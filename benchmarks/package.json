@@ -1,0 +1,17 @@
+{
+  "name": "pineforge-benchmarks-pinets",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PineTS runner for the PineForge three-way engine benchmark.",
+  "type": "module",
+  "scripts": {
+    "run": "node --experimental-strip-types runners/run_pinets.ts"
+  },
+  "dependencies": {
+    "pinets": "^0.9.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

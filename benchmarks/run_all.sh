@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# benchmarks/run_all.sh — full three-way engine benchmark in one command.
+#
+# Builds the runtime (if not already built), runs every benchmark strategy
+# through PyneCore + PineTS + PineForge, and produces the comparison
+# reports under benchmarks/results/.
+#
+# Honours these env vars:
+#   SKIP_BUILD     — skip the runtime build step
+#   SKIP_PYNE      — skip PyneCore strategy + indicator runs
+#   SKIP_PINETS    — skip PineTS indicator run
+#   SKIP_REPORTS   — skip the compare.py / compare_indicators.py step
+
+set -euo pipefail
+
+BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${BENCH_DIR}/.." && pwd)"
+WORKDIR="${BENCH_DIR}/_workdir"
+
+cd "${ROOT_DIR}"
+
+log()  { printf '\033[1;34m[bench]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[bench]\033[0m %s\n' "$*" >&2; }
+fail() { printf '\033[1;31m[bench]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# --- 1) build runtime ------------------------------------------------
+
+if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
+    log "configuring + building libpineforge"
+    cmake -B build -DPINEFORGE_BUILD_TESTS=ON >/dev/null
+    cmake --build build --target pineforge -j >/dev/null
+fi
+
+# --- 2) ensure benchmark deps ----------------------------------------
+
+if [[ ! -d "${BENCH_DIR}/.venv" ]]; then
+    log "creating Python venv at benchmarks/.venv"
+    python3 -m venv "${BENCH_DIR}/.venv"
+    "${BENCH_DIR}/.venv/bin/pip" install --quiet "pynesys-pynecore[cli]" pandas numpy
+fi
+if [[ ! -d "${BENCH_DIR}/node_modules" ]]; then
+    log "installing pinets via npm"
+    (cd "${BENCH_DIR}" && npm install --silent)
+fi
+
+# Convert reference OHLCV to PyneCore .ohlcv if absent.
+if [[ ! -f "${WORKDIR}/data/ETHUSDT_15.ohlcv" ]]; then
+    log "converting OHLCV CSV to PyneCore format"
+    mkdir -p "${WORKDIR}/data"
+    cp "${ROOT_DIR}/corpus/data/ohlcv_ETH-USDT-USDT_15m.csv" "${WORKDIR}/data/ETHUSDT_15.csv"
+    "${BENCH_DIR}/.venv/bin/pyne" -w "${WORKDIR}" data convert-from \
+        --provider pineforge --symbol ETHUSDT --timezone UTC \
+        "${WORKDIR}/data/ETHUSDT_15.csv" >/dev/null
+fi
+
+source "${BENCH_DIR}/.venv/bin/activate"
+
+# --- 3) run all five strategies through PyneCore ---------------------
+
+if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
+    log "running 5 strategies through PyneCore"
+    for s in "${BENCH_DIR}"/strategies/0*-*/; do
+        s="${s%/}"
+        log "  -> $(basename "$s")"
+        python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null
+    done
+
+    log "running canonical indicators through PyneCore"
+    pyne -w "${WORKDIR}" run \
+        "${BENCH_DIR}/strategies/_indicators/canonical_pyne.py" \
+        "${WORKDIR}/data/ETHUSDT_15.ohlcv" \
+        --plot "${BENCH_DIR}/strategies/_indicators/canonical_pyne.csv" >/dev/null
+fi
+
+# --- 4) run canonical indicators through PineTS ----------------------
+
+if [[ "${SKIP_PINETS:-0}" != "1" ]]; then
+    log "running canonical indicators through PineTS"
+    (cd "${BENCH_DIR}" && node runners/run_pinets_canonical.mjs >/dev/null)
+fi
+
+# --- 5) build + run PineForge canonical indicator runner -------------
+
+CANON_BIN="${BENCH_DIR}/runners/run_pineforge_canonical"
+if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" -nt "${CANON_BIN}" ]]; then
+    log "building PineForge canonical indicator runner"
+    c++ -std=c++17 -O2 -I "${ROOT_DIR}/include" \
+        "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" \
+        -L "${ROOT_DIR}/build/lib" \
+        -Wl,-force_load,"${ROOT_DIR}/build/lib/libpineforge.a" \
+        -o "${CANON_BIN}"
+fi
+log "running canonical indicators through PineForge"
+(cd "${BENCH_DIR}" && "${CANON_BIN}" >/dev/null)
+
+# --- 6) reports -------------------------------------------------------
+
+if [[ "${SKIP_REPORTS:-0}" != "1" ]]; then
+    log "generating trade-list comparison"
+    (cd "${BENCH_DIR}" && python3 compare.py)
+    log "generating indicator comparison"
+    (cd "${BENCH_DIR}" && python3 compare_indicators.py)
+fi
+
+log "done."
+log "results: ${BENCH_DIR}/results/{summary,trade_comparison,indicator_comparison}.md"

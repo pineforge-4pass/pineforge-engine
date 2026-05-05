@@ -1,0 +1,18 @@
+[project]
+name = "pineforge-benchmarks"
+version = "0.1.0"
+description = "Three-way engine comparison harness: PineForge vs PyneCore vs PineTS."
+requires-python = ">=3.11"
+dependencies = [
+    "pynesys-pynecore[cli]>=6.4",
+    "pandas>=2.0",
+    "numpy>=1.24",
+]
+
+[tool.uv]
+managed = true
+package = false
+
+[tool.uv.sources]
+# pin via PyPI; switch to the GitHub source if a fix is needed before
+# upstream cuts a release
