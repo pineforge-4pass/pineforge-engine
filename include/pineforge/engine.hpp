@@ -343,7 +343,13 @@ protected:
     void update_per_trade_extremes();
 
     // --- Strategy order commands ---
-    void strategy_entry(const std::string& id, bool is_long, double market_price,
+    // NOTE: prior to v0.2 the runtime accepted a leading `double market_price`
+    // positional after `is_long`. The implementation never read it; every
+    // fill price came from `current_bar_.close` inside the function body,
+    // and every closed-transpiler call site passed `current_bar_.close`
+    // verbatim. Parameter dropped to match TradingView's `strategy.entry()`
+    // surface. Consumer codegen must be regenerated alongside this commit.
+    void strategy_entry(const std::string& id, bool is_long,
                         double limit_price = std::numeric_limits<double>::quiet_NaN(),
                         double stop_price = std::numeric_limits<double>::quiet_NaN(),
                         double qty = std::numeric_limits<double>::quiet_NaN(),

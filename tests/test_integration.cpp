@@ -326,7 +326,7 @@ static void test_priced_entry_not_filled_same_bar_when_pooc_false() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, na<double>(), na<double>(), 101.0);
+                strategy_entry("L", true, na<double>(), 101.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -360,7 +360,7 @@ static void test_priced_entry_fill_rounds_to_mintick() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, na<double>(), na<double>(), 100.006);
+                strategy_entry("L", true, na<double>(), 100.006);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("L");
             }
@@ -466,7 +466,7 @@ static void test_buy_stop_limit_requires_stop_before_limit_on_path() {
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Buy stop-limit: stop activates at 105, limit fills at 95 only after activation.
-                strategy_entry("L", true, bar.close, 95.0, 105.0);
+                strategy_entry("L", true, 95.0, 105.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -499,7 +499,7 @@ static void test_buy_stop_limit_fills_when_limit_seen_after_activation() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close, 95.0, 105.0);
+                strategy_entry("L", true, 95.0, 105.0);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 strategy_close("L");
             }
@@ -538,7 +538,7 @@ static void test_sell_stop_limit_requires_stop_before_limit_on_path() {
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Sell stop-limit: stop activates at 95, limit fills at 105 only after activation.
-                strategy_entry("S", false, bar.close, 105.0, 95.0);
+                strategy_entry("S", false, 105.0, 95.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -572,7 +572,7 @@ static void test_sell_stop_limit_fills_when_limit_seen_after_activation() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("S", false, bar.close, 105.0, 95.0);
+                strategy_entry("S", false, 105.0, 95.0);
             } else if (bar_index_ == 2 && signed_position_size() < 0.0) {
                 strategy_close("S");
             }
@@ -610,7 +610,7 @@ public:
 
     void on_bar(const Bar& bar) override {
         // Try to pyramid every bar
-        strategy_entry("Long", true, bar.close);
+        strategy_entry("Long", true);
     }
 
     double get_signed_position_size() const { return signed_position_size(); }
@@ -641,9 +641,9 @@ static void test_allow_entry_in_opposite_entry_closes_without_reversing() {
             risk_direction_ = RiskDirection::LONG_ONLY;
         }
         void on_bar(const Bar& bar) override {
-            if (bar_index_ == 0) strategy_entry("L", true, bar.close);
+            if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_entry("S_BLOCKED", false, bar.close);
+                strategy_entry("S_BLOCKED", false);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -679,10 +679,10 @@ static void test_blocked_entry_does_not_consume_intraday_fill_quota() {
             max_intraday_filled_orders_ = 3;
         }
         void on_bar(const Bar& bar) override {
-            if (bar_index_ == 0) strategy_entry("L1", true, bar.close);
-            if (bar_index_ == 1) strategy_entry("L2", true, bar.close);
-            if (bar_index_ == 2) strategy_entry("L3_BLOCKED", true, bar.close);
-            if (bar_index_ == 3) strategy_entry("S_BLOCKED", false, bar.close);
+            if (bar_index_ == 0) strategy_entry("L1", true);
+            if (bar_index_ == 1) strategy_entry("L2", true);
+            if (bar_index_ == 2) strategy_entry("L3_BLOCKED", true);
+            if (bar_index_ == 3) strategy_entry("S_BLOCKED", false);
         }
         double get_signed_position_size() const { return signed_position_size(); }
     };
@@ -722,8 +722,8 @@ static void test_flat_bracket_dual_stop_closes_on_opposite_touch() {
         void on_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
-                strategy_entry("LE", true, na<double>(), na<double>(), 102.0);
-                strategy_entry("SE", false, na<double>(), na<double>(), 98.0);
+                strategy_entry("LE", true, na<double>(), 102.0);
+                strategy_entry("SE", false, na<double>(), 98.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -764,8 +764,8 @@ static void test_flat_bracket_dual_stop_cross_bar_closes_on_opposite_touch() {
         void on_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
-                strategy_entry("LE", true, na<double>(), na<double>(), 105.0);
-                strategy_entry("SE", false, na<double>(), na<double>(), 95.0);
+                strategy_entry("LE", true, na<double>(), 105.0);
+                strategy_entry("SE", false, na<double>(), 95.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -813,8 +813,8 @@ static void test_flat_bracket_dual_stop_open_equals_stop_prefers_long() {
             if (bar_index_ == 0) {
                 // Source order intentionally puts the short leg first to prove
                 // it does not affect arbitration when both legs tie at open.
-                strategy_entry("SE", false, na<double>(), na<double>(), 100.0);
-                strategy_entry("LE", true, na<double>(), na<double>(), 100.0);
+                strategy_entry("SE", false, na<double>(), 100.0);
+                strategy_entry("LE", true, na<double>(), 100.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -864,8 +864,8 @@ static void test_flat_armed_priced_entries_pyramid_within_one_bar() {
         void on_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
-                strategy_entry("S_NEAR", false, na<double>(), na<double>(), 99.0);
-                strategy_entry("S_FAR", false, na<double>(), na<double>(), 96.0);
+                strategy_entry("S_NEAR", false, na<double>(), 99.0);
+                strategy_entry("S_FAR", false, na<double>(), 96.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -969,7 +969,7 @@ public:
 
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ == 5) {
             strategy_close("Long");
@@ -1067,7 +1067,7 @@ public:
 
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ == 3) {
             strategy_close("Long");
@@ -1100,7 +1100,7 @@ static void test_trail_points_activation_ceils_to_mintick() {
         void on_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
-                strategy_entry("L", true, na<double>());
+                strategy_entry("L", true);
                 // trail_points = 6.2346 (sub-tick precision). With ceil rule
                 // the broker uses 7 ticks → activation = entry + $0.07.
                 // Without it, the engine produced entry + $0.06 (floor of
@@ -1210,7 +1210,7 @@ public:
 
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ == 2) {
             strategy_close("Long");
@@ -1358,8 +1358,8 @@ public:
         slippage_ = 0;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 1) strategy_entry("Long", true, bar.close);
-        if (bar_index_ == 3) strategy_entry("Short", false, bar.close);
+        if (bar_index_ == 1) strategy_entry("Long", true);
+        if (bar_index_ == 3) strategy_entry("Short", false);
         if (bar_index_ == 5) strategy_close("Short");
     }
 };
@@ -1397,10 +1397,10 @@ static void test_reversal_uses_explicit_qty_for_new_side() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close, na<double>(), na<double>(), 2.0);
+                strategy_entry("L", true, na<double>(), na<double>(), 2.0);
             }
             if (bar_index_ == 1) {
-                strategy_entry("S", false, bar.close, na<double>(), na<double>(), 5.0);
+                strategy_entry("S", false, na<double>(), na<double>(), 5.0);
             }
             if (bar_index_ == 2) {
                 strategy_close("S");
@@ -1441,9 +1441,9 @@ public:
         pyramiding_ = 3;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 1) strategy_entry("E1", true, bar.close);
-        if (bar_index_ == 2) strategy_entry("E2", true, bar.close);
-        if (bar_index_ == 3) strategy_entry("E3", true, bar.close);
+        if (bar_index_ == 1) strategy_entry("E1", true);
+        if (bar_index_ == 2) strategy_entry("E2", true);
+        if (bar_index_ == 3) strategy_entry("E3", true);
         // Partial exit: 50% of position
         if (bar_index_ == 5) strategy_exit("X1", "",
             std::numeric_limits<double>::quiet_NaN(),  // no limit
@@ -1484,7 +1484,7 @@ static void test_exit_qty_percent_reduces_position() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (bar_index_ == 1) {
                 strategy_exit("PX", "L",
@@ -1528,7 +1528,7 @@ static void test_partial_exit_id_fills_once_per_position() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (bar_index_ >= 1) {
                 strategy_exit("P", "L",
@@ -1571,9 +1571,9 @@ public:
         close_entries_rule_any_ = true;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 1) strategy_entry("A", true, bar.close);
-        if (bar_index_ == 2) strategy_entry("B", true, bar.close);
-        if (bar_index_ == 3) strategy_entry("C", true, bar.close);
+        if (bar_index_ == 1) strategy_entry("A", true);
+        if (bar_index_ == 2) strategy_entry("B", true);
+        if (bar_index_ == 3) strategy_entry("C", true);
         if (bar_index_ == 5) strategy_close("B");
         if (bar_index_ == 7) strategy_close_all();
     }
@@ -1605,7 +1605,7 @@ public:
     }
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ == 0) {
             // trail_points=10 (activation), trail_offset=5 (stop distance from peak)
@@ -1651,7 +1651,7 @@ static void test_limit_exit_beats_trailing_stop_after_activation() {
 
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_exit("X", "L",
                     113.0,
@@ -1694,7 +1694,7 @@ static void test_trailing_stop_fills_at_crossing_level_after_activation() {
 
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_exit("TS", "L",
                     std::numeric_limits<double>::quiet_NaN(),
@@ -1737,7 +1737,7 @@ static void test_trailing_stop_does_not_lookahead_bar_high_at_open() {
 
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_exit("TS", "L",
                     std::numeric_limits<double>::quiet_NaN(),
@@ -1780,7 +1780,7 @@ static void test_trailing_stop_ignores_entry_bar_extreme_before_exit_creation() 
 
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_exit("TS", "L",
                     std::numeric_limits<double>::quiet_NaN(),
@@ -1821,7 +1821,7 @@ static void test_trailing_points_without_offset_exits_at_activation() {
 
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("S", false, bar.close);
+                strategy_entry("S", false);
                 strategy_exit("TS", "S",
                     1791.0,                                     // far take-profit
                     std::numeric_limits<double>::quiet_NaN(),
@@ -1859,7 +1859,7 @@ public:
     }
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close, 97.0);  // limit price
+            strategy_entry("Long", true, 97.0);  // limit price
         }
         if (bar_index_ == 1 && position_side_ != PositionSide::FLAT) {
             strategy_close("Long");
@@ -1961,7 +1961,7 @@ public:
     void on_bar(const Bar& bar) override {
         entries_attempted++;
         if (position_side_ == PositionSide::FLAT) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ % 3 == 2) {
             strategy_close("Long");
@@ -1997,7 +1997,7 @@ public:
         slippage_ = 0;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("L", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 4) strategy_close("L");
     }
 
@@ -2018,7 +2018,7 @@ public:
         slippage_ = 0;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("L", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 3) strategy_close("L");
     }
 };
@@ -2125,7 +2125,7 @@ public:
     }
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ == 0) {
             strategy_exit("SL", "Long",
@@ -2166,7 +2166,7 @@ public:
     }
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
-            strategy_entry("Long", true, bar.close);
+            strategy_entry("Long", true);
         }
         if (bar_index_ == 0) {
             strategy_exit("TP", "Long", 120.0,
@@ -2259,7 +2259,7 @@ public:
         slippage_ = 0;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("Long", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("Long", true);
         if (bar_index_ == 3) strategy_close("Long");
 
         // Snapshot state AFTER strategy logic
@@ -2329,7 +2329,7 @@ public:
         slippage_ = 0;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("Short", false, bar.close);
+        if (bar_index_ == 0) strategy_entry("Short", false);
         if (bar_index_ == 3) strategy_close("Short");
         int i = bar_index_;
         if (i < 5) {
@@ -2377,9 +2377,9 @@ public:
         pyramiding_ = 3;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("E1", true, bar.close);
-        if (bar_index_ == 1) strategy_entry("E2", true, bar.close);
-        if (bar_index_ == 2) strategy_entry("E3", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("E1", true);
+        if (bar_index_ == 1) strategy_entry("E2", true);
+        if (bar_index_ == 2) strategy_entry("E3", true);
         if (bar_index_ == 5) strategy_close_all();
 
         int i = bar_index_;
@@ -2436,13 +2436,13 @@ public:
     }
     void on_bar(const Bar& bar) override {
         switch(bar_index_) {
-            case 0: strategy_entry("T1", true, bar.close); break;   // buy at 100
+            case 0: strategy_entry("T1", true); break;   // buy at 100
             case 1: strategy_close("T1"); break;                     // sell at 120
-            case 2: strategy_entry("T2", true, bar.close); break;   // buy at 120
+            case 2: strategy_entry("T2", true); break;   // buy at 120
             case 3: strategy_close("T2"); break;                     // sell at 110
-            case 4: strategy_entry("T3", false, bar.close); break;  // short at 110
+            case 4: strategy_entry("T3", false); break;  // short at 110
             case 5: strategy_close("T3"); break;                     // cover at 100
-            case 6: strategy_entry("T4", false, bar.close); break;  // short at 100
+            case 6: strategy_entry("T4", false); break;  // short at 100
             case 7: strategy_close("T4"); break;                     // cover at 115
         }
     }
@@ -2504,8 +2504,8 @@ public:
         process_orders_on_close_ = true;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("Long", true, bar.close);
-        if (bar_index_ == 2) strategy_entry("Short", false, bar.close); // reversal
+        if (bar_index_ == 0) strategy_entry("Long", true);
+        if (bar_index_ == 2) strategy_entry("Short", false); // reversal
         if (bar_index_ == 4) strategy_close("Short");
 
         int i = bar_index_;
@@ -2560,7 +2560,7 @@ public:
         process_orders_on_close_ = true;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("L", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 2) strategy_close("L");
     }
 };
@@ -2597,7 +2597,7 @@ public:
         syminfo_mintick_ = 0.1; // tick = 0.1, so 5 ticks = 0.5
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("L", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 2) strategy_close("L");
     }
 };
@@ -2634,7 +2634,7 @@ public:
         process_orders_on_close_ = true;
     }
     void on_bar(const Bar& bar) override {
-        if (bar_index_ == 0) strategy_entry("L", true, bar.close);
+        if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 2) strategy_close("L");
     }
 };
@@ -2676,7 +2676,7 @@ static void test_price_path_bullish_stop_first() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
                 strategy_exit("X", "L", 110.0, 95.0);
             }
         }
@@ -2710,7 +2710,7 @@ static void test_price_path_bearish_limit_first() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
                 strategy_exit("X", "L", 115.0, 92.0);
             }
         }
@@ -2744,7 +2744,7 @@ static void test_price_path_short_stop_first() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("S", false, bar.close);
+                strategy_entry("S", false);
                 strategy_exit("X", "S", 90.0, 115.0);
             }
         }
@@ -2782,7 +2782,7 @@ static void test_price_path_vs_open_proximity() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
                 strategy_exit("X", "L", 108.0, 93.0);
             }
         }
@@ -2817,7 +2817,7 @@ static void test_price_path_bullish_open_near_high_hits_limit_first() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
                 strategy_exit("X", "L", 111.0, 95.0);
             }
         }
@@ -2854,7 +2854,7 @@ static void test_price_path_open_near_low_hits_stop_first() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
                 strategy_exit("X", "L", 110.0, 95.0);
             }
         }
@@ -2889,8 +2889,8 @@ static void test_opposite_stop_entries_follow_path_order() {
         void on_bar(const Bar& bar) override {
             if (position_side_ == PositionSide::FLAT) {
                 // Insertion order intentionally long then short.
-                strategy_entry("LStop", true, bar.close, na<double>(), 105.0);
-                strategy_entry("SStop", false, bar.close, na<double>(), 95.0);
+                strategy_entry("LStop", true, na<double>(), 105.0);
+                strategy_entry("SStop", false, na<double>(), 95.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -2930,8 +2930,8 @@ static void test_opposite_stop_entries_use_open_proximity_path_priority() {
         }
         void on_bar(const Bar& bar) override {
             if (position_side_ == PositionSide::FLAT) {
-                strategy_entry("LStop", true, bar.close, na<double>(), 105.0);
-                strategy_entry("SStop", false, bar.close, na<double>(), 97.0);
+                strategy_entry("LStop", true, na<double>(), 105.0);
+                strategy_entry("SStop", false, na<double>(), 97.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -2971,8 +2971,8 @@ static void test_strategy_entry_oca_cancel_group() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close, na<double>(), 105.0, na<double>(), "", "entry_oca", 1);
-                strategy_entry("S", false, bar.close, na<double>(), 95.0, na<double>(), "", "entry_oca", 1);
+                strategy_entry("L", true, na<double>(), 105.0, na<double>(), "", "entry_oca", 1);
+                strategy_entry("S", false, na<double>(), 95.0, na<double>(), "", "entry_oca", 1);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -3007,7 +3007,7 @@ static void test_strategy_entry_qty_type_cash_overrides_default_sizing() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close, na<double>(), na<double>(), 1000.0, "", "", 0, 2);
+                strategy_entry("L", true, na<double>(), na<double>(), 1000.0, "", "", 0, 2);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("L");
             }
@@ -3042,7 +3042,7 @@ static void test_strategy_close_respects_entry_id() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("Long", true, bar.close);
+                strategy_entry("Long", true);
             } else if (bar_index_ == 1) {
                 // Should be a no-op: there is no "Short" entry to close.
                 strategy_close("Short");
@@ -3079,12 +3079,12 @@ static void test_market_close_fills_before_same_bar_opposite_stop_entry() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 // Match probe 63 ordering: opposite stop is submitted before the
                 // market close. TV still closes the existing position at next
                 // bar open before evaluating the opposite stop entry.
-                strategy_entry("S", false, bar.close, na<double>(), 95.0);
+                strategy_entry("S", false, na<double>(), 95.0);
                 strategy_close("L");
             }
         }
@@ -3123,14 +3123,14 @@ static void test_strategy_close_non_matching_does_not_persist() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("Long", true, bar.close);
+                strategy_entry("Long", true);
             } else if (bar_index_ == 1) {
                 // Non-matching close request while long.
                 strategy_close("Short");
             } else if (bar_index_ == 2) {
                 // Flip into short.
                 strategy_close("Long");
-                strategy_entry("Short", false, bar.close);
+                strategy_entry("Short", false);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -3169,14 +3169,14 @@ static void test_stale_exit_does_not_carry_to_future_position() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("Long", true, bar.close);
+                strategy_entry("Long", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_exit("X", "Long", 120.0, 95.0);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 // Close by market, leaving any pending exits stale.
                 strategy_close("Long");
             } else if (bar_index_ == 3 && signed_position_size() == 0.0) {
-                strategy_entry("Long", true, bar.close);
+                strategy_entry("Long", true);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -3216,7 +3216,7 @@ static void test_oca_exit_orders_follow_path_priority() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
                 // Intentionally insert TP first, then SL.
@@ -3257,7 +3257,7 @@ static void test_oca_exit_orders_use_open_proximity_path_priority() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
                 // Insert the stop first so a regression in sibling ordering would
@@ -3302,13 +3302,13 @@ static void test_noop_entry_does_not_block_later_opposite_stop() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L0", true, bar.close);
+                strategy_entry("L0", true);
             }
             if (bar_index_ == 1) {
                 // Same-direction long stop touched first on next bar -> no-op (pyramiding max).
-                strategy_entry("L1", true, na<double>(), na<double>(), 102.0);
+                strategy_entry("L1", true, na<double>(), 102.0);
                 // Opposite short stop touched later on next bar -> should still reverse.
-                strategy_entry("S1", false, na<double>(), na<double>(), 95.0);
+                strategy_entry("S1", false, na<double>(), 95.0);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -3344,7 +3344,7 @@ static void test_partial_exit_ignored_when_full_exit_present() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (bar_index_ == 1) {
                 strategy_exit("FULL", "L", 120.0, 95.0);
@@ -3388,7 +3388,7 @@ static void test_partial_exit_reservation_limits_full_exit() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (signed_position_size() > 0.0) {
                 strategy_exit("HALF", "L",
@@ -3439,7 +3439,7 @@ static void test_priced_exit_not_filled_same_bar_when_pooc_false() {
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Market entry fills on next bar open.
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             }
             if (bar_index_ == 2 && signed_position_size() > 0) {
                 // Stop sits at current close, so same-bar retroactive fill would trigger.
@@ -3483,12 +3483,12 @@ static void test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pas
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_entry("stale_long", true, na<double>(), na<double>(), 110.0);
+                strategy_entry("stale_long", true, na<double>(), 110.0);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 strategy_close("L");
-                strategy_entry("S", false, bar.close);
+                strategy_entry("S", false);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -3526,9 +3526,9 @@ static void test_strategy_close_any_non_matching_keeps_pending_entry_live() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_entry("add_long", true, na<double>(), na<double>(), 110.0);
+                strategy_entry("add_long", true, na<double>(), 110.0);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 strategy_close("missing");
             }
@@ -3564,7 +3564,7 @@ static void test_strategy_close_pooc_missing_id_noops() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("Missing");
             }
@@ -3599,9 +3599,9 @@ static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L0", true, bar.close);
+                strategy_entry("L0", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_entry("L1", true, bar.close, std::numeric_limits<double>::quiet_NaN(), 110.0);
+                strategy_entry("L1", true, std::numeric_limits<double>::quiet_NaN(), 110.0);
                 strategy_close("L0");
             }
         }
@@ -3640,9 +3640,9 @@ static void test_strategy_close_pooc_partial_close_keeps_other_exit_bracket() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("A", true, bar.close);
+                strategy_entry("A", true);
             } else if (bar_index_ == 1) {
-                strategy_entry("B", true, bar.close);
+                strategy_entry("B", true);
                 strategy_exit("XB", "B", 115.0, std::numeric_limits<double>::quiet_NaN());
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 strategy_close("A");
@@ -3688,9 +3688,9 @@ static void test_strategy_close_fifo_only_closes_requested_leg_size() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("Buy1", true, bar.close);
+                strategy_entry("Buy1", true);
             } else if (bar_index_ == 1) {
-                strategy_entry("Buy2", true, bar.close);
+                strategy_entry("Buy2", true);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 strategy_close("Buy2");
             }
@@ -3735,9 +3735,9 @@ static void test_strategy_close_pooc_fifo_only_closes_requested_leg_size() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("Buy1", true, bar.close);
+                strategy_entry("Buy1", true);
             } else if (bar_index_ == 1) {
-                strategy_entry("Buy2", true, bar.close);
+                strategy_entry("Buy2", true);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
                 strategy_close("Buy2");
             }
@@ -3779,7 +3779,7 @@ static void test_strategy_close_pooc_sets_exit_comment() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("L", "manual close");
             }
@@ -3815,7 +3815,7 @@ static void test_strategy_close_qty_percent_reduces_position() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("L", "half", na<double>(), 50.0, false);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
@@ -3857,7 +3857,7 @@ static void test_strategy_close_qty_reduces_position() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("L", "three", 3.0, na<double>(), false);
             }
@@ -3894,7 +3894,7 @@ static void test_strategy_close_immediately_fills_current_close() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close("L", "now", na<double>(), na<double>(), true);
             }
@@ -3931,10 +3931,10 @@ static void test_stale_close_all_does_not_close_future_reentry() {
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
-                strategy_entry("L", true, bar.close);
+                strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_exit("TP", "L", 120.0, std::numeric_limits<double>::quiet_NaN());
-                strategy_entry("S", false, bar.close);
+                strategy_entry("S", false);
                 strategy_close_all();
             }
         }

@@ -28,7 +28,7 @@
 
 namespace pineforge {
 
-void BacktestEngine::strategy_entry(const std::string& id, bool is_long, double market_price,
+void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      double limit_price, double stop_price, double qty,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
