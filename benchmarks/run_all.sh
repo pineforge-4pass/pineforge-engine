@@ -55,15 +55,39 @@ fi
 
 source "${BENCH_DIR}/.venv/bin/activate"
 
-# --- 3) run all five strategies through PyneCore ---------------------
+# --- 3a) bootstrap strategy folders + cloud-compile -----------------
+
+if [[ "${SKIP_BOOTSTRAP:-0}" != "1" ]]; then
+    log "bootstrapping benchmark strategy folders from corpus/"
+    python3 "${BENCH_DIR}/runners/bootstrap_strategies.py" >/dev/null
+fi
+
+if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
+    log "cloud-compiling .pine -> @pyne via PyneSys"
+    if [[ -z "${PYNESYS_API_KEY:-}" ]] && ! grep -q '^api_key = "[^"]\+' "${WORKDIR}/config/api.toml" 2>/dev/null; then
+        warn "no PyneSys API key found in env or ${WORKDIR}/config/api.toml"
+        warn "set PYNESYS_API_KEY=... or fill api.toml; skipping compile"
+    else
+        python3 "${BENCH_DIR}/runners/cloud_compile.py" >/dev/null \
+            || warn "cloud_compile.py reported failures; continuing with whatever exists"
+    fi
+fi
+
+# --- 3b) run all strategies through PyneCore ------------------------
 
 if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
-    log "running 5 strategies through PyneCore"
-    for s in "${BENCH_DIR}"/strategies/0*-*/; do
+    n_strats=$(ls -d "${BENCH_DIR}"/strategies/[0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
+    log "running ${n_strats} strategies through PyneCore"
+    failed=()
+    for s in "${BENCH_DIR}"/strategies/[0-9][0-9]-*/; do
         s="${s%/}"
-        log "  -> $(basename "$s")"
-        python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null
+        if ! python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>&1; then
+            failed+=("$(basename "$s")")
+        fi
     done
+    if (( ${#failed[@]} > 0 )); then
+        warn "PyneCore runtime failed on ${#failed[@]} strategies: ${failed[*]}"
+    fi
 
     log "running canonical indicators through PyneCore"
     pyne -w "${WORKDIR}" run \

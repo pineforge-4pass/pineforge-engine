@@ -110,19 +110,29 @@ cat results/summary.md
 
 ## Status
 
-- [x] Strategy curation: 5 hand-ported (01-sma-cross, 02-inside-bar, 03-supertrend, 04-macd-histogram, 05-stoch-rsi)
-- [x] PyneCore runners: trade list + canonical indicators
+- [x] Strategy curation: **50 strategies** (9 basic, 8 community, 33 validation), all non-MTF
+- [x] PyneCore translations: produced by the official PyneSys cloud
+      compiler (`pyne compile`, PyneComp v6.0.31). No hand-ports.
+- [x] PyneCore runner (`runners/run_pynecore.py`) + bootstrap
+      (`runners/bootstrap_strategies.py`) + cloud compile
+      (`runners/cloud_compile.py`)
 - [x] PineTS runner: canonical indicators (no strategy backtester yet upstream)
-- [x] PineForge runner: trades via existing `scripts/run_strategy.py`, indicators via `runners/run_pineforge_canonical.cpp`
-- [x] Trade-list comparator (`compare.py`) — see [`results/trade_comparison.md`](results/trade_comparison.md)
-- [x] Indicator comparator (`compare_indicators.py`) — see [`results/indicator_comparison.md`](results/indicator_comparison.md)
+- [x] PineForge runner: trades via `scripts/run_strategy.py`, indicators
+      via `runners/run_pineforge_canonical.cpp`
+- [x] Trade-list comparator (`compare.py`) — see
+      [`results/trade_comparison.md`](results/trade_comparison.md)
+- [x] Indicator comparator (`compare_indicators.py`) — see
+      [`results/indicator_comparison.md`](results/indicator_comparison.md)
 - [x] One-shot orchestrator: `bash run_all.sh`
 
-Headline numbers: see [`results/summary.md`](results/summary.md).
-Across 5 strategies and ~10,937 matched trades, PineForge and PyneCore
-produce identical entry/exit prices and per-trade P&L. On 10 indicators
-× 36,341 post-warmup bars, all three engines agree to within 5e-8
-relative delta.
+Headline numbers (see [`results/summary.md`](results/summary.md)):
+
+- **47 of 50 strategies (94%)**: both engines hit sub-0.5% PnL p90 vs TV
+- **43 of 50 (86%)**: PineForge ↔ PyneCore agreement is byte-identical (PnL p90 = 0%)
+- The 3 outliers (06-liquidity-sweep, 07-scalping-strategy,
+  49-partial-exit-qty-percent) all use bracket / trailing / partial
+  exits where PyneCore has order-matching semantic bugs PineForge does
+  not share — see the divergence section in `results/summary.md`.
 
 ## License
 

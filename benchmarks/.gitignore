@@ -14,4 +14,11 @@ runners/_smoke_pinets.mjs
 strategies/*/_pynecore_raw_trades.csv
 strategies/*/__pycache__/
 
+# Per-strategy stats CSV is regenerated each run; only trade lists are tracked
+strategies/*/pynecore_stats.csv
+
+# Cloud-compile temp/backup artefacts
+strategies/*/strategy_pyne.py.bak
+strategies/*/strategy_pyne.toml
+
 # Compare.py output is checked in to results/
