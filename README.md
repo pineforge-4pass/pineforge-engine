@@ -15,6 +15,15 @@ This repository ships:
 - [`corpus/`](corpus/) — **162 reference strategies** as a reproducibility kit: each ships its `strategy.pine` source, the `generated.cpp` produced by the closed transpiler, the TradingView trade export (`tv_trades.csv`), and the engine's own trade output (`engine_trades.csv`). One shell command (`bash scripts/run_corpus.sh`) builds every `generated.cpp` into a `.so`, runs each through the Python harness, and verifies parity against TradingView
 - [`benchmarks/`](benchmarks/) — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. PyneCore Python sources are produced by the official PyneSys cloud compiler (no hand-ports); the OHLCV is a pinned LFS-tracked snapshot. `bash benchmarks/run_all.sh` reproduces every comparison number from a fresh clone with zero external API calls. Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
 
+## Coverage
+
+[**`docs/coverage.md`**](docs/coverage.md) is the complete, current map
+of which Pine v6 surface this runtime covers — every TA class, every
+order primitive, every `request.security()` semantic, plus a structured
+inventory of what's deliberately not implemented (with feasibility tags
+for each gap). Read it before integrating PineForge as a backend or
+auditing the parity claim.
+
 ## What this is, and what it isn't
 
 **This is the runtime, not the compiler.** PineForge's PineScript-to-C++ transpiler is closed-source and ships separately. This library is what every compiled strategy `.so` links against: it provides the implementations of `ta.ema`, `strategy.entry`, `request.security`, the bar magnifier, and so on, behind a stable C ABI.
