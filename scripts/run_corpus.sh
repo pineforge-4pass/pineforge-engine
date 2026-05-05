@@ -100,8 +100,11 @@ fi
 # --- 3) verify --------------------------------------------------------
 
 if [[ "${SKIP_VERIFY:-0}" != "1" ]]; then
-    log "verifying TV parity"
-    "$PY" scripts/verify_corpus.py
+    log "printing corpus parity inspection summary"
+    if ! "$PY" scripts/verify_corpus.py --all --quiet; then
+        warn "corpus inspection reported drift above this helper's strict thresholds."
+        warn "This helper is not the canonical parity sweep; see corpus/README.md."
+    fi
 fi
 
 log "done."

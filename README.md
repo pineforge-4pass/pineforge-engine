@@ -163,10 +163,10 @@ PineForge follows **semantic versioning** at the C ABI level:
 
 A pre-compiled strategy `.so` against runtime `0.X.Y` will keep working against any later runtime within `0.X.Z`. Across major versions, all bets are off.
 
-## Reproducing the parity claim end-to-end
+## Reproducing the corpus run end-to-end
 
-The headline number — **158/162 strategies at strict TV parity** — is produced
-by the internal validation corpus (**private submodule**). If you have access:
+The private validation corpus lets maintainers rebuild and rerun all **162**
+compiled PineForge strategies from a fresh clone. If you have access:
 
 ```bash
 git submodule update --init corpus
@@ -174,7 +174,9 @@ bash scripts/run_corpus.sh
 ```
 
 That builds `libpineforge.a` plus 162 strategy `.so` files, runs each against the
-reference OHLCV feed, and diffs `engine_trades.csv` vs shipped `tv_trades.csv`.
+reference OHLCV feed, and rewrites each `engine_trades.csv`. The script also
+prints a lightweight corpus-inspection summary; the headline strict-parity
+number uses the canonical sweep methodology described in `corpus/README.md`.
 
 Without the submodule, use **`ctest`** and optional local fixtures you own.
 

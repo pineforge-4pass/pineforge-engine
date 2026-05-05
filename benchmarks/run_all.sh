@@ -106,13 +106,13 @@ fi
 
 if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
     log "cloud-compiling .pine -> @pyne via PyneSys (skip if strategy_pyne.py exists)"
-    compile_args=()
+    force_compile=0
     if [[ "${REFRESH_COMPILE:-0}" == "1" ]]; then
-        compile_args+=("--force")
+        force_compile=1
         log "  REFRESH_COMPILE=1: will re-call API for every strategy"
     fi
     needs_key=0
-    if (( ${#compile_args[@]} > 0 )); then
+    if (( force_compile == 1 )); then
         needs_key=1
     else
         # Even when not forcing, we still need a key if any strategy is
@@ -129,8 +129,13 @@ if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
         warn "set PYNESYS_API_KEY=... or fill ${WORKDIR}/config/api.toml"
         warn "skipping compile; benchmark will run only on existing files"
     else
-        python3 "${BENCH_DIR}/runners/cloud_compile.py" "${compile_args[@]}" >/dev/null \
-            || warn "cloud_compile.py reported failures; continuing with whatever exists"
+        if (( force_compile == 1 )); then
+            python3 "${BENCH_DIR}/runners/cloud_compile.py" --force >/dev/null \
+                || warn "cloud_compile.py reported failures; continuing with whatever exists"
+        else
+            python3 "${BENCH_DIR}/runners/cloud_compile.py" >/dev/null \
+                || warn "cloud_compile.py reported failures; continuing with whatever exists"
+        fi
     fi
 fi
 
