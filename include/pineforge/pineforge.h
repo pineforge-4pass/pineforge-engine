@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: Apache-2.0
+ *
  * pineforge.h — public C ABI for the PineForge runtime.
  *
  * This header is the single source of truth for the harness ↔ compiled-

@@ -14,6 +14,12 @@
 set -euo pipefail
 
 BENCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -d "${BENCH_DIR}/assets/strategies" ]]; then
+    BENCH_ASSETS="${BENCH_DIR}/assets"
+else
+    BENCH_ASSETS="${BENCH_DIR}"
+fi
+STRATEGIES_DIR="${BENCH_ASSETS}/strategies"
 ROOT_DIR="$(cd "${BENCH_DIR}/.." && pwd)"
 WORKDIR="${BENCH_DIR}/_workdir"
 
@@ -22,6 +28,17 @@ cd "${ROOT_DIR}"
 log()  { printf '\033[1;34m[bench]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[bench]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[bench]\033[0m %s\n' "$*" >&2; exit 1; }
+
+if [[ ! -f "${STRATEGIES_DIR}/01-sma-cross/strategy.pine" ]]; then
+    fail "benchmark fixtures missing (expected ${STRATEGIES_DIR}/01-sma-cross/strategy.pine).
+
+TV-linked strategy folders and OHLCV live in the private benchmarks/assets
+submodule (init: git submodule update --init benchmarks/assets).
+See CONTRIBUTING.md.
+
+Note: an inline benchmarks/strategies tree exists only in pre-migration /
+private monorepo checkouts — do not publish those paths in public history."
+fi
 
 # --- 1) build runtime ------------------------------------------------
 
@@ -43,7 +60,8 @@ if [[ ! -d "${BENCH_DIR}/node_modules" ]]; then
     (cd "${BENCH_DIR}" && npm install --silent)
 fi
 
-# OHLCV: prefer the LFS-tracked snapshot at benchmarks/data/ over a
+# OHLCV: prefer the committed snapshot at benchmarks/assets/data/ (submodule)
+# or benchmarks/data/ (legacy) over a
 # fresh Binance fetch. The committed file is what every committed
 # strategy_pyne.py and pineforge_trades.csv was generated against —
 # fetching live would silently drift the comparison.
@@ -51,7 +69,7 @@ fi
 # To force a fresh download from Binance, set REFRESH_OHLCV=1.
 source "${BENCH_DIR}/.venv/bin/activate"
 mkdir -p "${WORKDIR}/data"
-SNAPSHOT_CSV="${BENCH_DIR}/data/ETHUSDT_15.csv"
+SNAPSHOT_CSV="${BENCH_ASSETS}/data/ETHUSDT_15.csv"
 LIVE_CSV="${WORKDIR}/data/ETHUSDT_15.csv"
 
 if [[ "${REFRESH_OHLCV:-0}" == "1" ]]; then
@@ -59,10 +77,10 @@ if [[ "${REFRESH_OHLCV:-0}" == "1" ]]; then
     python3 "${BENCH_DIR}/runners/fetch_extended_ohlcv.py" \
         --since "${OHLCV_SINCE:-2025-03-01}" >/dev/null
     cp "${LIVE_CSV}" "${SNAPSHOT_CSV}"
-    log "wrote refreshed snapshot to benchmarks/data/ETHUSDT_15.csv"
+    log "wrote refreshed snapshot to benchmarks/assets/data/ETHUSDT_15.csv"
 elif [[ -f "${SNAPSHOT_CSV}" ]]; then
     if [[ ! -f "${LIVE_CSV}" ]] || ! cmp -s "${SNAPSHOT_CSV}" "${LIVE_CSV}"; then
-        log "using LFS-tracked OHLCV snapshot at benchmarks/data/ETHUSDT_15.csv"
+        log "using OHLCV snapshot at benchmarks/assets/data/ETHUSDT_15.csv"
         cp "${SNAPSHOT_CSV}" "${LIVE_CSV}"
         # Re-convert to PyneCore .ohlcv if missing or stale.
         if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
@@ -73,8 +91,8 @@ elif [[ -f "${SNAPSHOT_CSV}" ]]; then
         fi
     fi
 elif [[ ! -f "${LIVE_CSV}" ]]; then
-    warn "no LFS snapshot at benchmarks/data/ETHUSDT_15.csv"
-    warn "did you run \`git lfs pull\` after cloning?"
+    warn "no OHLCV snapshot at benchmarks/assets/data/ETHUSDT_15.csv"
+    warn "init the benchmarks/assets submodule, or run with REFRESH_OHLCV=1"
     warn "set REFRESH_OHLCV=1 to fetch from Binance instead"
     exit 1
 fi
@@ -99,7 +117,7 @@ if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
     else
         # Even when not forcing, we still need a key if any strategy is
         # missing its committed strategy_pyne.py.
-        for s in "${BENCH_DIR}"/strategies/[0-9][0-9]-*/; do
+        for s in "${STRATEGIES_DIR}"/[0-9][0-9]-*/; do
             [[ -f "$s/strategy.pine" ]] || continue
             [[ -f "$s/strategy_pyne.py" ]] || { needs_key=1; break; }
         done
@@ -127,10 +145,10 @@ fi
 # --- 3b) run all strategies through PyneCore ------------------------
 
 if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
-    n_strats=$(ls -d "${BENCH_DIR}"/strategies/[0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
+    n_strats=$(ls -d "${STRATEGIES_DIR}"/[0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
     log "running ${n_strats} strategies through PyneCore"
     failed=()
-    for s in "${BENCH_DIR}"/strategies/[0-9][0-9]-*/; do
+    for s in "${STRATEGIES_DIR}"/[0-9][0-9]-*/; do
         s="${s%/}"
         if ! python3 "${BENCH_DIR}/runners/run_pynecore.py" "$s" >/dev/null 2>&1; then
             failed+=("$(basename "$s")")
@@ -142,9 +160,9 @@ if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
 
     log "running canonical indicators through PyneCore"
     pyne -w "${WORKDIR}" run \
-        "${BENCH_DIR}/strategies/_indicators/canonical_pyne.py" \
+        "${STRATEGIES_DIR}/_indicators/canonical_pyne.py" \
         "${WORKDIR}/data/ETHUSDT_15.ohlcv" \
-        --plot "${BENCH_DIR}/strategies/_indicators/canonical_pyne.csv" >/dev/null
+        --plot "${STRATEGIES_DIR}/_indicators/canonical_pyne.csv" >/dev/null
 fi
 
 # --- 4) run canonical indicators through PineTS ----------------------

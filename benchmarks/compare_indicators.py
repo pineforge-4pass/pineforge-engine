@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Three-way per-bar indicator comparator: PineForge ↔ PyneCore ↔ PineTS.
 
-Reads:
-    benchmarks/strategies/_indicators/canonical_pineforge.csv
-    benchmarks/strategies/_indicators/canonical_pyne.csv
-    benchmarks/strategies/_indicators/canonical_pinets.csv
+Reads (via ``paths.ASSETS`` — ``benchmarks/assets/…`` submodule or legacy
+``benchmarks/strategies/…``):
+    …/_indicators/canonical_pineforge.csv
+    …/_indicators/canonical_pyne.csv
+    …/_indicators/canonical_pinets.csv
 
 For each (engine_pair, indicator_column) combination, computes the
 per-bar absolute and relative deltas, and reports:
@@ -22,13 +23,22 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 from collections import defaultdict
+import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-BENCH = REPO_ROOT / "benchmarks"
-INDIR = BENCH / "strategies" / "_indicators"
+_SYS_BENCH = Path(__file__).resolve().parent
+if str(_SYS_BENCH) not in sys.path:
+    sys.path.insert(0, str(_SYS_BENCH))
+from paths import ASSETS, BENCH, REPO_ROOT  # noqa: E402
+
+INDIR = ASSETS / "strategies" / "_indicators"
 OUT = BENCH / "results" / "indicator_comparison.md"
+
+
+def _md_relpath(from_dir: Path, target: Path) -> str:
+    return Path(os.path.relpath(target.resolve(), from_dir.resolve())).as_posix()
 
 INDICATOR_COLS = [
     "ema21", "sma21", "rsi14", "atr14",
@@ -159,10 +169,12 @@ def main() -> int:
     s_pf_pt = diff_two(pf, pt)
     s_pc_pt = diff_two(pc, pt)
 
+    pine_src = INDIR / "canonical.pine"
+    pine_href = _md_relpath(OUT.parent, pine_src)
     sections = [
         "# Indicator comparison\n",
         "All three engines compute the canonical indicator script "
-        "([`canonical.pine`](../strategies/_indicators/canonical.pine)) "
+        f"([`canonical.pine`]({pine_href})) "
         "on the same 36,361-bar OHLCV feed. This table reports per-bar "
         "absolute and relative deltas across every pair of engines.\n",
         "**NA columns** count bars where one engine reported a number "

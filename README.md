@@ -13,7 +13,7 @@ This repository ships:
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
 - A 16-binary ctest suite (15 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
 - **`corpus/`** (optional **git submodule**) — **162 reference strategies** for maintainers who have access: each folder has `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`, plus shared OHLCV under `corpus/data/`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`. Public clones omit this content.
-- [`benchmarks/`](benchmarks/) — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. PyneCore Python sources are produced by the official PyneSys cloud compiler (no hand-ports); the OHLCV is a pinned LFS-tracked snapshot. `bash benchmarks/run_all.sh` reproduces every comparison number from a fresh clone with zero external API calls. Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
+- [`benchmarks/`](benchmarks/) — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/*` folder with TV exports and trade CSVs) ship only via an optional **private `benchmarks/assets` submodule** — same confidentiality class as `corpus/`. With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
 
 ## Coverage
 
@@ -130,12 +130,11 @@ tests/                  - 14 ctest binaries
 corpus/                 - private submodule: 162 strategies (maintainers only); see CONTRIBUTING.md
   ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
-benchmarks/             - three-way comparison vs PyneCore + PineTS (50 strategies)
-  ├── data/             - LFS-tracked extended OHLCV (41,307 bars; covers full TV history)
-  ├── strategies/       - 50 × {strategy.pine, strategy_pyne.py, tv_trades.csv, *_trades.csv}
+benchmarks/             - three-way comparison harness vs PyneCore + PineTS
+  ├── assets/           - private submodule: data/ (OHLCV) + strategies/ (50 folders, TV-linked CSVs) — OSS omit
   ├── runners/          - cloud_compile, fetch_extended_ohlcv, regenerate_pineforge_trades, ...
-  ├── results/          - summary.md, trade_comparison.md, indicator_comparison.md
-  └── run_all.sh        - one-shot: bootstrap + cloud-compile + run + diff
+  ├── results/          - summary.md, trade_comparison.md, indicator_comparison.md (methodology samples)
+  └── run_all.sh        - one-shot: bootstrap + cloud-compile + run + diff (needs assets submodule)
 scripts/                - reproducibility tooling
   ├── run_strategy.py   - load any strategy.so via ctypes, write engine_trades.csv
   ├── run_corpus.sh     - one-shot: build all 162 .so + run + verify
@@ -186,14 +185,16 @@ Without the submodule, use **`ctest`** and optional local fixtures you own.
 
 [`benchmarks/`](benchmarks/) runs the same 50 strategies through
 PineForge, PyneCore, and PineTS to spot engine-specific defects vs
-TV-side semantics. Each engine consumes the same 41,307-bar Binance
-ETH/USDT:USDT 15m feed (LFS-tracked at `benchmarks/data/`). PyneCore
-Python sources are the official PyneSys cloud compiler output
-(committed; no hand-ports). PineTS handles indicators only — their
+TV-side semantics. **Strategy folders and** the 41,307-bar Binance
+ETH/USDT:USDT 15m OHLCV live under the private **`benchmarks/assets`**
+submodule (`assets/strategies/`, `assets/data/`); public clones omit them.
+PyneCore Python sources are the official PyneSys cloud compiler output
+(no hand-ports). PineTS handles indicators only — their
 strategy backtester is upstream roadmap.
 
 ```bash
-git lfs install && git lfs pull   # 2.3 MB OHLCV pin
+git submodule update --init corpus benchmarks/assets   # if you have access
+git lfs install && git lfs pull   # when OHLCV is LFS-tracked in-repo
 bash benchmarks/run_all.sh        # ~3 min from cold; zero API calls
 cat benchmarks/results/summary.md
 ```
@@ -220,11 +221,11 @@ for the full per-strategy table and methodology.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE). Third-party notices: [NOTICE](NOTICE). Security contact: [SECURITY.md](SECURITY.md).
+Apache License 2.0. See [LICENSE](LICENSE). Third-party notices: [NOTICE](NOTICE). Extended licensing notes (optional benchmark AGPL deps, trademarks, private submodules): [LEGAL.md](LEGAL.md). Community standards: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). Security contact: [SECURITY.md](SECURITY.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The short version:
+See [CONTRIBUTING.md](CONTRIBUTING.md) (includes the **Apache-2.0** contribution license grant). The short version:
 
 1. Every contribution must keep the parity test green.
 2. Public-API changes (anything exported from `<pineforge/pineforge.h>`) require a major-version bump.

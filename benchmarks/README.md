@@ -9,6 +9,17 @@ two open-source PineScript runtimes:
 - [**PineTS**](https://github.com/LuxAlgo/PineTS) — TypeScript transpiler/
   runtime that runs raw `.pine` source in Node.js / browsers. AGPL-3.0.
 
+TV-linked trade lists, per-engine outputs, the pinned OHLCV snapshot, and **all**
+per-strategy folders under **`strategies/`** (including `tv_trades.csv` and
+`_indicators/`) live in a **private** Git repository attached as
+**`benchmarks/assets`** (submodule: `assets/data/` + `assets/strategies/`). Public
+clones do not receive that content.
+
+For **open source**, the public engine repo must keep this data **out of tree and
+out of history** (same as `corpus/`). A temporary inline `benchmarks/data/` +
+`benchmarks/strategies/` tree may exist only in **private** monorepos or until you
+run the migration script below.
+
 The harness produces two reports under [`results/`](results/):
 
 | Output | PineForge | PyneCore | PineTS | Verified against |
@@ -19,8 +30,9 @@ The harness produces two reports under [`results/`](results/):
 ## What this is, and what it isn't
 
 **This is fair.** Each engine consumes the same 41,307-bar Binance
-ETH/USDT:USDT 15m OHLCV feed (LFS-tracked at
-[`data/ETHUSDT_15.csv`](data/ETHUSDT_15.csv)). The PyneCore Python is
+ETH/USDT:USDT 15m OHLCV feed (LFS-tracked when committed under
+[`data/ETHUSDT_15.csv`](data/ETHUSDT_15.csv) or submodule
+[`assets/data/ETHUSDT_15.csv`](assets/data/ETHUSDT_15.csv)). The PyneCore Python is
 the official cloud-compiler output for the same `strategy.pine`
 sources PineForge runs against — no hand-translation in the loop.
 Where engines have configurable behaviours (commission, slippage,
@@ -38,21 +50,23 @@ slightly; this harness measures that gap.
 
 ```
 benchmarks/
-├── data/
-│   └── ETHUSDT_15.csv                LFS-tracked OHLCV snapshot (~2.3 MB,
-│                                     41,307 bars, 2025-03-01 → today)
-├── strategies/
-│   ├── 01-sma-cross/
-│   │   ├── strategy.pine             canonical source (matches corpus/)
-│   │   ├── strategy_pyne.py          PyneSys cloud-compiler output
-│   │   ├── tv_trades.csv             ground truth (copied from corpus/)
-│   │   ├── pineforge_trades.csv      PineForge trade list (TV format)
-│   │   └── pynecore_trades.csv       PyneCore trade list (normalised)
-│   ├── 02-…  ...  50-…/              (50-strategy suite)
-│   └── _indicators/                  shared canonical indicator script
-│       ├── canonical.pine            10-indicator source
-│       ├── canonical_pyne.py         cloud-compiled @pyne version
-│       └── canonical_{pineforge,pyne,pinets}.csv  per-bar values
+├── assets/                            private git submodule (OSS): OHLCV + all strategy fixtures
+│   ├── data/
+│   │   └── ETHUSDT_15.csv             LFS may apply; ~2.3 MB, 41,307 bars
+│   └── strategies/
+│       ├── 01-sma-cross/
+│       │   ├── strategy.pine             canonical source (matches corpus/)
+│       │   ├── strategy_pyne.py          PyneSys cloud-compiler output
+│       │   ├── tv_trades.csv             ground truth (copied from corpus/)
+│       │   ├── pineforge_trades.csv      PineForge trade list (TV format)
+│       │   └── pynecore_trades.csv       PyneCore trade list (normalised)
+│       ├── 02-…  ...  50-…/              (50-strategy suite)
+│       └── _indicators/                  shared canonical indicator script
+│           ├── canonical.pine            10-indicator source
+│           ├── canonical_pyne.py         cloud-compiled @pyne version
+│           └── canonical_{pineforge,pyne,pinets}.csv  per-bar values
+├── data/                              private pre-migration / monorepo only — do not publish
+├── strategies/                        private pre-migration / monorepo only — do not publish
 ├── runners/
 │   ├── fetch_extended_ohlcv.py       ccxt fetch (mirrors parent's fetch_data.py)
 │   ├── bootstrap_strategies.py       copy 50 strategy folders from corpus/
@@ -206,11 +220,12 @@ every run so the comparison numbers stay reproducible.
 
 ### `strategies/<NN-slug>/strategy.pine`
 
-Hand-written PineScript v6 sources, copied verbatim from the
-[`corpus/`](../corpus/) directory of this repository. Apache 2.0 along
-with the rest of the repo. The community ones (06-…, 07-…, 08-…, etc.)
-are re-implementations of public PineScript patterns; if you recognise
-yours and want attribution, please open an issue.
+PineScript sources live in the **private** `benchmarks/assets` submodule (or a
+pre-migration checkout). Their **license and redistribution rights** are those
+of the private fixtures repository and underlying authors — they are **not**
+automatically Apache-2.0 merely because this engine repo is. The **benchmark
+harness code** under `benchmarks/runners/`, `compare*.py`, and `run_all.sh` is
+Apache-2.0 like the rest of this project.
 
 ### `strategies/<NN-slug>/strategy_pyne.py` (cloud-compiled)
 
@@ -229,12 +244,12 @@ PyneComp v6.0.31). They are committed for two reasons:
   runs of `compare.py` produce stable numbers regardless of cloud-side
   drift.
 
-These derivative works inherit the source license (Apache 2.0) — the
-PyneSys compiler is the same kind of tool as `gcc` or `rustc`: its
-output belongs to the source author, not the compiler vendor. The
-compiler header line in each file (`# This code was compiled by
-PyneComp v6.0.31`) attributes the translation tool, not transfers
-ownership.
+These derivative works **inherit the license terms of the underlying**
+`strategy.pine` (whatever license applies in the private fixtures repo).
+The PyneSys compiler is a tool (like `gcc`): its output does not transfer
+copyright to the compiler vendor. The compiler header line in each file
+(`# This code was compiled by PyneComp …`) attributes the translation tool,
+not ownership.
 
 ### PineTS (AGPL-3.0)
 
@@ -243,3 +258,5 @@ process — that's permissible for *running* the benchmark, but
 redistributing the whole toolchain as a single binary would trigger
 copyleft. We re-publish only **numerical results** (CSVs, summary
 tables), not PineTS source.
+
+Full licensing context for the runtime vs optional tools: [`../LEGAL.md`](../LEGAL.md).

@@ -3,10 +3,22 @@ Copyright 2026 PineForge contributors
 
 This product includes software developed for the PineForge project.
 
-Third-party components
-----------------------
+The PineForge runtime is licensed under the Apache License, Version 2.0.
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+
+Third-party components (runtime)
+----------------------------------
 
 Eigen (https://eigen.tuxfamily.org/)
-  Version fetched or installed at build time (e.g. 3.4.x).
+  Version fetched or installed at build time (e.g. 3.4.x via CMake FetchContent
+  or a system package such as libeigen3-dev / brew eigen).
   Licensed under the Mozilla Public License 2.0 (MPL-2.0).
   SPDX-License-Identifier: MPL-2.0
+
+Optional benchmark harness dependencies (not part of libpineforge)
+-------------------------------------------------------------------
+The contents under benchmarks/ may install separate Node.js and Python packages
+when you run the comparison tooling (e.g. PineTS, PyneCore, pandas). Those
+packages are licensed under their own terms (including AGPL-3.0 for PineTS as
+published upstream). They are not required to build or test the static runtime
+via ctest. See LEGAL.md for a summary.

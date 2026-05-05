@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Three-way trade-list comparator: TV ↔ PineForge ↔ PyneCore.
 
-For each strategy folder under `benchmarks/strategies/`, reads
+For each strategy folder under `benchmarks/` strategy fixtures (`data/` +
+`strategies/` inline, or `assets/data` + `assets/strategies` submodule), reads
 `tv_trades.csv`, `pineforge_trades.csv`, and `pynecore_trades.csv`,
 clips all three to a common entry-time window, aligns trades by
 direction + entry-time within that window, and reports:
@@ -51,19 +52,19 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-BENCH_DIR = REPO_ROOT / "benchmarks"
+_SYS_BENCH = Path(__file__).resolve().parent
+if str(_SYS_BENCH) not in sys.path:
+    sys.path.insert(0, str(_SYS_BENCH))
+from paths import BENCH, DATA, REPO_ROOT, STRATEGIES  # noqa: E402
+
+BENCH_DIR = BENCH
 
 # OHLCV resolution order (first existing wins):
-#   1. benchmarks/data/ETHUSDT_15.csv         — LFS-tracked snapshot
-#                                                (what committed pineforge_trades.csv
-#                                                 and pynecore_trades.csv were
-#                                                 generated against).
-#   2. benchmarks/_workdir/data/ETHUSDT_15.csv — live working copy, written
-#                                                by run_all.sh.
-#   3. corpus/data/ohlcv_ETH-USDT-USDT_15m.csv — fallback corpus reference.
+#   1. DATA/ETHUSDT_15.csv — snapshot (paths: benchmarks/assets/data or benchmarks/data)
+#   2. benchmarks/_workdir/data/ETHUSDT_15.csv — working copy from run_all.sh
+#   3. corpus/data/ohlcv_ETH-USDT-USDT_15m.csv — fallback
 _CANDIDATE_OHLCV = [
-    BENCH_DIR / "data" / "ETHUSDT_15.csv",
+    DATA / "ETHUSDT_15.csv",
     BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv",
     REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv",
 ]
@@ -434,7 +435,7 @@ def main() -> int:
                     help="Don't write Markdown reports — print to stdout instead")
     args = ap.parse_args()
 
-    strategies_root = BENCH_DIR / "strategies"
+    strategies_root = STRATEGIES
     if args.strategy:
         strategy_dirs = [strategies_root / args.strategy]
     else:

@@ -3,7 +3,8 @@
 in the same TV-format schema PineForge uses.
 
 Usage:
-    python benchmarks/runners/run_pynecore.py benchmarks/strategies/01-sma-cross
+    python benchmarks/runners/run_pynecore.py benchmarks/assets/strategies/01-sma-cross
+    # or legacy: benchmarks/strategies/01-sma-cross
 
 The strategy folder must contain:
     strategy_pyne.py   — hand-ported PyneCore script

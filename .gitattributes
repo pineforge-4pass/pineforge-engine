@@ -1,3 +1,4 @@
-# Large benchmark OHLCV — use Git LFS
+# Large benchmark OHLCV — use Git LFS when snapshots live in this repo
 # (install: https://git-lfs.com; after clone: `git lfs install && git lfs pull`)
+benchmarks/assets/data/*.csv filter=lfs diff=lfs merge=lfs -text
 benchmarks/data/*.csv filter=lfs diff=lfs merge=lfs -text

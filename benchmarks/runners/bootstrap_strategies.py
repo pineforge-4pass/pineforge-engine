@@ -2,7 +2,8 @@
 """Bootstrap a set of benchmark strategy folders from the corpus.
 
 For each requested strategy this script:
-    1. Creates `benchmarks/strategies/<NN-slug>/`.
+    1. Creates `benchmarks/…/strategies/<NN-slug>/` (see `paths.py`: either
+       `benchmarks/assets/strategies` or legacy `benchmarks/strategies`).
     2. Copies `strategy.pine`, `tv_trades.csv`, `engine_trades.csv`
        (renamed to `pineforge_trades.csv`) from the corpus.
     3. Stops short of generating `strategy_pyne.py` — that is
@@ -30,7 +31,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 CORPUS = REPO_ROOT / "corpus"
-BENCH_DIR = REPO_ROOT / "benchmarks" / "strategies"
+_STR = Path(__file__).resolve().parent.parent
+if str(_STR) not in sys.path:
+    sys.path.insert(0, str(_STR))
+from paths import STRATEGIES  # noqa: E402
+
+BENCH_DIR = STRATEGIES
 
 # Default plan: extend the existing 10 hand-ported strategies (which we
 # keep as 01-10) with another 40, bringing the suite to ~50 total.

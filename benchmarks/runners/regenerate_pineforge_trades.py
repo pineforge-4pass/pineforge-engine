@@ -3,14 +3,14 @@
 running the existing corpus-built `strategy.so` against the extended
 OHLCV file at `_workdir/data/ETHUSDT_15.csv`.
 
-Each `benchmarks/strategies/<NN-slug>/` folder maps to one
+Each benchmark strategy folder (see `paths.STRATEGIES`) maps to one
 `corpus/<category>/<corpus_name>/` folder via the same plan
 `bootstrap_strategies.py` uses. This script:
 
     1. Resolves the corpus folder for each benchmark folder
     2. Runs `scripts/run_strategy.py <corpus_folder> --ohlcv <extended>`
     3. Copies the resulting `engine_trades.csv` to
-       `benchmarks/strategies/<NN>/pineforge_trades.csv`
+       `<STRATEGIES>/<NN>/pineforge_trades.csv`
 
 Pre-requisites:
     - `cmake -B build -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
@@ -33,9 +33,14 @@ BENCH_DIR = REPO_ROOT / "benchmarks"
 CORPUS_ROOT = REPO_ROOT / "corpus"
 RUN_STRATEGY = REPO_ROOT / "scripts" / "run_strategy.py"
 
-# Prefer the LFS-tracked snapshot, fall back to the live working copy.
+_SYS_BENCH = BENCH_DIR
+if str(_SYS_BENCH) not in sys.path:
+    sys.path.insert(0, str(_SYS_BENCH))
+from paths import DATA, STRATEGIES  # noqa: E402
+
+# Prefer the committed snapshot, fall back to the live working copy.
 _OHLCV_CANDIDATES = [
-    BENCH_DIR / "data" / "ETHUSDT_15.csv",
+    DATA / "ETHUSDT_15.csv",
     BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv",
 ]
 DEFAULT_OHLCV = next((p for p in _OHLCV_CANDIDATES if p.exists()), _OHLCV_CANDIDATES[-1])
@@ -47,7 +52,7 @@ from bootstrap_strategies import DEFAULT_PLAN  # noqa: E402
 
 def regen_one(corpus_rel: str, idx: int, slug: str, ohlcv: Path) -> tuple[bool, str]:
     corpus_dir = CORPUS_ROOT / corpus_rel
-    bench_dir = BENCH_DIR / "strategies" / f"{idx:02d}-{slug}"
+    bench_dir = STRATEGIES / f"{idx:02d}-{slug}"
 
     if not bench_dir.exists():
         return False, f"benchmark folder missing: {bench_dir.relative_to(REPO_ROOT)}"

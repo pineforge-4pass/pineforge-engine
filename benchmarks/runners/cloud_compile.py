@@ -43,10 +43,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BENCH_DIR = REPO_ROOT / "benchmarks"
 WORKDIR = BENCH_DIR / "_workdir"
+_SYS_BENCH = Path(__file__).resolve().parent.parent
+if str(_SYS_BENCH) not in sys.path:
+    sys.path.insert(0, str(_SYS_BENCH))
+from paths import STRATEGIES  # noqa: E402
 
 
 def find_strategies(only: str | None) -> list[Path]:
-    root = BENCH_DIR / "strategies"
+    root = STRATEGIES
     out: list[Path] = []
     for d in sorted(root.iterdir()):
         if not d.is_dir() or d.name.startswith("_"):

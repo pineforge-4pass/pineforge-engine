@@ -12,6 +12,8 @@ Please allow reasonable time for a fix before discussing the issue in public.
 
 This repository is the **PineScript v6 backtest runtime** (C/C++ library). Reports about the closed-source transpiler, TradingView’s platform, or third-party strategy code are out of scope for this tracker unless they concern this runtime’s build or execution of untrusted native code.
 
+TradingView-linked CSV exports and related validation fixtures are maintained in **private** `corpus/` and `benchmarks/assets/` submodules; if you suspect those were exposed or committed to a public branch by mistake, report that as a data-handling concern privately as well.
+
 ## Supported versions
 
 Security fixes are applied to the `main` branch as needed. Tags and release notes will note any security-relevant changes; use the latest tag where possible.

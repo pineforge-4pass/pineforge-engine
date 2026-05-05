@@ -2,6 +2,7 @@
   "name": "pineforge-benchmarks-pinets",
   "private": true,
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "description": "PineTS runner for the PineForge three-way engine benchmark.",
   "type": "module",
   "scripts": {

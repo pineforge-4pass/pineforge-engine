@@ -22,6 +22,7 @@ const REPO = resolve(__dirname, '..', '..');
 // OHLCV resolution order: LFS snapshot → live working copy → corpus fallback.
 const { existsSync } = await import('node:fs');
 const candidates = [
+    resolve(REPO, 'benchmarks/assets/data/ETHUSDT_15.csv'),
     resolve(REPO, 'benchmarks/data/ETHUSDT_15.csv'),
     resolve(REPO, 'benchmarks/_workdir/data/ETHUSDT_15.csv'),
     resolve(REPO, 'corpus/data/ohlcv_ETH-USDT-USDT_15m.csv'),
@@ -105,8 +106,11 @@ for (const c of COLS) {
     }
 }
 
-// Emit canonical CSV.
-const outPath = resolve(REPO, 'benchmarks/strategies/_indicators/canonical_pinets.csv');
+// Emit canonical CSV (assets submodule or legacy benchmarks/strategies).
+const strategiesRoot = existsSync(resolve(REPO, 'benchmarks/assets/strategies'))
+    ? resolve(REPO, 'benchmarks/assets/strategies')
+    : resolve(REPO, 'benchmarks/strategies');
+const outPath = resolve(strategiesRoot, '_indicators/canonical_pinets.csv');
 const header = ['bar_index', 'timestamp_ms', ...COLS].join(',');
 const lines = [header];
 for (let i = 0; i < candles.length; i++) {
