@@ -1,0 +1,3 @@
+[submodule "corpus"]
+	path = corpus
+	url = git@github.com:fullpass-4pass/pineforge-corpus.git
