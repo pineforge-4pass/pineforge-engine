@@ -174,7 +174,7 @@ def main() -> int:
     sections = [
         "# Indicator comparison\n",
         "All three engines compute the canonical indicator script "
-        f"([`canonical.pine`]({pine_href})) "
+        f"([canonical.pine]({pine_href})) "
         "on the same 36,361-bar OHLCV feed. This table reports per-bar "
         "absolute and relative deltas across every pair of engines.\n",
         "**NA columns** count bars where one engine reported a number "
