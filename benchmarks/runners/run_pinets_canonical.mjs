@@ -18,7 +18,15 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, '..', '..');
-const csvPath = resolve(REPO, 'corpus/data/ohlcv_ETH-USDT-USDT_15m.csv');
+
+// Prefer the extended OHLCV (Binance ETH/USDT:USDT 15m since 2025-03-01)
+// fetched by `fetch_extended_ohlcv.py`. Fall back to the corpus copy
+// if the extended file isn't there yet.
+const extendedPath = resolve(REPO, 'benchmarks/_workdir/data/ETHUSDT_15.csv');
+const corpusPath = resolve(REPO, 'corpus/data/ohlcv_ETH-USDT-USDT_15m.csv');
+const { existsSync } = await import('node:fs');
+const csvPath = existsSync(extendedPath) ? extendedPath : corpusPath;
+console.log(`pinets: using OHLCV ${csvPath.replace(REPO + '/', '')}`);
 
 // Load OHLCV CSV into PineTS' candle objects.
 const text = readFileSync(csvPath, 'utf8');

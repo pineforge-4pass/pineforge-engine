@@ -47,6 +47,18 @@ BENCH_DIR = REPO_ROOT / "benchmarks" / "strategies"
 #          ies-probe-* / vcp-probe-* whose parents use request.security)
 #          are excluded.
 DEFAULT_PLAN: list[tuple[str, int, str]] = [
+    # 01..10 — the original hand-curated set (5 indicator-driven, 5 community)
+    ("basic/ma-cros",                       1, "sma-cross"),
+    ("basic/inside-bar",                    2, "inside-bar"),
+    ("basic/supertrend",                    3, "supertrend"),
+    ("validation/01-macd-histogram",        4, "macd-histogram"),
+    ("validation/04-stoch-rsi",             5, "stoch-rsi"),
+    ("community/LiquitySweep",              6, "liquidity-sweep"),
+    ("community/scalping-strategy",         7, "scalping-strategy"),
+    ("community/4ema_rsi",                  8, "4ema-rsi"),
+    ("community/KKB",                       9, "kkb-kalman"),
+    ("community/MarketShift",              10, "market-shift"),
+
     # remaining basic/
     ("basic/greedy",            11, "greedy"),
     ("basic/keltner",           12, "keltner"),

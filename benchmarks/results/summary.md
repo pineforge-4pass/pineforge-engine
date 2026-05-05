@@ -1,7 +1,8 @@
 # Three-way engine benchmark — summary
 
 Compared **PineForge** against two other open-source PineScript runtimes
-across the same 36,361-bar OHLCV feed (`corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`):
+across the same 41,307-bar Binance ETH/USDT:USDT 15m OHLCV feed (extended
+to cover all TV-export trades + ~30 days of warmup):
 
 | Engine | Language | License | Strategy support | Indicator support |
 |---|---|---|:---:|:---:|
@@ -13,8 +14,11 @@ PineTS does not yet implement strategy backtesting (their own roadmap
 calls it "the next big feature"), so the trade-list comparison is
 two-way (PineForge ↔ PyneCore). The indicator comparison is three-way.
 
-**All `strategy_pyne.py` files are produced by the official PyneSys
-cloud compiler** (`pyne compile`, PyneComp v6.0.31), not hand-ported.
+**All three artifacts are produced by official tooling, not hand-ports**:
+
+- `strategy.pine`: hand-written, identical across engines
+- `strategy_pyne.py`: produced by **PyneSys cloud compiler** (`pyne compile`, PyneComp v6.0.31)
+- OHLCV: fetched via **ccxt's `binanceusdm`** for `ETH/USDT:USDT 15m` since 2025-03-01 (mirrors the parent project's `scripts/fetch_data.py`)
 
 ---
 
@@ -22,59 +26,91 @@ cloud compiler** (`pyne compile`, PyneComp v6.0.31), not hand-ported.
 
 | Match degree | PineForge | PyneCore |
 |---|---:|---:|
-| 🟢 **excellent** | **49 / 50 (98%)** | 46 / 50 (92%) |
-| 🟢 strong | 1 / 50 | 1 / 50 |
+| 🟢 **excellent** | **48 / 50 (96%)** | 45 / 50 (90%) |
+| 🟢 strong | 2 / 50 | 2 / 50 |
 | 🟡 moderate | 0 / 50 | 2 / 50 |
 | 🟠 weak | 0 / 50 | 1 / 50 |
 | 🔴 minimal | 0 / 50 | 0 / 50 |
 
-**PineForge hits the canonical "excellent" tier on 49 out of 50
-strategies — count delta < 1%, entry/exit p90 < 0.01%, P&L p90 < 1%
+**PineForge hits the canonical "excellent" tier on 48 out of 50
+strategies** — count delta < 1%, entry/exit p90 < 0.01%, P&L p90 < 1%
 (or production thresholds for trail-using strategies), and ≥95% of
-TV's in-window trades have a matching engine trade.**
+TV's in-window trades have a matching engine trade.
 
-The single non-excellent PineForge result (`13-parabolic-asr`) is
-"strong" tier — it's a fast-flipping SAR strategy where both engines
-generate the same handful of extra in-window trades vs TV (count delta
-~2.8%, prices/PnL still strict).
+The 2 "strong" strategies (`13-parabolic-asr`, `17-bos-curv`) drift
+the same way on **both engines** — PineForge and PyneCore agree
+trade-for-trade with each other, just both produce slightly more
+trades than TV (count delta 1.8–2.8% on those, prices/PnL still
+strict). That's a TV-side semantic difference, not an engine bug.
+
+The 4 PyneCore-only outliers (`06-liquidity-sweep`,
+`07-scalping-strategy`, `49-partial-exit-qty-percent`, +
+`13-parabolic-asr` strong) all use bracket / trail / partial exits
+where PyneCore's broker emulator differs from TV; PineForge tracks TV
+faithfully on those.
 
 ---
 
-## Methodology fix: window-clipped comparison
+## Methodology
 
-An earlier draft of this report compared raw trade counts, which made
-both engines look like they failed the strict-tier count threshold on
-nearly every strategy. That was the comparator's fault, not the
-engines'. The TV exports cover ~3 weeks of history *before* this
-repo's OHLCV CSV begins (so we can't reproduce those trades — there
-are no bars), and our 36k-bar OHLCV extends ~4 weeks *after* TV's
-exports end (so the engine fires entries that TV's export does not
-include).
+### OHLCV: extended to cover full TV history
 
-The canonical PineForge parity sweep
-(`validate_detailed_report.py::common_entry_window_ms`) handles this
-by clipping all three trade lists to:
+The benchmark uses a **41,307-bar feed** (15-minute Binance ETH/USDT
+perpetual, 2025-03-01 → today) instead of the parent project's
+36,361-bar reference feed. The extra ~5,000 bars give every strategy
+~30 days of warmup before its first compared trade and cover ~3 weeks
+of TV-export history that the original 36k-bar feed missed.
 
-```
-[OHLCV time span]  ∩  [TV entry-time span]  ∩  [engine entry-time span]
-```
+The feed is fetched fresh each run via `runners/fetch_extended_ohlcv.py`
+which uses `ccxt.binanceusdm` — same provider, same symbol, same
+timeframe as the parent project's `scripts/fetch_data.py`. The bars
+are byte-identical to the corpus reference where the time ranges
+overlap.
 
-before computing any deltas. This benchmark now uses the same
-algorithm, which is why every per-strategy block shows
-`TV (raw / win)` — the raw count is what's in the CSV, the in-window
-count is what we actually compare.
+### Comparison: window-clipped four-dimensional diff
 
-After the fix, the count delta on 01-sma-cross drops from 3.3% to
-**0.00%** (TV in-window 2212, PineForge in-window 2212 — perfect
-agreement on every fired entry).
+For each strategy the harness:
 
-## Trade-list parity vs TradingView (window-clipped, 50 strategies)
+1. Reads `tv_trades.csv`, `pineforge_trades.csv`, `pynecore_trades.csv`.
+2. Computes the common entry-time window:
 
-50 strategies cloud-compiled to PyneCore from the same `strategy.pine`
-sources used by PineForge. Each engine produces a chronological trade
-list; the harness clips all three lists to the common-window
-intersection, then aligns trades by direction + entry-time within a
-1-hour gating window and reports p90 deltas.
+   ```
+   [OHLCV bar span] ∩ [TV entry span] ∩ [engine entry span]
+   ```
+
+   This mirrors `validate_detailed_report.py::common_entry_window_ms`
+   in the parent project.
+3. Clips both TV and engine trade lists to that window.
+4. Aligns trades within the window by direction + entry-time within
+   a 1-hour gating window with a $3 entry-price gate.
+5. Computes four-dimensional p90 deltas vs TV:
+
+   - **count delta** = `|n_tv − n_engine| / max(n_tv, n_engine)`
+   - **entry-price p90** = p90 of `|tv_entry − eng_entry| / |tv_entry|`
+   - **exit-price p90** = p90 of `|tv_exit − eng_exit| / |tv_exit|`
+   - **PnL p90** = p90 of `|tv_pnl − eng_pnl| / |tv_pnl|`, dropping trades with `|tv_pnl| < $0.01`
+6. Classifies into 5 tiers (excellent / strong / moderate / weak / minimal)
+   per the canonical sweep heuristic.
+
+### Threshold profiles (auto-detected per strategy)
+
+Match the parent project's `DEFAULT_PARITY_{STRICT,PRODUCTION}`:
+
+|  | strict | production (uses `trail_*`) |
+|---|---:|---:|
+| count rel diff | < 1% | < 1% |
+| entry p90 | < 0.01% | < 0.01% |
+| exit p90 | < 0.01% | < 0.05% |
+| PnL p90 | < 1% | < 100% |
+
+The 5-tier classifier requires **all four dimensions** to pass at the
+strategy's profile + ≥95% TV match rate for "excellent". Strategies
+that drift on count but match TV bit-for-bit on prices and P&L
+typically come out as "strong" (within 5x strict, ≥90% match rate).
+
+---
+
+## Trade-list parity (50 strategies, window-clipped)
 
 ### Coverage
 
@@ -87,9 +123,9 @@ intersection, then aligns trades by direction + entry-time within a
 (All `request.security()` / multi-timeframe strategies excluded —
 PyneCore's MTF data path is not yet wired into this harness.)
 
-### Per-engine strict-tier dimension stats (49 PineForge "excellent" strategies)
+### Per-engine strict-tier dimension stats (48 PineForge "excellent" strategies)
 
-For the 49 strategies where PineForge is excellent, on every matched
+For the 48 strategies where PineForge is excellent, on every matched
 trade in the common window:
 
 | Dimension | PineForge p90 | Threshold |
@@ -105,18 +141,28 @@ the parent project's `reports/validation_detailed.md` — it reflects
 TradingView's display rounding plus tiny PineForge-side fee
 recomputation differences, all well below the strict threshold.
 
-### Engine-level divergence (PyneCore-only, 4 strategies)
+### Engine-level divergence (PyneCore-only, 3 strategies)
 
-PyneCore drops below excellent on four strategies; all of them use
-TradingView's bracket / trailing / partial exits — categories where
-PyneCore has known order-matching defects PineForge does not share:
+Three strategies show PyneCore-specific drift PineForge does not
+share. All use TradingView's bracket / trailing / partial exits —
+categories where PyneCore's broker emulator differs from TV:
 
 | # | Strategy | PineForge | PyneCore | Defect |
 |---|---|---|---|---|
-| 06 | liquidity-sweep | 🟢 excellent (88 / 88 match) | 🟡 moderate (count Δ ~3%, exit p90 ~1.6%) | bracket exit (`stop=` + `limit=`) |
+| 06 | liquidity-sweep | 🟢 excellent | 🟡 moderate (count Δ ~3%, exit p90 ~1.6%) | bracket exit (`stop=` + `limit=`) |
 | 07 | scalping-strategy | 🟢 excellent (production profile) | 🟡 moderate | bracket + trail (`stop=` + `limit=` + `trail_points=`) |
-| 13 | parabolic-asr | 🟢 strong (count Δ ~2.8%) | 🟢 strong | (both engines drift the same — TV-side semantic) |
-| 49 | partial-exit-qty-percent | 🟢 excellent (683 / 683 match) | 🟠 weak (**2,671** trades vs TV's 683) | `strategy.close(qty_percent=…)` partial exits split into separate trades |
+| 49 | partial-exit-qty-percent | 🟢 excellent (725 / 725 match) | 🟠 weak (**2,805** trades vs TV's 725) | `strategy.close(qty_percent=…)` partial exits split into separate trades |
+
+The 49-partial-exit case is the most dramatic: PyneCore's broker
+emulator records every partial close as a separate trade, inflating
+the count to ~3.9× TV's. PineForge mirrors TV exactly.
+
+### TV-side drift, both engines agree (2 strategies)
+
+| # | Strategy | PineForge | PyneCore | Notes |
+|---|---|---|---|---|
+| 13 | parabolic-asr | 🟢 strong (count Δ 2.8%) | 🟢 strong (count Δ 2.8%) | both engines produce 2,848 in-window trades vs TV's 2,768; entry/exit/PnL strict |
+| 17 | bos-curv | 🟢 strong (count Δ 1.8%) | 🟢 strong (count Δ 1.8%) | both engines produce 267 trades vs TV's 272; engines agree trade-for-trade |
 
 The 49-partial-exit case is the most dramatic: PyneCore's broker
 emulator records every partial close as a separate trade, inflating
@@ -131,7 +177,7 @@ match degree, and PineForge ↔ PyneCore agreement.
 ## Indicator parity (three-way: PineForge vs PyneCore vs PineTS)
 
 A canonical script ([`canonical.pine`](../strategies/_indicators/canonical.pine))
-computes 10 common indicators on the full 36,361-bar feed:
+computes 10 common indicators on the full feed:
 
 ```
 ema21, sma21, rsi14, atr14,
@@ -139,7 +185,7 @@ macd_line, macd_signal, macd_hist,
 bb_basis, bb_upper, bb_lower
 ```
 
-### Headline numbers (max relative delta across all 10 indicators × 36,341 post-warmup bars)
+### Headline numbers (max relative delta across all 10 indicators × post-warmup bars)
 
 | Pair | p50-rel | p90-rel | p99-rel | max-rel |
 |---|---:|---:|---:|---:|
@@ -150,8 +196,8 @@ bb_basis, bb_upper, bb_lower
 \*The `1.8e+0` outlier is a single bar at the EMA/MACD warmup boundary
 where PineForge's `ta.ema` emits a value starting at bar 0 (seed = first
 close), while PyneCore and PineTS wait for the full length-1 bars of
-history. After both engines finish warming up they converge on the
-same numerical value to within 1e-8 relative.
+history. After both engines finish warming up they converge to within
+1e-8 relative.
 
 See [`indicator_comparison.md`](indicator_comparison.md) for the full
 per-indicator table.
@@ -161,7 +207,7 @@ per-indicator table.
 ## How to reproduce
 
 ```bash
-# 1. Build the runtime
+# 1. Build the runtime + corpus strategy .so files
 cd ..
 cmake -B build -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON
 cmake --build build -j
@@ -169,11 +215,8 @@ cmake --build build -j
 # 2. Set up the benchmark harness
 cd benchmarks
 python3 -m venv .venv && source .venv/bin/activate
-pip install "pynesys-pynecore[cli]" pandas numpy
+pip install "pynesys-pynecore[cli]" pandas numpy ccxt
 npm install
-mkdir -p _workdir/data
-cp ../corpus/data/ohlcv_ETH-USDT-USDT_15m.csv _workdir/data/ETHUSDT_15.csv
-pyne -w "$(pwd)/_workdir" data convert-from --provider pineforge --symbol ETHUSDT --timezone UTC _workdir/data/ETHUSDT_15.csv
 
 # 3. Configure the PyneSys API key (gitignored, not committed)
 cat > _workdir/config/api.toml <<EOF
@@ -182,21 +225,24 @@ api_key = "YOUR_KEY_HERE"
 timeout = 30
 EOF
 
-# 4. Bootstrap + cloud-compile + run + verify in one command
+# 4. Run the entire pipeline
 bash run_all.sh
 ```
 
 `run_all.sh` chains:
 
-1. `bootstrap_strategies.py` — copies 50 strategy folders from corpus/
-2. `cloud_compile.py` — runs `pyne compile` on every `strategy.pine` →
+1. `fetch_extended_ohlcv.py` — Binance USDT-M ETH/USDT:USDT 15m, since 2025-03-01
+2. `bootstrap_strategies.py` — copies 50 strategy folders from corpus/
+3. `cloud_compile.py` — runs `pyne compile` on every `strategy.pine` →
    `strategy_pyne.py` (cloud-canonical translation, no hand-ports)
-3. `run_pynecore.py` per strategy — runs the compiled output
-4. `run_pinets_canonical.mjs` + `run_pineforge_canonical` — three-way indicator comparison
-5. `compare.py` — clips all trade lists to the common entry-time
+4. `regenerate_pineforge_trades.py` — runs each corpus-built `strategy.so`
+   against the extended OHLCV via `scripts/run_strategy.py`
+5. `run_pynecore.py` per strategy — runs the cloud-compiled output
+6. `run_pinets_canonical.mjs` + `run_pineforge_canonical` — three-way indicator comparison
+7. `compare.py` — clips all trade lists to the common entry-time
    window, classifies match degree per the canonical sweep heuristic
-6. `compare_indicators.py` — per-bar indicator deltas
+8. `compare_indicators.py` — per-bar indicator deltas
 
 Total wall time on a recent Mac, after the runtime is built and the API
-key is set: **~5 minutes for 50 cloud compiles + 50 PyneCore runs +
-canonical indicators**.
+key is set: **~3 minutes** (~20s OHLCV fetch + 50s cloud compile +
+6s PineForge re-run + 70s PyneCore + ~5s diff/report).

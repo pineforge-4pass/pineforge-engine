@@ -43,17 +43,23 @@ if [[ ! -d "${BENCH_DIR}/node_modules" ]]; then
     (cd "${BENCH_DIR}" && npm install --silent)
 fi
 
-# Convert reference OHLCV to PyneCore .ohlcv if absent.
-if [[ ! -f "${WORKDIR}/data/ETHUSDT_15.ohlcv" ]]; then
-    log "converting OHLCV CSV to PyneCore format"
-    mkdir -p "${WORKDIR}/data"
-    cp "${ROOT_DIR}/corpus/data/ohlcv_ETH-USDT-USDT_15m.csv" "${WORKDIR}/data/ETHUSDT_15.csv"
-    "${BENCH_DIR}/.venv/bin/pyne" -w "${WORKDIR}" data convert-from \
-        --provider pineforge --symbol ETHUSDT --timezone UTC \
-        "${WORKDIR}/data/ETHUSDT_15.csv" >/dev/null
-fi
-
+# Fetch extended OHLCV from Binance USDT-M futures (covers full TV
+# trade-export time range with ~30-day pre-roll for warmup).
 source "${BENCH_DIR}/.venv/bin/activate"
+if [[ ! -f "${WORKDIR}/data/ETHUSDT_15.ohlcv" || "${REFRESH_OHLCV:-0}" == "1" ]]; then
+    log "fetching extended OHLCV (Binance ETH/USDT:USDT 15m, since 2025-03-01)"
+    mkdir -p "${WORKDIR}/data"
+    python3 "${BENCH_DIR}/runners/fetch_extended_ohlcv.py" \
+        --since "${OHLCV_SINCE:-2025-03-01}" >/dev/null \
+        || warn "OHLCV fetch failed; falling back to corpus copy"
+    if [[ ! -f "${WORKDIR}/data/ETHUSDT_15.csv" ]]; then
+        cp "${ROOT_DIR}/corpus/data/ohlcv_ETH-USDT-USDT_15m.csv" \
+           "${WORKDIR}/data/ETHUSDT_15.csv"
+        pyne -w "${WORKDIR}" data convert-from \
+            --provider pineforge --symbol ETHUSDT --timezone UTC \
+            "${WORKDIR}/data/ETHUSDT_15.csv" >/dev/null
+    fi
+fi
 
 # --- 3a) bootstrap strategy folders + cloud-compile -----------------
 
@@ -71,6 +77,14 @@ if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
         python3 "${BENCH_DIR}/runners/cloud_compile.py" >/dev/null \
             || warn "cloud_compile.py reported failures; continuing with whatever exists"
     fi
+fi
+
+# --- 3c) regenerate PineForge trades on the extended OHLCV ----------
+
+if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
+    log "regenerating PineForge trades against extended OHLCV"
+    python3 "${BENCH_DIR}/runners/regenerate_pineforge_trades.py" >/dev/null \
+        || warn "regenerate_pineforge_trades.py reported failures; continuing"
 fi
 
 # --- 3b) run all strategies through PyneCore ------------------------
@@ -115,7 +129,9 @@ if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" 
         -o "${CANON_BIN}"
 fi
 log "running canonical indicators through PineForge"
-(cd "${BENCH_DIR}" && "${CANON_BIN}" >/dev/null)
+# Prefer the extended OHLCV (matches the trade-list comparison feed);
+# the C++ binary takes the input CSV as its first arg.
+(cd "${BENCH_DIR}" && "${CANON_BIN}" "${WORKDIR}/data/ETHUSDT_15.csv" >/dev/null)
 
 # --- 6) reports -------------------------------------------------------
 

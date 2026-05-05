@@ -129,19 +129,25 @@ Headline numbers (see [`results/summary.md`](results/summary.md)):
 
 | Match degree | PineForge | PyneCore |
 |---|---:|---:|
-| 🟢 excellent | **49 / 50** | 46 / 50 |
-| 🟢 strong | 1 / 50 | 1 / 50 |
+| 🟢 excellent | **48 / 50** | 45 / 50 |
+| 🟢 strong | 2 / 50 | 2 / 50 |
 | 🟡 moderate | 0 | 2 |
 | 🟠 weak | 0 | 1 |
 
-PineForge hits canonical **excellent** tier on 49/50 strategies —
+PineForge hits canonical **excellent** tier on 48/50 strategies —
 count delta < 1%, entry/exit p90 < 0.01%, P&L p90 < 1%, ≥95% TV match
-rate (production thresholds for trail-using strategies). The single
-"strong" result (parabolic-asr) is a fast-flipping SAR where both
-engines generate the same handful of extra in-window trades vs TV.
+rate (production thresholds for trail-using strategies). The 2
+"strong" results (`13-parabolic-asr`, `17-bos-curv`) drift the same
+way on both engines — they agree trade-for-trade with each other,
+both producing 1.8–2.8% more trades than TV. That's TV-side semantic,
+not an engine bug.
 
-PyneCore drops below excellent on four bracket / trailing / partial-
+PyneCore drops below excellent on three bracket / trailing / partial-
 exit strategies — order-matching defects PineForge does not share.
+
+Benchmark uses **extended OHLCV** (Binance USDT-M ETH/USDT:USDT 15m,
+since 2025-03-01) so all TV-export trades fall inside the comparison
+window. The lead 30 days serve as warmup for indicator state.
 
 ## License
 

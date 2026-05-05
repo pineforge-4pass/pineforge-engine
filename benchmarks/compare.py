@@ -53,7 +53,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCH_DIR = REPO_ROOT / "benchmarks"
-OHLCV_PATH = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
+
+# Prefer the extended OHLCV fetched by `runners/fetch_extended_ohlcv.py`
+# (Binance USDT-M ETH/USDT:USDT 15m since 2025-03-01). Fall back to the
+# corpus reference if the extended file isn't present yet.
+_EXTENDED_OHLCV = BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv"
+_CORPUS_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
+OHLCV_PATH = _EXTENDED_OHLCV if _EXTENDED_OHLCV.exists() else _CORPUS_OHLCV
 
 # Match window for entry-time alignment (matches parent project's gate)
 MATCH_WINDOW_S = 3600
