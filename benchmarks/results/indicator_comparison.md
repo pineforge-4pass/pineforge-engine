@@ -1,6 +1,6 @@
 # Indicator comparison
 
-All three engines compute the canonical indicator script ([`canonical.pine`](../strategies/_indicators/canonical.pine)) on the same 36,361-bar OHLCV feed. This table reports per-bar absolute and relative deltas across every pair of engines.
+All three engines compute the canonical indicator script ([`canonical.pine`](../assets/strategies/_indicators/canonical.pine)) on the same 36,361-bar OHLCV feed. This table reports per-bar absolute and relative deltas across every pair of engines.
 
 **NA columns** count bars where one engine reported a number but the other was still in its warmup window (or vice versa). Engines disagree on warmup behaviour for some indicators (e.g. PineForge's EMA emits the first close at bar 0 while PyneCore/PineTS wait for length-1 bars of history). This is a documented semantic divergence, not a numerical defect.
 
