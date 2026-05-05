@@ -6,131 +6,149 @@ their strategy backtester is a roadmap item (per [their
 README](https://github.com/LuxAlgo/PineTS#roadmap)). Both columns
 are diffed against the same `tv_trades.csv` ground truth.
 
-### 01-sma-cross
+**Window-clipped comparison.** TV's chart export typically covers
+~3 weeks of history *before* this repo's OHLCV begins, and our
+OHLCV extends ~4 weeks *after* TV's export ends. To make the
+count fair, we clip both lists to
+`[OHLCV span] ∩ [TV entry span] ∩ [engine entry span]` before
+comparing — the same algorithm the canonical PineForge parity
+sweep (`validate_detailed_report.py::common_entry_window_ms`)
+uses.
 
-- TV trades: **2315**
-- **PineForge** trades: 2393 (matched 2212, 95.6% of TV) — ⚠ drift
-    - count delta:   `3.2595%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0803%`
-- **PyneCore** trades: 2394 (matched 2212, 95.6% of TV) — ⚠ drift
-    - count delta:   `3.2999%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0790%`
+**5-tier match degree** mirrors the canonical sweep:
+🟢 *excellent* (count + all p90 strict, ≥95% match) → 🟢 *strong* (within 5x strict, ≥90% match) → 🟡 *moderate* → 🟠 *weak* → 🔴 *minimal*. Strategies that use TradingView's `trail_*` exits get the production threshold profile (exit p90 <0.05%, PnL p90 <100%) matching the canonical sweep.
 
-### 01-sma-cross — PineForge ↔ PyneCore agreement
+### 01-sma-cross  *(profile: strict)*
 
-- shared trades: 2393 / max(2393, 2394)
-- count delta: `0.0418%`
+- TV trades (raw): **2315**
+- TV trades inside common window: **2212**
+- **PineForge** 🟢 **excellent**  (engine trades: 2393, in-window: 2212, matched 2212 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0804%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2394, in-window: 2212, matched 2212 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0791%`
+
+### 01-sma-cross — PineForge ↔ PyneCore agreement (in common window)
+
+- shared trades: 2393 / max(2393, 2393)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 02-inside-bar
+### 02-inside-bar  *(profile: strict)*
 
-- TV trades: **3332**
-- **PineForge** trades: 3467 (matched 3191, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.8939%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0787%`
-- **PyneCore** trades: 3468 (matched 3191, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.9216%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0787%`
+- TV trades (raw): **3332**
+- TV trades inside common window: **3191**
+- **PineForge** 🟢 **excellent**  (engine trades: 3467, in-window: 3192, matched 3191 = 100.0% of TV-in-window)
+    - count delta:  `0.0313%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0788%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 3468, in-window: 3192, matched 3191 = 100.0% of TV-in-window)
+    - count delta:  `0.0313%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0788%`
 
-### 02-inside-bar — PineForge ↔ PyneCore agreement
+### 02-inside-bar — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 3467 / max(3467, 3468)
-- count delta: `0.0288%`
+- shared trades: 3467 / max(3467, 3467)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 03-supertrend
+### 03-supertrend  *(profile: strict)*
 
-- TV trades: **761**
-- **PineForge** trades: 780 (matched 723, 95.0% of TV) — ⚠ drift
-    - count delta:   `2.4359%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0777%`
-- **PyneCore** trades: 781 (matched 723, 95.0% of TV) — ⚠ drift
-    - count delta:   `2.5608%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0777%`
+- TV trades (raw): **761**
+- TV trades inside common window: **723**
+- **PineForge** 🟢 **excellent**  (engine trades: 780, in-window: 723, matched 723 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0777%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 781, in-window: 723, matched 723 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0777%`
 
-### 03-supertrend — PineForge ↔ PyneCore agreement
+### 03-supertrend — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 780 / max(780, 781)
-- count delta: `0.1280%`
+- shared trades: 780 / max(780, 780)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 04-macd-histogram
+### 04-macd-histogram  *(profile: strict)*
 
-- TV trades: **2814**
-- **PineForge** trades: 2917 (matched 2696, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.5310%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0893%`
-- **PyneCore** trades: 2911 (matched 2695, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.3322%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0890%`
+- TV trades (raw): **2814**
+- TV trades inside common window: **2698**
+- **PineForge** 🟢 **excellent**  (engine trades: 2917, in-window: 2702, matched 2696 = 99.9% of TV-in-window)
+    - count delta:  `0.1480%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0894%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2911, in-window: 2695, matched 2695 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0890%`
 
-### 04-macd-histogram — PineForge ↔ PyneCore agreement
+### 04-macd-histogram — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2910 / max(2917, 2911)
-- count delta: `0.2057%`
+- shared trades: 2910 / max(2910, 2910)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 05-stoch-rsi
+### 05-stoch-rsi  *(profile: strict)*
 
-- TV trades: **1337**
-- **PineForge** trades: 1388 (matched 1257, 94.0% of TV) — ⚠ drift
-    - count delta:   `3.6744%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1161%`
-- **PyneCore** trades: 1390 (matched 1253, 93.7% of TV) — ⚠ drift
-    - count delta:   `3.8129%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1208%`
+- TV trades (raw): **1337**
+- TV trades inside common window: **1288**
+- **PineForge** 🟢 **excellent**  (engine trades: 1388, in-window: 1288, matched 1257 = 97.6% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1163%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1390, in-window: 1289, matched 1253 = 97.3% of TV-in-window)
+    - count delta:  `0.0776%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1209%`
 
-### 05-stoch-rsi — PineForge ↔ PyneCore agreement
+### 05-stoch-rsi — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1335 / max(1388, 1390)
-- count delta: `0.1439%`
+- shared trades: 1335 / max(1388, 1388)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 06-liquidity-sweep
+### 06-liquidity-sweep  *(profile: strict)*
 
-- TV trades: **93**
-- **PineForge** trades: 96 (matched 88, 94.6% of TV) — ⚠ drift
-    - count delta:   `3.1250%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0005%`
-    - PnL   p90:     `0.0983%`
-- **PyneCore** trades: 99 (matched 88, 94.6% of TV) — ⚠ drift
-    - count delta:   `6.0606%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `1.6334%`
-    - PnL   p90:     `100.0000%`
+- TV trades (raw): **93**
+- TV trades inside common window: **88**
+- **PineForge** 🟢 **excellent**  (engine trades: 96, in-window: 88, matched 88 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0005%`
+    - PnL   p90:    `0.0983%`
+- **PyneCore** 🟡 **moderate**  (engine trades: 99, in-window: 91, matched 88 = 100.0% of TV-in-window)
+    - count delta:  `3.2967%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `1.6334%`
+    - PnL   p90:    `100.0000%`
 
-### 06-liquidity-sweep — PineForge ↔ PyneCore agreement
+### 06-liquidity-sweep — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 96 / max(96, 99)
 - count delta: `3.0303%`
@@ -138,109 +156,114 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `1.6412%`
 - PnL   p90:   `100.0000%`
 
-### 07-scalping-strategy
+### 07-scalping-strategy  *(profile: production)*
 
-- TV trades: **429**
-- **PineForge** trades: 449 (matched 412, 96.0% of TV) — ⚠ drift
-    - count delta:   `4.4543%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0283%`
-    - PnL   p90:     `84.5409%`
-- **PyneCore** trades: 444 (matched 409, 95.3% of TV) — ⚠ drift
-    - count delta:   `3.3784%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.4672%`
-    - PnL   p90:     `112.7925%`
+- TV trades (raw): **429**
+- TV trades inside common window: **412**
+- **PineForge** 🟢 **excellent**  (engine trades: 449, in-window: 413, matched 412 = 100.0% of TV-in-window)
+    - count delta:  `0.2421%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0283%`
+    - PnL   p90:    `84.5409%`
+- **PyneCore** 🟡 **moderate**  (engine trades: 444, in-window: 409, matched 409 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.4672%`
+    - PnL   p90:    `7726.6667%`
 
-### 07-scalping-strategy — PineForge ↔ PyneCore agreement
+### 07-scalping-strategy — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 444 / max(449, 444)
-- count delta: `1.1136%`
+- shared trades: 444 / max(445, 444)
+- count delta: `0.2247%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.4232%`
-- PnL   p90:   `107.4010%`
+- PnL   p90:   `7971.3675%`
 
-### 08-4ema-rsi
+### 08-4ema-rsi  *(profile: strict)*
 
-- TV trades: **809**
-- **PineForge** trades: 845 (matched 781, 96.5% of TV) — ⚠ drift
-    - count delta:   `4.2604%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0928%`
-- **PyneCore** trades: 844 (matched 779, 96.3% of TV) — ⚠ drift
-    - count delta:   `4.1469%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0929%`
+- TV trades (raw): **809**
+- TV trades inside common window: **781**
+- **PineForge** 🟢 **excellent**  (engine trades: 845, in-window: 781, matched 781 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0929%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 844, in-window: 779, matched 779 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0931%`
 
-### 08-4ema-rsi — PineForge ↔ PyneCore agreement
+### 08-4ema-rsi — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 843 / max(845, 844)
-- count delta: `0.1183%`
+- shared trades: 843 / max(843, 843)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 09-kkb-kalman
+### 09-kkb-kalman  *(profile: strict)*
 
-- TV trades: **150**
-- **PineForge** trades: 159 (matched 142, 94.7% of TV) — ⚠ drift
-    - count delta:   `5.6604%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0793%`
-- **PyneCore** trades: 160 (matched 142, 94.7% of TV) — ⚠ drift
-    - count delta:   `6.2500%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0793%`
+- TV trades (raw): **150**
+- TV trades inside common window: **142**
+- **PineForge** 🟢 **excellent**  (engine trades: 159, in-window: 143, matched 142 = 100.0% of TV-in-window)
+    - count delta:  `0.6993%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0794%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 160, in-window: 143, matched 142 = 100.0% of TV-in-window)
+    - count delta:  `0.6993%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0794%`
 
-### 09-kkb-kalman — PineForge ↔ PyneCore agreement
+### 09-kkb-kalman — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 159 / max(159, 160)
-- count delta: `0.6250%`
+- shared trades: 159 / max(159, 159)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 10-market-shift
+### 10-market-shift  *(profile: strict)*
 
-- TV trades: **1152**
-- **PineForge** trades: 1205 (matched 1090, 94.6% of TV) — ⚠ drift
-    - count delta:   `4.3983%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0774%`
-- **PyneCore** trades: 1206 (matched 1090, 94.6% of TV) — ⚠ drift
-    - count delta:   `4.4776%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0774%`
+- TV trades (raw): **1152**
+- TV trades inside common window: **1093**
+- **PineForge** 🟢 **excellent**  (engine trades: 1205, in-window: 1095, matched 1090 = 99.7% of TV-in-window)
+    - count delta:  `0.1826%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0774%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1206, in-window: 1095, matched 1090 = 99.7% of TV-in-window)
+    - count delta:  `0.1826%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0774%`
 
-### 10-market-shift — PineForge ↔ PyneCore agreement
+### 10-market-shift — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1205 / max(1205, 1206)
-- count delta: `0.0829%`
+- shared trades: 1205 / max(1205, 1205)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 11-greedy
+### 11-greedy  *(profile: strict)*
 
-- TV trades: **13**
-- **PineForge** trades: 14 (matched 13, 100.0% of TV) — ⚠ drift
-    - count delta:   `7.1429%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0000%`
-- **PyneCore** trades: 14 (matched 13, 100.0% of TV) — ⚠ drift
-    - count delta:   `7.1429%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0000%`
+- TV trades (raw): **13**
+- TV trades inside common window: **13**
+- **PineForge** 🟢 **excellent**  (engine trades: 14, in-window: 13, matched 13 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0000%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 14, in-window: 13, matched 13 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0000%`
 
-### 11-greedy — PineForge ↔ PyneCore agreement
+### 11-greedy — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 14 / max(14, 14)
 - count delta: `0.0000%`
@@ -248,197 +271,206 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 12-keltner
+### 12-keltner  *(profile: strict)*
 
-- TV trades: **314**
-- **PineForge** trades: 317 (matched 297, 94.6% of TV) — ✅ STRICT PASS
-    - count delta:   `0.9464%`
-    - entry p90:     `0.0004%`
-    - exit  p90:     `0.0004%`
-    - PnL   p90:     `0.1194%`
-- **PyneCore** trades: 318 (matched 297, 94.6% of TV) — ⚠ drift
-    - count delta:   `1.2579%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0795%`
+- TV trades (raw): **314**
+- TV trades inside common window: **298**
+- **PineForge** 🟢 **excellent**  (engine trades: 317, in-window: 299, matched 297 = 99.7% of TV-in-window)
+    - count delta:  `0.3344%`
+    - entry p90:    `0.0004%`
+    - exit  p90:    `0.0004%`
+    - PnL   p90:    `0.1195%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 318, in-window: 299, matched 297 = 99.7% of TV-in-window)
+    - count delta:  `0.3344%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0796%`
 
-### 12-keltner — PineForge ↔ PyneCore agreement
+### 12-keltner — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 316 / max(317, 318)
-- count delta: `0.3145%`
+- shared trades: 316 / max(316, 317)
+- count delta: `0.3155%`
 - entry p90:   `0.0004%`
 - exit  p90:   `0.0004%`
 - PnL   p90:   `0.0678%`
 
-### 13-parabolic-asr
+### 13-parabolic-asr  *(profile: strict)*
 
-- TV trades: **2768**
-- **PineForge** trades: 2952 (matched 2647, 95.6% of TV) — ⚠ drift
-    - count delta:   `6.2331%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1101%`
-- **PyneCore** trades: 2953 (matched 2647, 95.6% of TV) — ⚠ drift
-    - count delta:   `6.2648%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1099%`
+- TV trades (raw): **2768**
+- TV trades inside common window: **2655**
+- **PineForge** 🟢 **strong**  (engine trades: 2952, in-window: 2733, matched 2646 = 99.7% of TV-in-window)
+    - count delta:  `2.8540%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1100%`
+- **PyneCore** 🟢 **strong**  (engine trades: 2953, in-window: 2733, matched 2646 = 99.7% of TV-in-window)
+    - count delta:  `2.8540%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1100%`
 
-### 13-parabolic-asr — PineForge ↔ PyneCore agreement
+### 13-parabolic-asr — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2952 / max(2952, 2953)
-- count delta: `0.0339%`
+- shared trades: 2952 / max(2952, 2952)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 14-pivot-ext
+### 14-pivot-ext  *(profile: strict)*
 
-- TV trades: **4890**
-- **PineForge** trades: 5081 (matched 4636, 94.8% of TV) — ⚠ drift
-    - count delta:   `3.7591%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0821%`
-- **PyneCore** trades: 5094 (matched 4680, 95.7% of TV) — ⚠ drift
-    - count delta:   `4.0047%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0777%`
+- TV trades (raw): **4890**
+- TV trades inside common window: **4680**
+- **PineForge** 🟢 **excellent**  (engine trades: 5081, in-window: 4669, matched 4636 = 99.1% of TV-in-window)
+    - count delta:  `0.2350%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0828%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 5094, in-window: 4681, matched 4680 = 100.0% of TV-in-window)
+    - count delta:  `0.0214%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0780%`
 
-### 14-pivot-ext — PineForge ↔ PyneCore agreement
+### 14-pivot-ext — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 5048 / max(5081, 5094)
-- count delta: `0.2552%`
+- shared trades: 5048 / max(5081, 5093)
+- count delta: `0.2356%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 15-stochastic-slow
+### 15-stochastic-slow  *(profile: strict)*
 
-- TV trades: **690**
-- **PineForge** trades: 716 (matched 665, 96.4% of TV) — ⚠ drift
-    - count delta:   `3.6313%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0819%`
-- **PyneCore** trades: 717 (matched 665, 96.4% of TV) — ⚠ drift
-    - count delta:   `3.7657%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0819%`
+- TV trades (raw): **690**
+- TV trades inside common window: **665**
+- **PineForge** 🟢 **excellent**  (engine trades: 716, in-window: 666, matched 665 = 100.0% of TV-in-window)
+    - count delta:  `0.1502%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0820%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 717, in-window: 666, matched 665 = 100.0% of TV-in-window)
+    - count delta:  `0.1502%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0820%`
 
-### 15-stochastic-slow — PineForge ↔ PyneCore agreement
+### 15-stochastic-slow — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 716 / max(716, 717)
-- count delta: `0.1395%`
+- shared trades: 716 / max(716, 716)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 16-volty-expan
+### 16-volty-expan  *(profile: strict)*
 
-- TV trades: **7235**
-- **PineForge** trades: 7580 (matched 6841, 94.6% of TV) — ⚠ drift
-    - count delta:   `4.5515%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1151%`
-- **PyneCore** trades: 7581 (matched 6841, 94.6% of TV) — ⚠ drift
-    - count delta:   `4.5640%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1086%`
+- TV trades (raw): **7235**
+- TV trades inside common window: **6943**
+- **PineForge** 🟢 **excellent**  (engine trades: 7580, in-window: 6997, matched 6841 = 98.5% of TV-in-window)
+    - count delta:  `0.7718%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1154%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 7581, in-window: 6997, matched 6841 = 98.5% of TV-in-window)
+    - count delta:  `0.7718%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1088%`
 
-### 16-volty-expan — PineForge ↔ PyneCore agreement
+### 16-volty-expan — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 7580 / max(7580, 7581)
-- count delta: `0.0132%`
+- shared trades: 7580 / max(7580, 7580)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 17-bos-curv
+### 17-bos-curv  *(profile: strict)*
 
-- TV trades: **272**
-- **PineForge** trades: 275 (matched 252, 92.6% of TV) — ⚠ drift
-    - count delta:   `1.0909%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0771%`
-- **PyneCore** trades: 276 (matched 252, 92.6% of TV) — ⚠ drift
-    - count delta:   `1.4493%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0771%`
+- TV trades (raw): **272**
+- TV trades inside common window: **254**
+- **PineForge** 🟢 **excellent**  (engine trades: 275, in-window: 254, matched 252 = 99.2% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0771%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 276, in-window: 254, matched 252 = 99.2% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0771%`
 
-### 17-bos-curv — PineForge ↔ PyneCore agreement
+### 17-bos-curv — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 275 / max(275, 276)
-- count delta: `0.3623%`
+- shared trades: 275 / max(275, 275)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 18-kanuck
+### 18-kanuck  *(profile: strict)*
 
-- TV trades: **875**
-- **PineForge** trades: 906 (matched 840, 96.0% of TV) — ⚠ drift
-    - count delta:   `3.4216%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0853%`
-- **PyneCore** trades: 907 (matched 840, 96.0% of TV) — ⚠ drift
-    - count delta:   `3.5281%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0853%`
+- TV trades (raw): **875**
+- TV trades inside common window: **840**
+- **PineForge** 🟢 **excellent**  (engine trades: 906, in-window: 840, matched 840 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0855%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 907, in-window: 840, matched 840 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0855%`
 
-### 18-kanuck — PineForge ↔ PyneCore agreement
+### 18-kanuck — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 906 / max(906, 907)
-- count delta: `0.1103%`
+- shared trades: 906 / max(906, 906)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 19-scalping-wunder-bots
+### 19-scalping-wunder-bots  *(profile: strict)*
 
-- TV trades: **419**
-- **PineForge** trades: 448 (matched 402, 95.9% of TV) — ⚠ drift
-    - count delta:   `6.4732%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0005%`
-    - PnL   p90:     `0.1253%`
-- **PyneCore** trades: 447 (matched 403, 96.2% of TV) — ⚠ drift
-    - count delta:   `6.2640%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.1642%`
+- TV trades (raw): **419**
+- TV trades inside common window: **405**
+- **PineForge** 🟢 **excellent**  (engine trades: 448, in-window: 409, matched 402 = 99.3% of TV-in-window)
+    - count delta:  `0.9780%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0005%`
+    - PnL   p90:    `0.1253%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 447, in-window: 407, matched 403 = 99.5% of TV-in-window)
+    - count delta:  `0.4914%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.1645%`
 
-### 19-scalping-wunder-bots — PineForge ↔ PyneCore agreement
+### 19-scalping-wunder-bots — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 441 / max(448, 447)
 - count delta: `0.2232%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0005%`
-- PnL   p90:   `0.1259%`
+- PnL   p90:   `0.1260%`
 
-### 20-bb-squeeze
+### 20-bb-squeeze  *(profile: strict)*
 
-- TV trades: **814**
-- **PineForge** trades: 844 (matched 781, 95.9% of TV) — ⚠ drift
-    - count delta:   `3.5545%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0863%`
-- **PyneCore** trades: 844 (matched 781, 95.9% of TV) — ⚠ drift
-    - count delta:   `3.5545%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0863%`
+- TV trades (raw): **814**
+- TV trades inside common window: **781**
+- **PineForge** 🟢 **excellent**  (engine trades: 844, in-window: 781, matched 781 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0865%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 844, in-window: 781, matched 781 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0865%`
 
-### 20-bb-squeeze — PineForge ↔ PyneCore agreement
+### 20-bb-squeeze — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 844 / max(844, 844)
 - count delta: `0.0000%`
@@ -446,109 +478,114 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 21-dmi-adx-trend
+### 21-dmi-adx-trend  *(profile: strict)*
 
-- TV trades: **2747**
-- **PineForge** trades: 2857 (matched 2638, 96.0% of TV) — ⚠ drift
-    - count delta:   `3.8502%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0785%`
-- **PyneCore** trades: 2858 (matched 2638, 96.0% of TV) — ⚠ drift
-    - count delta:   `3.8838%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0785%`
+- TV trades (raw): **2747**
+- TV trades inside common window: **2638**
+- **PineForge** 🟢 **excellent**  (engine trades: 2857, in-window: 2638, matched 2638 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0785%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2858, in-window: 2638, matched 2638 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0785%`
 
-### 21-dmi-adx-trend — PineForge ↔ PyneCore agreement
+### 21-dmi-adx-trend — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2857 / max(2857, 2858)
-- count delta: `0.0350%`
+- shared trades: 2857 / max(2857, 2857)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 22-hma-cross
+### 22-hma-cross  *(profile: strict)*
 
-- TV trades: **4713**
-- **PineForge** trades: 4898 (matched 4502, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.7771%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0822%`
-- **PyneCore** trades: 4899 (matched 4502, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.7967%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0822%`
+- TV trades (raw): **4713**
+- TV trades inside common window: **4502**
+- **PineForge** 🟢 **excellent**  (engine trades: 4898, in-window: 4502, matched 4502 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0822%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 4899, in-window: 4502, matched 4502 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0822%`
 
-### 22-hma-cross — PineForge ↔ PyneCore agreement
+### 22-hma-cross — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 4898 / max(4898, 4899)
-- count delta: `0.0204%`
+- shared trades: 4898 / max(4898, 4898)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 23-cci-momentum
+### 23-cci-momentum  *(profile: strict)*
 
-- TV trades: **2462**
-- **PineForge** trades: 2557 (matched 2351, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.7153%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0719%`
-- **PyneCore** trades: 2558 (matched 2351, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.7529%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0719%`
+- TV trades (raw): **2462**
+- TV trades inside common window: **2352**
+- **PineForge** 🟢 **excellent**  (engine trades: 2557, in-window: 2351, matched 2351 = 100.0% of TV-in-window)
+    - count delta:  `0.0425%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0720%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2558, in-window: 2351, matched 2351 = 100.0% of TV-in-window)
+    - count delta:  `0.0425%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0720%`
 
-### 23-cci-momentum — PineForge ↔ PyneCore agreement
+### 23-cci-momentum — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2557 / max(2557, 2558)
-- count delta: `0.0391%`
+- shared trades: 2557 / max(2557, 2557)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 24-tsi-signal
+### 24-tsi-signal  *(profile: strict)*
 
-- TV trades: **846**
-- **PineForge** trades: 881 (matched 808, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.9728%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0829%`
-- **PyneCore** trades: 882 (matched 808, 95.5% of TV) — ⚠ drift
-    - count delta:   `4.0816%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0829%`
+- TV trades (raw): **846**
+- TV trades inside common window: **808**
+- **PineForge** 🟢 **excellent**  (engine trades: 881, in-window: 809, matched 808 = 100.0% of TV-in-window)
+    - count delta:  `0.1236%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0830%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 882, in-window: 809, matched 808 = 100.0% of TV-in-window)
+    - count delta:  `0.1236%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0830%`
 
-### 24-tsi-signal — PineForge ↔ PyneCore agreement
+### 24-tsi-signal — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 880 / max(881, 882)
-- count delta: `0.1134%`
+- shared trades: 880 / max(880, 881)
+- count delta: `0.1135%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 25-linreg-channel
+### 25-linreg-channel  *(profile: strict)*
 
-- TV trades: **248**
-- **PineForge** trades: 259 (matched 239, 96.4% of TV) — ⚠ drift
-    - count delta:   `4.2471%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0940%`
-- **PyneCore** trades: 259 (matched 239, 96.4% of TV) — ⚠ drift
-    - count delta:   `4.2471%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0940%`
+- TV trades (raw): **248**
+- TV trades inside common window: **239**
+- **PineForge** 🟢 **excellent**  (engine trades: 259, in-window: 239, matched 239 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0941%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 259, in-window: 239, matched 239 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0941%`
 
-### 25-linreg-channel — PineForge ↔ PyneCore agreement
+### 25-linreg-channel — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 259 / max(259, 259)
 - count delta: `0.0000%`
@@ -556,175 +593,183 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 26-aroon-oscillator
+### 26-aroon-oscillator  *(profile: strict)*
 
-- TV trades: **1585**
-- **PineForge** trades: 1646 (matched 1518, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.7060%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0839%`
-- **PyneCore** trades: 1646 (matched 1518, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.7060%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0839%`
+- TV trades (raw): **1585**
+- TV trades inside common window: **1518**
+- **PineForge** 🟢 **excellent**  (engine trades: 1646, in-window: 1519, matched 1518 = 100.0% of TV-in-window)
+    - count delta:  `0.0658%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0840%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1646, in-window: 1518, matched 1518 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0840%`
 
-### 26-aroon-oscillator — PineForge ↔ PyneCore agreement
+### 26-aroon-oscillator — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1645 / max(1646, 1646)
+- shared trades: 1645 / max(1645, 1645)
 - count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 27-donchian-breakout
+### 27-donchian-breakout  *(profile: strict)*
 
-- TV trades: **1002**
-- **PineForge** trades: 1038 (matched 955, 95.3% of TV) — ⚠ drift
-    - count delta:   `3.4682%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0792%`
-- **PyneCore** trades: 1039 (matched 955, 95.3% of TV) — ⚠ drift
-    - count delta:   `3.5611%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0792%`
+- TV trades (raw): **1002**
+- TV trades inside common window: **955**
+- **PineForge** 🟢 **excellent**  (engine trades: 1038, in-window: 956, matched 955 = 100.0% of TV-in-window)
+    - count delta:  `0.1046%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1039, in-window: 956, matched 955 = 100.0% of TV-in-window)
+    - count delta:  `0.1046%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
 
-### 27-donchian-breakout — PineForge ↔ PyneCore agreement
+### 27-donchian-breakout — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1038 / max(1038, 1039)
-- count delta: `0.0962%`
+- shared trades: 1038 / max(1038, 1038)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 28-elder-ray
+### 28-elder-ray  *(profile: strict)*
 
-- TV trades: **2483**
-- **PineForge** trades: 2574 (matched 2375, 95.7% of TV) — ⚠ drift
-    - count delta:   `3.5354%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0790%`
-- **PyneCore** trades: 2569 (matched 2369, 95.4% of TV) — ⚠ drift
-    - count delta:   `3.3476%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0792%`
+- TV trades (raw): **2483**
+- TV trades inside common window: **2375**
+- **PineForge** 🟢 **excellent**  (engine trades: 2574, in-window: 2376, matched 2375 = 100.0% of TV-in-window)
+    - count delta:  `0.0421%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0791%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2569, in-window: 2370, matched 2369 = 100.0% of TV-in-window)
+    - count delta:  `0.0422%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
 
-### 28-elder-ray — PineForge ↔ PyneCore agreement
+### 28-elder-ray — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2567 / max(2574, 2569)
-- count delta: `0.1943%`
+- shared trades: 2567 / max(2567, 2568)
+- count delta: `0.0389%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 29-chandelier-exit
+### 29-chandelier-exit  *(profile: strict)*
 
-- TV trades: **1604**
-- **PineForge** trades: 1644 (matched 1514, 94.4% of TV) — ⚠ drift
-    - count delta:   `2.4331%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0823%`
-- **PyneCore** trades: 1645 (matched 1514, 94.4% of TV) — ⚠ drift
-    - count delta:   `2.4924%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0823%`
+- TV trades (raw): **1604**
+- TV trades inside common window: **1514**
+- **PineForge** 🟢 **excellent**  (engine trades: 1644, in-window: 1515, matched 1514 = 100.0% of TV-in-window)
+    - count delta:  `0.0660%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0824%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1645, in-window: 1515, matched 1514 = 100.0% of TV-in-window)
+    - count delta:  `0.0660%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0824%`
 
-### 29-chandelier-exit — PineForge ↔ PyneCore agreement
+### 29-chandelier-exit — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1644 / max(1644, 1645)
-- count delta: `0.0608%`
+- shared trades: 1644 / max(1644, 1644)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 30-atr-trailing-stop
+### 30-atr-trailing-stop  *(profile: strict)*
 
-- TV trades: **5073**
-- **PineForge** trades: 5271 (matched 4884, 96.3% of TV) — ⚠ drift
-    - count delta:   `3.7564%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0793%`
-- **PyneCore** trades: 5268 (matched 4882, 96.2% of TV) — ⚠ drift
-    - count delta:   `3.7016%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0793%`
+- TV trades (raw): **5073**
+- TV trades inside common window: **4884**
+- **PineForge** 🟢 **excellent**  (engine trades: 5271, in-window: 4888, matched 4884 = 100.0% of TV-in-window)
+    - count delta:  `0.0818%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0794%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 5268, in-window: 4884, matched 4882 = 100.0% of TV-in-window)
+    - count delta:  `0.0410%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0794%`
 
-### 30-atr-trailing-stop — PineForge ↔ PyneCore agreement
+### 30-atr-trailing-stop — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 5265 / max(5271, 5268)
-- count delta: `0.0569%`
+- shared trades: 5265 / max(5265, 5267)
+- count delta: `0.0380%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 31-vwma-divergence
+### 31-vwma-divergence  *(profile: strict)*
 
-- TV trades: **2574**
-- **PineForge** trades: 2677 (matched 2458, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.8476%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0803%`
-- **PyneCore** trades: 2678 (matched 2458, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.8835%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0803%`
+- TV trades (raw): **2574**
+- TV trades inside common window: **2458**
+- **PineForge** 🟢 **excellent**  (engine trades: 2677, in-window: 2458, matched 2458 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0803%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2678, in-window: 2458, matched 2458 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0803%`
 
-### 31-vwma-divergence — PineForge ↔ PyneCore agreement
+### 31-vwma-divergence — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2677 / max(2677, 2678)
-- count delta: `0.0373%`
+- shared trades: 2677 / max(2677, 2677)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 32-momentum-roc
+### 32-momentum-roc  *(profile: strict)*
 
-- TV trades: **5690**
-- **PineForge** trades: 5880 (matched 5453, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.2313%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0783%`
-- **PyneCore** trades: 5881 (matched 5453, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.2477%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0783%`
+- TV trades (raw): **5690**
+- TV trades inside common window: **5453**
+- **PineForge** 🟢 **excellent**  (engine trades: 5880, in-window: 5453, matched 5453 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0784%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 5881, in-window: 5453, matched 5453 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0784%`
 
-### 32-momentum-roc — PineForge ↔ PyneCore agreement
+### 32-momentum-roc — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 5880 / max(5880, 5881)
-- count delta: `0.0170%`
+- shared trades: 5880 / max(5880, 5880)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 33-mean-reversion-bb
+### 33-mean-reversion-bb  *(profile: strict)*
 
-- TV trades: **495**
-- **PineForge** trades: 516 (matched 476, 96.2% of TV) — ⚠ drift
-    - count delta:   `4.0698%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0816%`
-- **PyneCore** trades: 516 (matched 476, 96.2% of TV) — ⚠ drift
-    - count delta:   `4.0698%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0816%`
+- TV trades (raw): **495**
+- TV trades inside common window: **476**
+- **PineForge** 🟢 **excellent**  (engine trades: 516, in-window: 477, matched 476 = 100.0% of TV-in-window)
+    - count delta:  `0.2096%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0817%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 516, in-window: 477, matched 476 = 100.0% of TV-in-window)
+    - count delta:  `0.2096%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0817%`
 
-### 33-mean-reversion-bb — PineForge ↔ PyneCore agreement
+### 33-mean-reversion-bb — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 516 / max(516, 516)
 - count delta: `0.0000%`
@@ -732,197 +777,206 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 34-dual-ma-switch
+### 34-dual-ma-switch  *(profile: strict)*
 
-- TV trades: **1239**
-- **PineForge** trades: 1280 (matched 1186, 95.7% of TV) — ⚠ drift
-    - count delta:   `3.2031%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0888%`
-- **PyneCore** trades: 1277 (matched 1186, 95.7% of TV) — ⚠ drift
-    - count delta:   `2.9757%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0888%`
+- TV trades (raw): **1239**
+- TV trades inside common window: **1186**
+- **PineForge** 🟢 **excellent**  (engine trades: 1280, in-window: 1190, matched 1186 = 100.0% of TV-in-window)
+    - count delta:  `0.3361%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0888%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1277, in-window: 1186, matched 1185 = 100.0% of TV-in-window)
+    - count delta:  `0.0843%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0889%`
 
-### 34-dual-ma-switch — PineForge ↔ PyneCore agreement
+### 34-dual-ma-switch — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1276 / max(1280, 1277)
-- count delta: `0.2344%`
+- shared trades: 1275 / max(1275, 1276)
+- count delta: `0.0784%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 35-ema-ribbon-loop
+### 35-ema-ribbon-loop  *(profile: strict)*
 
-- TV trades: **628**
-- **PineForge** trades: 644 (matched 595, 94.7% of TV) — ⚠ drift
-    - count delta:   `2.4845%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0791%`
-- **PyneCore** trades: 641 (matched 593, 94.4% of TV) — ⚠ drift
-    - count delta:   `2.0281%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0792%`
+- TV trades (raw): **628**
+- TV trades inside common window: **595**
+- **PineForge** 🟢 **excellent**  (engine trades: 644, in-window: 598, matched 595 = 100.0% of TV-in-window)
+    - count delta:  `0.5017%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0792%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 641, in-window: 594, matched 593 = 100.0% of TV-in-window)
+    - count delta:  `0.1684%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0792%`
 
-### 35-ema-ribbon-loop — PineForge ↔ PyneCore agreement
+### 35-ema-ribbon-loop — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 639 / max(644, 641)
-- count delta: `0.4658%`
+- shared trades: 639 / max(639, 640)
+- count delta: `0.1562%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 36-pivot-array-breakout
+### 36-pivot-array-breakout  *(profile: strict)*
 
-- TV trades: **829**
-- **PineForge** trades: 861 (matched 785, 94.7% of TV) — ⚠ drift
-    - count delta:   `3.7166%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0908%`
-- **PyneCore** trades: 862 (matched 787, 94.9% of TV) — ⚠ drift
-    - count delta:   `3.8283%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0901%`
+- TV trades (raw): **829**
+- TV trades inside common window: **787**
+- **PineForge** 🟢 **excellent**  (engine trades: 861, in-window: 788, matched 785 = 99.7% of TV-in-window)
+    - count delta:  `0.1269%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0909%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 862, in-window: 788, matched 787 = 100.0% of TV-in-window)
+    - count delta:  `0.1269%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0902%`
 
-### 36-pivot-array-breakout — PineForge ↔ PyneCore agreement
+### 36-pivot-array-breakout — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 859 / max(861, 862)
-- count delta: `0.1160%`
+- shared trades: 859 / max(861, 861)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 37-range-filter-while
+### 37-range-filter-while  *(profile: strict)*
 
-- TV trades: **402**
-- **PineForge** trades: 403 (matched 382, 95.0% of TV) — ✅ STRICT PASS
-    - count delta:   `0.2481%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0797%`
-- **PyneCore** trades: 404 (matched 381, 94.8% of TV) — ✅ STRICT PASS
-    - count delta:   `0.4950%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0798%`
+- TV trades (raw): **402**
+- TV trades inside common window: **383**
+- **PineForge** 🟢 **excellent**  (engine trades: 403, in-window: 383, matched 382 = 99.7% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0797%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 404, in-window: 383, matched 381 = 99.7% of TV-in-window)
+    - count delta:  `0.2611%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0798%`
 
-### 37-range-filter-while — PineForge ↔ PyneCore agreement
+### 37-range-filter-while — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 401 / max(403, 404)
-- count delta: `0.2475%`
+- shared trades: 401 / max(402, 403)
+- count delta: `0.2481%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 38-adaptive-ma-func
+### 38-adaptive-ma-func  *(profile: strict)*
 
-- TV trades: **4599**
-- **PineForge** trades: 4774 (matched 4419, 96.1% of TV) — ⚠ drift
-    - count delta:   `3.6657%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0779%`
-- **PyneCore** trades: 4775 (matched 4419, 96.1% of TV) — ⚠ drift
-    - count delta:   `3.6859%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0779%`
+- TV trades (raw): **4599**
+- TV trades inside common window: **4422**
+- **PineForge** 🟢 **excellent**  (engine trades: 4774, in-window: 4425, matched 4419 = 99.9% of TV-in-window)
+    - count delta:  `0.0678%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0779%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 4775, in-window: 4425, matched 4419 = 99.8% of TV-in-window)
+    - count delta:  `0.0226%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0779%`
 
-### 38-adaptive-ma-func — PineForge ↔ PyneCore agreement
+### 38-adaptive-ma-func — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 4773 / max(4774, 4775)
+- shared trades: 4773 / max(4774, 4773)
 - count delta: `0.0209%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 39-candle-pattern
+### 39-candle-pattern  *(profile: strict)*
 
-- TV trades: **826**
-- **PineForge** trades: 857 (matched 788, 95.4% of TV) — ⚠ drift
-    - count delta:   `3.6173%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0791%`
-- **PyneCore** trades: 858 (matched 788, 95.4% of TV) — ⚠ drift
-    - count delta:   `3.7296%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0791%`
+- TV trades (raw): **826**
+- TV trades inside common window: **789**
+- **PineForge** 🟢 **excellent**  (engine trades: 857, in-window: 789, matched 788 = 99.9% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0791%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 858, in-window: 789, matched 788 = 99.9% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0791%`
 
-### 39-candle-pattern — PineForge ↔ PyneCore agreement
+### 39-candle-pattern — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 857 / max(857, 858)
-- count delta: `0.1166%`
+- shared trades: 857 / max(857, 857)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 40-dual-thrust
+### 40-dual-thrust  *(profile: strict)*
 
-- TV trades: **2870**
-- **PineForge** trades: 2964 (matched 2755, 96.0% of TV) — ⚠ drift
-    - count delta:   `3.1714%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0792%`
-- **PyneCore** trades: 2965 (matched 2755, 96.0% of TV) — ⚠ drift
-    - count delta:   `3.2040%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0792%`
+- TV trades (raw): **2870**
+- TV trades inside common window: **2755**
+- **PineForge** 🟢 **excellent**  (engine trades: 2964, in-window: 2755, matched 2755 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2965, in-window: 2755, matched 2755 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
 
-### 40-dual-thrust — PineForge ↔ PyneCore agreement
+### 40-dual-thrust — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2964 / max(2964, 2965)
-- count delta: `0.0337%`
+- shared trades: 2964 / max(2964, 2964)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 41-volume-breakout
+### 41-volume-breakout  *(profile: strict)*
 
-- TV trades: **1778**
-- **PineForge** trades: 1853 (matched 1704, 95.8% of TV) — ⚠ drift
-    - count delta:   `4.0475%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0853%`
-- **PyneCore** trades: 1854 (matched 1704, 95.8% of TV) — ⚠ drift
-    - count delta:   `4.0992%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0853%`
+- TV trades (raw): **1778**
+- TV trades inside common window: **1704**
+- **PineForge** 🟢 **excellent**  (engine trades: 1853, in-window: 1705, matched 1704 = 100.0% of TV-in-window)
+    - count delta:  `0.0587%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0855%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1854, in-window: 1705, matched 1704 = 100.0% of TV-in-window)
+    - count delta:  `0.0587%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0855%`
 
-### 41-volume-breakout — PineForge ↔ PyneCore agreement
+### 41-volume-breakout — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1853 / max(1853, 1854)
-- count delta: `0.0539%`
+- shared trades: 1853 / max(1853, 1853)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 42-ma-stack-array
+### 42-ma-stack-array  *(profile: strict)*
 
-- TV trades: **1407**
-- **PineForge** trades: 1453 (matched 1345, 95.6% of TV) — ⚠ drift
-    - count delta:   `3.1659%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0801%`
-- **PyneCore** trades: 1453 (matched 1345, 95.6% of TV) — ⚠ drift
-    - count delta:   `3.1659%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0805%`
+- TV trades (raw): **1407**
+- TV trades inside common window: **1345**
+- **PineForge** 🟢 **excellent**  (engine trades: 1453, in-window: 1346, matched 1345 = 100.0% of TV-in-window)
+    - count delta:  `0.0743%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0802%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1453, in-window: 1346, matched 1345 = 100.0% of TV-in-window)
+    - count delta:  `0.0743%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0807%`
 
-### 42-ma-stack-array — PineForge ↔ PyneCore agreement
+### 42-ma-stack-array — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 1453 / max(1453, 1453)
 - count delta: `0.0000%`
@@ -930,87 +984,91 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 43-swing-pivot-atr
+### 43-swing-pivot-atr  *(profile: strict)*
 
-- TV trades: **1618**
-- **PineForge** trades: 1684 (matched 1543, 95.4% of TV) — ⚠ drift
-    - count delta:   `3.9192%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0005%`
-    - PnL   p90:     `0.1241%`
-- **PyneCore** trades: 1684 (matched 1545, 95.5% of TV) — ⚠ drift
-    - count delta:   `3.9192%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0983%`
+- TV trades (raw): **1618**
+- TV trades inside common window: **1545**
+- **PineForge** 🟢 **excellent**  (engine trades: 1684, in-window: 1546, matched 1543 = 99.9% of TV-in-window)
+    - count delta:  `0.0647%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0005%`
+    - PnL   p90:    `0.1242%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 1684, in-window: 1546, matched 1545 = 100.0% of TV-in-window)
+    - count delta:  `0.0647%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0984%`
 
-### 43-swing-pivot-atr — PineForge ↔ PyneCore agreement
+### 43-swing-pivot-atr — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 1681 / max(1684, 1684)
-- count delta: `0.0000%`
+- shared trades: 1681 / max(1684, 1683)
+- count delta: `0.0594%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0005%`
-- PnL   p90:   `0.0789%`
+- PnL   p90:   `0.0790%`
 
-### 44-median-cross
+### 44-median-cross  *(profile: strict)*
 
-- TV trades: **2837**
-- **PineForge** trades: 2947 (matched 2721, 95.9% of TV) — ⚠ drift
-    - count delta:   `3.7326%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0844%`
-- **PyneCore** trades: 2948 (matched 2719, 95.8% of TV) — ⚠ drift
-    - count delta:   `3.7653%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0846%`
+- TV trades (raw): **2837**
+- TV trades inside common window: **2721**
+- **PineForge** 🟢 **excellent**  (engine trades: 2947, in-window: 2721, matched 2721 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0844%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 2948, in-window: 2721, matched 2719 = 99.9% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0846%`
 
-### 44-median-cross — PineForge ↔ PyneCore agreement
+### 44-median-cross — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2945 / max(2947, 2948)
-- count delta: `0.0339%`
+- shared trades: 2945 / max(2947, 2945)
+- count delta: `0.0679%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 45-multi-indicator-score
+### 45-multi-indicator-score  *(profile: strict)*
 
-- TV trades: **3910**
-- **PineForge** trades: 4057 (matched 3762, 96.2% of TV) — ⚠ drift
-    - count delta:   `3.6234%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0833%`
-- **PyneCore** trades: 4056 (matched 3761, 96.2% of TV) — ⚠ drift
-    - count delta:   `3.5996%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0835%`
+- TV trades (raw): **3910**
+- TV trades inside common window: **3763**
+- **PineForge** 🟢 **excellent**  (engine trades: 4057, in-window: 3764, matched 3762 = 100.0% of TV-in-window)
+    - count delta:  `0.0266%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0834%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 4056, in-window: 3762, matched 3761 = 100.0% of TV-in-window)
+    - count delta:  `0.0266%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0835%`
 
-### 45-multi-indicator-score — PineForge ↔ PyneCore agreement
+### 45-multi-indicator-score — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 4055 / max(4057, 4056)
-- count delta: `0.0246%`
+- shared trades: 4055 / max(4055, 4055)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 46-rsi-bands
+### 46-rsi-bands  *(profile: strict)*
 
-- TV trades: **350**
-- **PineForge** trades: 370 (matched 340, 97.1% of TV) — ⚠ drift
-    - count delta:   `5.4054%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0806%`
-- **PyneCore** trades: 370 (matched 340, 97.1% of TV) — ⚠ drift
-    - count delta:   `5.4054%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0806%`
+- TV trades (raw): **350**
+- TV trades inside common window: **340**
+- **PineForge** 🟢 **excellent**  (engine trades: 370, in-window: 340, matched 340 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0806%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 370, in-window: 340, matched 340 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0806%`
 
-### 46-rsi-bands — PineForge ↔ PyneCore agreement
+### 46-rsi-bands — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 370 / max(370, 370)
 - count delta: `0.0000%`
@@ -1018,87 +1076,91 @@ are diffed against the same `tv_trades.csv` ground truth.
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 47-supertrend-adx-filter
+### 47-supertrend-adx-filter  *(profile: strict)*
 
-- TV trades: **455**
-- **PineForge** trades: 460 (matched 429, 94.3% of TV) — ⚠ drift
-    - count delta:   `1.0870%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0772%`
-- **PyneCore** trades: 461 (matched 429, 94.3% of TV) — ⚠ drift
-    - count delta:   `1.3015%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0772%`
+- TV trades (raw): **455**
+- TV trades inside common window: **429**
+- **PineForge** 🟢 **excellent**  (engine trades: 460, in-window: 429, matched 429 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0773%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 461, in-window: 429, matched 429 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0773%`
 
-### 47-supertrend-adx-filter — PineForge ↔ PyneCore agreement
+### 47-supertrend-adx-filter — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 460 / max(460, 461)
-- count delta: `0.2169%`
+- shared trades: 460 / max(460, 460)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 48-bracket-exit-tp-sl
+### 48-bracket-exit-tp-sl  *(profile: strict)*
 
-- TV trades: **366**
-- **PineForge** trades: 379 (matched 345, 94.3% of TV) — ⚠ drift
-    - count delta:   `3.4301%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0004%`
-    - PnL   p90:     `0.1240%`
-- **PyneCore** trades: 379 (matched 345, 94.3% of TV) — ⚠ drift
-    - count delta:   `3.4301%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0918%`
+- TV trades (raw): **366**
+- TV trades inside common window: **345**
+- **PineForge** 🟢 **excellent**  (engine trades: 379, in-window: 345, matched 345 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0004%`
+    - PnL   p90:    `0.1240%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 379, in-window: 345, matched 345 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0918%`
 
-### 48-bracket-exit-tp-sl — PineForge ↔ PyneCore agreement
+### 48-bracket-exit-tp-sl — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 379 / max(379, 379)
 - count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0004%`
-- PnL   p90:   `0.1113%`
+- PnL   p90:   `0.1114%`
 
-### 49-partial-exit-qty-percent
+### 49-partial-exit-qty-percent  *(profile: strict)*
 
-- TV trades: **725**
-- **PineForge** trades: 749 (matched 683, 94.2% of TV) — ⚠ drift
-    - count delta:   `3.2043%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0004%`
-    - PnL   p90:     `0.1320%`
-- **PyneCore** trades: 2920 (matched 549, 75.7% of TV) — ⚠ drift
-    - count delta:   `75.1712%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `1.0305%`
-    - PnL   p90:     `125.0233%`
+- TV trades (raw): **725**
+- TV trades inside common window: **683**
+- **PineForge** 🟢 **excellent**  (engine trades: 749, in-window: 683, matched 683 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0004%`
+    - PnL   p90:    `0.1320%`
+- **PyneCore** 🟠 **weak**  (engine trades: 2920, in-window: 2671, matched 549 = 80.4% of TV-in-window)
+    - count delta:  `74.4291%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `1.0305%`
+    - PnL   p90:    `127.8078%`
 
-### 49-partial-exit-qty-percent — PineForge ↔ PyneCore agreement
+### 49-partial-exit-qty-percent — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 598 / max(749, 2920)
 - count delta: `74.3493%`
 - entry p90:   `0.0000%`
 - exit  p90:   `1.0315%`
-- PnL   p90:   `125.0226%`
+- PnL   p90:   `127.7389%`
 
-### 50-close-immediate-vs-next-bar
+### 50-close-immediate-vs-next-bar  *(profile: strict)*
 
-- TV trades: **732**
-- **PineForge** trades: 758 (matched 690, 94.3% of TV) — ⚠ drift
-    - count delta:   `3.4301%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0793%`
-- **PyneCore** trades: 758 (matched 690, 94.3% of TV) — ⚠ drift
-    - count delta:   `3.4301%`
-    - entry p90:     `0.0000%`
-    - exit  p90:     `0.0000%`
-    - PnL   p90:     `0.0793%`
+- TV trades (raw): **732**
+- TV trades inside common window: **690**
+- **PineForge** 🟢 **excellent**  (engine trades: 758, in-window: 690, matched 690 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 758, in-window: 690, matched 690 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
+    - entry p90:    `0.0000%`
+    - exit  p90:    `0.0000%`
+    - PnL   p90:    `0.0793%`
 
-### 50-close-immediate-vs-next-bar — PineForge ↔ PyneCore agreement
+### 50-close-immediate-vs-next-bar — PineForge ↔ PyneCore agreement (in common window)
 
 - shared trades: 758 / max(758, 758)
 - count delta: `0.0000%`
