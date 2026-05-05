@@ -6,17 +6,33 @@ set(TEST_SOURCES
     test_recompute
     test_str_utils
     test_ta
+    test_ta_indicators_extras
     test_kc
     test_matrix
     test_session_time
     test_dmi_parity
     test_integration
     test_request_security
+    test_engine_trade_accessors
 )
+
+# When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
+# binaries — header-only code (Series, na, color, log, math::pine_random)
+# is otherwise reported as 0% because it's only inlined into test TUs.
+if(PINEFORGE_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(_pf_cov_test_flags -fprofile-instr-generate -fcoverage-mapping)
+    else()
+        set(_pf_cov_test_flags --coverage -fprofile-arcs -ftest-coverage)
+    endif()
+endif()
 
 foreach(test_name ${TEST_SOURCES})
     add_executable(${test_name} ${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE pineforge)
+    if(PINEFORGE_ENABLE_COVERAGE)
+        target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
+    endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
@@ -27,4 +43,7 @@ endforeach()
 add_executable(test_c_abi test_c_abi.c)
 set_target_properties(test_c_abi PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(test_c_abi PRIVATE pineforge)
+if(PINEFORGE_ENABLE_COVERAGE)
+    target_compile_options(test_c_abi PRIVATE ${_pf_cov_test_flags})
+endif()
 add_test(NAME test_c_abi COMMAND test_c_abi)

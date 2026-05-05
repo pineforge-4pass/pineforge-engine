@@ -18,7 +18,7 @@ You'll need:
 - A C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12)
 - Eigen 3.3+ (will be fetched automatically if not on system)
 
-The full test suite — 14 binaries, 13 C++ + 1 pure-C ABI sanity test — completes in a few seconds. There is no slow-test tier; if your change makes ctest take more than ~10s, that's a regression.
+The full test suite — 16 binaries, 15 C++ + 1 pure-C ABI sanity test — completes in under a second. There is no slow-test tier; if your change makes ctest take more than ~10s, that's a regression.
 
 ## What changes are easy to land
 
@@ -87,6 +87,44 @@ For TA-class changes, the test pattern is:
 4. `printf` and assert
 
 For engine changes, look at `tests/test_integration.cpp` and `tests/test_request_security.cpp` for examples of multi-bar simulation tests.
+
+## Source coverage
+
+The runtime ships an opt-in coverage harness (Apple Clang's `llvm-cov` or
+GCC's `gcov`/`gcovr`). It is **not** wired into the default `cmake -B build`
+flow — coverage instrumentation forces `-fprofile-instr-generate` /
+`--coverage`, which slows the build and produces `.profraw` / `.gcda`
+side-files that don't belong in regular development trees.
+
+Run the full coverage pipeline with:
+
+```bash
+bash scripts/coverage.sh
+```
+
+That script:
+
+1. Configures a separate `build-cov/` tree with `-DPINEFORGE_ENABLE_COVERAGE=ON`.
+2. Builds the runtime + every test binary with the right instrumentation flags.
+3. Runs every test (`LLVM_PROFILE_FILE` redirected to `build-cov/coverage/raw/`).
+4. Merges the per-test `.profraw` files into one `.profdata`.
+5. Emits a per-file totals table and per-file annotated source listings.
+
+Outputs live under `build-cov/coverage/`:
+
+- `totals.txt` — line / region / function / branch percentages per source file.
+- `uncovered.txt` — same rows sorted ascending by line coverage (lowest first).
+- `per-file/<source>.txt` — annotated listings showing which lines/branches are unreached.
+- `html/index.html` — only when `FORMAT=html bash scripts/coverage.sh` is used (requires `lcov`/`gcovr`).
+
+Honoured env vars: `BUILD_DIR` (default `build-cov`), `COMPILER`
+(`clang` | `gcc`, auto-detected), `JOBS`, `SKIP_BUILD=1` and `SKIP_TESTS=1`
+to reuse cached artefacts, `FORMAT=html` to also emit a clickable report.
+
+The current totals on a fresh clone hover around 81% line coverage; new
+PRs that touch a file with <80% coverage should ideally raise (or at least
+not lower) that file's line coverage. The `uncovered.txt` report makes it
+easy to find candidates.
 
 ## Parity testing
 

@@ -23,6 +23,8 @@ option(PINEFORGE_BUILD_TESTS "Build the C++ test suite" ON)
 option(PINEFORGE_BUILD_EXAMPLES "Build example consumers (none yet)" OFF)
 option(PINEFORGE_BUILD_CORPUS_STRATEGIES
     "Build a strategy.so per .pine in corpus/ from its generated.cpp" OFF)
+option(PINEFORGE_ENABLE_COVERAGE
+    "Instrument the runtime + tests for source-level coverage (Clang or GCC)" OFF)
 
 # === Eigen3 ============================================================
 # Used for matrix-typed PineScript (matrix.* API). Tries system install
@@ -97,6 +99,26 @@ target_include_directories(pineforge
 )
 
 target_link_libraries(pineforge PUBLIC Eigen3::Eigen)
+
+# === Coverage instrumentation (opt-in) =================================
+# Build with:
+#   cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPINEFORGE_ENABLE_COVERAGE=ON
+# then drive the report via `bash scripts/coverage.sh`. Clang emits
+# llvm-profile (.profraw) which `llvm-cov` consumes; GCC emits .gcda /
+# .gcno which `gcov` / `gcovr` / `lcov` consume.
+if(PINEFORGE_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(_pf_cov_flags -fprofile-instr-generate -fcoverage-mapping)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+        set(_pf_cov_flags --coverage -fprofile-arcs -ftest-coverage)
+    else()
+        message(FATAL_ERROR
+            "PINEFORGE_ENABLE_COVERAGE requires Clang or GCC (got ${CMAKE_CXX_COMPILER_ID})")
+    endif()
+    target_compile_options(pineforge PRIVATE ${_pf_cov_flags})
+    target_link_options(pineforge PUBLIC ${_pf_cov_flags})
+    message(STATUS "Coverage instrumentation: ${_pf_cov_flags}")
+endif()
 
 # === Tests =============================================================
 if(PINEFORGE_BUILD_TESTS)

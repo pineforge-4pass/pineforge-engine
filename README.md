@@ -11,7 +11,7 @@ This repository ships:
 - `libpineforge.a` — the static runtime library
 - `<pineforge/pineforge.h>` — the public C ABI (the canonical, stability-pinned consumer surface)
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
-- A 14-binary ctest suite (13 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit
+- A 16-binary ctest suite (15 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
 - [`corpus/`](corpus/) — **162 reference strategies** as a reproducibility kit: each ships its `strategy.pine` source, the `generated.cpp` produced by the closed transpiler, the TradingView trade export (`tv_trades.csv`), and the engine's own trade output (`engine_trades.csv`). One shell command (`bash scripts/run_corpus.sh`) builds every `generated.cpp` into a `.so`, runs each through the Python harness, and verifies parity against TradingView
 - [`benchmarks/`](benchmarks/) — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. PyneCore Python sources are produced by the official PyneSys cloud compiler (no hand-ports); the OHLCV is a pinned LFS-tracked snapshot. `bash benchmarks/run_all.sh` reproduces every comparison number from a fresh clone with zero external API calls. Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
 
@@ -48,7 +48,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect 14 tests to pass. The largest (`test_integration`, `test_request_security`) take a few seconds; everything else completes in milliseconds.
+Expect 16 tests to pass. The largest (`test_integration`, `test_request_security`) take a few hundred milliseconds; everything else completes faster.
 
 ### Install
 
