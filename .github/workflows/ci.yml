@@ -55,12 +55,13 @@ jobs:
           set -euo pipefail
           EXTRA="${CMAKE_PREFIX_PATH_EXTRA:-}"
           PREFIX="${WORKSPACE}/pf_install"
+          # Pass prefix list to CMake with ';' — ':' is for env vars on Unix only.
+          CMAKE_PFX="${PREFIX}"
           if [[ -n "$EXTRA" ]]; then
-            export CMAKE_PREFIX_PATH="${PREFIX};${EXTRA}"
-          else
-            export CMAKE_PREFIX_PATH="${PREFIX}"
+            CMAKE_PFX="${PREFIX};${EXTRA}"
           fi
           cmake -S cmake/smoke_consumer -B smoke_build \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_PREFIX_PATH="${CMAKE_PFX}"
           cmake --build smoke_build -j 4
           ./smoke_build/smoke_version | grep -qE '^0\.1\.[0-9]+$'
