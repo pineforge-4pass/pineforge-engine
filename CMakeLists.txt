@@ -21,6 +21,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 option(PINEFORGE_BUILD_TESTS "Build the C++ test suite" ON)
 option(PINEFORGE_BUILD_EXAMPLES "Build example consumers (none yet)" OFF)
+option(PINEFORGE_BUILD_CORPUS_STRATEGIES
+    "Build a strategy.so per .pine in corpus/ from its generated.cpp" OFF)
 
 # === Eigen3 ============================================================
 # Used for matrix-typed PineScript (matrix.* API). Tries system install
@@ -102,6 +104,11 @@ if(PINEFORGE_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+# === Corpus strategies (opt-in) ========================================
+if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
+    add_subdirectory(corpus)
+endif()
+
 # === Install / package config =========================================
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -150,4 +157,5 @@ message(STATUS "  build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard:      ${CMAKE_CXX_STANDARD}")
 message(STATUS "  install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  build tests:       ${PINEFORGE_BUILD_TESTS}")
+message(STATUS "  build corpus:      ${PINEFORGE_BUILD_CORPUS_STRATEGIES}")
 message(STATUS "")

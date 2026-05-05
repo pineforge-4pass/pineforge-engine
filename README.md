@@ -12,6 +12,7 @@ This repository ships:
 - `<pineforge/pineforge.h>` — the public C ABI (the canonical, stability-pinned consumer surface)
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
 - A 14-binary ctest suite (13 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit
+- [`corpus/`](corpus/) — **162 reference strategies** as a reproducibility kit: each ships its `strategy.pine` source, the `generated.cpp` produced by the closed transpiler, the TradingView trade export (`tv_trades.csv`), and the engine's own trade output (`engine_trades.csv`). One shell command (`bash scripts/run_corpus.sh`) builds every `generated.cpp` into a `.so`, runs each through the Python harness, and verifies parity against TradingView
 
 ## What this is, and what it isn't
 
@@ -116,6 +117,13 @@ src/                    - implementation (~25 .cpp files split by concern)
   │   └── ta_misc.cpp                 Linreg, PercentRank, BarsSince, ValueWhen, ...
   └── magnifier.cpp / matrix.cpp / session_time.cpp / str_utils.cpp / timeframe.cpp / timezone.cpp / math.cpp
 tests/                  - 14 ctest binaries
+corpus/                 - 162 reference strategies × {strategy.pine, generated.cpp, tv_trades.csv, engine_trades.csv}
+  ├── data/             - reference 36k-bar OHLCV feed
+  └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
+scripts/                - reproducibility tooling
+  ├── run_strategy.py   - load any strategy.so via ctypes, write engine_trades.csv
+  ├── run_corpus.sh     - one-shot: build all 162 .so + run + verify
+  └── verify_corpus.py  - diff each engine_trades.csv against its tv_trades.csv
 cmake/                  - PineForgeConfig.cmake.in for downstream find_package()
 .github/workflows/      - CI: Linux + macOS × Release + Debug
 ```
@@ -138,6 +146,29 @@ PineForge follows **semantic versioning** at the C ABI level:
 - `MAJOR`: breaking ABI changes
 
 A pre-compiled strategy `.so` against runtime `0.X.Y` will keep working against any later runtime within `0.X.Z`. Across major versions, all bets are off.
+
+## Reproducing the parity claim end-to-end
+
+The headline number — **158/162 strategies pass at strict TV parity** —
+is fully reproducible from this repository alone. Run:
+
+```bash
+bash scripts/run_corpus.sh
+```
+
+That script builds `libpineforge.a` plus 162 strategy `.so` files (one
+per `corpus/<cat>/<name>/generated.cpp`), runs each `.so` against the
+reference 36k-bar OHLCV feed, and emits `engine_trades.csv` per strategy.
+The same script then diffs every fresh `engine_trades.csv` against the
+shipped `tv_trades.csv` via `scripts/verify_corpus.py`.
+
+The engine is deterministic: re-running this pipeline reproduces the
+committed `engine_trades.csv` files **byte-for-byte** (same hash, same
+trade list, same per-trade P&L). If your machine produces a different
+result, that is a bug worth filing.
+
+See [`corpus/README.md`](corpus/README.md) for layout, schema, and
+threshold profiles.
 
 ## Status
 

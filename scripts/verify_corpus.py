@@ -76,8 +76,13 @@ def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
             time_field = row["Date and time"]
             price_field = "Price USDT" if "Price USDT" in row else "Price"
             price = float(row[price_field])
-            qty = float(row.get("Position size (qty)") or row["Qty"])
-            pnl = float(row.get("Net P&L USD") or row["Net PnL"])
+            qty = float(
+                row.get("Position size (qty)")
+                or row.get("Size (qty)")
+                or row.get("Qty")
+                or 0.0
+            )
+            pnl = float(row.get("Net P&L USD") or row.get("Net PnL") or 0.0)
             direction = "long" if "long" in kind.lower() else "short"
             r["direction"] = direction
             r["qty"] = qty
