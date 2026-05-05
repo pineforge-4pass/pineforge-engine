@@ -128,7 +128,15 @@ endif()
 
 # === Corpus strategies (opt-in) ========================================
 if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
-    add_subdirectory(corpus)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/CMakeLists.txt")
+        add_subdirectory(corpus)
+    else()
+        message(FATAL_ERROR
+            "PINEFORGE_BUILD_CORPUS_STRATEGIES=ON but corpus/CMakeLists.txt is missing. "
+            "Init the private validation submodule (maintainers): "
+            "  git submodule update --init corpus\n"
+            "See CONTRIBUTING.md.")
+    endif()
 endif()
 
 # === Install / package config =========================================

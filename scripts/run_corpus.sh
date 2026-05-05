@@ -34,6 +34,12 @@ log()  { printf '\033[1;34m[run_corpus]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[run_corpus]\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31m[run_corpus]\033[0m %s\n' "$*" >&2; exit 1; }
 
+if [[ ! -f "$ROOT_DIR/corpus/CMakeLists.txt" ]]; then
+    fail "validation corpus is not checked out (missing corpus/CMakeLists.txt).
+Maintainers:   git submodule update --init corpus
+Public clones: the TV validation corpus lives in a private submodule only; see CONTRIBUTING.md."
+fi
+
 # --- 1) build ---------------------------------------------------------
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then

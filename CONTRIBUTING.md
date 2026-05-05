@@ -2,11 +2,41 @@
 
 Thanks for your interest. This document covers the practical workflow for contributing changes to the runtime.
 
+## Validation corpus (maintainers only)
+
+TradingView-linked validation fixtures (`strategy.pine`, `tv_trades.csv`,
+compiled `generated.cpp`, reference OHLCV) live in a **private** Git repository
+and are attached here as a **`corpus` git submodule**. Public clones do not
+receive that data.
+
+After cloning this repo, if you have access to the private corpus remote:
+
+```bash
+git submodule update --init corpus
+```
+
+To **move** an inline `corpus/` tree (full history still in this repo) into a
+new empty private GitHub repo and convert it to a submodule, run once:
+
+```bash
+chmod +x scripts/migrate_corpus_to_private_submodule.sh
+CORPUS_REMOTE=git@github.com:YOUR_ORG/YOUR-private-corpus.git \
+  bash scripts/migrate_corpus_to_private_submodule.sh
+```
+
+See `scripts/migrate_corpus_to_private_submodule.sh` for prerequisites.
+
+**Open-sourcing:** If this repo was ever public **with** `corpus/` committed, Git
+history may still contain those files until you rewrite it (e.g. [git
+filter-repo](https://github.com/newren/git-filter-repo)). The migration script
+only changes **future** snapshots.
+
 ## Development setup
 
 ```bash
 git clone https://github.com/fullpass-4pass/pineforge-engine.git pineforge-engine
 cd pineforge-engine
+git submodule update --init corpus   # omit if you do not have corpus access
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ctest --test-dir build --output-on-failure
@@ -128,8 +158,9 @@ easy to find candidates.
 
 ## Parity testing
 
-The 162-strategy parity corpus lives at [`corpus/`](corpus/) — see
-[`corpus/README.md`](corpus/README.md) for layout and threshold profiles. The full sweep is one command:
+The 162-strategy parity corpus is the private **`corpus` git submodule** (see
+top of this file). After `git submodule update --init corpus`, read
+[`corpus/README.md`](corpus/README.md) for layout and threshold profiles. The full sweep is:
 
 ```bash
 bash scripts/run_corpus.sh
