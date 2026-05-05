@@ -141,6 +141,7 @@ scripts/                - reproducibility tooling
   ├── run_corpus.sh     - one-shot: build all 162 .so + run + verify
   └── verify_corpus.py  - diff each engine_trades.csv against its tv_trades.csv
 cmake/                  - PineForgeConfig.cmake.in for downstream find_package()
+cmake/smoke_consumer/   - Minimal find_package(PineForge) CI smoke project
 .github/workflows/      - CI: Linux + macOS × Release + Debug
 ```
 
@@ -151,7 +152,7 @@ Every compiled strategy `.so` that statically links `libpineforge.a` exports **e
 - `libpineforge.a` is built with `-fvisibility=hidden -fvisibility-inlines-hidden`
 - Public symbols are tagged `PF_API` (visibility=default)
 - Internal C++ classes (`BacktestEngine`, `ta::*`, `pineforge::internal::*`) are not tagged, so they stay hidden in any final `.so`
-- The CI verifies the export table after build
+- CI runs `scripts/check_c_abi_runtime.py`, which asserts the runtime library only implements the two `PF_API` entry points that live in `src/c_abi.cpp` (the remaining C ABI symbols are emitted per-strategy by the transpiler; end-to-end export checks use the corpus `.so` builds)
 
 ## Versioning
 
@@ -224,7 +225,7 @@ for the full per-strategy table and methodology.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE). Third-party notices: [NOTICE](NOTICE). Security contact: [SECURITY.md](SECURITY.md).
 
 ## Contributing
 

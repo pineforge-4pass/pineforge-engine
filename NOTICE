@@ -1,0 +1,12 @@
+PineForge Engine
+Copyright 2026 PineForge contributors
+
+This product includes software developed for the PineForge project.
+
+Third-party components
+----------------------
+
+Eigen (https://eigen.tuxfamily.org/)
+  Version fetched or installed at build time (e.g. 3.4.x).
+  Licensed under the Mozilla Public License 2.0 (MPL-2.0).
+  SPDX-License-Identifier: MPL-2.0

@@ -5,7 +5,7 @@ Thanks for your interest. This document covers the practical workflow for contri
 ## Development setup
 
 ```bash
-git clone <this-repo> pineforge-engine
+git clone https://github.com/fullpass-4pass/pineforge-engine.git pineforge-engine
 cd pineforge-engine
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j

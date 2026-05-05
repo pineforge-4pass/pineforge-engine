@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        build_type: [Release, Debug]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Install Eigen3 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install eigen
+          echo "CMAKE_PREFIX_PATH_EXTRA=$(brew --prefix eigen)" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: C ABI runtime source check
+        run: python3 scripts/check_c_abi_runtime.py
+
+      - name: Install PineForge
+        run: cmake --install build --prefix "$GITHUB_WORKSPACE/pf_install"
+
+      - name: find_package smoke build
+        shell: bash
+        env:
+          WORKSPACE: ${{ github.workspace }}
+          BUILD_TYPE: ${{ matrix.build_type }}
+        run: |
+          set -euo pipefail
+          EXTRA="${CMAKE_PREFIX_PATH_EXTRA:-}"
+          PREFIX="${WORKSPACE}/pf_install"
+          if [[ -n "$EXTRA" ]]; then
+            export CMAKE_PREFIX_PATH="${PREFIX};${EXTRA}"
+          else
+            export CMAKE_PREFIX_PATH="${PREFIX}"
+          fi
+          cmake -S cmake/smoke_consumer -B smoke_build \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+          cmake --build smoke_build -j 4
+          ./smoke_build/smoke_version | grep -qE '^0\.1\.[0-9]+$'
