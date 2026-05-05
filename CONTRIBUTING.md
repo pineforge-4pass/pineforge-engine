@@ -1,0 +1,107 @@
+# Contributing to PineForge
+
+Thanks for your interest. This document covers the practical workflow for contributing changes to the runtime.
+
+## Development setup
+
+```bash
+git clone <this-repo> pineforge-engine
+cd pineforge-engine
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+You'll need:
+
+- CMake ≥ 3.16
+- A C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12)
+- Eigen 3.3+ (will be fetched automatically if not on system)
+
+The full test suite — 14 binaries, 13 C++ + 1 pure-C ABI sanity test — completes in a few seconds. There is no slow-test tier; if your change makes ctest take more than ~10s, that's a regression.
+
+## What changes are easy to land
+
+Pure implementation changes that touch internal C++ are easy. Examples:
+
+- Bug fixes in `engine_*.cpp` that improve TV parity
+- New TA classes (add to the appropriate `ta_*.cpp` partition + its declaration in `<pineforge/ta.hpp>`)
+- Refactors of internal C++ that don't touch the C ABI surface
+- Added unit tests in `tests/`
+
+Changes to `<pineforge/pineforge.h>` are hard. See "ABI stability" below.
+
+## ABI stability
+
+`<pineforge/pineforge.h>` is the canonical consumer surface and follows append-only semver:
+
+- **PATCH** (`0.1.X`): no ABI changes. Bug fixes, internal refactors, perf, new tests, doc fixes.
+- **MINOR** (`0.X.0`): append-only additions. New functions added at the end of the header; new fields appended at the end of existing struct definitions; new enum values at the end of an enum.
+  - You **may not** add a new field in the middle of `pf_report_t`. That's a layout change.
+  - You **may** add `pf_some_new_function()` at the end of the header. Old binaries that don't reference it keep working.
+- **MAJOR** (`X.0.0`): breaking changes. Reordering struct fields, removing functions, renaming things. Requires explicit maintainer signoff.
+
+The compile-time `static_assert`s in `src/c_abi.cpp` enforce layout pinning between `pf_*_t` POD types and their internal C++ mirrors. **If those `static_assert`s fail in your branch, do not "fix" them by changing the asserts.** Find what changed in the C++ representation and revert.
+
+## Coding style
+
+- C++17. No `std::filesystem`, no `<format>`. Yes to structured bindings, `if constexpr`, and `std::optional`.
+- 4-space indent (no tabs). 100-column soft limit. The repo's `.clang-format` is canonical.
+- Names: `lower_snake_case` for functions and members, `PascalCase` for types, `kPascal` for constants where they exist.
+- Comments explain *why*, not *what*. The runtime has hundreds of subtle TV-parity quirks; if you write code that handles one, leave a one-paragraph comment on what TV does, and link the offending probe / test fixture from `tests/`.
+
+## Function size
+
+The runtime targets functions ≤ 80 lines (one screen). Most are well under. Three are intentionally larger because splitting fragments a single concept:
+
+- `BacktestEngine::classify_order_eligibility`
+- `BacktestEngine::evaluate_fill_price`
+- `BacktestEngine::sort_orders_by_fill_phase`
+
+If you add a new function over 80 lines, expect the reviewer to ask "can this be split?". If the answer is "no, it's one cohesive thing", say so in the PR description. Don't fragment cohesive code just to hit a number.
+
+## File organisation
+
+The runtime is split by concern, not by class. When adding code:
+
+- New TA indicator class? Pick the correct `ta_*.cpp` partition by category (averages / oscillators / volatility-trend / extremes-volume / misc) and add it there.
+- New `BacktestEngine` method? It probably belongs in one of the `engine_*.cpp` partitions. Add the declaration to `<pineforge/engine.hpp>`'s appropriate section (private/protected/public) and the definition to whichever partition matches the concern.
+- New file-local helper that's only used in one `.cpp`? Put it in an anonymous namespace inside that file. Do not declare it in `engine_internal.hpp` unless it's genuinely cross-TU.
+- New cross-TU internal helper? Declare it in `engine_internal.hpp` under `pineforge::internal`.
+
+## Tests
+
+Every PR must keep ctest green:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+For meaningful changes, add a test. The easiest pattern: copy `tests/test_kc.cpp` and rename — it shows the standard test harness. New tests should be added to the `TEST_SOURCES` list in `tests/CMakeLists.txt`.
+
+For TA-class changes, the test pattern is:
+
+1. Construct the indicator
+2. Feed a known input series
+3. Compare against a hand-computed expected output (use Python or a spreadsheet)
+4. `printf` and assert
+
+For engine changes, look at `tests/test_integration.cpp` and `tests/test_request_security.cpp` for examples of multi-bar simulation tests.
+
+## Parity testing
+
+The 162-strategy parity corpus does not live in this repository — it's part of the closed PineForge transpiler's validation harness. As an external contributor, you don't need to run it; the maintainers do, before merging anything that touches runtime semantics. Your responsibility is the unit tests in this repo.
+
+If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), say so in the PR description. The maintainers will run the full parity sweep before merge.
+
+## Pull requests
+
+- Open against `main`.
+- Keep PRs small. One concept per PR; multiple commits is fine.
+- Title format: `area: short imperative summary` (e.g. `engine_fills: handle dual-stop tie-break`).
+- Body: explain the *why*. If it's a TV-parity fix, link the failing probe / cite the TV behavior.
+- All CI must pass before merge: build on Ubuntu + macOS in both Release and Debug, ctest, and the install/`find_package` smoke test.
+
+## License
+
+By contributing, you agree your contributions will be licensed under the Apache License 2.0 (the same license as the rest of the project). See [LICENSE](LICENSE).
