@@ -151,8 +151,45 @@ window. The lead 30 days serve as warmup for indicator state.
 
 ## License
 
-Same as the parent repository (Apache 2.0). Note that running PineTS at
-benchmark time pulls AGPL-3.0 code into Node's process — that's
-permissible for *running* the benchmark, but redistributing the whole
-toolchain as a single binary would trigger copyleft. We re-publish only
-**numerical results** (CSVs, summary tables), not PineTS source.
+Same as the parent repository (Apache 2.0). Three pieces deserve
+explicit notes:
+
+### `strategies/<NN-slug>/strategy.pine`
+
+Hand-written PineScript v6 sources, copied verbatim from the
+[`corpus/`](../corpus/) directory of this repository. Apache 2.0 along
+with the rest of the repo. The community ones (06-…, 07-…, 08-…, etc.)
+are re-implementations of public PineScript patterns; if you recognise
+yours and want attribution, please open an issue.
+
+### `strategies/<NN-slug>/strategy_pyne.py` (cloud-compiled)
+
+These files are **mechanically translated derivatives** of the
+corresponding `strategy.pine` files, produced by the
+[PyneSys cloud compiler](https://pynesys.io/) (`pyne compile`,
+PyneComp v6.0.31). They are committed for two reasons:
+
+- **Reproducibility-without-API-key** — anyone can run the benchmark
+  and reproduce the comparison numbers without paying for cloud
+  compilation. `runners/cloud_compile.py` skips strategies whose
+  `strategy_pyne.py` already exists; pass `--force` (or set
+  `REFRESH_COMPILE=1` to `run_all.sh`) to re-call the API.
+- **Pinning** — the cloud compiler is a moving target. Committing the
+  output freezes the comparison against PyneComp v6.0.31 so future
+  runs of `compare.py` produce stable numbers regardless of cloud-side
+  drift.
+
+These derivative works inherit the source license (Apache 2.0) — the
+PyneSys compiler is the same kind of tool as `gcc` or `rustc`: its
+output belongs to the source author, not the compiler vendor. The
+compiler header line in each file (`# This code was compiled by
+PyneComp v6.0.31`) attributes the translation tool, not transfers
+ownership.
+
+### PineTS (AGPL-3.0)
+
+Running PineTS at benchmark time pulls AGPL-3.0 code into Node's
+process — that's permissible for *running* the benchmark, but
+redistributing the whole toolchain as a single binary would trigger
+copyleft. We re-publish only **numerical results** (CSVs, summary
+tables), not PineTS source.

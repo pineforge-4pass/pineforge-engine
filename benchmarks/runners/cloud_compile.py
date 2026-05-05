@@ -63,8 +63,14 @@ def compile_one(strat_dir: Path, *, force: bool) -> tuple[bool, str]:
     out_py = strat_dir / "strategy_pyne.py"
     backup = strat_dir / "strategy_pyne.py.bak"
 
-    if out_py.exists() and not force and out_py.stat().st_mtime > pine.stat().st_mtime:
-        return True, "up-to-date"
+    # Default policy: keep the committed cloud-compiled output. Only
+    # re-call the PyneSys API when the user explicitly requests it
+    # (--force / REFRESH_COMPILE=1) — every compile costs API credits
+    # and the committed artefact is what every other engine's results
+    # were generated against. Mtime is intentionally NOT consulted
+    # here because freshly-cloned files all share the checkout time.
+    if out_py.exists() and not force:
+        return True, "skip (committed; --force to refresh)"
 
     if out_py.exists():
         out_py.replace(backup)
@@ -106,7 +112,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", help="Substring filter — only compile strategies whose folder name contains this")
     ap.add_argument("--force", action="store_true",
-                    help="Re-compile even when strategy_pyne.py is newer than strategy.pine")
+                    help="Re-call the PyneSys API even when a committed strategy_pyne.py "
+                         "already exists. Costs API credits per strategy.")
     args = ap.parse_args()
 
     if not (os.environ.get("PYNESYS_API_KEY") or "").strip():
@@ -128,7 +135,7 @@ def main() -> int:
     for i, d in enumerate(strategies, 1):
         ok, msg = compile_one(d, force=args.force)
         if ok:
-            if msg == "up-to-date":
+            if msg.startswith("skip"):
                 n_skip += 1
                 tag = "SKIP"
             else:

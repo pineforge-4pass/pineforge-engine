@@ -69,12 +69,31 @@ if [[ "${SKIP_BOOTSTRAP:-0}" != "1" ]]; then
 fi
 
 if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
-    log "cloud-compiling .pine -> @pyne via PyneSys"
-    if [[ -z "${PYNESYS_API_KEY:-}" ]] && ! grep -q '^api_key = "[^"]\+' "${WORKDIR}/config/api.toml" 2>/dev/null; then
-        warn "no PyneSys API key found in env or ${WORKDIR}/config/api.toml"
-        warn "set PYNESYS_API_KEY=... or fill api.toml; skipping compile"
+    log "cloud-compiling .pine -> @pyne via PyneSys (skip if strategy_pyne.py exists)"
+    compile_args=()
+    if [[ "${REFRESH_COMPILE:-0}" == "1" ]]; then
+        compile_args+=("--force")
+        log "  REFRESH_COMPILE=1: will re-call API for every strategy"
+    fi
+    needs_key=0
+    if (( ${#compile_args[@]} > 0 )); then
+        needs_key=1
     else
-        python3 "${BENCH_DIR}/runners/cloud_compile.py" >/dev/null \
+        # Even when not forcing, we still need a key if any strategy is
+        # missing its committed strategy_pyne.py.
+        for s in "${BENCH_DIR}"/strategies/[0-9][0-9]-*/; do
+            [[ -f "$s/strategy.pine" ]] || continue
+            [[ -f "$s/strategy_pyne.py" ]] || { needs_key=1; break; }
+        done
+    fi
+    if (( needs_key == 1 )) \
+       && [[ -z "${PYNESYS_API_KEY:-}" ]] \
+       && ! grep -q '^api_key = "[^"]\+' "${WORKDIR}/config/api.toml" 2>/dev/null; then
+        warn "missing strategy_pyne.py and no PyneSys API key found"
+        warn "set PYNESYS_API_KEY=... or fill ${WORKDIR}/config/api.toml"
+        warn "skipping compile; benchmark will run only on existing files"
+    else
+        python3 "${BENCH_DIR}/runners/cloud_compile.py" "${compile_args[@]}" >/dev/null \
             || warn "cloud_compile.py reported failures; continuing with whatever exists"
     fi
 fi
