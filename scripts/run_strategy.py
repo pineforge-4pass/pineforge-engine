@@ -276,15 +276,22 @@ def main() -> int:
                     help=f"OHLCV CSV (default: {DEFAULT_OHLCV.relative_to(REPO_ROOT)})")
     ap.add_argument("--so-name", default="strategy.so",
                     help="Library filename inside strategy_dir (default: strategy.so)")
+    ap.add_argument("-o", "--output", type=Path, default=None,
+                    help="Write engine_trades.csv to this path instead of "
+                         "strategy_dir/engine_trades.csv. Lets callers run "
+                         "a strategy.so against alternate OHLCV without "
+                         "polluting the strategy folder.")
     ap.add_argument("--no-overwrite", action="store_true",
-                    help="Skip if engine_trades.csv already exists.")
+                    help="Skip if the destination CSV already exists.")
     args = ap.parse_args()
 
     strategy_dir = args.strategy_dir.resolve()
-    out_path = strategy_dir / "engine_trades.csv"
+    out_path = (args.output.resolve() if args.output
+                else strategy_dir / "engine_trades.csv")
     if args.no_overwrite and out_path.exists():
         print(f"SKIP (exists): {out_path}")
         return 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     so_path = strategy_dir / args.so_name
     if not so_path.exists():

@@ -59,20 +59,23 @@ def regen_one(corpus_rel: str, idx: int, slug: str, ohlcv: Path) -> tuple[bool, 
         return False, (f"no strategy.so/.dylib/.dll in {corpus_dir.relative_to(REPO_ROOT)} — "
                        "build with `cmake --build build --target corpus_strategies`")
 
+    # Write the CSV directly into the benchmark folder via --output so we
+    # never overwrite the corpus's pinned engine_trades.csv (those were
+    # generated against the 36k corpus OHLCV and must stay reproducible
+    # against that feed alone).
+    dst = bench_dir / "pineforge_trades.csv"
     cmd = [
         sys.executable, str(RUN_STRATEGY),
-        str(corpus_dir), "--ohlcv", str(ohlcv.resolve()),
+        str(corpus_dir),
+        "--ohlcv", str(ohlcv.resolve()),
+        "--output", str(dst.resolve()),
     ]
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if res.returncode != 0:
         msg = (res.stderr.strip().splitlines() or [f"rc={res.returncode}"])[-1][:200]
         return False, f"run_strategy.py failed: {msg}"
-
-    src = corpus_dir / "engine_trades.csv"
-    if not src.exists():
-        return False, "run_strategy.py did not emit engine_trades.csv"
-    dst = bench_dir / "pineforge_trades.csv"
-    shutil.copy2(src, dst)
+    if not dst.exists():
+        return False, "run_strategy.py did not emit pineforge_trades.csv"
     return True, "ok"
 
 
