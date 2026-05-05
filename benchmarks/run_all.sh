@@ -190,8 +190,10 @@ if [[ ! -x "${CANON_BIN}" || "${BENCH_DIR}/runners/run_pineforge_canonical.cpp" 
 fi
 log "running canonical indicators through PineForge"
 # Prefer the extended OHLCV (matches the trade-list comparison feed);
-# the C++ binary takes the input CSV as its first arg.
-(cd "${BENCH_DIR}" && "${CANON_BIN}" "${WORKDIR}/data/ETHUSDT_15.csv" >/dev/null)
+# the C++ binary takes input and output CSV paths.
+(cd "${BENCH_DIR}" && "${CANON_BIN}" \
+    "${WORKDIR}/data/ETHUSDT_15.csv" \
+    "${STRATEGIES_DIR}/_indicators/canonical_pineforge.csv" >/dev/null)
 
 # --- 6) reports -------------------------------------------------------
 
