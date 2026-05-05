@@ -4,25 +4,27 @@ This directory ships an apples-to-apples comparison of **PineForge** against
 two open-source PineScript runtimes:
 
 - [**PyneCore**](https://github.com/PyneSys/pynecore) — Python framework that
-  runs hand-ported `@pyne` Python code with PineScript semantics. Apache 2.0.
+  runs `@pyne` Python translated from Pine source via the
+  [PyneSys cloud compiler](https://pynesys.io/). Apache 2.0.
 - [**PineTS**](https://github.com/LuxAlgo/PineTS) — TypeScript transpiler/
   runtime that runs raw `.pine` source in Node.js / browsers. AGPL-3.0.
 
-For each strategy in [`strategies/`](strategies/) the harness produces:
+The harness produces two reports under [`results/`](results/):
 
 | Output | PineForge | PyneCore | PineTS | Verified against |
 | --- | :---: | :---: | :---: | --- |
-| `*_trades.csv` (entries, exits, PnL) | ✅ | ✅ | ❌ (no strategy backtester yet, per [their roadmap](https://github.com/LuxAlgo/PineTS#roadmap)) | TradingView's `tv_trades.csv` |
-| `*_indicators.csv` (per-bar indicator values) | ✅ | ✅ | ✅ | Cross-engine consensus |
+| `trade_comparison.md` (entries, exits, PnL, count) | ✅ | ✅ | ❌ (no strategy backtester yet, per [their roadmap](https://github.com/LuxAlgo/PineTS#roadmap)) | TradingView's `tv_trades.csv` |
+| `indicator_comparison.md` (per-bar indicator values) | ✅ | ✅ | ✅ | Cross-engine consensus |
 
 ## What this is, and what it isn't
 
-**This is fair.** Each engine consumes the same OHLCV bar feed
-(`corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`, 36,361 15-minute bars). Each
-strategy is hand-ported to all three engines from one canonical
-`strategy.pine` source. Where engines have configurable behaviours
-(commission, slippage, default qty), they're set identically. Outputs
-are normalized to a common CSV schema before diffing.
+**This is fair.** Each engine consumes the same 41,307-bar Binance
+ETH/USDT:USDT 15m OHLCV feed (LFS-tracked at
+[`data/ETHUSDT_15.csv`](data/ETHUSDT_15.csv)). The PyneCore Python is
+the official cloud-compiler output for the same `strategy.pine`
+sources PineForge runs against — no hand-translation in the loop.
+Where engines have configurable behaviours (commission, slippage,
+default qty), they're set identically.
 
 **This is not a victory lap.** PineForge wins by design on the trade-list
 side because PineTS does not implement strategy backtesting yet — that's
@@ -36,61 +38,76 @@ slightly; this harness measures that gap.
 
 ```
 benchmarks/
+├── data/
+│   └── ETHUSDT_15.csv                LFS-tracked OHLCV snapshot (~2.3 MB,
+│                                     41,307 bars, 2025-03-01 → today)
 ├── strategies/
 │   ├── 01-sma-cross/
 │   │   ├── strategy.pine             canonical source (matches corpus/)
-│   │   ├── strategy.pyne.py          hand-ported PyneCore version
-│   │   ├── strategy.pinets.ts        hand-ported PineTS version (indicator-only)
+│   │   ├── strategy_pyne.py          PyneSys cloud-compiler output
+│   │   ├── tv_trades.csv             ground truth (copied from corpus/)
 │   │   ├── pineforge_trades.csv      PineForge trade list (TV format)
-│   │   ├── pynecore_trades.csv       PyneCore trade list (normalized)
-│   │   ├── pineforge_indicators.csv  per-bar indicator values
-│   │   ├── pynecore_indicators.csv   per-bar indicator values
-│   │   ├── pinets_indicators.csv     per-bar indicator values
-│   │   └── tv_trades.csv             ground truth (copied from corpus/)
-│   ├── 02-…/                         (curated 10-strategy suite)
-│   └── …
+│   │   └── pynecore_trades.csv       PyneCore trade list (normalised)
+│   ├── 02-…  ...  50-…/              (50-strategy suite)
+│   └── _indicators/                  shared canonical indicator script
+│       ├── canonical.pine            10-indicator source
+│       ├── canonical_pyne.py         cloud-compiled @pyne version
+│       └── canonical_{pineforge,pyne,pinets}.csv  per-bar values
 ├── runners/
-│   ├── run_pineforge.py              wraps scripts/run_strategy.py
-│   ├── run_pynecore.py               drives PyneCore script_runner
-│   └── run_pinets.ts                 drives PineTS via Node
-├── compare.py                        produces results/*.md
+│   ├── fetch_extended_ohlcv.py       ccxt fetch (mirrors parent's fetch_data.py)
+│   ├── bootstrap_strategies.py       copy 50 strategy folders from corpus/
+│   ├── cloud_compile.py              wraps `pyne compile` (skip-if-committed)
+│   ├── regenerate_pineforge_trades.py runs corpus's strategy.so against
+│   │                                 extended OHLCV via scripts/run_strategy.py
+│   ├── run_pynecore.py               wraps `pyne run`, normalises output
+│   ├── run_pinets_canonical.mjs      Node + pinets, indicator-only
+│   └── run_pineforge_canonical.cpp   bare-metal C++ harness over libpineforge
+├── compare.py                        trade-list comparator (window-clipped, 4-dim)
+├── compare_indicators.py             3-way per-bar indicator diff
 ├── results/
-│   ├── trade_comparison.md           PineForge vs PyneCore, per strategy
-│   ├── indicator_comparison.md       three-way per-bar indicator diff
-│   └── summary.md                    headline numbers
-├── pyproject.toml                    Python deps (pynecore, pandas)
-├── package.json                      Node deps (pinets, typescript)
-└── run_all.sh                        orchestrator
+│   ├── summary.md                    headline numbers + methodology
+│   ├── trade_comparison.md           per-strategy table (PF vs PC vs TV)
+│   └── indicator_comparison.md       per-indicator p50/p90/p99/max table
+├── pyproject.toml                    Python deps (pynesys-pynecore, pandas, ccxt)
+├── package.json                      Node deps (pinets)
+├── .gitignore                        gates _workdir/, .venv/, node_modules/, ...
+└── run_all.sh                        one-shot orchestrator
 ```
 
 ## Methodology
 
-### Trade-list comparison (PineForge ↔ PyneCore)
+### Trade-list comparison (PineForge ↔ PyneCore vs TradingView)
 
 For each strategy, both engines:
 
-1. Read the same 36,361-bar OHLCV file as input.
-2. Use identical `strategy(...)` declaration parameters: same initial
-   capital, commission model, default qty type, pyramiding cap, and
-   `process_orders_on_close=false` (TV's default).
+1. Read the same 41,307-bar OHLCV file as input.
+2. Run with `strategy(...)` decoration parameters preserved verbatim
+   from the original `.pine` source — initial capital, commission
+   model, default qty type, pyramiding cap, etc.
 3. Emit a chronological trade list.
 
-The harness then aligns trades by **direction + entry-time within a
-1-hour window** (matching TradingView's own export semantics) and
-reports:
+`compare.py` then:
 
-- Trade count delta vs TV
-- Entry-price p90 delta against the matched TV trade
-- Exit-price p90 delta against the matched TV trade
-- P&L p90 delta against the matched TV trade
+1. Computes `[OHLCV bar span] ∩ [TV entry span] ∩ [engine entry span]`
+   (mirrors `validate_detailed_report.py::common_entry_window_ms`
+   in the parent project).
+2. Clips both TV and engine trade lists to that window.
+3. Aligns trades within the window by direction + entry-time within
+   a 1-hour gating window with a $3 entry-price gate.
+4. Computes four-dimensional p90 deltas vs TV: count, entry-price,
+   exit-price, P&L.
+5. Classifies into 5 tiers (excellent / strong / moderate / weak / minimal)
+   per the canonical sweep heuristic. Strategies that use TradingView's
+   `trail_*` exits get the production threshold profile.
 
 ### Indicator-value comparison (three-way)
 
-Each strategy is also instrumented to emit per-bar values for the
-same set of canonical indicators (`ta.ema`, `ta.rsi`, `ta.atr`,
-`ta.macd`, `ta.bb`). For each (strategy, indicator, bar) tuple, the
-harness computes the max-of-pairwise delta and reports the worst
-1,000 bars across the corpus.
+A single canonical script ([`strategies/_indicators/canonical.pine`](strategies/_indicators/canonical.pine))
+computes 10 common indicators (`ta.ema`, `ta.sma`, `ta.rsi`, `ta.atr`,
+`ta.macd` × 3, `ta.bb` × 3) over the full 41,307-bar feed. Each engine
+emits one CSV with per-bar values; `compare_indicators.py` reports
+p50 / p90 / p99 / max relative deltas across every indicator-pair on
+post-warmup bars.
 
 ## Reproducing
 

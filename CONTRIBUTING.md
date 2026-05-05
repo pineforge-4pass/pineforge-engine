@@ -90,9 +90,27 @@ For engine changes, look at `tests/test_integration.cpp` and `tests/test_request
 
 ## Parity testing
 
-The 162-strategy parity corpus does not live in this repository — it's part of the closed PineForge transpiler's validation harness. As an external contributor, you don't need to run it; the maintainers do, before merging anything that touches runtime semantics. Your responsibility is the unit tests in this repo.
+The 162-strategy parity corpus lives at [`corpus/`](corpus/) — see
+[`corpus/README.md`](corpus/README.md) for layout and threshold profiles. The full sweep is one command:
 
-If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), say so in the PR description. The maintainers will run the full parity sweep before merge.
+```bash
+bash scripts/run_corpus.sh
+```
+
+It builds every `corpus/<>/<>/generated.cpp` into a `strategy.so`,
+runs each against `corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`, and
+diffs the regenerated `engine_trades.csv` files against the
+committed copies via `scripts/verify_corpus.py`. Re-running it
+should produce byte-identical output to git; if not, your change
+has a runtime-semantics regression.
+
+If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), run the corpus sweep locally and include the diff in the PR description.
+
+For a multi-engine cross-check, [`benchmarks/`](benchmarks/) ships
+the same 50 strategies through PineForge, [PyneCore](https://github.com/PyneSys/pynecore),
+and [PineTS](https://github.com/LuxAlgo/PineTS) — useful for spotting
+whether a parity drift is engine-specific or a TV-side semantic both
+engines see. `bash benchmarks/run_all.sh` runs the whole pipeline.
 
 ## Pull requests
 

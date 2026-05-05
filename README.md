@@ -13,6 +13,7 @@ This repository ships:
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
 - A 14-binary ctest suite (13 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit
 - [`corpus/`](corpus/) — **162 reference strategies** as a reproducibility kit: each ships its `strategy.pine` source, the `generated.cpp` produced by the closed transpiler, the TradingView trade export (`tv_trades.csv`), and the engine's own trade output (`engine_trades.csv`). One shell command (`bash scripts/run_corpus.sh`) builds every `generated.cpp` into a `.so`, runs each through the Python harness, and verifies parity against TradingView
+- [`benchmarks/`](benchmarks/) — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. PyneCore Python sources are produced by the official PyneSys cloud compiler (no hand-ports); the OHLCV is a pinned LFS-tracked snapshot. `bash benchmarks/run_all.sh` reproduces every comparison number from a fresh clone with zero external API calls. Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
 
 ## What this is, and what it isn't
 
@@ -118,8 +119,14 @@ src/                    - implementation (~25 .cpp files split by concern)
   └── magnifier.cpp / matrix.cpp / session_time.cpp / str_utils.cpp / timeframe.cpp / timezone.cpp / math.cpp
 tests/                  - 14 ctest binaries
 corpus/                 - 162 reference strategies × {strategy.pine, generated.cpp, tv_trades.csv, engine_trades.csv}
-  ├── data/             - reference 36k-bar OHLCV feed
+  ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
+benchmarks/             - three-way comparison vs PyneCore + PineTS (50 strategies)
+  ├── data/             - LFS-tracked extended OHLCV (41,307 bars; covers full TV history)
+  ├── strategies/       - 50 × {strategy.pine, strategy_pyne.py, tv_trades.csv, *_trades.csv}
+  ├── runners/          - cloud_compile, fetch_extended_ohlcv, regenerate_pineforge_trades, ...
+  ├── results/          - summary.md, trade_comparison.md, indicator_comparison.md
+  └── run_all.sh        - one-shot: bootstrap + cloud-compile + run + diff
 scripts/                - reproducibility tooling
   ├── run_strategy.py   - load any strategy.so via ctypes, write engine_trades.csv
   ├── run_corpus.sh     - one-shot: build all 162 .so + run + verify
@@ -170,9 +177,41 @@ result, that is a bug worth filing.
 See [`corpus/README.md`](corpus/README.md) for layout, schema, and
 threshold profiles.
 
+## Cross-engine comparison
+
+[`benchmarks/`](benchmarks/) runs the same 50 strategies through
+PineForge, PyneCore, and PineTS to spot engine-specific defects vs
+TV-side semantics. Each engine consumes the same 41,307-bar Binance
+ETH/USDT:USDT 15m feed (LFS-tracked at `benchmarks/data/`). PyneCore
+Python sources are the official PyneSys cloud compiler output
+(committed; no hand-ports). PineTS handles indicators only — their
+strategy backtester is upstream roadmap.
+
+```bash
+git lfs install && git lfs pull   # 2.3 MB OHLCV pin
+bash benchmarks/run_all.sh        # ~3 min from cold; zero API calls
+cat benchmarks/results/summary.md
+```
+
+Current standings (window-clipped 4-dimension diff vs TV):
+
+| Match degree | PineForge | PyneCore |
+|---|---:|---:|
+| 🟢 excellent | **48 / 50** | 45 / 50 |
+| 🟢 strong | 2 / 50 | 2 / 50 |
+| 🟡 moderate | 0 | 2 |
+| 🟠 weak | 0 | 1 |
+
+The 3 PyneCore-only outliers (`liquidity-sweep`, `scalping-strategy`,
+`partial-exit-qty-percent`) all involve `strategy.exit(stop=…, limit=…)`
+brackets, `trail_*` exits, or `strategy.close(qty_percent=…)` partial
+exits — categories where PyneCore's broker emulator differs from TV
+and PineForge does not. See [`benchmarks/results/summary.md`](benchmarks/results/summary.md)
+for the full per-strategy table and methodology.
+
 ## Status
 
-- v0.1 — initial public release. C ABI defined and pinned. 158/162 strategies pass at strict TV parity. CI runs on Ubuntu + macOS.
+- v0.1 — initial public release. C ABI defined and pinned. 158/162 strategies pass at strict TV parity (corpus); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS.
 
 ## License
 
