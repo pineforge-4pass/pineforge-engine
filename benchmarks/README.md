@@ -95,18 +95,40 @@ harness computes the max-of-pairwise delta and reports the worst
 ## Reproducing
 
 ```bash
-# Python deps
-uv sync                       # or: pip install -e .
+# 1. Pull the LFS-tracked OHLCV snapshot (~2.3 MB)
+git lfs install
+git lfs pull
 
-# Node deps
+# 2. Python + Node deps
+python3 -m venv .venv && source .venv/bin/activate
+pip install "pynesys-pynecore[cli]" pandas numpy ccxt
 npm install
 
-# Run everything
+# 3. (Optional) PyneSys API key — only needed if you want to refresh
+# the committed strategy_pyne.py snapshots. Leave unset to use the
+# committed PyneComp v6.0.31 outputs.
+cat > _workdir/config/api.toml <<EOF
+[api]
+api_key = "YOUR_KEY_HERE"
+timeout = 30
+EOF
+
+# 4. Run everything (uses the LFS-tracked OHLCV by default)
 bash run_all.sh
 
 # Read the results
 cat results/summary.md
 ```
+
+`run_all.sh` env knobs:
+
+- `REFRESH_OHLCV=1` — re-fetch the OHLCV from Binance USDT-M futures
+  via `runners/fetch_extended_ohlcv.py` and update the LFS snapshot.
+- `REFRESH_COMPILE=1` — re-call the PyneSys cloud compiler for every
+  strategy (costs API credits).
+- `SKIP_BUILD=1` / `SKIP_BOOTSTRAP=1` / `SKIP_COMPILE=1` /
+  `SKIP_PINEFORGE=1` / `SKIP_PYNE=1` / `SKIP_PINETS=1` /
+  `SKIP_REPORTS=1` — skip individual stages.
 
 ## Status
 
@@ -153,6 +175,17 @@ window. The lead 30 days serve as warmup for indicator state.
 
 Same as the parent repository (Apache 2.0). Three pieces deserve
 explicit notes:
+
+### `data/ETHUSDT_15.csv` (LFS-tracked)
+
+Binance USDT-M futures `ETH/USDT:USDT` 15-minute OHLCV, ~41,300 bars
+covering 2025-03-01 → present. Tracked via Git LFS (see the repo-root
+`.gitattributes`; install via `git lfs install` and pull via
+`git lfs pull`). Public market data — not copyrightable in the US/EU.
+Fetched via `runners/fetch_extended_ohlcv.py` (mirrors the parent
+project's `scripts/fetch_data.py`: `ccxt.binanceusdm` provider, same
+symbol, same timeframe). Pin this file rather than re-fetching on
+every run so the comparison numbers stay reproducible.
 
 ### `strategies/<NN-slug>/strategy.pine`
 

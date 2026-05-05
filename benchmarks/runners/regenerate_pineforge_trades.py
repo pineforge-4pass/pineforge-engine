@@ -31,8 +31,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BENCH_DIR = REPO_ROOT / "benchmarks"
 CORPUS_ROOT = REPO_ROOT / "corpus"
-DEFAULT_OHLCV = BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv"
 RUN_STRATEGY = REPO_ROOT / "scripts" / "run_strategy.py"
+
+# Prefer the LFS-tracked snapshot, fall back to the live working copy.
+_OHLCV_CANDIDATES = [
+    BENCH_DIR / "data" / "ETHUSDT_15.csv",
+    BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv",
+]
+DEFAULT_OHLCV = next((p for p in _OHLCV_CANDIDATES if p.exists()), _OHLCV_CANDIDATES[-1])
 
 # Reuse the canonical mapping from bootstrap_strategies.py.
 sys.path.insert(0, str(BENCH_DIR / "runners"))

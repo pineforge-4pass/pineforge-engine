@@ -54,12 +54,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCH_DIR = REPO_ROOT / "benchmarks"
 
-# Prefer the extended OHLCV fetched by `runners/fetch_extended_ohlcv.py`
-# (Binance USDT-M ETH/USDT:USDT 15m since 2025-03-01). Fall back to the
-# corpus reference if the extended file isn't present yet.
-_EXTENDED_OHLCV = BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv"
-_CORPUS_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
-OHLCV_PATH = _EXTENDED_OHLCV if _EXTENDED_OHLCV.exists() else _CORPUS_OHLCV
+# OHLCV resolution order (first existing wins):
+#   1. benchmarks/data/ETHUSDT_15.csv         — LFS-tracked snapshot
+#                                                (what committed pineforge_trades.csv
+#                                                 and pynecore_trades.csv were
+#                                                 generated against).
+#   2. benchmarks/_workdir/data/ETHUSDT_15.csv — live working copy, written
+#                                                by run_all.sh.
+#   3. corpus/data/ohlcv_ETH-USDT-USDT_15m.csv — fallback corpus reference.
+_CANDIDATE_OHLCV = [
+    BENCH_DIR / "data" / "ETHUSDT_15.csv",
+    BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv",
+    REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv",
+]
+OHLCV_PATH = next((p for p in _CANDIDATE_OHLCV if p.exists()), _CANDIDATE_OHLCV[-1])
 
 # Match window for entry-time alignment (matches parent project's gate)
 MATCH_WINDOW_S = 3600

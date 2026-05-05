@@ -43,22 +43,40 @@ if [[ ! -d "${BENCH_DIR}/node_modules" ]]; then
     (cd "${BENCH_DIR}" && npm install --silent)
 fi
 
-# Fetch extended OHLCV from Binance USDT-M futures (covers full TV
-# trade-export time range with ~30-day pre-roll for warmup).
+# OHLCV: prefer the LFS-tracked snapshot at benchmarks/data/ over a
+# fresh Binance fetch. The committed file is what every committed
+# strategy_pyne.py and pineforge_trades.csv was generated against —
+# fetching live would silently drift the comparison.
+#
+# To force a fresh download from Binance, set REFRESH_OHLCV=1.
 source "${BENCH_DIR}/.venv/bin/activate"
-if [[ ! -f "${WORKDIR}/data/ETHUSDT_15.ohlcv" || "${REFRESH_OHLCV:-0}" == "1" ]]; then
-    log "fetching extended OHLCV (Binance ETH/USDT:USDT 15m, since 2025-03-01)"
-    mkdir -p "${WORKDIR}/data"
+mkdir -p "${WORKDIR}/data"
+SNAPSHOT_CSV="${BENCH_DIR}/data/ETHUSDT_15.csv"
+LIVE_CSV="${WORKDIR}/data/ETHUSDT_15.csv"
+
+if [[ "${REFRESH_OHLCV:-0}" == "1" ]]; then
+    log "REFRESH_OHLCV=1: re-fetching from Binance ETH/USDT:USDT 15m"
     python3 "${BENCH_DIR}/runners/fetch_extended_ohlcv.py" \
-        --since "${OHLCV_SINCE:-2025-03-01}" >/dev/null \
-        || warn "OHLCV fetch failed; falling back to corpus copy"
-    if [[ ! -f "${WORKDIR}/data/ETHUSDT_15.csv" ]]; then
-        cp "${ROOT_DIR}/corpus/data/ohlcv_ETH-USDT-USDT_15m.csv" \
-           "${WORKDIR}/data/ETHUSDT_15.csv"
-        pyne -w "${WORKDIR}" data convert-from \
-            --provider pineforge --symbol ETHUSDT --timezone UTC \
-            "${WORKDIR}/data/ETHUSDT_15.csv" >/dev/null
+        --since "${OHLCV_SINCE:-2025-03-01}" >/dev/null
+    cp "${LIVE_CSV}" "${SNAPSHOT_CSV}"
+    log "wrote refreshed snapshot to benchmarks/data/ETHUSDT_15.csv"
+elif [[ -f "${SNAPSHOT_CSV}" ]]; then
+    if [[ ! -f "${LIVE_CSV}" ]] || ! cmp -s "${SNAPSHOT_CSV}" "${LIVE_CSV}"; then
+        log "using LFS-tracked OHLCV snapshot at benchmarks/data/ETHUSDT_15.csv"
+        cp "${SNAPSHOT_CSV}" "${LIVE_CSV}"
+        # Re-convert to PyneCore .ohlcv if missing or stale.
+        if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
+           || [[ "${LIVE_CSV}" -nt "${LIVE_CSV%.csv}.ohlcv" ]]; then
+            pyne -w "${WORKDIR}" data convert-from \
+                --provider pineforge --symbol ETHUSDT --timezone UTC \
+                "${LIVE_CSV}" >/dev/null
+        fi
     fi
+elif [[ ! -f "${LIVE_CSV}" ]]; then
+    warn "no LFS snapshot at benchmarks/data/ETHUSDT_15.csv"
+    warn "did you run \`git lfs pull\` after cloning?"
+    warn "set REFRESH_OHLCV=1 to fetch from Binance instead"
+    exit 1
 fi
 
 # --- 3a) bootstrap strategy folders + cloud-compile -----------------
