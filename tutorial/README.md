@@ -15,13 +15,16 @@ tutorial/
 └── CMakeLists.txt
 ```
 
-## Run
+Pick whichever path matches what you have installed.
+
+## Path A — local toolchain (cmake + g++ + python3)
 
 ```bash
 bash tutorial/run.sh
 ```
 
-Expected:
+Configures CMake (first time only), builds
+`tutorial/macd/strategy.so`, then runs `tutorial/run.py`. Expected:
 
 ```
 MACD(12,26,9) on BTCUSDT 15m — 672 bars, 2026-04-29 18:15 → 2026-05-06 18:00 UTC
@@ -34,20 +37,33 @@ MACD(12,26,9) on BTCUSDT 15m — 672 bars, 2026-04-29 18:15 → 2026-05-06 18:00
 
 Numbers depend on the OHLCV snapshot.
 
+## Path B — Docker (no local toolchain)
+
+Mount the strategy + OHLCV into the published runtime image; get a
+JSON report on stdout.
+
+```bash
+docker run --rm \
+  -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
+  -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
+  ghcr.io/fullpass-4pass/pineforge-engine:latest > report.json
+
+jq '.summary' report.json
+```
+
+Same engine, same numbers. Build the image locally instead with
+`docker build -t pineforge -f docker/Dockerfile .` if you don't want
+to pull from GHCR. Full mount/schema reference in
+[`docker/README.md`](../docker/README.md).
+
 ## Modify
 
 `generated.cpp` is plain C++ over `<pineforge/engine.hpp>`. Edit it
 (swap `ta::MACD` for `ta::RSI`, change params, add an exit rule),
-then `bash tutorial/run.sh`. `strategy.pine` is the PineScript form
-the C++ mirrors.
+then rerun whichever path you used. `strategy.pine` is the PineScript
+form the C++ mirrors.
 
 Refresh OHLCV: `python3 tutorial/data/fetch_btcusdt.py`
 (supports `--symbol`, `--interval`, `--limit`).
 
 Opt out of the tutorial build: `cmake -B build -DPINEFORGE_BUILD_TUTORIAL=OFF`.
-
-## No toolchain? Use Docker
-
-[`docker/`](../docker/README.md) takes any `strategy.cpp` + OHLCV CSV
-via mount points and emits a JSON report on stdout — same engine,
-zero local install.
