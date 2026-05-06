@@ -14,7 +14,7 @@ add_library(strategy_tutorial_macd SHARED ${TUT_DIR}/generated.cpp)
 target_link_libraries(strategy_tutorial_macd PRIVATE pineforge)
 
 # Force-load libpineforge so the c_abi.cpp symbols (pf_version_get,
-# strategy_set_trace_enabled) — which the codegen-emitted body never
+# strategy_set_trace_enabled) — which the strategy body never
 # references but tutorial/run.py expects via dlsym — are pulled in.
 if(APPLE)
     target_link_options(strategy_tutorial_macd PRIVATE
@@ -26,7 +26,7 @@ elseif(UNIX)
         "-Wl,--no-whole-archive")
 endif()
 
-# Codegen output triggers a few warnings we cannot fix at this layer.
+# Suppress a few warnings the strategy translation unit cannot fix.
 target_compile_options(strategy_tutorial_macd PRIVATE
     -Wno-unused-but-set-variable
     -Wno-unused-variable

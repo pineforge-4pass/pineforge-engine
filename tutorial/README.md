@@ -7,8 +7,7 @@ clone in under a minute. Everything lives under `tutorial/`:
 tutorial/
 ├── macd/
 │   ├── strategy.pine       Pine v6 source for reference
-│   ├── generated.cpp       C++ emit from pineforge-codegen (compiled)
-│   ├── regen.sh            optional: rebuild generated.cpp from .pine
+│   ├── generated.cpp       C++ shape the runtime loads (compiled)
 │   ├── strategy.so         BUILT — `.so` produced by CMake
 │   └── trades.csv          BUILT — written by run.py per backtest
 ├── data/
@@ -116,22 +115,17 @@ python3 tutorial/data/fetch_btcusdt.py --symbol ETHUSDT --interval 5m --limit 10
 
 ## Modifying the strategy
 
-1. Edit [`macd/strategy.pine`](macd/strategy.pine).
-2. Regenerate the C++:
-   ```bash
-   bash tutorial/macd/regen.sh
-   ```
-   This expects a sibling checkout of the (proprietary)
-   `pineforge-codegen` transpiler at `../pineforge-codegen`. Override
-   with `PINEFORGE_CODEGEN_DIR=/path/to/codegen`.
-3. Rebuild and rerun:
-   ```bash
-   bash tutorial/run.sh
-   ```
+`generated.cpp` is plain C++ that links against the public engine
+headers in `include/pineforge/`. Edit it directly — change indicator
+parameters, swap `ta::MACD` for `ta::RSI`, add an exit rule — then
+rerun:
 
-If you do not have access to `pineforge-codegen`, you can still hand-
-edit `generated.cpp` directly — the file is plain C++ that links
-against the public engine headers in `include/pineforge/`.
+```bash
+bash tutorial/run.sh
+```
+
+The sibling `strategy.pine` is kept for reference so you can see the
+PineScript v6 form the C++ mirrors.
 
 ## Next steps
 
