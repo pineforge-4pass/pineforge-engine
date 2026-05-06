@@ -10,7 +10,23 @@ Self-contained image for running a backtest of any pre-generated
 PineForge strategy translation unit against an OHLCV CSV. JSON
 report on stdout, build/compile noise on stderr.
 
-## Build
+## Pull (prebuilt)
+
+Each push to `main` (and every semver tag `vX.Y.Z`) publishes a
+multi-arch image to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/fullpass-4pass/pineforge-engine:latest
+# or pin a release:
+docker pull ghcr.io/fullpass-4pass/pineforge-engine:0.1.0
+```
+
+Available tags: `latest`, `main`, `vX.Y.Z`, `X.Y`, and `sha-<short>`.
+Linux `amd64` + `arm64`. Image must be marked public in the repo's
+package settings for anonymous pulls; otherwise `docker login ghcr.io`
+with a PAT (`read:packages` scope) first.
+
+## Build (from source)
 
 ```bash
 docker build -t pineforge -f docker/Dockerfile .
