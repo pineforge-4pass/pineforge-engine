@@ -1,4 +1,10 @@
-# PineForge Docker runtime
+# PineForge Docker runtime — tutorial image
+
+> **Tutorial / reference image.** Same spirit as `tutorial/` — a
+> minimal, end-to-end example you can copy and adapt. Production
+> deployments will want their own image (smaller base, pinned
+> libpineforge version, hardened entrypoint, image signing, etc.).
+> Use this one to learn the inputs/outputs and as a starting point.
 
 Self-contained image for running a backtest of any pre-generated
 PineForge strategy translation unit against an OHLCV CSV. JSON

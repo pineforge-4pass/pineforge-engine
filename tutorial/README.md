@@ -127,6 +127,14 @@ bash tutorial/run.sh
 The sibling `strategy.pine` is kept for reference so you can see the
 PineScript v6 form the C++ mirrors.
 
+## Containerised variant
+
+If you want the same flow without installing CMake / a C++ toolchain
+locally, see [`docker/README.md`](../docker/README.md). That image
+takes any pre-generated `strategy.cpp` plus an OHLCV CSV via mount
+points and emits a structured JSON report on stdout — also tutorial-
+grade, same caveats as the rest of `tutorial/`.
+
 ## Next steps
 
 - Browse `corpus/basic/` for nine more compact strategy examples
