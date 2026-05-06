@@ -23,6 +23,8 @@ option(PINEFORGE_BUILD_TESTS "Build the C++ test suite" ON)
 option(PINEFORGE_BUILD_EXAMPLES "Build example consumers (none yet)" OFF)
 option(PINEFORGE_BUILD_CORPUS_STRATEGIES
     "Build a strategy.so per .pine in corpus/ from its generated.cpp" OFF)
+option(PINEFORGE_BUILD_TUTORIAL
+    "Build the tutorial MACD strategy.so under tutorial/" ON)
 option(PINEFORGE_ENABLE_COVERAGE
     "Instrument the runtime + tests for source-level coverage (Clang or GCC)" OFF)
 
@@ -126,6 +128,11 @@ if(PINEFORGE_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+# === Tutorial strategy (opt-out) =======================================
+if(PINEFORGE_BUILD_TUTORIAL)
+    add_subdirectory(tutorial)
+endif()
+
 # === Corpus strategies (opt-in) ========================================
 if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/CMakeLists.txt")
@@ -187,5 +194,6 @@ message(STATUS "  build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard:      ${CMAKE_CXX_STANDARD}")
 message(STATUS "  install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  build tests:       ${PINEFORGE_BUILD_TESTS}")
+message(STATUS "  build tutorial:    ${PINEFORGE_BUILD_TUTORIAL}")
 message(STATUS "  build corpus:      ${PINEFORGE_BUILD_CORPUS_STRATEGIES}")
 message(STATUS "")

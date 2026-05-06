@@ -1,0 +1,45 @@
+//@version=6
+//
+// PineForge tutorial — MACD line/signal crossover.
+//
+// This is the original Pine v6 source the tutorial is built around.
+// It is kept here for reference only; PineForge ships its compiler
+// closed-source, so the actual backtest binary is built from the
+// sibling generated.cpp (which mirrors the engine bytecode this Pine
+// would produce). Read both side-by-side to see how each Pine line
+// maps onto the runtime API.
+//
+strategy("MACD Crossover (tutorial)",
+     overlay            = false,
+     initial_capital    = 1000000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+// === Inputs ===
+fastLen   = input.int(12, "Fast Length",   minval=1)
+slowLen   = input.int(26, "Slow Length",   minval=1)
+signalLen = input.int(9,  "Signal Length", minval=1)
+src       = input.source(close, "Source")
+
+// === MACD ===
+[macdLine, signalLine, histLine] = ta.macd(src, fastLen, slowLen, signalLen)
+
+// === Signals ===
+longCond  = ta.crossover(macdLine,  signalLine)
+shortCond = ta.crossunder(macdLine, signalLine)
+
+// === Entries ===
+if longCond
+    strategy.entry("Long",  strategy.long)
+if shortCond
+    strategy.entry("Short", strategy.short)
+
+plot(histLine,   "Histogram", style=plot.style_histogram, color=histLine >= 0 ? color.green : color.red)
+plot(macdLine,   "MACD",      color=color.blue)
+plot(signalLine, "Signal",    color=color.orange)

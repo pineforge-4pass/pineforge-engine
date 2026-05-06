@@ -44,3 +44,9 @@ _deps/
 .venv/
 __pycache__/
 *.pyc
+
+# Playwright MCP traces
+.playwright-mcp/
+
+# Tutorial backtest output
+tutorial/**/trades.csv
