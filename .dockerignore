@@ -1,0 +1,29 @@
+# Build outputs
+build/
+build-*/
+out/
+cmake-build-*/
+*.o
+*.so
+*.dylib
+*.dll
+*.a
+
+# IDE / cache
+.vscode/
+.idea/
+.cache/
+.DS_Store
+__pycache__/
+*.pyc
+
+# Big or unrelated trees the runtime image does not need
+.git/
+.github/
+benchmarks/
+corpus/
+docs/
+scripts/
+tutorial/
+.playwright-mcp/
+node_modules/
