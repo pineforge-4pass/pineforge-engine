@@ -11,6 +11,7 @@ tutorial/
 │   ├── btcusdt_15m_7d.csv  672 frozen bars (Binance)
 │   └── fetch_btcusdt.py    refresh from Binance public API
 ├── run.py                  ctypes harness + stats
+├── run_advanced.py         parameter sweep using ABI overrides
 ├── run.sh                  one-shot: cmake build + run.py
 └── CMakeLists.txt
 ```
@@ -56,7 +57,50 @@ Same engine, same numbers. Build the image locally instead with
 to pull from GHCR. Full mount/schema reference in
 [`docker/README.md`](../docker/README.md).
 
-## Modify
+## Advanced — re-run with different params, no rebuild
+
+The compiled strategy.so exports two C ABI hooks for runtime overrides:
+
+| Hook                        | Overrides                                  |
+| --------------------------- | ------------------------------------------ |
+| `strategy_set_input(k, v)`  | `input.*()` named values from strategy.pine (e.g. `"Fast Length"`, `"Slow Length"`, `"Source"`) |
+| `strategy_set_override(k, v)` | `strategy(...)` header fields (`initial_capital`, `commission_value`, `default_qty_value`, `pyramiding`, `slippage`, `default_qty_type`, `commission_type`, `process_orders_on_close`) |
+
+### Path A — sweep grid in Python
+
+```bash
+python3 tutorial/run_advanced.py
+```
+
+Loops a small `(fast, slow)` MACD grid × two qty sizes, prints a
+ranked table:
+
+```
+MACD sweep on BTCUSDT 15m — 672 bars, 8 configs (commission 0.04% each side)
+
+fast slow qty  trades  win%     net_pnl      max_dd     ms
+----------------------------------------------------------------
+  12   26   1      49 28.6%    -3270.77    -6093.70    0.1
+   8   21   1      65 27.7%    -3318.18    -7270.83    0.4
+  ...
+```
+
+### Path B — overrides via env vars to the docker image
+
+```bash
+docker run --rm \
+  -e PINEFORGE_INPUTS='{"Fast Length": "8", "Slow Length": "21"}' \
+  -e PINEFORGE_OVERRIDES='{"default_qty_value": "5", "commission_value": "0.04"}' \
+  -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
+  -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
+  ghcr.io/fullpass-4pass/pineforge-engine:latest \
+  | jq '{applied_inputs, applied_overrides, summary}'
+```
+
+Both env vars are JSON `{key: value}` objects (values stringified).
+Empty / unset → defaults from `strategy.pine`.
+
+## Modify the strategy
 
 `generated.cpp` is plain C++ over `<pineforge/engine.hpp>`. Edit it
 (swap `ta::MACD` for `ta::RSI`, change params, add an exit rule),

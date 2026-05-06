@@ -162,6 +162,9 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib.strategy_create.argtypes = [ctypes.c_char_p]
     lib.strategy_create.restype  = ctypes.c_void_p
 
+    lib.strategy_set_input.argtypes    = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+    lib.strategy_set_override.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+
     lib.run_backtest_full.argtypes = [
         ctypes.c_void_p,
         ctypes.POINTER(BarC), ctypes.c_int,
@@ -183,7 +186,9 @@ def fmt_utc(ms: int) -> str:
 
 def build_report_dict(report: ReportC, ohlcv_path: Path,
                       n_bars: int, first_ts: int, last_ts: int,
-                      elapsed: float) -> dict:
+                      elapsed: float,
+                      applied_inputs: dict[str, str],
+                      applied_overrides: dict[str, str]) -> dict:
     trades = []
     pnls: list[float] = []
     for i in range(report.trades_len):
@@ -223,7 +228,9 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "first_time": fmt_utc(first_ts),
             "last_time":  fmt_utc(last_ts),
         },
-        "elapsed_seconds": round(elapsed, 4),
+        "applied_inputs":    applied_inputs,
+        "applied_overrides": applied_overrides,
+        "elapsed_seconds":   round(elapsed, 4),
         "summary": {
             "total_trades":   n,
             "wins":           wins,
@@ -240,12 +247,34 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
     }
 
 
+def parse_kv_json(s: str | None, label: str) -> dict[str, str]:
+    """Parse a JSON object of {key: value} into a {str: str} map.
+    Empty / None / "{}" → {}. Non-object payloads abort with a clear
+    error so junk env vars don't silently noop."""
+    if not s or s.strip() in ("", "{}"):
+        return {}
+    try:
+        obj = json.loads(s)
+    except json.JSONDecodeError as e:
+        sys.exit(f"error: {label} is not valid JSON: {e}")
+    if not isinstance(obj, dict):
+        sys.exit(f"error: {label} must be a JSON object, got {type(obj).__name__}")
+    return {str(k): str(v) for k, v in obj.items()}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--so",    type=Path, required=True, help="strategy.so path")
-    ap.add_argument("--ohlcv", type=Path, required=True, help="OHLCV CSV path")
+    ap.add_argument("--so",        type=Path, required=True, help="strategy.so path")
+    ap.add_argument("--ohlcv",     type=Path, required=True, help="OHLCV CSV path")
+    ap.add_argument("--inputs",    default="",
+                    help='JSON object overriding input.*() values, e.g. \'{"Fast Length": "8"}\'')
+    ap.add_argument("--overrides", default="",
+                    help='JSON object overriding strategy() header, e.g. \'{"default_qty_value": "5"}\'')
     args = ap.parse_args()
+
+    inputs    = parse_kv_json(args.inputs,    "--inputs")
+    overrides = parse_kv_json(args.overrides, "--overrides")
 
     bars, n = load_bars(args.ohlcv)
     first_ts, last_ts = bars[0].timestamp, bars[n - 1].timestamp
@@ -253,6 +282,11 @@ def main() -> int:
     lib = load_strategy(args.so)
 
     state = lib.strategy_create(b"{}")
+    for k, v in inputs.items():
+        lib.strategy_set_input(state, k.encode(), v.encode())
+    for k, v in overrides.items():
+        lib.strategy_set_override(state, k.encode(), v.encode())
+
     report = ReportC()
     started = time.time()
     try:
@@ -263,7 +297,8 @@ def main() -> int:
             ctypes.byref(report),
         )
         elapsed = time.time() - started
-        out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts, elapsed)
+        out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts,
+                                elapsed, inputs, overrides)
         json.dump(out, sys.stdout, separators=(",", ":"))
         sys.stdout.write("\n")
     finally:

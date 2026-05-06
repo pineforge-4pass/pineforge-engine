@@ -10,6 +10,12 @@
 #   /in/strategy.cpp  required  user's generated.cpp
 #   /in/ohlcv.csv     required  CSV: timestamp,open,high,low,close,volume
 #
+# Optional env vars (parameter overrides — applied before backtest):
+#   PINEFORGE_INPUTS     JSON object of input.*() name -> value
+#                        e.g. '{"Fast Length": "8", "Slow Length": "21"}'
+#   PINEFORGE_OVERRIDES  JSON object of strategy() header field -> value
+#                        e.g. '{"default_qty_value": "5", "commission_value": "0.04"}'
+#
 # Exit codes:
 #   0  success, JSON written to stdout
 #   2  missing input mount
@@ -47,5 +53,9 @@ g++ -std=c++17 -O2 -fPIC -shared \
 
 echo "[pineforge] running backtest ..." >&2
 
-python3 "${PREFIX}/bin/run_json.py" --so "${SO}" --ohlcv "${OHLCV}" \
+python3 "${PREFIX}/bin/run_json.py" \
+    --so "${SO}" \
+    --ohlcv "${OHLCV}" \
+    --inputs    "${PINEFORGE_INPUTS:-}" \
+    --overrides "${PINEFORGE_OVERRIDES:-}" \
     || { echo "[pineforge] backtest failed" >&2; exit 4; }

@@ -52,6 +52,17 @@ Mount points:
 | `strategy.cpp`   | `/in/strategy.cpp`    | yes      | Generated PineForge translation unit |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
 
+Optional env vars apply parameter overrides before the backtest runs:
+
+| Env var                | Maps to                     | Example                                                  |
+| ---------------------- | --------------------------- | -------------------------------------------------------- |
+| `PINEFORGE_INPUTS`     | `strategy_set_input(k, v)`  | `'{"Fast Length": "8", "Slow Length": "21"}'`            |
+| `PINEFORGE_OVERRIDES`  | `strategy_set_override(k, v)` | `'{"default_qty_value": "5", "commission_value": "0.04"}'` |
+
+Both are JSON objects of `{string: string}` (numeric values must be
+quoted strings; the runtime parses on its side). Empty / unset →
+defaults from the original `strategy(...)` and `input.*()` calls.
+
 The `strategy.cpp` is the C++ source produced by your codegen step
 (see the project that owns the transpiler). It must export the
 PineForge C ABI declared in `<pineforge/pineforge.h>` — i.e. compile
@@ -72,7 +83,9 @@ network I/O at run time.
     "first_time": "2026-04-29 18:15 UTC",
     "last_time":  "2026-05-06 18:00 UTC"
   },
-  "elapsed_seconds": 0.0042,
+  "applied_inputs":    {},
+  "applied_overrides": {},
+  "elapsed_seconds":   0.0042,
   "summary": {
     "total_trades":   49,
     "wins":           16,
