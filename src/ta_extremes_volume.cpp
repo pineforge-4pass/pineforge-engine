@@ -96,15 +96,28 @@ double PivotHigh::compute(double src) {
         return na<double>();
     }
 
-    // Pivot candidate checks
+    // Pivot candidate rules (validated against TradingView's `ta.pivothigh`
+    // semantics by exporting per-bar pivot_high values from a TV indicator
+    // and diffing against this engine; see
+    // docs/per-bar-trace/tv_trace_helper.pine).
+    //
+    // LEFT side: equal-high left bars are allowed (non-strict). A run of
+    // identical highs to the left of the candidate should still confirm
+    // the right-most one as the pivot — TV reports the pivot exactly one
+    // bar after each flat-top, never on the first bar of a flat-top run.
+    //
+    // RIGHT side: equal-high right bars invalidate the candidate (strict).
+    // While the flat-top continues to the right, no pivot has yet been
+    // confirmed; the pivot is reported only on the bar AFTER the
+    // flat-top finishes.
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] >= pivot) {
+        if (is_na(buffer_[i]) || buffer_[i] > pivot) {
             return na<double>();
         }
     }
 
     for (int i = left_bars_ + 1; i < total; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] > pivot) {
+        if (is_na(buffer_[i]) || buffer_[i] >= pivot) {
             return na<double>();
         }
     }
@@ -135,15 +148,18 @@ double PivotLow::compute(double src) {
         return na<double>();
     }
 
-    // Pivot candidate checks
+    // Mirror of PivotHigh — see that function's comment for the TV-empirical
+    // rule rationale. LEFT non-strict (equal lows on left allowed), RIGHT
+    // strict (equal lows on right invalidate). Pivot lows confirm exactly
+    // one bar after each flat-bottom run.
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] <= pivot) {
+        if (is_na(buffer_[i]) || buffer_[i] < pivot) {
             return na<double>();
         }
     }
 
     for (int i = left_bars_ + 1; i < total; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] < pivot) {
+        if (is_na(buffer_[i]) || buffer_[i] <= pivot) {
             return na<double>();
         }
     }
@@ -479,6 +495,9 @@ double Lowest::recompute(double src) {
 }
 
 // --- PivotHigh ---
+// Recompute mirrors compute(): LEFT non-strict (`>` rejects), RIGHT strict
+// (`>=` rejects). Both must stay in lockstep — a delta here would surface as
+// `recompute != compute` in test_pivothigh_recompute_matches_compute.
 double PivotHigh::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
@@ -490,15 +509,17 @@ double PivotHigh::recompute(double src) {
     if (is_na(pivot)) return na<double>();
 
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] >= pivot) return na<double>();
+        if (is_na(buffer_[i]) || buffer_[i] > pivot) return na<double>();
     }
     for (int i = left_bars_ + 1; i < total; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] > pivot) return na<double>();
+        if (is_na(buffer_[i]) || buffer_[i] >= pivot) return na<double>();
     }
     return pivot;
 }
 
 // --- PivotLow ---
+// Recompute mirrors compute(): LEFT non-strict (`<` rejects), RIGHT strict
+// (`<=` rejects). See PivotHigh::recompute() comment for invariant rationale.
 double PivotLow::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
@@ -510,10 +531,10 @@ double PivotLow::recompute(double src) {
     if (is_na(pivot)) return na<double>();
 
     for (int i = 0; i < left_bars_; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] <= pivot) return na<double>();
+        if (is_na(buffer_[i]) || buffer_[i] < pivot) return na<double>();
     }
     for (int i = left_bars_ + 1; i < total; i++) {
-        if (is_na(buffer_[i]) || buffer_[i] < pivot) return na<double>();
+        if (is_na(buffer_[i]) || buffer_[i] <= pivot) return na<double>();
     }
     return pivot;
 }

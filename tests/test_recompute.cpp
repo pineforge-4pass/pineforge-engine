@@ -333,24 +333,28 @@ void test_compute_after_recompute() {
 
 // ============================================================================
 // PivotHigh / PivotLow parity + recompute == compute.
-// Current runtime semantics: strict on left side, equal-on-right accepted.
+// Runtime semantics validated against TradingView's `ta.pivothigh` /
+// `ta.pivotlow`: equal on left allowed, equal on right invalidates. A
+// flat-top run reports the pivot exactly one bar AFTER the last flat bar
+// (TV's pivot detection is right-exclusive on ties so a streak in progress
+// can still be broken by a higher right-side bar).
 // ============================================================================
 
-void test_pivothigh_equal_right_allowed() {
-    printf("Test PivotHigh tie on right is allowed... ");
+void test_pivothigh_equal_right_invalidates() {
+    printf("Test PivotHigh tie on right is not a pivot... ");
     ta::PivotHigh ph(1, 1);
     ph.compute(1.0);
     ph.compute(2.0);
-    CHECK_EQ(ph.compute(2.0), 2.0, "equal high on right => pivot");
+    CHECK_EQ(ph.compute(2.0), na<double>(), "equal high on right => na");
     printf("OK\n");
 }
 
-void test_pivothigh_equal_left_invalidates() {
-    printf("Test PivotHigh tie on left is not a pivot... ");
+void test_pivothigh_equal_left_allowed() {
+    printf("Test PivotHigh tie on left is allowed... ");
     ta::PivotHigh ph(1, 1);
     ph.compute(2.0);
     ph.compute(2.0);
-    CHECK_EQ(ph.compute(1.0), na<double>(), "equal high on left => na");
+    CHECK_EQ(ph.compute(1.0), 2.0, "equal high on left => pivot at right of flat-top");
     printf("OK\n");
 }
 
@@ -363,21 +367,21 @@ void test_pivothigh_strict_peak() {
     printf("OK\n");
 }
 
-void test_pivotlow_equal_right_allowed() {
-    printf("Test PivotLow tie on right is allowed... ");
+void test_pivotlow_equal_right_invalidates() {
+    printf("Test PivotLow tie on right is not a pivot... ");
     ta::PivotLow pl(1, 1);
     pl.compute(3.0);
     pl.compute(2.0);
-    CHECK_EQ(pl.compute(2.0), 2.0, "equal low on right => pivot");
+    CHECK_EQ(pl.compute(2.0), na<double>(), "equal low on right => na");
     printf("OK\n");
 }
 
-void test_pivotlow_equal_left_invalidates() {
-    printf("Test PivotLow tie on left is not a pivot... ");
+void test_pivotlow_equal_left_allowed() {
+    printf("Test PivotLow tie on left is allowed... ");
     ta::PivotLow pl(1, 1);
     pl.compute(2.0);
     pl.compute(2.0);
-    CHECK_EQ(pl.compute(3.0), na<double>(), "equal low on left => na");
+    CHECK_EQ(pl.compute(3.0), 2.0, "equal low on left => pivot at right of flat-bottom");
     printf("OK\n");
 }
 
@@ -544,11 +548,11 @@ int main() {
     test_compute_after_recompute();
 
     printf("\n=== PivotHigh / PivotLow tests ===\n\n");
-    test_pivothigh_equal_right_allowed();
-    test_pivothigh_equal_left_invalidates();
+    test_pivothigh_equal_right_invalidates();
+    test_pivothigh_equal_left_allowed();
     test_pivothigh_strict_peak();
-    test_pivotlow_equal_right_allowed();
-    test_pivotlow_equal_left_invalidates();
+    test_pivotlow_equal_right_invalidates();
+    test_pivotlow_equal_left_allowed();
     test_pivotlow_strict_trough();
     test_pivothigh_confirmation_requires_full_window();
     test_pivothigh_recompute_matches_compute();

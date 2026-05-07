@@ -25,15 +25,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Strict-profile thresholds from the parent project's parity sweep.
+# Strict-profile thresholds — must match
+# pineforge-utils/validator/validate.py::DEFAULT_PARITY_STRICT exactly.
+# This verifier and the external validator both apply the same gates so a
+# pass here implies a pass there (and vice versa). No production override.
 STRICT_COUNT_DELTA = 0.01      # 1.0%
 STRICT_ENTRY_DELTA = 0.0001    # 0.01%
 STRICT_EXIT_DELTA  = 0.0001    # 0.01%
 STRICT_PNL_DELTA   = 0.01      # 1.0%
-
-PRODUCTION_EXIT_DELTA = 0.0005 # 0.05%
-PRODUCTION_PNL_DELTA  = 1.0    # 100%
-PRODUCTION_COUNT_DELTA = 0.02  # 2.0%; trail-heavy scripts can differ at edges.
 
 STRONG_COUNT_DELTA = 0.05
 STRONG_ENTRY_DELTA = 0.001
@@ -140,13 +139,6 @@ def tv_timezone_offset(meta: dict) -> int:
     return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
 
 
-def is_production_profile(_strategy_dir: Path, rel: str) -> bool:
-    lowered = rel.lower()
-    if lowered == "community/ies":
-        return True
-    return any(token in lowered for token in ("trail", "trailing", "chandelier"))
-
-
 def align_by_time(tv: list[TradePair], eng: list[TradePair]) -> list[tuple[TradePair, TradePair]]:
     """Greedy time-window alignment: pair TV[i] with the closest engine trade
     that has the same direction and an entry within MATCH_WINDOW_SECONDS.
@@ -246,15 +238,11 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     exit_p90  = percentile(exit_deltas,  0.90)
     pnl_p90   = percentile(pnl_deltas,   0.90)
 
-    count_ok = count_delta <  STRICT_COUNT_DELTA
-    entry_ok = entry_p90  <  STRICT_ENTRY_DELTA
-    profile = "production" if is_production_profile(strategy_dir, rel) else "strict"
-    exit_threshold = PRODUCTION_EXIT_DELTA if profile == "production" else STRICT_EXIT_DELTA
-    pnl_threshold = PRODUCTION_PNL_DELTA if profile == "production" else STRICT_PNL_DELTA
-    count_threshold = PRODUCTION_COUNT_DELTA if profile == "production" else STRICT_COUNT_DELTA
-    count_ok = count_delta < count_threshold
-    exit_ok  = exit_p90   <  exit_threshold
-    pnl_ok   = pnl_p90    <  pnl_threshold
+    profile = "strict"
+    count_ok = count_delta < STRICT_COUNT_DELTA
+    entry_ok = entry_p90  < STRICT_ENTRY_DELTA
+    exit_ok  = exit_p90   < STRICT_EXIT_DELTA
+    pnl_ok   = pnl_p90    < STRICT_PNL_DELTA
     all_ok   = count_ok and entry_ok and exit_ok and pnl_ok
     if all_ok:
         label = "excellent"
