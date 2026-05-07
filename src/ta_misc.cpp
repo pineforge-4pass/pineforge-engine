@@ -309,18 +309,29 @@ double PercentileLinearInterpolation::recompute(double src, double percentage) {
 
 std::vector<double> pivot_point_levels(const std::string& method,
                                        double high, double low, double close) {
+    double P = (high + low + close) / 3.0;
+    std::vector<double> out(11, na<double>());
+    out[0] = P;
+
     if (method == "Traditional") {
-        double P = (high + low + close) / 3.0;
         double S1 = 2.0 * P - high;
         double R1 = 2.0 * P - low;
         double S2 = P - (high - low);
         double R2 = P + (high - low);
         double S3 = low - 2.0 * (high - P);
         double R3 = high + 2.0 * (P - low);
-        return {S3, S2, S1, P, R1, R2, R3};
+        double S4 = P - 3.0 * (high - low);
+        double R4 = P + 3.0 * (high - low);
+        double S5 = P - 4.0 * (high - low);
+        double R5 = P + 4.0 * (high - low);
+        out[1] = R1; out[2] = S1;
+        out[3] = R2; out[4] = S2;
+        out[5] = R3; out[6] = S3;
+        out[7] = R4; out[8] = S4;
+        out[9] = R5; out[10] = S5;
+        return out;
     }
     if (method == "Fibonacci") {
-        double P = (high + low + close) / 3.0;
         double range = high - low;
         double S1 = P - 0.382 * range;
         double S2 = P - 0.618 * range;
@@ -328,33 +339,54 @@ std::vector<double> pivot_point_levels(const std::string& method,
         double R1 = P + 0.382 * range;
         double R2 = P + 0.618 * range;
         double R3 = P + range;
-        return {S3, S2, S1, P, R1, R2, R3};
+        out[1] = R1; out[2] = S1;
+        out[3] = R2; out[4] = S2;
+        out[5] = R3; out[6] = S3;
+        return out;
     }
     if (method == "Woodie") {
-        double P = (high + low + 2.0 * close) / 4.0;
+        P = (high + low + 2.0 * close) / 4.0;
+        out[0] = P;
         double S1 = 2.0 * P - high;
         double R1 = 2.0 * P - low;
         double S2 = P - (high - low);
         double R2 = P + (high - low);
-        return {S2, S1, P, R1, R2};
+        double S3 = P - 2.0 * (high - low);
+        double R3 = P + 2.0 * (high - low);
+        double S4 = P - 3.0 * (high - low);
+        double R4 = P + 3.0 * (high - low);
+        out[1] = R1; out[2] = S1;
+        out[3] = R2; out[4] = S2;
+        out[5] = R3; out[6] = S3;
+        out[7] = R4; out[8] = S4;
+        return out;
     }
     if (method == "Classic") {
-        double P = (high + low + close) / 3.0;
         double S1 = 2.0 * P - high;
         double R1 = 2.0 * P - low;
         double S2 = P - (high - low);
         double R2 = P + (high - low);
-        return {S2, S1, P, R1, R2};
+        double S3 = P - 2.0 * (high - low);
+        double R3 = P + 2.0 * (high - low);
+        double S4 = P - 3.0 * (high - low);
+        double R4 = P + 3.0 * (high - low);
+        out[1] = R1; out[2] = S1;
+        out[3] = R2; out[4] = S2;
+        out[5] = R3; out[6] = S3;
+        out[7] = R4; out[8] = S4;
+        return out;
     }
     if (method == "DM") {
         double x;
         if (close == high)       x = high + 2.0 * low + close;
         else if (close == low)   x = 2.0 * high + low + close;
         else                     x = high + low + 2.0 * close;
-        double P  = x / 4.0;
+        P  = x / 4.0;
+        out[0] = P;
         double S1 = x / 2.0 - high;
         double R1 = x / 2.0 - low;
-        return {S1, P, R1};
+        out[1] = R1; out[2] = S1;
+        return out;
     }
     if (method == "Camarilla") {
         double r = high - low;
@@ -366,12 +398,17 @@ std::vector<double> pivot_point_levels(const std::string& method,
         double R2 = close + r * 1.1 / 6.0;
         double R3 = close + r * 1.1 / 4.0;
         double R4 = close + r * 1.1 / 2.0;
-        double P  = (high + low + close) / 3.0;
-        return {S4, S3, S2, S1, P, R1, R2, R3, R4};
+        double R5 = low != 0.0 ? (high / low) * close : na<double>();
+        double S5 = is_na(R5) ? na<double>() : close - (R5 - close);
+        out[1] = R1; out[2] = S1;
+        out[3] = R2; out[4] = S2;
+        out[5] = R3; out[6] = S3;
+        out[7] = R4; out[8] = S4;
+        out[9] = R5; out[10] = S5;
+        return out;
     }
-    // Unknown method
-    double P = (high + low + close) / 3.0;
-    return {P};
+    // Unknown method: return P and leave absent levels as na.
+    return out;
 }
 
 } // namespace ta

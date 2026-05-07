@@ -256,6 +256,7 @@ protected:
     // constructor). Gates the TradingView deferred-flip growth rule
     // applied in ``execute_market_entry``'s FLAT branch.
     bool script_has_strategy_close_ = false;
+    int64_t trade_start_time_ = std::numeric_limits<int64_t>::min();
 
     // Cumulative qty of ``strategy.close`` / ``strategy.close_all`` calls
     // issued during the CURRENT on_bar. Reset at the start of every bar
@@ -947,6 +948,9 @@ public:
         inputs_[key] = value;
     }
     void clear_inputs() { inputs_.clear(); }
+    void set_trade_start_time(int64_t timestamp_ms) {
+        trade_start_time_ = timestamp_ms;
+    }
 
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.

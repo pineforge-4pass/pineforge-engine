@@ -198,6 +198,33 @@ static void test_mom_roc() {
     CHECK(near(m2.compute(4.0), 3.0));
 }
 
+static void test_change_cross_family() {
+    std::printf("test_change_cross_family\n");
+
+    ta::Change change(3);
+    CHECK(is_na(change.compute(10.0)));
+    CHECK(near(change.compute(13.0), 3.0));
+    CHECK(near(change.compute(20.0, 2), 10.0));
+    CHECK(is_na(change.compute(na<double>())));
+    CHECK(near(change.recompute(25.0, 3), 15.0));
+
+    ta::Crossover crossover;
+    CHECK(!crossover.compute(1.0, 2.0));  // first bar has no prior comparison
+    CHECK(crossover.compute(3.0, 2.0));   // previous <=, current >
+    CHECK(!crossover.recompute(2.0, 3.0));
+
+    ta::Crossunder crossunder;
+    CHECK(!crossunder.compute(3.0, 2.0));
+    CHECK(crossunder.compute(1.0, 2.0));  // previous >=, current <
+    CHECK(!crossunder.recompute(3.0, 2.0));
+
+    ta::Cross cross;
+    CHECK(!cross.compute(1.0, 2.0));
+    CHECK(cross.compute(3.0, 2.0));       // up-cross
+    CHECK(cross.compute(1.0, 2.0));       // down-cross
+    CHECK(cross.recompute(1.5, 2.0));
+}
+
 static void test_cci() {
     std::printf("test_cci\n");
     ta::CCI cci(3);
@@ -704,6 +731,118 @@ static void test_mfi() {
 
     // recompute matches
     CHECK(near(rising.recompute(6.0, 10.0), 100.0));
+
+    ta::MFI falling(3);
+    double down = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 6; i >= 1; --i) down = falling.compute(double(i), 10.0);
+    CHECK(near(down, 0.0));
+}
+
+static void test_recompute_gap_paths() {
+    std::printf("test_recompute_gap_paths\n");
+
+    {
+        ta::Stoch a(3), b(3);
+        const double src[] = {10, 20, 30};
+        const double high[] = {11, 22, 33};
+        const double low[] = {9, 18, 27};
+        for (int i = 0; i < 2; ++i) {
+            a.compute(src[i], high[i], low[i]);
+            b.compute(src[i], high[i], low[i]);
+        }
+        a.compute(src[2], high[2], low[2]);
+        CHECK(near(a.recompute(25.0, 28.0, 20.0), b.compute(25.0, 28.0, 20.0)));
+    }
+
+    {
+        ta::ATR a(3), b(3);
+        const double h[] = {10, 12, 14, 15};
+        const double l[] = {8, 9, 10, 12};
+        const double c[] = {9, 11, 13, 14};
+        for (int i = 0; i < 3; ++i) {
+            a.compute(h[i], l[i], c[i]);
+            b.compute(h[i], l[i], c[i]);
+        }
+        a.compute(h[3], l[3], c[3]);
+        CHECK(near(a.recompute(16.0, 11.0, 15.0), b.compute(16.0, 11.0, 15.0)));
+    }
+
+    {
+        ta::Supertrend a(1.5, 3), b(1.5, 3);
+        const double h[] = {10, 11, 12, 13, 14, 15};
+        const double l[] = {8, 8, 9, 10, 11, 12};
+        const double c[] = {9, 10, 11, 12, 13, 14};
+        for (int i = 0; i < 5; ++i) {
+            a.compute(h[i], l[i], c[i]);
+            b.compute(h[i], l[i], c[i]);
+        }
+        a.compute(h[5], l[5], c[5]);
+        auto ar = a.recompute(16.0, 11.0, 15.0);
+        auto br = b.compute(16.0, 11.0, 15.0);
+        CHECK(near(ar.value, br.value));
+        CHECK(near(ar.direction, br.direction));
+    }
+
+    {
+        ta::SAR a(0.02, 0.02, 0.2), b(0.02, 0.02, 0.2);
+        const double h[] = {11, 12, 13, 11.5};
+        const double l[] = {9, 10, 11, 9.5};
+        const double c[] = {10, 12, 11, 10};
+        for (int i = 0; i < 3; ++i) {
+            a.compute(h[i], l[i], c[i]);
+            b.compute(h[i], l[i], c[i]);
+        }
+        a.compute(h[3], l[3], c[3]);
+        CHECK(near(a.recompute(12.0, 9.0, 9.5), b.compute(12.0, 9.0, 9.5)));
+    }
+
+    {
+        ta::TR a(false), b(false);
+        a.compute(10, 8, 9);
+        b.compute(10, 8, 9);
+        a.compute(12, 9, 11);
+        CHECK(near(a.recompute(13, 10, 12), b.compute(13, 10, 12)));
+    }
+
+    {
+        ta::Dev a(3), b(3);
+        for (double v : {1.0, 2.0}) {
+            a.compute(v);
+            b.compute(v);
+        }
+        a.compute(3.0);
+        CHECK(near(a.recompute(4.0), b.compute(4.0)));
+    }
+
+    {
+        ta::Linreg a(3), b(3);
+        for (double v : {1.0, 2.0}) {
+            a.compute(v, 0.0);
+            b.compute(v, 0.0);
+        }
+        a.compute(3.0, 0.0);
+        CHECK(near(a.recompute(4.0, 0.0), b.compute(4.0, 0.0)));
+    }
+
+    {
+        ta::PercentRank a(3), b(3);
+        for (double v : {1.0, 2.0, 3.0}) {
+            a.compute(v);
+            b.compute(v);
+        }
+        a.compute(4.0);
+        CHECK(near(a.recompute(2.5), b.compute(2.5)));
+    }
+
+    {
+        ta::Mode a(3), b(3);
+        for (double v : {1.0, 2.0}) {
+            a.compute(v);
+            b.compute(v);
+        }
+        a.compute(2.0);
+        CHECK(near(a.recompute(1.0), b.compute(1.0)));
+    }
 }
 
 // ============================================================================
@@ -713,37 +852,62 @@ static void test_mfi() {
 static void test_pivot_point_levels() {
     std::printf("test_pivot_point_levels\n");
     auto trad = ta::pivot_point_levels("Traditional", 110.0, 90.0, 100.0);
-    CHECK(trad.size() == 7);
+    CHECK(trad.size() == 11);
     double P = (110.0 + 90.0 + 100.0) / 3.0;
-    CHECK(near(trad[3], P));
+    CHECK(near(trad[0], P));
+    CHECK(near(trad[1], 2.0 * P - 90.0));    // R1
     CHECK(near(trad[2], 2.0 * P - 110.0));   // S1
-    CHECK(near(trad[4], 2.0 * P - 90.0));    // R1
+    CHECK(near(trad[3], P + (110.0 - 90.0))); // R2
+    CHECK(near(trad[4], P - (110.0 - 90.0))); // S2
+    CHECK(near(trad[5], 110.0 + 2.0 * (P - 90.0))); // R3
+    CHECK(near(trad[6], 90.0 - 2.0 * (110.0 - P))); // S3
+    CHECK(near(trad[7], P + 3.0 * (110.0 - 90.0))); // R4
+    CHECK(near(trad[8], P - 3.0 * (110.0 - 90.0))); // S4
+    CHECK(near(trad[9], P + 4.0 * (110.0 - 90.0))); // R5
+    CHECK(near(trad[10], P - 4.0 * (110.0 - 90.0))); // S5
 
     auto fib = ta::pivot_point_levels("Fibonacci", 110.0, 90.0, 100.0);
-    CHECK(fib.size() == 7);
+    CHECK(fib.size() == 11);
+    CHECK(is_na(fib[7]));
+    CHECK(is_na(fib[8]));
 
     auto wood = ta::pivot_point_levels("Woodie", 110.0, 90.0, 100.0);
-    CHECK(wood.size() == 5);
+    CHECK(wood.size() == 11);
+    CHECK(!is_na(wood[5]));
+    CHECK(!is_na(wood[6]));
 
     auto classic = ta::pivot_point_levels("Classic", 110.0, 90.0, 100.0);
-    CHECK(classic.size() == 5);
+    CHECK(classic.size() == 11);
+    CHECK(near(classic[5], P + 2.0 * (110.0 - 90.0)));
+    CHECK(near(classic[6], P - 2.0 * (110.0 - 90.0)));
+    CHECK(near(classic[7], P + 3.0 * (110.0 - 90.0)));
+    CHECK(near(classic[8], P - 3.0 * (110.0 - 90.0)));
 
     auto dm = ta::pivot_point_levels("DM", 110.0, 90.0, 100.0);
-    CHECK(dm.size() == 3);
+    CHECK(dm.size() == 11);
+    CHECK(near(dm[0], P));
+    CHECK(!is_na(dm[1]));
+    CHECK(!is_na(dm[2]));
+    CHECK(is_na(dm[3]));
 
     // DM has special-case branches when close == high or close == low.
     auto dm_high = ta::pivot_point_levels("DM", 110.0, 90.0, 110.0);
-    CHECK(dm_high.size() == 3);
+    CHECK(dm_high.size() == 11);
     auto dm_low = ta::pivot_point_levels("DM", 110.0, 90.0, 90.0);
-    CHECK(dm_low.size() == 3);
+    CHECK(dm_low.size() == 11);
 
     auto cam = ta::pivot_point_levels("Camarilla", 110.0, 90.0, 100.0);
-    CHECK(cam.size() == 9);
+    CHECK(cam.size() == 11);
+    CHECK(!is_na(cam[7]));
+    CHECK(!is_na(cam[8]));
+    CHECK(near(cam[9], (110.0 / 90.0) * 100.0));
+    CHECK(near(cam[10], 100.0 - (cam[9] - 100.0)));
 
-    // Unknown method → single-element {P}.
+    // Unknown method → P plus absent levels as na.
     auto unk = ta::pivot_point_levels("Bogus", 110.0, 90.0, 100.0);
-    CHECK(unk.size() == 1);
+    CHECK(unk.size() == 11);
     CHECK(near(unk[0], P));
+    for (std::size_t i = 1; i < unk.size(); ++i) CHECK(is_na(unk[i]));
 }
 
 // ============================================================================
@@ -757,6 +921,7 @@ int main() {
     test_swma();
     test_vwma();
     test_mom_roc();
+    test_change_cross_family();
     test_cci();
     test_cmo();
     test_tsi();
@@ -780,6 +945,7 @@ int main() {
     test_correlation();
     test_bbw_kcw();
     test_mfi();
+    test_recompute_gap_paths();
     test_pivot_point_levels();
 
     std::printf("\nta_indicators_extras: %d passed, %d failed\n",

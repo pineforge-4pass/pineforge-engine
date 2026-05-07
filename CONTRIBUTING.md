@@ -206,10 +206,11 @@ bash scripts/run_corpus.sh
 ```
 
 It builds every `corpus/<>/<>/generated.cpp` into a `strategy.so`,
-runs each against `corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`, and
+runs each against `corpus/data/ohlcv_ETH-USDT-USDT_15m_warmup6m.csv`
+when present (falling back to `corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`), and
 rewrites the regenerated `engine_trades.csv` files. It also prints a
-lightweight `scripts/verify_corpus.py --all --quiet` inspection summary; that
-helper is not the canonical parity sweep and may warn about expected drift.
+canonical `scripts/verify_corpus.py --all --quiet` summary with the five
+parity labels (`excellent`, `strong`, `moderate`, `weak`, `minimal`).
 Review the regenerated CSV diff before committing runtime-semantics changes.
 
 If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), run the corpus sweep locally and include the diff in the PR description.

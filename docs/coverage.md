@@ -10,12 +10,13 @@
 > Pine-to-C++ transpiler against this runtime, integrating PineForge into
 > a strategy harness, or auditing what is *actually* covered before
 > trusting the parity claim. Source-of-truth files: the headers under
-> [`include/pineforge/`](../include/pineforge/) and the implementations
-> under [`src/`](../src/).
+> `[include/pineforge/](../include/pineforge/)` and the implementations
+> under `[src/](../src/)`.
 >
 > **Two layers of "supported".** PineForge as a whole = (a) this runtime
-> + (b) PineForge's closed-source PineScript-to-C++ transpiler. Some Pine
-> surface (arrays, maps, UDTs, most scalar `math.*` calls) has no
+>
+> - (b) PineForge's closed-source PineScript-to-C++transpiler. Some Pine
+> surface (arrays, maps, UDTs, most scalar `math.`* calls) has no
 > dedicated runtime class because the transpiler emits the implementation
 > inline using the C++ standard library or generated structs. Those are
 > still fully supported in PineForge end-to-end; they just don't appear
@@ -29,27 +30,29 @@
 
 ## Coverage summary
 
-| Category                    | Runtime status                                                   | What `libpineforge.a` owns                                                                                                                                                                                                                                                                                                                                                                            |
-| --------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Engine / strategy lifecycle | Supported                                                        | `BacktestEngine`, three `run(...)` overloads, bar loop, `on_bar(...)` hook, `ReportC` / `SecurityDiagC` reporting.                                                                                                                                                                                                                                                                                   |
-| Strategy orders             | Supported                                                        | `strategy_entry / order / exit / close / close_all / cancel / cancel_all` with OHLC-path fill resolution, OCA, pyramiding, slippage, commissions, partial / FIFO-vs-ANY closes, trailing stops.                                                                                                                                                                                                      |
-| Strategy state / accessors  | Supported                                                        | Position state, equity / drawdown / runup tracking, win / loss counts, full closed- and open-trade accessor methods, intraday fill counter.                                                                                                                                                                                                                                                          |
-| Strategy risk               | Partial                                                          | Runtime fields cover position-size cap, drawdown cap (abs / %), intraday-loss cap (abs / %), consecutive losing days, and direction allow-list.                                                                                                                                                                                                                                                      |
-| Inputs                      | Value support only                                               | `unordered_map<string,string>` injection plus typed getters (`get_input_*`). UI metadata is the consumer's problem.                                                                                                                                                                                                                                                                                  |
-| `ta.*`                      | Broad runtime support                                            | 66 stateful TA classes in `namespace ta` plus a free `pivot_point_levels(...)`. Each class exposes both `compute(...)` (advance state) and `recompute(...)` (re-run on the same bar without permanently advancing history).                                                                                                                                                                          |
-| `math.*`                    | Narrow runtime backing                                           | Runtime owns only deterministic `pine_random(...)` and rolling `math::Sum`; everything else is left to consumer-emitted code.                                                                                                                                                                                                                                                                        |
-| `str.*`                     | Narrow runtime backing                                           | Runtime owns `pine_str_format`, `pine_str_format_time`, `pine_str_match`, `pine_str_split`, `pine_str_tostring`.                                                                                                                                                                                                                                                                                     |
-| `request.security()`        | Partial                                                          | Runtime owns the security state machine, ratio / calendar aggregation, lookahead / gaps semantics, lower-TF emulation, and per-security diagnostics.                                                                                                                                                                                                                                                  |
-| Bar magnifier               | Supported                                                        | OHLC-path sampling with 6 distribution modes plus optional volume-weighted sample density.                                                                                                                                                                                                                                                                                                            |
-| Time / session / timezone   | Supported                                                        | `pine_time` / `pine_time_close` with session filtering and a mutex-guarded `pine_tz::ScopedTimezone`.                                                                                                                                                                                                                                                                                                |
-| Timeframe parsing           | Supported                                                        | `tf_to_seconds`, `tf_ratio`, `tf_change`, `detect_timeframe`, calendar boundary detection, `TimeframeAggregator` (passthrough / ratio / calendar).                                                                                                                                                                                                                                                   |
-| Numeric matrices            | Supported                                                        | `PineMatrix` over `Eigen::MatrixXd` — construction, access, transforms, linear algebra, predicates.                                                                                                                                                                                                                                                                                                  |
-| Series history              | Supported                                                        | `Series<T>` ring buffer with Pine `[k]` semantics.                                                                                                                                                                                                                                                                                                                                                    |
-| Color                       | Supported                                                        | `pine_color` constants plus `new_color`, `r`, `g`, `b`, `t` helpers.                                                                                                                                                                                                                                                                                                                                  |
-| `na` / `is_na`              | Supported                                                        | Generic `na<T>()` and `is_na(...)` for double / integer / bool.                                                                                                                                                                                                                                                                                                                                       |
-| Logging / runtime errors    | Supported                                                        | `pine_log_info / warning / error`, `pine_runtime_error` (throws).                                                                                                                                                                                                                                                                                                                                     |
-| Arrays / maps / UDTs        | **No runtime module** (Pine surface still supported via consumer compiler) | The runtime ships no `array.hpp` / `map.hpp` / UDT module — its only generic value containers are `Series<T>` (history) and `PineMatrix` (numeric matrices). Pine arrays / maps / UDTs themselves work in PineForge: PineForge's transpiler emits them as `std::vector<T>`, `std::unordered_map<K,V>`, and generated C++ structs against this runtime's primitives.                                  |
-| Drawing / plotting / alerts | **No runtime module**                                            | No charting / drawing / alert types exist in the runtime. PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                                                              |
+
+| Category                    | Runtime status                                                             | What `libpineforge.a` owns                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Engine / strategy lifecycle | Supported                                                                  | `BacktestEngine`, three `run(...)` overloads, bar loop, `on_bar(...)` hook, `ReportC` / `SecurityDiagC` reporting.                                                                                                                                                                                                                                                  |
+| Strategy orders             | Supported                                                                  | `strategy_entry / order / exit / close / close_all / cancel / cancel_all` with OHLC-path fill resolution, OCA, pyramiding, slippage, commissions, margin gates, partial / FIFO-vs-ANY closes, trailing stops, and TV deferred-flip carry handling.                                                                                                                  |
+| Strategy state / accessors  | Supported                                                                  | Position state, equity / drawdown / runup tracking, win / loss counts, full closed- and open-trade accessor methods, intraday fill counter.                                                                                                                                                                                                                         |
+| Strategy risk               | Partial                                                                    | Runtime fields cover position-size cap, drawdown cap (abs / %), intraday-loss cap (abs / %), consecutive losing days, and direction allow-list.                                                                                                                                                                                                                     |
+| Inputs                      | Value support only                                                         | `unordered_map<string,string>` injection plus typed getters (`get_input_`*). UI metadata is the consumer's problem.                                                                                                                                                                                                                                                 |
+| `ta.`*                      | Broad runtime support                                                      | 59 official Pine v6 `ta.`* functions plus 8 official `ta.`* series variables backed by stateful runtime classes, and a free `pivot_point_levels(...)`. Stateful classes expose both `compute(...)` (advance state) and `recompute(...)` (re-run on the same bar without permanently advancing history).                                                             |
+| `math.`*                    | Narrow runtime backing                                                     | Runtime owns only deterministic `pine_random(...)` and rolling `math::Sum`; everything else is left to consumer-emitted code.                                                                                                                                                                                                                                       |
+| `str.`*                     | Narrow runtime backing                                                     | Runtime owns `pine_str_format`, `pine_str_format_time`, `pine_str_match`, `pine_str_split`, `pine_str_tostring`.                                                                                                                                                                                                                                                    |
+| `request.security()`        | Partial                                                                    | Runtime owns the security state machine, ratio / calendar aggregation, lookahead / gaps semantics, lower-TF emulation, and per-security diagnostics.                                                                                                                                                                                                                |
+| Bar magnifier               | Supported                                                                  | OHLC-path sampling with 6 distribution modes plus optional volume-weighted sample density.                                                                                                                                                                                                                                                                          |
+| Time / session / timezone   | Supported                                                                  | `pine_time` / `pine_time_close` with session filtering and a mutex-guarded `pine_tz::ScopedTimezone`.                                                                                                                                                                                                                                                               |
+| Timeframe parsing           | Supported                                                                  | `tf_to_seconds`, `tf_ratio`, `tf_change`, `detect_timeframe`, calendar boundary detection, `TimeframeAggregator` (passthrough / ratio / calendar).                                                                                                                                                                                                                  |
+| Numeric matrices            | Supported                                                                  | `PineMatrix` over `Eigen::MatrixXd` — construction, access, transforms, linear algebra, predicates.                                                                                                                                                                                                                                                                 |
+| Series history              | Supported                                                                  | `Series<T>` ring buffer with Pine `[k]` semantics.                                                                                                                                                                                                                                                                                                                  |
+| Color                       | Supported                                                                  | `pine_color` constants plus `new_color`, `r`, `g`, `b`, `t` helpers.                                                                                                                                                                                                                                                                                                |
+| `na` / `is_na`              | Supported                                                                  | Generic `na<T>()` and `is_na(...)` for double / integer / bool.                                                                                                                                                                                                                                                                                                     |
+| Logging / runtime errors    | Supported                                                                  | `pine_log_info / warning / error`, `pine_runtime_error` (throws).                                                                                                                                                                                                                                                                                                   |
+| Arrays / maps / UDTs        | **No runtime module** (Pine surface still supported via consumer compiler) | The runtime ships no `array.hpp` / `map.hpp` / UDT module — its only generic value containers are `Series<T>` (history) and `PineMatrix` (numeric matrices). Pine arrays / maps / UDTs themselves work in PineForge: PineForge's transpiler emits them as `std::vector<T>`, `std::unordered_map<K,V>`, and generated C++ structs against this runtime's primitives. |
+| Drawing / plotting / alerts | **No runtime module**                                                      | No charting / drawing / alert types exist in the runtime. PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                            |
+
 
 ## Public C ABI
 
@@ -57,18 +60,20 @@
 Every compiled PineForge strategy `.so` exports exactly the 10 symbols
 declared there:
 
-| Symbol                                    | Role                                              |
-| ----------------------------------------- | ------------------------------------------------- |
-| `strategy_create`                         | Allocate a strategy instance                      |
-| `strategy_free`                           | Release the instance                              |
-| `run_backtest`                            | Run with auto-detected timeframe                  |
-| `run_backtest_full`                       | Run with timeframe + magnifier configuration      |
-| `report_free`                             | Free arrays inside a filled `pf_report_t`         |
-| `strategy_set_input`                      | Override a Pine `input.*()` value                 |
-| `strategy_set_override`                   | Override a `strategy(...)` declaration param     |
-| `strategy_set_magnifier_volume_weighted`  | Toggle volume-weighted magnifier                  |
-| `strategy_set_trace_enabled`              | Toggle per-bar trace recording                    |
-| `pf_version_get`                          | Runtime version                                   |
+
+| Symbol                                   | Role                                         |
+| ---------------------------------------- | -------------------------------------------- |
+| `strategy_create`                        | Allocate a strategy instance                 |
+| `strategy_free`                          | Release the instance                         |
+| `run_backtest`                           | Run with auto-detected timeframe             |
+| `run_backtest_full`                      | Run with timeframe + magnifier configuration |
+| `report_free`                            | Free arrays inside a filled `pf_report_t`    |
+| `strategy_set_input`                     | Override a Pine `input.*()` value            |
+| `strategy_set_override`                  | Override a `strategy(...)` declaration param |
+| `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier             |
+| `strategy_set_trace_enabled`             | Toggle per-bar trace recording               |
+| `pf_version_get`                         | Runtime version                              |
+
 
 POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`,
 `pf_trace_entry_t`, `pf_version_t`) and the `pf_magnifier_distribution_t`
@@ -86,29 +91,31 @@ consumption.
 
 ## Runtime modules — file layout
 
-Headers live under [`include/pineforge/`](../include/pineforge/) and
-implementations under [`src/`](../src/). Several large concerns are
+Headers live under `[include/pineforge/](../include/pineforge/)` and
+implementations under `[src/](../src/)`. Several large concerns are
 split across multiple `.cpp` files (declarations stay in the matching
 single `.hpp`):
 
-| Module             | Header                | Source                                                                                                                                                                                                                  | Pine-facing role                                                                                                                                            |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`         | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                 | The 10 documented C symbols every compiled strategy `.so` exports.                                                                                          |
-| Engine             | `engine.hpp`          | `engine_run.cpp`, `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_risk.cpp`, `engine_report.cpp` | Strategy lifecycle, orders, fills, risk gating, reports, inputs / syminfo, magnifier loop, TF aggregation, `request.security` plumbing.                    |
-| Engine internals   | `engine_internal.hpp` | (private cross-TU header)                                                                                                                                                                                               | `pineforge::internal::*` types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                              |
-| Technical analysis | `ta.hpp`              | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                      | 66 stateful TA classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function.                                                          |
-| Math               | `math.hpp`            | `math.cpp`                                                                                                                                                                                                              | Inline `pine_random(...)` PRNG and rolling `math::Sum` class.                                                                                               |
-| Strings            | `str_utils.hpp`       | `str_utils.cpp`                                                                                                                                                                                                         | Format, format-time, regex match, split, and numeric-to-string helpers.                                                                                     |
-| Timeframe          | `timeframe.hpp`       | `timeframe.cpp`                                                                                                                                                                                                         | TF string parsing, ratio computation, calendar detection, `TimeframeAggregator`.                                                                            |
-| Session / time     | `session_time.hpp`    | `session_time.cpp`                                                                                                                                                                                                      | `pine_time(...)`, `pine_time_close(...)` with session and timezone gating.                                                                                  |
-| Timezone           | (private) `timezone.hpp` | `timezone.cpp`                                                                                                                                                                                                       | `pine_tz::ScopedTimezone` — mutex-guarded `TZ` env-var swap for thread-safe formatting. Internal; not in public include path.                                |
-| Bar magnifier      | `magnifier.hpp`       | `magnifier.cpp`                                                                                                                                                                                                         | OHLC price-path sampling with six distribution modes; optional volume-weighted sample density.                                                              |
-| Matrices           | `matrix.hpp`          | `matrix.cpp`                                                                                                                                                                                                            | Eigen-backed `PineMatrix`.                                                                                                                                  |
-| Series history     | `series.hpp`          | header-only                                                                                                                                                                                                             | Generic `Series<T>` deque with `push` / `update` / `[k]` indexing.                                                                                          |
-| `na`               | `na.hpp`              | header-only                                                                                                                                                                                                             | `na<T>()` generators and `is_na(...)` checks.                                                                                                                |
-| Bar struct         | `bar.hpp`             | header-only                                                                                                                                                                                                             | `struct Bar { double open, high, low, close, volume; int64_t timestamp; };` (Unix milliseconds).                                                            |
-| Color              | `color.hpp`           | header-only                                                                                                                                                                                                             | 17 named ARGB constants plus `new_color`, `r`, `g`, `b`, `t`.                                                                                                |
-| Logging            | `log.hpp`             | header-only                                                                                                                                                                                                             | `pine_log_info / warning / error` (stderr) and `pine_runtime_error` (throws `std::runtime_error`).                                                          |
+
+| Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
+| ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                  | The 10 documented C symbols every compiled strategy `.so` exports.                                                                                            |
+| Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_risk.cpp`, `engine_report.cpp` | Strategy lifecycle, orders, fills, risk gating, reports, inputs / syminfo, magnifier loop, TF aggregation, `request.security` plumbing.                       |
+| Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::`* types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
+| Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.`* functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
+| Math               | `math.hpp`               | `math.cpp`                                                                                                                                                                                                                               | Inline `pine_random(...)` PRNG and rolling `math::Sum` class.                                                                                                 |
+| Strings            | `str_utils.hpp`          | `str_utils.cpp`                                                                                                                                                                                                                          | Format, format-time, regex match, split, and numeric-to-string helpers.                                                                                       |
+| Timeframe          | `timeframe.hpp`          | `timeframe.cpp`                                                                                                                                                                                                                          | TF string parsing, ratio computation, calendar detection, `TimeframeAggregator`.                                                                              |
+| Session / time     | `session_time.hpp`       | `session_time.cpp`                                                                                                                                                                                                                       | `pine_time(...)`, `pine_time_close(...)` with session and timezone gating.                                                                                    |
+| Timezone           | (private) `timezone.hpp` | `timezone.cpp`                                                                                                                                                                                                                           | `pine_tz::ScopedTimezone` — mutex-guarded `TZ` env-var swap for thread-safe formatting. Internal; not in public include path.                                 |
+| Bar magnifier      | `magnifier.hpp`          | `magnifier.cpp`                                                                                                                                                                                                                          | OHLC price-path sampling with six distribution modes; optional volume-weighted sample density.                                                                |
+| Matrices           | `matrix.hpp`             | `matrix.cpp`                                                                                                                                                                                                                             | Eigen-backed `PineMatrix`.                                                                                                                                    |
+| Series history     | `series.hpp`             | header-only                                                                                                                                                                                                                              | Generic `Series<T>` deque with `push` / `update` / `[k]` indexing.                                                                                            |
+| `na`               | `na.hpp`                 | header-only                                                                                                                                                                                                                              | `na<T>()` generators and `is_na(...)` checks.                                                                                                                 |
+| Bar struct         | `bar.hpp`                | header-only                                                                                                                                                                                                                              | `struct Bar { double open, high, low, close, volume; int64_t timestamp; };` (Unix milliseconds).                                                              |
+| Color              | `color.hpp`              | header-only                                                                                                                                                                                                                              | 17 named ARGB constants plus `new_color`, `r`, `g`, `b`, `t`.                                                                                                 |
+| Logging            | `log.hpp`                | header-only                                                                                                                                                                                                                              | `pine_log_info / warning / error` (stderr) and `pine_runtime_error` (throws `std::runtime_error`).                                                            |
+
 
 ## Engine lifecycle
 
@@ -158,6 +165,7 @@ density can be flipped to volume-weighted via
 
 ### Order entry points
 
+
 | Method                                                                                                      | Notes                                                                                                                                                                                                                 |
 | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `strategy_entry(id, is_long, limit, stop, qty, comment, oca_name, oca_type, qty_type)`                      | Replaces an existing pending order with the same `id`. Plain market entry under `process_orders_on_close=true` fills immediately at bar close so `position_avg_price` is correct for follow-up `strategy_exit` calls. |
@@ -167,12 +175,21 @@ density can be flipped to volume-weighted via
 | `strategy_close_all()`                                                                                      | Convenience wrapper for `strategy_close("")`.                                                                                                                                                                         |
 | `strategy_cancel(id)` / `strategy_cancel_all()`                                                             | Drops pending orders by id or globally.                                                                                                                                                                               |
 
+
 Pending orders are resolved on every `process_pending_orders(bar)` call,
 which walks a 4-waypoint OHLC path (`O → H → L → C` or `O → L → H → C`
 depending on open proximity to high vs low). The runtime resolves stop
 / limit priority, gap fills, opposing-stop arbitration, OCA siblings,
 and trail levels along that path. `slippage_` (in ticks) and
-`syminfo_mintick_` round all fill prices.
+`syminfo_mintick_` round all fill prices; stop entries use directional
+mintick snapping (long stops up, short stops down) to match TradingView.
+
+Priced `strategy.entry` orders also track TradingView's deferred-flip
+carry rule. When an opposite priced entry is placed while a position is
+open, then fires later from flat after a `strategy.close` /
+`strategy.close_all`, the runtime opens `qty + carried_position_qty`.
+Source order inside a single `on_bar(...)` matters: close calls that
+appear before the entry reduce the captured carry for that entry.
 
 `strategy_exit` accepts price params (`profit`, `loss`, `limit`, `stop`,
 `trail_*`); the runtime's exit method itself does not enforce that at
@@ -188,10 +205,16 @@ and `commission_value_`. Both are per-trade; there is no separate
 runtime entry point for `strategy.default_entry_qty` — the value is
 read directly from `default_qty_value_`.
 
+Margin checks use `margin_long_` / `margin_short_` percentages from the
+generated subclass (`100` = no leverage). If the implied required
+capital for a flat entry or pyramid add exceeds current equity, the fill
+is silently rejected, matching TradingView's strategy engine behaviour.
+
 ### Risk
 
 `BacktestEngine` tracks six risk fields and gates entries through
 `check_risk_allow_entry(is_long)` and `update_risk_state()`:
+
 
 | Field                                                 | Effect                                                                                                        |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -201,6 +224,7 @@ read directly from `default_qty_value_`.
 | `risk_max_intraday_loss_` (+ `_is_pct_`)              | Halt strategy when running intraday P&L crosses the cap. Day boundary uses month / day-of-month, not session. |
 | `risk_max_cons_loss_days_`                            | Halt strategy after N consecutive losing days.                                                                |
 | `max_intraday_filled_orders_`                         | Skip pending fills past the per-day cap; counter resets on a new day-of-year.                                 |
+
 
 Risk halt is one-way: once `risk_halted_` is set, no new entries are
 accepted for the remainder of the run. None of these fields are exposed
@@ -266,6 +290,7 @@ instance per call site.
 
 ### Tuple-returning TA classes
 
+
 | Class        | Result struct      | Fields                                  |
 | ------------ | ------------------ | --------------------------------------- |
 | `MACD`       | `MACDResult`       | `macd_line`, `signal_line`, `histogram` |
@@ -274,8 +299,10 @@ instance per call site.
 | `Supertrend` | `SupertrendResult` | `value`, `direction`                    |
 | `DMI`        | `DMIResult`        | `diplus`, `diminus`, `adx`              |
 
-`Stoch::compute(src, high, low)` returns a single `double`. There is no
-`%K / %D` tuple in the runtime.
+
+`Stoch::compute(src, high, low)` returns Pine v6's official single
+stochastic value. `%K / %D` smoothing is explicit Pine code, e.g. assign
+the result to `k` and compute `d = ta.sma(k, length)`.
 
 ### Single-value TA classes
 
@@ -303,8 +330,13 @@ Statistical / windowed (`src/ta_misc.cpp`): `StdDev`, `Variance`,
 `Lowest`, `HighestBars`, `LowestBars`, `PercentRank`,
 `PercentileNearestRank`, `PercentileLinearInterpolation`, `Correlation`.
 
-Volume indicators (`src/ta_extremes_volume.cpp`): `OBV`, `AccDist`,
-`NVI`, `PVI`, `PVT`, `WAD`, `WVAD`, `III`, `VWAP`.
+Volume indicators (`src/ta_extremes_volume.cpp`): official `ta.vwap(...)`
+is a function backed by `VWAP`; official `ta.obv`, `ta.accdist`,
+`ta.nvi`, `ta.pvi`, `ta.pvt`, `ta.wad`, `ta.wvad`, and `ta.iii` are
+series variables backed by `OBV`, `AccDist`, `NVI`, `PVI`, `PVT`,
+`WAD`, `WVAD`, and `III`. Parenthesized call forms such as
+`ta.obv()` are rejected by PineForge's support checker because they are
+not Pine v6 functions.
 
 Cumulative / chart-extreme (`src/ta_extremes_volume.cpp`): `Cum`,
 `AllTimeMax`, `AllTimeMin`.
@@ -313,30 +345,33 @@ Linear regression (`src/ta_misc.cpp`): `Linreg(length).compute(src, offset)`.
 
 ### `ta::TR` first-bar behaviour
 
-`TR::compute(high, low, close)` returns `high - low` on the first bar
-(when `prev_close_` is `na`). The runtime does not take a `handle_na`
-parameter — any "return na on first bar" semantics are the caller's
-responsibility.
+`TR(bool handle_na=false).compute(high, low, close)` matches Pine v6's
+`ta.tr(handle_na)` split. With the default `handle_na=false`, the first
+bar returns `na`; with `handle_na=true`, the first bar falls back to
+`high - low`. The property form `ta.tr` maps to the default form.
 
 ### `pivot_point_levels(method, high, low, close)`
 
-Free function in `namespace ta`. Returns `std::vector<double>` whose
-length and ordering depend on the method literal:
-
-- `"Traditional"` and `"Fibonacci"` → 7 levels: `S3, S2, S1, P, R1, R2, R3`.
-- `"Woodie"` and `"Classic"` → 5 levels: `S2, S1, P, R1, R2`.
-- `"DM"` → 3 levels: `S1, P, R1`.
-- `"Camarilla"` → 9 levels: `S4, S3, S2, S1, P, R1, R2, R3, R4`.
-- Anything else → single-element `{P}` (where `P = (high + low + close) / 3`).
+Free function in `namespace ta`. The runtime returns Pine v6's
+documented 11-slot order:
+`P, R1, S1, R2, S2, R3, S3, R4, S4, R5, S5`. Levels absent from the
+selected method are `na<double>()`. Current runtime inputs are
+`method, high, low, close`; the official Pine `anchor` / `developing`
+parameters are handled by the consumer compiler layer when present.
+Woodie pivots use this runtime's close-based fallback because the free
+function does not receive the period open required by TradingView's full
+Woodie formula.
 
 ## Math (`<pineforge/math.hpp>`)
 
 The runtime exposes only two pieces under math:
 
+
 | Symbol                                            | Signature                                    | Notes                                                                                                          |
 | ------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `pine_random(lo, call_site, hi, seed, bar_index)` | inline free function                         | Deterministic SplitMix64-style mixer. Stable across platforms / runs; **not** TradingView's PRNG.              |
 | `math::Sum(length)`                               | class with `compute(src)` / `recompute(src)` | Rolling-window sum used to back PineScript `math.sum(source, length)`. NaN inputs short-circuit to NaN output. |
+
 
 Order-fill rounding to mintick lives on `BacktestEngine::round_to_mintick(price)`.
 Every other Pine math function is the consumer compiler's responsibility
@@ -345,13 +380,15 @@ Every other Pine math function is the consumer compiler's responsibility
 
 ## Strings (`<pineforge/str_utils.hpp>`)
 
+
 | Helper                 | Signature                                | Behaviour                                                                                                                                                                                                                                     |
-| ---------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ---------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pine_str_format`      | `(fmt, vector<string> args)`             | `{N}` placeholder substitution against `args[N]`. Multiple occurrences of the same placeholder are all replaced.                                                                                                                              |
 | `pine_str_format_time` | `(timestamp_ms, format, timezone)`       | Maps Pine tokens (`yyyy / MM / dd / HH / mm / ss`) to `strftime` and formats. Empty / `"UTC"` / `"Etc/UTC"` use `gmtime_r`; everything else swaps `TZ` under `pine_tz::ScopedTimezone` and uses `localtime_r`.                                |
 | `pine_str_match`       | `(source, regex_pattern)`                | Returns the first capture group if any, else the full match. Empty string on no match or regex error.                                                                                                                                         |
 | `pine_str_split`       | `(source, separator)`                    | Returns `vector<string>`. Empty separator yields `{source}`.                                                                                                                                                                                  |
 | `pine_str_tostring`    | `(value, format_mode = "", mintick = 0)` | NaN renders as `"NaN"`. Modes: `"mintick"` (rounds to mintick, decimal places implied by mintick), `"percent"` (×100 with `%` suffix, 2 decimals), `"volume"` (B / M / K abbreviations). Default mode falls back to `std::to_string(double)`. |
+
 
 Enum-string lookup for `str.tostring(<enum_member>)` is implemented by
 `pine_enum_str_at(table, n, idx)` (defined in `engine.hpp`), which
@@ -400,6 +437,8 @@ struct SecurityEvalState {
     int lower_tf_ratio, lower_tf_seconds;
     int current_sub_bar_count;
     int64_t feed_count, eval_complete_count, eval_partial_count;
+    bool lower_tf_array_requested;
+    int lower_tf_sub_bar_index;
 };
 ```
 
@@ -408,6 +447,12 @@ Lifecycle hooks the generated subclass implements:
 - `configure_security_evaluators()` — called once at the start of `run(...)`; the subclass calls `register_security_eval(sec_id, requested_tf, input_tf, lookahead_on, gaps_on)` for each `request.security()` call site.
 - `evaluate_security(sec_id, bar, is_complete)` — invoked by the runtime each time a security bar is ready (complete or partial under `lookahead_on`).
 - `clear_security(sec_id)` — invoked when `gaps_on` produces an empty bar.
+
+For `request.security_lower_tf(...)`, the generated subclass registers
+with `register_security_lower_tf_eval(sec_id, requested_tf, input_tf)`
+and reads `security_lower_tf_sub_bar_index(sec_id)` during synthesis so
+it can clear and append to the returned array in earliest-to-latest
+order.
 
 Per-bar feed semantics (`feed_security_eval_state`):
 
@@ -419,13 +464,19 @@ Per-bar feed semantics (`feed_security_eval_state`):
 - **Lower-TF emulation** (`lower_tf_emulation=true`) synthesizes intrabar bars from the input bar via `synthesize_lower_tf_bars`, which samples the OHLC path in `ratio + 1` `ENDPOINTS`-distribution points, time-stamps each slice on a fixed `requested_seconds` grid, and divides volume evenly (with the remainder on the last slice). Each synthetic bar is fed as a complete update.
 
 `supports_lower_tf_emulation` only accepts emulation when **both** input
-and requested timeframes are fixed intraday minute strings (no `D / W /
-M / S` suffix), `requested < input`, and
+and requested timeframes are fixed intraday minute strings (no `D / W / M / S` suffix), `requested < input`, and
 `input_seconds % requested_seconds == 0`.
 
 `ensure_supported_lower_tf_emulation_flags` rejects lower-TF emulation
-when `lookahead_on` or `gaps_on` is set — emulation is `lookahead_off /
-gaps_off` only.
+when `lookahead_on` or `gaps_on` is set — emulation is
+`lookahead_off / gaps_off` only.
+
+`request.security_lower_tf(...)` is supported for same-symbol lower
+timeframes that satisfy the same emulation constraints. It returns an
+array whose elements are ordered earliest-to-latest within the chart bar,
+matching Pine v6's documented return shape. PineForge currently supports
+numeric and bool element arrays; tuple, UDT, color, and string element
+arrays are rejected by the transpiler.
 
 `validate_security_timeframes(input_tf)` runs at the start of `run(...)`
 and throws when:
@@ -434,12 +485,13 @@ and throws when:
 - a requested TF is finer than the input but does not satisfy the lower-TF emulation constraints above.
 
 Beyond that, the runtime does not police the symbol argument or reject
-other `request.*` variants — those rejections live in the surrounding
+other `request.`* variants — those rejections live in the surrounding
 compiler layers.
 
 ## Bar magnifier
 
 `MagnifierDistribution` has six modes (in `magnifier.hpp`):
+
 
 | Mode                  | Sample placement                                              |
 | --------------------- | ------------------------------------------------------------- |
@@ -450,9 +502,9 @@ compiler layers.
 | `FRONT_LOADED`        | Density near `O`.                                             |
 | `BACK_LOADED`         | Density near `C`.                                             |
 
+
 `sample_price_path(bar, n, dist)` samples at least 2 points and always
-emits exactly `O` first and `C` last. The middle leg sequence is `O →
-H → L → C` when the open is closer to high, otherwise `O → L → H → C`
+emits exactly `O` first and `C` last. The middle leg sequence is `O → H → L → C` when the open is closer to high, otherwise `O → L → H → C`
 (ties go low-first).
 
 `sample_price_path_volume_weighted(bar, base, mean_volume, min=2, max=64, dist)`
@@ -559,6 +611,7 @@ the session helpers are safe to call from a multi-strategy harness.
 
 `PineMatrix` wraps `Eigen::MatrixXd`. Member surface:
 
+
 | Group            | Methods                                                                                                                                                             |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Construction     | `new_(rows, cols, init_val=0)` (static)                                                                                                                             |
@@ -572,6 +625,7 @@ the session helpers are safe to call from a multi-strategy harness.
 | Count            | `elements_count`                                                                                                                                                    |
 | Predicates       | `is_square`, `is_identity`, `is_diagonal`, `is_antidiagonal`, `is_symmetric`, `is_antisymmetric`, `is_triangular`, `is_stochastic`, `is_binary`, `is_zero`          |
 
+
 The element type is fixed to `double`. UDT-typed matrices are not
 runtime-supported (see "Not implemented anywhere" below).
 
@@ -579,17 +633,20 @@ runtime-supported (see "Not implemented anywhere" below).
 
 `fill_report(ReportC*)` populates:
 
-| Field                                                                                                    | Meaning                                                                                       |
-| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `total_trades`, `trades`, `trades_len`, `net_profit`                                                     | Closed trade summary; `trades` is heap-allocated `TradeC[]`, freed via `free_report`.         |
-| `input_bars_processed`, `script_bars_processed`                                                          | Bar counters from the `run(...)` loop.                                                        |
-| `magnifier_sub_bars_total`, `magnifier_sample_ticks_total`                                               | Magnifier work counters (sub-bars consumed × ticks sampled).                                  |
-| `input_tf_seconds`, `script_tf_seconds`, `script_tf_ratio`, `needs_aggregation`, `bar_magnifier_enabled` | TF / aggregation diagnostics for the run.                                                     |
-| `security_feeds_total`, `security_eval_complete_total`, `security_eval_partial_total`                    | Aggregate `request.security` counters.                                                        |
-| `security_diag`, `security_diag_len`                                                                     | Per-security `SecurityDiagC { sec_id, feed_count, eval_complete_count, eval_partial_count }`. |
+
+| Field                                                                                                    | Meaning                                                                                               |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `total_trades`, `trades`, `trades_len`, `net_profit`                                                     | Closed trade summary; `trades` is heap-allocated `TradeC[]`, freed via `free_report`.                 |
+| `input_bars_processed`, `script_bars_processed`                                                          | Bar counters from the `run(...)` loop.                                                                |
+| `magnifier_sub_bars_total`, `magnifier_sample_ticks_total`                                               | Magnifier work counters (sub-bars consumed × ticks sampled).                                          |
+| `input_tf_seconds`, `script_tf_seconds`, `script_tf_ratio`, `needs_aggregation`, `bar_magnifier_enabled` | TF / aggregation diagnostics for the run.                                                             |
+| `security_feeds_total`, `security_eval_complete_total`, `security_eval_partial_total`                    | Aggregate `request.security` counters.                                                                |
+| `security_diag`, `security_diag_len`                                                                     | Per-security `SecurityDiagC { sec_id, feed_count, eval_complete_count, eval_partial_count }`.         |
+| `trace`, `trace_len`, `trace_names`, `trace_names_len`                                                   | Optional per-bar trace records and interned trace-name table, populated only when tracing is enabled. |
+
 
 Each `TradeC` carries
-`entry_time / exit_time / entry_price / exit_price / pnl / pnl_pct / is_long / max_runup / max_drawdown`
+`entry_time / exit_time / entry_price / exit_price / pnl / pnl_pct / is_long / max_runup / max_drawdown / qty`
 (where `max_runup` / `max_drawdown` are peak favorable / adverse
 excursions in $ / contract).
 
@@ -624,14 +681,15 @@ generated structs.
 - Pine `array<T>` — emitted as `std::vector<T>` by PineForge's transpiler.
 - Pine `map<K,V>` — emitted as `std::unordered_map<K,V>`.
 - User-defined types (UDTs) — emitted as plain C++ structs; nested fields and `array<UDT>` are also handled there.
-- Currency conversion (`strategy.convert_to_*`) — no runtime feed; PineForge's transpiler treats this as identity (no FX adjustment).
-- Most scalar `math.*` functions (`abs`, `sqrt`, `min`, `max`, trig, `round`, etc.) — PineForge emits these against `<cmath>` / inline expressions.
-- Most `str.*` operations (`length`, `contains`, `replace`, `lower`, `upper`, `tonumber`, etc.) — PineForge emits these against `std::string`.
+- Currency conversion (`strategy.convert_to_`*) — no runtime feed; PineForge's transpiler treats this as identity (no FX adjustment).
+- Most scalar `math.`* functions (`abs`, `sqrt`, `min`, `max`, trig, `round`, etc.) — PineForge emits these against `<cmath>` / inline expressions.
+- Most `str.`* operations (`length`, `contains`, `replace`, `lower`, `upper`, `tonumber`, etc.) — PineForge emits these against `std::string`.
 
 ### Not implemented anywhere — gaps with a future story
 
 These are **not** supported by PineForge as a whole today. Each item
 carries a forward-looking assessment using these buckets:
+
 
 | Tag                           | Meaning                                                                                                                  |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -641,10 +699,11 @@ carries a forward-looking assessment using these buckets:
 | **Out of scope by design**    | Conflicts with PineForge's offline-batch / paid-parity-validity model. Not a roadmap item even if mechanically possible. |
 | **Out of scope structurally** | Cannot be done without a feature PineForge does not have (e.g. live data feed).                                          |
 
+
 #### Drawing / charting / alerts
 
 `plot`, `plotshape`, `plotchar`, `plotcandle`, `plotbar`, `plotarrow`,
-`fill`, `hline`, `bgcolor`, `barcolor`, `label.*`, `line.*`, `box.*`,
+`fill`, `hline`, `bgcolor`, `barcolor`, `label.`*, `line.`*, `box.*`,
 `table.*`, `polyline.*`, `linefill.*`, `alert(...)`, `alertcondition(...)`.
 
 - **Feasibility:** *Feasible* for plotting primitives (capture series + style metadata into the `ReportC` extension or a side-channel CSV / JSON for an external renderer); *Out of scope structurally* for live `alert(...)` because PineForge produces no realtime stream.
@@ -672,19 +731,17 @@ declaration.
 - **Future story:** Resolve the import (local file or fetched bundle), parse it into an AST, inline its `export`-ed names into the importing strategy's symbol table, and proceed. The runtime needs zero changes; this is an analyzer / compiler-pipeline feature. The hard parts are the package-resolution UX (registry, versioning, caching) and namespacing rules, not code generation.
 - **Why not done yet:** PineForge's primary user surface is single-file strategies. Library-driven workflows are common on TradingView but the cost / value has not justified building the resolver. Pre-expansion (paste the library inline) is the current workaround.
 
-#### External `request.*` variants
+#### External `request.`* variants
 
 `request.financial(symbol, field, period)`, `request.dividends`,
 `request.earnings`, `request.splits`, `request.currency_rate`,
-`request.seed(source, symbol, expression)`, `request.security_lower_tf`,
-`request.quandl`.
+`request.seed(source, symbol, expression)`, `request.quandl`.
 
 - **Feasibility:**
-  - `request.security_lower_tf`: *Easy*. The lower-TF emulation already in `engine_lower_tf.cpp` (`synthesize_lower_tf_bars`) produces exactly the array of sub-bars this function returns — only the API shape differs (returns an array instead of a single bar evaluation).
   - `request.financial / dividends / earnings / splits / currency_rate`: *Feasible — needs aux data*. Would need a parallel data-ingestion path so the user can supply a CSV / Parquet of fundamentals or corporate actions; the runtime would then look up the right slice by `bar.timestamp`.
   - `request.seed`: *Out of scope structurally*. TradingView seeds are user-published time series hosted on TV's infrastructure; PineForge has no equivalent registry.
   - `request.quandl`: *Out of scope by design*. Deprecated upstream; not worth implementing.
-- **Future story:** Lower-TF arrays should ship next when the demand surfaces — the runtime helper exists. Fundamentals would land as a generic "auxiliary timeline" feature: pass `aux_data={"earnings": df}` to the runner, exposed to Pine via `request.financial`-shaped accessors that read from the aux table.
+- **Future story:** Fundamentals would land as a generic "auxiliary timeline" feature: pass `aux_data={"earnings": df}` to the runner, exposed to Pine via `request.financial`-shaped accessors that read from the aux table.
 - **Why not done yet:** Most strategy logic in our test corpus relies on the chart symbol's bars + indicators. Fundamentals-driven strategies are a meaningful but smaller user segment; we have not built the aux-data ingestion contract.
 
 #### `barmerge.lookahead_on` for lower-TF emulation
@@ -713,42 +770,22 @@ is the backing store.
 - **Future story:** Worth doing if a strategy needs UDT matrices. The consumer compiler routing is already prepared to dispatch on matrix element type — only the runtime side is missing.
 - **Why not done yet:** No real strategy in our corpus uses UDT matrices; numeric matrices satisfy every observed use case so far.
 
-#### `ta.stoch` `%K / %D` tuple form
-
-TradingView's `ta.stoch(...)` is documented as returning a single value,
-but many strategies destructure `[k, d]` from a separately-smoothed
-pair. PineForge's `Stoch::compute` returns only the raw stochastic;
-smoothing into `%K` / `%D` must be done with explicit `ta.sma(...)`
-calls.
-
-- **Feasibility:** *Easy*. Add a `StochKD` class returning a `StochKDResult { double k; double d; }` struct, exactly the shape of `MACDResult`. Consumer compiler would need a new dispatch entry.
-- **Future story:** Worth shipping the next time TA-class additions get batched. Removes one of the more frequent friction points users hit on porting strategies.
-- **Why not done yet:** Workaround (manual `ta.sma` smoothing) is one extra line of Pine; never bubbled to the top of the queue.
-
-#### `ta.tr(handle_na)` parameter
-
-`TR::compute(high, low, close)` always returns `high - low` on the first
-bar (when `prev_close_` is `na`). TV's `ta.tr(handle_na)` returns `na`
-on the first bar when `handle_na=false`.
-
-- **Feasibility:** *Easy*. One-line change: thread a `bool handle_na` constructor argument (or compute argument) into `TR` and branch on the first-bar path.
-- **Future story:** Trivial fix. Should land alongside any other small TA polish work.
-- **Why not done yet:** No strategy in the test corpus has been observed depending on `handle_na=false`.
-
 ## Verifying the surface yourself
 
-The 162-strategy validation corpus under [`corpus/`](../corpus/) is the
+The 162-strategy validation corpus under `[corpus/](../corpus/)` is the
 canonical proof that this runtime delivers the surface listed above.
 Run `bash scripts/run_corpus.sh` to compile every `generated.cpp`
 against `libpineforge.a` and diff the per-strategy `engine_trades.csv`
-against the TradingView export shipped alongside it — 158 / 162
-strategies match at the strict tier (count + entry-price + exit-price +
-P&L all within `1.0% / 0.01% / 0.01% / 1.0%`).
+against the TradingView export shipped alongside it — the current
+canonical report is **excellent=158, strong=4** across 162 strategies.
+The strict profile checks count + entry-price + exit-price + P&L within
+`1.0% / 0.01% / 0.01% / 1.0%`; the production profile is reserved for
+path-dependent trailing-stop strategies.
 
-The three-way benchmark under [`benchmarks/`](../benchmarks/) extends
+The three-way benchmark under `[benchmarks/](../benchmarks/)` extends
 this comparison to include [PyneCore](https://github.com/PyneSys/pynecore)
 and [PineTS](https://github.com/LuxAlgo/PineTS), exercising the same
 surface across three independent engines (PineForge hits canonical
 *excellent* tier on 48 / 50 strategies vs PyneCore's 45 / 50; the 3
 PyneCore-only outliers all involve bracket / trail / partial exits, see
-[`benchmarks/results/summary.md`](../benchmarks/results/summary.md)).
+`[benchmarks/results/summary.md](../benchmarks/results/summary.md)`).

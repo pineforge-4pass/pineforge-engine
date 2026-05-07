@@ -440,49 +440,55 @@ void test_pivotlow_recompute_matches_compute() {
 // ============================================================================
 
 static bool near(double a, double b, double tol = 1e-9) {
+    if (is_na(a) && is_na(b)) return true;
+    if (is_na(a) || is_na(b)) return false;
     return std::abs(a - b) < tol;
 }
 
 void test_pivot_traditional() {
     printf("Test pivot_point_levels Traditional... ");
     auto levels = ta::pivot_point_levels("Traditional", 110, 90, 100);
-    CHECK(levels.size() == 7, "Traditional should return 7 levels");
+    CHECK(levels.size() == 11, "Traditional should return 11 levels");
     double p = (110.0 + 90.0 + 100.0) / 3.0;
-    CHECK(near(levels[3], p), "Traditional pivot value");
+    CHECK(near(levels[0], p), "Traditional pivot value");
     double S1 = 2.0 * p - 110.0;
     double R1 = 2.0 * p - 90.0;
     CHECK(near(levels[2], S1), "Traditional S1");
-    CHECK(near(levels[4], R1), "Traditional R1");
+    CHECK(near(levels[1], R1), "Traditional R1");
+    CHECK(near(levels[9], p + 4.0 * 20.0), "Traditional R5");
+    CHECK(near(levels[10], p - 4.0 * 20.0), "Traditional S5");
     printf("OK\n");
 }
 
 void test_pivot_fibonacci() {
     printf("Test pivot_point_levels Fibonacci... ");
     auto levels = ta::pivot_point_levels("Fibonacci", 110, 90, 100);
-    CHECK(levels.size() == 7, "Fibonacci should return 7 levels");
+    CHECK(levels.size() == 11, "Fibonacci should return 11 levels");
     double p = (110.0 + 90.0 + 100.0) / 3.0;
-    CHECK(near(levels[3], p), "Fibonacci pivot value");
+    CHECK(near(levels[0], p), "Fibonacci pivot value");
     double range = 20.0;
     CHECK(near(levels[2], p - 0.382 * range), "Fibonacci S1");
-    CHECK(near(levels[4], p + 0.382 * range), "Fibonacci R1");
+    CHECK(near(levels[1], p + 0.382 * range), "Fibonacci R1");
     printf("OK\n");
 }
 
 void test_pivot_woodie() {
     printf("Test pivot_point_levels Woodie... ");
     auto levels = ta::pivot_point_levels("Woodie", 110, 90, 100);
-    CHECK(levels.size() == 5, "Woodie should return 5 levels");
+    CHECK(levels.size() == 11, "Woodie should return 11 levels");
     double p = (110.0 + 90.0 + 200.0) / 4.0;
-    CHECK(near(levels[2], p), "Woodie pivot value");
+    CHECK(near(levels[0], p), "Woodie pivot value");
     printf("OK\n");
 }
 
 void test_pivot_classic() {
     printf("Test pivot_point_levels Classic... ");
     auto levels = ta::pivot_point_levels("Classic", 110, 90, 100);
-    CHECK(levels.size() == 5, "Classic should return 5 levels");
+    CHECK(levels.size() == 11, "Classic should return 11 levels");
     double p = (110.0 + 90.0 + 100.0) / 3.0;
-    CHECK(near(levels[2], p), "Classic pivot value");
+    CHECK(near(levels[0], p), "Classic pivot value");
+    CHECK(near(levels[7], p + 3.0 * 20.0), "Classic R4");
+    CHECK(near(levels[8], p - 3.0 * 20.0), "Classic S4");
     printf("OK\n");
 }
 
@@ -490,31 +496,32 @@ void test_pivot_dm() {
     printf("Test pivot_point_levels DM... ");
     // close != high and close != low => x = H + L + 2C
     auto levels = ta::pivot_point_levels("DM", 110, 90, 100);
-    CHECK(levels.size() == 3, "DM should return 3 levels");
+    CHECK(levels.size() == 11, "DM should return 11 levels");
     double x = 110.0 + 90.0 + 200.0;
     double p = x / 4.0;
-    CHECK(near(levels[1], p), "DM pivot value");
-    CHECK(near(levels[0], x / 2.0 - 110.0), "DM S1");
-    CHECK(near(levels[2], x / 2.0 - 90.0), "DM R1");
+    CHECK(near(levels[0], p), "DM pivot value");
+    CHECK(near(levels[2], x / 2.0 - 110.0), "DM S1");
+    CHECK(near(levels[1], x / 2.0 - 90.0), "DM R1");
     printf("OK\n");
 }
 
 void test_pivot_camarilla() {
     printf("Test pivot_point_levels Camarilla... ");
     auto levels = ta::pivot_point_levels("Camarilla", 110, 90, 100);
-    CHECK(levels.size() == 9, "Camarilla should return 9 levels");
+    CHECK(levels.size() == 11, "Camarilla should return 11 levels");
     double p = (110.0 + 90.0 + 100.0) / 3.0;
-    CHECK(near(levels[4], p), "Camarilla pivot value");
+    CHECK(near(levels[0], p), "Camarilla pivot value");
     double r = 20.0;
-    CHECK(near(levels[3], 100.0 - r * 1.1 / 12.0), "Camarilla S1");
-    CHECK(near(levels[5], 100.0 + r * 1.1 / 12.0), "Camarilla R1");
+    CHECK(near(levels[2], 100.0 - r * 1.1 / 12.0), "Camarilla S1");
+    CHECK(near(levels[1], 100.0 + r * 1.1 / 12.0), "Camarilla R1");
+    CHECK(near(levels[9], (110.0 / 90.0) * 100.0), "Camarilla R5");
     printf("OK\n");
 }
 
 void test_pivot_unknown() {
     printf("Test pivot_point_levels unknown method... ");
     auto levels = ta::pivot_point_levels("SomethingElse", 110, 90, 100);
-    CHECK(levels.size() == 1, "Unknown method should return 1 level");
+    CHECK(levels.size() == 11, "Unknown method should return 11 levels");
     double p = (110.0 + 90.0 + 100.0) / 3.0;
     CHECK(near(levels[0], p), "Unknown method pivot value");
     printf("OK\n");

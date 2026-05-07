@@ -281,6 +281,11 @@ PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t s,
  * script must already have been compiled into the .so. */
 PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
 
+/* Set the first Unix-millisecond timestamp at which strategy order commands
+ * may create/cancel/fill orders. Earlier bars still execute user code and warm
+ * TA/series state, but strategy.entry/order/exit/close commands are ignored. */
+PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms);
+
 /* ── Version query ──────────────────────────────────────────────── */
 
 typedef struct pf_version_s {

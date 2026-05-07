@@ -28,11 +28,18 @@
 
 namespace pineforge {
 
+namespace {
+inline bool trading_is_active(int64_t current_ms, int64_t start_ms) {
+    return current_ms >= start_ms;
+}
+}
+
 void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      double limit_price, double stop_price, double qty,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
     int64_t preserved_seq = 0;
     for (const auto& o : pending_orders_) {
         if (o.id == id) {
@@ -109,6 +116,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
 
 void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
                                     double qty, double qty_percent, bool immediately) {
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
@@ -162,6 +170,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double trail_points, double trail_offset,
                                     double trail_price, double qty_percent,
                                     const std::string& comment) {
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
     bool is_partial = qp < 100.0 - 1e-9;
     bool has_trail_request = !std::isnan(trail_points);
@@ -222,6 +231,7 @@ void BacktestEngine::strategy_cancel_all() {
 void BacktestEngine::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
     int64_t preserved_seq = 0;
     for (const auto& o : pending_orders_) {
         if (o.id == id) {

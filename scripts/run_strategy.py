@@ -42,7 +42,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
+REFERENCE_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
+WARMUP_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m_warmup6m.csv"
+DEFAULT_OHLCV = WARMUP_OHLCV if WARMUP_OHLCV.exists() else REFERENCE_OHLCV
 
 
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
@@ -153,15 +155,36 @@ class Strategy:
 
         L.strategy_free.argtypes = [ctypes.c_void_p]
         L.report_free.argtypes = [ctypes.POINTER(ReportC)]
+        if hasattr(L, "strategy_set_input"):
+            L.strategy_set_input.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        if hasattr(L, "strategy_set_trace_enabled"):
+            L.strategy_set_trace_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        if hasattr(L, "strategy_set_trade_start_time"):
+            L.strategy_set_trade_start_time.argtypes = [ctypes.c_void_p, ctypes.c_int64]
 
-    def run(self, bars_csv: Path, params: dict | None = None) -> dict:
+    def run(self, bars_csv: Path, params: dict | None = None,
+            *, trace_enabled: bool = False, trade_start_time_ms: int | None = None) -> dict:
         """Read OHLCV from CSV, drive the engine, return a report dict."""
         bars, n = _load_bars(bars_csv)
-        params_json = json.dumps(params or {}).encode()
+        params = params or {}
+        params_json = json.dumps(params).encode()
 
         state = self.lib.strategy_create(params_json)
         report = ReportC()
         try:
+            if trace_enabled and hasattr(self.lib, "strategy_set_trace_enabled"):
+                self.lib.strategy_set_trace_enabled(state, 1)
+            if trade_start_time_ms is not None and hasattr(self.lib, "strategy_set_trade_start_time"):
+                self.lib.strategy_set_trade_start_time(state, int(trade_start_time_ms))
+            if hasattr(self.lib, "strategy_set_input"):
+                for key, value in params.items():
+                    if key.startswith("tv_"):
+                        continue
+                    self.lib.strategy_set_input(
+                        state,
+                        str(key).encode(),
+                        str(value).encode(),
+                    )
             self.lib.run_backtest_full(
                 state, bars, n,
                 b"", b"",            # auto-detect input_tf, default script_tf
@@ -216,11 +239,27 @@ def _report_to_dict(r: ReportC) -> dict:
             "max_drawdown": float(t.max_drawdown),
             "qty": float(t.qty),
         })
+    trace_names: list[str] = []
+    for i in range(r.trace_names_len):
+        raw = r.trace_names[i]
+        trace_names.append(raw.decode() if raw else "")
+    trace = []
+    for i in range(r.trace_len):
+        e = r.trace[i]
+        name = trace_names[e.name_id] if 0 <= e.name_id < len(trace_names) else ""
+        trace.append({
+            "timestamp": int(e.timestamp),
+            "bar_index": int(e.bar_index),
+            "name": name,
+            "value": float(e.value),
+        })
     return {
         "total_trades": int(r.total_trades),
         "net_profit": float(r.net_profit),
         "input_bars_processed": int(r.input_bars_processed),
         "trades": trades,
+        "trace": trace,
+        "trace_names": trace_names,
     }
 
 
@@ -228,6 +267,43 @@ def _report_to_dict(r: ReportC) -> dict:
 
 def _fmt_time_utc(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def _load_window_ms(csv_path: Path) -> tuple[int, int]:
+    """Return first/last bar timestamps from an OHLCV CSV."""
+    first: int | None = None
+    last: int | None = None
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ts = int(row["timestamp"])
+            if first is None:
+                first = ts
+            last = ts
+    if first is None or last is None:
+        raise ValueError(f"empty OHLCV CSV: {csv_path}")
+    return first, last
+
+
+def _filter_trades_to_window(trades: list[dict], window: tuple[int, int] | None) -> list[dict]:
+    """Keep trades whose entries occur inside the comparison window."""
+    if window is None:
+        return trades
+    start_ms, end_ms = window
+    return [
+        t for t in trades
+        if start_ms <= int(t["entry_time"]) <= end_ms
+    ]
+
+
+def _filter_trace_to_window(trace: list[dict], window: tuple[int, int] | None) -> list[dict]:
+    if window is None:
+        return trace
+    start_ms, end_ms = window
+    return [
+        e for e in trace
+        if start_ms <= int(e["timestamp"]) <= end_ms
+    ]
 
 
 def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
@@ -265,6 +341,46 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
                 ])
 
 
+
+def _tv_timezone_offset(meta: dict) -> int:
+    tz_name = str(meta.get("tv_trades_csv_tz", "")).lower()
+    return {"utc_plus_8": 8, "asia_taipei": 8, "utc": 0}.get(tz_name, 8)
+
+
+def _parse_trade_dt(s: str, tz_offset_hours: int) -> int:
+    from datetime import timedelta
+    tz = timezone(timedelta(hours=tz_offset_hours))
+    return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=tz).timestamp() * 1000)
+
+
+def _load_tv_entry_window(strategy_dir: Path, meta: dict, bar_interval_ms: int) -> tuple[int, int] | None:
+    tv_name = str(meta.get("tv_trades_csv", "tv_trades.csv"))
+    tv_path = strategy_dir / tv_name
+    if not tv_path.exists():
+        return None
+    tz_offset = _tv_timezone_offset(meta)
+    entries: list[int] = []
+    with tv_path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if str(row.get("Type", "")).startswith("Entry"):
+                entries.append(_parse_trade_dt(row["Date and time"], tz_offset))
+    if not entries:
+        return None
+    return min(entries) - bar_interval_ms, max(entries)
+
+
+def _infer_bar_interval_ms(csv_path: Path) -> int:
+    prev: int | None = None
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ts = int(row["timestamp"])
+            if prev is not None:
+                return max(1, ts - prev)
+            prev = ts
+    return 15 * 60 * 1000
+
 # --- CLI ---------------------------------------------------------------
 
 def main() -> int:
@@ -283,6 +399,15 @@ def main() -> int:
                          "polluting the strategy folder.")
     ap.add_argument("--no-overwrite", action="store_true",
                     help="Skip if the destination CSV already exists.")
+    ap.add_argument("--trace-json", type=Path, default=None,
+                    help="Enable @pf-trace capture and write per-bar trace records to JSON.")
+    ap.add_argument("--emit-window-ohlcv", type=Path, default=None,
+                    help="Trim emitted trades/traces to entries inside this OHLCV window. "
+                         "Defaults to the strategy TV trade window when available, else the reference OHLCV window.")
+    ap.add_argument("--no-trim-output", action="store_true",
+                    help="Emit all trades from the full OHLCV input, including warmup trades.")
+    ap.add_argument("--disable-trading-before-window", action="store_true",
+                    help="Warm indicators on pre-window bars but ignore strategy order commands until the emit window starts.")
     args = ap.parse_args()
 
     strategy_dir = args.strategy_dir.resolve()
@@ -303,8 +428,39 @@ def main() -> int:
 
     started = time.time()
     strat = Strategy(so_path)
-    report = strat.run(args.ohlcv.resolve())
-    write_engine_trades_csv(report["trades"], out_path)
+    inputs_path = strategy_dir / "inputs.json"
+    params = {}
+    if inputs_path.exists():
+        with inputs_path.open(encoding="utf-8") as f:
+            params = json.load(f)
+    tv_window_used = False
+    if args.no_trim_output:
+        emit_window = None
+    elif args.emit_window_ohlcv is not None:
+        emit_window = _load_window_ms(args.emit_window_ohlcv.resolve())
+    else:
+        emit_window = _load_tv_entry_window(strategy_dir, params, _infer_bar_interval_ms(args.ohlcv.resolve()))
+        tv_window_used = emit_window is not None
+        if emit_window is None:
+            emit_window = _load_window_ms(REFERENCE_OHLCV)
+    trade_start_ms = emit_window[0] if (emit_window is not None and (tv_window_used or args.disable_trading_before_window)) else None
+    report = strat.run(args.ohlcv.resolve(), params=params,
+                       trace_enabled=args.trace_json is not None,
+                       trade_start_time_ms=trade_start_ms)
+    raw_trade_count = len(report["trades"])
+    trades_to_write = _filter_trades_to_window(report["trades"], emit_window)
+    write_engine_trades_csv(trades_to_write, out_path)
+    if args.trace_json is not None:
+        trace_to_write = _filter_trace_to_window(report["trace"], emit_window)
+        args.trace_json.parent.mkdir(parents=True, exist_ok=True)
+        with args.trace_json.open("w", encoding="utf-8") as f:
+            json.dump({
+                "strategy": str(strategy_dir),
+                "ohlcv": str(args.ohlcv.resolve()),
+                "emit_window": None if emit_window is None else {"start_ms": emit_window[0], "end_ms": emit_window[1]},
+                "trace_names": report["trace_names"],
+                "trace": trace_to_write,
+            }, f)
     elapsed = time.time() - started
 
     try:
@@ -313,7 +469,8 @@ def main() -> int:
         rel = strategy_dir
     print(
         f"{rel}: "
-        f"{report['total_trades']} trades, "
+        f"{len(trades_to_write)} trades"
+        f"{'' if raw_trade_count == len(trades_to_write) else f' ({raw_trade_count} raw)'}, "
         f"net_profit={report['net_profit']:.2f}, "
         f"bars={report['input_bars_processed']}, "
         f"{elapsed:.2f}s -> {out_path.name}"

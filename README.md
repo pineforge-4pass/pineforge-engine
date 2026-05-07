@@ -4,7 +4,7 @@
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
-The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **158 of 162** strategies match at the strictest tier (count + entry-price + exit-price + P&L all within `1.0% / 0.01% / 0.01% / 1.0%`). That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
+The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **158 excellent + 4 strong** across 162 strategies under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
 
 This repository ships:
 
@@ -219,7 +219,7 @@ for the full per-strategy table and methodology.
 
 ## Status
 
-- v0.1 — initial public release. C ABI defined and pinned. Reported **158/162** strict TV parity on the internal corpus (private submodule); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
+- v0.1 — initial public release. C ABI defined and pinned. Reported **158 excellent + 4 strong** TV parity on the internal corpus (private submodule); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
 
 ## License
 

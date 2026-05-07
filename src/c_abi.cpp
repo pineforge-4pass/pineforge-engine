@@ -121,6 +121,11 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
     static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
 }
 
+PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
+    if (!s) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
+}
+
 /* Return the runtime library version. */
 PF_API pf_version_t pf_version_get(void) {
     pf_version_t v;

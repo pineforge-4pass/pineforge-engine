@@ -171,7 +171,7 @@ if [[ "$COMPILER" == "clang" ]]; then
         -instr-profile="$PROFDATA" \
         "${SHARED_FILTER[@]}" \
         "${SOURCES[@]}" \
-        | awk '/^[A-Za-z0-9_\/\.\-]+\.(cpp|hpp|h|cc|c)\s/ {print $0}' \
+        | awk '/^[A-Za-z0-9_\/\.\-]+\.(cpp|hpp|h|cc|c)[[:space:]]/ {print $0}' \
         | sort -k4n \
         > "$COV_DIR/uncovered.txt"
 
