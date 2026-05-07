@@ -4,7 +4,7 @@
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
-The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **158 excellent + 4 strong** across 162 strategies under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
+The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **160 excellent + 2 strong** across 162 strategies under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
 
 This repository ships:
 
@@ -30,7 +30,7 @@ auditing the parity claim.
 
 **This is a backtest engine, not a charting library.** PineScript drawing primitives (`plot`, `bgcolor`, `label`, …) compile cleanly but do nothing at runtime. The runtime computes trade execution and reports — it does not render.
 
-**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the internal reference corpus (`158/162` at strict thresholds; **maintainers only** — init the private `corpus` submodule per [`CONTRIBUTING.md`](CONTRIBUTING.md)). Where it diverges, it documents the divergence.
+**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the internal reference corpus (`160/162` at excellent tier; **maintainers only** — init the private `corpus` submodule per [`CONTRIBUTING.md`](CONTRIBUTING.md)). Where it diverges, it documents the divergence.
 
 ## Quickstart
 
@@ -175,13 +175,9 @@ bash scripts/run_corpus.sh
 
 That builds `libpineforge.a` plus 162 strategy `.so` files, runs each against the
 reference OHLCV feed, and rewrites each `engine_trades.csv`. The script also
-prints a lightweight corpus-inspection summary; the headline strict-parity
-number uses the canonical sweep methodology described in `corpus/README.md`.
+prints the canonical five-tier corpus summary described in `corpus/README.md`.
 
 Without the submodule, use **`ctest`** and optional local fixtures you own.
-
-**Migrating** an existing inline `corpus/` to a private submodule (one-time):
-`scripts/migrate_corpus_to_private_submodule.sh` (see [`CONTRIBUTING.md`](CONTRIBUTING.md)).
 
 ## Cross-engine comparison
 
@@ -219,7 +215,7 @@ for the full per-strategy table and methodology.
 
 ## Status
 
-- v0.1 — initial public release. C ABI defined and pinned. Reported **158 excellent + 4 strong** TV parity on the internal corpus (private submodule); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
+- v0.1 — initial public release. C ABI defined and pinned. Reported **160 excellent + 2 strong** TV parity on the internal corpus (private submodule); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
 
 ## License
 

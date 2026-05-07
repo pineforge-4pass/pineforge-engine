@@ -10,9 +10,9 @@ The PineForge **runtime** (C/C++ sources under `src/`, `include/`, `tests/`, `cm
 
 See [LICENSE](LICENSE) for the full Apache License 2.0 text.
 
-Optional **private** git submodules (`corpus/`, `benchmarks/assets/`) are separate works maintained outside the public tree. Their contents are **not** licensed to the public by virtue of this repo alone; access is governed by those repositories and your agreement with their owners. Each private repo should carry its own **`LEGAL.md`** (see [`corpus/LEGAL.md`](corpus/LEGAL.md) in the corpus checkout and [`scripts/templates/LEGAL_PRIVATE_BENCHMARK_ASSETS.md`](scripts/templates/LEGAL_PRIVATE_BENCHMARK_ASSETS.md) for benchmark assets).
+Optional **private** git submodules (`corpus/`, `benchmarks/assets/`) are separate works maintained outside the public tree. Their contents are **not** licensed to the public by virtue of this repo alone; access is governed by those repositories and your agreement with their owners. Each private repo should carry its own legal notice.
 
-To **remove** historical copies of `corpus/`, `benchmarks/data/`, and `benchmarks/strategies/` from all commits before a public release, maintainers run **`scripts/run_filter_repo_strip_private_fixtures.sh`** locally (requires `git-filter-repo`). This environment cannot perform that rewrite for you; coordinate a force-push with your team after re-adding submodule pointers.
+Historical cleanup for private fixture blobs is handled by maintainer-internal release documentation, not by scripts in this public repository.
 
 ## Third-party components linked into `libpineforge`
 

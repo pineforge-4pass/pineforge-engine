@@ -4,70 +4,19 @@ Thanks for your interest. This document covers the practical workflow for contri
 
 Community interaction is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For licensing and third-party obligations (Eigen, optional benchmark tools), see [LEGAL.md](LEGAL.md).
 
-## Validation corpus (maintainers only)
+## Private fixtures
 
-TradingView-linked validation fixtures (`strategy.pine`, `tv_trades.csv`,
-compiled `generated.cpp`, reference OHLCV) live in a **private** Git repository
-and are attached here as a **`corpus` git submodule**. Public clones do not
-receive that data.
-
-After cloning this repo, if you have access to the private corpus remote:
+TradingView-linked validation fixtures (`corpus/`) and benchmark assets
+(`benchmarks/assets`) are private maintainer data. Public clones do not
+receive them. If you have access, initialize the optional submodules:
 
 ```bash
-git submodule update --init corpus
+git submodule update --init corpus benchmarks/assets
 ```
 
-To **move** an inline `corpus/` tree (full history still in this repo) into a
-new empty private GitHub repo and convert it to a submodule, run once:
-
-```bash
-chmod +x scripts/migrate_corpus_to_private_submodule.sh
-CORPUS_REMOTE=git@github.com:YOUR_ORG/YOUR-private-corpus.git \
-  bash scripts/migrate_corpus_to_private_submodule.sh
-```
-
-See `scripts/migrate_corpus_to_private_submodule.sh` for prerequisites.
-
-**Open-sourcing:** If this repo was ever public **with** `corpus/` committed, Git
-history may still contain those files until you rewrite it (e.g. [git
-filter-repo](https://github.com/newren/git-filter-repo)). The migration script
-only changes **future** snapshots.
-
-## Benchmark fixtures (maintainers only)
-
-Everything needed to reproduce [`benchmarks/run_all.sh`](benchmarks/run_all.sh) —
-the pinned extended OHLCV **and** all **`benchmarks/…/strategies/*`** folders
-(`.pine` sources, `tv_trades.csv`, `*_trades.csv`, cloud-compiled Pyne,
-`_indicators/*`) — is TradingView-linked validation data. For open source, it
-belongs in a **private** Git repository attached as **`benchmarks/assets`**
-(submodule with `data/` + `strategies/` at its root). **Public clones must not
-contain `benchmarks/strategies` or `benchmarks/data`** in-tree or in history
-after migration (same policy as `corpus/`).
-
-A temporary inline `benchmarks/data/` + `benchmarks/strategies/` layout is only
-for private monorepos or the window before you run the migration script.
-
-After cloning, if you have access:
-
-```bash
-git submodule update --init benchmarks/assets
-```
-
-To **move** inline `benchmarks/data/` + `benchmarks/strategies/` (or an existing
-`benchmarks/assets/data` + `…/strategies` tree) into a new empty private GitHub
-repo and convert to a submodule, run once:
-
-```bash
-chmod +x scripts/migrate_benchmarks_assets_to_private_submodule.sh
-BENCHMARKS_ASSETS_REMOTE=git@github.com:YOUR_ORG/YOUR-private-benchmarks.git \
-  bash scripts/migrate_benchmarks_assets_to_private_submodule.sh
-```
-
-See `scripts/migrate_benchmarks_assets_to_private_submodule.sh` for prerequisites.
-
-To **purge** historical blobs after the submodule migration, use `git filter-repo`
-with `--invert-paths --path benchmarks/data --path benchmarks/strategies` (same
-caveats as for `corpus/` — coordinate with collaborators before a force-push).
+The public repository intentionally does not ship one-time migration or
+history-rewrite scripts for private fixture management. Maintainers should use
+internal release documentation for those workflows.
 
 ## Development setup
 
@@ -233,7 +182,7 @@ engines see. `bash benchmarks/run_all.sh` runs the whole pipeline.
 
 Before advertising a **public** default branch:
 
-1. **Private data** — `corpus/` and benchmark fixtures (`benchmarks/data` + `benchmarks/strategies`, or `benchmarks/assets`) must not appear in **public** history if they contain TV-linked exports you are not allowed to redistribute. Use private submodules plus history rewrite: run **`bash scripts/run_filter_repo_strip_private_fixtures.sh`** (install [`git-filter-repo`](https://github.com/newren/git-filter-repo)) or equivalent; see script header for submodule restore and force-push steps. [LEGAL.md](LEGAL.md) describes submodule separation.
+1. **Private data** — `corpus/` and benchmark fixtures (`benchmarks/data` + `benchmarks/strategies`, or `benchmarks/assets`) must not appear in **public** history if they contain TV-linked exports you are not allowed to redistribute. Use private submodules and maintainer-internal release docs for history-rewrite workflows. [LEGAL.md](LEGAL.md) describes submodule separation.
 2. **Secrets** — No API keys, `.env`, or machine-specific paths in tracked files; keep `benchmarks/_workdir`, `.venv`, and `node_modules` untracked.
 3. **Notices** — Keep [NOTICE](NOTICE) aligned with anything linked into `libpineforge` (e.g. Eigen). Update [LEGAL.md](LEGAL.md) if you add a new mandatory runtime dependency.
 4. **Benchmark AGPL** — Optional `benchmarks/` tooling installs AGPL-covered PineTS (`pinets`). Default CI stays on ctest only so a minimal clone is not forced to pull AGPL into the lib build.

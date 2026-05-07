@@ -777,7 +777,7 @@ canonical proof that this runtime delivers the surface listed above.
 Run `bash scripts/run_corpus.sh` to compile every `generated.cpp`
 against `libpineforge.a` and diff the per-strategy `engine_trades.csv`
 against the TradingView export shipped alongside it — the current
-canonical report is **excellent=158, strong=4** across 162 strategies.
+canonical report is **excellent=160, strong=2** across 162 strategies.
 The strict profile checks count + entry-price + exit-price + P&L within
 `1.0% / 0.01% / 0.01% / 1.0%`; the production profile is reserved for
 path-dependent trailing-stop strategies.
