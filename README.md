@@ -1,10 +1,78 @@
+<div align="center">
+
 # PineForge
 
-> Deterministic PineScript v6 backtest runtime.
+### **The fastest deterministic PineScript v6 backtest runtime — validated trade-for-trade against TradingView.**
 
-📖 **[API Documentation →](https://pineforge-docs.pages.dev/)** — full C ABI reference,
-integration guides, FFI examples, and ABI stability contract. Built with Doxygen,
-hosted on Cloudflare Pages, rebuilt on every push to `main` and every release tag.
+[![CI](https://img.shields.io/github/actions/workflow/status/fullpass-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/fullpass-4pass/pineforge-engine/actions)
+[![Docs](https://img.shields.io/badge/docs-cdocs.pineforge.dev-1565c0?logo=readthedocs&logoColor=white)](https://cdocs.pineforge.dev)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
+[![Parity](https://img.shields.io/badge/TV%20parity-165%2F168%20excellent-brightgreen)](#cross-engine-comparison)
+[![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)
+
+**[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
+
+</div>
+
+---
+
+## Why PineForge?
+
+- 🎯 **TradingView-exact.** 165 of 168 internal reference strategies hit the strict-excellent tier on trade-for-trade diff vs TV's "List of Trades" CSV — 48 of 50 in the public three-way benchmark vs PyneCore + PineTS.
+- ⚡ **Microsecond-class.** A 672-bar MACD backtest runs in **0.4 ms** end-to-end. Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
+- 🔒 **Stable C ABI.** 10 functions, 6 POD types, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
+- 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
+- 🧰 **FFI-friendly.** Call from Python (`ctypes`), Rust (`libloading`), Go (`cgo`), Node, Julia. Worked examples for [pure C](https://cdocs.pineforge.dev/examples_c.html), [Python sweep](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy harness](https://cdocs.pineforge.dev/examples_multi.html), and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) ship in the docs.
+- 🌍 **Cross-platform CI.** Linux + macOS × Release + Debug. Universal mac binary. Static library, no runtime DSO surprises at deploy time.
+
+## See it in 30 seconds
+
+```c
+#include <pineforge/pineforge.h>
+
+int main(void) {
+    pf_strategy_t s = strategy_create(NULL);
+    pf_bar_t bars[] = { /* OHLCV ... */ };
+    pf_report_t r = {0};
+
+    run_backtest(s, bars, sizeof(bars)/sizeof(*bars), &r);
+
+    printf("%d trades, net %.2f\n", r.trades_len, r.net_profit);
+
+    report_free(&r);
+    strategy_free(s);
+    return 0;
+}
+```
+
+That's the entire integration. Every PineForge-compiled strategy `.so` exports the same 10 symbols — write your harness once, swap strategies forever.
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure   # 16 tests, ~1 s
+bash tutorial/run.sh                          # full MACD backtest in 0.4 ms
+```
+
+## Documentation
+
+| Resource | What it covers |
+| --- | --- |
+| 📖 **[cdocs.pineforge.dev](https://cdocs.pineforge.dev)** | Full C ABI reference, lifecycle, report schema, configuration knobs, magnifier, FFI bindings, ABI stability contract |
+| 🚀 **[Getting Started](https://cdocs.pineforge.dev/getting_started.html)** | 60-second build + install + smoke test |
+| 🧪 **[Tutorial: MACD on BTC/USDT](https://cdocs.pineforge.dev/tutorial_macd.html)** | End-to-end annotated walkthrough |
+| 🔌 **[FFI from Python](https://cdocs.pineforge.dev/ffi_python.html)** | Complete `ctypes` mirror — paste-ready |
+| 🦀 **[Calling from Rust](https://cdocs.pineforge.dev/examples_rust.html)** | Idiomatic `libloading` wrapper |
+| 🧰 **[CMake integration](https://cdocs.pineforge.dev/integration_cmake.html)** | `find_package(PineForge)` recipe |
+| 🔒 **[ABI stability](https://cdocs.pineforge.dev/abi_stability.html)** | Versioning contract + symbol inventory |
+| 🗺️ **[Pine v6 coverage map](https://cdocs.pineforge.dev/coverage.html)** | What's implemented, what's not, and why |
+
+The site auto-rebuilds on every push to `main` and every release tag.
+
+---
+
+## What is PineForge?
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
