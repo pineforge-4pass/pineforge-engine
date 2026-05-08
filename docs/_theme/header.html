@@ -30,6 +30,13 @@
 <link rel="icon" href="$relpath^$projecticon" type="image/x-icon" />
 <!--END PROJECT_ICON-->
 <link href="$relpath^tabs.css" rel="stylesheet" type="text/css"/>
+
+<!-- doxygen-awesome v2.3.4 + darkmode toggle still rely on jQuery's `$()`.
+     Doxygen 1.10+ stopped bundling jquery.js, so pull a pinned copy from a CDN. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
+        integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
 <!--BEGIN FULL_SIDEBAR-->
 <script type="text/javascript">var page_layout=1;</script>
 <!--END FULL_SIDEBAR-->
