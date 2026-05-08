@@ -146,7 +146,7 @@ easy to find candidates.
 
 ## Parity testing
 
-The 162-strategy parity corpus is the private **`corpus` git submodule** (see
+The 168-strategy parity corpus (162 base + 6 parity probes) is the private **`corpus` git submodule** (see
 top of this file). After `git submodule update --init corpus`, read
 [`corpus/README.md`](corpus/README.md) for layout and threshold profiles. The full sweep is:
 

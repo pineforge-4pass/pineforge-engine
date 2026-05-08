@@ -4,7 +4,7 @@
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
-The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **160 excellent + 2 strong** across 162 strategies under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
+The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **165 excellent + 2 strong + 1 stress probe at the 1× margin boundary** across 168 strategies (162 reference + 6 parity probes) under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
 
 This repository ships:
 
@@ -12,12 +12,12 @@ This repository ships:
 - `<pineforge/pineforge.h>` — the public C ABI (the canonical, stability-pinned consumer surface)
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
 - A 16-binary ctest suite (15 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
-- **`corpus/`** (optional **git submodule**) — **162 reference strategies** for maintainers who have access: each folder has `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`, plus shared OHLCV under `corpus/data/`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`. Public clones omit this content.
-- [`benchmarks/`](benchmarks/) — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/*` folder with TV exports and trade CSVs) ship only via an optional **private `benchmarks/assets` submodule** — same confidentiality class as `corpus/`. With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
+- `**corpus/`** (optional **git submodule**) — **168 reference strategies** (162 base + 6 parity probes) for maintainers who have access: each folder has `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`, plus shared OHLCV under `corpus/data/`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`. Public clones omit this content.
+- `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **private `benchmarks/assets` submodule** — same confidentiality class as `corpus/`. With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
 
 ## Coverage
 
-[**`docs/coverage.md`**](docs/coverage.md) is the complete, current map
+`**[docs/coverage.md](docs/coverage.md)`** is the complete, current map
 of which Pine v6 surface this runtime covers — every TA class, every
 order primitive, every `request.security()` semantic, plus a structured
 inventory of what's deliberately not implemented (with feasibility tags
@@ -30,7 +30,7 @@ auditing the parity claim.
 
 **This is a backtest engine, not a charting library.** PineScript drawing primitives (`plot`, `bgcolor`, `label`, …) compile cleanly but do nothing at runtime. The runtime computes trade execution and reports — it does not render.
 
-**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the internal reference corpus (`160/162` at excellent tier; **maintainers only** — init the private `corpus` submodule per [`CONTRIBUTING.md`](CONTRIBUTING.md)). Where it diverges, it documents the divergence.
+**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the internal reference corpus (`165/168` at strict-excellent tier; **maintainers only** — init the private `corpus` submodule per `[CONTRIBUTING.md](CONTRIBUTING.md)`). Where it diverges, it documents the divergence.
 
 ## Quickstart
 
@@ -82,18 +82,20 @@ int main(void) {
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**. Every compiled PineForge strategy `.so` exports exactly the 10 symbols declared there:
 
-| Symbol | Role |
-| --- | --- |
-| `strategy_create` | Allocate a strategy instance |
-| `strategy_free` | Release the instance |
-| `run_backtest` | Run with auto-detected timeframe |
-| `run_backtest_full` | Run with timeframe + magnifier configuration |
-| `report_free` | Free arrays inside a filled `pf_report_t` |
-| `strategy_set_input` | Override a Pine `input.*()` value |
-| `strategy_set_override` | Override a `strategy(...)` declaration param |
-| `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier |
-| `strategy_set_trace_enabled` | Toggle per-bar trace recording |
-| `pf_version_get` | Runtime version |
+
+| Symbol                                   | Role                                         |
+| ---------------------------------------- | -------------------------------------------- |
+| `strategy_create`                        | Allocate a strategy instance                 |
+| `strategy_free`                          | Release the instance                         |
+| `run_backtest`                           | Run with auto-detected timeframe             |
+| `run_backtest_full`                      | Run with timeframe + magnifier configuration |
+| `report_free`                            | Free arrays inside a filled `pf_report_t`    |
+| `strategy_set_input`                     | Override a Pine `input.*()` value            |
+| `strategy_set_override`                  | Override a `strategy(...)` declaration param |
+| `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier             |
+| `strategy_set_trace_enabled`             | Toggle per-bar trace recording               |
+| `pf_version_get`                         | Runtime version                              |
+
 
 POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`) and the `pf_magnifier_distribution_t` enum complete the surface.
 
@@ -126,8 +128,8 @@ src/                    - implementation (~25 .cpp files split by concern)
   │   ├── ta_extremes_volume.cpp      Highest/Lowest, OBV, AccDist, NVI/PVI/PVT, VWAP, ...
   │   └── ta_misc.cpp                 Linreg, PercentRank, BarsSince, ValueWhen, ...
   └── magnifier.cpp / matrix.cpp / session_time.cpp / str_utils.cpp / timeframe.cpp / timezone.cpp / math.cpp
-tests/                  - 14 ctest binaries
-corpus/                 - private submodule: 162 strategies (maintainers only); see CONTRIBUTING.md
+tests/                  - 16 ctest binaries (15 C++ + 1 pure-C ABI sanity)
+corpus/                 - private submodule: 168 strategies (maintainers only); see CONTRIBUTING.md
   ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
 benchmarks/             - three-way comparison harness vs PyneCore + PineTS
@@ -137,7 +139,7 @@ benchmarks/             - three-way comparison harness vs PyneCore + PineTS
   └── run_all.sh        - one-shot: bootstrap + cloud-compile + run + diff (needs assets submodule)
 scripts/                - reproducibility tooling
   ├── run_strategy.py   - load any strategy.so via ctypes, write engine_trades.csv
-  ├── run_corpus.sh     - one-shot: build all 162 .so + run + verify
+  ├── run_corpus.sh     - one-shot: build all 168 .so + run + verify
   └── verify_corpus.py  - diff each engine_trades.csv against its tv_trades.csv
 cmake/                  - PineForgeConfig.cmake.in for downstream find_package()
 cmake/smoke_consumer/   - Minimal find_package(PineForge) CI smoke project
@@ -150,7 +152,7 @@ Every compiled strategy `.so` that statically links `libpineforge.a` exports **e
 
 - `libpineforge.a` is built with `-fvisibility=hidden -fvisibility-inlines-hidden`
 - Public symbols are tagged `PF_API` (visibility=default)
-- Internal C++ classes (`BacktestEngine`, `ta::*`, `pineforge::internal::*`) are not tagged, so they stay hidden in any final `.so`
+- Internal C++ classes (`BacktestEngine`, `ta::`*, `pineforge::internal::`*) are not tagged, so they stay hidden in any final `.so`
 - CI runs `scripts/check_c_abi_runtime.py` (runtime `PF_API` split vs transpiler-emitted symbols). Full trade-list parity sweeps use the private `corpus` submodule locally, not in GitHub Actions.
 
 ## Versioning
@@ -165,7 +167,7 @@ A pre-compiled strategy `.so` against runtime `0.X.Y` will keep working against 
 
 ## Reproducing the corpus run end-to-end
 
-The private validation corpus lets maintainers rebuild and rerun all **162**
+The private validation corpus lets maintainers rebuild and rerun all **168**
 compiled PineForge strategies from a fresh clone. If you have access:
 
 ```bash
@@ -173,18 +175,18 @@ git submodule update --init corpus
 bash scripts/run_corpus.sh
 ```
 
-That builds `libpineforge.a` plus 162 strategy `.so` files, runs each against the
+That builds `libpineforge.a` plus 168 strategy `.so` files, runs each against the
 reference OHLCV feed, and rewrites each `engine_trades.csv`. The script also
 prints the canonical five-tier corpus summary described in `corpus/README.md`.
 
-Without the submodule, use **`ctest`** and optional local fixtures you own.
+Without the submodule, use `**ctest**` and optional local fixtures you own.
 
 ## Cross-engine comparison
 
-[`benchmarks/`](benchmarks/) runs the same 50 strategies through
+`[benchmarks/](benchmarks/)` runs the same 50 strategies through
 PineForge, PyneCore, and PineTS to spot engine-specific defects vs
 TV-side semantics. **Strategy folders and** the 41,307-bar Binance
-ETH/USDT:USDT 15m OHLCV live under the private **`benchmarks/assets`**
+ETH/USDT:USDT 15m OHLCV live under the private `**benchmarks/assets`**
 submodule (`assets/strategies/`, `assets/data/`); public clones omit them.
 PyneCore Python sources are the official PyneSys cloud compiler output
 (no hand-ports). PineTS handles indicators only — their
@@ -199,23 +201,25 @@ cat benchmarks/results/summary.md
 
 Current standings (window-clipped 4-dimension diff vs TV):
 
-| Match degree | PineForge | PyneCore |
-|---|---:|---:|
-| 🟢 excellent | **48 / 50** | 45 / 50 |
-| 🟢 strong | 2 / 50 | 2 / 50 |
-| 🟡 moderate | 0 | 2 |
-| 🟠 weak | 0 | 1 |
+
+| Match degree | PineForge   | PyneCore |
+| ------------ | ----------- | -------- |
+| 🟢 excellent | **48 / 50** | 45 / 50  |
+| 🟢 strong    | 2 / 50      | 2 / 50   |
+| 🟡 moderate  | 0           | 2        |
+| 🟠 weak      | 0           | 1        |
+
 
 The 3 PyneCore-only outliers (`liquidity-sweep`, `scalping-strategy`,
 `partial-exit-qty-percent`) all involve `strategy.exit(stop=…, limit=…)`
-brackets, `trail_*` exits, or `strategy.close(qty_percent=…)` partial
+brackets, `trail_`* exits, or `strategy.close(qty_percent=…)` partial
 exits — categories where PyneCore's broker emulator differs from TV
-and PineForge does not. See [`benchmarks/results/summary.md`](benchmarks/results/summary.md)
+and PineForge does not. See `[benchmarks/results/summary.md](benchmarks/results/summary.md)`
 for the full per-strategy table and methodology.
 
 ## Status
 
-- v0.1 — initial public release. C ABI defined and pinned. Reported **160 excellent + 2 strong** TV parity on the internal corpus (private submodule); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
+- v0.1 — initial public release. C ABI defined and pinned. Reported **165 excellent + 2 strong** TV parity on the internal corpus (private submodule, 168 strategies including 6 parity probes); 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
 
 ## License
 
@@ -228,3 +232,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) (includes the **Apache-2.0** contribution
 1. Every contribution must keep the parity test green.
 2. Public-API changes (anything exported from `<pineforge/pineforge.h>`) require a major-version bump.
 3. Internal C++ helpers can change freely as long as the ABI surface stays put.
+
