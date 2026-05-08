@@ -192,8 +192,14 @@ public:
 class Cross {
     double prev_a;
     double prev_b;
+    // Skip-tie state: TV's `ta.cross` tracks the last NON-TIED sign of
+    // (a - b) so that intermediate "tied" bars (a == b) are transparent.
+    // ta.crossover/ta.crossunder use the simpler immediate-prev rule and
+    // need no skip-tie state.
+    int last_nonzero_sign_;  // -1, 0 (uninitialised), +1
 
     double saved_prev_a_, saved_prev_b_;
+    int saved_last_nonzero_sign_;
 
 public:
     Cross();
@@ -885,13 +891,20 @@ public:
 class VWAP {
     double cum_pv_ = 0.0;
     double cum_vol_ = 0.0;
+    // Anchor day index (Unix-day = timestamp_ms / 86_400_000). On the
+    // first compute() call we record this from the bar timestamp; on
+    // every subsequent compute() the cumulator is reset whenever the
+    // day index advances. Pine v6 `ta.vwap(source)` defaults to a Daily
+    // anchor (`anchor = timeframe.change("1D")`); engine matches that.
+    int64_t anchor_day_ = std::numeric_limits<int64_t>::min();
 
     double saved_cum_pv_, saved_cum_vol_;
+    int64_t saved_anchor_day_ = std::numeric_limits<int64_t>::min();
 
 public:
     VWAP() = default;
-    double compute(double src, double volume);
-    double recompute(double src, double volume);
+    double compute(double src, double volume, int64_t timestamp_ms);
+    double recompute(double src, double volume, int64_t timestamp_ms);
 };
 
 // --- Statistical ---

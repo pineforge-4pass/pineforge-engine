@@ -186,8 +186,17 @@ SupertrendResult Supertrend::compute(double high, double low, double close) {
         direction = prev_direction_;
     }
 
-    // Supertrend value
-    double st_val = (direction == 1.0) ? final_lower : final_upper;
+    // Supertrend value: per Pine v6 ta.supertrend reference impl,
+    //   `superTrend := _direction == -1 ? lowerBand : upperBand`
+    // i.e. an UPTREND (direction = -1) trails the LOWER band as
+    // support; a DOWNTREND (direction = +1) trails the UPPER band as
+    // resistance. The previous version picked the OPPOSITE band per
+    // direction, which left `direction` correct (the engine matched TV
+    // bar-for-bar on the dir series) but inflated the line in uptrends
+    // by ~2× ATR (and depressed it in downtrends). Caught by the TA
+    // correctness sweep — direction had 0 mismatches across 4694 bars
+    // while st_line had 4694/4694 mismatches.
+    double st_val = (direction == 1.0) ? final_upper : final_lower;
 
     result.value = st_val;
     result.direction = direction;
@@ -479,10 +488,15 @@ double Variance::compute(double src) {
 
 BBW::BBW(int length, double mult) : bb_(length, mult) {}
 
+// Pine v6's `ta.bbw` returns the BB width as a PERCENTAGE of the basis
+// (i.e., `(upper-lower)/basis * 100`) — the docs example explicitly
+// multiplies by 100. KCW (`ta.kcw`) is a sibling but returns the same
+// quantity AS A FRACTION (no ×100). The asymmetry is deliberate in
+// TradingView's reference implementation; mirror it here.
 double BBW::compute(double src) {
     auto r = bb_.compute(src);
     if (is_na(r.middle) || r.middle == 0) return na<double>();
-    return (r.upper - r.lower) / r.middle;
+    return (r.upper - r.lower) / r.middle * 100.0;
 }
 
 // ============================================================================
@@ -723,10 +737,12 @@ double Variance::recompute(double src) {
 }
 
 // --- BBW ---
+// Mirror of compute(): Pine's ta.bbw is in PERCENTAGE (×100); see the
+// compute() docstring for the asymmetry vs ta.kcw which uses fraction.
 double BBW::recompute(double src) {
     auto r = bb_.recompute(src);
     if (is_na(r.middle) || r.middle == 0) return na<double>();
-    return (r.upper - r.lower) / r.middle;
+    return (r.upper - r.lower) / r.middle * 100.0;
 }
 
 // --- KCW ---

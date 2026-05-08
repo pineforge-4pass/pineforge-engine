@@ -418,19 +418,41 @@ double WVAD::compute(double open, double high, double low, double close, double 
 }
 
 // --- III ---
+// Intraday Intensity Index. Pine's `ta.iii` per-bar formula
+// (per the official reference manual):
+//   ((close - low) - (high - close)) / (high - low) * volume
+// = (2*close - high - low) / (high - low) * volume.
+// Volume MULTIPLIES the close-position ratio; the previous version
+// divided, producing values ~1e-6 instead of TV's ~1e+4 magnitudes
+// (caught by the TA correctness sweep against TV — every bar diverged).
 double III::compute(double high, double low, double close, double volume) {
     if (is_na(high) || is_na(low) || is_na(close) || is_na(volume))
         return na<double>();
-    double denom = (high - low) * volume;
-    if (denom == 0.0) return 0.0;
-    return (2.0 * close - high - low) / denom;
+    double range = high - low;
+    if (range == 0.0) return 0.0;
+    return (2.0 * close - high - low) / range * volume;
 }
 
 // --- VWAP ---
-double VWAP::compute(double src, double volume) {
+// Pine v6 `ta.vwap(source)` defaults to a Daily anchor — the cumulator
+// resets at the start of every UTC day. Earlier the engine treated VWAP
+// as a single chart-wide cumulator, which produced values that drifted
+// from TV by ~30% on intra-day bars (and progressively further as the
+// day advanced). Resetting on UTC-day boundaries restores parity. The
+// `anchor_day_` member is initialised lazily on the first non-NA bar.
+double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
     saved_cum_pv_ = cum_pv_;
     saved_cum_vol_ = cum_vol_;
+    saved_anchor_day_ = anchor_day_;
     if (is_na(src) || is_na(volume)) return na<double>();
+    int64_t day = timestamp_ms / 86400000LL;
+    if (anchor_day_ == std::numeric_limits<int64_t>::min()) {
+        anchor_day_ = day;
+    } else if (day != anchor_day_) {
+        cum_pv_ = 0.0;
+        cum_vol_ = 0.0;
+        anchor_day_ = day;
+    }
     cum_pv_ += src * volume;
     cum_vol_ += volume;
     if (cum_vol_ == 0.0) return na<double>();
@@ -664,10 +686,11 @@ double III::recompute(double high, double low, double close, double volume) {
 }
 
 // --- VWAP ---
-double VWAP::recompute(double src, double volume) {
+double VWAP::recompute(double src, double volume, int64_t timestamp_ms) {
     cum_pv_ = saved_cum_pv_;
     cum_vol_ = saved_cum_vol_;
-    return compute(src, volume);
+    anchor_day_ = saved_anchor_day_;
+    return compute(src, volume, timestamp_ms);
 }
 
 // --- Mode ---

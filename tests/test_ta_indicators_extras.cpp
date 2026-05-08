@@ -265,13 +265,18 @@ static void test_cmo() {
 
 static void test_tsi() {
     std::printf("test_tsi\n");
+    // Pine v6 ta.tsi returns a value in [-1, 1], NOT [-100, 100] (the
+    // textbook True Strength Index normalisation). Engine matches Pine's
+    // range. A monotone-up source still drives TSI well above zero, just
+    // bounded by 1.0 instead of 100.0.
     ta::TSI tsi(3, 5);
     double v = std::numeric_limits<double>::quiet_NaN();
     for (int i = 1; i <= 25; ++i) {
-        v = tsi.compute(100.0 + i);  // strictly rising → TSI converges to +100
+        v = tsi.compute(100.0 + i);  // strictly rising → TSI converges to +1
     }
     CHECK(!is_na(v));
-    CHECK(v > 50.0);  // monotone-up series should drive TSI well above zero
+    CHECK(v > 0.5);  // monotone-up series should drive TSI well above zero
+    CHECK(v <= 1.0);
 
     // Zero divisor branch: constant series → ds == 0, ads == 0 → returns 0
     ta::TSI flat(3, 5);
@@ -310,8 +315,16 @@ static void test_cog() {
     ta::COG cog(3);
     cog.compute(1); cog.compute(2);
     double v = cog.compute(3);
-    // num = 1*1 + 2*2 + 3*3 = 14; den = 1+2+3 = 6 → -14/6
-    CHECK(near(v, -14.0 / 6.0));
+    // Pine v6 ta.cog weights `source[i]` (i bars BACK) by `(i+1)`, so
+    // the NEWEST bar gets weight 1 and the OLDEST gets weight `length`.
+    // After feeding 1, 2, 3 the buffer is [1(oldest), 2, 3(newest)]:
+    //   num = 3*1 + 2*2 + 1*3 = 10
+    //   den = 1+2+3 = 6
+    //   result = -10/6
+    // (The earlier `-14/6` test enforced an oldest-first weighting that
+    // didn't match Pine's `source[i]` indexing — caught by the TA
+    // correctness sweep against TV.)
+    CHECK(near(v, -10.0 / 6.0));
 
     // den == 0 branch
     ta::COG zero(3);
@@ -319,7 +332,7 @@ static void test_cog() {
     CHECK(near(zero.compute(0), 0.0));
 
     // recompute consistency
-    CHECK(near(cog.recompute(3.0), -14.0 / 6.0));
+    CHECK(near(cog.recompute(3.0), -10.0 / 6.0));
     // Empty buffer dispatches to compute
     ta::COG cog2(3);
     CHECK(is_na(cog2.recompute(1.0)));
@@ -457,24 +470,34 @@ static void test_wvad_iii_stateless() {
     CHECK(is_na(w.compute(na<double>(), 1, 1, 1, 1)));
 
     ta::III iii;
-    // (2*close - high - low) / ((high - low) * vol)
+    // Pine v6 ta.iii formula: (2*close - high - low) / (high - low) * volume
+    // (volume MULTIPLIES the close-position fraction; the older engine
+    // implementation accidentally divided, producing values that were
+    // ~1e+10 too small versus TV. Fixed to match TV's reference.)
     double iv = iii.compute(110, 90, 105, 200);
-    CHECK(near(iv, (2 * 105.0 - 110.0 - 90.0) / ((110.0 - 90.0) * 200.0), 1e-9));
+    CHECK(near(iv, (2 * 105.0 - 110.0 - 90.0) / (110.0 - 90.0) * 200.0, 1e-9));
     CHECK(near(iii.recompute(110, 90, 105, 200), iv));
-    CHECK(near(iii.compute(100, 100, 100, 100), 0.0));  // denom==0
+    CHECK(near(iii.compute(100, 100, 100, 100), 0.0));  // range==0 → 0
     CHECK(is_na(iii.compute(na<double>(), 1, 1, 1)));
 }
 
 static void test_vwap() {
     std::printf("test_vwap\n");
+    // Day 1: two bars accumulate inside the same UTC day → running mean of (price*vol).
+    int64_t t1a = 86400000LL * 20000;          // arbitrary day
+    int64_t t1b = t1a + 60000;                  // 1 minute later, same day
+    int64_t t2  = t1a + 86400000LL;             // exactly +1 day → triggers reset
     ta::VWAP v;
-    CHECK(near(v.compute(10, 100), 10.0));
-    CHECK(near(v.compute(20, 100), 15.0));  // (10*100 + 20*100) / 200
-    // recompute on same bar
-    CHECK(near(v.recompute(20, 100), 15.0));
-    // NaN propagation
+    CHECK(near(v.compute(10, 100, t1a), 10.0));
+    CHECK(near(v.compute(20, 100, t1b), 15.0));  // (10*100 + 20*100) / 200
+    // recompute on same bar should not advance the cumulator nor reset.
+    CHECK(near(v.recompute(20, 100, t1b), 15.0));
+    // Crossing the day boundary anchors a fresh cumulator → returns the
+    // first new-day bar's price (per Pine v6 ta.vwap Daily anchor).
+    CHECK(near(v.compute(50, 200, t2), 50.0));
+    // NaN propagation (timestamp irrelevant).
     ta::VWAP v_na;
-    CHECK(is_na(v_na.compute(na<double>(), 1)));
+    CHECK(is_na(v_na.compute(na<double>(), 1, t1a)));
 }
 
 // ============================================================================

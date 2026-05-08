@@ -309,6 +309,13 @@ double PercentileLinearInterpolation::recompute(double src, double percentage) {
 
 std::vector<double> pivot_point_levels(const std::string& method,
                                        double high, double low, double close) {
+    // Codegen lowers `ta.pivot_point_levels(type, anchor)` to pass the
+    // PREVIOUS bar's HLC (`_s_high[1]/_s_low[1]/_s_close[1]`), so the very
+    // first bar receives NaN inputs. Mirror Pine's na propagation by
+    // returning a vector of 11 NaNs in that case.
+    if (is_na(high) || is_na(low) || is_na(close)) {
+        return std::vector<double>(11, na<double>());
+    }
     double P = (high + low + close) / 3.0;
     std::vector<double> out(11, na<double>());
     out[0] = P;

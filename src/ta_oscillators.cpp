@@ -158,20 +158,41 @@ double Change::compute(double src, int length) {
 // --- Cross ---
 
 Cross::Cross()
-    : prev_a(na<double>()), prev_b(na<double>()) {}
+    : prev_a(na<double>()), prev_b(na<double>()),
+      last_nonzero_sign_(0) {}
 
 bool Cross::compute(double a, double b) {
     saved_prev_a_ = prev_a;
     saved_prev_b_ = prev_b;
-    if (is_na(a) || is_na(b) || is_na(prev_a) || is_na(prev_b)) {
+    saved_last_nonzero_sign_ = last_nonzero_sign_;
+    if (is_na(a) || is_na(b)) {
         prev_a = a;
         prev_b = b;
         return false;
     }
 
-    // Cross in either direction
-    bool result = ((a > b) && (prev_a <= prev_b)) ||
-                  ((a < b) && (prev_a >= prev_b));
+    // TV's `ta.cross` uses SKIP-TIE semantics: it tracks the LAST
+    // NON-TIED sign of (a - b) and fires only when the current sign is
+    // non-zero AND opposite of that remembered sign. Tied bars (a == b)
+    // don't update the remembered sign and don't fire a cross — they're
+    // treated as "the previous side carries through". This differs from
+    // `ta.crossover`/`ta.crossunder`, which use the simpler immediate-
+    // prev <=/>= rule (and so DO fire on a tied → non-tied transition).
+    //
+    // Caught by the TA correctness sweep on the (close, open) pair: 5
+    // bars where engine fired but TV didn't (prev tied, last non-tied
+    // bar SAME side as current), and 3 bars where engine didn't fire
+    // but TV did (prev tied, last non-tied bar OPPOSITE side). The
+    // skip-tie rule eliminates both error classes.
+    int curr_sign = (a > b) ? 1 : ((a < b) ? -1 : 0);
+    bool result = false;
+    if (curr_sign != 0 && last_nonzero_sign_ != 0 &&
+        curr_sign != last_nonzero_sign_) {
+        result = true;
+    }
+    if (curr_sign != 0) {
+        last_nonzero_sign_ = curr_sign;
+    }
     prev_a = a;
     prev_b = b;
     return result;
@@ -450,7 +471,14 @@ double TSI::compute(double src) {
     double ds = ema_short_.compute(ema_long_.compute(pc));
     double ads = ema_abs_short_.compute(ema_abs_long_.compute(std::abs(pc)));
     if (ads == 0) return 0.0;
-    return 100.0 * ds / ads;
+    // Pine v6 ta.tsi returns the True Strength Index normalised to [-1, 1]
+    // (per the official reference manual). Classical TSI literature uses
+    // [-100, 100] (i.e. ×100), but Pine deliberately drops the percentage
+    // scaling — engine must match TV's range, not the textbook's. Caught
+    // by the TA correctness sweep (engine values were ~100× larger than
+    // TV across all 4694 overlapping bars when the codegen-call args
+    // were corrected and a real source was reaching compute()).
+    return ds / ads;
 }
 
 // ============================================================================
@@ -476,9 +504,18 @@ double COG::compute(double src) {
     buffer_.push_back(src);
     if ((int)buffer_.size() > length_) buffer_.pop_front();
     if ((int)buffer_.size() < length_) return na<double>();
+    // Pine v6 ta.cog weights `source[i]` (i bars BACK from the current
+    // bar) by `(i + 1)`. Pine's `source[0]` is the most recent value, so
+    // the NEWEST bar gets weight 1 and the OLDEST bar gets weight length.
+    // Engine's deque has the oldest at index 0, so we walk the buffer
+    // from the back to keep the weighting aligned with Pine. The earlier
+    // forward-walk produced a small (~0.04 typical magnitude) but bar-
+    // for-bar consistent drift versus TV — caught by the TA correctness
+    // sweep across 4694 bars.
     double num = 0, den = 0;
-    for (int i = 0; i < (int)buffer_.size(); i++) {
-        num += buffer_[i] * (i + 1);
+    int n = (int)buffer_.size();
+    for (int i = 0; i < n; i++) {
+        num += buffer_[n - 1 - i] * (i + 1);
         den += buffer_[i];
     }
     if (den == 0) return 0.0;
@@ -512,6 +549,7 @@ bool Crossunder::recompute(double a, double b) {
 bool Cross::recompute(double a, double b) {
     prev_a = saved_prev_a_;
     prev_b = saved_prev_b_;
+    last_nonzero_sign_ = saved_last_nonzero_sign_;
     return compute(a, b);
 }
 
@@ -696,9 +734,12 @@ double COG::recompute(double src) {
     if (buffer_.empty()) return compute(src);
     buffer_.back() = src;
     if ((int)buffer_.size() < length_) return na<double>();
+    // Mirror of compute(): see that function's comment for the
+    // newest-to-oldest weighting rationale.
     double num = 0, den = 0;
-    for (int i = 0; i < (int)buffer_.size(); i++) {
-        num += buffer_[i] * (i + 1);
+    int n = (int)buffer_.size();
+    for (int i = 0; i < n; i++) {
+        num += buffer_[n - 1 - i] * (i + 1);
         den += buffer_[i];
     }
     if (den == 0) return 0.0;
