@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_RUNTIME = frozenset({
     "strategy_set_trace_enabled",
     "strategy_set_trade_start_time",
+    "strategy_get_last_error",
     "pf_version_get",
     "pf_version_string",
 })
