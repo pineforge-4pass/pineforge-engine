@@ -19,7 +19,7 @@
 
 ## Why PineForge?
 
-- 🎯 **TradingView-exact.** 167 of 168 internal reference strategies match TV trade-for-trade (165 strict-excellent + 2 strong); the lone outlier is a stress probe at the 1× margin boundary where TV's behaviour is itself suspect. 48 of 50 in the public three-way benchmark vs PyneCore + PineTS.
+- 🎯 **TradingView-exact.** 167 of 168 internal reference strategies match TV trade-for-trade (165 strict-excellent + 2 strong). The lone outlier is a stress probe at the 1× margin boundary — an edge case where TV's published behaviour is ambiguous and we follow the deterministic interpretation. 48 of 50 in the public three-way benchmark vs PyneCore + PineTS.
 - ⚡ **Microsecond-class.** A 672-bar MACD backtest runs in **0.4 ms** end-to-end. Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
 - 🔒 **Stable C ABI.** 10 functions, 6 POD types, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
 - 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
@@ -76,7 +76,7 @@ The site auto-rebuilds on every push to `main` and every release tag.
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
-The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **165 strict-excellent + 2 strong = 167/168 matching**, with **1 stress probe at the 1× margin boundary** where TV's own behaviour is suspect (we treat that as a TV-side defect, not a PineForge gap). 168 total strategies = 162 reference + 6 parity probes under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
+The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **165 strict-excellent + 2 strong = 167/168 matching**, with **1 stress probe at the 1× margin boundary** that exercises an edge case where TV's published semantics are ambiguous. 168 total strategies = 162 reference + 6 parity probes under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
 
 This repository ships:
 
@@ -102,7 +102,7 @@ auditing the parity claim.
 
 **This is a backtest engine, not a charting library.** PineScript drawing primitives (`plot`, `bgcolor`, `label`, …) compile cleanly but do nothing at runtime. The runtime computes trade execution and reports — it does not render.
 
-**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the internal reference corpus (`165/168` strict-excellent + 2 strong = `167/168` matching; the 1 outlier is a 1×-margin stress probe where TV is itself buggy. **Maintainers only** — init the private `corpus` submodule per `[CONTRIBUTING.md](CONTRIBUTING.md)`). Where it diverges, it documents the divergence.
+**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the internal reference corpus (`165/168` strict-excellent + 2 strong = `167/168` matching; the 1 outlier is a 1×-margin stress probe that lands on an undocumented TV edge case. **Maintainers only** — init the private `corpus` submodule per `[CONTRIBUTING.md](CONTRIBUTING.md)`). Where it diverges, it documents the divergence.
 
 ## Quickstart
 
@@ -291,7 +291,7 @@ for the full per-strategy table and methodology.
 
 ## Status
 
-- v0.1 — initial public release. C ABI defined and pinned. Reported **165 strict-excellent + 2 strong = 167/168** TV parity on the internal corpus (private submodule, 168 strategies including 6 parity probes); the lone outlier is a 1×-margin stress probe where TV's own behaviour is suspect. 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
+- v0.1 — initial public release. C ABI defined and pinned. Reported **165 strict-excellent + 2 strong = 167/168** TV parity on the internal corpus (private submodule, 168 strategies including 6 parity probes); the lone outlier is a 1×-margin stress probe on an undocumented TV edge case. 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
 
 ## License
 
