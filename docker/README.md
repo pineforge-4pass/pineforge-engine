@@ -64,6 +64,44 @@ Optional env vars apply parameter overrides before the backtest runs:
 parses on its side). Empty / unset → defaults from the original
 `strategy(...)` and `input.*()` calls.
 
+### `PINEFORGE_OVERRIDES` keys
+
+Each key maps to a single argument of the Pine `strategy(...)` call
+and may be set independently. The runtime applies only the keys you
+provide; everything else stays at the strategy's compiled-in default.
+
+| Key                       | Type                 | Allowed values / range                                              | Notes                                                           |
+| ------------------------- | -------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `initial_capital`         | number               | `> 0`                                                               | Starting equity in account currency.                            |
+| `pyramiding`              | integer              | `>= 0`                                                              | Max same-direction entries before further entries are blocked.  |
+| `slippage`                | integer              | `>= 0`                                                              | Per-fill slippage in ticks (mintick units).                     |
+| `commission_value`        | number               | `>= 0`                                                              | Commission magnitude. Units depend on `commission_type`.        |
+| `commission_type`         | enum                 | `percent`, `cash_per_order`, `cash_per_contract`                    | Selects how `commission_value` is interpreted.                  |
+| `default_qty_value`       | number               | any                                                                 | Default order size, interpreted per `default_qty_type`.         |
+| `default_qty_type`        | enum                 | `fixed`, `percent_of_equity`, `cash`                                | Default sizing mode for `strategy.entry/order` calls.           |
+| `process_orders_on_close` | boolean              | `true` / `false` (or `1` / `0`)                                     | When true, market orders fill at bar close instead of next open.|
+| `close_entries_rule`      | enum                 | `ANY`, `FIFO`                                                       | How `strategy.close(id)` selects entries (FIFO is the default). |
+
+Example combining several keys:
+
+```bash
+docker run --rm \
+  -v $(pwd)/strategy.cpp:/in/strategy.cpp:ro \
+  -v $(pwd)/ohlcv.csv:/in/ohlcv.csv:ro \
+  -e 'PINEFORGE_OVERRIDES={
+        "initial_capital":"100000",
+        "default_qty_type":"percent_of_equity",
+        "default_qty_value":"10",
+        "commission_type":"percent",
+        "commission_value":"0.04",
+        "slippage":"2",
+        "pyramiding":"0",
+        "process_orders_on_close":"true",
+        "close_entries_rule":"ANY"
+      }' \
+  pineforge | jq '.applied_overrides'
+```
+
 Runtime args (passed to `run_backtest_full` rather than the strategy
 header) are configured via separate env vars:
 
