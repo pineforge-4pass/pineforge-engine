@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """CI guardrail: runtime-side PF_API implementations in c_abi.cpp stay documented.
 
-The header lists ten harness-facing symbols; only ``strategy_set_trace_enabled`` and
-``pf_version_get`` are defined in the static runtime — the rest are emitted per-strategy
-by the transpiler (see comment in src/c_abi.cpp). If that split changes, update
+The header lists eleven harness-facing symbols; only the three in EXPECTED_RUNTIME
+are defined in the static runtime — the rest are emitted per-strategy by the
+transpiler (see comment in src/c_abi.cpp). If that split changes, update
 EXPECTED_RUNTIME below and the comment block in c_abi.cpp together.
 """
 
@@ -15,7 +15,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_RUNTIME = frozenset({"strategy_set_trace_enabled", "pf_version_get"})
+EXPECTED_RUNTIME = frozenset({
+    "strategy_set_trace_enabled",
+    "strategy_set_trade_start_time",
+    "pf_version_get",
+})
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 

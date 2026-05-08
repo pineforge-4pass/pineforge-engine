@@ -62,7 +62,8 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=short
+            type=sha,format=short,prefix=
+            type=sha,format=long,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
