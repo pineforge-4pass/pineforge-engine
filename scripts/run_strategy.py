@@ -155,6 +155,9 @@ class Strategy:
 
         L.strategy_free.argtypes = [ctypes.c_void_p]
         L.report_free.argtypes = [ctypes.POINTER(ReportC)]
+        if hasattr(L, "strategy_get_last_error"):
+            L.strategy_get_last_error.argtypes = [ctypes.c_void_p]
+            L.strategy_get_last_error.restype = ctypes.c_char_p
         if hasattr(L, "strategy_set_input"):
             L.strategy_set_input.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
         if hasattr(L, "strategy_set_trace_enabled"):
@@ -191,6 +194,14 @@ class Strategy:
                 0, 4, 3,             # bar_magnifier off, samples=4, dist=ENDPOINTS
                 ctypes.byref(report),
             )
+            if hasattr(self.lib, "strategy_get_last_error"):
+                err_ptr = self.lib.strategy_get_last_error(state)
+                if err_ptr:
+                    err_msg = err_ptr.decode("utf-8", "replace")
+                    if err_msg:
+                        raise RuntimeError(
+                            "pineforge engine rejected run: " + err_msg
+                        )
             return _report_to_dict(report)
         finally:
             self.lib.report_free(ctypes.byref(report))

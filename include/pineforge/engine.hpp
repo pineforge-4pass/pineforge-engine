@@ -613,6 +613,12 @@ protected:
     int diag_script_tf_ratio_ = 0;
     bool diag_needs_aggregation_ = false;
 
+    // Captured by the public run() wrappers when the underlying engine logic
+    // throws. Cleared at the start of every run(). Surfaces through
+    // last_error() / pf_strategy_get_last_error() so the C ABI never
+    // unwinds a C++ exception across the extern "C" boundary.
+    std::string last_error_;
+
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false);
@@ -940,6 +946,12 @@ public:
     const Trade& get_trade(int i) const { return trades_[i]; }
     void fill_report(ReportC* out) const;
     static void free_report(ReportC* report);
+
+    // Returns the error message captured by the most recent run() if it
+    // failed, or an empty string if the run completed normally. Cleared at
+    // the start of every run(). The C ABI exposes this via
+    // pf_strategy_get_last_error().
+    const std::string& last_error() const { return last_error_; }
 
     // Per-input override (title -> serialized value). Must be set before run()
     // so get_input_*() lookups pick up the TV-tester value rather than the

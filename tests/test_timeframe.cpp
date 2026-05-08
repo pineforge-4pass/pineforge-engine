@@ -2,7 +2,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
+#include <vector>
 #include <pineforge/timeframe.hpp>
 #include <pineforge/engine.hpp>
 
@@ -222,6 +224,42 @@ static void test_calendar_weekly_aggregation() {
     CHECK(lc.volume == 600.0); // 100+110+120+130+140
 }
 
+// ─── script_tf finer than input_tf must throw ─────────────────────────────────
+
+class NoopStrategy : public BacktestEngine {
+public:
+    void on_bar(const Bar&) override {}
+};
+
+static void test_run_rejects_script_tf_finer_than_input_tf() {
+    std::printf("test_run_rejects_script_tf_finer_than_input_tf\n");
+    NoopStrategy strat;
+    std::vector<Bar> bars = {
+        make_bar(10, 10, 10, 10, 100, 0),
+        make_bar(11, 11, 11, 11, 100, 3600000),
+        make_bar(12, 12, 12, 12, 100, 7200000),
+    };
+    // Engine must NOT throw across its public API — exceptions get
+    // captured into last_error() so the C ABI can never unwind a C++
+    // exception across the extern "C" boundary.
+    bool threw = false;
+    try {
+        strat.run(bars.data(), static_cast<int>(bars.size()),
+                  "60", "5", false, 0, MagnifierDistribution::ENDPOINTS);
+    } catch (...) {
+        threw = true;
+    }
+    CHECK(!threw);
+    CHECK(!strat.last_error().empty());
+    CHECK(strat.last_error().find("script timeframe must be coarser")
+          != std::string::npos);
+
+    // Subsequent successful run must clear the captured error.
+    strat.run(bars.data(), static_cast<int>(bars.size()),
+              "60", "60", false, 0, MagnifierDistribution::ENDPOINTS);
+    CHECK(strat.last_error().empty());
+}
+
 // ─── main ─────────────────────────────────────────────────────────────────────
 
 int main() {
@@ -233,6 +271,7 @@ int main() {
     test_passthrough();
     test_calendar_daily_aggregation();
     test_calendar_weekly_aggregation();
+    test_run_rejects_script_tf_finer_than_input_tf();
 
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);

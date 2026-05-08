@@ -320,6 +320,24 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
  *  `strategy.entry/order/exit/close` commands are ignored. */
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms);
 
+/** Returns the error message captured by the most recent #run_backtest /
+ *  #run_backtest_full call on this strategy.
+ *
+ *  Returns an empty string when the run completed normally, or `NULL`
+ *  only when `s` itself is `NULL`. The pointer is owned by the engine
+ *  and remains valid until the next #run_backtest* call (which clears
+ *  the captured error before it begins).
+ *
+ *  The runtime catches every `std::exception` derivative inside the
+ *  engine's run loop so the C ABI never unwinds a C++ exception across
+ *  the `extern "C"` boundary. Consumers must check this after every
+ *  run to surface engine-rejected configurations such as a script
+ *  timeframe finer than the input timeframe, a `request.security`
+ *  timeframe below the chart timeframe without a supported lower-TF
+ *  emulation, or a missing input timeframe when securities are
+ *  registered. */
+PF_API const char* strategy_get_last_error(pf_strategy_t s);
+
 /** @} */ /* end of pf_config */
 
 /** @defgroup pf_version Version query

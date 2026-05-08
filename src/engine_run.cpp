@@ -16,6 +16,8 @@ using namespace internal;
 
 // open_trade_* accessors moved to engine_trade_accessors.cpp.
 void BacktestEngine::run(const Bar* bars, int n) {
+    last_error_.clear();
+    try {
     trades_.reserve(256);
     max_equity_ = initial_capital_;
     min_equity_ = initial_capital_;
@@ -64,6 +66,11 @@ void BacktestEngine::run(const Bar* bars, int n) {
         }
         update_equity_extremes();
         prev_bar_timestamp_ = current_bar_.timestamp;
+    }
+    } catch (const std::exception& e) {
+        last_error_ = e.what();
+    } catch (...) {
+        last_error_ = "unknown error during BacktestEngine::run";
     }
 }
 
@@ -156,6 +163,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                           bool bar_magnifier,
                           int magnifier_samples,
                           MagnifierDistribution magnifier_dist) {
+    last_error_.clear();
+    try {
     // Auto-detect input_tf from bar timestamps if not provided
     std::string effective_input_tf = input_tf;
     if (effective_input_tf.empty() && n_input >= 2) {
@@ -185,6 +194,12 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
 
     // Determine aggregation ratio for script TF
     int ratio = tf_ratio(effective_input_tf, effective_script_tf);
+    if (ratio == -2 && !effective_input_tf.empty() && !effective_script_tf.empty()) {
+        throw std::runtime_error(
+            "script timeframe must be coarser than or equal to input timeframe: requested script_tf "
+            + effective_script_tf + " from input timeframe " + effective_input_tf
+        );
+    }
     bool needs_aggregation = (ratio > 1 || ratio == -1);
     diag_script_tf_ratio_ = ratio;
     diag_needs_aggregation_ = needs_aggregation;
@@ -210,6 +225,11 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     } else {
         run_aggregation_bar_loop(input_bars, n_input, bar_magnifier,
                                  expected_script_bars);
+    }
+    } catch (const std::exception& e) {
+        last_error_ = e.what();
+    } catch (...) {
+        last_error_ = "unknown error during BacktestEngine::run";
     }
 }
 
@@ -399,6 +419,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                           bool bar_magnifier,
                           int magnifier_samples,
                           MagnifierDistribution magnifier_dist) {
+    last_error_.clear();
+    try {
     // Store syminfo and inputs
     syminfo_ = syminfo;
     syminfo_mintick_ = syminfo.mintick;
@@ -428,6 +450,11 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
 
     // Delegate to the TF-aware run
     run(input_bars, n_input, input_tf, script_tf, bar_magnifier, magnifier_samples, magnifier_dist);
+    } catch (const std::exception& e) {
+        last_error_ = e.what();
+    } catch (...) {
+        last_error_ = "unknown error during BacktestEngine::run";
+    }
 }
 
 }  // namespace pineforge

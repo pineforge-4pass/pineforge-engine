@@ -121,6 +121,22 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
     static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
 }
 
+/* Returns the error message captured by the most recent run() on this
+ * strategy, or an empty string if the run completed normally. The
+ * pointer remains valid until the next run() (which clears the
+ * captured error before it begins). Returns NULL only when ``s`` is
+ * NULL. The runtime catches all std::exception derivatives inside
+ * BacktestEngine::run() so the C ABI never unwinds an exception across
+ * the extern "C" boundary; consumers must check this after every run
+ * to surface engine-rejected configurations (e.g. script_tf finer than
+ * input_tf, request.security TF below the chart TF without a supported
+ * lower-TF emulation, missing input_tf when securities are registered).
+ */
+PF_API const char* strategy_get_last_error(pf_strategy_t s) {
+    if (!s) return nullptr;
+    return static_cast<pineforge::BacktestEngine*>(s)->last_error().c_str();
+}
+
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
     if (!s) return;
     static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);

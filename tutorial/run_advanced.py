@@ -51,6 +51,9 @@ def load_lib():
         ctypes.POINTER(ReportC)]
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
+    if hasattr(lib, "strategy_get_last_error"):
+        lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
+        lib.strategy_get_last_error.restype  = ctypes.c_char_p
     return lib
 
 
@@ -68,6 +71,14 @@ def run_one(lib, bars, n, *, inputs: dict[str, str],
     lib.run_backtest_full(state, bars, n, b"", b"", 0, 4, 3,
                           ctypes.byref(report))
     elapsed = time.time() - t0
+    if hasattr(lib, "strategy_get_last_error"):
+        err_ptr = lib.strategy_get_last_error(state)
+        if err_ptr:
+            err_msg = err_ptr.decode("utf-8", "replace")
+            if err_msg:
+                lib.report_free(ctypes.byref(report))
+                lib.strategy_free(state)
+                raise RuntimeError("pineforge engine rejected run: " + err_msg)
 
     pnls = [report.trades[i].pnl for i in range(report.trades_len)]
     wins = sum(p > 0 for p in pnls)

@@ -174,6 +174,10 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     ]
     lib.run_backtest_full.restype = None
 
+    if hasattr(lib, "strategy_get_last_error"):
+        lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
+        lib.strategy_get_last_error.restype  = ctypes.c_char_p
+
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
@@ -297,6 +301,15 @@ def main() -> int:
             ctypes.byref(report),
         )
         elapsed = time.time() - started
+        err_msg = ""
+        if hasattr(lib, "strategy_get_last_error"):
+            err_ptr = lib.strategy_get_last_error(state)
+            err_msg = err_ptr.decode("utf-8", "replace") if err_ptr else ""
+        if err_msg:
+            json.dump({"engine": "pineforge", "error": err_msg},
+                      sys.stdout, separators=(",", ":"))
+            sys.stdout.write("\n")
+            return 1
         out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts,
                                 elapsed, inputs, overrides)
         json.dump(out, sys.stdout, separators=(",", ":"))

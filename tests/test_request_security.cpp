@@ -166,29 +166,23 @@ void test_request_security_lower_tf_requires_finer_input_bars() {
         {12.0, 12.0, 12.0, 12.0, 100.0, 1800000},
     };
 
-    try {
-        strat.run(
-            input_bars.data(),
-            static_cast<int>(input_bars.size()),
-            "15",
-            "15",
-            false,
-            4,
-            MagnifierDistribution::ENDPOINTS
-        );
-    } catch (const std::runtime_error& err) {
-        require(
-            std::string(err.what()).find("request.security lower TF requires finer input bars")
-                != std::string::npos,
-            std::string("Unexpected lower-TF error: ") + err.what()
-        );
-        std::cout << "test_request_security_lower_tf_requires_finer_input_bars passed.\n";
-        return;
-    }
-
-    throw std::runtime_error(
-        "Lower-TF request.security should fail without finer input bars"
+    strat.run(
+        input_bars.data(),
+        static_cast<int>(input_bars.size()),
+        "15",
+        "15",
+        false,
+        4,
+        MagnifierDistribution::ENDPOINTS
     );
+    require(!strat.last_error().empty(),
+            "Lower-TF request.security should fail without finer input bars");
+    require(
+        strat.last_error().find("request.security lower TF requires finer input bars")
+            != std::string::npos,
+        std::string("Unexpected lower-TF error: ") + strat.last_error()
+    );
+    std::cout << "test_request_security_lower_tf_requires_finer_input_bars passed.\n";
 }
 
 void test_request_security_emulates_ratio_divisible_lower_tf() {
@@ -261,30 +255,26 @@ void test_request_security_lower_tf_emulation_rejects_unsupported_flags() {
             test_case.gaps_on
         );
 
-        try {
-            strat.run(
-                input_bars.data(),
-                static_cast<int>(input_bars.size()),
-                "15",
-                "15",
-                false,
-                4,
-                MagnifierDistribution::ENDPOINTS
-            );
-        } catch (const std::runtime_error& err) {
-            require(
-                std::string(err.what()).find(
-                    "request.security lower TF emulation only supports lookahead=barmerge.lookahead_off and gaps=barmerge.gaps_off"
-                ) != std::string::npos,
-                std::string("Unexpected lower-TF unsupported-flag error for ")
-                    + test_case.label + ": " + err.what()
-            );
-            continue;
-        }
-
-        throw std::runtime_error(
+        strat.run(
+            input_bars.data(),
+            static_cast<int>(input_bars.size()),
+            "15",
+            "15",
+            false,
+            4,
+            MagnifierDistribution::ENDPOINTS
+        );
+        require(
+            !strat.last_error().empty(),
             std::string("Lower-TF request.security should reject unsupported emulation flags for ")
-            + test_case.label
+                + test_case.label
+        );
+        require(
+            strat.last_error().find(
+                "request.security lower TF emulation only supports lookahead=barmerge.lookahead_off and gaps=barmerge.gaps_off"
+            ) != std::string::npos,
+            std::string("Unexpected lower-TF unsupported-flag error for ")
+                + test_case.label + ": " + strat.last_error()
         );
     }
 
@@ -298,29 +288,25 @@ void test_request_security_higher_tf_requires_inferable_input_tf() {
         {10.0, 10.0, 10.0, 10.0, 100.0, 0},
     };
 
-    try {
-        strat.run(
-            input_bars.data(),
-            static_cast<int>(input_bars.size()),
-            "",
-            "",
-            false,
-            4,
-            MagnifierDistribution::ENDPOINTS
-        );
-    } catch (const std::runtime_error& err) {
-        require(
-            std::string(err.what()).find("request.security cannot infer input timeframe")
-                != std::string::npos,
-            std::string("Unexpected unknown-input-TF error: ") + err.what()
-        );
-        std::cout << "test_request_security_higher_tf_requires_inferable_input_tf passed.\n";
-        return;
-    }
-
-    throw std::runtime_error(
+    strat.run(
+        input_bars.data(),
+        static_cast<int>(input_bars.size()),
+        "",
+        "",
+        false,
+        4,
+        MagnifierDistribution::ENDPOINTS
+    );
+    require(
+        !strat.last_error().empty(),
         "Higher-TF request.security should fail with an inference diagnostic when input_tf is unknown"
     );
+    require(
+        strat.last_error().find("request.security cannot infer input timeframe")
+            != std::string::npos,
+        std::string("Unexpected unknown-input-TF error: ") + strat.last_error()
+    );
+    std::cout << "test_request_security_higher_tf_requires_inferable_input_tf passed.\n";
 }
 
 // --- request.security_lower_tf harnesses ---
@@ -461,30 +447,26 @@ void test_request_security_lower_tf_array_rejects_higher_timeframe() {
         {105.0, 120.0, 100.0, 115.0, 100.0, 300000},
     };
 
-    try {
-        strat.run(
-            input_bars.data(),
-            static_cast<int>(input_bars.size()),
-            "5",
-            "5",
-            false,
-            4,
-            MagnifierDistribution::ENDPOINTS
-        );
-    } catch (const std::runtime_error& err) {
-        require(
-            std::string(err.what()).find(
-                "request.security_lower_tf requires a timeframe finer than the chart's input timeframe"
-            ) != std::string::npos,
-            std::string("Unexpected higher-TF lower-TF-array error: ") + err.what()
-        );
-        std::cout << "test_request_security_lower_tf_array_rejects_higher_timeframe passed.\n";
-        return;
-    }
-
-    throw std::runtime_error(
+    strat.run(
+        input_bars.data(),
+        static_cast<int>(input_bars.size()),
+        "5",
+        "5",
+        false,
+        4,
+        MagnifierDistribution::ENDPOINTS
+    );
+    require(
+        !strat.last_error().empty(),
         "request.security_lower_tf with a coarser timeframe than the chart should raise"
     );
+    require(
+        strat.last_error().find(
+            "request.security_lower_tf requires a timeframe finer than the chart's input timeframe"
+        ) != std::string::npos,
+        std::string("Unexpected higher-TF lower-TF-array error: ") + strat.last_error()
+    );
+    std::cout << "test_request_security_lower_tf_array_rejects_higher_timeframe passed.\n";
 }
 
 void test_request_security_lower_tf_array_rejects_non_divisible_timeframe() {
@@ -495,31 +477,27 @@ void test_request_security_lower_tf_array_rejects_non_divisible_timeframe() {
         {105.0, 120.0, 100.0, 115.0, 100.0, 900000},
     };
 
-    try {
-        strat.run(
-            input_bars.data(),
-            static_cast<int>(input_bars.size()),
-            "15",
-            "15",
-            false,
-            4,
-            MagnifierDistribution::ENDPOINTS
-        );
-    } catch (const std::runtime_error& err) {
-        require(
-            std::string(err.what()).find(
-                "request.security lower TF requires finer input bars"
-            ) != std::string::npos,
-            std::string("Unexpected non-divisible lower-TF-array error: ")
-                + err.what()
-        );
-        std::cout << "test_request_security_lower_tf_array_rejects_non_divisible_timeframe passed.\n";
-        return;
-    }
-
-    throw std::runtime_error(
+    strat.run(
+        input_bars.data(),
+        static_cast<int>(input_bars.size()),
+        "15",
+        "15",
+        false,
+        4,
+        MagnifierDistribution::ENDPOINTS
+    );
+    require(
+        !strat.last_error().empty(),
         "request.security_lower_tf with a non-divisor timeframe should raise"
     );
+    require(
+        strat.last_error().find(
+            "request.security lower TF requires finer input bars"
+        ) != std::string::npos,
+        std::string("Unexpected non-divisible lower-TF-array error: ")
+            + strat.last_error()
+    );
+    std::cout << "test_request_security_lower_tf_array_rejects_non_divisible_timeframe passed.\n";
 }
 
 void test_request_security_helper_ta_uses_security_local_state() {
