@@ -19,7 +19,7 @@ trades: 49  net pnl: -190.85
   ...
 ```
 
-## Source — `macd_runner.c`
+## Source: macd_runner.c
 
 ```c
 #include <pineforge/pineforge.h>
@@ -161,7 +161,7 @@ header for the type declarations). Runtime helpers like
 #pf_version_get are resolved via `dlsym` from the loaded `.so`, not
 linked at compile time.
 
-## Why `dlopen` and not `-lpineforge`?
+## Why dlopen, not -lpineforge
 
 The PineForge runtime is shipped as a **static library** (`libpineforge.a`)
 that gets baked into each compiled strategy `.so`. You never link the

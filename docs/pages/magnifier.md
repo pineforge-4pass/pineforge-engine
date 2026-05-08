@@ -72,7 +72,7 @@ Quick sanity check: with `magnifier_samples = 4` and
 `PF_MAGNIFIER_ENDPOINTS`, expect roughly
 `magnifier_sample_ticks_total ≈ 4 * input_bars_processed`.
 
-## How it interacts with `request.security()`
+## How it interacts with request.security()
 
 A higher-timeframe feed brought in via `request.security()` follows the
 **parent timeframe** of the security site, not the script TF. The

@@ -71,7 +71,7 @@ changes — concurrent backtests on different timezones are safe, but
 each handle should stay on a single thread. See [Lifecycle](@ref
 lifecycle) for the threading rule.
 
-## `request.security()` interaction
+## request.security() interaction
 
 A `request.security(symbol, timeframe, expr)` call site has its own
 target timeframe, separate from script TF. The runtime evaluates the

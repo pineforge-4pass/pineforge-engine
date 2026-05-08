@@ -104,7 +104,7 @@ PF_MAGNIFIER_FRONT_LOADED = 4
 PF_MAGNIFIER_BACK_LOADED  = 5
 ```
 
-## Loading a strategy `.so`
+## Loading a strategy .so
 
 Each compiled PineForge strategy `.so` exports the public ABI symbols
 itself. Open it with `ctypes.CDLL`:

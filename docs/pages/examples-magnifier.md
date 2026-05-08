@@ -48,7 +48,7 @@ close) is bar-close-deterministic. Distribution modes only differ when
 the script has intra-bar `strategy.exit(stop=…)` brackets, trail stops,
 or take-profit limits — see [Bar magnifier](@ref magnifier).
 
-## Source — `magnifier_ab.py`
+## Source: magnifier_ab.py
 
 ```python
 #!/usr/bin/env python3

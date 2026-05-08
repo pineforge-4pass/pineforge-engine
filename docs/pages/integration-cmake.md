@@ -5,7 +5,7 @@
 PineForge installs a standard CMake **package config**. Downstream
 projects pull it in with one `find_package` call.
 
-## Minimal `CMakeLists.txt`
+## Minimal CMakeLists.txt
 
 ```cmake
 cmake_minimum_required(VERSION 3.16)
@@ -45,7 +45,7 @@ Within a major version PineForge guarantees C ABI back-compat — see
 [ABI stability](@ref abi_stability) — so `0.1` (any compatible
 0.x.y) is the recommended pin.
 
-## Linking from a hand-written `Makefile`
+## Linking from a hand-written Makefile
 
 ```make
 CFLAGS  += -I$(PREFIX)/include
@@ -59,7 +59,7 @@ runner: runner.o
 `-lstdc++` is required even from C TUs because the runtime is C++ inside.
 `-lm` covers the `math.h` calls inside the runtime's TA classes.
 
-## Linking from `pkg-config`
+## Linking from pkg-config
 
 PineForge does **not** ship a `pkg-config` `.pc` file (the CMake config
 is the canonical surface). If you need one, generate it from the
@@ -78,7 +78,7 @@ Cflags: -I${includedir}
 Libs: -L${libdir} -lpineforge -lstdc++ -lm
 ```
 
-## Loading a compiled strategy `.so`
+## Loading a compiled strategy .so
 
 A compiled PineForge strategy is a separate shared object that **also**
 exports the public C ABI symbols (`strategy_create`, `run_backtest`,

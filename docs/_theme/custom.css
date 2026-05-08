@@ -75,10 +75,11 @@ html.dark-mode {
     background: transparent;
     padding: 8px 0;
     font-size: 14px;
+    overflow-x: hidden;
 }
 #nav-tree .item {
-    line-height: 1.6;
-    padding: 3px 0;
+    line-height: 1.55;
+    padding: 2px 0;
 }
 #nav-tree a {
     color: var(--side-nav-foreground);
@@ -86,19 +87,18 @@ html.dark-mode {
 }
 #nav-tree a:hover {
     color: var(--primary-color);
+    background: rgba(21, 101, 192, 0.06);
+}
+/* Selected: highlight the row with a left accent — never grow horizontally. */
+#nav-tree .selected {
+    background: rgba(21, 101, 192, 0.10);
+    border-left: 3px solid var(--primary-color);
+    margin-left: -3px;
 }
 #nav-tree .selected > a,
 #nav-tree .selected > a:visited {
-    color: #ffffff !important;
-    background: var(--primary-color);
-    border-radius: 4px;
-    padding: 2px 6px;
-    margin-right: 6px;
-}
-
-/* Indentation: doxygen uses inline padding-left per depth. Tighten it. */
-#nav-tree .children_ul {
-    padding-left: 14px;
+    color: var(--primary-dark-color);
+    font-weight: 600;
 }
 
 /* Resizer handle — slimmer */
@@ -110,28 +110,8 @@ html.dark-mode {
     background: var(--primary-light-color);
 }
 
-/* ───────────────────────────── Search box ───────────────────────── */
-#MSearchBox {
-    background: var(--page-background-color);
-    border: 1px solid var(--separator-color);
-    border-radius: 6px;
-    padding: 4px 8px;
-    margin: 8px 12px;
-    box-shadow: none;
-    width: calc(100% - 24px) !important;
-    box-sizing: border-box;
-}
-#MSearchField {
-    color: var(--page-foreground-color);
-    font-size: 13px;
-}
-#MSearchSelect {
-    margin-right: 4px;
-}
-
-/* Dark-mode toggle button — keep top-right pinned */
-#MSearchBox + #MSearchSelectExt,
-.tabs2 .alter-theme-button { display: none; }
+/* Search box: leave doxygen-awesome's default styling alone.
+   Custom sizing fights its tabs.css rules and overflows the sidebar. */
 
 /* ───────────────────────────── Content area ─────────────────────── */
 #doc-content {

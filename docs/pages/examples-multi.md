@@ -45,7 +45,7 @@ ranking:
 thread-safe — its internal state machine assumes serial advance. But
 N handles on N threads is fine.
 
-## Source — `multi.py`
+## Source: multi.py
 
 ```python
 #!/usr/bin/env python3

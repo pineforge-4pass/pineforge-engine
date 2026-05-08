@@ -17,7 +17,7 @@ PineForge 0.1.1 (97c93d3) — 672 bars
   ...
 ```
 
-## `Cargo.toml`
+## Cargo.toml
 
 ```toml
 [package]
@@ -29,7 +29,7 @@ edition = "2021"
 libloading = "0.8"   # safe wrapper around dlopen / dlsym
 ```
 
-## `src/main.rs`
+## src/main.rs
 
 ```rust
 use libloading::{Library, Symbol};

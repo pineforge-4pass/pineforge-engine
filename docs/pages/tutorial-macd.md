@@ -100,11 +100,11 @@ Same engine, identical numbers. Build the image locally instead with
 `docker build -t pineforge -f docker/Dockerfile .` if you don't want to
 pull from GHCR.
 
-## Inside `run.py` — annotated walkthrough
+## Inside run.py — annotated walkthrough
 
 The full harness is ~80 lines. Here's the dataflow, end to end.
 
-### 1. Mirror the C ABI in `ctypes`
+### 1. Mirror the C ABI in ctypes
 
 Skipped here — see [FFI from Python](@ref ffi_python) for the complete
 mirror. The harness defines `BarC`, `TradeC`, and `ReportC` exactly

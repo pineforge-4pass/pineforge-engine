@@ -58,7 +58,7 @@ typedef struct pf_report_s {
 | `trades_len` | `int` | Length of `trades`. |
 | `net_profit` | `double` | Sum of all closed-trade PnL in account currency. |
 
-### `pf_trade_t`
+### pf_trade_t
 
 ```c
 typedef struct pf_trade_s {

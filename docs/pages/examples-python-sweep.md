@@ -44,7 +44,7 @@ on that handle, but trade state does not reset.
 PineForge integration bug. The runtime will not warn you — the second
 report's `trades_len` simply grows.
 
-## Source — `sweep.py`
+## Source: sweep.py
 
 ```python
 #!/usr/bin/env python3
