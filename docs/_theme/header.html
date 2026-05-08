@@ -1,7 +1,24 @@
 <!-- HTML header for doxygen 1.17.0 — patched for doxygen-awesome-css -->
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "https://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" lang="$langISO">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="$langISO" class="light-mode">
 <head>
+<script>
+  /* Force light theme as default. Toggle still flips to dark on click;
+     user choice persists via localStorage. Override only runs when no
+     user preference has been stored yet. */
+  (function () {
+    try {
+      var KEY = "prefers-color-scheme";
+      if (localStorage.getItem(KEY) === null) {
+        localStorage.setItem(KEY, "light");
+      }
+      if (localStorage.getItem(KEY) === "light") {
+        document.documentElement.classList.remove("dark-mode");
+        document.documentElement.classList.add("light-mode");
+      }
+    } catch (e) {}
+  })();
+</script>
 <meta http-equiv="Content-Type" content="text/xhtml;charset=UTF-8"/>
 <meta http-equiv="X-UA-Compatible" content="IE=11"/>
 <meta name="generator" content="Doxygen $doxygenversion"/>

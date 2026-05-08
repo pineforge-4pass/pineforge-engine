@@ -35,10 +35,15 @@ jobs:
         with:
           fetch-depth: 0   # need tags for git describe in build.sh
 
-      - name: Install doxygen + graphviz
+      - name: Install doxygen 1.13 + graphviz
+        env:
+          DOXYGEN_VERSION: "1.13.2"
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends doxygen graphviz
+          sudo apt-get install -y --no-install-recommends graphviz
+          curl -sSL "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
+            | sudo tar -xz -C /opt
+          sudo ln -sf "/opt/doxygen-${DOXYGEN_VERSION}/bin/doxygen" /usr/local/bin/doxygen
           doxygen --version
           dot -V
 
