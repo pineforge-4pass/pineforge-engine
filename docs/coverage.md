@@ -235,7 +235,7 @@ via `StrategyOverrides`; they must be set by the generated subclass.
 `strategy.closedtrades.*` accessors are wired (defined inline on `BacktestEngine`):
 
 ```
-profit, profit_percent, commission, direction,
+profit, profit_percent, commission,
 entry_bar_index, exit_bar_index,
 entry_comment, exit_comment, entry_id, exit_id,
 entry_price, exit_price, entry_time, exit_time,
@@ -246,10 +246,15 @@ size, max_runup, max_runup_percent, max_drawdown, max_drawdown_percent
 `exit_*` fields (exits do not exist for an open trade):
 
 ```
-profit, profit_percent, commission, direction,
+profit, profit_percent, commission,
 entry_bar_index, entry_comment, entry_id, entry_price, entry_time,
 size, max_runup, max_runup_percent, max_drawdown, max_drawdown_percent
 ```
+
+Pine v6 has no `strategy.closedtrades.direction(...)` /
+`strategy.opentrades.direction(...)` accessor — direction is encoded in
+the sign of `size` (positive = long, negative = short), and the support
+checker rejects any user code that calls a `direction(...)` accessor.
 
 Aggregate strategy state methods are also defined on the engine:
 `net_profit / gross_profit / gross_loss` (and `_percent` variants),
@@ -277,8 +282,27 @@ variables must be reconstructed from `tf_to_seconds(...)` (which
 - `is_last_tick_` — last sample within the script bar.
 - `barstate_islast_` — last script bar in the run.
 
-`barstate.isrealtime`, `barstate.ishistory`, and live-tick semantics
-have no runtime backing.
+Pine v6 exposes seven `barstate.*` flags. PineForge runs in batch mode
+with no live data feed, so the runtime cannot honour their realtime
+semantics. The consumer compiler maps them onto the three engine flags
+above with the following batch-mode approximations:
+
+
+| Pine v6 flag                      | PineForge batch-mode value                               |
+| --------------------------------- | -------------------------------------------------------- |
+| `barstate.isfirst`                | `bar_index == 0` (handled by the consumer compiler).     |
+| `barstate.islast`                 | always `false` (no live "current" bar in batch mode).    |
+| `barstate.ishistory`              | always `true` (every bar is historical in batch mode).   |
+| `barstate.isrealtime`             | always `false`.                                          |
+| `barstate.isnew`                  | follows `is_first_tick_` (first sample of a script bar). |
+| `barstate.isconfirmed`            | follows `is_last_tick_` (last sample of a script bar).   |
+| `barstate.islastconfirmedhistory` | always `false`.                                          |
+
+
+Live-tick semantics (`calc_on_every_tick`, `calc_on_order_fills`,
+`barstate.isnew` flipping mid-bar on a live feed) have no runtime
+backing — they are intentionally not modelled, see
+"`varip` and realtime tick semantics" below.
 
 ## Technical Analysis (`namespace ta`)
 
@@ -323,7 +347,11 @@ Trend / pivots (`src/ta_volatility_trend.cpp`): `Supertrend(factor, atr_period)`
 
 Cross / state machines (`src/ta_misc.cpp`): `Crossover`, `Crossunder`,
 `Cross`, `Rising(length)`, `Falling(length)`, `BarsSince`,
-`ValueWhen(max_occurrence=1)`, `Change(max_length=1)`.
+`ValueWhen(max_occurrence=1)`, `Change(max_length=1)`. `Change::compute`
+takes a `double src`; Pine v6's `ta.change` also accepts a bool source
+(returns true on flip). The consumer compiler is responsible for
+casting bool → 0.0 / 1.0 before feeding the runtime, since the runtime
+class itself is numeric only.
 
 Statistical / windowed (`src/ta_misc.cpp`): `StdDev`, `Variance`,
 `Median`, `Mode`, `Range`, `Dev` (mean absolute deviation), `Highest`,
@@ -331,10 +359,13 @@ Statistical / windowed (`src/ta_misc.cpp`): `StdDev`, `Variance`,
 `PercentileNearestRank`, `PercentileLinearInterpolation`, `Correlation`.
 
 Volume indicators (`src/ta_extremes_volume.cpp`): official `ta.vwap(...)`
-is a function backed by `VWAP`; official `ta.obv`, `ta.accdist`,
-`ta.nvi`, `ta.pvi`, `ta.pvt`, `ta.wad`, `ta.wvad`, and `ta.iii` are
-series variables backed by `OBV`, `AccDist`, `NVI`, `PVI`, `PVT`,
-`WAD`, `WVAD`, and `III`. Parenthesized call forms such as
+is a function backed by `VWAP` — single-value form only. Pine v6's
+3-tuple form `[vwap, upper_band, lower_band] = ta.vwap(source, anchor, stdev_mult)`
+when `stdev_mult` is specified is not implemented at the runtime layer;
+the consumer compiler must reject or emit it inline. Official `ta.obv`,
+`ta.accdist`, `ta.nvi`, `ta.pvi`, `ta.pvt`, `ta.wad`, `ta.wvad`, and
+`ta.iii` are series variables backed by `OBV`, `AccDist`, `NVI`, `PVI`,
+`PVT`, `WAD`, `WVAD`, and `III`. Parenthesized call forms such as
 `ta.obv()` are rejected by PineForge's support checker because they are
 not Pine v6 functions.
 
@@ -735,14 +766,21 @@ declaration.
 
 `request.financial(symbol, field, period)`, `request.dividends`,
 `request.earnings`, `request.splits`, `request.currency_rate`,
+`request.economic(country_code, field, ...)`,
 `request.seed(source, symbol, expression)`, `request.quandl`.
 
+These are the eight `request.`* calls Pine v6 exposes outside the two
+that PineForge does support (`request.security` and
+`request.security_lower_tf`). The support checker rejects all eight
+loudly via a generic `request.`* catch-all, so user code never silently
+falls through to broken codegen.
+
 - **Feasibility:**
-  - `request.financial / dividends / earnings / splits / currency_rate`: *Feasible — needs aux data*. Would need a parallel data-ingestion path so the user can supply a CSV / Parquet of fundamentals or corporate actions; the runtime would then look up the right slice by `bar.timestamp`.
+  - `request.financial / dividends / earnings / splits / currency_rate / economic`: *Feasible — needs aux data*. Would need a parallel data-ingestion path so the user can supply a CSV / Parquet of fundamentals, corporate actions, or macroeconomic series; the runtime would then look up the right slice by `bar.timestamp`.
   - `request.seed`: *Out of scope structurally*. TradingView seeds are user-published time series hosted on TV's infrastructure; PineForge has no equivalent registry.
   - `request.quandl`: *Out of scope by design*. Deprecated upstream; not worth implementing.
-- **Future story:** Fundamentals would land as a generic "auxiliary timeline" feature: pass `aux_data={"earnings": df}` to the runner, exposed to Pine via `request.financial`-shaped accessors that read from the aux table.
-- **Why not done yet:** Most strategy logic in our test corpus relies on the chart symbol's bars + indicators. Fundamentals-driven strategies are a meaningful but smaller user segment; we have not built the aux-data ingestion contract.
+- **Future story:** Fundamentals and economic indicators would land as a generic "auxiliary timeline" feature: pass `aux_data={"earnings": df, "us_gdp": df}` to the runner, exposed to Pine via `request.financial` / `request.economic`-shaped accessors that read from the aux table.
+- **Why not done yet:** Most strategy logic in our test corpus relies on the chart symbol's bars + indicators. Fundamentals- and macro-driven strategies are a meaningful but smaller user segment; we have not built the aux-data ingestion contract.
 
 #### `barmerge.lookahead_on` for lower-TF emulation
 
@@ -772,15 +810,26 @@ is the backing store.
 
 ## Verifying the surface yourself
 
-The 162-strategy validation corpus under `[corpus/](../corpus/)` is the
-canonical proof that this runtime delivers the surface listed above.
-Run `bash scripts/run_corpus.sh` to compile every `generated.cpp`
+The 168-strategy validation corpus under `[corpus/](../corpus/)` (162
+reference strategies + 6 parity probes) is the canonical proof that
+this runtime delivers the surface listed above. Run
+`bash scripts/run_corpus.sh` to compile every `generated.cpp`
 against `libpineforge.a` and diff the per-strategy `engine_trades.csv`
 against the TradingView export shipped alongside it — the current
-canonical report is **excellent=160, strong=2** across 162 strategies.
-The strict profile checks count + entry-price + exit-price + P&L within
-`1.0% / 0.01% / 0.01% / 1.0%`; the production profile is reserved for
-path-dependent trailing-stop strategies.
+canonical report is **excellent=165, strong=2** across the 167 reference
+strategies in `basic/`, `community/`, and `validation/`. The strict
+profile is the only profile and is applied to every strategy: count +
+entry-price + exit-price + P&L within `1.0% / 0.01% / 0.01% / 1.0%`.
+
+One additional probe — `corpus/parity-anomalies/equity-mirror/` (the
+former `parity-probe-03-equity-mirror`) — lives in a dedicated
+`parity-anomalies/` directory and is excluded from the headline count
+by default. It exercises the 1× equity margin boundary specifically to
+surface TV-side non-determinism we cannot match deterministically (see
+`parity-anomalies/tv-margin-boundary.md` in the dev-utils repo for the
+full write-up, and `corpus/parity-anomalies/README.md` for the local
+index). Run `python scripts/verify_corpus.py --all --include-anomalies`
+to fold it into the sweep.
 
 The three-way benchmark under `[benchmarks/](../benchmarks/)` extends
 this comparison to include [PyneCore](https://github.com/PyneSys/pynecore)

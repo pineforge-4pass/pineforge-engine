@@ -10,10 +10,21 @@ This mirrors the canonical corpus summary used by the runtime docs:
 it applies common-window edge trimming, honours per-strategy metadata,
 and reports the five parity labels used in the corpus README.
 
+`--all` covers the three reference-tier categories — `basic/`, `community/`,
+`validation/` — i.e. 167 strategies after the equity-mirror anomaly probe
+moved to `parity-anomalies/`. The `parity-anomalies/` category is a home
+for probes that *deliberately* surface TV-side non-determinism (engine is
+correct, divergence is documented in `pineforge-utils/parity-anomalies/`);
+it is excluded from `--all` by default so it doesn't mask as a regression.
+Use `--include-anomalies` to fold it into the same sweep, or run it
+explicitly with `--category parity-anomalies`.
+
 Usage:
   scripts/verify_corpus.py corpus/basic/greedy           # one strategy
-  scripts/verify_corpus.py --all                         # entire corpus
+  scripts/verify_corpus.py --all                         # 167 reference strategies
+  scripts/verify_corpus.py --all --include-anomalies     # + parity-anomalies/
   scripts/verify_corpus.py --category validation         # one category
+  scripts/verify_corpus.py --category parity-anomalies   # anomaly probes only
   scripts/verify_corpus.py corpus/... --show-diffs 5     # show first 5 diffs
 """
 from __future__ import annotations
@@ -208,7 +219,7 @@ def percentile(xs: list[float], p: float) -> float:
 
 def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0) -> str:
     rel = strategy_dir.name
-    if strategy_dir.parent.name in {"basic", "community", "validation"}:
+    if strategy_dir.parent.name in {"basic", "community", "validation", "parity-anomalies"}:
         rel = f"{strategy_dir.parent.name}/{strategy_dir.name}"
     meta = load_strategy_metadata(strategy_dir)
     tv_path = strategy_dir / str(meta.get("tv_trades_csv", "tv_trades.csv"))
@@ -301,9 +312,16 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("strategy_dir", nargs="?", help="Single strategy folder, e.g. corpus/basic/greedy")
-    ap.add_argument("--all", action="store_true", help="Verify every strategy in corpus/")
-    ap.add_argument("--category", choices=["basic", "community", "validation"],
+    ap.add_argument("--all", action="store_true",
+                    help="Verify all reference-tier strategies (basic/, community/, validation/). "
+                         "parity-anomalies/ is excluded unless --include-anomalies is given.")
+    ap.add_argument("--category", choices=["basic", "community", "validation", "parity-anomalies"],
                     help="Verify all strategies in one category")
+    ap.add_argument("--include-anomalies", action="store_true",
+                    help="With --all, also include parity-anomalies/ probes. These deliberately "
+                         "surface TV-side non-determinism and are documented in "
+                         "pineforge-utils/parity-anomalies/. Folding them in degrades the headline "
+                         "tier counts, so off by default.")
     ap.add_argument("--show-diffs", type=int, default=0,
                     help="With single-strategy mode, show this many worst-deviation matched trades")
     ap.add_argument("--quiet", action="store_true", help="Print only summary")
@@ -318,12 +336,20 @@ def main() -> int:
         return 0 if label in {"excellent", "strong"} else 1
 
     if args.all or args.category:
-        cats = [args.category] if args.category else ["basic", "community", "validation"]
+        if args.category:
+            cats = [args.category]
+        else:
+            cats = ["basic", "community", "validation"]
+            if args.include_anomalies:
+                cats.append("parity-anomalies")
         n_total = 0
         counts = {k: 0 for k in ("excellent", "strong", "moderate", "weak", "minimal", "missing")}
         n_fail: list[str] = []
         for cat in cats:
-            for strat in sorted((corpus_root / cat).iterdir()):
+            cat_root = corpus_root / cat
+            if not cat_root.is_dir():
+                continue
+            for strat in sorted(cat_root.iterdir()):
                 if not strat.is_dir():
                     continue
                 label = verify_one(strat, verbose=not args.quiet)
@@ -341,6 +367,17 @@ def main() -> int:
             f"moderate={counts['moderate']}, weak={counts['weak']}, "
             f"minimal={counts['minimal']}, missing={counts['missing']}"
         )
+        # Emit a one-liner about parity-anomalies/ when --all skipped them, so
+        # the user knows there's more to inspect on demand.
+        anomaly_dir = corpus_root / "parity-anomalies"
+        if args.all and not args.include_anomalies and anomaly_dir.is_dir():
+            n_anomaly = sum(1 for d in anomaly_dir.iterdir() if d.is_dir())
+            if n_anomaly:
+                print(
+                    f"(skipped {n_anomaly} probe(s) in parity-anomalies/ — these surface "
+                    "TV-side non-determinism, see corpus/parity-anomalies/README.md; "
+                    "rerun with --include-anomalies to fold them in)"
+                )
         if n_fail:
             print()
             print("Below strong tier:")

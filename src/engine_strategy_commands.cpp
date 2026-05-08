@@ -47,15 +47,17 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     // — the close of the bar where ``strategy.entry`` was just called),
     // NOT later in apply_market_order_fill where fill_price is the
     // NEXT bar's open. For ``qty = strategy.equity / close`` sizing
-    // patterns (parity-probe-03, community/IES) this distinction is
-    // load-bearing: the close-vs-open slippage routinely inflates
-    // overshoot from ~zero (at signal) to ~$20 (at fill), and
+    // patterns (parity-anomalies/equity-mirror, community/IES) this
+    // distinction is load-bearing: the close-vs-open slippage routinely
+    // inflates overshoot from ~zero (at signal) to ~$20 (at fill), and
     // pre-fix engine rejected those at fill time while TV accepted
     // them at signal time — accumulating into community/IES's PnL
     // drift. Verified empirically by parity-probe-04..06 (all 57/57
-    // matched) and parity-probe-03 (full-equity sizing right at the
-    // 1× boundary). Only applied to MARKET entries (limit/stop entries
-    // have their own price baked into the order itself).
+    // matched) and parity-anomalies/equity-mirror (full-equity sizing
+    // right at the 1× boundary, where TV's behaviour is itself
+    // non-deterministic — see corpus/parity-anomalies/README.md).
+    // Only applied to MARKET entries (limit/stop entries have their
+    // own price baked into the order itself).
     if (!std::isnan(qty) && std::isnan(limit_price) && std::isnan(stop_price)) {
         double margin_pct = is_long ? margin_long_ : margin_short_;
         if (margin_pct > 0.0 && !std::isnan(current_bar_.close)) {
