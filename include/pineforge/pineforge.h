@@ -47,9 +47,9 @@
 
 /* ── Version ─────────────────────────────────────────────────────── */
 
-#define PINEFORGE_VERSION_MAJOR 0
-#define PINEFORGE_VERSION_MINOR 1
-#define PINEFORGE_VERSION_PATCH 0
+/* Macros (PINEFORGE_VERSION_MAJOR / _MINOR / _PATCH / _STRING / _FULL,
+ * PINEFORGE_GIT_SHA) live in the generated <pineforge/version.h>. */
+#include <pineforge/version.h>
 
 /* ── Visibility ──────────────────────────────────────────────────── */
 
@@ -296,6 +296,11 @@ typedef struct pf_version_s {
 } pf_version_t;
 
 PF_API pf_version_t pf_version_get(void);
+
+/* Full git-derived version descriptor: "MAJOR.MINOR.PATCH[-N-gSHA[-dirty]]"
+ * for git checkouts, plain "MAJOR.MINOR.PATCH" for tarball builds. Pointer
+ * is to a static string with program-lifetime; do not free. */
+PF_API const char* pf_version_string(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

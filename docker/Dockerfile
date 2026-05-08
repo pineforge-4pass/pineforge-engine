@@ -6,6 +6,10 @@
 # user-supplied generated.cpp against libpineforge.a and runs it
 # against the user-supplied OHLCV, emitting a JSON report on stdout.
 #
+# Build args (release.yml passes these; sane defaults for local builds):
+#   PINEFORGE_VERSION  semver "MAJOR.MINOR.PATCH" (defaults to VERSION file)
+#   PINEFORGE_GIT_SHA  full commit sha
+#
 # Build:
 #   docker build -t pineforge -f docker/Dockerfile .
 # Run:
@@ -21,10 +25,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         cmake \
         ca-certificates \
+        git \
         libeigen3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+# VERSION file is the version source-of-truth inside the build context;
+# release.yml writes the bumped value before `docker build` so the
+# generated <pineforge/version.h> matches the image tag.
+COPY VERSION ./
 COPY CMakeLists.txt ./
 COPY cmake ./cmake
 COPY include ./include
@@ -37,8 +46,24 @@ RUN cmake -B build \
         -DPINEFORGE_BUILD_TUTORIAL=OFF \
     && cmake --build build --target pineforge -j
 
+# Stage the generated version header alongside the curated ones so
+# stage 2 can copy a single tree.
+RUN cp build/include/pineforge/version.h include/pineforge/version.h
+
 # === Stage 2: runtime =================================================
 FROM debian:bookworm-slim
+
+ARG PINEFORGE_VERSION=unknown
+ARG PINEFORGE_GIT_SHA=unknown
+ARG PINEFORGE_BUILD_DATE=unknown
+
+LABEL org.opencontainers.image.title="pineforge" \
+      org.opencontainers.image.description="Deterministic PineScript v6 backtest runtime" \
+      org.opencontainers.image.version="${PINEFORGE_VERSION}" \
+      org.opencontainers.image.revision="${PINEFORGE_GIT_SHA}" \
+      org.opencontainers.image.created="${PINEFORGE_BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/luisleo526/pineforge-engine" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ \
@@ -47,8 +72,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Bundle the prebuilt static library, the public headers, and the
-# JSON harness inside the image. Users only mount their own code.
+# Bundle the prebuilt static library, the public headers (curated +
+# generated version.h), and the JSON harness. Users only mount their
+# own code.
 RUN mkdir -p /opt/pineforge/lib /opt/pineforge/include /opt/pineforge/bin
 COPY --from=builder /src/build/lib/libpineforge.a /opt/pineforge/lib/
 COPY --from=builder /src/include/pineforge        /opt/pineforge/include/pineforge
@@ -57,6 +83,8 @@ COPY docker/run_json.py    /opt/pineforge/bin/run_json.py
 COPY docker/entrypoint.sh  /opt/pineforge/bin/entrypoint.sh
 RUN chmod +x /opt/pineforge/bin/entrypoint.sh /opt/pineforge/bin/run_json.py
 
-ENV PINEFORGE_PREFIX=/opt/pineforge
+ENV PINEFORGE_PREFIX=/opt/pineforge \
+    PINEFORGE_VERSION=${PINEFORGE_VERSION} \
+    PINEFORGE_GIT_SHA=${PINEFORGE_GIT_SHA}
 
 ENTRYPOINT ["/opt/pineforge/bin/entrypoint.sh"]

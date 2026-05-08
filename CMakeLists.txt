@@ -1,8 +1,22 @@
 cmake_minimum_required(VERSION 3.16)
+
+# Resolve version from git tag (preferred) or VERSION file (fallback).
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(PineForgeVersion)
+pineforge_resolve_version()
+
 project(PineForge
-    VERSION 0.1.0
+    VERSION ${PINEFORGE_VERSION_MMP}
     DESCRIPTION "Deterministic PineScript v6 backtest runtime, validated trade-for-trade against TradingView"
     LANGUAGES C CXX
+)
+
+# Generate <pineforge/version.h> from version.h.in. Lives in the build
+# tree; installed alongside the curated headers below.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/pineforge/version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/include/pineforge/version.h"
+    @ONLY
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -95,6 +109,7 @@ target_compile_options(pineforge PRIVATE
 target_include_directories(pineforge
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -163,6 +178,11 @@ install(DIRECTORY include/pineforge
     FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
 )
 
+# Generated version header — installed alongside the curated ones.
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/include/pineforge/version.h"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/pineforge
+)
+
 install(EXPORT PineForgeTargets
     FILE PineForgeTargets.cmake
     NAMESPACE PineForge::
@@ -189,7 +209,7 @@ install(FILES
 
 # === Summary ===========================================================
 message(STATUS "")
-message(STATUS "PineForge ${PROJECT_VERSION}")
+message(STATUS "PineForge ${PINEFORGE_VERSION_FULL}")
 message(STATUS "  build type:        ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ standard:      ${CMAKE_CXX_STANDARD}")
 message(STATUS "  install prefix:    ${CMAKE_INSTALL_PREFIX}")

@@ -1,0 +1,307 @@
+name: Release
+
+# Bump version, tag, build & push the Docker image to GHCR, and cut a
+# GitHub Release with auto-generated notes — all from a single
+# workflow_dispatch click. The choice of bump (major/minor/patch) is the
+# only required input.
+#
+# Trigger: GitHub UI → Actions → Release → "Run workflow" → pick bump.
+#
+# Security notes:
+#   - The only user input is `bump`, a `choice` enum constrained to
+#     {patch,minor,major} — no free-text reaches a shell. Even so, it is
+#     piped through an `env:` block (BUMP) and matched in a `case`.
+#   - All other interpolations are GitHub-controlled context (repo, actor,
+#     sha, secrets) or values we computed ourselves from the VERSION file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    outputs:
+      tag:     ${{ steps.bump.outputs.tag }}
+      version: ${{ steps.bump.outputs.next }}
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute next version
+        id: bump
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          current="$(tr -d '[:space:]' < VERSION)"
+          if ! [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "VERSION file malformed: '$current'" >&2
+            exit 1
+          fi
+          maj="${BASH_REMATCH[1]}"
+          min="${BASH_REMATCH[2]}"
+          pat="${BASH_REMATCH[3]}"
+          case "$BUMP" in
+            major) maj=$((maj + 1)); min=0; pat=0 ;;
+            minor) min=$((min + 1)); pat=0 ;;
+            patch) pat=$((pat + 1)) ;;
+            *) echo "unknown bump: $BUMP" >&2; exit 1 ;;
+          esac
+          next="${maj}.${min}.${pat}"
+          tag="v${next}"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "next=$next"       >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "Bumping ${current} -> ${next} (${BUMP})"
+
+      - name: Refuse if tag already exists
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists -- pick a different bump" >&2
+            exit 1
+          fi
+
+      - name: Write bumped VERSION, commit, tag, push
+        env:
+          NEXT: ${{ steps.bump.outputs.next }}
+          TAG:  ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${NEXT}" > VERSION
+          git add VERSION
+          git commit -m "chore(release): ${TAG}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin HEAD
+          git push origin "${TAG}"
+
+      - name: Resolve previous tag for changelog range
+        id: prev
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          prev="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${TAG}$" | head -n1 || true)"
+          echo "prev=${prev}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$prev" ]]; then
+            echo "Changelog range: ${prev}..${TAG}"
+          else
+            echo "No prior tag -- full history will be used"
+          fi
+
+      - name: Generate release notes
+        id: notes
+        env:
+          TAG:      ${{ steps.bump.outputs.tag }}
+          PREV:     ${{ steps.prev.outputs.prev }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE:    ${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## ${TAG}"
+            echo
+            if [[ -n "$PREV" ]]; then
+              echo "### Changes since ${PREV}"
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREV}..${TAG}"
+            else
+              echo "### Initial release"
+              echo
+              git log --pretty=format:'- %s (%h)' "${TAG}"
+            fi
+            echo
+            echo
+            echo "### Container image"
+            echo
+            echo '```'
+            echo "docker pull ${REGISTRY}/${IMAGE}:${TAG#v}"
+            echo '```'
+          } > RELEASE_NOTES.md
+          echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
+
+      - name: Build context metadata
+        id: ctx
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.bump.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.bump.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.bump.outputs.tag }}
+            type=raw,value=latest
+            type=sha,format=short,prefix=,value=${{ steps.ctx.outputs.sha }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PINEFORGE_VERSION=${{ steps.bump.outputs.next }}
+            PINEFORGE_GIT_SHA=${{ steps.ctx.outputs.sha }}
+            PINEFORGE_BUILD_DATE=${{ steps.ctx.outputs.date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.bump.outputs.tag }}
+          NOTES:    ${{ steps.notes.outputs.path }}
+        run: |
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes-file "${NOTES}" \
+            --verify-tag
+
+  # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
+  # to the GitHub Release created above. Tarball layout:
+  #   pineforge-vX.Y.Z-{triple}/
+  #     include/pineforge/*.{h,hpp}    (curated + generated version.h)
+  #     lib/libpineforge.a
+  #     lib/cmake/PineForge/*.cmake
+  #     LICENSE NOTICE VERSION
+  #
+  # Consumers still need Eigen3 (>= 3.3) installed system-wide; see
+  # release notes / README.
+  prebuilt:
+    needs: release
+    permissions:
+      contents: write   # gh release upload
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: linux-x86_64
+            runner: ubuntu-22.04
+          - triple: linux-aarch64
+            runner: ubuntu-22.04-arm
+          - triple: macos-x86_64
+            runner: macos-13
+          - triple: macos-arm64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          fetch-depth: 0   # version helper wants tags for `git describe`
+
+      - name: Install Eigen3 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Install Eigen3 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install eigen
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix eigen)" >> "$GITHUB_ENV"
+
+      - name: Configure
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          stage="stage/pineforge-${TAG}-${TRIPLE}"
+          echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPINEFORGE_BUILD_TESTS=OFF \
+            -DPINEFORGE_BUILD_TUTORIAL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+
+      - name: Build
+        run: cmake --build build -j 4
+
+      - name: Install to staging
+        run: cmake --install build
+
+      - name: Bundle docs into tarball root
+        run: |
+          set -euo pipefail
+          cp LICENSE NOTICE VERSION "${STAGE_DIR}/"
+
+      - name: Pack tarball + sha256
+        id: pack
+        env:
+          TAG:    ${{ needs.release.outputs.tag }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          base="pineforge-${TAG}-${TRIPLE}"
+          tarball="${base}.tar.gz"
+          tar -czf "${tarball}" -C stage "${base}"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${tarball}" > "${tarball}.sha256"
+          else
+            shasum -a 256 "${tarball}" > "${tarball}.sha256"
+          fi
+          echo "tarball=${tarball}"           >> "$GITHUB_OUTPUT"
+          echo "sha256=${tarball}.sha256"     >> "$GITHUB_OUTPUT"
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:     ${{ needs.release.outputs.tag }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SHASUM:  ${{ steps.pack.outputs.sha256 }}
+        run: |
+          gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber

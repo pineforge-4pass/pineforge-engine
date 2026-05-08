@@ -19,6 +19,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_trace_enabled",
     "strategy_set_trade_start_time",
     "pf_version_get",
+    "pf_version_string",
 })
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")

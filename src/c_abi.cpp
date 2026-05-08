@@ -132,8 +132,12 @@ PF_API pf_version_t pf_version_get(void) {
     v.major      = PINEFORGE_VERSION_MAJOR;
     v.minor      = PINEFORGE_VERSION_MINOR;
     v.patch      = PINEFORGE_VERSION_PATCH;
-    v.commit_sha = "";
+    v.commit_sha = PINEFORGE_GIT_SHA;
     return v;
+}
+
+PF_API const char* pf_version_string(void) {
+    return PINEFORGE_VERSION_FULL;
 }
 
 } /* extern "C" */
