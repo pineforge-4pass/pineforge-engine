@@ -1,0 +1,76 @@
+/* PineForge — light overrides on top of doxygen-awesome.
+   Keep this small; the heavy lifting lives in doxygen-awesome.css. */
+
+html {
+    /* OpenCV-ish accent — calmer than the awesome default red-ish hue */
+    --primary-color: #1565c0;
+    --primary-dark-color: #0d47a1;
+    --primary-light-color: #5e92f3;
+    --page-foreground-color: #2c2c2c;
+    --page-secondary-foreground-color: #5d5d5d;
+
+    --side-nav-background: #f7f9fb;
+    --header-background: #fafbfc;
+    --header-foreground: var(--page-foreground-color);
+
+    --code-background: #f3f5f8;
+    --fragment-background: #f3f5f8;
+    --fragment-foreground: #1f2328;
+}
+
+html.dark-mode {
+    --primary-color: #62a5ff;
+    --primary-dark-color: #4a90e2;
+    --primary-light-color: #8cc1ff;
+    --page-background-color: #14181d;
+    --page-foreground-color: #d7dde4;
+    --side-nav-background: #1a1f25;
+    --code-background: #1a1f25;
+    --fragment-background: #1a1f25;
+    --fragment-foreground: #e6edf3;
+}
+
+/* Tighten the title bar */
+#projectname {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+#projectbrief {
+    color: var(--page-secondary-foreground-color);
+    font-size: 14px;
+}
+
+/* Tables — slightly more breathing room, match OpenCV docs */
+.contents table.markdownTable th,
+.contents table.markdownTable td {
+    padding: 8px 12px;
+}
+.contents table.markdownTable th {
+    background: var(--header-background);
+    font-weight: 600;
+}
+
+/* Code fences inside markdown pages — keep them flush, no ugly border */
+div.fragment {
+    border-radius: 6px;
+    border: 1px solid var(--separator-color, #e1e4e8);
+    padding: 12px 16px;
+}
+
+/* Notes / warnings — calmer, OpenCV-style */
+dl.note, dl.warning, dl.attention, dl.todo, dl.bug, dl.deprecated {
+    border-left-width: 4px;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin: 16px 0;
+}
+
+/* Tighter sidebar typography */
+#side-nav .ui-resizable-e {
+    background: transparent;
+}
+
+/* Top nav search — wider field */
+#MSearchBox {
+    min-width: 220px;
+}

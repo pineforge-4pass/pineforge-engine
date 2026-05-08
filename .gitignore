@@ -4,6 +4,10 @@ build-*/
 out/
 cmake-build-*/
 
+# Doxygen site (generated)
+docs/site/
+docs/_theme/doxygen-awesome/
+
 # CMake artefacts
 CMakeCache.txt
 CMakeFiles/

@@ -2,6 +2,10 @@
 
 > Deterministic PineScript v6 backtest runtime.
 
+📖 **[API Documentation →](https://pineforge-docs.pages.dev/)** — full C ABI reference,
+integration guides, FFI examples, and ABI stability contract. Built with Doxygen,
+hosted on Cloudflare Pages, rebuilt on every push to `main` and every release tag.
+
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
 The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **165 excellent + 2 strong + 1 stress probe at the 1× margin boundary** across 168 strategies (162 reference + 6 parity probes) under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.

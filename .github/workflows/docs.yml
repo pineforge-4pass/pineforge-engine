@@ -1,0 +1,74 @@
+name: docs
+
+# Build the API documentation with Doxygen and deploy to Cloudflare Pages.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN  - token with "Cloudflare Pages: Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID - your CF account id
+#
+# Required repository variables (or hard-code below):
+#   CF_PAGES_PROJECT      - the Cloudflare Pages project name
+#                           (defaults to "pineforge-docs" if unset)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  deployments: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CF_PROJECT: ${{ vars.CF_PAGES_PROJECT || 'pineforge-docs' }}
+      DEPLOY_BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need tags for git describe in build.sh
+
+      - name: Install doxygen + graphviz
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen graphviz
+          doxygen --version
+          dot -V
+
+      - name: Build site
+        run: bash docs/build.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          path: docs/site/html
+          retention-days: 7
+
+      - name: Sanitize deploy branch name
+        id: deploy
+        run: |
+          # CF Pages branch names: alphanumerics, dashes, underscores, slashes.
+          SAFE="$(printf '%s' "$DEPLOY_BRANCH" | tr -c 'A-Za-z0-9._/-' '-')"
+          echo "branch=$SAFE" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name != 'pull_request'
+        uses: cloudflare/wrangler-action@v3
+        env:
+          CF_PROJECT_NAME: ${{ env.CF_PROJECT }}
+          CF_DEPLOY_BRANCH: ${{ steps.deploy.outputs.branch }}
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            pages deploy docs/site/html
+            --project-name="$CF_PROJECT_NAME"
+            --branch="$CF_DEPLOY_BRANCH"

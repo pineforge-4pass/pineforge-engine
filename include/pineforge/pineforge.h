@@ -69,125 +69,128 @@
 extern "C" {
 #endif
 
-/* ── Magnifier distribution ──────────────────────────────────────── */
-/* Bar magnifier sub-bar sampling distribution. Layout-compatible with
- * the internal C++ `pineforge::MagnifierDistribution` enum class —
- * static_assert in c_abi.cpp guarantees the values match. */
+/** @defgroup pf_types Types
+ *  @brief POD types and enums passed across the C ABI.
+ *  @{
+ */
 
+/** Bar-magnifier sub-bar sampling distribution.
+ *
+ *  Selects how intra-bar synthetic ticks are placed when the bar
+ *  magnifier is enabled in #run_backtest_full. Layout-compatible with the
+ *  internal C++ `pineforge::MagnifierDistribution` enum class — a
+ *  `static_assert` in `c_abi.cpp` guarantees the integer values match. */
 typedef enum pf_magnifier_distribution_e {
-    PF_MAGNIFIER_UNIFORM       = 0,
-    PF_MAGNIFIER_COSINE        = 1,
-    PF_MAGNIFIER_TRIANGLE      = 2,
-    PF_MAGNIFIER_ENDPOINTS     = 3,  /* default — exact O,H,L,C points + uniform fill between */
-    PF_MAGNIFIER_FRONT_LOADED  = 4,
-    PF_MAGNIFIER_BACK_LOADED   = 5
+    PF_MAGNIFIER_UNIFORM       = 0, /**< Uniform spacing across the parent bar. */
+    PF_MAGNIFIER_COSINE        = 1, /**< Cosine-tapered density. */
+    PF_MAGNIFIER_TRIANGLE      = 2, /**< Triangle-tapered density. */
+    PF_MAGNIFIER_ENDPOINTS     = 3, /**< Default — exact O,H,L,C points plus uniform fill between. */
+    PF_MAGNIFIER_FRONT_LOADED  = 4, /**< Sample density biased toward bar open. */
+    PF_MAGNIFIER_BACK_LOADED   = 5  /**< Sample density biased toward bar close. */
 } pf_magnifier_distribution_t;
 
-/* ── Bar ─────────────────────────────────────────────────────────── */
-/* Single OHLCV bar pushed into the engine. Layout-compatible with the
- * internal C++ `pineforge::Bar` struct. */
-
+/** Single OHLCV bar pushed into the engine.
+ *
+ *  Layout-compatible with the internal C++ `pineforge::Bar` struct. */
 typedef struct pf_bar_s {
-    double  open;
-    double  high;
-    double  low;
-    double  close;
-    double  volume;
-    int64_t timestamp;  /* Unix milliseconds */
+    double  open;       /**< Open price.   */
+    double  high;       /**< High price.   */
+    double  low;        /**< Low price.    */
+    double  close;      /**< Close price.  */
+    double  volume;     /**< Bar volume.   */
+    int64_t timestamp;  /**< Bar open time, Unix milliseconds. */
 } pf_bar_t;
 
-/* ── Trade ───────────────────────────────────────────────────────── */
-/* Closed-trade record returned in pf_report_t::trades.
- * Layout-compatible with internal `pineforge::TradeC`. */
-
+/** Closed-trade record returned in pf_report_t::trades.
+ *
+ *  Layout-compatible with internal `pineforge::TradeC`. */
 typedef struct pf_trade_s {
-    int64_t entry_time;
-    int64_t exit_time;
-    double  entry_price;
-    double  exit_price;
-    double  pnl;
-    double  pnl_pct;
-    int     is_long;        /* 1 if long, 0 if short */
-    /* Max Adverse / Favorable Excursion in $ per unit qty.
-     * `max_runup` = peak favorable price travel (in trade direction).
-     * `max_drawdown` = peak adverse price travel (against trade). */
-    double  max_runup;
-    double  max_drawdown;
-    double  qty;
+    int64_t entry_time;     /**< Entry fill time (Unix ms). */
+    int64_t exit_time;      /**< Exit  fill time (Unix ms). */
+    double  entry_price;    /**< Entry fill price (incl. slippage). */
+    double  exit_price;     /**< Exit  fill price (incl. slippage). */
+    double  pnl;            /**< Net realized PnL in account currency. */
+    double  pnl_pct;        /**< Net realized PnL as a percentage of entry capital. */
+    int     is_long;        /**< 1 if long, 0 if short. */
+    double  max_runup;      /**< Peak favorable price travel during the trade ($/unit qty). */
+    double  max_drawdown;   /**< Peak adverse  price travel during the trade ($/unit qty). */
+    double  qty;            /**< Filled quantity. */
 } pf_trade_t;
 
-/* ── Security diagnostic (per request.security site) ─────────────── */
-/* Layout-compatible with internal `pineforge::SecurityDiagC`. */
-
+/** Per-`request.security()` site diagnostic counters.
+ *
+ *  Layout-compatible with internal `pineforge::SecurityDiagC`. */
 typedef struct pf_security_diag_s {
-    int     sec_id;
-    int64_t feed_count;
-    int64_t complete_count;
-    int64_t partial_count;
+    int     sec_id;          /**< Stable id for the request.security site. */
+    int64_t feed_count;      /**< Higher-TF feed bars consumed. */
+    int64_t complete_count;  /**< Evaluations on completed parent bars. */
+    int64_t partial_count;   /**< Evaluations on still-forming parent bars. */
 } pf_security_diag_t;
 
-/* ── Per-bar trace entry ─────────────────────────────────────────── */
-/* Emitted by `// @pf-trace name=expr` pragmas in the source script.
- * Layout-compatible with internal `pineforge::TraceEntryC`. */
-
+/** Single per-bar trace entry.
+ *
+ *  Emitted when the source script contains `// @pf-trace name=expr`
+ *  pragmas and tracing is enabled via #strategy_set_trace_enabled.
+ *  Layout-compatible with internal `pineforge::TraceEntryC`. */
 typedef struct pf_trace_entry_s {
-    int64_t timestamp;
-    int32_t bar_index;
-    int32_t name_id;        /* index into pf_report_t::trace_names */
-    double  value;
+    int64_t timestamp;  /**< Bar timestamp (Unix ms). */
+    int32_t bar_index;  /**< Zero-based bar index. */
+    int32_t name_id;    /**< Index into pf_report_t::trace_names. */
+    double  value;      /**< Traced expression value on this bar. */
 } pf_trace_entry_t;
 
-/* ── Backtest report ─────────────────────────────────────────────── */
-/* Filled by pf_run / pf_run_full and freed via pf_report_free.
- * Layout-compatible with internal `pineforge::ReportC`.
+/** Backtest report filled by #run_backtest / #run_backtest_full.
  *
- * Lifetime: arrays (`trades`, `security_diag`, `trace`, `trace_names`)
- * are heap-allocated by the runtime in pf_run / pf_run_full. The caller
- * must invoke pf_report_free exactly once on each filled report.
- * `trace_names` strings are owned by the live strategy handle until
- * pf_strategy_destroy. */
+ *  Layout-compatible with internal `pineforge::ReportC`.
+ *
+ *  ### Ownership and lifetime
+ *  The struct itself is caller-owned (typically stack). The embedded
+ *  arrays (`trades`, `security_diag`, `trace`, `trace_names`) are
+ *  heap-allocated by the runtime; the caller must invoke #report_free
+ *  exactly once on each filled report. `trace_names` string pointers
+ *  remain owned by the strategy handle until #strategy_free. */
 
 typedef struct pf_report_s {
     /* Trades */
-    int             total_trades;
-    pf_trade_t*     trades;
-    int             trades_len;
-    double          net_profit;
+    int             total_trades;       /**< Closed-trade count (== trades_len). */
+    pf_trade_t*     trades;             /**< Heap array of closed trades. */
+    int             trades_len;         /**< Length of #trades. */
+    double          net_profit;         /**< Sum of all closed-trade PnL. */
 
     /* Bar processing counts */
-    int64_t         input_bars_processed;
-    int64_t         script_bars_processed;
+    int64_t         input_bars_processed;   /**< Source-feed bars consumed. */
+    int64_t         script_bars_processed;  /**< Script-timeframe bars evaluated. */
 
-    /* Security diagnostics (request.security strategies) */
-    int64_t         security_feeds_total;
-    int64_t         security_complete_total;
-    int64_t         security_partial_total;
+    /* Security diagnostics */
+    int64_t         security_feeds_total;     /**< Total higher-TF feed bars across all security sites. */
+    int64_t         security_complete_total;  /**< Total complete-bar evals across all security sites. */
+    int64_t         security_partial_total;   /**< Total partial-bar evals across all security sites. */
 
     /* Bar magnifier diagnostics */
-    int64_t         magnifier_sub_bars_total;
-    int64_t         magnifier_sample_ticks_total;
+    int64_t         magnifier_sub_bars_total;     /**< Sub-bars synthesized by the magnifier. */
+    int64_t         magnifier_sample_ticks_total; /**< Sample ticks visited by the magnifier. */
 
     /* Timeframe metadata */
-    int             input_tf_seconds;
-    int             script_tf_seconds;
-    int             script_tf_ratio;
-    int             needs_aggregation;
-    int             bar_magnifier_enabled;
+    int             input_tf_seconds;       /**< Detected/configured input timeframe (seconds). */
+    int             script_tf_seconds;      /**< Script timeframe (seconds). */
+    int             script_tf_ratio;        /**< script_tf_seconds / input_tf_seconds. */
+    int             needs_aggregation;      /**< 1 if input → script TF aggregation was performed. */
+    int             bar_magnifier_enabled;  /**< 1 if magnifier was active for this run. */
 
-    /* Per-security feed/eval counters (one entry per request.security site) */
-    pf_security_diag_t* security_diag;
-    int                 security_diag_len;
+    /* Per-security feed/eval counters */
+    pf_security_diag_t* security_diag;      /**< One entry per request.security site. */
+    int                 security_diag_len;  /**< Length of #security_diag. */
 
-    /* Per-bar trace records (only populated when trace was enabled) */
-    pf_trace_entry_t*   trace;
-    int                 trace_len;
-    const char**        trace_names;
-    int                 trace_names_len;
+    /* Per-bar trace records */
+    pf_trace_entry_t*   trace;              /**< Per-bar trace records (empty unless tracing enabled). */
+    int                 trace_len;          /**< Length of #trace. */
+    const char**        trace_names;        /**< Names indexed by pf_trace_entry_t::name_id. */
+    int                 trace_names_len;    /**< Length of #trace_names. */
 } pf_report_t;
 
-/* ── Strategy handle ─────────────────────────────────────────────── */
-/* Opaque pointer to a compiled strategy instance. */
+/** @} */ /* end of pf_types */
 
+/** Opaque handle to a compiled strategy instance. */
 typedef void* pf_strategy_t;
 
 /* ───────────────────────────────────────────────────────────────────
@@ -204,34 +207,49 @@ typedef void* pf_strategy_t;
  * unprefixed forms.
  */
 
-/* Allocate a new strategy instance. The optional `params_json` argument
- * is currently ignored; pass NULL. Returns NULL on allocation failure.
- * Caller owns the returned handle and must release it via strategy_free. */
+/** @defgroup pf_lifecycle Strategy lifecycle
+ *  @brief Create, run, and destroy a compiled strategy instance.
+ *  @{
+ */
+
+/** Allocate a new strategy instance.
+ *
+ *  @param params_json  Currently ignored; pass `NULL`.
+ *  @return Strategy handle, or `NULL` on allocation failure.
+ *
+ *  Caller owns the returned handle and must release it via #strategy_free. */
 PF_API pf_strategy_t strategy_create(const char* params_json);
 
-/* Release a strategy handle previously returned by strategy_create.
- * Safe to call with NULL. Invalidates any pf_report_t::trace_names
- * pointers obtained from this strategy. */
+/** Release a strategy handle previously returned by #strategy_create.
+ *
+ *  Safe to call with `NULL`. Invalidates any `pf_report_t::trace_names`
+ *  pointers obtained from this strategy. */
 PF_API void strategy_free(pf_strategy_t s);
 
-/* Run a backtest using auto-detected timeframe and no bar magnifier.
- * `bars` must be non-NULL with length `n` >= 0. `out` must be non-NULL;
- * its fields are populated with heap allocations the caller must free
- * via pf_report_free. */
+/** Run a backtest with auto-detected timeframe and no bar magnifier.
+ *
+ *  @param s     Strategy handle from #strategy_create.
+ *  @param bars  Non-NULL pointer to OHLCV bars (length @p n).
+ *  @param n     Bar count (>= 0).
+ *  @param out   Non-NULL output report. Fields are populated with heap
+ *               allocations the caller must release via #report_free. */
 PF_API void run_backtest(pf_strategy_t s,
                          pf_bar_t* bars,
                          int n,
                          pf_report_t* out);
 
-/* Run a backtest with full timeframe / magnifier configuration.
+/** Run a backtest with explicit timeframe and magnifier configuration.
  *
- * `input_tf` / `script_tf` may be empty strings — the runtime then
- * auto-detects the input timeframe from bar timestamps and defaults
- * `script_tf` to it.
- *
- * `bar_magnifier` is treated as boolean (0 / non-zero).
- * `magnifier_samples` is the number of intra-bar samples per parent bar
- * when magnifier is enabled (typical: 4). */
+ *  @param s                  Strategy handle.
+ *  @param bars               Bar feed.
+ *  @param n                  Bar count.
+ *  @param input_tf           Input timeframe ("1", "5", "15", "60", "1D", ...).
+ *                            Empty string → auto-detect from bar timestamps.
+ *  @param script_tf          Script timeframe. Empty string → defaults to @p input_tf.
+ *  @param bar_magnifier      Boolean (0 / non-zero) — enable bar magnifier.
+ *  @param magnifier_samples  Sub-bar samples per parent bar (typical: 4).
+ *  @param magnifier_dist     Sampling distribution (see #pf_magnifier_distribution_t).
+ *  @param out                Output report. Free with #report_free. */
 PF_API void run_backtest_full(pf_strategy_t s,
                               pf_bar_t* bars,
                               int n,
@@ -242,32 +260,46 @@ PF_API void run_backtest_full(pf_strategy_t s,
                               pf_magnifier_distribution_t magnifier_dist,
                               pf_report_t* out);
 
-/* Free heap allocations attached to a filled report. The pf_report_t
- * struct itself is caller-owned (typically stack); only the embedded
- * arrays are runtime-allocated. Safe to call with NULL or with a report
- * that has already been freed (idempotent best-effort). */
+/** Free heap arrays attached to a filled report.
+ *
+ *  Idempotent. Safe to call with `NULL` or an already-freed report.
+ *  The `pf_report_t` struct itself is caller-owned. */
 PF_API void report_free(pf_report_t* report);
 
-/* ── Per-strategy configuration ─────────────────────────────────── */
-/* Set a Pine `input.*()` value override before running a backtest.
- * `key` is the input's title (or fallback identifier); `value` is the
- * serialized form (numbers as decimal strings, booleans as "true" /
- * "false"). Calls after run_backtest are accepted but only take effect
- * on subsequent runs. */
+/** @} */ /* end of pf_lifecycle */
+
+/** @defgroup pf_config Per-strategy configuration
+ *  @brief Override @c input.*() values, `strategy(...)` params, and runtime knobs.
+ *  @{
+ */
+
+/** Override a Pine @c input.*() value before the next run.
+ *
+ *  @param s      Strategy handle.
+ *  @param key    The input's title (or fallback identifier).
+ *  @param value  Serialized value — numbers as decimal strings,
+ *                booleans as `"true"` / `"false"`.
+ *
+ *  Calls after #run_backtest are accepted but only take effect on
+ *  subsequent runs. */
 PF_API void strategy_set_input(pf_strategy_t s,
                                const char* key,
                                const char* value);
 
-/* Override a `strategy(...)` declaration parameter — keys include
- * `initial_capital`, `commission_value`, `default_qty_value`,
- * `pyramiding`, `slippage`, `process_orders_on_close`,
- * `close_entries_rule`, `default_qty_type`, `commission_type`. */
+/** Override a `strategy(...)` declaration parameter.
+ *
+ *  Recognised @p key values: `initial_capital`, `commission_value`,
+ *  `default_qty_value`, `pyramiding`, `slippage`,
+ *  `process_orders_on_close`, `close_entries_rule`, `default_qty_type`,
+ *  `commission_type`. */
 PF_API void strategy_set_override(pf_strategy_t s,
                                   const char* key,
                                   const char* value);
 
-/* Toggle volume-weighted magnifier sampling. Has no effect unless bar
- * magnifier is enabled in run_backtest_full. */
+/** Toggle volume-weighted bar-magnifier sampling.
+ *
+ *  Has no effect unless the bar magnifier is enabled in
+ *  #run_backtest_full. */
 PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t s,
                                                    int on);
 
@@ -275,32 +307,45 @@ PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t s,
  * RUNTIME LIBRARY EXPORTS — implemented in libruntime
  * ─────────────────────────────────────────────────────────────────── */
 
-/* Toggle per-bar trace recording. Default off (zero-cost when off).
- * The harness calls this to enable trace capture for a specific
- * validation run; corresponding `// @pf-trace` pragmas in the source
- * script must already have been compiled into the .so. */
+/** Toggle per-bar trace recording. Default off (zero-cost when off).
+ *
+ *  Enables capture for `// @pf-trace name=expr` pragmas already compiled
+ *  into the strategy `.so`. Trace records appear in pf_report_t::trace. */
 PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
 
-/* Set the first Unix-millisecond timestamp at which strategy order commands
- * may create/cancel/fill orders. Earlier bars still execute user code and warm
- * TA/series state, but strategy.entry/order/exit/close commands are ignored. */
+/** Set the earliest Unix-ms timestamp at which strategy order commands
+ *  may fire.
+ *
+ *  Earlier bars still execute user code and warm TA/series state, but
+ *  `strategy.entry/order/exit/close` commands are ignored. */
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms);
 
-/* ── Version query ──────────────────────────────────────────────── */
+/** @} */ /* end of pf_config */
 
+/** @defgroup pf_version Version query
+ *  @brief Runtime version metadata.
+ *  @{
+ */
+
+/** Runtime version descriptor returned by #pf_version_get. */
 typedef struct pf_version_s {
-    int         major;
-    int         minor;
-    int         patch;
-    const char* commit_sha;  /* may be empty string if unknown */
+    int         major;       /**< Major version. */
+    int         minor;       /**< Minor version. */
+    int         patch;       /**< Patch version. */
+    const char* commit_sha;  /**< Short git commit SHA, or `""` if unknown. */
 } pf_version_t;
 
+/** @return Linked runtime version. */
 PF_API pf_version_t pf_version_get(void);
 
-/* Full git-derived version descriptor: "MAJOR.MINOR.PATCH[-N-gSHA[-dirty]]"
- * for git checkouts, plain "MAJOR.MINOR.PATCH" for tarball builds. Pointer
- * is to a static string with program-lifetime; do not free. */
+/** Full git-derived version descriptor.
+ *
+ *  Returns `"MAJOR.MINOR.PATCH[-N-gSHA[-dirty]]"` for git checkouts, or
+ *  plain `"MAJOR.MINOR.PATCH"` for tarball builds. The pointer is to a
+ *  static string with program lifetime; do not free. */
 PF_API const char* pf_version_string(void);
+
+/** @} */ /* end of pf_version */
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -1,0 +1,218 @@
+# Doxyfile for PineForge runtime — public C ABI documentation.
+#
+# Build:
+#   bash docs/build.sh        # downloads doxygen-awesome-css, runs doxygen
+#
+# Output: docs/site/html/
+
+# ── Project identity ──────────────────────────────────────────────────────
+PROJECT_NAME           = "PineForge"
+PROJECT_BRIEF          = "Deterministic PineScript v6 backtest runtime — C ABI reference"
+PROJECT_LOGO           =
+PROJECT_NUMBER         =     # filled in by docs/build.sh from VERSION
+
+OUTPUT_DIRECTORY       = site
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+OUTPUT_LANGUAGE        = English
+BRIEF_MEMBER_DESC      = YES
+REPEAT_BRIEF           = YES
+ALWAYS_DETAILED_SEC    = NO
+INLINE_INHERITED_MEMB  = NO
+FULL_PATH_NAMES        = NO
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MULTILINE_CPP_IS_BRIEF = NO
+TAB_SIZE               = 4
+OPTIMIZE_OUTPUT_FOR_C  = YES
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 4
+AUTOLINK_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = NO
+DISTRIBUTE_GROUP_DOC   = YES
+GROUP_NESTED_COMPOUNDS = NO
+SUBGROUPING            = YES
+INLINE_GROUPED_CLASSES = NO
+TYPEDEF_HIDES_STRUCT   = YES
+
+# ── Build options ─────────────────────────────────────────────────────────
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_PRIV_VIRTUAL   = NO
+EXTRACT_PACKAGE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = NO
+EXTRACT_LOCAL_METHODS  = NO
+EXTRACT_ANON_NSPACES   = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+HIDE_FRIEND_COMPOUNDS  = YES
+HIDE_IN_BODY_DOCS      = YES
+INTERNAL_DOCS          = NO
+CASE_SENSE_NAMES       = SYSTEM
+HIDE_SCOPE_NAMES       = NO
+HIDE_COMPOUND_REFERENCE= NO
+SHOW_INCLUDE_FILES     = YES
+SHOW_GROUPED_MEMB_INC  = NO
+FORCE_LOCAL_INCLUDES   = NO
+INLINE_INFO            = YES
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+SORT_MEMBERS_CTORS_1ST = NO
+SORT_GROUP_NAMES       = NO
+SORT_BY_SCOPE_NAME     = NO
+STRICT_PROTO_MATCHING  = NO
+GENERATE_TODOLIST      = NO
+GENERATE_TESTLIST      = NO
+GENERATE_BUGLIST       = NO
+GENERATE_DEPRECATEDLIST= YES
+SHOW_USED_FILES        = YES
+SHOW_FILES             = YES
+SHOW_NAMESPACES        = NO
+LAYOUT_FILE            =
+
+# ── Warnings ──────────────────────────────────────────────────────────────
+QUIET                  = NO
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO
+WARN_FORMAT            = "$file:$line: $text"
+
+# ── Inputs ────────────────────────────────────────────────────────────────
+# Public C ABI header + manually-written narrative pages. The internal
+# C++ headers are deliberately excluded (no stability guarantee).
+INPUT                  = ../include/pineforge/pineforge.h \
+                         pages/index.md \
+                         pages/getting-started.md \
+                         pages/install.md \
+                         pages/integration-cmake.md \
+                         pages/lifecycle.md \
+                         pages/report-schema.md \
+                         pages/configuration.md \
+                         pages/magnifier.md \
+                         pages/timeframes.md \
+                         pages/ffi-python.md \
+                         pages/tutorial-macd.md \
+                         pages/examples-c.md \
+                         pages/examples-python-sweep.md \
+                         pages/examples-multi.md \
+                         pages/examples-magnifier.md \
+                         pages/examples-rust.md \
+                         pages/abi-stability.md \
+                         pages/coverage.md
+
+USE_MDFILE_AS_MAINPAGE = pages/index.md
+INPUT_ENCODING         = UTF-8
+FILE_PATTERNS          = *.h *.hpp *.md
+RECURSIVE              = NO
+EXCLUDE_PATTERNS       =
+EXCLUDE_SYMBOLS        =
+
+EXAMPLE_PATH           = ../tutorial \
+                         ../cmake/smoke_consumer
+EXAMPLE_PATTERNS       = *.c *.cpp *.py *.cmake
+EXAMPLE_RECURSIVE      = YES
+
+IMAGE_PATH             =
+
+# ── Source browser ────────────────────────────────────────────────────────
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
+REFERENCES_LINK_SOURCE = YES
+SOURCE_TOOLTIPS        = YES
+USE_HTAGS              = NO
+VERBATIM_HEADERS       = YES
+
+# ── Indexing ──────────────────────────────────────────────────────────────
+ALPHABETICAL_INDEX     = YES
+
+# ── HTML output ───────────────────────────────────────────────────────────
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+
+# OpenCV-style polish via the doxygen-awesome-css theme.
+# docs/build.sh fetches it into docs/_theme/doxygen-awesome.
+HTML_HEADER            = _theme/header.html
+HTML_FOOTER            = _theme/footer.html
+HTML_EXTRA_STYLESHEET  = _theme/doxygen-awesome/doxygen-awesome.css \
+                         _theme/doxygen-awesome/doxygen-awesome-sidebar-only.css \
+                         _theme/doxygen-awesome/doxygen-awesome-sidebar-only-darkmode-toggle.css \
+                         _theme/custom.css
+HTML_EXTRA_FILES       = _theme/doxygen-awesome/doxygen-awesome-darkmode-toggle.js \
+                         _theme/doxygen-awesome/doxygen-awesome-fragment-copy-button.js \
+                         _theme/doxygen-awesome/doxygen-awesome-paragraph-link.js \
+                         _theme/doxygen-awesome/doxygen-awesome-interactive-toc.js \
+                         _theme/doxygen-awesome/doxygen-awesome-tabs.js
+HTML_COLORSTYLE        = LIGHT
+HTML_COLORSTYLE_HUE    = 209
+HTML_COLORSTYLE_SAT    = 255
+HTML_COLORSTYLE_GAMMA  = 113
+HTML_DYNAMIC_MENUS     = YES
+HTML_DYNAMIC_SECTIONS  = NO
+HTML_INDEX_NUM_ENTRIES = 100
+GENERATE_DOCSET        = NO
+GENERATE_HTMLHELP      = NO
+GENERATE_QHP           = NO
+GENERATE_ECLIPSEHELP   = NO
+DISABLE_INDEX          = NO
+GENERATE_TREEVIEW      = YES
+FULL_SIDEBAR           = NO
+ENUM_VALUES_PER_LINE   = 1
+TREEVIEW_WIDTH         = 335
+EXT_LINKS_IN_WINDOW    = NO
+HTML_FORMULA_FORMAT    = png
+FORMULA_FONTSIZE       = 10
+USE_MATHJAX            = NO
+SEARCHENGINE           = YES
+SERVER_BASED_SEARCH    = NO
+EXTERNAL_SEARCH        = NO
+
+# ── Other formats off ─────────────────────────────────────────────────────
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+GENERATE_DOCBOOK       = NO
+GENERATE_AUTOGEN_DEF   = NO
+
+# ── Preprocessor ──────────────────────────────────────────────────────────
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+SEARCH_INCLUDES        = YES
+INCLUDE_PATH           = ../include
+PREDEFINED             = PF_API= \
+                         __cplusplus= \
+                         DOXYGEN_SHOULD_SKIP_THIS
+
+# ── Diagrams ──────────────────────────────────────────────────────────────
+HAVE_DOT               = YES
+DOT_NUM_THREADS        = 0
+CLASS_GRAPH            = NO
+COLLABORATION_GRAPH    = NO
+GROUP_GRAPHS           = NO
+UML_LOOK               = NO
+TEMPLATE_RELATIONS     = NO
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = YES
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+GRAPHICAL_HIERARCHY    = NO
+DIRECTORY_GRAPH        = NO
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+DOT_PATH               =
+DOT_GRAPH_MAX_NODES    = 50
+MAX_DOT_GRAPH_DEPTH    = 0
+GENERATE_LEGEND        = YES
+DOT_CLEANUP            = YES
+
+# ── Aliases for nicer markdown in API comments ────────────────────────────
+ALIASES                = "stability=@par Stability:^^"
