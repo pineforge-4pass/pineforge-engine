@@ -62,13 +62,11 @@ jobs:
       - name: Deploy to Cloudflare Pages
         if: github.event_name != 'pull_request'
         uses: cloudflare/wrangler-action@v3
-        env:
-          CF_PROJECT_NAME: ${{ env.CF_PROJECT }}
-          CF_DEPLOY_BRANCH: ${{ steps.deploy.outputs.branch }}
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: >-
             pages deploy docs/site/html
-            --project-name="$CF_PROJECT_NAME"
-            --branch="$CF_DEPLOY_BRANCH"
+            --project-name=${{ env.CF_PROJECT }}
+            --branch=${{ steps.deploy.outputs.branch }}
+            --commit-dirty=true
