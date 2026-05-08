@@ -48,7 +48,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # PAT (contents:write) — bypasses branch-protection rule that
+          # requires PRs into main. GITHUB_TOKEN does not bypass.
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Configure git identity
         run: |
