@@ -2,6 +2,12 @@
  * Light is the default theme; .dark-mode block flips it. */
 
 html {
+    /* doxygen-awesome's --top-height defaults to 120px (covers titlearea
+       only). With DISABLE_INDEX=NO the search-bearing #main-nav extends
+       to ~140px, so the side-nav starts 20px too high and the search
+       box overlaps the top of the navigation tree. Bump it. */
+    --top-height: 140px;
+
     /* Calm OpenCV-ish blue accent */
     --primary-color:        #1565c0;
     --primary-dark-color:   #0d47a1;
