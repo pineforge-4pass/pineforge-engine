@@ -229,12 +229,16 @@ jobs:
         include:
           - triple: linux-x86_64
             runner: ubuntu-22.04
+            cmake_extra: ""
           - triple: linux-aarch64
             runner: ubuntu-22.04-arm
-          - triple: macos-x86_64
-            runner: macos-13
-          - triple: macos-arm64
+            cmake_extra: ""
+          # Single universal slice covers x86_64 + arm64 macs. macos-13
+          # (Intel) runner pool is being phased out and queues for >30min;
+          # cross-build a fat archive on macos-latest (arm64) instead.
+          - triple: macos-universal
             runner: macos-latest
+            cmake_extra: "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -258,17 +262,21 @@ jobs:
 
       - name: Configure
         env:
-          TAG:    ${{ needs.release.outputs.tag }}
-          TRIPLE: ${{ matrix.triple }}
+          TAG:         ${{ needs.release.outputs.tag }}
+          TRIPLE:      ${{ matrix.triple }}
+          CMAKE_EXTRA: ${{ matrix.cmake_extra }}
         run: |
           set -euo pipefail
           stage="stage/pineforge-${TAG}-${TRIPLE}"
           echo "STAGE_DIR=${stage}" >> "$GITHUB_ENV"
+          # CMAKE_EXTRA is unquoted so multi-flag strings (e.g. mac fat
+          # archive flag) split into separate argv entries.
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DPINEFORGE_BUILD_TESTS=OFF \
             -DPINEFORGE_BUILD_TUTORIAL=OFF \
-            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}"
+            -DCMAKE_INSTALL_PREFIX="${PWD}/${stage}" \
+            ${CMAKE_EXTRA}
 
       - name: Build
         run: cmake --build build -j 4
