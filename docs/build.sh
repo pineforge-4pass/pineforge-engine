@@ -15,6 +15,12 @@ cd "$(dirname "$0")"
 DOXYGEN_AWESOME_VERSION="${DOXYGEN_AWESOME_VERSION:-v2.3.4}"
 THEME_DIR="_theme/doxygen-awesome"
 
+# Prefer Doxygen 1.13.2 if installed (matches CI). Falls back to whatever
+# `doxygen` is on $PATH otherwise.
+if [[ -x "/Volumes/Doxygen/Doxygen.app/Contents/Resources/doxygen" ]]; then
+    export PATH="/Volumes/Doxygen/Doxygen.app/Contents/Resources:$PATH"
+fi
+
 # 1. Fetch doxygen-awesome-css if missing or wrong version.
 if [[ ! -f "$THEME_DIR/.version" ]] \
    || [[ "$(cat "$THEME_DIR/.version" 2>/dev/null)" != "$DOXYGEN_AWESOME_VERSION" ]]; then

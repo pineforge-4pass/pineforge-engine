@@ -1,76 +1,315 @@
-/* PineForge — light overrides on top of doxygen-awesome.
-   Keep this small; the heavy lifting lives in doxygen-awesome.css. */
+/* PineForge custom overrides on top of doxygen-awesome.
+ * Light is the default theme; .dark-mode block flips it. */
 
 html {
-    /* OpenCV-ish accent — calmer than the awesome default red-ish hue */
-    --primary-color: #1565c0;
-    --primary-dark-color: #0d47a1;
-    --primary-light-color: #5e92f3;
-    --page-foreground-color: #2c2c2c;
+    /* Calm OpenCV-ish blue accent */
+    --primary-color:        #1565c0;
+    --primary-dark-color:   #0d47a1;
+    --primary-light-color:  #5e92f3;
+
+    --page-background-color:           #ffffff;
+    --page-foreground-color:           #2c2c2c;
     --page-secondary-foreground-color: #5d5d5d;
 
-    --side-nav-background: #f7f9fb;
-    --header-background: #fafbfc;
-    --header-foreground: var(--page-foreground-color);
+    --side-nav-background:    #f8fafc;
+    --side-nav-foreground:    #1f2328;
+    --header-background:      #ffffff;
+    --separator-color:        #e1e4e8;
 
-    --code-background: #f3f5f8;
-    --fragment-background: #f3f5f8;
-    --fragment-foreground: #1f2328;
+    --code-background:        #f3f5f8;
+    --fragment-background:    #f6f8fa;
+    --fragment-foreground:    #1f2328;
+
+    /* Typography */
+    --font-family:            -apple-system, BlinkMacSystemFont, "Segoe UI",
+                              "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-family-monospace:  "SF Mono", Menlo, Consolas, "Liberation Mono",
+                              monospace;
+    --content-line-height:    1.65;
+    --tree-item-height:       28px;
 }
 
 html.dark-mode {
-    --primary-color: #62a5ff;
-    --primary-dark-color: #4a90e2;
-    --primary-light-color: #8cc1ff;
-    --page-background-color: #14181d;
-    --page-foreground-color: #d7dde4;
-    --side-nav-background: #1a1f25;
-    --code-background: #1a1f25;
-    --fragment-background: #1a1f25;
-    --fragment-foreground: #e6edf3;
+    --primary-color:        #62a5ff;
+    --primary-dark-color:   #4a90e2;
+    --primary-light-color:  #8cc1ff;
+
+    --page-background-color:           #14181d;
+    --page-foreground-color:           #d7dde4;
+    --page-secondary-foreground-color: #9aa3ad;
+
+    --side-nav-background:    #1a1f25;
+    --side-nav-foreground:    #d7dde4;
+    --header-background:      #14181d;
+    --separator-color:        #2a3038;
+
+    --code-background:        #1a1f25;
+    --fragment-background:    #1a1f25;
+    --fragment-foreground:    #e6edf3;
 }
 
-/* Tighten the title bar */
+/* ───────────────────────────── Title bar ────────────────────────── */
 #projectname {
     font-weight: 600;
+    font-size: 22px;
     letter-spacing: -0.01em;
 }
-#projectbrief {
+#projectnumber {
+    font-weight: 400;
     color: var(--page-secondary-foreground-color);
     font-size: 14px;
 }
-
-/* Tables — slightly more breathing room, match OpenCV docs */
-.contents table.markdownTable th,
-.contents table.markdownTable td {
-    padding: 8px 12px;
-}
-.contents table.markdownTable th {
-    background: var(--header-background);
-    font-weight: 600;
+#projectbrief {
+    color: var(--page-secondary-foreground-color);
+    font-size: 13px;
+    line-height: 1.4;
+    margin-top: 2px;
 }
 
-/* Code fences inside markdown pages — keep them flush, no ugly border */
-div.fragment {
+/* ───────────────────────────── Side nav ─────────────────────────── */
+#side-nav {
+    background: var(--side-nav-background);
+    border-right: 1px solid var(--separator-color);
+}
+#nav-tree {
+    background: transparent;
+    padding: 8px 0;
+    font-size: 14px;
+}
+#nav-tree .item {
+    line-height: 1.6;
+    padding: 3px 0;
+}
+#nav-tree a {
+    color: var(--side-nav-foreground);
+    text-decoration: none;
+}
+#nav-tree a:hover {
+    color: var(--primary-color);
+}
+#nav-tree .selected > a,
+#nav-tree .selected > a:visited {
+    color: #ffffff !important;
+    background: var(--primary-color);
+    border-radius: 4px;
+    padding: 2px 6px;
+    margin-right: 6px;
+}
+
+/* Indentation: doxygen uses inline padding-left per depth. Tighten it. */
+#nav-tree .children_ul {
+    padding-left: 14px;
+}
+
+/* Resizer handle — slimmer */
+.ui-resizable-e {
+    width: 4px !important;
+    background: transparent;
+}
+.ui-resizable-e:hover {
+    background: var(--primary-light-color);
+}
+
+/* ───────────────────────────── Search box ───────────────────────── */
+#MSearchBox {
+    background: var(--page-background-color);
+    border: 1px solid var(--separator-color);
     border-radius: 6px;
-    border: 1px solid var(--separator-color, #e1e4e8);
-    padding: 12px 16px;
+    padding: 4px 8px;
+    margin: 8px 12px;
+    box-shadow: none;
+    width: calc(100% - 24px) !important;
+    box-sizing: border-box;
+}
+#MSearchField {
+    color: var(--page-foreground-color);
+    font-size: 13px;
+}
+#MSearchSelect {
+    margin-right: 4px;
 }
 
-/* Notes / warnings — calmer, OpenCV-style */
-dl.note, dl.warning, dl.attention, dl.todo, dl.bug, dl.deprecated {
+/* Dark-mode toggle button — keep top-right pinned */
+#MSearchBox + #MSearchSelectExt,
+.tabs2 .alter-theme-button { display: none; }
+
+/* ───────────────────────────── Content area ─────────────────────── */
+#doc-content {
+    background: var(--page-background-color);
+}
+.contents {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 24px 40px 48px;
+    font-size: 15px;
+    line-height: var(--content-line-height);
+}
+.contents h1 {
+    font-size: 28px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--separator-color);
+    padding-bottom: 12px;
+    margin-top: 0;
+    margin-bottom: 18px;
+}
+.contents h2 {
+    font-size: 22px;
+    font-weight: 600;
+    margin-top: 36px;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--separator-color);
+}
+.contents h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-top: 24px;
+    margin-bottom: 10px;
+}
+.contents h4 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-top: 18px;
+    margin-bottom: 6px;
+}
+
+.contents p {
+    margin: 12px 0;
+}
+
+/* ───────────────────────────── Tables ───────────────────────────── */
+.contents table.markdownTable,
+.contents table.doxtable {
+    border-collapse: collapse;
+    margin: 16px 0;
+    width: 100%;
+    font-size: 14px;
+}
+.contents table.markdownTable th,
+.contents table.markdownTable td,
+.contents table.doxtable th,
+.contents table.doxtable td {
+    padding: 8px 12px;
+    border: 1px solid var(--separator-color);
+}
+.contents table.markdownTable th,
+.contents table.doxtable th {
+    background: var(--side-nav-background);
+    font-weight: 600;
+    text-align: left;
+}
+.contents table.markdownTable tr:nth-child(even),
+.contents table.doxtable tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.015);
+}
+html.dark-mode .contents table.markdownTable tr:nth-child(even),
+html.dark-mode .contents table.doxtable tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+/* ───────────────────────────── Code blocks ──────────────────────── */
+div.fragment {
+    background: var(--fragment-background);
+    border: 1px solid var(--separator-color);
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    font-family: var(--font-family-monospace);
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-x: auto;
+}
+.line {
+    line-height: 1.55;
+}
+
+/* Inline code */
+code, .tt {
+    background: var(--code-background);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: var(--font-family-monospace);
+    font-size: 0.9em;
+}
+
+/* ───────────────────────────── Notes / warnings ─────────────────── */
+dl.note, dl.warning, dl.attention, dl.bug, dl.deprecated, dl.todo {
     border-left-width: 4px;
     border-radius: 4px;
     padding: 12px 16px;
     margin: 16px 0;
+    background: var(--side-nav-background);
+}
+dl.note   { border-left-color: var(--primary-color); }
+dl.warning, dl.attention { border-left-color: #d97706; }
+
+/* ───────────────────────────── Tabbed (custom) ──────────────────── */
+.tabbed > ul {
+    list-style: none;
+    padding: 0;
+    margin: 12px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    border-bottom: 1px solid var(--separator-color);
+}
+.tabbed > ul > li {
+    margin: 0;
+}
+.tabbed > ul > li > b.tab-title {
+    display: inline-block;
+    padding: 8px 14px;
+    cursor: default;
+    color: var(--page-secondary-foreground-color);
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+}
+.tabbed > ul > li:hover > b.tab-title {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-light-color);
 }
 
-/* Tighter sidebar typography */
-#side-nav .ui-resizable-e {
-    background: transparent;
+/* ───────────────────────────── Footer ───────────────────────────── */
+.navpath ul {
+    background: var(--side-nav-background);
+    border-top: 1px solid var(--separator-color);
+    border-bottom: none;
+    padding: 6px 16px;
+    font-size: 12px;
+}
+.navpath li.footer {
+    color: var(--page-secondary-foreground-color);
 }
 
-/* Top nav search — wider field */
-#MSearchBox {
-    min-width: 220px;
+/* ───────────────────────────── Misc polish ──────────────────────── */
+a, a:visited {
+    color: var(--primary-color);
+    text-decoration: none;
+}
+a:hover {
+    color: var(--primary-dark-color);
+    text-decoration: underline;
+}
+
+hr {
+    border: none;
+    border-top: 1px solid var(--separator-color);
+    margin: 24px 0;
+}
+
+/* Title bar inside the project header — give it real breathing room */
+#titlearea {
+    border-bottom: 1px solid var(--separator-color);
+    background: var(--header-background);
+    padding: 12px 16px;
+}
+
+/* Drop the doxygen-generated hover smartmenu arrows that don't apply here */
+.tabs, .tabs2, .tabs3 {
+    background-image: none;
+    background-color: var(--header-background);
+    border-bottom: 1px solid var(--separator-color);
+}
+.tablist li {
+    background-image: none;
 }
