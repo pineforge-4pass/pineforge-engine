@@ -7,11 +7,17 @@ tutorial/
 ├── macd/
 │   ├── strategy.pine       Pine v6 reference
 │   └── generated.cpp       compiled C++ (becomes strategy.so)
+├── mtf/
+│   ├── strategy_htf.pine   HTF SMA filter via request.security
+│   ├── generated_htf.cpp   → strategy_htf.so
+│   ├── strategy_ltf.pine   intra-bar via request.security_lower_tf
+│   └── generated_ltf.cpp   → strategy_ltf.so
 ├── data/
 │   ├── btcusdt_15m_7d.csv  672 frozen bars (Binance)
 │   └── fetch_btcusdt.py    refresh from Binance public API
 ├── run.py                  ctypes harness + stats
 ├── run_advanced.py         parameter sweep using ABI overrides
+├── run_mtf.py              MTF demo — script_tf switch + lower_tf
 ├── run.sh                  one-shot: cmake build + run.py
 └── CMakeLists.txt
 ```
@@ -99,6 +105,44 @@ docker run --rm \
 
 Both env vars are JSON `{key: value}` objects (values stringified).
 Empty / unset → defaults from `strategy.pine`.
+
+## Multi-timeframe (MTF) demo
+
+Two extra `.so` files demonstrate the runtime's two MTF surfaces:
+
+- `tutorial/mtf/strategy_htf.so` — chart at 15m, HTF SMA trend filter
+  pulled in via `request.security`. Demonstrates **upward** aggregation
+  (input feed → coarser TF inside the strategy).
+- `tutorial/mtf/strategy_ltf.so` — chart at 15m (or any TF), intra-bar
+  1m sub-bars synthesized via `request.security_lower_tf` from each
+  chart bar's OHLC path. Demonstrates **downward** synthesis — PF's
+  design is that the input feed's resolution is the upper bound on what
+  the lower-TF target can be, with no separate finer feed (contrast
+  TradingView).
+
+Build and run:
+
+```bash
+cmake --build build --target strategy_tutorial_mtf_htf strategy_tutorial_mtf_ltf -j
+python3 tutorial/run_mtf.py
+```
+
+`run_mtf.py` prints three tables, each with the exact
+`run_backtest_full(...)` call signature above it:
+
+1. **Table A** — `script_tf` sweep (`b""`, `b"15"`, `b"60"`, `b"240"`)
+   over a fixed input feed. Shows how the same compiled `.so` reinterprets
+   cadence per run.
+2. **Table B** — `(input_tf, script_tf)` pair matrix. Shows the
+   auto-detect → defaulting → concatenation chain on resolved
+   `input_tf_seconds` / `script_tf_seconds` / `script_tf_ratio`.
+3. **Table C** — lower-TF synthesis ratio at two different input TFs
+   (`b"15"` → 15 sub-bars/bar; `b"60"` → 60 sub-bars/bar). Confirms
+   `security_feeds_total == (input_tf_seconds / 60) * input_bars_processed`.
+
+Full design notes (validation rules, codegen contract, comparison with
+TradingView's lower-TF model) live in
+[docs/pages/mtf.md](../docs/pages/mtf.md).
 
 ## Modify the strategy
 

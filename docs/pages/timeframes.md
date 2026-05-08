@@ -88,6 +88,10 @@ These are counted in `pf_report_t::security_complete_total` and
 `pf_report_t::security_partial_total`. Per-site counters live in
 `security_diag[i]`.
 
+For the lower-TF surface (`request.security_lower_tf`) — including the
+codegen contract, validation rules, and the contrast with TradingView's
+separate-feed model — see @ref mtf.
+
 ## Practical guidance
 
 - For trade-list parity with TradingView, set both `input_tf` and

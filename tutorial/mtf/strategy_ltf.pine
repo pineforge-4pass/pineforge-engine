@@ -1,0 +1,58 @@
+//@version=6
+//
+// PineForge tutorial — MTF demo (lower-timeframe via request.security_lower_tf).
+//
+// Chart cadence is the input feed (15m by default). Inside each chart
+// bar, request.security_lower_tf("1", close) returns an array of
+// synthetic 1-minute closes covering that bar. The engine builds those
+// sub-bars from the chart bar's own OHLC path — there is no separate
+// finer feed (contrast with TradingView, which downloads a real 1m
+// stream when you switch the timeframe).
+//
+// Entry signal: the realized 1m range exceeds a threshold, i.e. the
+// chart bar moved a meaningful distance intra-bar. This is the kind of
+// signal you cannot compute from chart-TF OHLC alone — that's the
+// point of the lower-TF surface.
+//
+// Read alongside generated_ltf.cpp for the C++ shape the runtime
+// actually loads as strategy_ltf.so.
+//
+strategy("PineForge MTF tutorial — lower-TF intra-bar range",
+     overlay            = false,
+     initial_capital    = 1000000,
+     currency           = currency.USD,
+     process_orders_on_close = false,
+     pyramiding         = 1,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0,
+     slippage           = 0,
+     default_qty_type   = strategy.fixed,
+     default_qty_value  = 1)
+
+// === Inputs ===
+rangePct = input.float(0.5, "Range threshold (% of bar close)", minval=0.0)
+
+// === Lower-TF sub-bar closes for the current chart bar ===
+//
+// PF only supports lookahead=off, gaps=off on this builtin (TV does
+// not expose them anyway). Target TF "1" must be a clean integer
+// divisor of the chart's input TF.
+sub = request.security_lower_tf(syminfo.tickerid, "1", close)
+
+// === Realized intra-bar range from the sub-bar array ===
+float subHi = na
+float subLo = na
+if array.size(sub) > 0
+    subHi := array.max(sub)
+    subLo := array.min(sub)
+
+float pct = nz((subHi - subLo) / close * 100.0)
+
+// === Entries: long when intra-bar move was large *and* up ===
+longCond  = pct > rangePct and close > open and strategy.position_size == 0
+exitCond  = strategy.position_size > 0 and close < open
+
+if longCond
+    strategy.entry("Long", strategy.long)
+if exitCond
+    strategy.close("Long")

@@ -60,6 +60,7 @@ Five end-to-end, runnable examples that go beyond the MACD tutorial:
 | [Parameter sweep in Python](@ref examples_python_sweep) | Re-run one `.so` over a 2-D grid; sticky configuration; walk-forward variant. |
 | [Multi-strategy harness](@ref examples_multi) | Load N `.so` files; rank by net PnL; thread-pool execution. |
 | [Magnifier on vs off](@ref examples_magnifier) | A/B comparison with all six distribution modes. |
+| [Multi-timeframe (MTF)](@ref mtf) | `script_tf` switching, `request.security`, and lower-TF sub-bar synthesis. |
 | [Calling from Rust](@ref examples_rust) | Idiomatic `libloading` wrapper with safe Rust types. |
 
 ---

@@ -94,6 +94,7 @@ INPUT                  = ../include/pineforge/pineforge.h \
                          pages/configuration.md \
                          pages/magnifier.md \
                          pages/timeframes.md \
+                         pages/mtf.md \
                          pages/ffi-python.md \
                          pages/tutorial-macd.md \
                          pages/examples-c.md \
