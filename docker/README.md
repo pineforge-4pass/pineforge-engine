@@ -54,14 +54,31 @@ Mount points:
 
 Optional env vars apply parameter overrides before the backtest runs:
 
-| Env var                | Maps to                     | Example                                                  |
-| ---------------------- | --------------------------- | -------------------------------------------------------- |
-| `PINEFORGE_INPUTS`     | `strategy_set_input(k, v)`  | `'{"Fast Length": "8", "Slow Length": "21"}'`            |
+| Env var                | Maps to                       | Example                                                  |
+| ---------------------- | ----------------------------- | -------------------------------------------------------- |
+| `PINEFORGE_INPUTS`     | `strategy_set_input(k, v)`    | `'{"Fast Length": "8", "Slow Length": "21"}'`            |
 | `PINEFORGE_OVERRIDES`  | `strategy_set_override(k, v)` | `'{"default_qty_value": "5", "commission_value": "0.04"}'` |
 
-Both are JSON objects of `{string: string}` (numeric values must be
-quoted strings; the runtime parses on its side). Empty / unset →
-defaults from the original `strategy(...)` and `input.*()` calls.
+`PINEFORGE_INPUTS` / `PINEFORGE_OVERRIDES` are JSON objects of
+`{string: string}` (numeric values must be quoted strings; the runtime
+parses on its side). Empty / unset → defaults from the original
+`strategy(...)` and `input.*()` calls.
+
+Runtime args (passed to `run_backtest_full` rather than the strategy
+header) are configured via separate env vars:
+
+| Env var                       | Default        | Notes                                                                 |
+| ----------------------------- | -------------- | --------------------------------------------------------------------- |
+| `PINEFORGE_INPUT_TF`          | auto-detect    | Chart bar timeframe: `'1'`, `'5'`, `'15'`, `'60'`, `'D'`, `'W'`, ...  |
+| `PINEFORGE_SCRIPT_TF`         | = input_tf     | Strategy timeframe; **must be ≥ input_tf** (engine throws otherwise)  |
+| `PINEFORGE_BAR_MAGNIFIER`     | `false`        | `true` enables intra-bar OHLC path sampling for stop/limit fills      |
+| `PINEFORGE_MAGNIFIER_SAMPLES` | `4`            | Sub-bar sample count when magnifier is on (≥2)                        |
+| `PINEFORGE_MAGNIFIER_DIST`    | `endpoints`    | `uniform`, `cosine`, `triangle`, `endpoints`, `front_loaded`, `back_loaded` |
+
+The engine catches every error (TF mismatch, unsupported emulation
+flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
+container surfaces these as `{"engine":"pineforge","error":"..."}` on
+stdout with exit code `1` instead of crashing.
 
 The `strategy.cpp` is the C++ source produced by your codegen step
 (see the project that owns the transpiler). It must export the
@@ -85,6 +102,17 @@ network I/O at run time.
   },
   "applied_inputs":    {},
   "applied_overrides": {},
+  "applied_runtime": {
+    "input_tf":          "",
+    "script_tf":         "",
+    "input_tf_seconds":  900,
+    "script_tf_seconds": 900,
+    "script_tf_ratio":   1,
+    "needs_aggregation": false,
+    "bar_magnifier":     false,
+    "magnifier_samples": 4,
+    "magnifier_dist":    "endpoints"
+  },
   "elapsed_seconds":   0.0042,
   "summary": {
     "total_trades":   49,

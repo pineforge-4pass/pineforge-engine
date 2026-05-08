@@ -192,7 +192,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       n_bars: int, first_ts: int, last_ts: int,
                       elapsed: float,
                       applied_inputs: dict[str, str],
-                      applied_overrides: dict[str, str]) -> dict:
+                      applied_overrides: dict[str, str],
+                      applied_runtime: dict[str, object] | None = None) -> dict:
     trades = []
     pnls: list[float] = []
     for i in range(report.trades_len):
@@ -234,6 +235,7 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
         },
         "applied_inputs":    applied_inputs,
         "applied_overrides": applied_overrides,
+        "applied_runtime":   applied_runtime or {},
         "elapsed_seconds":   round(elapsed, 4),
         "summary": {
             "total_trades":   n,
@@ -266,6 +268,35 @@ def parse_kv_json(s: str | None, label: str) -> dict[str, str]:
     return {str(k): str(v) for k, v in obj.items()}
 
 
+# MagnifierDistribution enum values mirror include/pineforge/magnifier.hpp.
+MAGNIFIER_DISTS = {
+    "uniform":      0,
+    "cosine":       1,
+    "triangle":     2,
+    "endpoints":    3,
+    "front_loaded": 4,
+    "back_loaded":  5,
+}
+
+
+def parse_magnifier_dist(s: str) -> int:
+    if not s:
+        return 3
+    key = s.strip().lower()
+    if key in MAGNIFIER_DISTS:
+        return MAGNIFIER_DISTS[key]
+    if key.isdigit() and 0 <= int(key) <= 5:
+        return int(key)
+    sys.exit(
+        f"error: --magnifier-dist must be one of "
+        f"{sorted(MAGNIFIER_DISTS)} or 0-5, got {s!r}"
+    )
+
+
+def parse_bool(s: str) -> bool:
+    return s.strip().lower() in ("1", "true", "yes", "on")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -275,10 +306,30 @@ def main() -> int:
                     help='JSON object overriding input.*() values, e.g. \'{"Fast Length": "8"}\'')
     ap.add_argument("--overrides", default="",
                     help='JSON object overriding strategy() header, e.g. \'{"default_qty_value": "5"}\'')
+    ap.add_argument("--input-tf", default="",
+                    help="Chart bar timeframe (e.g. '1', '5', '15', '60', 'D'). "
+                         "Empty = auto-detect from bar timestamps.")
+    ap.add_argument("--script-tf", default="",
+                    help="Strategy timeframe. Empty = same as input_tf. "
+                         "Must be coarser than or equal to input_tf; the engine "
+                         "rejects finer values via strategy_get_last_error.")
+    ap.add_argument("--bar-magnifier", default="",
+                    help="Enable intra-bar price-path sampling for stop/limit fills "
+                         "(true/false, default false).")
+    ap.add_argument("--magnifier-samples", type=int, default=4,
+                    help="Sub-bar sample count when --bar-magnifier=true (default 4).")
+    ap.add_argument("--magnifier-dist", default="endpoints",
+                    help="Sample distribution: uniform, cosine, triangle, "
+                         "endpoints (default), front_loaded, back_loaded.")
     args = ap.parse_args()
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
     overrides = parse_kv_json(args.overrides, "--overrides")
+    input_tf  = args.input_tf.strip().encode()
+    script_tf = args.script_tf.strip().encode()
+    bar_magnifier = 1 if parse_bool(args.bar_magnifier) else 0
+    magnifier_samples = max(2, int(args.magnifier_samples))
+    magnifier_dist = parse_magnifier_dist(args.magnifier_dist)
 
     bars, n = load_bars(args.ohlcv)
     first_ts, last_ts = bars[0].timestamp, bars[n - 1].timestamp
@@ -296,8 +347,8 @@ def main() -> int:
     try:
         lib.run_backtest_full(
             state, bars, n,
-            b"", b"",
-            0, 4, 3,            # bar_magnifier off, samples=4, dist=ENDPOINTS
+            input_tf, script_tf,
+            bar_magnifier, magnifier_samples, magnifier_dist,
             ctypes.byref(report),
         )
         elapsed = time.time() - started
@@ -310,8 +361,19 @@ def main() -> int:
                       sys.stdout, separators=(",", ":"))
             sys.stdout.write("\n")
             return 1
+        applied_runtime = {
+            "input_tf":           input_tf.decode() if input_tf else "",
+            "script_tf":          script_tf.decode() if script_tf else "",
+            "input_tf_seconds":   int(report.input_tf_seconds),
+            "script_tf_seconds":  int(report.script_tf_seconds),
+            "script_tf_ratio":    int(report.script_tf_ratio),
+            "needs_aggregation":  bool(report.needs_aggregation),
+            "bar_magnifier":      bool(bar_magnifier),
+            "magnifier_samples":  magnifier_samples,
+            "magnifier_dist":     args.magnifier_dist.strip().lower() or "endpoints",
+        }
         out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts,
-                                elapsed, inputs, overrides)
+                                elapsed, inputs, overrides, applied_runtime)
         json.dump(out, sys.stdout, separators=(",", ":"))
         sys.stdout.write("\n")
     finally:

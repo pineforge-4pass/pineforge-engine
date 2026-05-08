@@ -16,6 +16,16 @@
 #   PINEFORGE_OVERRIDES  JSON object of strategy() header field -> value
 #                        e.g. '{"default_qty_value": "5", "commission_value": "0.04"}'
 #
+# Optional env vars (runtime args — applied to run_backtest_full):
+#   PINEFORGE_INPUT_TF           Chart bar timeframe ('1','5','15','60','D',...).
+#                                Empty / unset = auto-detect from bar timestamps.
+#   PINEFORGE_SCRIPT_TF          Strategy timeframe; empty = same as input_tf.
+#                                Must be coarser than or equal to input_tf.
+#   PINEFORGE_BAR_MAGNIFIER      'true' / 'false' (default false).
+#   PINEFORGE_MAGNIFIER_SAMPLES  Sub-bar sample count when magnifier=true (>=2, default 4).
+#   PINEFORGE_MAGNIFIER_DIST     Sample distribution: uniform / cosine / triangle /
+#                                endpoints (default) / front_loaded / back_loaded.
+#
 # Exit codes:
 #   0  success, JSON written to stdout
 #   2  missing input mount
@@ -58,4 +68,9 @@ python3 "${PREFIX}/bin/run_json.py" \
     --ohlcv "${OHLCV}" \
     --inputs    "${PINEFORGE_INPUTS:-}" \
     --overrides "${PINEFORGE_OVERRIDES:-}" \
+    --input-tf          "${PINEFORGE_INPUT_TF:-}" \
+    --script-tf         "${PINEFORGE_SCRIPT_TF:-}" \
+    --bar-magnifier     "${PINEFORGE_BAR_MAGNIFIER:-}" \
+    --magnifier-samples "${PINEFORGE_MAGNIFIER_SAMPLES:-4}" \
+    --magnifier-dist    "${PINEFORGE_MAGNIFIER_DIST:-endpoints}" \
     || { echo "[pineforge] backtest failed" >&2; exit 4; }
