@@ -40,6 +40,34 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
+
+    // TradingView broker rule: market-entry orders are admitted only
+    // when ``qty * <signal-bar close> * margin_pct/100 <= equity``.
+    // The check happens HERE (at signal time, with current_bar_.close
+    // — the close of the bar where ``strategy.entry`` was just called),
+    // NOT later in apply_market_order_fill where fill_price is the
+    // NEXT bar's open. For ``qty = strategy.equity / close`` sizing
+    // patterns (parity-probe-03, community/IES) this distinction is
+    // load-bearing: the close-vs-open slippage routinely inflates
+    // overshoot from ~zero (at signal) to ~$20 (at fill), and
+    // pre-fix engine rejected those at fill time while TV accepted
+    // them at signal time — accumulating into community/IES's PnL
+    // drift. Verified empirically by parity-probe-04..06 (all 57/57
+    // matched) and parity-probe-03 (full-equity sizing right at the
+    // 1× boundary). Only applied to MARKET entries (limit/stop entries
+    // have their own price baked into the order itself).
+    if (!std::isnan(qty) && std::isnan(limit_price) && std::isnan(stop_price)) {
+        double margin_pct = is_long ? margin_long_ : margin_short_;
+        if (margin_pct > 0.0 && !std::isnan(current_bar_.close)) {
+            double required_margin = std::abs(qty) * current_bar_.close
+                                     * (margin_pct / 100.0);
+            double available_equity = current_equity();
+            double epsilon = std::max(1e-9, std::abs(available_equity) * 1e-12);
+            if (required_margin > available_equity + epsilon) {
+                return;
+            }
+        }
+    }
     int64_t preserved_seq = 0;
     for (const auto& o : pending_orders_) {
         if (o.id == id) {

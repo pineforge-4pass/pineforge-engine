@@ -435,14 +435,15 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
     if (tv_deferred_flip) {
         consume_tv_carry_from_siblings(id, created_position_side);
     }
-    double margin_pct = is_long ? margin_long_ : margin_short_;
-    if (margin_pct > 0.0) {
-        double required_margin = std::abs(qty) * fill_price * (margin_pct / 100.0);
-        double available_equity = current_equity();
-        if (required_margin > available_equity) {
-            return;
-        }
-    }
+    // NOTE: margin check is performed at SIGNAL time inside
+    // strategy_entry / queue_deferred_close_order, NOT here at fill
+    // time. This matches TV's broker emulator, which rejects entries
+    // whose qty * SIGNAL_BAR_CLOSE exceeds equity. By the time we
+    // reach this fill-side helper the order has already been admitted
+    // (or rejected) at signal time, and the next-bar slippage between
+    // signal close and fill open should NOT be allowed to flip a TV-
+    // accepted entry into a reject. See parity-probe-{03..06} +
+    // ies-probe-08 for the empirical justification.
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     open_fresh_position(requested, fill_price, qty, id);
 }
