@@ -10,10 +10,59 @@
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
 [![Parity](https://img.shields.io/badge/TV%20parity-167%2F168-brightgreen)](#cross-engine-comparison)
 [![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)
+[![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
 
-**[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
+**[🚀 Get API Key (free)](https://www.pineforge.dev) · [📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
+
+---
+
+## Backtest PineScript with AI — no build step
+
+The fastest way to use PineForge: let your AI agent write, run, and optimize strategies for you via the **[`@pineforge/codegen-mcp`](https://www.npmjs.com/package/@pineforge/codegen-mcp)** MCP server.
+
+**The workflow:**
+1. Agent writes (or you paste) PineScript v6 source
+2. MCP transpiles Pine → C++ via the hosted API (source leaves your machine; OHLCV never does)
+3. Engine runs locally in Docker — microsecond-class, bit-reproducible results
+4. Agent reads the trade list, suggests improvements, sweeps parameters
+
+**Prerequisites:** Node ≥ 20, Docker, a PineForge API key ([free tier at pineforge.dev](https://www.pineforge.dev))
+
+### Claude Code (one command)
+
+```bash
+claude mcp add pineforge-codegen \
+  --transport stdio \
+  --env PINEFORGE_API_KEY=pf_... \
+  -- npx -y @pineforge/codegen-mcp
+```
+
+### Claude Desktop / Cursor / any MCP client
+
+```jsonc
+{
+  "mcpServers": {
+    "pineforge-codegen": {
+      "command": "npx",
+      "args": ["-y", "@pineforge/codegen-mcp"],
+      "env": { "PINEFORGE_API_KEY": "pf_..." }
+    }
+  }
+}
+```
+
+Once connected, your AI agent can:
+
+| What to ask | Tool used |
+|---|---|
+| "Fetch BTC/USDT 15m data for the last 30 days" | `fetch_binance_ohlcv` |
+| "Backtest this SMA-cross strategy on that data" | `backtest_pine` |
+| "Sweep fast length 8–21, slow 21–55, rank by net PnL" | `backtest_pine_grid` |
+| "What broker overrides are available?" | `list_engine_params` |
+
+> **Free tier included.** Sign up at [pineforge.dev](https://www.pineforge.dev) — no credit card required to start.
 
 ---
 
@@ -26,7 +75,13 @@
 - 🧰 **FFI-friendly.** Call from Python (`ctypes`), Rust (`libloading`), Go (`cgo`), Node, Julia. Worked examples for [pure C](https://cdocs.pineforge.dev/examples_c.html), [Python sweep](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy harness](https://cdocs.pineforge.dev/examples_multi.html), and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) ship in the docs.
 - 🌍 **Cross-platform CI.** Linux + macOS × Release + Debug. Universal mac binary. Static library, no runtime DSO surprises at deploy time.
 
-## See it in 30 seconds
+---
+
+## For developers: embed the runtime directly
+
+PineForge ships as a static C library (`libpineforge.a`) with a stable 10-symbol C ABI. Call from C, Python, Rust, Go, Node, Julia — one harness, swap strategies forever.
+
+### See it in 30 seconds
 
 ```c
 #include <pineforge/pineforge.h>
