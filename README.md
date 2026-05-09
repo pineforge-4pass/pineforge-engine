@@ -12,7 +12,7 @@
 [![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)
 [![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
 
-**[🚀 Get API Key (free)](https://www.pineforge.dev) · [📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
+**[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev) · [📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
 
@@ -61,6 +61,8 @@ Once connected, your AI agent can:
 | "Backtest this SMA-cross strategy on that data" | `backtest_pine` |
 | "Sweep fast length 8–21, slow 21–55, rank by net PnL" | `backtest_pine_grid` |
 | "What broker overrides are available?" | `list_engine_params` |
+
+> **Try it first.** Paste any Pine v6 strategy at [codegen.pineforge.dev](https://codegen.pineforge.dev) to see the generated C++ before running anything locally.
 
 > **Free tier included.** Sign up at [pineforge.dev](https://www.pineforge.dev) — no credit card required to start.
 
