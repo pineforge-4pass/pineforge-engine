@@ -7,11 +7,9 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/fullpass-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/fullpass-4pass/pineforge-engine/actions)
 [![Docs](https://img.shields.io/badge/docs-cdocs.pineforge.dev-1565c0?logo=readthedocs&logoColor=white)](https://cdocs.pineforge.dev)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)
-
+[![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)<br>
 [![Parity](https://img.shields.io/badge/TV%20parity-167%2F168-brightgreen)](#cross-engine-comparison)
-[![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)
-
+[![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)<br>
 [![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
 
 **[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev) · [📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
