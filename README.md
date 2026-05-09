@@ -12,7 +12,8 @@
 [![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)<br>
 [![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
 
-**[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev) · [📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
+**[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev)**<br>
+**[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
 
