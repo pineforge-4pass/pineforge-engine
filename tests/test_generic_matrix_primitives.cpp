@@ -270,6 +270,13 @@ static bool throws_inv(Fn&& fn) {
     return false;
 }
 
+static void test_elements_count_normal() {
+    // M2: practical overflow scenario requires ~2^31 elements (memory infeasible
+    // in test). Verify normal totals are correct on a moderately-shaped matrix.
+    auto m = PineGenericMatrix<int>::new_(100, 100, 0);
+    assert(m.elements_count() == 10000);
+}
+
 static void test_new_negative_dims_throws() {
     assert(throws_inv([]{ (void)PineGenericMatrix<int>::new_(-1, 2, 0); }));
     assert(throws_inv([]{ (void)PineGenericMatrix<int>::new_(2, -1, 0); }));
@@ -316,6 +323,7 @@ int main() {
     test_bounds_submatrix();
     test_submatrix_ordering_throws();
     test_new_negative_dims_throws();
+    test_elements_count_normal();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
     return 0;
 }

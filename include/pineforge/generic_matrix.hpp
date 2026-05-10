@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <cstdint>
+#include <limits>
 
 namespace pineforge {
 
@@ -209,9 +210,11 @@ public:
     }
 
     int elements_count() const {
-        int total = 0;
-        for (const auto& r : data_) total += static_cast<int>(r.size());
-        return total;
+        int64_t total = 0;
+        for (const auto& r : data_) total += static_cast<int64_t>(r.size());
+        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
+            throw std::overflow_error("matrix.elements_count: total exceeds int range");
+        return static_cast<int>(total);
     }
 };
 
@@ -400,9 +403,11 @@ public:
     }
 
     int elements_count() const {
-        int total = 0;
-        for (const auto& r : data_) total += static_cast<int>(r.size());
-        return total;
+        int64_t total = 0;
+        for (const auto& r : data_) total += static_cast<int64_t>(r.size());
+        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
+            throw std::overflow_error("matrix.elements_count: total exceeds int range");
+        return static_cast<int>(total);
     }
 };
 
