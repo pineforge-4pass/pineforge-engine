@@ -270,6 +270,11 @@ static bool throws_inv(Fn&& fn) {
     return false;
 }
 
+static void test_new_negative_dims_throws() {
+    assert(throws_inv([]{ (void)PineGenericMatrix<int>::new_(-1, 2, 0); }));
+    assert(throws_inv([]{ (void)PineGenericMatrix<int>::new_(2, -1, 0); }));
+}
+
 static void test_submatrix_ordering_throws() {
     auto m = PineGenericMatrix<int>::new_(3, 3, 0);
     assert(throws_inv([&]{ (void)m.submatrix(2, 1, 0, 1); }));
@@ -310,6 +315,7 @@ int main() {
     test_bounds_add_row_col_idx();
     test_bounds_submatrix();
     test_submatrix_ordering_throws();
+    test_new_negative_dims_throws();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
     return 0;
 }
