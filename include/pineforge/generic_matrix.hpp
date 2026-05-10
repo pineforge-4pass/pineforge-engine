@@ -67,6 +67,18 @@ public:
             data_[r].insert(data_[r].begin() + idx, values[r]);
         }
     }
+
+    void remove_row(int idx) { data_.erase(data_.begin() + idx); }
+
+    void remove_col(int idx) {
+        for (auto& r : data_) r.erase(r.begin() + idx);
+    }
+
+    void swap_rows(int i, int j) { std::swap(data_[i], data_[j]); }
+
+    void swap_columns(int i, int j) {
+        for (auto& r : data_) std::swap(r[i], r[j]);
+    }
 };
 
 } // namespace pineforge
