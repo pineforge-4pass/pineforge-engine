@@ -81,11 +81,10 @@ public:
     }
 
     void add_col(int idx, const std::vector<T>& values) {
+        if (data_.empty())
+            throw std::logic_error("matrix.add_col on empty matrix: use add_row first");
         if (idx < 0 || idx > columns())
             throw std::out_of_range("matrix.add_col: column index out of range");
-        if (data_.empty()) {
-            data_.assign(values.size(), std::vector<T>{});
-        }
         if (values.size() != data_.size())
             throw std::runtime_error("matrix.add_col: values size must equal rows()");
         // Strong guarantee: build a new buffer, swap on success.
@@ -307,9 +306,10 @@ public:
     }
 
     void add_col(int idx, const std::vector<bool>& values) {
+        if (data_.empty())
+            throw std::logic_error("matrix.add_col on empty matrix: use add_row first");
         if (idx < 0 || idx > columns())
             throw std::out_of_range("matrix.add_col: column index out of range");
-        if (data_.empty()) data_.assign(values.size(), std::vector<char>{});
         if (values.size() != data_.size())
             throw std::runtime_error("matrix.add_col: values size must equal rows()");
         std::vector<std::vector<char>> next;

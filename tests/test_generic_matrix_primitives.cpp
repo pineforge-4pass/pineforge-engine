@@ -277,6 +277,14 @@ static void test_elements_count_normal() {
     assert(m.elements_count() == 10000);
 }
 
+static void test_add_col_on_empty_throws() {
+    auto m = PineGenericMatrix<int>::new_(0, 0, 0);
+    bool threw = false;
+    try { m.add_col(0, std::vector<int>{1, 2}); }
+    catch (const std::logic_error&) { threw = true; }
+    assert(threw);
+}
+
 static void test_new_negative_dims_throws() {
     assert(throws_inv([]{ (void)PineGenericMatrix<int>::new_(-1, 2, 0); }));
     assert(throws_inv([]{ (void)PineGenericMatrix<int>::new_(2, -1, 0); }));
@@ -324,6 +332,7 @@ int main() {
     test_submatrix_ordering_throws();
     test_new_negative_dims_throws();
     test_elements_count_normal();
+    test_add_col_on_empty_throws();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
     return 0;
 }
