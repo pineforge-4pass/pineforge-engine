@@ -36,6 +36,23 @@ public:
 
     int rows() const { return static_cast<int>(data_.size()); }
     int columns() const { return data_.empty() ? 0 : static_cast<int>(data_[0].size()); }
+
+    std::vector<T> row(int idx) const {
+        return data_[static_cast<size_t>(idx)];
+    }
+
+    std::vector<T> col(int idx) const {
+        std::vector<T> out;
+        out.reserve(data_.size());
+        for (const auto& r : data_) out.push_back(r[static_cast<size_t>(idx)]);
+        return out;
+    }
+
+    template <typename U = T,
+              typename = std::enable_if_t<!std::is_same_v<U, bool>>>
+    const std::vector<T>& row_ref(int idx) const {
+        return data_[static_cast<size_t>(idx)];
+    }
 };
 
 } // namespace pineforge
