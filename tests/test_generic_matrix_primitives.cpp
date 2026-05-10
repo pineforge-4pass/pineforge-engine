@@ -24,6 +24,30 @@ static void test_new_get_set_fill_string() {
     assert(m.get(0, 0) == "bye");
 }
 
+static void test_reshape_reverse() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    int v = 0;
+    for (int r = 0; r < 2; ++r) for (int c = 0; c < 3; ++c) m.set(r, c, ++v);
+    m.reshape(3, 2);
+    assert(m.rows() == 3 && m.columns() == 2);
+    assert(m.get(0, 0) == 1 && m.get(2, 1) == 6);
+
+    m.reverse();
+    assert(m.get(0, 0) == 5 && m.get(2, 1) == 2);
+}
+
+static void test_reshape_overflow_throws() {
+    auto m = PineGenericMatrix<int>::new_(1, 1, 0);
+    bool threw = false;
+    try { m.reshape(-1, 2); }
+    catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+    threw = false;
+    try { m.reshape(1 << 16, 1 << 16); }
+    catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
 static void test_copy_submatrix_transpose_concat() {
     auto m = PineGenericMatrix<int>::new_(2, 3, 0);
     int v = 0;
@@ -123,6 +147,8 @@ int main() {
     test_add_row_int();
     test_add_col_int();
     test_remove_swap_int();
+    test_reshape_reverse();
+    test_reshape_overflow_throws();
     test_copy_submatrix_transpose_concat();
     test_row_col_int();
     test_row_ref_int();
