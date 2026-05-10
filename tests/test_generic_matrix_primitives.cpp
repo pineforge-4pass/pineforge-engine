@@ -24,6 +24,25 @@ static void test_new_get_set_fill_string() {
     assert(m.get(0, 0) == "bye");
 }
 
+static void test_sort_int() {
+    auto m = PineGenericMatrix<int>::new_(3, 2, 0);
+    m.set(0, 0, 3); m.set(0, 1, 30);
+    m.set(1, 0, 1); m.set(1, 1, 10);
+    m.set(2, 0, 2); m.set(2, 1, 20);
+    m.sort(0, true);
+    assert(m.get(0, 0) == 1 && m.get(0, 1) == 10);
+    assert(m.get(1, 0) == 2);
+    assert(m.get(2, 0) == 3);
+}
+
+static void test_sort_string() {
+    auto m = PineGenericMatrix<std::string>::new_(2, 1, std::string(""));
+    m.set(0, 0, std::string("b"));
+    m.set(1, 0, std::string("a"));
+    m.sort(0, true);
+    assert(m.get(0, 0) == "a");
+}
+
 static void test_reshape_reverse() {
     auto m = PineGenericMatrix<int>::new_(2, 3, 0);
     int v = 0;
@@ -147,6 +166,8 @@ int main() {
     test_add_row_int();
     test_add_col_int();
     test_remove_swap_int();
+    test_sort_int();
+    test_sort_string();
     test_reshape_reverse();
     test_reshape_overflow_throws();
     test_copy_submatrix_transpose_concat();
