@@ -103,6 +103,8 @@ public:
     }
 
     [[nodiscard]] PineGenericMatrix transpose() const {
+        static_assert(std::is_default_constructible_v<T>,
+                      "matrix.transpose requires default-constructible element type");
         PineGenericMatrix m;
         int r = rows(), c = columns();
         m.data_.assign(static_cast<size_t>(c), std::vector<T>(static_cast<size_t>(r), T{}));
@@ -134,6 +136,8 @@ public:
     }
 
     void reshape(int new_rows, int new_cols) {
+        static_assert(std::is_default_constructible_v<T>,
+                      "matrix.reshape requires default-constructible element type");
         if (new_rows < 0 || new_cols < 0)
             throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
         int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
