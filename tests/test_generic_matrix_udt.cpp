@@ -81,7 +81,72 @@ static void test_udt_no_default_ctor_compile_guard() {
     (void)m;
 }
 
+// --- M4: strong exception guarantee ---
+// Throwing-copy UDT: nth copy ctor throws.
+struct ThrowOnCopy {
+    int v{0};
+    static int copies;
+    static int throw_at;  // 0 disables
+    ThrowOnCopy() = default;
+    explicit ThrowOnCopy(int x) : v(x) {}
+    ThrowOnCopy(const ThrowOnCopy& o) : v(o.v) {
+        ++copies;
+        if (throw_at != 0 && copies == throw_at) throw std::runtime_error("boom");
+    }
+    ThrowOnCopy& operator=(const ThrowOnCopy&) = default;
+    ThrowOnCopy(ThrowOnCopy&&) noexcept = default;
+    ThrowOnCopy& operator=(ThrowOnCopy&&) noexcept = default;
+};
+int ThrowOnCopy::copies = 0;
+int ThrowOnCopy::throw_at = 0;
+
+static void prime_matrix(PineGenericMatrix<ThrowOnCopy>& m) {
+    int v = 0;
+    for (int r = 0; r < m.rows(); ++r)
+        for (int c = 0; c < m.columns(); ++c)
+            m.set(r, c, ThrowOnCopy{++v});
+}
+
+static void test_strong_guarantee_add_col() {
+    auto m = PineGenericMatrix<ThrowOnCopy>::new_(3, 2);
+    prime_matrix(m);
+    int snapshot_v00 = m.get(0, 0).v;
+    int snapshot_v21 = m.get(2, 1).v;
+    int orig_cols = m.columns();
+    ThrowOnCopy::copies = 0;
+    ThrowOnCopy::throw_at = 5;  // mid-loop
+    bool threw = false;
+    try {
+        std::vector<ThrowOnCopy> col{ThrowOnCopy{100}, ThrowOnCopy{101}, ThrowOnCopy{102}};
+        m.add_col(0, col);
+    } catch (const std::runtime_error&) { threw = true; }
+    ThrowOnCopy::throw_at = 0;
+    assert(threw);
+    assert(m.columns() == orig_cols);  // unchanged
+    assert(m.get(0, 0).v == snapshot_v00);
+    assert(m.get(2, 1).v == snapshot_v21);
+}
+
+static void test_strong_guarantee_remove_col() {
+    auto m = PineGenericMatrix<ThrowOnCopy>::new_(3, 3);
+    prime_matrix(m);
+    int orig_cols = m.columns();
+    int snapshot_v00 = m.get(0, 0).v;
+    int snapshot_v22 = m.get(2, 2).v;
+    ThrowOnCopy::copies = 0;
+    ThrowOnCopy::throw_at = 4;
+    bool threw = false;
+    try { m.remove_col(1); } catch (const std::runtime_error&) { threw = true; }
+    ThrowOnCopy::throw_at = 0;
+    assert(threw);
+    assert(m.columns() == orig_cols);
+    assert(m.get(0, 0).v == snapshot_v00);
+    assert(m.get(2, 2).v == snapshot_v22);
+}
+
 int main() {
+    test_strong_guarantee_add_col();
+    test_strong_guarantee_remove_col();
     test_udt_new_get_set();
     test_udt_deep_copy();
     test_udt_add_row_and_row();
