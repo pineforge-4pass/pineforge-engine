@@ -14,6 +14,7 @@ set(TEST_SOURCES
     test_integration
     test_request_security
     test_engine_trade_accessors
+    test_generic_matrix_primitives
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
@@ -47,7 +48,3 @@ if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_c_abi PRIVATE ${_pf_cov_test_flags})
 endif()
 add_test(NAME test_c_abi COMMAND test_c_abi)
-
-add_executable(test_generic_matrix_primitives test_generic_matrix_primitives.cpp)
-target_link_libraries(test_generic_matrix_primitives PRIVATE pineforge)
-add_test(NAME test_generic_matrix_primitives COMMAND test_generic_matrix_primitives)

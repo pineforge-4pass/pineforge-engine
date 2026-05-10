@@ -55,6 +55,8 @@ public:
     }
 
     void add_row(int idx, const std::vector<T>& values) {
+        if (!data_.empty() && values.size() != static_cast<size_t>(columns()))
+            throw std::runtime_error("PineGenericMatrix::add_row: values size must equal columns()");
         data_.reserve(data_.size() + 1);
         data_.insert(data_.begin() + idx, values);
     }
@@ -63,6 +65,8 @@ public:
         if (data_.empty()) {
             data_.assign(values.size(), std::vector<T>{});
         }
+        if (values.size() != data_.size())
+            throw std::runtime_error("PineGenericMatrix::add_col: values size must equal rows()");
         for (size_t r = 0; r < data_.size(); ++r) {
             data_[r].insert(data_[r].begin() + idx, values[r]);
         }
