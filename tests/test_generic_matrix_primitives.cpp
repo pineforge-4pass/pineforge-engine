@@ -277,6 +277,20 @@ static void test_elements_count_normal() {
     assert(m.elements_count() == 10000);
 }
 
+static void test_self_concat() {
+    auto m = PineGenericMatrix<int>::new_(2, 2, 0);
+    m.set(0, 0, 1); m.set(0, 1, 2);
+    m.set(1, 0, 3); m.set(1, 1, 4);
+    auto h = m.concat(m, true);
+    assert(h.rows() == 2 && h.columns() == 4);
+    assert(h.get(0, 0) == 1 && h.get(0, 2) == 1);
+    assert(h.get(1, 3) == 4);
+    auto v = m.concat(m, false);
+    assert(v.rows() == 4 && v.columns() == 2);
+    assert(v.get(0, 0) == 1 && v.get(2, 0) == 1);
+    assert(v.get(3, 1) == 4);
+}
+
 static void test_add_col_on_empty_throws() {
     auto m = PineGenericMatrix<int>::new_(0, 0, 0);
     bool threw = false;
@@ -333,6 +347,7 @@ int main() {
     test_new_negative_dims_throws();
     test_elements_count_normal();
     test_add_col_on_empty_throws();
+    test_self_concat();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
     return 0;
 }
