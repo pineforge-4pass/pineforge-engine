@@ -187,6 +187,26 @@ static void test_add_row_size_mismatch_throws() {
     assert(threw);
 }
 
+static void test_concat_shape_mismatch_throws() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    auto bad_h = PineGenericMatrix<int>::new_(3, 1, 0); // wrong rows for horizontal
+    auto bad_v = PineGenericMatrix<int>::new_(1, 2, 0); // wrong cols for vertical
+    bool threw1 = false, threw2 = false;
+    try { (void)m.concat(bad_h, true); }
+    catch (const std::invalid_argument&) { threw1 = true; }
+    try { (void)m.concat(bad_v, false); }
+    catch (const std::invalid_argument&) { threw2 = true; }
+    assert(threw1);
+    assert(threw2);
+    // sanity: matching shapes still work
+    auto good_h = PineGenericMatrix<int>::new_(2, 1, 7);
+    auto good_v = PineGenericMatrix<int>::new_(1, 3, 9);
+    auto h = m.concat(good_h, true);
+    assert(h.rows() == 2 && h.columns() == 4);
+    auto v = m.concat(good_v, false);
+    assert(v.rows() == 3 && v.columns() == 3);
+}
+
 static void test_add_col_size_mismatch_throws() {
     auto m = PineGenericMatrix<int>::new_(3, 2, 0);
     bool threw = false;
@@ -209,6 +229,7 @@ int main() {
     test_add_row_size_mismatch_throws();
     test_add_col_size_mismatch_throws();
     test_copy_submatrix_transpose_concat();
+    test_concat_shape_mismatch_throws();
     test_row_col_int();
     test_row_ref_int();
     std::printf("All test_generic_matrix_primitives tests passed.\n");

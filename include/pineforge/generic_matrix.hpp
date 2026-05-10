@@ -113,6 +113,13 @@ public:
     }
 
     [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
+        if (horizontal) {
+            if (rows() != other.rows())
+                throw std::invalid_argument("matrix.concat: row count mismatch");
+        } else {
+            if (columns() != other.columns())
+                throw std::invalid_argument("matrix.concat: column count mismatch");
+        }
         PineGenericMatrix m = copy();
         if (horizontal) {
             for (size_t r = 0; r < m.data_.size(); ++r) {
@@ -281,6 +288,13 @@ public:
     }
 
     [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
+        if (horizontal) {
+            if (rows() != other.rows())
+                throw std::invalid_argument("matrix.concat: row count mismatch");
+        } else {
+            if (columns() != other.columns())
+                throw std::invalid_argument("matrix.concat: column count mismatch");
+        }
         PineGenericMatrix m = copy();
         if (horizontal) {
             for (size_t r = 0; r < m.data_.size(); ++r)
