@@ -207,8 +207,8 @@ public:
         if (new_rows < 0 || new_cols < 0)
             throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
         int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
-        if (total > static_cast<int64_t>(INT32_MAX))
-            throw std::runtime_error("PineGenericMatrix::reshape: dimension overflow");
+        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
+            throw std::runtime_error("matrix.reshape: dimension overflow");
         std::vector<T> flat;
         flat.reserve(static_cast<size_t>(total));
         for (const auto& r : data_) for (const auto& v : r) flat.push_back(v);
@@ -400,8 +400,8 @@ public:
         if (new_rows < 0 || new_cols < 0)
             throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
         int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
-        if (total > static_cast<int64_t>(INT32_MAX))
-            throw std::runtime_error("PineGenericMatrix::reshape: dimension overflow");
+        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
+            throw std::runtime_error("matrix.reshape: dimension overflow");
         std::vector<char> flat;
         flat.reserve(static_cast<size_t>(total));
         for (const auto& r : data_) for (char v : r) flat.push_back(v);
