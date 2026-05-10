@@ -10,14 +10,6 @@ using pineforge::Series;
 
 struct Pt { double x{0.0}; std::string label{}; };
 
-// Series<T>::operator[] calls na<T>() for out-of-range offsets.
-// Provide a specialization so the translation unit links cleanly.
-namespace pineforge {
-template<> inline PineGenericMatrix<Pt> na<PineGenericMatrix<Pt>>() {
-    return PineGenericMatrix<Pt>{};
-}
-} // namespace pineforge
-
 static void test_series_of_generic_matrix() {
     Series<PineGenericMatrix<Pt>> s;
     auto m1 = PineGenericMatrix<Pt>::new_(1, 1);
