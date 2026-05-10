@@ -141,6 +141,17 @@ public:
     }
 
     void reverse() { std::reverse(data_.begin(), data_.end()); }
+
+    void sort(int column, bool ascending = true) {
+        static_assert(std::is_same_v<T, int> ||
+                      std::is_same_v<T, bool> ||
+                      std::is_same_v<T, std::string>,
+                      "PineGenericMatrix::sort requires int, bool, or std::string element type");
+        std::sort(data_.begin(), data_.end(),
+            [column, ascending](const std::vector<T>& a, const std::vector<T>& b) {
+                return ascending ? (a[column] < b[column]) : (b[column] < a[column]);
+            });
+    }
 };
 
 } // namespace pineforge
