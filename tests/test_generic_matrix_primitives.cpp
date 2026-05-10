@@ -215,6 +215,63 @@ static void test_add_col_size_mismatch_throws() {
     assert(threw);
 }
 
+// --- B1: bounds checking ---
+template <typename Fn>
+static bool throws_oor(Fn&& fn) {
+    try { fn(); } catch (const std::out_of_range&) { return true; } catch (...) {}
+    return false;
+}
+
+static void test_bounds_get_set() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    assert(throws_oor([&]{ m.get(-1, 0); }));
+    assert(throws_oor([&]{ m.get(0, -1); }));
+    assert(throws_oor([&]{ m.get(2, 0); }));
+    assert(throws_oor([&]{ m.get(0, 3); }));
+    assert(throws_oor([&]{ m.set(-1, 0, 1); }));
+    assert(throws_oor([&]{ m.set(0, -1, 1); }));
+    assert(throws_oor([&]{ m.set(2, 0, 1); }));
+    assert(throws_oor([&]{ m.set(0, 3, 1); }));
+}
+
+static void test_bounds_row_col_ref() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    assert(throws_oor([&]{ (void)m.row(-1); }));
+    assert(throws_oor([&]{ (void)m.row(2); }));
+    assert(throws_oor([&]{ (void)m.col(-1); }));
+    assert(throws_oor([&]{ (void)m.col(3); }));
+    assert(throws_oor([&]{ (void)m.row_ref(-1); }));
+    assert(throws_oor([&]{ (void)m.row_ref(2); }));
+}
+
+static void test_bounds_remove_swap() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    assert(throws_oor([&]{ m.remove_row(-1); }));
+    assert(throws_oor([&]{ m.remove_row(2); }));
+    assert(throws_oor([&]{ m.remove_col(-1); }));
+    assert(throws_oor([&]{ m.remove_col(3); }));
+    assert(throws_oor([&]{ m.swap_rows(-1, 0); }));
+    assert(throws_oor([&]{ m.swap_rows(0, 2); }));
+    assert(throws_oor([&]{ m.swap_columns(-1, 0); }));
+    assert(throws_oor([&]{ m.swap_columns(0, 3); }));
+}
+
+static void test_bounds_add_row_col_idx() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    assert(throws_oor([&]{ m.add_row(-1, std::vector<int>{0,0,0}); }));
+    assert(throws_oor([&]{ m.add_row(3, std::vector<int>{0,0,0}); }));
+    assert(throws_oor([&]{ m.add_col(-1, std::vector<int>{0,0}); }));
+    assert(throws_oor([&]{ m.add_col(4, std::vector<int>{0,0}); }));
+}
+
+static void test_bounds_submatrix() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    assert(throws_oor([&]{ (void)m.submatrix(-1, 1, 0, 1); }));
+    assert(throws_oor([&]{ (void)m.submatrix(0, 3, 0, 1); }));
+    assert(throws_oor([&]{ (void)m.submatrix(0, 1, -1, 1); }));
+    assert(throws_oor([&]{ (void)m.submatrix(0, 1, 0, 4); }));
+}
+
 int main() {
     test_new_get_set_fill_int();
     test_new_get_set_fill_string();
@@ -232,6 +289,11 @@ int main() {
     test_concat_shape_mismatch_throws();
     test_row_col_int();
     test_row_ref_int();
+    test_bounds_get_set();
+    test_bounds_row_col_ref();
+    test_bounds_remove_swap();
+    test_bounds_add_row_col_idx();
+    test_bounds_submatrix();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
     return 0;
 }

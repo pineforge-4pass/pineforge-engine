@@ -50,11 +50,41 @@ static void test_bool_concat_shape_mismatch_throws() {
     assert(v.get(2, 0) == true);
 }
 
+template <typename Fn>
+static bool throws_oor(Fn&& fn) {
+    try { fn(); } catch (const std::out_of_range&) { return true; } catch (...) {}
+    return false;
+}
+
+static void test_bool_bounds_all_ops() {
+    auto m = PineGenericMatrix<bool>::new_(2, 3, false);
+    assert(throws_oor([&]{ (void)m.get(-1, 0); }));
+    assert(throws_oor([&]{ (void)m.get(0, 3); }));
+    assert(throws_oor([&]{ m.set(2, 0, true); }));
+    assert(throws_oor([&]{ m.set(0, -1, true); }));
+    assert(throws_oor([&]{ (void)m.row(-1); }));
+    assert(throws_oor([&]{ (void)m.row(2); }));
+    assert(throws_oor([&]{ (void)m.col(-1); }));
+    assert(throws_oor([&]{ (void)m.col(3); }));
+    assert(throws_oor([&]{ m.remove_row(-1); }));
+    assert(throws_oor([&]{ m.remove_row(2); }));
+    assert(throws_oor([&]{ m.remove_col(3); }));
+    assert(throws_oor([&]{ m.swap_rows(-1, 0); }));
+    assert(throws_oor([&]{ m.swap_columns(0, 3); }));
+    assert(throws_oor([&]{ m.add_row(-1, std::vector<bool>{false,false,false}); }));
+    assert(throws_oor([&]{ m.add_row(3, std::vector<bool>{false,false,false}); }));
+    assert(throws_oor([&]{ m.add_col(-1, std::vector<bool>{false,false}); }));
+    assert(throws_oor([&]{ m.add_col(4, std::vector<bool>{false,false}); }));
+    assert(throws_oor([&]{ (void)m.submatrix(-1, 1, 0, 1); }));
+    assert(throws_oor([&]{ (void)m.submatrix(0, 1, 0, 4); }));
+}
+
 int main() {
     test_bool_get_set_fill();
     test_bool_row_returns_vector_bool();
     test_bool_sort();
     test_bool_concat_shape_mismatch_throws();
+    test_bool_bounds_all_ops();
     std::printf("All test_generic_matrix_bool_proxy tests passed.\n");
     return 0;
 }
