@@ -152,6 +152,12 @@ public:
                 return ascending ? (a[column] < b[column]) : (b[column] < a[column]);
             });
     }
+
+    int elements_count() const {
+        int total = 0;
+        for (const auto& r : data_) total += static_cast<int>(r.size());
+        return total;
+    }
 };
 
 } // namespace pineforge
