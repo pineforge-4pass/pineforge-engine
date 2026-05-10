@@ -13,6 +13,7 @@ set(TEST_SOURCES
     test_dmi_parity
     test_integration
     test_request_security
+    test_security_tf_validation
     test_engine_trade_accessors
     test_generic_matrix_primitives
     test_generic_matrix_udt
