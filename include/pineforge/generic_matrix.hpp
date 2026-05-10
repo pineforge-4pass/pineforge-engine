@@ -121,6 +121,26 @@ public:
         }
         return m;
     }
+
+    void reshape(int new_rows, int new_cols) {
+        if (new_rows < 0 || new_cols < 0)
+            throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
+        int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
+        if (total > static_cast<int64_t>(INT32_MAX))
+            throw std::runtime_error("PineGenericMatrix::reshape: dimension overflow");
+        std::vector<T> flat;
+        flat.reserve(static_cast<size_t>(total));
+        for (const auto& r : data_) for (const auto& v : r) flat.push_back(v);
+        flat.resize(static_cast<size_t>(total), T{});
+        data_.assign(static_cast<size_t>(new_rows),
+                     std::vector<T>(static_cast<size_t>(new_cols), T{}));
+        size_t k = 0;
+        for (int r = 0; r < new_rows; ++r)
+            for (int c = 0; c < new_cols; ++c)
+                data_[r][c] = flat[k++];
+    }
+
+    void reverse() { std::reverse(data_.begin(), data_.end()); }
 };
 
 } // namespace pineforge
