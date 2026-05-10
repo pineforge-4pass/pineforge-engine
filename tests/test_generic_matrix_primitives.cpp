@@ -179,6 +179,22 @@ static void test_row_ref_int() {
     assert(&r[0] == &m.row_ref(0)[0]);
 }
 
+static void test_add_row_size_mismatch_throws() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    bool threw = false;
+    try { m.add_row(0, std::vector<int>{1, 2}); }
+    catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
+static void test_add_col_size_mismatch_throws() {
+    auto m = PineGenericMatrix<int>::new_(3, 2, 0);
+    bool threw = false;
+    try { m.add_col(0, std::vector<int>{1, 2}); }
+    catch (const std::runtime_error&) { threw = true; }
+    assert(threw);
+}
+
 int main() {
     test_new_get_set_fill_int();
     test_new_get_set_fill_string();
@@ -190,6 +206,8 @@ int main() {
     test_sort_string();
     test_reshape_reverse();
     test_reshape_overflow_throws();
+    test_add_row_size_mismatch_throws();
+    test_add_col_size_mismatch_throws();
     test_copy_submatrix_transpose_concat();
     test_row_col_int();
     test_row_ref_int();
