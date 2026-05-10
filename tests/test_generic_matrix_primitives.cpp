@@ -24,6 +24,36 @@ static void test_new_get_set_fill_string() {
     assert(m.get(0, 0) == "bye");
 }
 
+static void test_copy_submatrix_transpose_concat() {
+    auto m = PineGenericMatrix<int>::new_(2, 3, 0);
+    int v = 0;
+    for (int r = 0; r < 2; ++r) for (int c = 0; c < 3; ++c) m.set(r, c, ++v);
+    auto c = m.copy();
+    c.set(0, 0, 99);
+    assert(m.get(0, 0) == 1);
+    assert(c.get(0, 0) == 99);
+
+    auto sub = m.submatrix(0, 2, 1, 3);
+    assert(sub.rows() == 2 && sub.columns() == 2);
+    assert(sub.get(0, 0) == 2 && sub.get(1, 1) == 6);
+
+    auto t = m.transpose();
+    assert(t.rows() == 3 && t.columns() == 2);
+    assert(t.get(0, 0) == 1 && t.get(2, 1) == 6);
+
+    auto a = PineGenericMatrix<int>::new_(2, 1, 0);
+    a.set(0, 0, 10); a.set(1, 0, 20);
+    auto h = m.concat(a, true);
+    assert(h.rows() == 2 && h.columns() == 4);
+    assert(h.get(0, 3) == 10);
+
+    auto b = PineGenericMatrix<int>::new_(1, 3, 0);
+    b.set(0, 0, 100); b.set(0, 1, 200); b.set(0, 2, 300);
+    auto vcat = m.concat(b, false);
+    assert(vcat.rows() == 3 && vcat.columns() == 3);
+    assert(vcat.get(2, 1) == 200);
+}
+
 static void test_remove_swap_int() {
     auto m = PineGenericMatrix<int>::new_(3, 3, 0);
     int v = 0;
@@ -93,6 +123,7 @@ int main() {
     test_add_row_int();
     test_add_col_int();
     test_remove_swap_int();
+    test_copy_submatrix_transpose_concat();
     test_row_col_int();
     test_row_ref_int();
     std::printf("All test_generic_matrix_primitives tests passed.\n");

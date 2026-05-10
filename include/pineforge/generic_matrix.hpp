@@ -79,6 +79,48 @@ public:
     void swap_columns(int i, int j) {
         for (auto& r : data_) std::swap(r[i], r[j]);
     }
+
+    [[nodiscard]] PineGenericMatrix copy() const {
+        PineGenericMatrix m;
+        m.data_ = data_;
+        return m;
+    }
+
+    [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
+                                              int from_col, int to_col) const {
+        PineGenericMatrix m;
+        m.data_.reserve(static_cast<size_t>(to_row - from_row));
+        for (int r = from_row; r < to_row; ++r) {
+            std::vector<T> row(data_[r].begin() + from_col,
+                               data_[r].begin() + to_col);
+            m.data_.push_back(std::move(row));
+        }
+        return m;
+    }
+
+    [[nodiscard]] PineGenericMatrix transpose() const {
+        PineGenericMatrix m;
+        int r = rows(), c = columns();
+        m.data_.assign(static_cast<size_t>(c), std::vector<T>(static_cast<size_t>(r), T{}));
+        for (int i = 0; i < r; ++i)
+            for (int j = 0; j < c; ++j)
+                m.data_[j][i] = data_[i][j];
+        return m;
+    }
+
+    [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
+        PineGenericMatrix m = copy();
+        if (horizontal) {
+            for (size_t r = 0; r < m.data_.size(); ++r) {
+                m.data_[r].insert(m.data_[r].end(),
+                                  other.data_[r].begin(),
+                                  other.data_[r].end());
+            }
+        } else {
+            for (const auto& row : other.data_) m.data_.push_back(row);
+        }
+        return m;
+    }
 };
 
 } // namespace pineforge
