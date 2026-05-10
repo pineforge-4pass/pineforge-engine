@@ -53,6 +53,20 @@ public:
     const std::vector<T>& row_ref(int idx) const {
         return data_[static_cast<size_t>(idx)];
     }
+
+    void add_row(int idx, const std::vector<T>& values) {
+        data_.reserve(data_.size() + 1);
+        data_.insert(data_.begin() + idx, values);
+    }
+
+    void add_col(int idx, const std::vector<T>& values) {
+        if (data_.empty()) {
+            data_.assign(values.size(), std::vector<T>{});
+        }
+        for (size_t r = 0; r < data_.size(); ++r) {
+            data_[r].insert(data_[r].begin() + idx, values[r]);
+        }
+    }
 };
 
 } // namespace pineforge

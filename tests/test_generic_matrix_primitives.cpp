@@ -24,6 +24,31 @@ static void test_new_get_set_fill_string() {
     assert(m.get(0, 0) == "bye");
 }
 
+static void test_add_row_int() {
+    auto m = PineGenericMatrix<int>::new_(0, 3, 0);
+    assert(m.rows() == 0);
+    m.add_row(0, std::vector<int>{1, 2, 3});
+    assert(m.rows() == 1);
+    assert(m.get(0, 0) == 1 && m.get(0, 2) == 3);
+    m.add_row(1, std::vector<int>{4, 5, 6});
+    assert(m.rows() == 2);
+    assert(m.get(1, 1) == 5);
+    m.add_row(0, std::vector<int>{7, 8, 9});
+    assert(m.rows() == 3);
+    assert(m.get(0, 0) == 7);
+    assert(m.get(1, 0) == 1);
+}
+
+static void test_add_col_int() {
+    auto m = PineGenericMatrix<int>::new_(2, 0, 0);
+    m.add_col(0, std::vector<int>{1, 2});
+    assert(m.columns() == 1);
+    assert(m.get(0, 0) == 1 && m.get(1, 0) == 2);
+    m.add_col(1, std::vector<int>{3, 4});
+    assert(m.columns() == 2);
+    assert(m.get(0, 1) == 3 && m.get(1, 1) == 4);
+}
+
 static void test_row_col_int() {
     auto m = PineGenericMatrix<int>::new_(2, 3, 0);
     m.set(0, 0, 1); m.set(0, 1, 2); m.set(0, 2, 3);
@@ -49,6 +74,8 @@ static void test_row_ref_int() {
 int main() {
     test_new_get_set_fill_int();
     test_new_get_set_fill_string();
+    test_add_row_int();
+    test_add_col_int();
     test_row_col_int();
     test_row_ref_int();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
