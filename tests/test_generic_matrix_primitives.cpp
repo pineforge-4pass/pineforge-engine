@@ -24,6 +24,22 @@ static void test_new_get_set_fill_string() {
     assert(m.get(0, 0) == "bye");
 }
 
+static void test_remove_swap_int() {
+    auto m = PineGenericMatrix<int>::new_(3, 3, 0);
+    int v = 0;
+    for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) m.set(r, c, ++v);
+    m.remove_row(1);
+    assert(m.rows() == 2);
+    assert(m.get(0, 0) == 1 && m.get(1, 0) == 7);
+    m.remove_col(2);
+    assert(m.columns() == 2);
+    assert(m.get(0, 1) == 2 && m.get(1, 1) == 8);
+    m.swap_rows(0, 1);
+    assert(m.get(0, 0) == 7 && m.get(1, 0) == 1);
+    m.swap_columns(0, 1);
+    assert(m.get(0, 0) == 8 && m.get(0, 1) == 7);
+}
+
 static void test_add_row_int() {
     auto m = PineGenericMatrix<int>::new_(0, 3, 0);
     assert(m.rows() == 0);
@@ -76,6 +92,7 @@ int main() {
     test_new_get_set_fill_string();
     test_add_row_int();
     test_add_col_int();
+    test_remove_swap_int();
     test_row_col_int();
     test_row_ref_int();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
