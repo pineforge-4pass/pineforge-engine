@@ -164,4 +164,146 @@ public:
     }
 };
 
+template <>
+class PineGenericMatrix<bool> {
+    std::vector<std::vector<char>> data_;
+
+public:
+    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init = false) {
+        PineGenericMatrix m;
+        m.data_.assign(static_cast<size_t>(rows),
+                       std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
+        return m;
+    }
+
+    bool get(int row, int col) const {
+        return data_[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
+    }
+
+    void set(int row, int col, bool val) {
+        data_[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
+    }
+
+    void fill(bool val) {
+        char c = val ? 1 : 0;
+        for (auto& r : data_) std::fill(r.begin(), r.end(), c);
+    }
+
+    int rows() const { return static_cast<int>(data_.size()); }
+    int columns() const { return data_.empty() ? 0 : static_cast<int>(data_[0].size()); }
+
+    std::vector<bool> row(int idx) const {
+        std::vector<bool> out;
+        const auto& src = data_[static_cast<size_t>(idx)];
+        out.reserve(src.size());
+        for (char c : src) out.push_back(c != 0);
+        return out;
+    }
+
+    std::vector<bool> col(int idx) const {
+        std::vector<bool> out;
+        out.reserve(data_.size());
+        for (const auto& r : data_) out.push_back(r[static_cast<size_t>(idx)] != 0);
+        return out;
+    }
+
+    // row_ref intentionally NOT exposed for T=bool — proxy storage prevents
+    // returning const std::vector<bool>&.
+
+    void add_row(int idx, const std::vector<bool>& values) {
+        if (!data_.empty() && values.size() != static_cast<size_t>(columns()))
+            throw std::runtime_error("PineGenericMatrix::add_row: values size must equal columns()");
+        std::vector<char> row;
+        row.reserve(values.size());
+        for (bool v : values) row.push_back(v ? 1 : 0);
+        data_.reserve(data_.size() + 1);
+        data_.insert(data_.begin() + idx, std::move(row));
+    }
+
+    void add_col(int idx, const std::vector<bool>& values) {
+        if (data_.empty()) data_.assign(values.size(), std::vector<char>{});
+        if (values.size() != data_.size())
+            throw std::runtime_error("PineGenericMatrix::add_col: values size must equal rows()");
+        for (size_t r = 0; r < data_.size(); ++r) {
+            data_[r].insert(data_[r].begin() + idx, values[r] ? 1 : 0);
+        }
+    }
+
+    void remove_row(int idx) { data_.erase(data_.begin() + idx); }
+    void remove_col(int idx) { for (auto& r : data_) r.erase(r.begin() + idx); }
+    void swap_rows(int i, int j) { std::swap(data_[i], data_[j]); }
+    void swap_columns(int i, int j) { for (auto& r : data_) std::swap(r[i], r[j]); }
+
+    [[nodiscard]] PineGenericMatrix copy() const {
+        PineGenericMatrix m; m.data_ = data_; return m;
+    }
+
+    [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
+                                              int from_col, int to_col) const {
+        PineGenericMatrix m;
+        m.data_.reserve(static_cast<size_t>(to_row - from_row));
+        for (int r = from_row; r < to_row; ++r) {
+            std::vector<char> row(data_[r].begin() + from_col,
+                                  data_[r].begin() + to_col);
+            m.data_.push_back(std::move(row));
+        }
+        return m;
+    }
+
+    void reshape(int new_rows, int new_cols) {
+        if (new_rows < 0 || new_cols < 0)
+            throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
+        int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
+        if (total > static_cast<int64_t>(INT32_MAX))
+            throw std::runtime_error("PineGenericMatrix::reshape: dimension overflow");
+        std::vector<char> flat;
+        flat.reserve(static_cast<size_t>(total));
+        for (const auto& r : data_) for (char v : r) flat.push_back(v);
+        flat.resize(static_cast<size_t>(total), 0);
+        data_.assign(static_cast<size_t>(new_rows),
+                     std::vector<char>(static_cast<size_t>(new_cols), 0));
+        size_t k = 0;
+        for (int r = 0; r < new_rows; ++r)
+            for (int c = 0; c < new_cols; ++c)
+                data_[r][c] = flat[k++];
+    }
+
+    void reverse() { std::reverse(data_.begin(), data_.end()); }
+
+    [[nodiscard]] PineGenericMatrix transpose() const {
+        PineGenericMatrix m;
+        int r = rows(), c = columns();
+        m.data_.assign(static_cast<size_t>(c), std::vector<char>(static_cast<size_t>(r), 0));
+        for (int i = 0; i < r; ++i)
+            for (int j = 0; j < c; ++j)
+                m.data_[j][i] = data_[i][j];
+        return m;
+    }
+
+    [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
+        PineGenericMatrix m = copy();
+        if (horizontal) {
+            for (size_t r = 0; r < m.data_.size(); ++r)
+                m.data_[r].insert(m.data_[r].end(),
+                                  other.data_[r].begin(), other.data_[r].end());
+        } else {
+            for (const auto& row : other.data_) m.data_.push_back(row);
+        }
+        return m;
+    }
+
+    void sort(int column, bool ascending = true) {
+        std::sort(data_.begin(), data_.end(),
+            [column, ascending](const std::vector<char>& a, const std::vector<char>& b) {
+                return ascending ? (a[column] < b[column]) : (b[column] < a[column]);
+            });
+    }
+
+    int elements_count() const {
+        int total = 0;
+        for (const auto& r : data_) total += static_cast<int>(r.size());
+        return total;
+    }
+};
+
 } // namespace pineforge

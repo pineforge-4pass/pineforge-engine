@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_engine_trade_accessors
     test_generic_matrix_primitives
     test_generic_matrix_udt
+    test_generic_matrix_bool_proxy
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
