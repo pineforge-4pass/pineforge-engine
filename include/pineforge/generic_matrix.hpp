@@ -426,11 +426,10 @@ public:
         return m;
     }
 
-    void sort(int column, bool ascending = true) {
-        std::sort(data_.begin(), data_.end(),
-            [column, ascending](const std::vector<char>& a, const std::vector<char>& b) {
-                return ascending ? (a[column] < b[column]) : (b[column] < a[column]);
-            });
+    template <typename Dummy = void>
+    void sort(int /*column*/, bool /*ascending*/ = true) {
+        static_assert(!std::is_same_v<Dummy, void> && std::is_same_v<Dummy, void>,
+                      "matrix.sort: not supported on bool element type");
     }
 
     int elements_count() const {
