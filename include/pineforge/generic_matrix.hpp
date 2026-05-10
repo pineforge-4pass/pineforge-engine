@@ -244,6 +244,11 @@ public:
     }
 };
 
+// TODO(n3): The bool specialization duplicates ~140 LOC of validation,
+// strong-exception-guarantee, and shape logic from the general spec because
+// std::vector<bool>'s proxy storage forces a separate vector<char> backing.
+// A future refactor could factor out a CRTP base or thin pImpl to share the
+// invariants; deferred until proxy-related ABI considerations are revisited.
 template <>
 class PineGenericMatrix<bool> {
     std::vector<std::vector<char>> data_;
