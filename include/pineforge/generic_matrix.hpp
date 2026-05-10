@@ -23,10 +23,18 @@ public:
     }
 
     T get(int row, int col) const {
+        if (row < 0 || row >= rows())
+            throw std::out_of_range("matrix.get: row index out of range");
+        if (col < 0 || col >= columns())
+            throw std::out_of_range("matrix.get: column index out of range");
         return data_[static_cast<size_t>(row)][static_cast<size_t>(col)];
     }
 
     void set(int row, int col, T val) {
+        if (row < 0 || row >= rows())
+            throw std::out_of_range("matrix.set: row index out of range");
+        if (col < 0 || col >= columns())
+            throw std::out_of_range("matrix.set: column index out of range");
         data_[static_cast<size_t>(row)][static_cast<size_t>(col)] = val;
     }
 
@@ -38,10 +46,14 @@ public:
     int columns() const { return data_.empty() ? 0 : static_cast<int>(data_[0].size()); }
 
     std::vector<T> row(int idx) const {
+        if (idx < 0 || idx >= rows())
+            throw std::out_of_range("matrix.row: row index out of range");
         return data_[static_cast<size_t>(idx)];
     }
 
     std::vector<T> col(int idx) const {
+        if (idx < 0 || idx >= columns())
+            throw std::out_of_range("matrix.col: column index out of range");
         std::vector<T> out;
         out.reserve(data_.size());
         for (const auto& r : data_) out.push_back(r[static_cast<size_t>(idx)]);
@@ -51,36 +63,54 @@ public:
     template <typename U = T,
               typename = std::enable_if_t<!std::is_same_v<U, bool>>>
     const std::vector<T>& row_ref(int idx) const {
+        if (idx < 0 || idx >= rows())
+            throw std::out_of_range("matrix.row_ref: row index out of range");
         return data_[static_cast<size_t>(idx)];
     }
 
     void add_row(int idx, const std::vector<T>& values) {
+        if (idx < 0 || idx > rows())
+            throw std::out_of_range("matrix.add_row: row index out of range");
         if (!data_.empty() && values.size() != static_cast<size_t>(columns()))
-            throw std::runtime_error("PineGenericMatrix::add_row: values size must equal columns()");
+            throw std::runtime_error("matrix.add_row: values size must equal columns()");
         data_.reserve(data_.size() + 1);
         data_.insert(data_.begin() + idx, values);
     }
 
     void add_col(int idx, const std::vector<T>& values) {
+        if (idx < 0 || idx > columns())
+            throw std::out_of_range("matrix.add_col: column index out of range");
         if (data_.empty()) {
             data_.assign(values.size(), std::vector<T>{});
         }
         if (values.size() != data_.size())
-            throw std::runtime_error("PineGenericMatrix::add_col: values size must equal rows()");
+            throw std::runtime_error("matrix.add_col: values size must equal rows()");
         for (size_t r = 0; r < data_.size(); ++r) {
             data_[r].insert(data_[r].begin() + idx, values[r]);
         }
     }
 
-    void remove_row(int idx) { data_.erase(data_.begin() + idx); }
+    void remove_row(int idx) {
+        if (idx < 0 || idx >= rows())
+            throw std::out_of_range("matrix.remove_row: row index out of range");
+        data_.erase(data_.begin() + idx);
+    }
 
     void remove_col(int idx) {
+        if (idx < 0 || idx >= columns())
+            throw std::out_of_range("matrix.remove_col: column index out of range");
         for (auto& r : data_) r.erase(r.begin() + idx);
     }
 
-    void swap_rows(int i, int j) { std::swap(data_[i], data_[j]); }
+    void swap_rows(int i, int j) {
+        if (i < 0 || i >= rows() || j < 0 || j >= rows())
+            throw std::out_of_range("matrix.swap_rows: row index out of range");
+        std::swap(data_[i], data_[j]);
+    }
 
     void swap_columns(int i, int j) {
+        if (i < 0 || i >= columns() || j < 0 || j >= columns())
+            throw std::out_of_range("matrix.swap_columns: column index out of range");
         for (auto& r : data_) std::swap(r[i], r[j]);
     }
 
@@ -92,6 +122,10 @@ public:
 
     [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
+        if (from_row < 0 || to_row > rows())
+            throw std::out_of_range("matrix.submatrix: row index out of range");
+        if (from_col < 0 || to_col > columns())
+            throw std::out_of_range("matrix.submatrix: column index out of range");
         PineGenericMatrix m;
         m.data_.reserve(static_cast<size_t>(to_row - from_row));
         for (int r = from_row; r < to_row; ++r) {
@@ -188,10 +222,18 @@ public:
     }
 
     bool get(int row, int col) const {
+        if (row < 0 || row >= rows())
+            throw std::out_of_range("matrix.get: row index out of range");
+        if (col < 0 || col >= columns())
+            throw std::out_of_range("matrix.get: column index out of range");
         return data_[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
     }
 
     void set(int row, int col, bool val) {
+        if (row < 0 || row >= rows())
+            throw std::out_of_range("matrix.set: row index out of range");
+        if (col < 0 || col >= columns())
+            throw std::out_of_range("matrix.set: column index out of range");
         data_[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
     }
 
@@ -204,6 +246,8 @@ public:
     int columns() const { return data_.empty() ? 0 : static_cast<int>(data_[0].size()); }
 
     std::vector<bool> row(int idx) const {
+        if (idx < 0 || idx >= rows())
+            throw std::out_of_range("matrix.row: row index out of range");
         std::vector<bool> out;
         const auto& src = data_[static_cast<size_t>(idx)];
         out.reserve(src.size());
@@ -212,6 +256,8 @@ public:
     }
 
     std::vector<bool> col(int idx) const {
+        if (idx < 0 || idx >= columns())
+            throw std::out_of_range("matrix.col: column index out of range");
         std::vector<bool> out;
         out.reserve(data_.size());
         for (const auto& r : data_) out.push_back(r[static_cast<size_t>(idx)] != 0);
@@ -222,8 +268,10 @@ public:
     // returning const std::vector<bool>&.
 
     void add_row(int idx, const std::vector<bool>& values) {
+        if (idx < 0 || idx > rows())
+            throw std::out_of_range("matrix.add_row: row index out of range");
         if (!data_.empty() && values.size() != static_cast<size_t>(columns()))
-            throw std::runtime_error("PineGenericMatrix::add_row: values size must equal columns()");
+            throw std::runtime_error("matrix.add_row: values size must equal columns()");
         std::vector<char> row;
         row.reserve(values.size());
         for (bool v : values) row.push_back(v ? 1 : 0);
@@ -232,18 +280,36 @@ public:
     }
 
     void add_col(int idx, const std::vector<bool>& values) {
+        if (idx < 0 || idx > columns())
+            throw std::out_of_range("matrix.add_col: column index out of range");
         if (data_.empty()) data_.assign(values.size(), std::vector<char>{});
         if (values.size() != data_.size())
-            throw std::runtime_error("PineGenericMatrix::add_col: values size must equal rows()");
+            throw std::runtime_error("matrix.add_col: values size must equal rows()");
         for (size_t r = 0; r < data_.size(); ++r) {
             data_[r].insert(data_[r].begin() + idx, values[r] ? 1 : 0);
         }
     }
 
-    void remove_row(int idx) { data_.erase(data_.begin() + idx); }
-    void remove_col(int idx) { for (auto& r : data_) r.erase(r.begin() + idx); }
-    void swap_rows(int i, int j) { std::swap(data_[i], data_[j]); }
-    void swap_columns(int i, int j) { for (auto& r : data_) std::swap(r[i], r[j]); }
+    void remove_row(int idx) {
+        if (idx < 0 || idx >= rows())
+            throw std::out_of_range("matrix.remove_row: row index out of range");
+        data_.erase(data_.begin() + idx);
+    }
+    void remove_col(int idx) {
+        if (idx < 0 || idx >= columns())
+            throw std::out_of_range("matrix.remove_col: column index out of range");
+        for (auto& r : data_) r.erase(r.begin() + idx);
+    }
+    void swap_rows(int i, int j) {
+        if (i < 0 || i >= rows() || j < 0 || j >= rows())
+            throw std::out_of_range("matrix.swap_rows: row index out of range");
+        std::swap(data_[i], data_[j]);
+    }
+    void swap_columns(int i, int j) {
+        if (i < 0 || i >= columns() || j < 0 || j >= columns())
+            throw std::out_of_range("matrix.swap_columns: column index out of range");
+        for (auto& r : data_) std::swap(r[i], r[j]);
+    }
 
     [[nodiscard]] PineGenericMatrix copy() const {
         PineGenericMatrix m; m.data_ = data_; return m;
@@ -251,6 +317,10 @@ public:
 
     [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
+        if (from_row < 0 || to_row > rows())
+            throw std::out_of_range("matrix.submatrix: row index out of range");
+        if (from_col < 0 || to_col > columns())
+            throw std::out_of_range("matrix.submatrix: column index out of range");
         PineGenericMatrix m;
         m.data_.reserve(static_cast<size_t>(to_row - from_row));
         for (int r = from_row; r < to_row; ++r) {
