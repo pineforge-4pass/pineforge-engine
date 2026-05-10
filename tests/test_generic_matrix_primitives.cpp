@@ -264,6 +264,21 @@ static void test_bounds_add_row_col_idx() {
     assert(throws_oor([&]{ m.add_col(4, std::vector<int>{0,0}); }));
 }
 
+template <typename Fn>
+static bool throws_inv(Fn&& fn) {
+    try { fn(); } catch (const std::invalid_argument&) { return true; } catch (...) {}
+    return false;
+}
+
+static void test_submatrix_ordering_throws() {
+    auto m = PineGenericMatrix<int>::new_(3, 3, 0);
+    assert(throws_inv([&]{ (void)m.submatrix(2, 1, 0, 1); }));
+    assert(throws_inv([&]{ (void)m.submatrix(0, 1, 2, 1); }));
+    // Boundary: append-style (idx == size for inserts) and from==to (empty slice) ok
+    auto empty = m.submatrix(1, 1, 0, 0);
+    assert(empty.rows() == 0);
+}
+
 static void test_bounds_submatrix() {
     auto m = PineGenericMatrix<int>::new_(2, 3, 0);
     assert(throws_oor([&]{ (void)m.submatrix(-1, 1, 0, 1); }));
@@ -294,6 +309,7 @@ int main() {
     test_bounds_remove_swap();
     test_bounds_add_row_col_idx();
     test_bounds_submatrix();
+    test_submatrix_ordering_throws();
     std::printf("All test_generic_matrix_primitives tests passed.\n");
     return 0;
 }

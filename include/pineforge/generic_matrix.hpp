@@ -126,6 +126,10 @@ public:
             throw std::out_of_range("matrix.submatrix: row index out of range");
         if (from_col < 0 || to_col > columns())
             throw std::out_of_range("matrix.submatrix: column index out of range");
+        if (from_row > to_row)
+            throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
+        if (from_col > to_col)
+            throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
         PineGenericMatrix m;
         m.data_.reserve(static_cast<size_t>(to_row - from_row));
         for (int r = from_row; r < to_row; ++r) {
@@ -321,6 +325,10 @@ public:
             throw std::out_of_range("matrix.submatrix: row index out of range");
         if (from_col < 0 || to_col > columns())
             throw std::out_of_range("matrix.submatrix: column index out of range");
+        if (from_row > to_row)
+            throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
+        if (from_col > to_col)
+            throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
         PineGenericMatrix m;
         m.data_.reserve(static_cast<size_t>(to_row - from_row));
         for (int r = from_row; r < to_row; ++r) {
