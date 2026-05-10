@@ -88,9 +88,15 @@ public:
         }
         if (values.size() != data_.size())
             throw std::runtime_error("matrix.add_col: values size must equal rows()");
+        // Strong guarantee: build a new buffer, swap on success.
+        std::vector<std::vector<T>> next;
+        next.reserve(data_.size());
         for (size_t r = 0; r < data_.size(); ++r) {
-            data_[r].insert(data_[r].begin() + idx, values[r]);
+            std::vector<T> row = data_[r];
+            row.insert(row.begin() + idx, values[r]);
+            next.push_back(std::move(row));
         }
+        data_.swap(next);
     }
 
     void remove_row(int idx) {
@@ -102,7 +108,14 @@ public:
     void remove_col(int idx) {
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.remove_col: column index out of range");
-        for (auto& r : data_) r.erase(r.begin() + idx);
+        std::vector<std::vector<T>> next;
+        next.reserve(data_.size());
+        for (const auto& r : data_) {
+            std::vector<T> row = r;
+            row.erase(row.begin() + idx);
+            next.push_back(std::move(row));
+        }
+        data_.swap(next);
     }
 
     void swap_rows(int i, int j) {
@@ -114,7 +127,9 @@ public:
     void swap_columns(int i, int j) {
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             throw std::out_of_range("matrix.swap_columns: column index out of range");
-        for (auto& r : data_) std::swap(r[i], r[j]);
+        std::vector<std::vector<T>> next = data_;
+        for (auto& r : next) std::swap(r[i], r[j]);
+        data_.swap(next);
     }
 
     [[nodiscard]] PineGenericMatrix copy() const {
@@ -188,12 +203,13 @@ public:
         flat.reserve(static_cast<size_t>(total));
         for (const auto& r : data_) for (const auto& v : r) flat.push_back(v);
         flat.resize(static_cast<size_t>(total), T{});
-        data_.assign(static_cast<size_t>(new_rows),
-                     std::vector<T>(static_cast<size_t>(new_cols), T{}));
+        std::vector<std::vector<T>> next(static_cast<size_t>(new_rows),
+                                         std::vector<T>(static_cast<size_t>(new_cols), T{}));
         size_t k = 0;
         for (int r = 0; r < new_rows; ++r)
             for (int c = 0; c < new_cols; ++c)
-                data_[r][c] = flat[k++];
+                next[r][c] = flat[k++];
+        data_.swap(next);
     }
 
     void reverse() { std::reverse(data_.begin(), data_.end()); }
@@ -296,9 +312,14 @@ public:
         if (data_.empty()) data_.assign(values.size(), std::vector<char>{});
         if (values.size() != data_.size())
             throw std::runtime_error("matrix.add_col: values size must equal rows()");
+        std::vector<std::vector<char>> next;
+        next.reserve(data_.size());
         for (size_t r = 0; r < data_.size(); ++r) {
-            data_[r].insert(data_[r].begin() + idx, values[r] ? 1 : 0);
+            std::vector<char> row = data_[r];
+            row.insert(row.begin() + idx, values[r] ? 1 : 0);
+            next.push_back(std::move(row));
         }
+        data_.swap(next);
     }
 
     void remove_row(int idx) {
@@ -309,7 +330,14 @@ public:
     void remove_col(int idx) {
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.remove_col: column index out of range");
-        for (auto& r : data_) r.erase(r.begin() + idx);
+        std::vector<std::vector<char>> next;
+        next.reserve(data_.size());
+        for (const auto& r : data_) {
+            std::vector<char> row = r;
+            row.erase(row.begin() + idx);
+            next.push_back(std::move(row));
+        }
+        data_.swap(next);
     }
     void swap_rows(int i, int j) {
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
@@ -319,7 +347,9 @@ public:
     void swap_columns(int i, int j) {
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             throw std::out_of_range("matrix.swap_columns: column index out of range");
-        for (auto& r : data_) std::swap(r[i], r[j]);
+        std::vector<std::vector<char>> next = data_;
+        for (auto& r : next) std::swap(r[i], r[j]);
+        data_.swap(next);
     }
 
     [[nodiscard]] PineGenericMatrix copy() const {
@@ -356,12 +386,13 @@ public:
         flat.reserve(static_cast<size_t>(total));
         for (const auto& r : data_) for (char v : r) flat.push_back(v);
         flat.resize(static_cast<size_t>(total), 0);
-        data_.assign(static_cast<size_t>(new_rows),
-                     std::vector<char>(static_cast<size_t>(new_cols), 0));
+        std::vector<std::vector<char>> next(static_cast<size_t>(new_rows),
+                                            std::vector<char>(static_cast<size_t>(new_cols), 0));
         size_t k = 0;
         for (int r = 0; r < new_rows; ++r)
             for (int c = 0; c < new_cols; ++c)
-                data_[r][c] = flat[k++];
+                next[r][c] = flat[k++];
+        data_.swap(next);
     }
 
     void reverse() { std::reverse(data_.begin(), data_.end()); }
