@@ -63,7 +63,10 @@ public:
     std::vector<double> completed_closes;
 
     LowerTimeframeEmulationHarness() {
-        register_security_eval(0, "5", "", false, false);
+        // Use the lower-TF API: regular request.security with a
+        // finer-than-input TF is now rejected by the validator;
+        // callers must opt in via register_security_lower_tf_eval.
+        register_security_lower_tf_eval(0, "5", "");
     }
 
     void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
@@ -87,7 +90,15 @@ public:
 class LowerTimeframeUnsupportedFlagHarness : public BacktestEngine {
 public:
     explicit LowerTimeframeUnsupportedFlagHarness(bool lookahead_on, bool gaps_on) {
-        register_security_eval(0, "5", "", lookahead_on, gaps_on);
+        // Register the LTF-array path then override the flags so we
+        // can prove LTF emulation rejects non-default lookahead/gaps.
+        register_security_lower_tf_eval(0, "5", "");
+        // The lower-TF-array helper pins flags off; flip them back on
+        // here to drive the unsupported-flag rejection path.
+        if (!security_eval_states_.empty()) {
+            security_eval_states_.back().lookahead_on = lookahead_on;
+            security_eval_states_.back().gaps_on = gaps_on;
+        }
     }
 
     void on_bar(const Bar& bar) override {
@@ -178,7 +189,7 @@ void test_request_security_lower_tf_requires_finer_input_bars() {
     require(!strat.last_error().empty(),
             "Lower-TF request.security should fail without finer input bars");
     require(
-        strat.last_error().find("request.security lower TF requires finer input bars")
+        strat.last_error().find("Use request.security_lower_tf for sub-input timeframes")
             != std::string::npos,
         std::string("Unexpected lower-TF error: ") + strat.last_error()
     );
@@ -462,7 +473,7 @@ void test_request_security_lower_tf_array_rejects_higher_timeframe() {
     );
     require(
         strat.last_error().find(
-            "request.security_lower_tf requires a timeframe finer than the chart's input timeframe"
+            "Lower-TF API requires a strictly finer timeframe"
         ) != std::string::npos,
         std::string("Unexpected higher-TF lower-TF-array error: ") + strat.last_error()
     );
@@ -492,7 +503,7 @@ void test_request_security_lower_tf_array_rejects_non_divisible_timeframe() {
     );
     require(
         strat.last_error().find(
-            "request.security lower TF requires finer input bars"
+            "is not an integer divisor of input"
         ) != std::string::npos,
         std::string("Unexpected non-divisible lower-TF-array error: ")
             + strat.last_error()

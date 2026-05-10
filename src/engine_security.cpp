@@ -77,6 +77,18 @@ int BacktestEngine::security_lower_tf_sub_bar_index(int sec_id) const {
 }
 
 
+// Safe wrapper around tf_to_seconds: returns <=0 on any parse failure
+// (including std::invalid_argument from stoi on garbage like "abc").
+// We use this instead of letting stoi escape so we can attach the
+// offending literal to the diagnostic.
+static int safe_tf_to_seconds(const std::string& tf) {
+    try {
+        return tf_to_seconds(tf);
+    } catch (...) {
+        return 0;
+    }
+}
+
 void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
     if (input_tf.empty()) {
         if (!security_eval_states_.empty()) {
@@ -87,6 +99,11 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
         return;
     }
 
+    // Note: script_tf >= input_tf is enforced separately in
+    // BacktestEngine::run() (see engine_run.cpp ~line 199), which throws
+    // "script timeframe must be coarser than or equal to input timeframe"
+    // when the script_tf/input_tf ratio is invalid. We do not re-check
+    // that invariant here.
     int input_seconds = tf_to_seconds(input_tf);
     for (auto& state : security_eval_states_) {
         state.lower_tf_requested = false;
@@ -97,7 +114,13 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
 
         int lower_ratio = 0;
         int lower_seconds = 0;
-        if (supports_lower_tf_emulation(input_tf, state.tf, &lower_ratio, &lower_seconds)) {
+        bool ltf_supported = supports_lower_tf_emulation(
+            input_tf, state.tf, &lower_ratio, &lower_seconds);
+        if (ltf_supported && state.lower_tf_array_requested) {
+            // Only request.security_lower_tf may opt into LTF emulation.
+            // request.security with a finer TF must be rejected even
+            // when the ratio happens to be an integer — see the
+            // finer-than-input check below.
             state.lower_tf_requested = true;
             ensure_supported_lower_tf_emulation_flags(state.lookahead_on, state.gaps_on);
             state.lower_tf_emulation = true;
@@ -106,26 +129,55 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
             continue;
         }
 
-        int requested_seconds = tf_to_seconds(state.tf);
-        int req_ratio = tf_ratio(input_tf, state.tf);
-        if ((input_seconds > 0 && requested_seconds > 0 && requested_seconds < input_seconds)
-            || req_ratio == -2) {
-            state.lower_tf_requested = true;
+        // Parse the requested TF defensively so a garbage literal like
+        // "abc" produces a precise diagnostic instead of an opaque
+        // std::invalid_argument from stoi.
+        int requested_seconds = safe_tf_to_seconds(state.tf);
+        if (requested_seconds <= 0) {
+            const char* api = state.lower_tf_array_requested
+                ? "request.security_lower_tf" : "request.security";
             throw std::runtime_error(
-                "request.security lower TF requires finer input bars: requested "
-                + state.tf + " from input timeframe " + input_tf
+                std::string(api) + ": invalid timeframe literal '" + state.tf + "'"
             );
         }
 
-        // ``request.security_lower_tf`` only makes sense when the requested
-        // TF is strictly finer than the chart's input TF AND the ratio is
-        // an exact integer divisor (the supports_lower_tf_emulation check
-        // above). If the requested TF is the same or coarser, TV would
-        // raise an error rather than silently returning an empty array.
+        if (requested_seconds < input_seconds) {
+            // Finer than input — only valid for security_lower_tf with
+            // an integer divisor ratio.
+            if (!state.lower_tf_array_requested) {
+                throw std::runtime_error(
+                    "request.security: requested timeframe '" + state.tf
+                    + "' is finer than input '" + input_tf
+                    + "'. Use request.security_lower_tf for sub-input timeframes."
+                );
+            }
+            // LTF case: must be an exact integer divisor.
+            if (input_seconds % requested_seconds != 0) {
+                throw std::runtime_error(
+                    "request.security_lower_tf: requested timeframe '" + state.tf
+                    + "' is not an integer divisor of input '" + input_tf
+                    + "' (ratio " + std::to_string(
+                        static_cast<double>(input_seconds) / requested_seconds)
+                    + " is non-integer; chart bars cannot be evenly subdivided)"
+                );
+            }
+            // Defensive: integer-ratio finer LTF should already have been
+            // accepted by supports_lower_tf_emulation above. Reaching
+            // here implies a mismatch between the two checks (e.g. a
+            // non-fixed-intraday TF on one side).
+            throw std::runtime_error(
+                "request.security_lower_tf: internal error - passed integer-ratio check but emulation support returned false (requested '"
+                + state.tf + "', input '" + input_tf + "')"
+            );
+        }
+
+        // requested_seconds >= input_seconds: HTF or same TF. Valid for
+        // request.security; never valid for request.security_lower_tf.
         if (state.lower_tf_array_requested) {
             throw std::runtime_error(
-                "request.security_lower_tf requires a timeframe finer than the chart's input timeframe: requested "
-                + state.tf + " from input timeframe " + input_tf
+                "request.security_lower_tf: requested timeframe '" + state.tf
+                + "' is not finer than input '" + input_tf
+                + "'. Lower-TF API requires a strictly finer timeframe."
             );
         }
     }
