@@ -6,7 +6,14 @@
 
 namespace pineforge {
 
-template<typename T> T na();
+// Generic fallback: returns T{} for any default-constructible T.
+// Explicit specializations below still take precedence for primitive types.
+template<typename T>
+inline T na() {
+    static_assert(std::is_default_constructible_v<T>,
+                  "na<T>() requires T to be default-constructible");
+    return T{};
+}
 template<> inline double na<double>() { return std::numeric_limits<double>::quiet_NaN(); }
 template<> inline int na<int>() { return std::numeric_limits<int>::min(); }
 template<> inline int64_t na<int64_t>() { return std::numeric_limits<int64_t>::min(); }
