@@ -16,12 +16,23 @@ class PineGenericMatrix {
 public:
     ~PineGenericMatrix() = default;
 
-    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, T init = T{}) {
+    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, T init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
         PineGenericMatrix m;
         m.data_.assign(static_cast<size_t>(rows),
                        std::vector<T>(static_cast<size_t>(cols), init));
+        return m;
+    }
+
+    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols) {
+        static_assert(std::is_default_constructible_v<T>,
+                      "matrix.new: no-init overload requires default-constructible T");
+        if (rows < 0 || cols < 0)
+            throw std::invalid_argument("matrix.new: negative dimensions");
+        PineGenericMatrix m;
+        m.data_.assign(static_cast<size_t>(rows),
+                       std::vector<T>(static_cast<size_t>(cols), T{}));
         return m;
     }
 
@@ -238,13 +249,17 @@ class PineGenericMatrix<bool> {
     std::vector<std::vector<char>> data_;
 
 public:
-    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init = false) {
+    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
         PineGenericMatrix m;
         m.data_.assign(static_cast<size_t>(rows),
                        std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
         return m;
+    }
+
+    [[nodiscard]] static PineGenericMatrix new_(int rows, int cols) {
+        return new_(rows, cols, false);
     }
 
     bool get(int row, int col) const {
