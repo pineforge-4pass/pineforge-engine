@@ -16,6 +16,8 @@ public:
     ~PineGenericMatrix() = default;
 
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, T init = T{}) {
+        if (rows < 0 || cols < 0)
+            throw std::invalid_argument("matrix.new: negative dimensions");
         PineGenericMatrix m;
         m.data_.assign(static_cast<size_t>(rows),
                        std::vector<T>(static_cast<size_t>(cols), init));
@@ -219,6 +221,8 @@ class PineGenericMatrix<bool> {
 
 public:
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init = false) {
+        if (rows < 0 || cols < 0)
+            throw std::invalid_argument("matrix.new: negative dimensions");
         PineGenericMatrix m;
         m.data_.assign(static_cast<size_t>(rows),
                        std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
