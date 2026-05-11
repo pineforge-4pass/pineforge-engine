@@ -391,6 +391,111 @@ static void test_none_unchanged() {
     if (b) CHECK(near(b->qty, 5.0));
 }
 
+// Two strategy.exit brackets attached to the same long entry, each with
+// its own qty + oca_name. Tests that:
+//   (a) ``qty=N`` on strategy.exit is honoured as an absolute reservation
+//       (so two qty=1 brackets coexist against a qty=2 position instead
+//       of the first one swallowing 100% of the position).
+//   (b) When bracket A's TP fires, only Group A siblings are cancelled —
+//       Group B remains pending and can fire later.
+//
+// Pre-fix: ``strategy_exit`` ignored both ``qty`` and ``oca_name`` (the
+// codegen warned + dropped them). Symptoms in
+// validation_oca/oca-three-way-probe-02-multi-group-partial: TV=1242
+// trades, engine=716 trades (engine misses ~42% because the first
+// bracket's qty_percent=100 reserved the whole position so the second
+// bracket never placed).
+static void test_strategy_exit_two_brackets_independent_oca_groups() {
+    std::printf("test_strategy_exit_two_brackets_independent_oca_groups\n");
+    class TwoBracketProbe : public BacktestEngine {
+    public:
+        struct TradeRow {
+            std::string entry_id;
+            std::string exit_id;
+            double qty;
+            double exit_price;
+        };
+        std::vector<TradeRow> closed_trades;
+
+        TwoBracketProbe() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 2.0;
+            slippage_ = 0;
+            commission_value_ = 0;
+            pyramiding_ = 1;
+        }
+        void on_bar(const Bar& bar) override {
+            (void)bar;
+            // Bar 0: open long qty 2 (default_qty_value_).
+            if (bar_index_ == 0) {
+                strategy_entry("L", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(),
+                               2.0, "long entry");
+            }
+            // Bars 1+: while long, attach two qty=1 brackets in distinct
+            // OCA groups. Bracket A is tight (TP=110, SL=90); bracket B
+            // is wide (TP=130, SL=70).
+            if (position_side_ == PositionSide::LONG) {
+                strategy_exit("X_A", "L",
+                              /*limit=*/110.0, /*stop=*/90.0,
+                              /*trail_points=*/std::numeric_limits<double>::quiet_NaN(),
+                              /*trail_offset=*/std::numeric_limits<double>::quiet_NaN(),
+                              /*trail_price=*/std::numeric_limits<double>::quiet_NaN(),
+                              /*qty_percent=*/100.0,
+                              /*comment=*/"X_A",
+                              /*qty=*/1.0,
+                              /*oca_name=*/"GRP_A");
+                strategy_exit("X_B", "L",
+                              /*limit=*/130.0, /*stop=*/70.0,
+                              /*trail_points=*/std::numeric_limits<double>::quiet_NaN(),
+                              /*trail_offset=*/std::numeric_limits<double>::quiet_NaN(),
+                              /*trail_price=*/std::numeric_limits<double>::quiet_NaN(),
+                              /*qty_percent=*/100.0,
+                              /*comment=*/"X_B",
+                              /*qty=*/1.0,
+                              /*oca_name=*/"GRP_B");
+            }
+            if (bar_index_ == 6) {
+                for (const auto& t : trades_) {
+                    closed_trades.push_back({t.entry_id, t.exit_id, t.qty, t.exit_price});
+                }
+            }
+        }
+    };
+    TwoBracketProbe p;
+    Bar bars[7];
+    // Bar 1 fills L at open=100. Bar 2: high=112 → X_A's TP=110 fires
+    // (qty=1). Bar 3: high=132 → X_B's TP=130 fires (qty=1). Both
+    // brackets must trigger independently; pre-fix only X_A would.
+    double opens[7]  = { 100, 100, 105, 120, 120, 120, 120 };
+    double highs[7]  = { 101, 105, 112, 132, 121, 121, 121 };
+    double lows[7]   = {  99,  99, 104, 119, 119, 119, 119 };
+    double closes[7] = { 100, 105, 112, 130, 120, 120, 120 };
+    for (int i = 0; i < 7; ++i) {
+        bars[i].open      = opens[i];
+        bars[i].high      = highs[i];
+        bars[i].low       = lows[i];
+        bars[i].close     = closes[i];
+        bars[i].volume    = 1000.0;
+        bars[i].timestamp = (int64_t)(i + 1) * 60'000;
+    }
+    p.run(bars, 7);
+
+    // Both bracket fires must produce a trade. With the bug, only X_A
+    // fired (X_B was never placed because X_A reserved 100% of qty).
+    CHECK(p.closed_trades.size() == 2);
+    bool seen_a = false, seen_b = false;
+    for (const auto& tr : p.closed_trades) {
+        CHECK(near(tr.qty, 1.0));
+        if (tr.exit_id == "X_A") { seen_a = true; CHECK(near(tr.exit_price, 110.0)); }
+        if (tr.exit_id == "X_B") { seen_b = true; CHECK(near(tr.exit_price, 130.0)); }
+    }
+    CHECK(seen_a);
+    CHECK(seen_b);
+}
+
 int main() {
     test_reduce_two_sibling_partial();
     test_reduce_three_sibling();
@@ -399,6 +504,7 @@ int main() {
     test_cross_group_isolation();
     test_cancel_oca_partial_fill_keeps_sibling();
     test_none_unchanged();
+    test_strategy_exit_two_brackets_independent_oca_groups();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

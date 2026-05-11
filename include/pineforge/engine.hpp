@@ -369,7 +369,9 @@ protected:
                        double trail_offset = std::numeric_limits<double>::quiet_NaN(),
                        double trail_price = std::numeric_limits<double>::quiet_NaN(),
                        double qty_percent = 100.0,
-                       const std::string& comment = "");
+                       const std::string& comment = "",
+                       double qty = std::numeric_limits<double>::quiet_NaN(),
+                       const std::string& oca_name = "");
     void strategy_cancel(const std::string& id);
     void strategy_cancel_all();
     void strategy_order(const std::string& id, bool is_long, double qty,
