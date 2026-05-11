@@ -199,9 +199,20 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double limit_price, double stop_price,
                                     double trail_points, double trail_offset,
                                     double trail_price, double qty_percent,
-                                    const std::string& comment) {
+                                    const std::string& comment,
+                                    double qty, const std::string& oca_name) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
+    bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
+    // If an explicit qty is given, derive an effective qp from the current
+    // position size so downstream FIFO accounting (compute_exit_reserved_qty,
+    // already-reserved tally, etc.) sees a consistent fraction. The order
+    // itself stores the absolute qty so the per-fill execution path
+    // honours the literal request.
+    if (has_explicit_qty && position_qty_ > 1e-10) {
+        double clamped_qty = std::min(qty, position_qty_);
+        qp = (clamped_qty / position_qty_) * 100.0;
+    }
     bool is_partial = qp < 100.0 - 1e-9;
     bool has_trail_request = !std::isnan(trail_points);
 
@@ -217,9 +228,39 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                               preserved_seq, preserved_reserved_qty);
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
-    if (!compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
-                                   qp, is_partial, reserved_qty)) {
-        return;
+    if (has_explicit_qty) {
+        // Honour the explicit qty literally (clamped to the live position
+        // and subject to the same already-reserved accounting). This is
+        // the path Pine's ``strategy.exit(... qty=N)`` follows when N is
+        // strictly smaller than the open position size — required for
+        // multi-bracket per-position exits (validation_oca/oca-three-way-
+        // probe-02 has two qty=1 brackets attached to a qty=2 entry).
+        if (position_side_ == PositionSide::FLAT) {
+            // Defer placement; FIFO accounting will recompute when a
+            // position eventually exists.
+            reserved_qty = std::min(qty, std::numeric_limits<double>::infinity());
+        } else {
+            double already_reserved = 0.0;
+            for (const auto& o : pending_orders_) {
+                if (o.type != OrderType::EXIT || o.from_entry != from_entry) continue;
+                if (!std::isnan(o.qty)) {
+                    already_reserved += o.qty;
+                } else {
+                    double oqp = std::isnan(o.qty_percent) ? 100.0
+                        : std::clamp(o.qty_percent, 0.0, 100.0);
+                    already_reserved += position_qty_ * (oqp / 100.0);
+                }
+            }
+            double available = std::max(0.0, position_qty_ - already_reserved);
+            reserved_qty = std::min(qty, available);
+            if (reserved_qty <= 1e-10) return;
+        }
+        is_partial = reserved_qty < position_qty_ - 1e-9;
+    } else {
+        if (!compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
+                                       qp, is_partial, reserved_qty)) {
+            return;
+        }
     }
 
     PendingOrder order;
@@ -235,8 +276,15 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.qty_type = -1;
     order.qty_percent = qp;
     order.requested_partial = is_partial;
-    order.oca_name = "";
-    order.oca_type = 0;
+    // OCA-name plumbing: ``strategy.exit`` supports oca_name (Pine v6) so
+    // siblings in different OCA groups can fire independently. The cancel
+    // sweep predicate (engine_fills.cpp::apply_filled_order_to_state →
+    // cancel_oca_group) already isolates groups by name; without this
+    // assignment all strategy.exit-issued orders shared an empty name and
+    // the first bracket's TP would silently leave the other bracket's
+    // legs intact (probe oca-three-way-02 lost ~42% of its trades).
+    order.oca_name = oca_name;
+    order.oca_type = oca_name.empty() ? 0 : 1;  // strategy.exit semantics: cancel
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
     order.created_position_side = position_side_;
