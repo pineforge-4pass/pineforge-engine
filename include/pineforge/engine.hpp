@@ -219,7 +219,17 @@ protected:
     PositionSide position_side_ = PositionSide::FLAT;
     double position_entry_price_ = 0.0;   // volume-weighted average (for strategy calculations)
     int64_t position_entry_time_ = 0;
-    double position_qty_ = 1.0;
+    // Position is FLAT until the first entry fires; the canonical
+    // accessor ``signed_position_size`` already reads as 0 when FLAT
+    // regardless of this default, but several internal carry- and
+    // risk-gating reads (strategy_entry's tv_carry_qty capture,
+    // check_risk_allow_entry's max-position check) read position_qty_
+    // directly. A non-zero default leaks into those reads on the very
+    // first call of any session, producing phantom carry growth (probe
+    // 62 trade #1 fired qty=2 from a default-leaked carry=1) and
+    // spuriously blocked entries when ``risk_max_position_size_=1``.
+    // Initialising to 0 keeps the canonical and direct reads aligned.
+    double position_qty_ = 0.0;
     int position_entry_count_ = 0;  // number of entries in current direction (for pyramiding)
     int position_open_bar_ = -1;    // bar_index_ when position was opened (for exit delay)
     std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting

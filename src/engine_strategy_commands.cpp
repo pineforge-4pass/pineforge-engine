@@ -21,6 +21,7 @@
  */
 
 #include <pineforge/engine.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -29,8 +30,42 @@
 namespace pineforge {
 
 namespace {
-inline bool trading_is_active(int64_t current_ms, int64_t start_ms) {
-    return current_ms >= start_ms;
+// TradingView replays the strategy continuously from the FIRST OHLCV bar.
+// The validator's ``trade_start_time`` gate intentionally suppresses
+// strategy commands during the warmup span so TA / var accumulators
+// converge without polluting comparison output. But the gate is set to
+// ``TV first entry - input bar`` (see _trade_start_time_ms_from_tv in
+// the validator) which, on a 15m strategy fed 1m OHLCV, lands one
+// MINUTE before the first TV trade — far inside the script bar that
+// CONTAINS the first TV trade, but BEFORE the script bar that
+// PRECEDES it.
+//
+// A stop/limit placed on the immediately-preceding script bar (where
+// TV's first trade originates) is therefore dropped under the strict
+// gate, and the engine's first in-window trade fires several bars
+// later from a different placement entirely. Validation/62-same-id-
+// stop-cross-before-modify is the canonical victim: TV's 03-31 03:30
+// long entry was longFirst's 03:15 stop firing — pre-fix the 03:15
+// strategy.entry was gated, longModify at 03:30 armed a different
+// stop that fired hours later, and the validator's price-fallback
+// alignment then misaligned 64 in-window trades.
+//
+// Subtracting one script TF interval from the gate restores the
+// previous script bar's strategy commands (just enough to let
+// pre-window placements fire on the first in-window bar) without
+// re-introducing the 411 extra pre-window trades that an
+// unconditional bypass produces in continuously-firing strategies
+// like basic/volty-expan. The buffer matches TV's chart-bar
+// resolution rather than the validator-chosen input-bar resolution.
+inline bool trading_is_active(int64_t current_ms, int64_t start_ms,
+                              int script_tf_seconds) {
+    if (start_ms == std::numeric_limits<int64_t>::min()) {
+        return true;
+    }
+    int64_t buffer_ms = (script_tf_seconds > 0)
+                           ? static_cast<int64_t>(script_tf_seconds) * 1000
+                           : 0;
+    return current_ms >= start_ms - buffer_ms;
 }
 }
 
@@ -39,7 +74,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
 
     // TradingView broker rule: market-entry orders are admitted only
     // when ``qty * <signal-bar close> * margin_pct/100 <= equity``.
@@ -115,7 +150,21 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     // captures the post-close position size; when entry is called BEFORE
     // close, ``pending_close_qty_in_bar_`` is still 0 and the carry
     // equals the open position.
-    double effective_pos = std::max(0.0, position_qty_ - pending_close_qty_in_bar_);
+    //
+    // Side-gate: ``position_qty_`` is undefined whenever ``position_side_``
+    // is FLAT — the engine's default ``position_qty_ = 1.0`` would leak
+    // into ``tv_carry_qty`` for the FIRST priced ``strategy.entry`` call
+    // of any session that has never opened a position before, fabricating
+    // a phantom carry. Probe 62 manifests this: the longModify stop
+    // placed at 03:30 (after the warmup gate skipped longFirst at 03:15)
+    // captured carry=1 from the default qty, then fired later with
+    // qty=2 instead of 1, breaking parity from trade #1 onward. Reading
+    // the position size through the canonical ``signed_position_size``
+    // path returns 0 when FLAT regardless of the underlying default.
+    double live_pos_qty = (position_side_ == PositionSide::FLAT)
+                              ? 0.0
+                              : position_qty_;
+    double effective_pos = std::max(0.0, live_pos_qty - pending_close_qty_in_bar_);
     order.tv_carry_qty = effective_pos;
     order.comment = comment;
 
@@ -146,7 +195,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
 
 void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
                                     double qty, double qty_percent, bool immediately) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
@@ -201,7 +250,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double trail_price, double qty_percent,
                                     const std::string& comment,
                                     double qty, const std::string& oca_name) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
     // If an explicit qty is given, derive an effective qp from the current
@@ -309,7 +358,7 @@ void BacktestEngine::strategy_cancel_all() {
 void BacktestEngine::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
     int64_t preserved_seq = 0;
     for (const auto& o : pending_orders_) {
         if (o.id == id) {
