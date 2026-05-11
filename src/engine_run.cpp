@@ -88,10 +88,24 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
     int total_sub = (int)sub_bars.size();
     diag_magnifier_sub_bars_processed_ += total_sub;
 
+    // Real-bar magnifier mode: when we have multiple input sub-bars per script
+    // bar (i.e. input_tf < script_tf and the validator/caller fed real lower-TF
+    // OHLCV), each sub-bar's OHLC already encodes real intra-bar movement.
+    // Walking each real sub-bar at its natural ENDPOINTS (O,H,L,C) reproduces
+    // TradingView's broker emulator exactly — TV uses ENDPOINTS only and steps
+    // through the lower-TF bars one at a time. Synthetic distributions
+    // (UNIFORM/COSINE/TRIANGLE/etc.) interpolate spurious mid-points inside a
+    // 1m bar that don't correspond to any real tick, adding noise. With real
+    // sub-bars in hand we therefore force ENDPOINTS+4 regardless of the
+    // user-requested distribution, and skip volume-weighted upsampling: extra
+    // ticks beyond the four real OHLC corners cannot recover information that
+    // wasn't in the input feed.
+    const bool real_bar_magnifier_mode = (total_sub > 1);
+
     // Precompute per-script-bar mean volume so volume-weighted sampling can
     // scale each sub-bar's tick count relative to the local average.
     double mean_vol = 0.0;
-    if (magnifier_volume_weighted_ && total_sub > 0) {
+    if (magnifier_volume_weighted_ && total_sub > 0 && !real_bar_magnifier_mode) {
         double sum_vol = 0.0;
         for (const Bar& sb : sub_bars) sum_vol += sb.volume;
         mean_vol = sum_vol / total_sub;
@@ -107,13 +121,20 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
             feed_security_eval_state(state, sb);
         }
 
-        std::vector<double> samples =
-            magnifier_volume_weighted_
-                ? sample_price_path_volume_weighted(sb, magnifier_samples_, mean_vol,
-                                                    /*min_samples=*/2,
-                                                    /*max_samples=*/std::max(magnifier_samples_ * 4, 8),
-                                                    magnifier_dist_)
-                : sample_price_path(sb, magnifier_samples_, magnifier_dist_);
+        std::vector<double> samples;
+        if (real_bar_magnifier_mode) {
+            // Each real sub-bar's OHLC turning points are the ticks. Always 4
+            // samples = [O, H, L, C] in TV-style path order.
+            samples = sample_price_path(sb, 4, MagnifierDistribution::ENDPOINTS);
+        } else if (magnifier_volume_weighted_) {
+            samples = sample_price_path_volume_weighted(
+                sb, magnifier_samples_, mean_vol,
+                /*min_samples=*/2,
+                /*max_samples=*/std::max(magnifier_samples_ * 4, 8),
+                magnifier_dist_);
+        } else {
+            samples = sample_price_path(sb, magnifier_samples_, magnifier_dist_);
+        }
         int n_samples = (int)samples.size();
         diag_magnifier_sample_ticks_processed_ += n_samples;
 
