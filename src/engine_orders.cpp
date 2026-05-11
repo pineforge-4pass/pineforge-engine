@@ -233,6 +233,29 @@ void BacktestEngine::cancel_oca_group(const std::string& oca_name, const std::st
         pending_orders_.end());
 }
 
+// Pine v6 strategy.oca.reduce: when one sibling fills qty Q, every other
+// sibling's remaining qty is reduced by Q. Siblings whose remaining qty
+// reaches <= 0 are cancelled outright (matches TradingView behaviour and
+// degenerates to oca.cancel when the filling order's qty >= sibling qty).
+// Siblings using default sizing (qty == NaN) cannot have a meaningful
+// per-order qty applied at place time, so we conservatively cancel them
+// (this matches the prior, blanket-cancel behaviour for that subset).
+void BacktestEngine::reduce_oca_group(const std::string& oca_name,
+                                      const std::string& exclude_id,
+                                      double filled_qty) {
+    if (oca_name.empty()) return;
+    if (!(filled_qty > 0.0)) return;  // nothing to subtract
+    pending_orders_.erase(
+        std::remove_if(pending_orders_.begin(), pending_orders_.end(),
+            [&](PendingOrder& o) {
+                if (o.oca_name != oca_name || o.id == exclude_id) return false;
+                if (std::isnan(o.qty)) return true;  // default-sized: cancel
+                o.qty -= filled_qty;
+                return o.qty <= 1e-12;
+            }),
+        pending_orders_.end());
+}
+
 
 void BacktestEngine::purge_exit_orders() {
     pending_orders_.erase(
