@@ -275,6 +275,11 @@ protected:
 
     // --- SymInfo + Input injection ---
     SymInfo syminfo_;
+    // Chart's display timezone — separate from ``syminfo_.timezone`` (the
+    // exchange TZ). Set by ``set_chart_timezone`` / the C ABI's
+    // ``strategy_set_chart_timezone``. See the doc on ``set_chart_timezone``
+    // for why these two TZ slots must NOT alias.
+    std::string chart_timezone_;
     std::unordered_map<std::string, std::string> inputs_;
 
     // Input injection helpers for generated code
@@ -1000,15 +1005,37 @@ public:
         trade_start_time_ = timestamp_ms;
     }
 
-    // Override syminfo_.timezone outside of run(syminfo, ...). Used by the
-    // C ABI's strategy_set_chart_timezone() so harnesses (validator, py
-    // wrapper) can supply the chart TZ for ``hour``/``minute``/``dayofweek``
-    // semantics without going through the full SymInfo overload of run().
-    // Empty / "UTC" / "Etc/UTC" all behave as UTC.
+    // Set the chart's display timezone. Stored in a dedicated slot so it
+    // does NOT clobber ``syminfo_.timezone`` (the symbol/exchange TZ).
+    //
+    // Pre-fix this method wrote the chart TZ into ``syminfo_.timezone``,
+    // which the codegen reads as the default tz argument of the 1-arg
+    // ``hour(time)`` / ``minute(time)`` / ``dayofweek(time)`` form. That
+    // conflated two distinct TV concepts and silently shifted the result
+    // by the chart-vs-exchange offset (e.g. Asia/Taipei vs UTC = +8h)
+    // for crypto symbols. The shift cascaded into ``hour``-bucketed
+    // accumulators — see
+    // ``validation_typed_matrix/typed-matrix-probe-01-bool-regime-mask``,
+    // whose 24x7 ``matrix<bool>`` regime mask filled in 8 hours earlier
+    // than TV and produced ~9% trade-count divergence (TV 773, engine 714
+    // before this fix; ~778 after).
+    //
+    // TV semantics (Pine v6 reference docs):
+    //   * Bare variable ``hour`` / ``minute`` / ``dayofweek``: exchange
+    //     timezone (``syminfo.timezone``). Already correct via
+    //     ``_decompose_bar_time()``'s hardcoded ``gmtime_r``, which
+    //     matches the corpus' ETH-USDT (UTC) data.
+    //   * 1-arg function form ``hour(time)``: defaults its tz arg to
+    //     ``syminfo.timezone`` (NOT the chart display TZ). With this
+    //     change, ``syminfo_.timezone`` retains its constructor default
+    //     ("UTC") and the codegen lambda lands on the cheap gmtime_r
+    //     branch — matching TV.
+    //   * 2-arg function form ``hour(time, tz)``: honours the explicit
+    //     argument, unchanged by this fix.
     void set_chart_timezone(const std::string& tz) {
-        syminfo_.timezone = tz;
+        chart_timezone_ = tz;
     }
-    const std::string& chart_timezone() const { return syminfo_.timezone; }
+    const std::string& chart_timezone() const { return chart_timezone_; }
 
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.
