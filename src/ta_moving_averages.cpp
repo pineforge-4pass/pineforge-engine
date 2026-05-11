@@ -38,8 +38,17 @@ double RMA::compute(double src) {
         output_val = sum / length;
         return output_val;
     } else {
-        double alpha = 1.0 / length;
-        output_val = alpha * src + (1.0 - alpha) * output_val;
+        // Pine reference formula (TradingView ta.rma):
+        //   rma := (src + (length - 1) * rma[1]) / length
+        // Use the same expression order as Pine to match per-bar values to
+        // the last ULP. The mathematically equivalent form
+        //   alpha*src + (1-alpha)*rma[1]   with alpha = 1/length
+        // produces 1-3 ULP drift per bar that compounds across the series
+        // and can flip RSI/ATR threshold-crossings on close calls. See
+        // tests/test_ta_rma_warmup.cpp for fixed Pine-formula reference
+        // values.
+        output_val = (src + static_cast<double>(length - 1) * output_val)
+                     / static_cast<double>(length);
         return output_val;
     }
 }

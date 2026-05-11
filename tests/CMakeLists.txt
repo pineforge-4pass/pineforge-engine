@@ -9,6 +9,7 @@ set(TEST_SOURCES
     test_ta
     test_ta_indicators_extras
     test_kc
+    test_ta_rma_warmup
     test_matrix
     test_session_time
     test_chart_timezone
@@ -42,6 +43,10 @@ endif()
 foreach(test_name ${TEST_SOURCES})
     add_executable(${test_name} ${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE pineforge)
+    # Match the engine's FMA-disabled FP semantics so bit-exact reference
+    # values in tests like test_ta_rma_warmup don't drift due to
+    # contracted multiply-adds emitted in the test TU itself.
+    target_compile_options(${test_name} PRIVATE -ffp-contract=off)
     if(PINEFORGE_ENABLE_COVERAGE)
         target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
     endif()
