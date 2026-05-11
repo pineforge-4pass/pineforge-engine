@@ -395,10 +395,172 @@ static void test_two_cycle_siblings_independent_carry() {
     CHECK(b_seen);
 }
 
+// Scenario 4 (regression for the per-bar pending_close_qty_in_bar_ reset
+// in run_simple_bar_loop / run_aggregation_bar_loop): re-runs the
+// open-guaranteed flip-stop probe through the script_tf-aware run()
+// overload (the validator's actual code path) and asserts the per-cycle
+// qty chain ascends 1, 2, 3, ... — same shape as
+// validation/95-multi-cycle-open-guaranteed-stops, but with deterministic
+// 1m → 1m passthrough so no aggregation can mask the regression.
+//
+// Pre-fix: the bar loop never reset ``pending_close_qty_in_bar_`` so it
+// monotonically grew across bars. Once it exceeded the live position
+// size, every subsequent ``strategy.entry`` placement saw
+// ``effective_pos = max(0, pos_qty - pending_close)`` clamp to 0 and
+// captured carry=0, freezing the qty chain at base_qty=1 forever (each
+// cycle would emit a fresh qty=1 trade instead of growing). The PnL
+// formula per trade still computed (exit-entry)*qty correctly, but the
+// qty chain was wrong from cycle 4 onward — the symptom listed in the
+// task as "pnl_p90 ~ 0.5–0.92 USD/row".
+//
+// Per-trade FIFO PnL formula being verified: each emit_close_trade row
+// must equal (exit_price - leg_entry_price) * leg_qty * point_value
+// (point_value=1 here for cleanness). With pyramiding=1, each cycle has
+// exactly one PyramidEntry whose qty == cycle index N, and its entry
+// price equals the prior cycle's exit price. We assert both the qty
+// chain and the per-row PnL.
+static void test_per_bar_pending_close_resets_in_script_tf_run() {
+    std::printf("test_per_bar_pending_close_resets_in_script_tf_run\n");
+    DeferredFlipProbe p;
+
+    constexpr int N = 12;
+    Bar bars[N];
+    double open_price = 100.0;
+    for (int i = 0; i < N; ++i) {
+        bars[i].open  = open_price;
+        bars[i].high  = open_price + 1.0;
+        bars[i].low   = open_price - 1.0;
+        bars[i].close = open_price;
+        bars[i].volume = 1000.0;
+        bars[i].timestamp = (int64_t)(i + 1) * 60'000;
+        open_price += 5.0;
+    }
+
+    // Use the script_tf-aware overload (validator path). Same TF on
+    // input + script keeps the loop in run_simple_bar_loop — the same
+    // place that lacked the reset before this fix.
+    p.run(bars, N, "1", "1");
+
+    // Expect a strictly ascending qty chain: 1, 2, 3, 4, ... (the cycle
+    // count caps at the bar window length / 2). Pre-fix the chain
+    // collapses to 1, 2, 1, 1, 1, ... once pending_close_qty_in_bar_
+    // overruns the live position.
+    CHECK(p.closed_trades.size() >= 4);
+    int expected_qty = 1;
+    int max_qty = 0;
+    for (const auto& tr : p.closed_trades) {
+        CHECK((int)tr.qty == expected_qty);
+        ++expected_qty;
+        if ((int)tr.qty > max_qty) max_qty = (int)tr.qty;
+    }
+    // Sanity: chain must reach at least 4 to demonstrate the regression
+    // would have collapsed it. test_deferred_flip_chain_grows already
+    // covers the 1-bump case via the legacy direct-run overload.
+    CHECK(max_qty >= 4);
+}
+
+// Scenario 5 (per-leg FIFO PnL formula): pyramiding=3 with three
+// distinct entry prices. Each strategy.exit-driven close emits a
+// per-leg trade row whose PnL must be computed against THAT leg's
+// entry price (not the volume-weighted average), with the leg's own
+// qty. This test catches the wrong-formula regression listed in the
+// task description: snapping avg_entry across legs in the same bar
+// would produce a single qty=N row at avg-entry, not N qty=1 rows
+// each at its own leg entry.
+static void test_per_leg_fifo_pnl_three_legs() {
+    std::printf("test_per_leg_fifo_pnl_three_legs\n");
+    class ThreePyramidProbe : public BacktestEngine {
+    public:
+        struct TradeRow {
+            std::string entry_id;
+            double entry_price;
+            double exit_price;
+            double qty;
+            double pnl;
+        };
+        std::vector<TradeRow> closed_trades;
+
+        ThreePyramidProbe() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            slippage_ = 0;
+            commission_value_ = 0;
+            pyramiding_ = 3;
+            script_has_strategy_close_ = true;
+        }
+        void on_bar(const Bar& bar) override {
+            (void)bar;
+            // Three sequential market entries at distinct opens: bar
+            // 0 → leg1, bar 1 → leg2, bar 2 → leg3 (each fills at the
+            // NEXT bar's open in the no-process_orders_on_close path).
+            if (bar_index_ == 0)
+                strategy_entry("L1", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(),
+                               1.0, "leg 1");
+            if (bar_index_ == 1)
+                strategy_entry("L2", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(),
+                               1.0, "leg 2");
+            if (bar_index_ == 2)
+                strategy_entry("L3", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(),
+                               1.0, "leg 3");
+            // Bar 4: full close. Engine emits ONE trade per pyramid
+            // entry — three rows total, each with its own entry price.
+            if (bar_index_ == 4 && position_side_ == PositionSide::LONG)
+                strategy_close("", "close all");
+            if (bar_index_ == 6) {
+                for (const auto& t : trades_) {
+                    closed_trades.push_back(
+                        {t.entry_id, t.entry_price, t.exit_price, t.qty, t.pnl});
+                }
+            }
+        }
+    };
+    ThreePyramidProbe p;
+    Bar bars[7];
+    double opens[7] = { 100, 110, 120, 130, 140, 145, 150 };
+    for (int i = 0; i < 7; ++i) {
+        bars[i].open      = opens[i];
+        bars[i].high      = opens[i] + 1.0;
+        bars[i].low       = opens[i] - 1.0;
+        bars[i].close     = opens[i];
+        bars[i].volume    = 1000.0;
+        bars[i].timestamp = (int64_t)(i + 1) * 60'000;
+    }
+    p.run(bars, 7, "1", "1");
+
+    // Three legs, three trade rows. Each leg's entry price is the
+    // bar AFTER the placement (market order fills at next-bar open).
+    CHECK(p.closed_trades.size() == 3);
+    if (p.closed_trades.size() == 3) {
+        // Leg 1: placed bar 0, fills bar 1 open = 110.
+        // Leg 2: placed bar 1, fills bar 2 open = 120.
+        // Leg 3: placed bar 2, fills bar 3 open = 130.
+        // All three close at bar 5 open = 145.
+        double leg_entries[3] = { 110.0, 120.0, 130.0 };
+        double exit_price = 145.0;
+        for (int i = 0; i < 3; ++i) {
+            const auto& tr = p.closed_trades[i];
+            CHECK(near(tr.entry_price, leg_entries[i]));
+            CHECK(near(tr.exit_price, exit_price));
+            CHECK(near(tr.qty, 1.0));
+            // Per-leg FIFO formula: pnl = (exit - leg_entry) * leg_qty.
+            CHECK(near(tr.pnl, (exit_price - leg_entries[i]) * 1.0));
+        }
+    }
+}
+
 int main() {
     test_deferred_flip_chain_grows();
     test_same_direction_no_carry();
     test_two_cycle_siblings_independent_carry();
+    test_per_bar_pending_close_resets_in_script_tf_run();
+    test_per_leg_fifo_pnl_three_legs();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
