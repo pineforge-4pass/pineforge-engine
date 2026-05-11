@@ -1,6 +1,7 @@
 set(TEST_SOURCES
     test_timeframe
     test_magnifier
+    test_magnifier_real_bars
     test_path_at
     test_na_runtime
     test_recompute
