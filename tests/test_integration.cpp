@@ -1889,9 +1889,13 @@ static void test_magnifier_limit_fill() {
 
 static void test_magnifier_volume_weighted_toggle() {
     std::printf("test_magnifier_volume_weighted_toggle\n");
-    // First sub-bar carries 10x the volume of the second within the same
-    // script bar. With volume_weighted ON, the engine must emit strictly
-    // more sample ticks than with the flat 4-sample schedule.
+    // Real-bar magnifier mode (multiple sub-bars per script bar, e.g.
+    // input_tf=1m, script_tf=2m) overrides the volume-weighted toggle: each
+    // sub-bar collapses to its four real OHLC corners regardless of vw,
+    // because synthesizing extra ticks inside a real lower-TF bar cannot
+    // recover information not in the input feed. The toggle still flows
+    // through the engine's state, but the per-sub-bar tick count stays
+    // pinned at 4 — so flat and vw report the same total tick count.
     Bar bars[] = {
         {100, 105, 99, 103, 5000, 60000},
         {103, 108, 102, 106,  500, 120000},
@@ -1904,6 +1908,7 @@ static void test_magnifier_volume_weighted_toggle() {
     ReportC flat_report{};
     strat_flat.fill_report(&flat_report);
     int64_t flat_ticks = flat_report.magnifier_sample_ticks_total;
+    int64_t flat_subs  = flat_report.magnifier_sub_bars_total;
     BacktestEngine::free_report(&flat_report);
 
     MagnifierLimitStrategy strat_vw;
@@ -1912,11 +1917,13 @@ static void test_magnifier_volume_weighted_toggle() {
     ReportC vw_report{};
     strat_vw.fill_report(&vw_report);
     int64_t vw_ticks = vw_report.magnifier_sample_ticks_total;
+    int64_t vw_subs  = vw_report.magnifier_sub_bars_total;
     BacktestEngine::free_report(&vw_report);
 
-    // Volume-weighted should scale sample count up on high-vol sub-bars.
-    CHECK(vw_ticks != flat_ticks);
-    CHECK(vw_ticks >= flat_ticks);
+    // Real-bar mode pins ticks at 4 per sub-bar — vw and flat must match.
+    CHECK(flat_ticks == vw_ticks);
+    CHECK(flat_subs == vw_subs);
+    CHECK(flat_ticks == flat_subs * 4);
 }
 
 // ---- 27. Magnifier + TA consistency ----------------------------------------
