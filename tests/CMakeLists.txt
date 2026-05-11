@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
     test_engine_trade_accessors
+    test_strategy_oca
     test_generic_matrix_primitives
     test_generic_matrix_udt
     test_generic_matrix_bool_proxy
