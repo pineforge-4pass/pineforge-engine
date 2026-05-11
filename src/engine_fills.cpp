@@ -369,7 +369,9 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                                              const Bar& bar,
                                              double& trail_best_path_state) {
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
-                         order.created_position_side, false);
+                         order.created_position_side, /*close_only_opposite=*/false,
+                         /*is_priced_entry=*/false, /*tv_carry_qty=*/0.0,
+                         order.created_bar);
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
     if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
@@ -405,7 +407,8 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, close_only_opposite,
                          /*is_priced_entry=*/true,
-                         order.tv_carry_qty);
+                         order.tv_carry_qty,
+                         order.created_bar);
 
     bool did_execute =
         (position_side_ != side_before)

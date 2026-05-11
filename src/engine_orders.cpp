@@ -48,7 +48,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                           PositionSide created_position_side,
                                           bool close_only_opposite,
                                           bool is_priced_entry,
-                                          double tv_carry_qty) {
+                                          double tv_carry_qty,
+                                          int created_bar) {
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     bool is_opposite_entry = position_side_ != PositionSide::FLAT && position_side_ != requested;
     bool direction_blocked =
@@ -70,7 +71,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
 
     if (position_side_ == PositionSide::FLAT) {
         enter_market_from_flat(id, is_long, fill_price, explicit_qty, explicit_qty_type,
-                               created_position_side, is_priced_entry, tv_carry_qty);
+                               created_position_side, is_priced_entry, tv_carry_qty,
+                               created_bar);
         return;
     }
 
@@ -390,12 +392,29 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
 // fresh at qty=1. Without this, both siblings would grow and the engine
 // emits an extra-qty pyramid add (or, after the cleanup-loop wipes the
 // survivor, an entire extra round-trip the next day).
+//
+// Cycle scoping: TV consumes carry only when the triggering sibling fires
+// from FLAT. That means a sibling armed in a LATER position cycle (whose
+// own ``tv_carry_qty`` was captured from a different source position
+// later than this firing entry's ``created_bar``) must keep its carry
+// independent — it will apply its own carry when it later fires from
+// flat. Without this scoping, consuming a future-cycle sibling's carry
+// drops one cycle's worth of qty (validation/52, 63, 72, 92, 93, 95, 96
+// pre-fix: row count + qty match TV exactly, but per-leg PnL drifts
+// because the chain qty schedule shifts by one cycle when a sibling is
+// pre-emptively wiped by an earlier-cycle fire).
 void BacktestEngine::consume_tv_carry_from_siblings(const std::string& id,
-                                                    PositionSide created_position_side) {
+                                                    PositionSide created_position_side,
+                                                    int created_bar) {
     for (auto& other : pending_orders_) {
         if (other.id == id) continue;
         if (other.created_position_side != created_position_side) continue;
         if (other.tv_carry_qty <= 0.0) continue;
+        // Cycle-scope: only consume siblings placed no later than the
+        // firing order's own placement. Siblings placed in a LATER bar
+        // captured carry from a DIFFERENT source position cycle and own
+        // their carry — TV does not pre-emptively wipe them.
+        if (other.created_bar > created_bar) continue;
         other.tv_carry_qty = 0.0;
     }
 }
@@ -446,7 +465,8 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
                                             double fill_price, double explicit_qty,
                                             int explicit_qty_type,
                                             PositionSide created_position_side,
-                                            bool is_priced_entry, double tv_carry_qty) {
+                                            bool is_priced_entry, double tv_carry_qty,
+                                            int created_bar) {
     bool carry_was_long = (created_position_side == PositionSide::LONG);
     bool tv_deferred_flip =
         script_has_strategy_close_
@@ -456,7 +476,7 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
     double base_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     double qty = tv_deferred_flip ? (tv_carry_qty + base_qty) : base_qty;
     if (tv_deferred_flip) {
-        consume_tv_carry_from_siblings(id, created_position_side);
+        consume_tv_carry_from_siblings(id, created_position_side, created_bar);
     }
     // NOTE: margin check is performed at SIGNAL time inside
     // strategy_entry / queue_deferred_close_order, NOT here at fill

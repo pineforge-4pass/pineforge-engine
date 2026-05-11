@@ -791,7 +791,8 @@ private:
                               PositionSide created_position_side = PositionSide::FLAT,
                               bool close_only_opposite = false,
                               bool is_priced_entry = false,
-                              double tv_carry_qty = 0.0);
+                              double tv_carry_qty = 0.0,
+                              int created_bar = -1);
     void execute_market_exit(double fill_price);
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
@@ -907,7 +908,8 @@ private:
                                 double fill_price, double explicit_qty,
                                 int explicit_qty_type,
                                 PositionSide created_position_side,
-                                bool is_priced_entry, double tv_carry_qty);
+                                bool is_priced_entry, double tv_carry_qty,
+                                int created_bar);
     void add_to_pyramid_market(const std::string& id, bool is_long,
                                double fill_price, double explicit_qty,
                                int explicit_qty_type,
@@ -922,7 +924,8 @@ private:
     void open_fresh_position(PositionSide requested, double fill_price,
                              double qty, const std::string& id);
     void consume_tv_carry_from_siblings(const std::string& id,
-                                        PositionSide created_position_side);
+                                        PositionSide created_position_side,
+                                        int created_bar);
 
     // run() helpers (defined in engine_run.cpp).
     int  count_expected_script_bars(const Bar* input_bars, int n_input,
