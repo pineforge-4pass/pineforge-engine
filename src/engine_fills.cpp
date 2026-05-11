@@ -350,8 +350,22 @@ void BacktestEngine::apply_filled_order_to_state(
     // (type 2, Pine v6 strategy.oca.reduce) reduces siblings' remaining
     // qty by the qty just filled — only siblings whose qty drops to 0
     // are removed. See TradingView Pine v6 docs strategy.oca.reduce.
+    //
+    // OCA-cancel full-fill gate (validation_oca/oca-three-way-probe-02):
+    // TV cancels CANCEL-group siblings only after the originating order
+    // is FULLY filled, not after the first contract fills. With qty=4
+    // long + qty=2 sibling A_TP: A_TP fills qty=2, position=2 remaining,
+    // A_SL stays alive until the second sibling fires. We compare the
+    // qty actually transacted (``filled_qty``) against the order's
+    // explicit qty. If the request was default-sized (qty == NaN), we
+    // can't compute a residual so we conservatively cancel siblings on
+    // any fill (matches the prior, blanket-cancel behaviour for that
+    // subset). The OCA group name scoping inside cancel_oca_group /
+    // reduce_oca_group already isolates groups from each other.
     if (!order.oca_name.empty()) {
-        if (order.oca_type == 1) {
+        bool fully_filled = std::isnan(order.qty)
+            || filled_qty + 1e-12 >= order.qty;
+        if (order.oca_type == 1 && fully_filled) {
             cancel_oca_group(order.oca_name, order.id);
         } else if (order.oca_type == 2) {
             reduce_oca_group(order.oca_name, order.id, filled_qty);

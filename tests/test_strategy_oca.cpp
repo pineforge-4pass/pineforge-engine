@@ -196,6 +196,179 @@ static void test_cancel_unchanged() {
     CHECK(p.find(2, "A") == nullptr);
 }
 
+// Cross-group isolation: when Group A's CANCEL sibling fills, Group
+// B's REDUCE sibling must remain untouched (different oca_name). Both
+// the cancel_oca_group helper and the reduce_oca_group helper already
+// scope by oca_name, so this is a regression guard for the
+// post-fill OCA dispatch in apply_filled_order_to_state.
+static void test_cross_group_isolation() {
+    std::printf("test_cross_group_isolation\n");
+    class CrossGroupProbe : public BacktestEngine {
+    public:
+        struct PendingSnap { std::string id; double qty; std::string oca_name; };
+        std::vector<std::vector<PendingSnap>> pending_per_bar;
+
+        CrossGroupProbe() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            slippage_ = 0;
+            commission_value_ = 0;
+            pyramiding_ = 100;
+        }
+        void on_bar(const Bar& bar) override {
+            (void)bar;
+            if (bar_index_ == 1) {
+                // Group A: CANCEL siblings (each qty=2)
+                strategy_order("A_TP", true, 2.0, /*limit=*/100.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               "GRP_A", /*cancel=*/1);
+                strategy_order("A_SL", true, 2.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               /*stop=*/120.0,
+                               "GRP_A", 1);
+                // Group B: REDUCE siblings (each qty=2)
+                strategy_order("B_TP", true, 2.0, /*limit=*/95.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               "GRP_B", /*reduce=*/2);
+                strategy_order("B_SL", true, 2.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               /*stop=*/130.0,
+                               "GRP_B", 2);
+            }
+            std::vector<PendingSnap> snap;
+            for (const auto& po : pending_orders_) {
+                snap.push_back({po.id, po.qty, po.oca_name});
+            }
+            pending_per_bar.push_back(std::move(snap));
+        }
+        const PendingSnap* find(int bar, const std::string& id) const {
+            if (bar < 0 || bar >= (int)pending_per_bar.size()) return nullptr;
+            for (const auto& s : pending_per_bar[bar]) {
+                if (s.id == id) return &s;
+            }
+            return nullptr;
+        }
+    };
+    CrossGroupProbe p;
+    Bar bars[5] = {
+        {100, 105,  95, 100, 1000,  60'000},
+        {100, 108,  95, 105, 1000, 120'000},  // place orders
+        {100, 110,  90, 105, 1000, 180'000},  // A_TP @100 fills (qty 2)
+        {100, 110,  85, 105, 1000, 240'000},
+        {100, 110,  85, 105, 1000, 300'000},
+    };
+    p.run(bars, 5);
+
+    // After bar 2: A_TP filled → A_SL cancelled (Group A).
+    CHECK(p.find(2, "A_TP") == nullptr);
+    CHECK(p.find(2, "A_SL") == nullptr);
+    // Group B siblings MUST still be alive — A's fill is in a different
+    // OCA group and must not touch them. Note: B_TP's limit at 95 is
+    // not yet touched (low=90 on bar 2 fills A_TP @ 100 first; B_TP
+    // would fill on the SAME bar but our run executes the priced
+    // entries one per bar, so B_TP fires on a later bar).
+    auto* b_tp = p.find(2, "B_TP");
+    auto* b_sl = p.find(2, "B_SL");
+    if (b_tp == nullptr) {
+        // B_TP may have fired same bar; check Group B's cross-group
+        // isolation by inspecting whether B_SL still has its full qty.
+        CHECK(b_sl != nullptr);
+    } else {
+        // B_TP still pending — verify its qty unchanged (Group A's fill
+        // doesn't reduce or cancel B's siblings).
+        CHECK(near(b_tp->qty, 2.0));
+        CHECK(b_sl != nullptr);
+        CHECK(near(b_sl->qty, 2.0));
+    }
+}
+
+// OCA-CANCEL full-fill gate: when a CANCEL-group order fires for less
+// qty than its requested ``order.qty`` (because the position is smaller
+// than the order size), TV does NOT cancel the remaining siblings until
+// the originating order fully fills. The engine guards this by
+// comparing ``filled_qty`` against ``order.qty`` in
+// apply_filled_order_to_state.
+//
+// In our engine, RAW_ORDER opposite-direction fills close the FULL
+// position regardless of order.qty (apply_raw_order_fill, line 494),
+// so for OCA-cancel siblings of size > position the fill IS partial
+// and ``filled_qty < order.qty``. With the gate, A_SL stays alive.
+// Without the gate, A_SL is wiped immediately.
+static void test_cancel_oca_partial_fill_keeps_sibling() {
+    std::printf("test_cancel_oca_partial_fill_keeps_sibling\n");
+    class PartialFillProbe : public BacktestEngine {
+    public:
+        struct PendingSnap { std::string id; double qty; };
+        std::vector<std::vector<PendingSnap>> pending_per_bar;
+
+        PartialFillProbe() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            slippage_ = 0;
+            commission_value_ = 0;
+            pyramiding_ = 100;
+        }
+        void on_bar(const Bar& bar) override {
+            (void)bar;
+            // Bar 1: open long qty 2.
+            if (bar_index_ == 1) {
+                strategy_entry("L", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(),
+                               2.0, "long entry");
+            }
+            // Bar 2: place A_TP (limit, short, qty=4 — bigger than
+            // position) and A_SL (stop, short, qty=4) in OCA-CANCEL.
+            // A_SL has stop BELOW the bar range (80) so only A_TP
+            // (limit=100) is touched at fire time. When A_TP fires,
+            // the engine fills a SHORT order against the long position
+            // — this closes the position (qty=2), not the full order
+            // qty 4. filled_qty (2) < order.qty (4) → fully_filled =
+            // false → cancel_oca_group should NOT run. A_SL remains
+            // pending.
+            if (bar_index_ == 2 && position_side_ == PositionSide::LONG) {
+                strategy_order("A_TP", false, 4.0, /*limit=*/100.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               "GRP_A", /*cancel=*/1);
+                strategy_order("A_SL", false, 4.0,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               /*stop=*/80.0,
+                               "GRP_A", 1);
+            }
+            std::vector<PendingSnap> snap;
+            for (const auto& po : pending_orders_) {
+                snap.push_back({po.id, po.qty});
+            }
+            pending_per_bar.push_back(std::move(snap));
+        }
+        const PendingSnap* find(int bar, const std::string& id) const {
+            if (bar < 0 || bar >= (int)pending_per_bar.size()) return nullptr;
+            for (const auto& s : pending_per_bar[bar]) {
+                if (s.id == id) return &s;
+            }
+            return nullptr;
+        }
+    };
+    PartialFillProbe p;
+    Bar bars[5] = {
+        {100, 105,  95, 100, 1000,  60'000},
+        {100, 105,  95, 100, 1000, 120'000},  // place L
+        {100, 105,  95, 100, 1000, 180'000},  // place A_TP/A_SL while long
+        {100, 110,  90, 105, 1000, 240'000},  // A_TP @100 fires; partial fill (only qty 2)
+        {100, 110,  90, 105, 1000, 300'000},
+    };
+    p.run(bars, 5);
+
+    // After bar 3: A_TP filled qty=2 against position size 2. order.qty
+    // was 4 — so fully_filled=false. A_SL must remain pending.
+    CHECK(p.find(3, "A_TP") == nullptr);  // A_TP itself is gone (consumed)
+    auto* a_sl = p.find(3, "A_SL");
+    CHECK(a_sl != nullptr);
+    if (a_sl) CHECK(near(a_sl->qty, 4.0));  // unchanged
+}
+
 // Sanity: oca.none leaves siblings untouched on fill.
 static void test_none_unchanged() {
     std::printf("test_none_unchanged\n");
@@ -223,6 +396,8 @@ int main() {
     test_reduce_three_sibling();
     test_reduce_full_fill_cascade();
     test_cancel_unchanged();
+    test_cross_group_isolation();
+    test_cancel_oca_partial_fill_keeps_sibling();
     test_none_unchanged();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
