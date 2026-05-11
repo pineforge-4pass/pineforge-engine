@@ -314,6 +314,14 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
         is_last_tick_ = true;
         barstate_islast_ = (i == n_input - 1);
         diag_script_bars_processed_++;
+        // Reset per-bar pending-close accumulator. Each on_bar call captures
+        // fresh ``strategy.close*`` qty for the same-bar close-then-entry
+        // source-order rule (see engine.hpp). Without the reset the
+        // accumulator monotonically grows and starves every subsequent
+        // priced-entry's tv_carry_qty (validation/52, 63, 72, 93, 95, 96
+        // pre-fix: per-leg PnL drifts because the deferred-flip carry
+        // chain is wiped after the first fire).
+        pending_close_qty_in_bar_ = 0.0;
 
         // Feed security evaluators
         for (auto& state : security_eval_states_) {
@@ -368,6 +376,11 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
             emitted_script_bars++;
             barstate_islast_ = (emitted_script_bars == expected_script_bars);
             diag_script_bars_processed_++;
+            // Reset per-bar pending-close accumulator. See run_simple_bar_loop
+            // for the regression history; the aggregated path was missing the
+            // same reset, which is why all 8 affected probes are scripts that
+            // run with input_tf < script_tf (1m feeds, 15m strategies).
+            pending_close_qty_in_bar_ = 0.0;
 
             if (bar_magnifier && !group_sub_bars.empty()) {
                 // Magnifier mode: process sub-bars with price path sampling
