@@ -584,6 +584,20 @@ protected:
         // 0 and then push for every subsequent sub-bar.
         bool lower_tf_array_requested = false;
         int lower_tf_sub_bar_index = 0;
+        // ``lower_tf_use_input`` selects the input-passthrough LTF path:
+        // when the requested TF is >= input_tf and < script_tf we hand
+        // the per-script-bar window of real input bars to the codegen
+        // (optionally roll-up aggregated when req > input). Mutually
+        // exclusive with ``lower_tf_emulation`` (synthesis) — only one
+        // is set per state. ``lower_tf_input_aggregation_ratio`` is
+        // ``req_seconds / input_seconds`` (>=1; 1 means raw passthrough,
+        // N means N raw input bars roll up into one returned LTF bar).
+        // ``lower_tf_input_buffer`` accumulates raw input bars within
+        // the current script-TF chunk and is flushed at chunk
+        // completion (or at end of feed for trailing partial chunks).
+        bool lower_tf_use_input = false;
+        int lower_tf_input_aggregation_ratio = 1;
+        std::vector<Bar> lower_tf_input_buffer;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;

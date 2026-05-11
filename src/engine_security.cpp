@@ -105,11 +105,15 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
     // when the script_tf/input_tf ratio is invalid. We do not re-check
     // that invariant here.
     int input_seconds = tf_to_seconds(input_tf);
+    int script_seconds = tf_to_seconds(script_tf_);
     for (auto& state : security_eval_states_) {
         state.lower_tf_requested = false;
         state.lower_tf_emulation = false;
         state.lower_tf_ratio = 0;
         state.lower_tf_seconds = 0;
+        state.lower_tf_use_input = false;
+        state.lower_tf_input_aggregation_ratio = 1;
+        state.lower_tf_input_buffer.clear();
         if (state.tf.empty()) continue;
 
         int lower_ratio = 0;
@@ -172,13 +176,43 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
         }
 
         // requested_seconds >= input_seconds: HTF or same TF. Valid for
-        // request.security; never valid for request.security_lower_tf.
+        // request.security; for request.security_lower_tf this is the
+        // input-passthrough path when the requested TF is also strictly
+        // finer than the script TF.
         if (state.lower_tf_array_requested) {
-            throw std::runtime_error(
-                "request.security_lower_tf: requested timeframe '" + state.tf
-                + "' is not finer than input '" + input_tf
-                + "'. Lower-TF API requires a strictly finer timeframe."
-            );
+            if (script_seconds <= 0) {
+                throw std::runtime_error(
+                    "request.security_lower_tf: script timeframe is unknown — cannot validate '"
+                    + state.tf + "' against script TF"
+                );
+            }
+            if (requested_seconds >= script_seconds) {
+                throw std::runtime_error(
+                    "request.security_lower_tf: requested timeframe '" + state.tf
+                    + "' is not finer than script timeframe '" + script_tf_
+                    + "'. Lower-TF API requires a strictly finer timeframe."
+                );
+            }
+            if (script_seconds % requested_seconds != 0) {
+                throw std::runtime_error(
+                    "request.security_lower_tf: requested timeframe '" + state.tf
+                    + "' is not an integer divisor of script timeframe '"
+                    + script_tf_ + "'"
+                );
+            }
+            if (requested_seconds % input_seconds != 0) {
+                throw std::runtime_error(
+                    "request.security_lower_tf: requested timeframe '" + state.tf
+                    + "' is not an integer multiple of input '" + input_tf
+                    + "' (cannot aggregate raw input bars to requested TF)"
+                );
+            }
+            state.lower_tf_requested = true;
+            state.lower_tf_use_input = true;
+            state.lower_tf_input_aggregation_ratio =
+                requested_seconds / input_seconds;
+            state.lower_tf_ratio = script_seconds / requested_seconds;
+            state.lower_tf_seconds = requested_seconds;
         }
     }
 }
@@ -196,6 +230,62 @@ bool BacktestEngine::security_series_slot_is_new(int sec_id) const {
 
 
 void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar) {
+    if (state.lower_tf_use_input) {
+        // Buffer raw input bars until we accumulate one full script-TF
+        // chunk, then aggregate (if req > input) and dispatch each
+        // resulting LTF bar to the codegen via evaluate_security. The
+        // codegen detects ``lower_tf_sub_bar_index == 0`` to clear its
+        // accumulator vector and pushes once per dispatch.
+        state.lower_tf_input_buffer.push_back(input_bar);
+        int input_seconds = tf_to_seconds(input_tf_);
+        int script_seconds = tf_to_seconds(script_tf_);
+        if (input_seconds <= 0 || script_seconds <= 0) {
+            return;
+        }
+        int chunk_size = script_seconds / input_seconds;
+        if (chunk_size <= 0 ||
+            static_cast<int>(state.lower_tf_input_buffer.size()) < chunk_size) {
+            return;
+        }
+        int agg_ratio = state.lower_tf_input_aggregation_ratio;
+        if (agg_ratio < 1) agg_ratio = 1;
+        std::vector<Bar> ltf_bars;
+        ltf_bars.reserve(static_cast<std::size_t>(chunk_size / agg_ratio));
+        if (agg_ratio == 1) {
+            for (const Bar& b : state.lower_tf_input_buffer) {
+                ltf_bars.push_back(b);
+            }
+        } else {
+            for (int i = 0; i + agg_ratio <= chunk_size; i += agg_ratio) {
+                Bar acc = state.lower_tf_input_buffer[
+                    static_cast<std::size_t>(i)];
+                acc.high = acc.high;
+                acc.low = acc.low;
+                double vol = acc.volume;
+                for (int j = 1; j < agg_ratio; ++j) {
+                    const Bar& nxt = state.lower_tf_input_buffer[
+                        static_cast<std::size_t>(i + j)];
+                    if (nxt.high > acc.high) acc.high = nxt.high;
+                    if (nxt.low < acc.low) acc.low = nxt.low;
+                    acc.close = nxt.close;
+                    vol += nxt.volume;
+                }
+                acc.volume = vol;
+                ltf_bars.push_back(acc);
+            }
+        }
+        state.lower_tf_sub_bar_index = 0;
+        for (const Bar& b : ltf_bars) {
+            state.feed_count++;
+            state.current_bar = b;
+            state.current_sub_bar_count = 1;
+            state.eval_complete_count++;
+            evaluate_security(state.sec_id, b, true);
+            state.lower_tf_sub_bar_index++;
+        }
+        state.lower_tf_input_buffer.clear();
+        return;
+    }
     if (state.lower_tf_emulation) {
         std::vector<Bar> synthetic_bars =
             synthesize_lower_tf_bars(input_bar, state.lower_tf_ratio, state.lower_tf_seconds);
