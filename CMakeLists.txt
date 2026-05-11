@@ -104,6 +104,19 @@ target_compile_options(pineforge PRIVATE
     -Wextra
     -Wpedantic
     -Wno-unused-parameter
+    # Disable floating-point contraction (FMA generation). TradingView's
+    # Pine runtime executes in JavaScript, which has no FMA primitive —
+    # every multiply-add is two separately-rounded operations. With the
+    # default -O2 + clang behaviour (`-ffp-contract=on` for in-statement
+    # contraction) the engine emits FMA on ARM64 / AVX2, producing
+    # results 1-2 ULP closer to the true value than Pine. That sounds
+    # like a win but it's the wrong target — we want bit-exact parity
+    # with TradingView, not "more accurate". The 1-2 ULP drift compounds
+    # across hundreds of RMA iterations and can flip RSI threshold
+    # crossings on close-call bars (see tests/test_ta_rma_warmup.cpp).
+    # `-ffp-contract=off` forces the compiler to round each * and + to
+    # IEEE-754 double independently, matching the Pine reference.
+    -ffp-contract=off
 )
 
 target_include_directories(pineforge
