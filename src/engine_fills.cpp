@@ -313,6 +313,15 @@ void BacktestEngine::apply_filled_order_to_state(
     // Track trades before fill to set exit_comment/exit_id on new trades
     size_t trades_before = trades_.size();
 
+    // Snapshot signed position before the fill so we can compute the
+    // filled qty for OCA-reduce semantics. Long = +qty, Short = -qty.
+    auto signed_pos = [&]() {
+        if (position_side_ == PositionSide::LONG)  return  position_qty_;
+        if (position_side_ == PositionSide::SHORT) return -position_qty_;
+        return 0.0;
+    };
+    double signed_pos_before = signed_pos();
+
     if (order.type == OrderType::MARKET) {
         apply_market_order_fill(order, fill_price, bar, trail_best_path_state);
     } else if (order.type == OrderType::ENTRY) {
@@ -324,6 +333,9 @@ void BacktestEngine::apply_filled_order_to_state(
                              exit_closed_from_bar, exit_closed_was_long);
     }
 
+    double signed_pos_after = signed_pos();
+    double filled_qty = std::abs(signed_pos_after - signed_pos_before);
+
     if (position_side_ == PositionSide::FLAT) {
         trail_best_path_state = trail_best_price_;
     }
@@ -334,12 +346,15 @@ void BacktestEngine::apply_filled_order_to_state(
         trades_[ti].exit_id = order.id;
     }
 
-    // Handle OCA groups: cancel (type 1) or reduce (type 2). For reduce,
-    // TradingView cancels remaining orders in the group when one fills —
-    // the position is sized by the filled order.
+    // Handle OCA groups: cancel (type 1) cancels all siblings; reduce
+    // (type 2, Pine v6 strategy.oca.reduce) reduces siblings' remaining
+    // qty by the qty just filled — only siblings whose qty drops to 0
+    // are removed. See TradingView Pine v6 docs strategy.oca.reduce.
     if (!order.oca_name.empty()) {
-        if (order.oca_type == 1 || order.oca_type == 2) {
+        if (order.oca_type == 1) {
             cancel_oca_group(order.oca_name, order.id);
+        } else if (order.oca_type == 2) {
+            reduce_oca_group(order.oca_name, order.id, filled_qty);
         }
     }
     // When an exit fill causes position to go flat, subsequent EXIT

@@ -798,6 +798,10 @@ private:
     void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
     void execute_partial_exit_by_entry_percent(double fill_price, const std::string& from_entry, double qty_percent);
     void cancel_oca_group(const std::string& oca_name, const std::string& exclude_id);
+    // Pine v6 oca.reduce: when one sibling fills qty Q, reduce remaining
+    // siblings' qty by Q. Siblings whose qty becomes <= 0 are cancelled.
+    void reduce_oca_group(const std::string& oca_name, const std::string& exclude_id,
+                          double filled_qty);
     void purge_exit_orders();
 
     // process_pending_orders helpers (defined in engine_fills.cpp).
