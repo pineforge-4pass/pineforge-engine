@@ -95,7 +95,7 @@ void test_req_equals_script_rejected() {
               "1", "15", false, 4, MagnifierDistribution::ENDPOINTS);
     assert(!strat.last_error().empty());
     assert(strat.last_error().find(
-        "not finer than script timeframe") != std::string::npos);
+        "must be finer than script timeframe") != std::string::npos);
     std::cout << "test_req_equals_script_rejected passed.\n";
 }
 
@@ -122,7 +122,7 @@ void test_req_non_divisor_of_script_rejected() {
               "1", "60", false, 4, MagnifierDistribution::ENDPOINTS);
     assert(!strat.last_error().empty());
     assert(strat.last_error().find(
-        "not an integer divisor of script timeframe") != std::string::npos);
+        "must evenly divide script timeframe") != std::string::npos);
     std::cout << "test_req_non_divisor_of_script_rejected passed.\n";
 }
 

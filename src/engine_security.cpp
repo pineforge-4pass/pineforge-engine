@@ -189,15 +189,15 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
             if (requested_seconds >= script_seconds) {
                 throw std::runtime_error(
                     "request.security_lower_tf: requested timeframe '" + state.tf
-                    + "' is not finer than script timeframe '" + script_tf_
+                    + "' must be finer than script timeframe '" + script_tf_
                     + "'. Lower-TF API requires a strictly finer timeframe."
                 );
             }
             if (script_seconds % requested_seconds != 0) {
                 throw std::runtime_error(
                     "request.security_lower_tf: requested timeframe '" + state.tf
-                    + "' is not an integer divisor of script timeframe '"
-                    + script_tf_ + "'"
+                    + "' must evenly divide script timeframe '"
+                    + script_tf_ + "' (script_tf must be an integer multiple of requested TF)"
                 );
             }
             if (requested_seconds % input_seconds != 0) {
