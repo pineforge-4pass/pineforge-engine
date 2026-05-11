@@ -505,7 +505,20 @@ protected:
     int count_wintrades() const { return win_trades_count_; }
     int count_losstrades() const { return loss_trades_count_; }
 
-    // --- Time/date extraction from bar timestamp (UTC) ---
+    // --- Time/date extraction from bar timestamp ---
+    // Pine's bare ``hour`` / ``minute`` / ``dayofweek`` (the variable form,
+    // not the 1-arg function form) returns the wall-clock for the **exchange
+    // timezone** of the symbol (per TV reference docs). For crypto symbols
+    // like ETH-USDT the exchange TZ is UTC, which matches the engine's
+    // storage TZ — so the cheap ``gmtime_r`` path is correct for the
+    // overwhelming majority of strategies in the corpus.
+    //
+    // The 1-arg function form ``hour(time)`` is handled separately by the
+    // codegen (see codegen/visit_call.py) and DOES honour
+    // ``syminfo_.timezone`` (set via ``strategy_set_chart_timezone``) since
+    // TV's reference says the function form defaults its tz arg to
+    // ``syminfo.timezone``, which TV harnesses commonly set to the chart's
+    // display TZ for cross-exchange / multi-zone work.
     struct BarTime {
         int year, month, dayofmonth, hour, minute, second, dayofweek, weekofyear;
     };
@@ -981,6 +994,16 @@ public:
     void set_trade_start_time(int64_t timestamp_ms) {
         trade_start_time_ = timestamp_ms;
     }
+
+    // Override syminfo_.timezone outside of run(syminfo, ...). Used by the
+    // C ABI's strategy_set_chart_timezone() so harnesses (validator, py
+    // wrapper) can supply the chart TZ for ``hour``/``minute``/``dayofweek``
+    // semantics without going through the full SymInfo overload of run().
+    // Empty / "UTC" / "Etc/UTC" all behave as UTC.
+    void set_chart_timezone(const std::string& tz) {
+        syminfo_.timezone = tz;
+    }
+    const std::string& chart_timezone() const { return syminfo_.timezone; }
 
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.

@@ -142,6 +142,15 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
     static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
 }
 
+/* Override the chart TZ for ``hour``/``minute``/``dayofweek``/etc. See
+ * pineforge.h docstring; NULL or empty are normalised to the legacy UTC
+ * fast path. */
+PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz) {
+    if (!s) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_chart_timezone(
+        tz ? std::string(tz) : std::string());
+}
+
 /* Return the runtime library version. */
 PF_API pf_version_t pf_version_get(void) {
     pf_version_t v;

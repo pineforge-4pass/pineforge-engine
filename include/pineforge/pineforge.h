@@ -320,6 +320,26 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
  *  `strategy.entry/order/exit/close` commands are ignored. */
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms);
 
+/** Set the strategy's chart timezone (IANA / POSIX TZ string).
+ *
+ *  Pine builtins ``hour``, ``minute``, ``second``, ``dayofmonth``,
+ *  ``dayofweek``, ``month``, ``year`` and ``weekofyear`` return the
+ *  wall-clock for the chart's timezone — TV exports trade rows in chart
+ *  TZ too. Engine bars are stored as Unix-ms (UTC), so without this
+ *  override these builtins return UTC and silently diverge from TV by N
+ *  hours when the chart is on a non-UTC zone (Asia/Taipei = UTC+8 is the
+ *  validator default).
+ *
+ *  Pass `NULL`, `""`, `"UTC"` or `"Etc/UTC"` for the legacy UTC
+ *  behaviour (cheap, mutex-free). Any other value names a TZ resolved by
+ *  the system tzdata; the per-bar decomposition then runs under a
+ *  process-global mutex so multi-threaded harnesses don't corrupt each
+ *  other's wall time.
+ *
+ *  Should be called before #run_backtest / #run_backtest_full. Persists
+ *  across runs on the same strategy handle until overridden. */
+PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz);
+
 /** Returns the error message captured by the most recent #run_backtest /
  *  #run_backtest_full call on this strategy.
  *
