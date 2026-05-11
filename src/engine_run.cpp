@@ -266,8 +266,9 @@ void BacktestEngine::init_security_eval_states_for_run(
         state.current_bar = Bar{};
         state.current_sub_bar_count = 0;
         state.lower_tf_sub_bar_index = 0;
+        state.lower_tf_input_buffer.clear();
         state.aggregator = TimeframeAggregator();
-        if (state.lower_tf_emulation) {
+        if (state.lower_tf_emulation || state.lower_tf_use_input) {
             continue;
         }
         int req_ratio = tf_ratio(effective_input_tf, state.tf);
