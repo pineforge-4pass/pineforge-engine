@@ -11,6 +11,7 @@ set(TEST_SOURCES
     test_kc
     test_matrix
     test_session_time
+    test_chart_timezone
     test_dmi_parity
     test_integration
     test_request_security
