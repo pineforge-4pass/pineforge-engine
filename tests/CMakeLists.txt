@@ -17,6 +17,7 @@ set(TEST_SOURCES
     test_request_security
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
+    test_security_lower_tf_script_bound
     test_engine_trade_accessors
     test_strategy_oca
     test_strategy_pyramiding
