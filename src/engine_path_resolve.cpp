@@ -745,6 +745,7 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            double position_entry_price,
                                            double trail_best_start,
                                            bool is_entry_bar,
+                                           bool magnifier_active,
                                            double syminfo_mintick) {
     ExitPathFill fill;
     if (position_side == PositionSide::FLAT) return fill;
@@ -757,7 +758,17 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
         is_long, trail_points, trail_offset, position_entry_price,
         trail_best_start, syminfo_mintick);
 
-    if (!is_entry_bar) {
+    // Open-gap shortcut. The legacy code only ran this on non-entry bars,
+    // because on the entry bar bar.open == position_entry_price and a stop /
+    // limit on the wrong side would gap-fill at $0 PnL. With magnifier ON,
+    // however, TV's broker emulator does treat each lower-TF sub-bar's
+    // open as a fresh gap event and DOES fill wrong-side exits at the
+    // entry bar's open (verified across magnifier-dist-probe-01..08b — 340
+    // of 871 trades on probe-01 are wrong-side gap fills). Allow the gap
+    // shortcut on the entry bar in magnifier mode only; the wrong-side
+    // eligibility skip in classify_order_eligibility still gates the non-
+    // magnifier path against bogus na-arithmetic stops.
+    if (!is_entry_bar || magnifier_active) {
         if (try_exit_open_gap_fill(bar, is_long, has_stop, stop_price,
                                    has_limit, limit_price, trail, &fill)) {
             return fill;
