@@ -176,10 +176,94 @@ static void test_legacy_path_used_when_single_sub_bar() {
     BacktestEngine::free_report(&report);
 }
 
+// Wrong-side stop on entry bar in magnifier mode: TV's broker emulator
+// fires a long sell-stop placed ABOVE the entry price at the entry bar's
+// open (gap-fill semantics — every magnifier sub-bar opens fresh and the
+// price < stop predicate matches at sub-bar 0). Reported as a $0-PnL trade
+// (entry == exit). Verified empirically across magnifier-dist-probe-01 ..
+// 08b: 340 / 871 trades on probe-01 are wrong-side entries that TV fires
+// at entry while the legacy engine left them dangling.
+class WrongSideStopStrat : public BacktestEngine {
+public:
+    WrongSideStopStrat() {
+        initial_capital_ = 100000;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0.0;
+        slippage_ = 0;
+        process_orders_on_close_ = false;
+    }
+    void on_bar(const Bar& bar) override {
+        (void)bar;
+        if (bar_index_ == 0) {
+            strategy_entry("L", true);
+            // Stop deliberately ABOVE the next bar's expected entry price
+            // (entry bar opens at 100, stop placed at 105). Wrong-side for
+            // a long: sell-stop placed above current price.
+            strategy_exit("X", "L", std::numeric_limits<double>::quiet_NaN(),
+                          /*stop_price=*/105.0);
+        }
+    }
+};
+
+static std::vector<Bar> make_two_15m_bars_for_wrong_side() {
+    std::vector<Bar> bars;
+    bars.reserve(30);
+    // Bar 0 (signal bar) and bar 1 (entry bar) sit between 99 and 102 the
+    // whole time — the long sell-stop at 105 NEVER touches via path walk.
+    // Only the gap-at-open shortcut on the entry bar can fire it.
+    for (int i = 0; i < 30; ++i) {
+        double base = 100.0;
+        double o = base, h = base + 2.0, l = base - 1.0, c = base + 1.0;
+        bars.push_back({o, h, l, c, 50.0, (int64_t)i * 60'000});
+    }
+    return bars;
+}
+
+static void test_wrong_side_stop_fills_at_entry_under_magnifier() {
+    std::printf("test_wrong_side_stop_fills_at_entry_under_magnifier\n");
+
+    WrongSideStopStrat strat;
+    auto bars = make_two_15m_bars_for_wrong_side();
+    strat.run(bars.data(), (int)bars.size(), "1", "15", true, 4,
+              MagnifierDistribution::ENDPOINTS);
+
+    CHECK(strat.trade_count() == 1);
+    if (strat.trade_count() == 1) {
+        const auto& t = strat.get_trade(0);
+        // Entry and exit both fill at 100 (the entry-bar open) — wrong-side
+        // gap-fill produces a $0-PnL trade.
+        CHECK(near(t.entry_price, 100.0, 1e-9));
+        CHECK(near(t.exit_price,  100.0, 1e-9));
+    }
+}
+
+// Without magnifier, the legacy non-magnifier path applies: a wrong-side
+// stop placed on the signal bar must NOT fire on the entry bar (the bar
+// path doesn't cross the stop on a falling segment, and the eligibility
+// skip in classify_order_eligibility blocks the gap-shortcut). This is
+// the gate that protects scripts which derive stops/limits from
+// strategy.position_avg_price while flat (the engine returns 0.0 there
+// instead of na, producing numerically-valid but semantically-wrong-side
+// levels — without the gate every such bar would close at $0 PnL).
+static void test_wrong_side_stop_blocked_without_magnifier() {
+    std::printf("test_wrong_side_stop_blocked_without_magnifier\n");
+
+    WrongSideStopStrat strat;
+    auto bars = make_two_15m_bars_for_wrong_side();
+    // Aggregate to 15m but with magnifier OFF: the entry bar runs as a
+    // single tick and the wrong-side stop should not fire on it. The
+    // strategy never closes the position, so no trades are emitted.
+    strat.run(bars.data(), (int)bars.size(), "1", "15", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    CHECK(strat.trade_count() == 0);
+}
+
 int main() {
     test_stop_fills_in_correct_script_bar();
     test_distribution_irrelevant_when_real_sub_bars();
     test_legacy_path_used_when_single_sub_bar();
+    test_wrong_side_stop_fills_at_entry_under_magnifier();
+    test_wrong_side_stop_blocked_without_magnifier();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

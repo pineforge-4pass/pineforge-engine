@@ -408,16 +408,40 @@ protected:
     // (floor). Verified against basic/parabolic-asr where the 2,513
     // non-gap stop entry fills show a perfectly one-sided +/-0.01 bias.
     // See investigation report at /tmp/pf_investigation_parabolic_asr.md.
+    //
+    // The 1e-9 epsilon nudge guards against FP slop: a price computed as
+    // ``user_close + 0.5`` may land at ``1803.1199999998`` (just below the
+    // 1803.12 mintick boundary), which a raw ``ceil`` would push to 1803.13
+    // and a raw ``floor`` to 1803.11. The nudge resolves any value within
+    // 1 nanotick of an exact mintick boundary to that boundary, keeping
+    // the bias one-sided only for sub-mintick midpoints (e.g. 1804.945).
     double round_to_mintick_directional(double price, bool is_long_stop) const {
         if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
+        constexpr double kBoundaryEps = 1e-9;
         double r = price / syminfo_mintick_;
-        return (is_long_stop ? std::ceil(r) : std::floor(r)) * syminfo_mintick_;
+        if (is_long_stop) {
+            return std::ceil(r - kBoundaryEps) * syminfo_mintick_;
+        }
+        return std::floor(r + kBoundaryEps) * syminfo_mintick_;
     }
 
     double apply_slippage(double price, bool is_buy) const {
-        if (slippage_ == 0) return round_to_mintick(price);
+        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
+        // TradingView snaps fills to mintick directionally even when slippage
+        // is zero: a buy fills at the next-higher mintick, a sell at the
+        // next-lower mintick. The legacy nearest-mintick rounding biased
+        // sub-mintick stop levels (e.g. (open+high)/2 for an odd-mintick
+        // bar) up by one tick for sells, producing a deterministic +0.01
+        // exit-price drift on the magnifier-dist corpus (≈ 180 trades per
+        // probe). Matching TV's directional snap removes that drift while
+        // preserving the original add-slippage-then-snap shape for the
+        // slippage > 0 path.
+        if (slippage_ == 0) {
+            return round_to_mintick_directional(price, /*is_long_stop=*/is_buy);
+        }
         double slip = slippage_ * syminfo_mintick_;
-        return round_to_mintick(is_buy ? price + slip : price - slip);
+        double slipped = is_buy ? price + slip : price - slip;
+        return round_to_mintick_directional(slipped, /*is_long_stop=*/is_buy);
     }
 
     // --- Commission helper ---

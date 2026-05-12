@@ -165,6 +165,7 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            double position_entry_price,
                                            double trail_best_start,
                                            bool is_entry_bar,
+                                           bool magnifier_active,
                                            double syminfo_mintick);
 
 

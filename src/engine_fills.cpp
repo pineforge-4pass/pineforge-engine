@@ -639,6 +639,25 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     // trail) on the entry bar itself (entry fills at open, then intra-bar
     // data evaluates exits). But skip if the exit has garbage values
     // (computed when position was flat).
+    //
+    // The wrong-side eligibility skip (stop > entry for long, etc.) gates
+    // out spurious orders whose stop/limit was derived from
+    // ``strategy.position_avg_price`` while flat: Pine returns ``na`` and
+    // arithmetic propagates ``na`` (so the order becomes a no-op), but the
+    // engine returns ``0.0`` and arithmetic produces a numerically-valid
+    // but semantically-wrong-side level (negative or near-zero). Without
+    // the skip those orders gap-fill at the entry bar's open (every bar a
+    // signal fires would close at $0 PnL).
+    //
+    // The magnifier corpus (probe-01..08b) places exits with USER-COMPUTED
+    // valid wrong-side stops (e.g. ``open + (high-open)*0.5`` is between
+    // open and high, then becomes wrong-side once the next bar's open lands
+    // below it). TV's broker emulator fires these at the entry bar's open
+    // because each magnifier sub-bar opens fresh and triggers the gap
+    // predicate. The bypass below lets bar_magnifier_enabled_ runs fall
+    // through to resolve_exit_path_fill / try_exit_open_gap_fill (now also
+    // active on entry bars in magnifier mode) so legitimate wrong-side
+    // exits fire at entry price as TV reports them.
     bool is_entry_bar = (exit_style && position_open_bar_ == bar_index_);
     if (is_entry_bar) {
         bool has_price = !std::isnan(order.stop_price) || !std::isnan(order.limit_price)
@@ -646,13 +665,15 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         if (!has_price) {
             return OrderEligibility::Skip;  // skip market exits on entry bar
         }
-        double ep = position_entry_price_;
-        if (position_side_ == PositionSide::LONG) {
-            if (!std::isnan(order.stop_price) && order.stop_price > ep) return OrderEligibility::Skip;
-            if (!std::isnan(order.limit_price) && order.limit_price < ep) return OrderEligibility::Skip;
-        } else if (position_side_ == PositionSide::SHORT) {
-            if (!std::isnan(order.stop_price) && order.stop_price < ep) return OrderEligibility::Skip;
-            if (!std::isnan(order.limit_price) && order.limit_price > ep) return OrderEligibility::Skip;
+        if (!bar_magnifier_enabled_) {
+            double ep = position_entry_price_;
+            if (position_side_ == PositionSide::LONG) {
+                if (!std::isnan(order.stop_price) && order.stop_price > ep) return OrderEligibility::Skip;
+                if (!std::isnan(order.limit_price) && order.limit_price < ep) return OrderEligibility::Skip;
+            } else if (position_side_ == PositionSide::SHORT) {
+                if (!std::isnan(order.stop_price) && order.stop_price < ep) return OrderEligibility::Skip;
+                if (!std::isnan(order.limit_price) && order.limit_price > ep) return OrderEligibility::Skip;
+            }
         }
     }
 
@@ -692,6 +713,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             position_entry_price_,
             trail_best_path_state,
             is_entry_bar,
+            bar_magnifier_enabled_,
             syminfo_mintick_);
         if (exit_fill.should_fill) {
             fill_price = exit_fill.fill_price;
