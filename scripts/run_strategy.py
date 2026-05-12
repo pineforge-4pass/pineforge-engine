@@ -29,6 +29,12 @@ Usage examples
 
     # All strategies (matches `bash scripts/run_corpus.sh`)
     for d in corpus/*/*/; do python scripts/run_strategy.py "$d"; done
+
+    # Warm indicators on pre-window bars but suppress order execution
+    # until the comparison window opens (prevents warmup-period trades
+    # from polluting engine_trades.csv in strategies with early signals):
+    python scripts/run_strategy.py corpus/basic/greedy \\
+        --disable-trading-before-window
 """
 from __future__ import annotations
 

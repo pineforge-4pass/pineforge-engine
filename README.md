@@ -109,7 +109,7 @@ That's the entire integration. Every PineForge-compiled strategy `.so` exports t
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-ctest --test-dir build --output-on-failure   # 16 tests, ~1 s
+ctest --test-dir build --output-on-failure   # 30 tests, ~1 s
 bash tutorial/run.sh                          # full MACD backtest in 0.4 ms
 ```
 
@@ -134,15 +134,15 @@ The site auto-rebuilds on every push to `main` and every release tag.
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
-The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **165 strict-excellent + 2 strong = 167/168 matching**, with **1 stress probe at the 1× margin boundary** that exercises an edge case where TV's published semantics are ambiguous. 168 total strategies = 162 reference + 6 parity probes under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
+The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on an internal reference corpus: **165 strict-excellent + 2 strong = 167/168 matching**, with **1 stress probe at the 1× margin boundary** that exercises an edge case where TV's published semantics are ambiguous. 168 total strategies = 162 reference + 5 parity probes + 1 anomaly probe (equity-mirror, excluded from headline by default) under the canonical verifier. That corpus is **not shipped** in public checkouts; see **Contributing** / private `corpus` submodule below.
 
 This repository ships:
 
 - `libpineforge.a` — the static runtime library
 - `<pineforge/pineforge.h>` — the public C ABI (the canonical, stability-pinned consumer surface)
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
-- A 16-binary ctest suite (15 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
-- `**corpus/`** (optional **git submodule**) — **168 reference strategies** (162 base + 6 parity probes) for maintainers who have access: each folder has `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`, plus shared OHLCV under `corpus/data/`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`. Public clones omit this content.
+- A 30-binary ctest suite (29 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
+- `**corpus/`** (optional **git submodule**) — **168 reference strategies** (162 base + 5 parity probes + 1 anomaly probe) for maintainers who have access: each folder has `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`, plus shared OHLCV under `corpus/data/`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`. Public clones omit this content.
 - `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **private `benchmarks/assets` submodule** — same confidentiality class as `corpus/`. With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
 
 ## Coverage
@@ -178,7 +178,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect 16 tests to pass. The largest (`test_integration`, `test_request_security`) take a few hundred milliseconds; everything else completes faster.
+Expect 30 tests to pass. The largest (`test_integration`, `test_request_security`) take a few hundred milliseconds; everything else completes faster.
 
 ### Install
 
@@ -258,7 +258,7 @@ src/                    - implementation (~25 .cpp files split by concern)
   │   ├── ta_extremes_volume.cpp      Highest/Lowest, OBV, AccDist, NVI/PVI/PVT, VWAP, ...
   │   └── ta_misc.cpp                 Linreg, PercentRank, BarsSince, ValueWhen, ...
   └── magnifier.cpp / matrix.cpp / session_time.cpp / str_utils.cpp / timeframe.cpp / timezone.cpp / math.cpp
-tests/                  - 16 ctest binaries (15 C++ + 1 pure-C ABI sanity)
+tests/                  - 30 ctest binaries (29 C++ + 1 pure-C ABI sanity)
 corpus/                 - private submodule: 168 strategies (maintainers only); see CONTRIBUTING.md
   ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
@@ -349,7 +349,9 @@ for the full per-strategy table and methodology.
 
 ## Status
 
-- v0.1 — initial public release. C ABI defined and pinned. Reported **165 strict-excellent + 2 strong = 167/168** TV parity on the internal corpus (private submodule, 168 strategies including 6 parity probes); the lone outlier is a 1×-margin stress probe on an undocumented TV edge case. 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
+- v0.1 — initial public release. C ABI defined and pinned. Reported **165 strict-excellent + 2 strong = 167/168** TV parity on the internal corpus (private submodule, 168 strategies including 5 parity probes + 1 anomaly probe); the lone outlier is a 1×-margin stress probe on an undocumented TV edge case. 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
+- v0.2 — same-id stop/replace deferred to post-bar OHLC resolution (PR #13); RMA warmup seed aligned to Pine reference formula, `-ffp-contract=off` build flag added (PR #14).
+- v0.3 — magnifier wrong-side gap fill fixed for entry bar; directional mintick rounding in `apply_slippage` (PR #15). ctest suite expanded to 30 binaries.
 
 ## License
 

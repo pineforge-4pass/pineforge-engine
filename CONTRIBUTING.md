@@ -36,7 +36,7 @@ You'll need:
 - A C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12)
 - Eigen 3.3+ (will be fetched automatically if not on system)
 
-The full test suite — 16 binaries, 15 C++ + 1 pure-C ABI sanity test — completes in under a second. There is no slow-test tier; if your change makes ctest take more than ~10s, that's a regression.
+The full test suite — 30 binaries, 29 C++ + 1 pure-C ABI sanity test — completes in under a second. There is no slow-test tier; if your change makes ctest take more than ~10s, that's a regression.
 
 ## What changes are easy to land
 

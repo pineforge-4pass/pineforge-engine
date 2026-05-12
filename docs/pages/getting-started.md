@@ -22,7 +22,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect 16 tests to pass. The largest (`test_integration`,
+Expect 30 tests to pass. The largest (`test_integration`,
 `test_request_security`) take a few hundred milliseconds; everything
 else completes faster.
 

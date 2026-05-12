@@ -19,7 +19,7 @@ sudo cmake --install build --prefix /usr/local
 | Option | Default | Effect |
 | --- | --- | --- |
 | `CMAKE_BUILD_TYPE` | `Release` | Set to `Debug` for assertions and unstripped symbols. |
-| `PINEFORGE_BUILD_TESTS` | `ON` | Build the 16-binary `ctest` suite. Disable in package builds. |
+| `PINEFORGE_BUILD_TESTS` | `ON` | Build the 30-binary `ctest` suite. Disable in package builds. |
 | `PINEFORGE_BUILD_TUTORIAL` | `ON` | Build `tutorial/macd/strategy.so`. |
 | `PINEFORGE_BUILD_CORPUS_STRATEGIES` | `OFF` | Compile the private 168-strategy corpus (maintainers only). |
 | `PINEFORGE_ENABLE_COVERAGE` | `OFF` | Instrument runtime + tests for source coverage (Clang/GCC). |
