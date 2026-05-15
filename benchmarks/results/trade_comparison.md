@@ -1,7 +1,7 @@
 # Trade comparison
 
 Each strategy is run through PineForge and PyneCore against the
-same 36k-bar OHLCV feed. PineTS is excluded from this report —
+same 41,307-bar OHLCV feed. PineTS is excluded from this report —
 their strategy backtester is a roadmap item (per [their
 README](https://github.com/LuxAlgo/PineTS#roadmap)). Both columns
 are diffed against the same `tv_trades.csv` ground truth.

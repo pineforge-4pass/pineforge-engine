@@ -762,7 +762,7 @@ def main() -> int:
         "Match degree per the canonical PineForge parity sweep "
         "(align-then-trim window; trail_* strategies use production thresholds; "
         "inputs.json overrides honoured).\n",
-        "| Strategy | Profile | TV (raw / win) | PineForge | PyneCore |",
+        "| Strategy | Profile | TV (raw) | PineForge (eng / TV-in-win) | PyneCore (eng / TV-in-win) |",
         "|---|---|---|---|---|",
     ]
     pf_tally: dict[str, int] = {lbl: 0 for lbl in all_labels}
@@ -773,9 +773,9 @@ def main() -> int:
         pf_emoji = _LABEL_EMOJI.get(pf_d.label, "🔴")
         pc_emoji = _LABEL_EMOJI.get(pc_d.label, "🔴")
         summary_lines.append(
-            f"| {name} | {profile} | {tv_raw} / {pf_d.n_tv_in_window} | "
-            f"{pf_emoji} {pf_d.label} ({pf_d.n_engine_in_window}) | "
-            f"{pc_emoji} {pc_d.label} ({pc_d.n_engine_in_window}) |"
+            f"| {name} | {profile} | {tv_raw} | "
+            f"{pf_emoji} {pf_d.label} ({pf_d.n_engine_in_window} / {pf_d.n_tv_in_window}) | "
+            f"{pc_emoji} {pc_d.label} ({pc_d.n_engine_in_window} / {pc_d.n_tv_in_window}) |"
         )
     summary_lines.append("")
     n = len(summary_rows)
