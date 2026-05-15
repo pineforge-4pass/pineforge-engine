@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)<br>
 [![Parity](https://img.shields.io/badge/TV%20parity-227%2F228-brightgreen)](#cross-engine-comparison)
-[![Speed](https://img.shields.io/badge/MACD%20672%20bars-0.4%20ms-success)](tutorial/)<br>
+[![Speed](https://img.shields.io/badge/median%2056%C3%97%20vs%20PyneCore%20%2849%20strategies%29-success)](benchmarks/results/speed.md)<br>
 [![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
 
 **[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev)**<br>
@@ -71,8 +71,8 @@ Once connected, your AI agent can:
 
 ## Why PineForge?
 
-- 🎯 **TradingView-exact.** 227 of 228 reference strategies match TV trade-for-trade. The lone outlier is a stress probe at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct. 48 of 50 in the public three-way benchmark vs PyneCore + PineTS.
-- ⚡ **Microsecond-class.** A 672-bar MACD backtest runs in **0.4 ms** end-to-end. Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
+- 🎯 **TradingView-exact.** 227 of 228 reference strategies match TV trade-for-trade. The lone outlier is a stress probe at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct. 49 of 50 PineForge excellent vs PyneCore + PineTS in the public three-way benchmark (PyneCore: 46 of 50; PineTS indicator-only).
+- ⚡ **Microsecond-class.** Median **56× faster than PyneCore** across 49 commonly-timed strategies (full 41,307-bar OHLCV via dlopen+run; see [benchmarks/results/speed.md](benchmarks/results/speed.md)). Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
 - 🔒 **Stable C ABI.** 10 functions, 6 POD types, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
 - 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
 - 🧰 **FFI-friendly.** Call from Python (`ctypes`), Rust (`libloading`), Go (`cgo`), Node, Julia. Worked examples for [pure C](https://cdocs.pineforge.dev/examples_c.html), [Python sweep](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy harness](https://cdocs.pineforge.dev/examples_multi.html), and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) ship in the docs.
@@ -110,7 +110,7 @@ That's the entire integration. Every PineForge-compiled strategy `.so` exports t
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure   # 30 tests, ~1 s
-bash tutorial/run.sh                          # full MACD backtest in 0.4 ms
+bash tutorial/run.sh                          # MACD backtest end-to-end
 ```
 
 ## Documentation
@@ -143,7 +143,7 @@ This repository ships:
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
 - A 30-binary ctest suite (29 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
 - `**corpus/`** (**public git submodule**) — **228 reference strategies** under a single `corpus/validation/` tree. Each folder ships `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`.
-- `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 50 strategies and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **`benchmarks/assets` submodule** — a separate optional submodule (not yet public). With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on 48/50 strategies vs PyneCore's 45/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics
+- `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 75 strategies (50 public + 25 promoted corpus probes) and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **`benchmarks/assets` submodule** — a separate optional submodule (not yet public). With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on 49/50 strategies (first 50) vs PyneCore’s 46/50; the 3 outliers are PyneCore-specific defects on bracket / trail / partial-exit semantics. Median speedup: 56× vs PyneCore across 49 commonly-timed strategies.
 
 ## Coverage
 
@@ -342,18 +342,21 @@ Current standings (window-clipped 4-dimension diff vs TV):
 
 | Match degree | PineForge   | PyneCore |
 | ------------ | ----------- | -------- |
-| 🟢 excellent | **48 / 50** | 45 / 50  |
-| 🟢 strong    | 2 / 50      | 2 / 50   |
+| 🟢 excellent | **49 / 50** | 46 / 50  |
+| 🟢 strong    | 1 / 50      | 1 / 50   |
 | 🟡 moderate  | 0           | 2        |
 | 🟠 weak      | 0           | 1        |
 
 
-The 3 PyneCore-only outliers (`liquidity-sweep`, `scalping-strategy`,
-`partial-exit-qty-percent`) all involve `strategy.exit(stop=…, limit=…)`
+The 3 PyneCore-only outliers from excellent (`liquidity-sweep`, `scalping-strategy`,
+`partial-exit-qty-percent`) involve `strategy.exit(stop=…, limit=…)`
 brackets, `trail_`* exits, or `strategy.close(qty_percent=…)` partial
 exits — categories where PyneCore's broker emulator differs from TV
-and PineForge does not. See `[benchmarks/results/summary.md](benchmarks/results/summary.md)`
+and PineForge does not. (`13-parabolic-asr` is strong on both engines — a TV-side
+semantic, not a PyneCore defect.) See [`benchmarks/results/summary.md`](benchmarks/results/summary.md)
 for the full per-strategy table and methodology.
+
+Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Per-strategy speed table at [`benchmarks/results/speed.md`](benchmarks/results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
 
 ## Status
 

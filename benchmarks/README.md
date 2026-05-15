@@ -178,25 +178,30 @@ cat results/summary.md
       [`results/indicator_comparison.md`](results/indicator_comparison.md)
 - [x] One-shot orchestrator: `bash run_all.sh`
 
+Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. PineForge holds tier "excellent" on 49 of 50 strategies (was 48/50 in 2025-05). New per-strategy speed table at [`results/speed.md`](results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
+
 Headline numbers (see [`results/summary.md`](results/summary.md)):
 
 | Match degree | PineForge | PyneCore |
 |---|---:|---:|
-| 🟢 excellent | **48 / 50** | 45 / 50 |
-| 🟢 strong | 2 / 50 | 2 / 50 |
+| 🟢 excellent | **49 / 50** | 46 / 50 |
+| 🟢 strong | 1 / 50 | 1 / 50 |
 | 🟡 moderate | 0 | 2 |
 | 🟠 weak | 0 | 1 |
 
-PineForge hits canonical **excellent** tier on 48/50 strategies —
+PineForge hits canonical **excellent** tier on 49/50 strategies —
 count delta < 1%, entry/exit p90 < 0.01%, P&L p90 < 1%, ≥95% TV match
-rate (production thresholds for trail-using strategies). The 2
-"strong" results (`13-parabolic-asr`, `17-bos-curv`) drift the same
-way on both engines — they agree trade-for-trade with each other,
-both producing 1.8–2.8% more trades than TV. That's TV-side semantic,
-not an engine bug.
+rate (production thresholds for trail-using strategies). The 1
+"strong" result (`13-parabolic-asr`) drifts the same way on both
+engines — they agree trade-for-trade with each other, producing ~2%
+more trades than TV. That's a TV-side semantic, not an engine bug.
+(`17-bos-curv` promoted from strong → excellent under the canonical
+window algorithm as of 2026-05-16.)
 
 PyneCore drops below excellent on three bracket / trailing / partial-
-exit strategies — order-matching defects PineForge does not share.
+exit strategies (`06-liquidity-sweep`, `07-scalping-strategy`,
+`49-partial-exit-qty-percent`) — order-matching defects PineForge
+does not share.
 
 Benchmark uses **extended OHLCV** (Binance USDT-M ETH/USDT:USDT 15m,
 since 2025-03-01) so all TV-export trades fall inside the comparison
