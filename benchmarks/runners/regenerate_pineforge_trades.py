@@ -1,77 +1,50 @@
 #!/usr/bin/env python3
-"""Re-generate `pineforge_trades.csv` for every benchmark strategy by
-running the existing corpus-built `strategy.so` against the extended
-OHLCV file at `_workdir/data/ETHUSDT_15.csv`.
+"""Regenerate `pineforge_trades.csv` for every bench strategy by
+codegen+building each `assets/strategies/<NN>/strategy.pine` and
+running it through `scripts/run_strategy.py` against the pinned OHLCV.
 
-Each benchmark strategy folder (see `paths.STRATEGIES`) maps to one
-`corpus/<category>/<corpus_name>/` folder via the same plan
-`bootstrap_strategies.py` uses. This script:
-
-    1. Resolves the corpus folder for each benchmark folder
-    2. Runs `scripts/run_strategy.py <corpus_folder> --ohlcv <extended>`
-    3. Copies the resulting `engine_trades.csv` to
-       `<STRATEGIES>/<NN>/pineforge_trades.csv`
+This script no longer depends on the corpus-side bootstrap_strategies
+DEFAULT_PLAN (which became stale after corpus consolidation in
+commit ef6ce58). The bench is now the source of truth for its own
+50+N strategy.pine files.
 
 Pre-requisites:
-    - `cmake -B build -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON`
-      `cmake --build build --target corpus_strategies`
-      (puts strategy.dylib/.so into every corpus/<>/<>/ folder)
-    - Extended OHLCV at `_workdir/data/ETHUSDT_15.csv`
-      (produced by `fetch_extended_ohlcv.py`)
+    - cmake -B build -DPINEFORGE_BUILD_TESTS=ON
+      cmake --build build --target pineforge -j
+    - sibling pineforge-codegen repo checked out next to engine
+      (or PINEFORGE_CODEGEN_PATH env var set)
 """
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-BENCH_DIR = REPO_ROOT / "benchmarks"
-CORPUS_ROOT = REPO_ROOT / "corpus"
+BENCH = REPO_ROOT / "benchmarks"
 RUN_STRATEGY = REPO_ROOT / "scripts" / "run_strategy.py"
 
-_SYS_BENCH = BENCH_DIR
-if str(_SYS_BENCH) not in sys.path:
-    sys.path.insert(0, str(_SYS_BENCH))
+sys.path.insert(0, str(BENCH))
 from paths import DATA, STRATEGIES  # noqa: E402
 
-# Prefer the committed snapshot, fall back to the live working copy.
-_OHLCV_CANDIDATES = [
-    DATA / "ETHUSDT_15.csv",
-    BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv",
-]
-DEFAULT_OHLCV = next((p for p in _OHLCV_CANDIDATES if p.exists()), _OHLCV_CANDIDATES[-1])
+sys.path.insert(0, str(BENCH / "runners"))
+from compile_bench_strategy import compile_one  # noqa: E402
 
-# Reuse the canonical mapping from bootstrap_strategies.py.
-sys.path.insert(0, str(BENCH_DIR / "runners"))
-from bootstrap_strategies import DEFAULT_PLAN  # noqa: E402
+DEFAULT_OHLCV = DATA / "ETHUSDT_15.csv"
 
 
-def regen_one(corpus_rel: str, idx: int, slug: str, ohlcv: Path) -> tuple[bool, str]:
-    corpus_dir = CORPUS_ROOT / corpus_rel
-    bench_dir = STRATEGIES / f"{idx:02d}-{slug}"
+def regen_one(bench_dir: Path, ohlcv: Path) -> tuple[bool, str]:
+    try:
+        dylib = compile_one(bench_dir)
+    except Exception as e:
+        return False, f"compile failed: {str(e).splitlines()[0][:200]}"
 
-    if not bench_dir.exists():
-        return False, f"benchmark folder missing: {bench_dir.relative_to(REPO_ROOT)}"
-    if not corpus_dir.exists():
-        return False, f"corpus folder missing: {corpus_dir.relative_to(REPO_ROOT)}"
-    so_files = list(corpus_dir.glob("strategy.*"))
-    so_files = [p for p in so_files if p.suffix in (".so", ".dylib", ".dll")]
-    if not so_files:
-        return False, (f"no strategy.so/.dylib/.dll in {corpus_dir.relative_to(REPO_ROOT)} — "
-                       "build with `cmake --build build --target corpus_strategies`")
-
-    # Write the CSV directly into the benchmark folder via --output so we
-    # never overwrite the corpus's pinned engine_trades.csv (those were
-    # generated against the 36k corpus OHLCV and must stay reproducible
-    # against that feed alone).
     dst = bench_dir / "pineforge_trades.csv"
     cmd = [
         sys.executable, str(RUN_STRATEGY),
-        str(corpus_dir),
+        str(dylib.parent),
         "--ohlcv", str(ohlcv.resolve()),
         "--output", str(dst.resolve()),
     ]
@@ -87,38 +60,36 @@ def regen_one(corpus_rel: str, idx: int, slug: str, ohlcv: Path) -> tuple[bool, 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--ohlcv", type=Path, default=DEFAULT_OHLCV,
-                    help=f"OHLCV CSV (default: {DEFAULT_OHLCV.relative_to(REPO_ROOT)})")
-    ap.add_argument("--only", help="Substring filter on benchmark slug")
+    ap.add_argument("--ohlcv", type=Path, default=DEFAULT_OHLCV)
+    ap.add_argument("--only", help="Substring filter on bench slug")
     args = ap.parse_args()
 
     if not args.ohlcv.exists():
         print(f"ERROR: OHLCV not found at {args.ohlcv}", file=sys.stderr)
-        print("Run scripts/fetch_extended_ohlcv.py first.", file=sys.stderr)
         return 1
 
     started = time.time()
     n_ok = n_fail = 0
     failed: list[tuple[str, str]] = []
 
-    for corpus_rel, idx, slug in DEFAULT_PLAN:
-        if args.only and args.only not in slug:
+    for d in sorted(STRATEGIES.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
             continue
-        ok, msg = regen_one(corpus_rel, idx, slug, args.ohlcv)
+        if args.only and args.only not in d.name:
+            continue
+        ok, msg = regen_one(d, args.ohlcv)
         tag = "OK" if ok else "FAIL"
-        print(f"  [{idx:02d}-{slug:38s}] {tag:4s}  {msg}")
+        print(f"  [{d.name:42s}] {tag:4s}  {msg}")
         if ok:
             n_ok += 1
         else:
             n_fail += 1
-            failed.append((f"{idx:02d}-{slug}", msg))
+            failed.append((d.name, msg))
 
     elapsed = time.time() - started
-    print()
-    print(f"regenerated {n_ok}, failed {n_fail}  in {elapsed:.1f}s")
+    print(f"\nregenerated {n_ok}, failed {n_fail}  in {elapsed:.1f}s")
     if failed:
-        print()
-        print("failed:")
+        print("\nfailed:")
         for name, err in failed:
             print(f"  {name}: {err}")
         return 1
