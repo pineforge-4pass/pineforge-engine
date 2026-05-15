@@ -178,7 +178,7 @@ cat results/summary.md
       [`results/indicator_comparison.md`](results/indicator_comparison.md)
 - [x] One-shot orchestrator: `bash run_all.sh`
 
-Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. PineForge holds tier "excellent" on **50 of 50** original strategies (was 48/50 in 2025-05) and **95 of 100** on the expanded suite (full 3-way coverage; PyneCore 85/100). New per-strategy speed table at [`results/speed.md`](results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
+Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. PineForge holds tier "excellent" on **50 of 50** original strategies (was 48/50 in 2025-05) and **100 of 100** on the expanded suite (full 3-way coverage; PyneCore 85/100). New per-strategy speed table at [`results/speed.md`](results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
 
 Headline numbers (see [`results/summary.md`](results/summary.md)):
 
