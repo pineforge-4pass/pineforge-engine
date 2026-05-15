@@ -217,6 +217,416 @@ git commit -m "docs(bench): record cloud-compiler drift log; bump assets"
 
 ---
 
+## Phase 1.5 — Decouple bench regen from corpus (NEW, plan revision 2026-05-15-r2)
+
+**Why this phase exists:** Discovered during Task 0.1 that `regenerate_pineforge_trades.py` depends on `bootstrap_strategies.DEFAULT_PLAN` mapping bench slug → corpus path (`basic/`, `community/`, `validation/01-…`). Corpus commit `ef6ce58` (≈2025-09) consolidated everything into `validation/<surface-driven-slug>-NN/`. All 50 DEFAULT_PLAN paths now miss. Spec assumed regen worked; it does not. Fix is to remove the corpus dependency entirely: bench owns its `assets/strategies/<NN>/strategy.pine` as source-of-truth, and we codegen+build .dylib in a bench-local workdir.
+
+### Task 1.5: Build `compile_bench_strategy.py`
+
+**Files:**
+- Create: `benchmarks/runners/compile_bench_strategy.py`
+- Test on: `benchmarks/assets/strategies/01-sma-cross/`
+
+- [ ] **Step 1: Confirm codegen Python API surface**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-codegen
+uv run python -c "from pineforge_codegen import transpile; print(transpile.__doc__)"
+```
+
+Expected: `transpile()` is callable, takes Pine source string, returns C++ source string.
+
+- [ ] **Step 2: Inspect corpus CMake to copy compile flags**
+
+```bash
+sed -n '1,80p' /Users/haoliangwen/code/pineforge-engine/corpus/CMakeLists.txt
+```
+
+Note: per-strategy `add_library(... SHARED generated.cpp)`, links against `pineforge` static lib, force-load all symbols (`-Wl,-force_load` on macOS, `-Wl,--whole-archive` on ELF), suppresses `-Wno-unused-but-set-variable`/`-Wno-unused-variable`/`-Wno-unused-parameter`.
+
+- [ ] **Step 3: Write the compiler**
+
+```python
+#!/usr/bin/env python3
+"""Codegen + compile a bench strategy.pine into a runnable .dylib/.so.
+
+Bench source-of-truth is `assets/strategies/<NN-slug>/strategy.pine`.
+This script:
+    1. Reads the .pine file.
+    2. Calls pineforge_codegen.transpile(pine_source) -> C++ source.
+    3. Writes generated.cpp into _workdir/build_strategies/<NN-slug>/.
+    4. Compiles with clang++ against libpineforge.{a,dylib} from
+       <repo>/build/, mirroring corpus/CMakeLists.txt link flags.
+    5. Returns absolute path of the resulting strategy.dylib.
+
+The bench builds are isolated under _workdir so they never collide with
+the corpus's pinned strategy.dylib files.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+BENCH = REPO_ROOT / "benchmarks"
+BUILD_DIR = REPO_ROOT / "build"
+WORKDIR = BENCH / "_workdir" / "build_strategies"
+CODEGEN_REPO = REPO_ROOT.parent / "pineforge-codegen"
+INCLUDE_DIR = REPO_ROOT / "include"
+sys.path.insert(0, str(BENCH))
+from paths import STRATEGIES  # noqa: E402
+
+# Locate libpineforge static lib produced by the engine build.
+def _find_libpineforge() -> Path:
+    for cand in (BUILD_DIR / "libpineforge.a", BUILD_DIR / "src" / "libpineforge.a"):
+        if cand.exists():
+            return cand
+    raise FileNotFoundError(
+        "libpineforge.a not found under build/. Run: "
+        "cmake -B build -DPINEFORGE_BUILD_TESTS=ON && cmake --build build --target pineforge -j"
+    )
+
+
+def _ensure_codegen_importable() -> None:
+    if not CODEGEN_REPO.exists():
+        raise FileNotFoundError(f"pineforge-codegen sibling repo not found at {CODEGEN_REPO}")
+    sys.path.insert(0, str(CODEGEN_REPO))
+
+
+def transpile_pine(pine_path: Path, dest_cpp: Path) -> None:
+    _ensure_codegen_importable()
+    from pineforge_codegen import transpile  # type: ignore
+    cpp = transpile(pine_path.read_text())
+    dest_cpp.parent.mkdir(parents=True, exist_ok=True)
+    dest_cpp.write_text(cpp)
+
+
+def compile_dylib(cpp_path: Path, out_dylib: Path) -> None:
+    libpf = _find_libpineforge()
+    is_macos = platform.system() == "Darwin"
+    suffix = ".dylib" if is_macos else ".so"
+    if out_dylib.suffix != suffix:
+        out_dylib = out_dylib.with_suffix(suffix)
+
+    cxx = os.environ.get("CXX", "c++")
+    args = [
+        cxx, "-std=c++17", "-O2", "-fPIC", "-shared",
+        "-Wno-unused-but-set-variable", "-Wno-unused-variable", "-Wno-unused-parameter",
+        f"-I{INCLUDE_DIR}",
+        str(cpp_path),
+        "-o", str(out_dylib),
+    ]
+    if is_macos:
+        args += ["-Wl,-force_load," + str(libpf)]
+    else:
+        args += ["-Wl,--whole-archive", str(libpf), "-Wl,--no-whole-archive"]
+
+    res = subprocess.run(args, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"compile failed for {cpp_path}:\n{res.stderr[-2000:]}")
+
+
+def compile_one(bench_dir: Path) -> Path:
+    """Codegen + compile one bench strategy. Returns path to built .dylib."""
+    pine = bench_dir / "strategy.pine"
+    if not pine.exists():
+        raise FileNotFoundError(f"missing strategy.pine in {bench_dir}")
+    out_dir = WORKDIR / bench_dir.name
+    cpp = out_dir / "generated.cpp"
+    dylib = out_dir / "strategy.dylib"
+    transpile_pine(pine, cpp)
+    compile_dylib(cpp, dylib)
+    return dylib
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--only", help="Substring filter on bench slug")
+    ap.add_argument("--clean", action="store_true",
+                    help=f"Delete {WORKDIR.relative_to(REPO_ROOT)} before building")
+    args = ap.parse_args()
+
+    if args.clean and WORKDIR.exists():
+        shutil.rmtree(WORKDIR)
+
+    n_ok = n_fail = 0
+    failed: list[tuple[str, str]] = []
+    for d in sorted(STRATEGIES.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        if args.only and args.only not in d.name:
+            continue
+        try:
+            dylib = compile_one(d)
+            print(f"  [{d.name:42s}] OK    {dylib.relative_to(REPO_ROOT)}")
+            n_ok += 1
+        except Exception as e:
+            msg = str(e).splitlines()[0][:200]
+            print(f"  [{d.name:42s}] FAIL  {msg}")
+            failed.append((d.name, msg))
+            n_fail += 1
+
+    print(f"\nbuilt {n_ok}, failed {n_fail}")
+    if failed:
+        print("\nfailed:")
+        for name, err in failed:
+            print(f"  {name}: {err}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 4: Build engine + smoke-compile 01-sma-cross**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine
+cmake -B build -DPINEFORGE_BUILD_TESTS=ON 2>&1 | tail -3
+cmake --build build --target pineforge -j 2>&1 | tail -3
+cd benchmarks
+uv run python runners/compile_bench_strategy.py --only 01-sma-cross --clean
+ls -la _workdir/build_strategies/01-sma-cross/
+```
+
+Expected: `built 1, failed 0`. `strategy.dylib` exists, ~1-3 MB on macOS.
+
+- [ ] **Step 5: Verify .dylib exposes pf_* symbols**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine
+nm -gU benchmarks/_workdir/build_strategies/01-sma-cross/strategy.dylib | grep -E "pf_|pineforge_" | head -10
+```
+
+Expected: at least `pf_version_get`, `strategy_set_*`, and the per-strategy entry symbol present.
+
+- [ ] **Step 6: Add codegen sibling-repo install to bench env**
+
+The `compile_bench_strategy.py` `sys.path.insert(0, str(CODEGEN_REPO))` only works if `pineforge-codegen` is checked out at `../pineforge-codegen` relative to the engine repo. Verify:
+
+```bash
+test -d /Users/haoliangwen/code/pineforge-codegen/pineforge_codegen || \
+  echo "ERROR: pineforge-codegen sibling repo missing"
+```
+
+If the import path needs to be more robust, accept env override `PINEFORGE_CODEGEN_PATH`. Patch `_ensure_codegen_importable()` to honour it:
+
+```python
+def _ensure_codegen_importable() -> None:
+    cand = Path(os.environ.get("PINEFORGE_CODEGEN_PATH", str(CODEGEN_REPO)))
+    if not cand.exists():
+        raise FileNotFoundError(f"pineforge-codegen not found at {cand} (set PINEFORGE_CODEGEN_PATH)")
+    if str(cand) not in sys.path:
+        sys.path.insert(0, str(cand))
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine
+git add benchmarks/runners/compile_bench_strategy.py
+git commit -m "feat(bench): bench-local codegen+compile; decouple from corpus DEFAULT_PLAN
+
+Bench owns its assets/strategies/<NN>/strategy.pine as source of truth.
+compile_bench_strategy.py runs pineforge_codegen.transpile -> clang++
+build under benchmarks/_workdir/build_strategies/<NN>/strategy.dylib,
+mirroring corpus/CMakeLists.txt link flags. Removes brittle slug ->
+corpus-folder mapping (broken since corpus consolidation in ef6ce58)."
+```
+
+### Task 1.6: Rewrite `regenerate_pineforge_trades.py`
+
+**Files:**
+- Modify: `benchmarks/runners/regenerate_pineforge_trades.py`
+
+- [ ] **Step 1: Replace corpus-mapping with bench-local compile**
+
+Replace the script entirely with this version:
+
+```python
+#!/usr/bin/env python3
+"""Regenerate `pineforge_trades.csv` for every bench strategy by
+codegen+building each `assets/strategies/<NN>/strategy.pine` and
+running it through `scripts/run_strategy.py` against the pinned OHLCV.
+
+This script no longer depends on the corpus-side bootstrap_strategies
+DEFAULT_PLAN (which became stale after corpus consolidation in
+commit ef6ce58). The bench is now the source of truth for its own
+50+N strategy.pine files.
+
+Pre-requisites:
+    - cmake -B build -DPINEFORGE_BUILD_TESTS=ON
+      cmake --build build --target pineforge -j
+    - sibling pineforge-codegen repo checked out next to engine
+      (or PINEFORGE_CODEGEN_PATH env var set)
+"""
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+BENCH = REPO_ROOT / "benchmarks"
+RUN_STRATEGY = REPO_ROOT / "scripts" / "run_strategy.py"
+
+sys.path.insert(0, str(BENCH))
+from paths import DATA, STRATEGIES  # noqa: E402
+
+sys.path.insert(0, str(BENCH / "runners"))
+from compile_bench_strategy import compile_one  # noqa: E402
+
+DEFAULT_OHLCV = DATA / "ETHUSDT_15.csv"
+
+
+def regen_one(bench_dir: Path, ohlcv: Path) -> tuple[bool, str]:
+    try:
+        dylib = compile_one(bench_dir)
+    except Exception as e:
+        return False, f"compile failed: {str(e).splitlines()[0][:200]}"
+
+    dst = bench_dir / "pineforge_trades.csv"
+    cmd = [
+        sys.executable, str(RUN_STRATEGY),
+        str(dylib.parent),
+        "--ohlcv", str(ohlcv.resolve()),
+        "--output", str(dst.resolve()),
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if res.returncode != 0:
+        msg = (res.stderr.strip().splitlines() or [f"rc={res.returncode}"])[-1][:200]
+        return False, f"run_strategy.py failed: {msg}"
+    if not dst.exists():
+        return False, "run_strategy.py did not emit pineforge_trades.csv"
+    return True, "ok"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--ohlcv", type=Path, default=DEFAULT_OHLCV)
+    ap.add_argument("--only", help="Substring filter on bench slug")
+    args = ap.parse_args()
+
+    if not args.ohlcv.exists():
+        print(f"ERROR: OHLCV not found at {args.ohlcv}", file=sys.stderr)
+        return 1
+
+    started = time.time()
+    n_ok = n_fail = 0
+    failed: list[tuple[str, str]] = []
+
+    for d in sorted(STRATEGIES.iterdir()):
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        if args.only and args.only not in d.name:
+            continue
+        ok, msg = regen_one(d, args.ohlcv)
+        tag = "OK" if ok else "FAIL"
+        print(f"  [{d.name:42s}] {tag:4s}  {msg}")
+        if ok:
+            n_ok += 1
+        else:
+            n_fail += 1
+            failed.append((d.name, msg))
+
+    elapsed = time.time() - started
+    print(f"\nregenerated {n_ok}, failed {n_fail}  in {elapsed:.1f}s")
+    if failed:
+        print("\nfailed:")
+        for name, err in failed:
+            print(f"  {name}: {err}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+- [ ] **Step 2: Smoke test on 01-sma-cross**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks
+uv run python runners/regenerate_pineforge_trades.py --only 01-sma-cross
+head -3 assets/strategies/01-sma-cross/pineforge_trades.csv
+wc -l assets/strategies/01-sma-cross/pineforge_trades.csv
+```
+
+Expected: `regenerated 1, failed 0`. CSV row count should be within ±5% of last refresh's `2315`.
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine
+git add benchmarks/runners/regenerate_pineforge_trades.py
+git commit -m "refactor(bench): regen trades from bench .pine sources, drop corpus DEFAULT_PLAN dep
+
+bootstrap_strategies.DEFAULT_PLAN became stale when corpus consolidated
+into validation/<slug>-NN tree (ef6ce58). The bench is now the source
+of truth for its own strategy.pine files; this script codegen+builds
+each one in benchmarks/_workdir/build_strategies/ and runs via
+scripts/run_strategy.py. bootstrap_strategies.py is kept for legacy
+ref but its DEFAULT_PLAN is no longer wired into regen."
+```
+
+### Task 1.7: Differential validation against committed baseline
+
+**Files:**
+- Test only; no code changes.
+
+- [ ] **Step 1: Snapshot pre-regen baseline**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks/assets
+git stash push -m "pre-task-2.1-baseline" -- strategies/*/pineforge_trades.csv
+```
+
+- [ ] **Step 2: Regenerate ALL 50 via new pipeline**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks
+uv run python runners/regenerate_pineforge_trades.py 2>&1 | tee _workdir/regen_smoke.log
+```
+
+Expected: `regenerated 50, failed 0`. Wall time ~5-10 min (codegen+compile is the new cost).
+
+- [ ] **Step 3: Diff per-strategy row counts vs baseline**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks/assets
+for f in strategies/*/pineforge_trades.csv; do
+    new=$(wc -l < "$f")
+    old=$(git show "stash@{0}:$f" 2>/dev/null | wc -l)
+    delta=$(( new - old ))
+    printf "%-50s  old=%6d  new=%6d  Δ=%+d\n" "$f" "$old" "$new" "$delta"
+done | tee /tmp/regen_diff.txt
+```
+
+Expected: deltas within ±5% per strategy. Large unexplained shifts indicate either an engine regression OR a codegen change that landed without bench coverage. Either way, investigate before continuing.
+
+- [ ] **Step 4: Pop stash**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks/assets
+git stash pop  # restore baseline; new regen will rerun in Task 2.1
+```
+
+- [ ] **Step 5: No commit (this task is validation-only)**
+
+If smoke fails or unexplained deltas exceed tolerance: **STOP**, report to controller, do NOT proceed to Task 2.1.
+
+---
+
 ## Phase 2 — PineForge regeneration (existing 50)
 
 ### Task 2.1: Regenerate trade lists against engine v0.4.1
