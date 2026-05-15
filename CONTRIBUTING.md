@@ -4,27 +4,28 @@ Thanks for your interest. This document covers the practical workflow for contri
 
 Community interaction is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For licensing and third-party obligations (Eigen, optional benchmark tools), see [LEGAL.md](LEGAL.md).
 
-## Private fixtures
+## Submodules
 
-TradingView-linked validation fixtures (`corpus/`) and benchmark assets
-(`benchmarks/assets`) are private maintainer data. Public clones do not
-receive them. If you have access, initialize the optional submodules:
+The `corpus/` validation tree and `benchmarks/assets` are published as
+separate Apache-2.0 submodules. Initialize them after cloning:
 
 ```bash
 git submodule update --init corpus benchmarks/assets
 ```
 
-The public repository intentionally does not ship one-time migration or
-history-rewrite scripts for private fixture management. Maintainers should use
-internal release documentation for those workflows.
+Both submodules are redistributable: `tv_trades.csv` files are produced
+from PineScript sources we own, and the corpus ships under the same
+Apache-2.0 license as the engine. The `generated.cpp` and built
+`strategy.dylib` / `strategy.so` artefacts are intentionally excluded
+from the published corpus — they're regenerated locally by
+`scripts/run_corpus.sh`.
 
 ## Development setup
 
 ```bash
 git clone https://github.com/fullpass-4pass/pineforge-engine.git pineforge-engine
 cd pineforge-engine
-git submodule update --init corpus   # omit if you do not have corpus access
-git submodule update --init benchmarks/assets   # omit if you do not have benchmark fixtures access
+git submodule update --init corpus benchmarks/assets
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ctest --test-dir build --output-on-failure
@@ -146,7 +147,7 @@ easy to find candidates.
 
 ## Parity testing
 
-The 168-strategy parity corpus (162 base + 6 parity probes) is the private **`corpus` git submodule** (see
+The parity corpus lives in the **`corpus` git submodule** (see
 top of this file). After `git submodule update --init corpus`, read
 [`corpus/README.md`](corpus/README.md) for layout and threshold profiles. The full sweep is:
 
@@ -154,13 +155,22 @@ top of this file). After `git submodule update --init corpus`, read
 bash scripts/run_corpus.sh
 ```
 
-It builds every `corpus/<>/<>/generated.cpp` into a `strategy.so`,
-runs each against `corpus/data/ohlcv_ETH-USDT-USDT_15m_warmup6m.csv`
-when present (falling back to `corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`), and
+It builds every `corpus/validation/<probe>/generated.cpp` into a
+`strategy.dylib` / `strategy.so`, runs each against
+`corpus/data/ohlcv_ETH-USDT-USDT_15m_warmup6m.csv` when present
+(falling back to `corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`), and
 rewrites the regenerated `engine_trades.csv` files. It also prints a
 canonical `scripts/verify_corpus.py --all --quiet` summary with the five
 parity labels (`excellent`, `strong`, `moderate`, `weak`, `minimal`).
 Review the regenerated CSV diff before committing runtime-semantics changes.
+
+Probe directories follow the convention
+`<category>-<descriptive-slug>-NN` (e.g. `bracket-exit-tp-sl-fixed-01`,
+`analyzer-parity-stop-limit-timing-01`). The leading `<category>` token
+groups probes by the engine sub-system they exercise — `bracket`,
+`analyzer-parity`, `barstate`, `anomaly`, and so on. See
+[`corpus/README.md`](corpus/README.md) for the full category list and
+when to pick which one when adding a new probe.
 
 If your change has a non-trivial chance of affecting TV parity (anything in `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, the ta classes, the magnifier, or session/timeframe handling), run the corpus sweep locally and include the diff in the PR description.
 
@@ -178,11 +188,11 @@ engines see. `bash benchmarks/run_all.sh` runs the whole pipeline.
 - Body: explain the *why*. If it's a TV-parity fix, link the failing probe / cite the TV behavior.
 - All CI must pass before merge: build on Ubuntu + macOS in both Release and Debug, ctest, and the install/`find_package` smoke test.
 
-## Maintainer: open-source release checklist
+## Maintainer: release checklist
 
-Before advertising a **public** default branch:
+Before cutting a release on the **public** default branch:
 
-1. **Private data** — `corpus/` and benchmark fixtures (`benchmarks/data` + `benchmarks/strategies`, or `benchmarks/assets`) must not appear in **public** history if they contain TV-linked exports you are not allowed to redistribute. Use private submodules and maintainer-internal release docs for history-rewrite workflows. [LEGAL.md](LEGAL.md) describes submodule separation.
+1. **Submodule pins** — bump `corpus/` and `benchmarks/assets` submodules to the intended commits and verify both upstream tags resolve under their published Apache-2.0 trees. [LEGAL.md](LEGAL.md) describes the submodule split.
 2. **Secrets** — No API keys, `.env`, or machine-specific paths in tracked files; keep `benchmarks/_workdir`, `.venv`, and `node_modules` untracked.
 3. **Notices** — Keep [NOTICE](NOTICE) aligned with anything linked into `libpineforge` (e.g. Eigen). Update [LEGAL.md](LEGAL.md) if you add a new mandatory runtime dependency.
 4. **Benchmark AGPL** — Optional `benchmarks/` tooling installs AGPL-covered PineTS (`pinets`). Default CI stays on ctest only so a minimal clone is not forced to pull AGPL into the lib build.
