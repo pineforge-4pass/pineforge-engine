@@ -296,25 +296,25 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
 
-### 13-parabolic-asr  *(profile: strict)*
+### 13-stoch-slow-k-d-cross  *(profile: strict)*
 
-- TV trades (raw): **2768**
-- TV trades inside common window: **2656**
-- **PineForge** 🟢 **strong**  (engine trades: 2951, in-window: 2733, matched 2647 = 99.7% of TV-in-window)
-    - count delta:  `2.8174%`
+- TV trades (raw): **7585**
+- TV trades inside common window: **7175**
+- **PineForge** 🟢 **excellent**  (engine trades: 7244, in-window: 7175, matched 7175 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
     - exit  p90:    `0.0000%`
-    - PnL   p90:    `0.1090%`
-- **PyneCore** 🟢 **strong**  (engine trades: 4424, in-window: 2848, matched 2756 = 99.7% of TV-in-window)
-    - count delta:  `2.9143%`
+    - PnL   p90:    `0.0769%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 10789, in-window: 7585, matched 7585 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
     - exit  p90:    `0.0000%`
-    - PnL   p90:    `0.1081%`
+    - PnL   p90:    `0.0762%`
 
-### 13-parabolic-asr — PineForge ↔ PyneCore agreement (in common window)
+### 13-stoch-slow-k-d-cross — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 2951 / max(2951, 2951)
-- count delta: `0.0000%`
+- shared trades: 7244 / max(7244, 7245)
+- count delta: `0.0138%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
