@@ -274,12 +274,13 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str) -> str:
     lines.append("`entry/exit/pnl p90` are 90th-percentile relative deltas across matched")
     lines.append("trades (PnL excludes scratch trades with `|tv_pnl| < $0.01`).")
     lines.append("")
-    lines.append("| Slug | Category | Tier | TV | Engine | Matched | Count Δ | Entry p90 | Exit p90 | PnL p90 |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Slug | Category | Tier | Profile | TV | Engine | Matched | Count Δ | Entry p90 | Exit p90 | PnL p90 |")
+    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
     for r in sorted(rows, key=lambda x: (_category_of(x["slug"]), x["slug"])):
         link = f"[`{r['slug']}`](./validation/{r['slug']}/)"
         lines.append(
             f"| {link} | `{_category_of(r['slug'])}` | {r['tier']} | "
+            f"`{r.get('profile','strict')}` | "
             f"{r['tv']} | {r['eng']} | {r['matched']} | "
             f"{_fmt_pct(r['count_delta'])} | {_fmt_pct(r['entry_p90'])} | "
             f"{_fmt_pct(r['exit_p90'])} | {_fmt_pct(r['pnl_p90'])} |"
