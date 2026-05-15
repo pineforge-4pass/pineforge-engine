@@ -178,18 +178,18 @@ cat results/summary.md
       [`results/indicator_comparison.md`](results/indicator_comparison.md)
 - [x] One-shot orchestrator: `bash run_all.sh`
 
-Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. PineForge holds tier "excellent" on 49 of 50 strategies (was 48/50 in 2025-05). New per-strategy speed table at [`results/speed.md`](results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
+Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. PineForge holds tier "excellent" on **50 of 50** strategies (was 48/50 in 2025-05). New per-strategy speed table at [`results/speed.md`](results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
 
 Headline numbers (see [`results/summary.md`](results/summary.md)):
 
 | Match degree | PineForge | PyneCore |
 |---|---:|---:|
-| 🟢 excellent | **49 / 50** | 46 / 50 |
-| 🟢 strong | 1 / 50 | 1 / 50 |
+| 🟢 excellent | **50 / 50** | 47 / 50 |
+| 🟢 strong | 0 / 50 | 0 / 50 |
 | 🟡 moderate | 0 | 2 |
 | 🟠 weak | 0 | 1 |
 
-PineForge hits canonical **excellent** tier on 49/50 strategies —
+PineForge hits canonical **excellent** tier on 50/50 strategies —
 count delta < 1%, entry/exit p90 < 0.01%, P&L p90 < 1%, ≥95% TV match
 rate (production thresholds for trail-using strategies). The 1
 "strong" result (`13-parabolic-asr`) drifts the same way on both
