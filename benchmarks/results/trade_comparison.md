@@ -1469,28 +1469,28 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.2039%`
 
-### 64-anomaly-equity-mirror-strategy-equity-01  *(profile: strict)*
+### 64-composite-vcp-cumulative-volume-delta-01  *(profile: strict)*
 
-- TV trades (raw): **24**
-- TV trades inside common window: **24**
-- **PineForge** 🟠 **weak**  (engine trades: 25, in-window: 25, matched 13 = 54.2% of TV-in-window)
-    - count delta:  `4.0000%`
+- TV trades (raw): **3119**
+- TV trades inside common window: **3119**
+- **PineForge** 🟢 **excellent**  (engine trades: 3119, in-window: 3119, matched 3119 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
     - exit  p90:    `0.0000%`
-    - PnL   p90:    `2.3202%`
-- **PyneCore** 🟠 **weak**  (engine trades: 32, in-window: 18, matched 8 = 33.3% of TV-in-window)
-    - count delta:  `25.0000%`
+    - PnL   p90:    `0.0761%`
+- **PyneCore** 🟢 **excellent**  (engine trades: 4382, in-window: 3119, matched 3119 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
     - exit  p90:    `0.0000%`
-    - PnL   p90:    `5.2156%`
+    - PnL   p90:    `0.0761%`
 
-### 64-anomaly-equity-mirror-strategy-equity-01 — PineForge ↔ PyneCore agreement (in common window)
+### 64-composite-vcp-cumulative-volume-delta-01 — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 10 / max(25, 18)
-- count delta: `28.0000%`
+- shared trades: 3119 / max(3119, 3119)
+- count delta: `0.0000%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
-- PnL   p90:   `3.6360%`
+- PnL   p90:   `0.0000%`
 
 ### 65-bracket-atr-trail-series-int-points-01  *(profile: production)*
 

@@ -67,7 +67,7 @@ Match degree per the canonical PineForge parity sweep (align-then-trim window; t
 | 61-analyzer-parity-edge-margin-50-pct-01 | strict | 57 | 🟢 excellent (57 / 57) | 🟢 strong (57 / 57) |
 | 62-analyzer-parity-percent-of-equity-sizing-01 | strict | 57 | 🟢 excellent (57 / 57) | 🟢 strong (57 / 57) |
 | 63-analyzer-parity-small-equity-fraction-01 | strict | 57 | 🟢 excellent (57 / 57) | 🟢 excellent (57 / 57) |
-| 64-anomaly-equity-mirror-strategy-equity-01 | strict | 24 | 🟠 weak (25 / 24) | 🟠 weak (18 / 24) |
+| 64-composite-vcp-cumulative-volume-delta-01 | strict | 3119 | 🟢 excellent (3119 / 3119) | 🟢 excellent (3119 / 3119) |
 | 65-bracket-atr-trail-series-int-points-01 | production | 792 | 🟢 excellent (792 / 792) | 🟡 moderate (792 / 792) |
 | 66-bracket-entry-exit-same-pass-attach-01 | strict | 728 | 🟢 excellent (728 / 728) | 🟢 excellent (728 / 728) |
 | 67-bracket-exit-stop-limit-trail-same-bar-01 | production | 732 | 🟢 excellent (732 / 732) | 🟡 moderate (732 / 732) |
@@ -96,16 +96,16 @@ Match degree per the canonical PineForge parity sweep (align-then-trim window; t
 | 98-magnifier-tick-dist-endpoints-01 | strict | 871 | 🟢 strong (871 / 871) | 🟢 excellent (871 / 871) |
 | 99-matrix-eigen-rank-deficient-cov-01 | strict | 871 | 🟢 excellent (871 / 871) | 🟢 excellent (871 / 871) |
 
-- **excellent**: PineForge 88/91, PyneCore 77/91
+- **excellent**: PineForge 89/91, PyneCore 78/91
 - **strong**: PineForge 2/91, PyneCore 2/91
 - **moderate**: PineForge 0/91, PyneCore 8/91
-- **weak**: PineForge 1/91, PyneCore 4/91
+- **weak**: PineForge 0/91, PyneCore 3/91
 ## Notes
 
 - **As of:** 2026-05-16. Engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Validator: canonical port from `scripts/verify_corpus.py` (commit `fc59170`, matches `scripts/run_corpus.sh` logic).
-- **OHLCV (r5):** Bench uses corpus `ohlcv_ETH-USDT-USDT_15m_warmup6m.csv` (53,930 bars, 2024-10-20 → 2026-05-04, ~6 months pre-TV warmup).
-- **Bench size (r6):** 100 strategies promoted. 9 of 25 newly promoted (slots 76-100) have hard PyneCore failures (LTF/MTF/varIP/UDT/bracket/recompute features cloud-compiler emits but PyneCore runtime rejects). Comparator skips these → 91 strategies in 3-way reports. Failed: 77, 80, 83, 88, 91, 92, 94, 97, 100.
-- **Slot 13 swap (r5):** Replaced `13-parabolic-asr` (TV-side SAR semantic divergence) with corpus `ta-stoch-slow-k-d-cross-01`.
-- **Slot 98:** PineForge tier "strong" on `magnifier-tick-dist-endpoints-01` despite corpus reporting excellent; under bench warmup6m feed the magnifier endpoints distribution shows pnl_p90 just over strict threshold (0.012 vs 0.01).
-- **Build:** All 100 dylibs built via `cmake -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON --target bench_strategies`. Codegen-free for public users (`generated.cpp` files committed to assets).
-- **Known issue:** `10-market-shift` PyneCore 6.4.6 `input.string()` API rejection; reflects stale CSV from prior refresh.
+- **OHLCV:** `ohlcv_ETH-USDT-USDT_15m_warmup6m.csv` (53,930 bars, 6mo pre-TV warmup).
+- **Bench size:** 100 strategies promoted, 91 in 3-way reports (9 PyneCore-incompatible probes auto-skipped).
+- **Slot 64 swap (r6):** Replaced `64-anomaly-equity-mirror-strategy-equity-01` (documented TV broker margin-boundary non-determinism, weak under both engines) with `composite-vcp-cumulative-volume-delta-01` (both excellent, 3119/3119).
+- **PineForge non-excellent (2 of 91):** 81 + 98 magnifier-tick-dist-endpoints (pnl_p90 0.012 vs strict 0.01, fill drift in ENDPOINTS distribution).
+- **9 PyneCore failures (slots 76-100):** 6 LTF/MTF (80, 83, 88, 92, 97, 100): bench harness gap (no security_data injection). 2 bracket-trail (77, 94): PyneCore `assert order.stop is not None` bug. 1 UDT (91): cloud-compiler emits undefined `cfg`.
+- **Known issue:** `10-market-shift` PyneCore 6.4.6 `input.string()` API rejection; reflects stale CSV.
