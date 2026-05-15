@@ -10,17 +10,22 @@
 #   - uv (Python package manager) + Python 3.11+
 #   - node >= 20
 #   - git submodule update --init benchmarks/assets  (assets data + strategies)
-#   - PYNESYS_API_KEY env var  (only if you want to refresh strategy_pyne.py;
-#     the committed .py files work as-is for parity reproduction — see SKIP_PYNE_REFRESH)
+#
+# No API keys required. All inputs (OHLCV, strategy.pine, generated.cpp,
+# tv_trades.csv, strategy_pyne.py) are committed in the assets submodule.
 #
 # Honours these env vars:
 #   SKIP_BUILD          — skip the runtime + bench-strategy build step
-#   SKIP_PYNE_REFRESH   — skip cloud_compile (default 1: strategy_pyne.py committed)
 #   SKIP_PYNE           — skip PyneCore strategy + indicator runs
 #   SKIP_PINETS         — skip PineTS indicator run
 #   SKIP_PINEFORGE      — skip PineForge trade regeneration
 #   SKIP_SPEED          — skip the per-strategy speed sweep (pineforge_bench + timers)
 #   SKIP_REPORTS        — skip the compare.py / compare_indicators.py step
+#
+# Maintenance scripts (refresh OHLCV, add new bench slots, refresh
+# strategy_pyne.py, re-emit generated.cpp) are NOT part of this script —
+# they live in pineforge-utils/bench-maintenance/ and require closed-source
+# dependencies (codegen, PyneSys API key) that public reproducers don't need.
 
 set -euo pipefail
 
@@ -74,90 +79,30 @@ if [[ ! -d "${BENCH_DIR}/node_modules" ]]; then
     (cd "${BENCH_DIR}" && npm install --silent)
 fi
 
-# OHLCV: prefer the committed snapshot at benchmarks/assets/data/ (submodule)
-# or benchmarks/data/ (legacy) over a
-# fresh Binance fetch. The committed file is what every committed
-# strategy_pyne.py and pineforge_trades.csv was generated against —
-# fetching live would silently drift the comparison.
-#
-# To force a fresh download from Binance, set REFRESH_OHLCV=1.
+# OHLCV is the committed snapshot at benchmarks/assets/data/ETHUSDT_15.csv
+# (submodule). Every committed strategy_pyne.py + pineforge_trades.csv was
+# generated against this file. To extend / re-fetch, see
+# pineforge-utils/bench-maintenance/fetch_extended_ohlcv.py (maintainer-only).
 source "${BENCH_DIR}/.venv/bin/activate"
 mkdir -p "${WORKDIR}/data"
 SNAPSHOT_CSV="${BENCH_ASSETS}/data/ETHUSDT_15.csv"
 LIVE_CSV="${WORKDIR}/data/ETHUSDT_15.csv"
 
-if [[ "${REFRESH_OHLCV:-0}" == "1" ]]; then
-    log "REFRESH_OHLCV=1: re-fetching from Binance ETH/USDT:USDT 15m"
-    python3 "${BENCH_DIR}/runners/fetch_extended_ohlcv.py" \
-        --since "${OHLCV_SINCE:-2025-03-01}" >/dev/null
-    cp "${LIVE_CSV}" "${SNAPSHOT_CSV}"
-    log "wrote refreshed snapshot to benchmarks/assets/data/ETHUSDT_15.csv"
-elif [[ -f "${SNAPSHOT_CSV}" ]]; then
-    if [[ ! -f "${LIVE_CSV}" ]] || ! cmp -s "${SNAPSHOT_CSV}" "${LIVE_CSV}"; then
-        log "using OHLCV snapshot at benchmarks/assets/data/ETHUSDT_15.csv"
-        cp "${SNAPSHOT_CSV}" "${LIVE_CSV}"
-        # Re-convert to PyneCore .ohlcv if missing or stale.
-        if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
-           || [[ "${LIVE_CSV}" -nt "${LIVE_CSV%.csv}.ohlcv" ]]; then
-            pyne -w "${WORKDIR}" data convert-from \
-                --provider pineforge --symbol ETHUSDT --timezone UTC \
-                "${LIVE_CSV}" >/dev/null
-        fi
-    fi
-elif [[ ! -f "${LIVE_CSV}" ]]; then
-    warn "no OHLCV snapshot at benchmarks/assets/data/ETHUSDT_15.csv"
-    warn "init the benchmarks/assets submodule, or run with REFRESH_OHLCV=1"
-    warn "set REFRESH_OHLCV=1 to fetch from Binance instead"
-    exit 1
+if [[ ! -f "${SNAPSHOT_CSV}" ]]; then
+    fail "no OHLCV snapshot at benchmarks/assets/data/ETHUSDT_15.csv
+init the benchmarks/assets submodule: git submodule update --init benchmarks/assets"
 fi
 
-# --- 3a) bootstrap strategy folders ---------------------------------
-
-if [[ "${SKIP_BOOTSTRAP:-0}" != "1" ]]; then
-    log "bootstrapping benchmark strategy folders from corpus/"
-    python3 "${BENCH_DIR}/runners/bootstrap_strategies.py" >/dev/null
+if [[ ! -f "${LIVE_CSV}" ]] || ! cmp -s "${SNAPSHOT_CSV}" "${LIVE_CSV}"; then
+    log "copying OHLCV snapshot to ${WORKDIR}/data/"
+    cp "${SNAPSHOT_CSV}" "${LIVE_CSV}"
 fi
-
-# --- 3b) cloud-compile .pine -> @pyne (default: SKIP — strategy_pyne.py committed) ---
-#
-# Set SKIP_PYNE_REFRESH=0 and provide PYNESYS_API_KEY to re-compile via PyneSys.
-# This is only needed when you want to update strategy_pyne.py files from updated
-# .pine sources.  The committed strategy_pyne.py files work as-is for parity
-# reproduction without any API key.
-
-if [[ "${SKIP_PYNE_REFRESH:-1}" != "1" ]]; then
-    log "cloud-compiling .pine -> @pyne via PyneSys (skip if strategy_pyne.py exists)"
-    force_compile=0
-    if [[ "${REFRESH_COMPILE:-0}" == "1" ]]; then
-        force_compile=1
-        log "  REFRESH_COMPILE=1: will re-call API for every strategy"
-    fi
-    needs_key=0
-    if (( force_compile == 1 )); then
-        needs_key=1
-    else
-        # Even when not forcing, we still need a key if any strategy is
-        # missing its committed strategy_pyne.py.
-        for s in "${STRATEGIES_DIR}"/[0-9][0-9]-*/; do
-            [[ -f "$s/strategy.pine" ]] || continue
-            [[ -f "$s/strategy_pyne.py" ]] || { needs_key=1; break; }
-        done
-    fi
-    if (( needs_key == 1 )) \
-       && [[ -z "${PYNESYS_API_KEY:-}" ]] \
-       && ! grep -q '^api_key = "[^"]\+' "${WORKDIR}/config/api.toml" 2>/dev/null; then
-        warn "missing strategy_pyne.py and no PyneSys API key found"
-        warn "set PYNESYS_API_KEY=... or fill ${WORKDIR}/config/api.toml"
-        warn "skipping compile; benchmark will run only on existing files"
-    else
-        if (( force_compile == 1 )); then
-            python3 "${BENCH_DIR}/runners/cloud_compile.py" --force >/dev/null \
-                || warn "cloud_compile.py reported failures; continuing with whatever exists"
-        else
-            python3 "${BENCH_DIR}/runners/cloud_compile.py" >/dev/null \
-                || warn "cloud_compile.py reported failures; continuing with whatever exists"
-        fi
-    fi
+# Re-convert to PyneCore .ohlcv if missing or stale.
+if [[ ! -f "${LIVE_CSV%.csv}.ohlcv" ]] \
+   || [[ "${LIVE_CSV}" -nt "${LIVE_CSV%.csv}.ohlcv" ]]; then
+    pyne -w "${WORKDIR}" data convert-from \
+        --provider pineforge --symbol ETHUSDT --timezone UTC \
+        "${LIVE_CSV}" >/dev/null
 fi
 
 # --- 3c) regenerate PineForge trades on the extended OHLCV ----------

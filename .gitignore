@@ -54,3 +54,10 @@ __pycache__/
 
 # Tutorial backtest output
 tutorial/**/trades.csv
+
+# Claude Code session state
+.claude/
+
+# Session-local handoff notes (not for public history)
+HANDOFF.md
+BENCH_REFRESH_HANDOFF.md
