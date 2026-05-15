@@ -59,3 +59,7 @@ Match degree per the canonical PineForge parity sweep (align-then-trim window; t
 - **strong**: PineForge 1/50, PyneCore 1/50
 - **moderate**: PineForge 0/50, PyneCore 2/50
 - **weak**: PineForge 0/50, PyneCore 1/50
+
+## Notes
+
+- **OHLCV (2026-05-16 r5):** Swapped to corpus `ohlcv_ETH-USDT-USDT_15m_warmup6m.csv` (53,930 bars, 2024-10-20 → 2026-05-04, ~6 months pre-TV warmup). Prior bench feed (41,308 bars, 2025-03-01 onset) caused PineForge warmup-edge trim on indicator-heavy strategies; warmup6m eliminates that asymmetry.
