@@ -128,6 +128,8 @@ def bootstrap_one(corpus_rel: str, idx: int, slug: str) -> tuple[bool, str]:
         shutil.copy2(src / "tv_trades.csv", dst / "tv_trades.csv")
     if (src / "engine_trades.csv").exists():
         shutil.copy2(src / "engine_trades.csv", dst / "pineforge_trades.csv")
+    if (src / "inputs.json").exists():
+        shutil.copy2(src / "inputs.json", dst / "inputs.json")
     return True, "bootstrapped"
 
 

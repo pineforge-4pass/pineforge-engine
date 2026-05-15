@@ -254,11 +254,11 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 
 - TV trades (raw): **774**
 - TV trades inside common window: **774**
-- **PineForge** 🟡 **moderate**  (engine trades: 785, in-window: 785, matched 746 = 96.4% of TV-in-window)
-    - count delta:  `1.4013%`
+- **PineForge** 🟢 **excellent**  (engine trades: 774, in-window: 774, matched 774 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
     - exit  p90:    `0.0000%`
-    - PnL   p90:    `0.0876%`
+    - PnL   p90:    `0.0841%`
 - **PyneCore** 🟡 **moderate**  (engine trades: 1077, in-window: 782, matched 745 = 96.6% of TV-in-window)
     - count delta:  `1.4066%`
     - entry p90:    `0.0000%`
@@ -267,8 +267,8 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 
 ### 100-matrix-bool-mask-no-transpose-01 — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 784 / max(784, 784)
-- count delta: `0.0000%`
+- shared trades: 745 / max(771, 782)
+- count delta: `1.4066%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
@@ -1864,10 +1864,10 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 
 - TV trades (raw): **871**
 - TV trades inside common window: **871**
-- **PineForge** 🟢 **strong**  (engine trades: 871, in-window: 871, matched 871 = 100.0% of TV-in-window)
+- **PineForge** 🟢 **excellent**  (engine trades: 871, in-window: 871, matched 871 = 100.0% of TV-in-window)
     - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
-    - exit  p90:    `0.2091%`
+    - exit  p90:    `0.0000%`
     - PnL   p90:    `0.0739%`
 - **PyneCore** 🟢 **excellent**  (engine trades: 1210, in-window: 871, matched 871 = 100.0% of TV-in-window)
     - count delta:  `0.0000%`
@@ -1880,17 +1880,17 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 - shared trades: 871 / max(871, 871)
 - count delta: `0.0000%`
 - entry p90:   `0.0000%`
-- exit  p90:   `0.2040%`
-- PnL   p90:   `100.0000%`
+- exit  p90:   `0.0000%`
+- PnL   p90:   `0.0000%`
 
 ### 81-magnifier-tick-dist-endpoints-rsi-cross-08a  *(profile: strict)*
 
 - TV trades (raw): **2345**
 - TV trades inside common window: **2345**
-- **PineForge** 🟢 **strong**  (engine trades: 2345, in-window: 2345, matched 2345 = 100.0% of TV-in-window)
+- **PineForge** 🟢 **excellent**  (engine trades: 2345, in-window: 2345, matched 2345 = 100.0% of TV-in-window)
     - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
-    - exit  p90:    `0.0575%`
+    - exit  p90:    `0.0000%`
     - PnL   p90:    `0.0704%`
 - **PyneCore** 🟢 **excellent**  (engine trades: 3254, in-window: 2345, matched 2345 = 100.0% of TV-in-window)
     - count delta:  `0.0000%`
@@ -1903,8 +1903,8 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 - shared trades: 2345 / max(2345, 2345)
 - count delta: `0.0000%`
 - entry p90:   `0.0000%`
-- exit  p90:   `0.0364%`
-- PnL   p90:   `100.0000%`
+- exit  p90:   `0.0000%`
+- PnL   p90:   `0.0000%`
 
 ### 82-matrix-covariance-eigen-pca-01  *(profile: strict)*
 
@@ -1933,11 +1933,11 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 
 - TV trades (raw): **774**
 - TV trades inside common window: **774**
-- **PineForge** 🟡 **moderate**  (engine trades: 785, in-window: 785, matched 746 = 96.4% of TV-in-window)
-    - count delta:  `1.4013%`
+- **PineForge** 🟢 **excellent**  (engine trades: 774, in-window: 774, matched 774 = 100.0% of TV-in-window)
+    - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
     - exit  p90:    `0.0000%`
-    - PnL   p90:    `0.0876%`
+    - PnL   p90:    `0.0841%`
 - **PyneCore** 🟡 **moderate**  (engine trades: 1077, in-window: 782, matched 745 = 96.6% of TV-in-window)
     - count delta:  `1.4066%`
     - entry p90:    `0.0000%`
@@ -1946,8 +1946,8 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 
 ### 83-matrix-bool-mask-explicit-utc-tz-01 — PineForge ↔ PyneCore agreement (in common window)
 
-- shared trades: 784 / max(784, 784)
-- count delta: `0.0000%`
+- shared trades: 745 / max(771, 782)
+- count delta: `1.4066%`
 - entry p90:   `0.0000%`
 - exit  p90:   `0.0000%`
 - PnL   p90:   `0.0000%`
@@ -2278,10 +2278,10 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 
 - TV trades (raw): **871**
 - TV trades inside common window: **871**
-- **PineForge** 🟢 **strong**  (engine trades: 871, in-window: 871, matched 871 = 100.0% of TV-in-window)
+- **PineForge** 🟢 **excellent**  (engine trades: 871, in-window: 871, matched 871 = 100.0% of TV-in-window)
     - count delta:  `0.0000%`
     - entry p90:    `0.0000%`
-    - exit  p90:    `0.2091%`
+    - exit  p90:    `0.0000%`
     - PnL   p90:    `0.0739%`
 - **PyneCore** 🟢 **excellent**  (engine trades: 1210, in-window: 871, matched 871 = 100.0% of TV-in-window)
     - count delta:  `0.0000%`
@@ -2294,8 +2294,8 @@ on the trimmed lists. Per-strategy `inputs.json` overrides
 - shared trades: 871 / max(871, 871)
 - count delta: `0.0000%`
 - entry p90:   `0.0000%`
-- exit  p90:   `0.2040%`
-- PnL   p90:   `100.0000%`
+- exit  p90:   `0.0000%`
+- PnL   p90:   `0.0000%`
 
 ### 99-matrix-eigen-rank-deficient-cov-01  *(profile: strict)*
 
