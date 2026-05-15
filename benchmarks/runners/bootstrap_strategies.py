@@ -141,7 +141,12 @@ def main() -> int:
     plan = DEFAULT_PLAN
     if args.plan:
         raw = json.loads(args.plan.read_text(encoding="utf-8"))
-        plan = [(r["corpus_path"], r["idx"], r["slug"]) for r in raw]
+        # Support both list-of-lists [corpus_rel, idx, slug] (emitted by
+        # promote_corpus_probes.py) and list-of-dicts {corpus_path, idx, slug}.
+        if raw and isinstance(raw[0], list):
+            plan = [(r[0], r[1], r[2]) for r in raw]
+        else:
+            plan = [(r["corpus_path"], r["idx"], r["slug"]) for r in raw]
 
     n_ok = n_skip = n_fail = 0
     for corpus_rel, idx, slug in plan:
