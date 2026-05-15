@@ -9,6 +9,7 @@
 #   SKIP_BUILD     — skip the runtime build step
 #   SKIP_PYNE      — skip PyneCore strategy + indicator runs
 #   SKIP_PINETS    — skip PineTS indicator run
+#   SKIP_SPEED     — skip the per-strategy speed sweep (pineforge_bench + timers)
 #   SKIP_REPORTS   — skip the compare.py / compare_indicators.py step
 
 set -euo pipefail
@@ -195,7 +196,28 @@ log "running canonical indicators through PineForge"
     "${WORKDIR}/data/ETHUSDT_15.csv" \
     "${STRATEGIES_DIR}/_indicators/canonical_pineforge.csv" >/dev/null)
 
-# --- 6) reports -------------------------------------------------------
+# --- 6) speed sweep ---------------------------------------------------
+
+if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
+    log "running per-strategy speed sweep"
+    if [[ ! -f "${ROOT_DIR}/build/CMakeCache.txt" ]] \
+       || ! grep -q "PINEFORGE_BUILD_SPEED_BENCH:BOOL=ON" "${ROOT_DIR}/build/CMakeCache.txt"; then
+        log "configuring with -DPINEFORGE_BUILD_SPEED_BENCH=ON"
+        cmake -B "${ROOT_DIR}/build" -DPINEFORGE_BUILD_SPEED_BENCH=ON -DPINEFORGE_BUILD_TESTS=ON >/dev/null
+    fi
+    cmake --build "${ROOT_DIR}/build" --target pineforge_bench -j >/dev/null \
+        || fail "speed harness build failed (configure with -DPINEFORGE_BUILD_SPEED_BENCH=ON)"
+    "${ROOT_DIR}/build/bin/pineforge_bench" \
+        --benchmark_format=json > "${WORKDIR}/pf_speed.json"
+    uv run python speed/time_pynecore.py > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
+    node speed/time_pinets.mjs > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"
+    uv run python speed/aggregate.py \
+        --pineforge "${WORKDIR}/pf_speed.json" \
+        --pynecore  "${WORKDIR}/pc_speed.json" \
+        --pinets    "${WORKDIR}/pt_speed.json"
+fi
+
+# --- 7) reports -------------------------------------------------------
 
 if [[ "${SKIP_REPORTS:-0}" != "1" ]]; then
     log "generating trade-list comparison"
