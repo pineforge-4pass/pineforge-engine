@@ -119,6 +119,8 @@ def main() -> int:
     ap.add_argument("--workdir", type=Path, default=WORKDIR)
     ap.add_argument("--script", default="strategy_pyne.py",
                     help="Filename of the @pyne script inside strategy_dir")
+    ap.add_argument("--no-write", action="store_true",
+                    help="Skip writing CSV outputs (for timing-only runs)")
     args = ap.parse_args()
 
     strat_dir = args.strategy_dir.resolve()
@@ -144,6 +146,9 @@ def main() -> int:
     if res.returncode != 0:
         print(f"pyne failed (rc={res.returncode}):\n{res.stderr}", file=sys.stderr)
         return res.returncode
+
+    if args.no_write:
+        return 0
 
     if not raw_trades.exists():
         print(f"ERROR: pyne did not produce a trade CSV at {raw_trades}", file=sys.stderr)
