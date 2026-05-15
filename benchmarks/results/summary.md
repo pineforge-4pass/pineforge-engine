@@ -14,6 +14,7 @@ Match degree per the canonical PineForge parity sweep (align-then-trim window; t
 | 08-4ema-rsi | strict | 809 | 🟢 excellent (809 / 809) | 🟢 excellent (809 / 809) |
 | 09-kkb-kalman | strict | 150 | 🟢 excellent (149 / 149) | 🟢 excellent (149 / 149) |
 | 10-market-shift | strict | 1152 | 🟢 excellent (1152 / 1152) | 🟢 excellent (1147 / 1147) |
+| 100-matrix-bool-mask-no-transpose-01 | strict | 774 | 🟡 moderate (785 / 774) | 🟡 moderate (782 / 771) |
 | 11-greedy | strict | 13 | 🟢 excellent (13 / 13) | 🟢 excellent (13 / 13) |
 | 12-keltner | strict | 314 | 🟢 excellent (314 / 314) | 🟢 excellent (313 / 313) |
 | 13-stoch-slow-k-d-cross | strict | 7585 | 🟢 excellent (7585 / 7585) | 🟢 excellent (7585 / 7585) |
@@ -80,32 +81,40 @@ Match degree per the canonical PineForge parity sweep (align-then-trim window; t
 | 74-bracket-trail-points-no-offset-explicit-01 | production | 782 | 🟢 excellent (782 / 782) | 🟡 moderate (782 / 782) |
 | 75-composite-4emarsi-rsi-pullback-latch-01 | strict | 816 | 🟢 excellent (816 / 816) | 🟢 excellent (815 / 815) |
 | 76-analyzer-parity-choch-bos-isolator-01 | strict | 1027 | 🟢 excellent (1026 / 1026) | 🟢 excellent (1026 / 1026) |
+| 77-composite-scalping-fast-ma-cross-trigger-01 | strict | 3097 | 🟢 excellent (3097 / 3097) | 🟢 excellent (3097 / 3097) |
 | 78-cap-max-intraday-filled-orders-isolate-01 | strict | 1958 | 🟢 excellent (1958 / 1958) | 🟠 weak (1180 / 1952) |
 | 79-composite-kanuck-kama-state-recurrence-01 | strict | 4979 | 🟢 excellent (4977 / 4979) | 🟢 excellent (4978 / 4979) |
+| 80-magnifier-tick-dist-volume-weighted-on-01 | strict | 871 | 🟢 strong (871 / 871) | 🟢 excellent (871 / 871) |
 | 81-magnifier-tick-dist-endpoints-rsi-cross-08a | strict | 2345 | 🟢 strong (2345 / 2345) | 🟢 excellent (2345 / 2345) |
 | 82-matrix-covariance-eigen-pca-01 | strict | 2850 | 🟢 excellent (2850 / 2850) | 🟢 excellent (2850 / 2850) |
+| 83-matrix-bool-mask-explicit-utc-tz-01 | strict | 774 | 🟡 moderate (785 / 774) | 🟡 moderate (782 / 771) |
 | 84-na-nz-fixnan-history-chain-01 | strict | 3094 | 🟢 excellent (3093 / 3093) | 🟢 excellent (3093 / 3093) |
 | 85-oca-raw-strategy-order-reduce-01 | strict | 366 | 🟢 excellent (366 / 366) | 🟢 excellent (366 / 366) |
 | 86-order-range-expansion-pending-stop-01 | strict | 2947 | 🟢 excellent (2947 / 2947) | 🟢 excellent (2946 / 2947) |
 | 87-pyramid-deferred-flip-close-all-01 | strict | 2356 | 🟢 excellent (2378 / 2356) | 🟢 excellent (2356 / 2356) |
+| 88-order-stop-entry-cancel-opposite-01 | strict | 1739 | 🟢 excellent (1738 / 1738) | 🟢 excellent (1738 / 1738) |
 | 89-session-ny-spring-forward-dst-01 | strict | 396 | 🟢 excellent (396 / 396) | 🟢 excellent (396 / 396) |
 | 90-ta-hma-55-close-cross-01 | strict | 4839 | 🟢 excellent (4839 / 4839) | 🟢 excellent (4839 / 4839) |
+| 91-pyramid-close-id-grouping-01 | strict | 2196 | 🟢 excellent (2196 / 2196) | 🟢 excellent (2196 / 2196) |
+| 92-session-hour-minute-pulse-filter-01 | strict | 366 | 🟢 excellent (366 / 366) | 🟢 excellent (366 / 366) |
 | 93-analyzer-parity-stop-limit-timing-01 | strict | 778 | 🟢 excellent (778 / 778) | 🟢 excellent (778 / 778) |
+| 94-ta-hma-fast-slow-cross-01 | strict | 4713 | 🟢 excellent (4713 / 4713) | 🟢 excellent (4713 / 4713) |
 | 95-cap-risk-gates-allow-max-intraday-01 | strict | 732 | 🟢 excellent (732 / 732) | 🟢 excellent (732 / 732) |
 | 96-composite-ies-rsi-macd-momentum-01 | strict | 4799 | 🟢 excellent (4798 / 4798) | 🟢 excellent (4799 / 4799) |
+| 97-composite-scalping-integration-01 | strict | 3097 | 🟢 excellent (3097 / 3097) | 🟢 excellent (3097 / 3097) |
 | 98-magnifier-tick-dist-endpoints-01 | strict | 871 | 🟢 strong (871 / 871) | 🟢 excellent (871 / 871) |
 | 99-matrix-eigen-rank-deficient-cov-01 | strict | 871 | 🟢 excellent (871 / 871) | 🟢 excellent (871 / 871) |
 
-- **excellent**: PineForge 89/91, PyneCore 78/91
-- **strong**: PineForge 2/91, PyneCore 2/91
-- **moderate**: PineForge 0/91, PyneCore 8/91
-- **weak**: PineForge 0/91, PyneCore 3/91
+- **excellent**: PineForge 95/100, PyneCore 85/100
+- **strong**: PineForge 3/100, PyneCore 2/100
+- **moderate**: PineForge 2/100, PyneCore 10/100
+- **weak**: PineForge 0/100, PyneCore 3/100
 ## Notes
 
-- **As of:** 2026-05-16. Engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Validator: canonical port from `scripts/verify_corpus.py` (commit `fc59170`, matches `scripts/run_corpus.sh` logic).
+- **As of:** 2026-05-16. Engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Validator: canonical port from `scripts/verify_corpus.py` (commit `fc59170`).
 - **OHLCV:** `ohlcv_ETH-USDT-USDT_15m_warmup6m.csv` (53,930 bars, 6mo pre-TV warmup).
-- **Bench size:** 100 strategies promoted, 91 in 3-way reports (9 PyneCore-incompatible probes auto-skipped).
-- **Slot 64 swap (r6):** Replaced `64-anomaly-equity-mirror-strategy-equity-01` (documented TV broker margin-boundary non-determinism, weak under both engines) with `composite-vcp-cumulative-volume-delta-01` (both excellent, 3119/3119).
-- **PineForge non-excellent (2 of 91):** 81 + 98 magnifier-tick-dist-endpoints (pnl_p90 0.012 vs strict 0.01, fill drift in ENDPOINTS distribution).
-- **9 PyneCore failures (slots 76-100):** 6 LTF/MTF (80, 83, 88, 92, 97, 100): bench harness gap (no security_data injection). 2 bracket-trail (77, 94): PyneCore `assert order.stop is not None` bug. 1 UDT (91): cloud-compiler emits undefined `cfg`.
+- **Bench size (r7):** 100 strategies, all 100 in 3-way reports (no comparator skips). Slots 77/80/83/88/91/92/94/97/100 swapped from PyneCore-incompatible (LTF/MTF/varIP/UDT/bracket-trail/recompute) to PyneCore-OK probes (composite/magnifier/matrix/order/pyramid/session/ta).
+- **PineForge non-excellent (5 of 100):** 80, 81, 98 magnifier-tick-dist (3 strong, pnl_p90 marginal at 0.012 vs strict 0.01); 83, 100 matrix-bool-mask (2 moderate, count delta ~1.4% — engines agree, both moderate together).
+- **Slot 64 (r6):** Replaced anomaly-equity-mirror (TV broker margin-boundary non-determinism) with composite-vcp-cumulative-volume-delta-01 (both excellent).
+- **Slot 13 (r5):** Replaced parabolic-asr (TV-side SAR semantic divergence) with ta-stoch-slow-k-d-cross-01.
 - **Known issue:** `10-market-shift` PyneCore 6.4.6 `input.string()` API rejection; reflects stale CSV.
