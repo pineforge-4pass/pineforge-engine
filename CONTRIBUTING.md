@@ -15,10 +15,12 @@ git submodule update --init corpus benchmarks/assets
 
 Both submodules are redistributable: `tv_trades.csv` files are produced
 from PineScript sources we own, and the corpus ships under the same
-Apache-2.0 license as the engine. The `generated.cpp` and built
-`strategy.dylib` / `strategy.so` artefacts are intentionally excluded
-from the published corpus — they're regenerated locally by
-`scripts/run_corpus.sh`.
+Apache-2.0 license as the engine. The corpus also ships the per-probe
+`generated.cpp` (transpiler output of our own clean-room
+`strategy.pine`) so public users can rebuild without access to the
+closed-source `pineforge-codegen` transpiler. The compiled
+`strategy.dylib` / `strategy.so` / `strategy.dll` artefacts are
+platform-specific and rebuilt locally by `scripts/run_corpus.sh`.
 
 ## Development setup
 

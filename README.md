@@ -297,19 +297,27 @@ A pre-compiled strategy `.so` against runtime `0.X.Y` will keep working against 
 
 ## Reproducing the corpus run end-to-end
 
-The private validation corpus lets maintainers rebuild and rerun all **168**
-compiled PineForge strategies from a fresh clone. If you have access:
+The validation corpus lets anyone rebuild and rerun every compiled
+PineForge strategy from a fresh clone. The corpus ships
+`generated.cpp` for every probe, so no transpiler access is required —
+just the engine, the corpus submodule, and a C++17 compiler.
 
 ```bash
+git clone https://github.com/fullpass-4pass/pineforge-engine.git
+cd pineforge-engine
 git submodule update --init corpus
-bash scripts/run_corpus.sh
+
+# Build + run + verify (no codegen needed — generated.cpp ships in corpus)
+JOBS=8 scripts/run_corpus.sh
+
+# Optional: regen the report
+python3 scripts/regen_validation_report.py
 ```
 
-That builds `libpineforge.a` plus 168 strategy `.so` files, runs each against the
-reference OHLCV feed, and rewrites each `engine_trades.csv`. The script also
-prints the canonical five-tier corpus summary described in `corpus/README.md`.
-
-Without the submodule, use `**ctest**` and optional local fixtures you own.
+That builds `libpineforge.a` plus one `strategy.so` per probe, runs each
+against the reference OHLCV feed, rewrites each `engine_trades.csv`,
+and prints the canonical corpus summary described in
+`corpus/README.md`.
 
 ## Cross-engine comparison
 
