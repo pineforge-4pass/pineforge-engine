@@ -174,11 +174,35 @@ if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
     endif()
 endif()
 
+# === Bench strategies (opt-in) ========================================
+# Builds one strategy.dylib/.so per bench strategy from committed generated.cpp.
+# Requires the benchmarks/assets submodule to be initialised:
+#   git submodule update --init benchmarks/assets
+# Build with:
+#   cmake -B build -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON
+#   cmake --build build --target bench_strategies -j
+option(PINEFORGE_BUILD_BENCH_STRATEGIES
+    "Build benchmarks bench strategies (.dylib/.so per strategy)" OFF)
+if(PINEFORGE_BUILD_BENCH_STRATEGIES)
+    set(_bench_strat_cmake
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/assets/strategies/CMakeLists.txt")
+    if(EXISTS "${_bench_strat_cmake}")
+        add_subdirectory(benchmarks/assets/strategies)
+    else()
+        message(FATAL_ERROR
+            "PINEFORGE_BUILD_BENCH_STRATEGIES=ON but "
+            "benchmarks/assets/strategies/CMakeLists.txt is missing.\n"
+            "Init the assets submodule:\n"
+            "  git submodule update --init benchmarks/assets\n"
+            "See CONTRIBUTING.md.")
+    endif()
+endif()
+
 # === Speed bench (opt-in) =============================================
 # Google Benchmark target for per-strategy PineForge timing.
 # Build with: cmake -B build -DPINEFORGE_BUILD_SPEED_BENCH=ON
-# Requires bench-built strategy dylibs in benchmarks/_workdir/build_strategies/
-# (produced by: cd benchmarks && uv run python runners/compile_bench_strategy.py)
+# Requires bench-built strategy dylibs alongside generated.cpp in assets/strategies/.
+# Build bench strategies first: cmake --build build --target bench_strategies
 option(PINEFORGE_BUILD_SPEED_BENCH "Build benchmarks/speed GBench target" OFF)
 if(PINEFORGE_BUILD_SPEED_BENCH)
     add_subdirectory(benchmarks/speed)
@@ -239,4 +263,5 @@ message(STATUS "  install prefix:    ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "  build tests:       ${PINEFORGE_BUILD_TESTS}")
 message(STATUS "  build tutorial:    ${PINEFORGE_BUILD_TUTORIAL}")
 message(STATUS "  build corpus:      ${PINEFORGE_BUILD_CORPUS_STRATEGIES}")
+message(STATUS "  build bench strat: ${PINEFORGE_BUILD_BENCH_STRATEGIES}")
 message(STATUS "")
