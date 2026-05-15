@@ -33,12 +33,13 @@ target_compile_features(pineforge_bench PRIVATE cxx_std_17)
 # Pass the bench-built strategy dylib directory and canonical OHLCV path as
 # compile-time string macros so the binary is self-contained (no argv needed).
 #
-# NOTE: BENCH_STRATEGIES_DIR points at _workdir/build_strategies/ (bench-built
-# dylibs from a previous local compile run), NOT benchmarks/assets/strategies/.
-# The bench dylibs are the targets for speed measurement.
-# For the cmake-built dylibs (PINEFORGE_BUILD_BENCH_STRATEGIES), update this
-# path to point at benchmarks/assets/strategies/ if you want to use those instead.
+# Strategy dylibs live next to their generated.cpp under
+# benchmarks/assets/strategies/<NN-slug>/strategy.dylib (built via
+# -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON; LIBRARY_OUTPUT_DIRECTORY pins them
+# in-place per benchmarks/assets/strategies/CMakeLists.txt). Public users
+# get reproducible speed numbers from cmake-built dylibs alone — no
+# closed-source codegen required.
 target_compile_definitions(pineforge_bench PRIVATE
-    BENCH_STRATEGIES_DIR="${CMAKE_SOURCE_DIR}/benchmarks/_workdir/build_strategies"
+    BENCH_STRATEGIES_DIR="${CMAKE_SOURCE_DIR}/benchmarks/assets/strategies"
     BENCH_OHLCV_PATH="${CMAKE_SOURCE_DIR}/benchmarks/assets/data/ETHUSDT_15.csv"
 )
