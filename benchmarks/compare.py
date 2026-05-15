@@ -4,19 +4,23 @@
 For each strategy folder under `benchmarks/` strategy fixtures (`data/` +
 `strategies/` inline, or `assets/data` + `assets/strategies` submodule), reads
 `tv_trades.csv`, `pineforge_trades.csv`, and `pynecore_trades.csv`,
-clips all three to a common entry-time window, aligns trades by
-direction + entry-time within that window, and reports:
+aligns trades by direction + entry-time within the mutually matched window,
+and reports:
 
     - Trade count (TV / PineForge / PyneCore) inside the common window
     - Entry-price p90 delta vs TV
     - Exit-price  p90 delta vs TV
     - PnL        p90 delta vs TV
-    - 5-tier match degree (excellent / strong / moderate / weak / minimal)
+    - 7-label match degree (excellent / strong / moderate / weak / minimal /
+      anomaly / engine_only)
 
-The common window algorithm mirrors the canonical PineForge parity
-sweep (`validate_detailed_report.py::common_entry_window_ms`):
+The window algorithm mirrors the canonical PineForge parity sweep
+(`scripts/verify_corpus.py::trim_to_common_match_window`):
 
-    [lo, hi] = ohlcv_span ∩ tv_entry_span ∩ engine_entry_span
+    1. align(tv_full, eng_full)       — initial greedy match
+    2. trim_to_common_match_window()  — clip to [min_matched_entry − 1h,
+                                          max_matched_entry + 1h]
+    3. align(tv_trimmed, eng_trimmed) — final gating match
 
 This is critical: TV's chart export typically covers ~3 weeks BEFORE
 our OHLCV CSV starts (so we can't reproduce those trades — no bars),
@@ -46,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -74,6 +79,11 @@ OHLCV_PATH = next((p for p in _CANDIDATE_OHLCV if p.exists()), _CANDIDATE_OHLCV[
 MATCH_WINDOW_S = 3600
 ENTRY_PRICE_GATE = 3.00
 
+# Per-strategy near-zero PnL filter: trades whose |tv_pnl| < $0.01 are
+# excluded from pnl p90 so scratch trades don't blow up the per-trade ratio.
+# Mirrors canonical verify_corpus.py / validate.py.
+PNL_NEAR_ZERO_USD = 0.01
+
 # Parity thresholds copied from the canonical
 # `validate_detailed_report.py::DEFAULT_PARITY_{STRICT,PRODUCTION}`.
 STRICT_COUNT = 0.01      # 1.0%
@@ -84,16 +94,43 @@ STRICT_PNL   = 0.01      # 1.0%
 PRODUCTION_EXIT = 0.0005 # 0.05% — exits absorb sub-bar broker drift
 PRODUCTION_PNL  = 1.0    # 100%  — trail_* exits intrinsically wide
 
+# Strong-tier breakpoints (canonical verify_corpus.py:58-61)
+STRONG_COUNT_DELTA = 0.05
+STRONG_ENTRY_DELTA = 0.001
+STRONG_EXIT_DELTA  = 0.005
+STRONG_PNL_DELTA   = 1.0
+
 # Detect strategies that use TradingView's trailing stops; these get
 # the production threshold profile per validate_detailed_report.py.
 _TRAIL_PATTERN = re.compile(r"\btrail_(points|offset|price)\s*=", re.IGNORECASE)
 _LINE_COMMENT = re.compile(r"//.*?$", re.MULTILINE)
 _BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
-# Wall-time at which TV's chart was set when the trades.csv was exported.
-# Engine CSVs are emitted in UTC. Override via env var if your re-export
-# uses a different chart timezone.
-TV_TZ_OFFSET_HOURS = 8
+# canonical: scripts/verify_corpus.py:213-220
+# TradingView "Date and time" columns are bare wall-clock strings.
+# Default is UTC+8 (Asia/Taipei), overridden per-strategy via inputs.json::tv_trades_csv_tz.
+TV_CSV_TZ_OFFSET_HOURS = 8     # default, was TV_TZ_OFFSET_HOURS in earlier compare.py
+ENGINE_CSV_TZ_OFFSET_HOURS = 0
+TV_TZ_BY_NAME = {
+    "utc_plus_8": 8,
+    "asia_taipei": 8,
+    "utc": 0,
+}
+
+# Label → degree mapping (degree used for legacy rendering / summary tallying).
+# Covers all 7 labels returned by the canonical classifier + overrides.
+LABEL_TO_DEGREE = {
+    "excellent":   5,
+    "strong":      4,
+    "moderate":    3,
+    "weak":        2,
+    "minimal":     1,
+    "anomaly":     4,
+    "engine_only": 4,
+}
+
+# Mirrors `validate_detailed_report.py::MATCH_DEGREE_LABELS`.
+DEGREE_LABEL = {5: "excellent", 4: "strong", 3: "moderate", 2: "weak", 1: "minimal"}
 
 
 @dataclass
@@ -123,45 +160,180 @@ def parse_dt(s: str, tz_offset_hours: int) -> int:
     raise ValueError(f"unparseable time {s!r}: {last_err}")
 
 
+def load_strategy_metadata(strategy_dir: Path) -> dict:
+    """Load inputs.json for a strategy, returning {} if absent. Mirrors verify_corpus.py."""
+    inputs_path = strategy_dir / "inputs.json"
+    if not inputs_path.exists():
+        return {}
+    with inputs_path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def tv_timezone_offset(meta: dict) -> int:
+    """Resolve TV CSV timezone offset from inputs.json or default. Mirrors verify_corpus.py."""
+    tz_name = str(meta.get("tv_trades_csv_tz", "")).lower()
+    return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
+
+
+def detect_parity_profile_from_source(pine_source: str) -> str:
+    """Return 'production' if pine source uses trail_* exit params, else 'strict'.
+
+    Mirrors verify_corpus.py::detect_parity_profile (operates on source string).
+    """
+    cleaned = _BLOCK_COMMENT.sub("", pine_source)
+    cleaned = _LINE_COMMENT.sub("", cleaned)
+    return "production" if _TRAIL_PATTERN.search(cleaned) else "strict"
+
+
 def detect_parity_profile(pine_path: Path) -> str:
     """Return 'production' if the strategy uses trail_* exit params, else 'strict'.
 
-    Mirrors `validate_detailed_report.py::detect_parity_profile`.
+    Thin wrapper around detect_parity_profile_from_source; kept for callers
+    that pass a Path. Prefer resolve_profile() for new code.
     """
     if not pine_path.exists():
         return "strict"
-    src = pine_path.read_text(encoding="utf-8", errors="replace")
-    src = _BLOCK_COMMENT.sub("", src)
-    src = _LINE_COMMENT.sub("", src)
-    return "production" if _TRAIL_PATTERN.search(src) else "strict"
+    try:
+        return detect_parity_profile_from_source(
+            pine_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError:
+        return "strict"
+
+
+def resolve_profile(strategy_dir: Path, meta: dict) -> str:
+    """Resolve the parity profile: inputs.json wins, then auto-detect. Mirrors verify_corpus.py."""
+    forced = str(meta.get("parity_profile", "")).lower()
+    if forced in {"strict", "production"}:
+        return forced
+    pine_path = strategy_dir / "strategy.pine"
+    if pine_path.is_file():
+        try:
+            return detect_parity_profile_from_source(
+                pine_path.read_text(encoding="utf-8")
+            )
+        except OSError:
+            return "strict"
+    return "strict"
+
+
+def parity_for_profile(profile: str) -> dict:
+    """Return a fresh threshold dict for the given profile name. Mirrors verify_corpus.py."""
+    if profile == "production":
+        return {
+            "count": 0.01,
+            "entry": 0.0001,
+            "exit":  PRODUCTION_EXIT,
+            "pnl":   PRODUCTION_PNL,
+        }
+    return {
+        "count": STRICT_COUNT,
+        "entry": STRICT_ENTRY,
+        "exit":  STRICT_EXIT,
+        "pnl":   STRICT_PNL,
+    }
+
+
+def interior_time_bounds(
+    trim_bars: int,
+    warmup_bars: int,
+    ohlcv_first_ms: int | None,
+    ohlcv_last_ms: int | None,
+    bar_ms: int,
+) -> tuple[int, int] | None:
+    """Return [lo_ms, hi_ms] window for 'interior' entries, or None if trivial.
+
+    Mirrors verify_corpus.py::interior_time_bounds verbatim.
+    ``trim_bars`` symmetrically excludes edge bars from BOTH ends; ``warmup_bars``
+    is an extra asymmetric lead pad. If the OHLCV span is unknown, returns None.
+    """
+    if trim_bars <= 0 and warmup_bars <= 0:
+        return None
+    if ohlcv_first_ms is None or ohlcv_last_ms is None or bar_ms <= 0:
+        return None
+    lead_pad = (trim_bars + max(0, warmup_bars)) * bar_ms
+    tail_pad = trim_bars * bar_ms
+    lo = ohlcv_first_ms + lead_pad
+    hi = ohlcv_last_ms - tail_pad
+    if lo >= hi:
+        return None
+    return lo, hi
+
+
+def is_interior(entry_ms: int, bounds: tuple[int, int] | None) -> bool:
+    """Return True if entry_ms is within the interior bounds (or bounds is None)."""
+    if bounds is None:
+        return True
+    lo, hi = bounds
+    return lo <= entry_ms <= hi
+
+
+def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
+    """Best-effort: read first/last timestamps + bar interval from a per-strategy OHLCV csv.
+
+    Looks for ohlcv.csv / data.csv / candles.csv next to strategy.pine.
+    For existing 50 bench strategies (no per-strategy OHLCV), returns (None, None, 0)
+    and interior trimming is skipped (no-op). Future corpus-promoted bench strategies
+    (Phase 5) will have these files and will be honoured.
+    Mirrors verify_corpus.py::_ohlcv_span_ms verbatim.
+    """
+    candidates = [strategy_dir / n for n in ("ohlcv.csv", "data.csv", "candles.csv")]
+    csv_path = next((p for p in candidates if p.is_file()), None)
+    if csv_path is None:
+        return None, None, 0
+    try:
+        with csv_path.open(encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return None, None, 0
+            ts_idx = None
+            for i, name in enumerate(header):
+                if name.strip().lower() in {"timestamp", "time", "ts", "open_time"}:
+                    ts_idx = i
+                    break
+            if ts_idx is None:
+                return None, None, 0
+            first = None
+            second = None
+            last = None
+            for row in reader:
+                if not row:
+                    continue
+                try:
+                    v = int(float(row[ts_idx]))
+                except (ValueError, IndexError):
+                    continue
+                if first is None:
+                    first = v
+                elif second is None:
+                    second = v
+                last = v
+            bar_ms = (second - first) if (first is not None and second is not None) else 0
+            # Normalize seconds to ms if it looks like seconds.
+            if first is not None and first < 10**12:
+                first *= 1000
+                if last is not None:
+                    last *= 1000
+                if bar_ms:
+                    bar_ms *= 1000
+            return first, last, bar_ms
+    except OSError:
+        return None, None, 0
 
 
 def ohlcv_span_seconds() -> tuple[int, int]:
-    """Return (first_ts_s, last_ts_s) of the corpus OHLCV feed."""
+    """Return (first_ts_s, last_ts_s) of the corpus OHLCV feed.
+
+    NOTE: The canonical sweep (verify_corpus.py) uses align-then-trim
+    (trim_to_common_match_window) rather than OHLCV-span intersection for the
+    comparison window. This function is kept for potential sanity-check use
+    but is no longer called by compute_diff().
+    """
     with OHLCV_PATH.open() as f:
         reader = csv.DictReader(f)
         rows = [int(r["timestamp"]) for r in reader]
     return rows[0] // 1000, rows[-1] // 1000
-
-
-def common_window(tv: list["Trade"], eng: list["Trade"],
-                  ohlcv_lo: int, ohlcv_hi: int) -> tuple[int, int] | None:
-    """Intersection of OHLCV span and both trade-list entry spans.
-
-    Mirrors `validate_detailed_report.py::common_entry_window_ms`.
-    """
-    lo, hi = ohlcv_lo, ohlcv_hi
-    if tv:
-        lo = max(lo, min(t.entry_time for t in tv))
-        hi = min(hi, max(t.entry_time for t in tv))
-    if eng:
-        lo = max(lo, min(t.entry_time for t in eng))
-        hi = min(hi, max(t.entry_time for t in eng))
-    return (lo, hi) if lo <= hi else None
-
-
-def filter_to_window(trades: list["Trade"], lo: int, hi: int) -> list["Trade"]:
-    return [t for t in trades if lo <= t.entry_time <= hi]
 
 
 def parse_trades(path: Path, tz_offset_hours: int) -> list[Trade]:
@@ -242,6 +414,27 @@ def align(a: list[Trade], b: list[Trade]) -> list[tuple[Trade, Trade]]:
     return matched
 
 
+def trim_to_common_match_window(
+    tv: list[Trade],
+    eng: list[Trade],
+    matched: list[tuple[Trade, Trade]],
+) -> tuple[list[Trade], list[Trade]]:
+    """Drop leading/trailing edge trades outside the mutually matched window.
+
+    The canonical parity sweep compares the common in-window trade region.
+    This avoids failing a strategy because one engine has an extra bootstrap or
+    terminal trade just outside the overlapping validation window.
+    Mirrors verify_corpus.py::trim_to_common_match_window verbatim.
+    """
+    if not matched:
+        return tv, eng
+    lo = min(min(t.entry_time, e.entry_time) for t, e in matched) - MATCH_WINDOW_S
+    hi = max(max(t.entry_time, e.entry_time) for t, e in matched) + MATCH_WINDOW_S
+    tv_trim = [t for t in tv if lo <= t.entry_time <= hi]
+    eng_trim = [e for e in eng if lo <= e.entry_time <= hi]
+    return tv_trim, eng_trim
+
+
 def relmax(a: float, b: float) -> float:
     return abs(a - b) / max(abs(a), abs(b), 1e-9)
 
@@ -259,60 +452,60 @@ def percentile(xs: list[float], p: float) -> float:
 class EngineDiff:
     name: str
     n_engine_total: int        # full count, before window clip
-    n_engine_in_window: int    # after window clip
-    n_tv_in_window: int
+    n_engine_in_window: int    # after window clip (interior gate if bounds set)
+    n_tv_in_window: int        # after window clip (interior gate if bounds set)
     n_matched: int
     count_delta: float
     entry_p90: float
     exit_p90: float
     pnl_p90: float
     profile: str               # "strict" or "production"
-    degree: int                # 1..5; 5=excellent, 1=minimal
-    label: str                 # 'excellent' / 'strong' / 'moderate' / 'weak' / 'minimal'
+    degree: int                # 1..5; 5=excellent, 1=minimal (derived from label)
+    label: str                 # 'excellent'/'strong'/'moderate'/'weak'/'minimal'/'anomaly'/'engine_only'
 
 
-# Mirrors `validate_detailed_report.py::MATCH_DEGREE_LABELS`.
-DEGREE_LABEL = {5: "excellent", 4: "strong", 3: "moderate", 2: "weak", 1: "minimal"}
+def classify_match_degree_canonical(
+    *,
+    count_d: float,
+    entry_p90: float,
+    exit_p90: float,
+    pnl_p90: float,
+    gating_matched_n: int,
+    tv_gate_n: int,
+    profile: str,
+) -> str:
+    """Canonical tier classifier. Mirrors verify_corpus.py:434-454 exactly.
 
-
-def classify_match_degree(*, count_d: float, entry_p90: float,
-                          exit_p90: float, pnl_p90: float,
-                          match_pct: float, profile: str) -> tuple[int, str]:
-    """5-tier classifier matching the canonical sweep's heuristic.
-
-    - excellent: every dimension passes the strict (or production) threshold,
-      and ≥95% of TV trades have a matched engine trade.
-    - strong: count + entry strict, exit/PnL within 5x strict (or absorbed
-      by production envelope), match_pct ≥ 90%.
-    - moderate: count + entry within 5x strict, match_pct ≥ 75%.
-    - weak: match_pct ≥ 50%.
-    - minimal: match_pct < 50%.
+    - excellent: all four thresholds pass.
+    - strong: 99%+ match + STRONG_* breakpoints pass.
+    - moderate: 90%+ match.
+    - weak: any matched trades.
+    - minimal: zero matched trades.
     """
-    max_exit = STRICT_EXIT if profile == "strict" else PRODUCTION_EXIT
-    max_pnl  = STRICT_PNL  if profile == "strict" else PRODUCTION_PNL
-
-    excellent = (count_d  < STRICT_COUNT
-                 and entry_p90 < STRICT_ENTRY
-                 and exit_p90  < max_exit
-                 and pnl_p90   < max_pnl
-                 and match_pct >= 0.95)
-    if excellent:
-        return 5, DEGREE_LABEL[5]
-    strong = (count_d  < STRICT_COUNT * 5
-              and entry_p90 < STRICT_ENTRY * 5
-              and exit_p90  < max_exit * 5
-              and pnl_p90   < max_pnl * 1.5
-              and match_pct >= 0.90)
+    thresh = parity_for_profile(profile)
+    all_ok = (
+        count_d   < thresh["count"]
+        and entry_p90 < thresh["entry"]
+        and exit_p90  < thresh["exit"]
+        and pnl_p90   < thresh["pnl"]
+    )
+    if all_ok:
+        return "excellent"
+    match_pct = gating_matched_n / max(tv_gate_n, 1)
+    strong = (
+        match_pct  >= 0.99
+        and count_d   < STRONG_COUNT_DELTA
+        and entry_p90 < STRONG_ENTRY_DELTA
+        and exit_p90  < STRONG_EXIT_DELTA
+        and pnl_p90   < STRONG_PNL_DELTA
+    )
     if strong:
-        return 4, DEGREE_LABEL[4]
-    moderate = (count_d  < STRICT_COUNT * 10
-                and entry_p90 < STRICT_ENTRY * 10
-                and match_pct >= 0.75)
-    if moderate:
-        return 3, DEGREE_LABEL[3]
-    if match_pct >= 0.50:
-        return 2, DEGREE_LABEL[2]
-    return 1, DEGREE_LABEL[1]
+        return "strong"
+    if match_pct >= 0.90:
+        return "moderate"
+    if gating_matched_n > 0:
+        return "weak"
+    return "minimal"
 
 
 def compute_diff(
@@ -320,57 +513,109 @@ def compute_diff(
     eng_full: list[Trade],
     tv_full: list[Trade],
     *,
-    ohlcv_lo: int,
-    ohlcv_hi: int,
     profile: str,
+    strategy_dir: Path,
+    meta: dict,
 ) -> EngineDiff:
-    """Window-clipped TV-vs-engine diff.
+    """Canonical align-then-trim TV-vs-engine diff.
 
-    Both lists are restricted to the intersection of OHLCV bar span,
-    TV entry span, and engine entry span before any other comparison.
+    Mirrors verify_corpus.py::verify_one() logic:
+      1. align(tv, eng) — initial greedy pass
+      2. trim_to_common_match_window() — clip to matched-window ± MATCH_WINDOW_S
+      3. align(tv_trim, eng_trim) — final gating match
+      4. interior trim (if inputs.json has trim_bars/warmup_bars)
+      5. classify_match_degree_canonical()
+      6. expected_tier / validation_overrides overrides
     """
-    win = common_window(tv_full, eng_full, ohlcv_lo, ohlcv_hi)
-    if win is None:
-        return EngineDiff(name, len(eng_full), 0, 0, 0,
-                          1.0, 1.0, 1.0, 1.0, profile, 1, DEGREE_LABEL[1])
-    lo, hi = win
-    tv = filter_to_window(tv_full, lo, hi)
-    eng = filter_to_window(eng_full, lo, hi)
+    matched = align(tv_full, eng_full)
+    tv_cmp, eng_cmp = trim_to_common_match_window(tv_full, eng_full, matched)
+    matched = align(tv_cmp, eng_cmp)
 
-    matched = align(tv, eng)
-    n_tv = len(tv)
-    n_eng = len(eng)
-    if n_tv == 0 and n_eng == 0:
-        return EngineDiff(name, len(eng_full), 0, 0, 0,
-                          0.0, 0.0, 0.0, 0.0, profile, 5, DEGREE_LABEL[5])
+    if not matched:
+        all_zero = (len(tv_cmp) == 0 and len(eng_cmp) == 0)
+        deg = 5 if all_zero else 1
+        lbl = DEGREE_LABEL[deg]
+        return EngineDiff(name, len(eng_full), len(eng_cmp), len(tv_cmp), 0,
+                          0.0, 0.0, 0.0, 0.0, profile, deg, lbl)
 
-    count_delta = abs(n_tv - n_eng) / max(n_tv, n_eng, 1)
-    if matched:
-        entry_p90 = percentile([relmax(t.entry_price, e.entry_price) for t, e in matched], 0.9)
-        exit_p90  = percentile([relmax(t.exit_price,  e.exit_price)  for t, e in matched], 0.9)
-        pnl_p90   = percentile(
-            [abs(t.pnl - e.pnl) / abs(t.pnl)
-             for t, e in matched if abs(t.pnl) > 0.01],
-            0.9,
-        )
+    # Interior trim from inputs.json (no-op for existing 50 bench strategies
+    # that have no per-strategy OHLCV; becomes active for Phase 5 promotions).
+    trim_bars = int(meta.get("trim_bars", 0) or 0)
+    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
+    first_ms, last_ms, bar_ms = _ohlcv_span_ms(strategy_dir)
+    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
+
+    if bounds is not None:
+        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
+        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
+        gating_matched = [
+            (t, e) for (t, e) in matched if is_interior(t.entry_time * 1000, bounds)
+        ]
+        if not gating_matched:
+            gating_matched = matched
     else:
-        entry_p90 = exit_p90 = pnl_p90 = 1.0
+        tv_gate, eng_gate, gating_matched = tv_cmp, eng_cmp, matched
 
-    match_pct = len(matched) / max(n_tv, 1)
-    degree, label = classify_match_degree(
-        count_d=count_delta, entry_p90=entry_p90,
-        exit_p90=exit_p90, pnl_p90=pnl_p90,
-        match_pct=match_pct, profile=profile,
+    count_delta = abs(len(tv_gate) - len(eng_gate)) / max(len(tv_gate), len(eng_gate), 1)
+    entry_p90 = percentile(
+        [relmax(t.entry_price, e.entry_price) for t, e in gating_matched], 0.9
     )
-    return EngineDiff(name, len(eng_full), n_eng, n_tv, len(matched),
-                      count_delta, entry_p90, exit_p90, pnl_p90,
-                      profile, degree, label)
+    exit_p90 = percentile(
+        [relmax(t.exit_price, e.exit_price) for t, e in gating_matched], 0.9
+    )
+    pnl_p90 = percentile(
+        [
+            abs(t.pnl - e.pnl) / abs(t.pnl)
+            for t, e in gating_matched
+            if abs(t.pnl) >= PNL_NEAR_ZERO_USD
+        ],
+        0.9,
+    )
+
+    label = classify_match_degree_canonical(
+        count_d=count_delta,
+        entry_p90=entry_p90,
+        exit_p90=exit_p90,
+        pnl_p90=pnl_p90,
+        gating_matched_n=len(gating_matched),
+        tv_gate_n=len(tv_gate),
+        profile=profile,
+    )
+
+    # Per-strategy override: inputs.json::expected_tier = "anomaly" / "engine_only"
+    # Mirrors verify_corpus.py:466-468. Only fires when computed tier < excellent.
+    expected_tier = str(meta.get("expected_tier", "")).strip().lower()
+    if expected_tier in {"anomaly", "engine_only"} and label != "excellent":
+        label = expected_tier
+
+    # Per-strategy override: inputs.json::validation_overrides.expect_tv_match = false
+    # Mirrors verify_corpus.py:479-482. Relabels as engine_only.
+    val_overrides = meta.get("validation_overrides") or {}
+    if not bool(val_overrides.get("expect_tv_match", True)) and label != "excellent":
+        label = "engine_only"
+
+    degree = LABEL_TO_DEGREE.get(label, 1)
+    return EngineDiff(
+        name, len(eng_full), len(eng_gate), len(tv_gate), len(gating_matched),
+        count_delta, entry_p90, exit_p90, pnl_p90, profile, degree, label,
+    )
 
 
 def fmt_pct(x: float) -> str:
     return f"{x*100:.4f}%"
 
 
+_LABEL_EMOJI = {
+    "excellent":   "🟢",
+    "strong":      "🟢",
+    "moderate":    "🟡",
+    "weak":        "🟠",
+    "minimal":     "🔴",
+    "anomaly":     "🔵",
+    "engine_only": "🟣",
+}
+
+# Keep legacy dict for any code that accesses _DEGREE_EMOJI by degree int.
 _DEGREE_EMOJI = {5: "🟢", 4: "🟢", 3: "🟡", 2: "🟠", 1: "🔴"}
 
 
@@ -382,7 +627,7 @@ def render_strategy_block(name: str, profile: str, tv_full: int,
         win_tv = diffs[0].n_tv_in_window
         lines.append(f"- TV trades inside common window: **{win_tv}**")
     for d in diffs:
-        emoji = _DEGREE_EMOJI[d.degree]
+        emoji = _LABEL_EMOJI.get(d.label, "🔴")
         match_pct = 100 * d.n_matched / max(d.n_tv_in_window, 1)
         lines.append(
             f"- **{d.name}** {emoji} **{d.label}**  "
@@ -397,15 +642,10 @@ def render_strategy_block(name: str, profile: str, tv_full: int,
     return "\n".join(lines)
 
 
-def render_pf_pc_agreement(strategy: str, pf: list[Trade], pc: list[Trade],
-                           ohlcv_lo: int, ohlcv_hi: int) -> str:
-    """Engine-vs-engine agreement, clipped to the same common window."""
-    win = common_window(pf, pc, ohlcv_lo, ohlcv_hi)
-    if win is None:
-        return f"### {strategy} — PineForge ↔ PyneCore\n\nno common window\n"
-    lo, hi = win
-    pf_w = filter_to_window(pf, lo, hi)
-    pc_w = filter_to_window(pc, lo, hi)
+def render_pf_pc_agreement(strategy: str, pf: list[Trade], pc: list[Trade]) -> str:
+    """Engine-vs-engine agreement, clipped to the same common match window."""
+    matched = align(pf, pc)
+    pf_w, pc_w = trim_to_common_match_window(pf, pc, matched)
     matched = align(pf_w, pc_w)
     if not matched:
         return f"### {strategy} — PineForge ↔ PyneCore\n\nno shared trades in window\n"
@@ -441,8 +681,6 @@ def main() -> int:
     else:
         strategy_dirs = sorted(d for d in strategies_root.iterdir() if d.is_dir())
 
-    ohlcv_lo, ohlcv_hi = ohlcv_span_seconds()
-
     sections: list[str] = [
         "# Trade comparison\n",
         "Each strategy is run through PineForge and PyneCore against the\n"
@@ -450,18 +688,23 @@ def main() -> int:
         "their strategy backtester is a roadmap item (per [their\n"
         "README](https://github.com/LuxAlgo/PineTS#roadmap)). Both columns\n"
         "are diffed against the same `tv_trades.csv` ground truth.\n",
-        "**Window-clipped comparison.** TV's chart export typically covers\n"
+        "**Window algorithm (align-then-trim).** TV's chart export typically covers\n"
         "~3 weeks of history *before* this repo's OHLCV begins, and our\n"
         "OHLCV extends ~4 weeks *after* TV's export ends. To make the\n"
-        "count fair, we clip both lists to\n"
-        "`[OHLCV span] ∩ [TV entry span] ∩ [engine entry span]` before\n"
-        "comparing — the same algorithm the canonical PineForge parity\n"
-        "sweep (`validate_detailed_report.py::common_entry_window_ms`)\n"
-        "uses.\n",
-        "**5-tier match degree** mirrors the canonical sweep:\n"
-        "🟢 *excellent* (count + all p90 strict, ≥95% match) → "
-        "🟢 *strong* (within 5x strict, ≥90% match) → "
-        "🟡 *moderate* → 🟠 *weak* → 🔴 *minimal*. "
+        "count fair, we use the same canonical algorithm as\n"
+        "`scripts/verify_corpus.py::trim_to_common_match_window`:\n"
+        "1. align(tv, engine) — initial greedy match; 2. trim to\n"
+        "[min_matched_entry − 1h, max_matched_entry + 1h]; 3. re-align\n"
+        "on the trimmed lists. Per-strategy `inputs.json` overrides\n"
+        "(`trim_bars`, `warmup_bars`, `expected_tier`,\n"
+        "`validation_overrides.expect_tv_match`) are honoured.\n",
+        "**7-label match degree** mirrors the canonical sweep:\n"
+        "🟢 *excellent* (all four p90 thresholds pass) → "
+        "🟢 *strong* (99%+ match + STRONG_* breakpoints) → "
+        "🟡 *moderate* (90%+ match) → 🟠 *weak* (any matched) → 🔴 *minimal* (0 matched). "
+        "🔵 *anomaly* and 🟣 *engine_only* are declared via `inputs.json::expected_tier` "
+        "or `validation_overrides.expect_tv_match: false` — they indicate documented "
+        "TV-side non-determinism or engine-only probes, not regressions. "
         "Strategies that use TradingView's `trail_*` exits get the "
         "production threshold profile (exit p90 <0.05%, PnL p90 <100%) "
         "matching the canonical sweep.\n",
@@ -480,14 +723,17 @@ def main() -> int:
                   file=sys.stderr)
             continue
 
-        profile = detect_parity_profile(strat_dir / "strategy.pine")
-        tv = parse_trades(tv_path, TV_TZ_OFFSET_HOURS)
-        pf = parse_trades(pf_path, 0)
-        pc = parse_trades(pc_path, 0)
+        meta = load_strategy_metadata(strat_dir)
+        profile = resolve_profile(strat_dir, meta)
+        tv = parse_trades(tv_path, tv_timezone_offset(meta))
+        pf = parse_trades(pf_path, ENGINE_CSV_TZ_OFFSET_HOURS)
+        pc = parse_trades(pc_path, ENGINE_CSV_TZ_OFFSET_HOURS)
 
         diffs = [
-            compute_diff("PineForge", pf, tv, ohlcv_lo=ohlcv_lo, ohlcv_hi=ohlcv_hi, profile=profile),
-            compute_diff("PyneCore",  pc, tv, ohlcv_lo=ohlcv_lo, ohlcv_hi=ohlcv_hi, profile=profile),
+            compute_diff("PineForge", pf, tv, profile=profile,
+                         strategy_dir=strat_dir, meta=meta),
+            compute_diff("PyneCore",  pc, tv, profile=profile,
+                         strategy_dir=strat_dir, meta=meta),
         ]
         summary_rows.append((strat_dir.name, profile, len(tv), diffs[0], diffs[1]))
 
@@ -495,7 +741,8 @@ def main() -> int:
             print(f"=== {strat_dir.name}  ({profile}) ===")
             print(f"  raw counts:    TV={len(tv)}  PineForge={len(pf)}  PyneCore={len(pc)}")
             for d in diffs:
-                print(f"  {d.name:9s} {_DEGREE_EMOJI[d.degree]} {d.label:9s}  "
+                emoji = _LABEL_EMOJI.get(d.label, "🔴")
+                print(f"  {d.name:9s} {emoji} {d.label:11s}  "
                       f"in-window TV={d.n_tv_in_window} engine={d.n_engine_in_window} "
                       f"matched={d.n_matched}  "
                       f"count={fmt_pct(d.count_delta):>9s}  "
@@ -505,32 +752,40 @@ def main() -> int:
             print()
 
         sections.append(render_strategy_block(strat_dir.name, profile, len(tv), diffs))
-        sections.append(render_pf_pc_agreement(strat_dir.name, pf, pc, ohlcv_lo, ohlcv_hi))
+        sections.append(render_pf_pc_agreement(strat_dir.name, pf, pc))
 
-    # Tally the 5-tier breakdown per engine.
+    # Tally the label breakdown per engine.
+    all_labels = ("excellent", "strong", "moderate", "weak", "minimal",
+                  "anomaly", "engine_only")
     summary_lines = [
         "# Summary\n",
         "Match degree per the canonical PineForge parity sweep "
-        "(window-clipped; trail_* strategies use production thresholds).\n",
+        "(align-then-trim window; trail_* strategies use production thresholds; "
+        "inputs.json overrides honoured).\n",
         "| Strategy | Profile | TV (raw / win) | PineForge | PyneCore |",
         "|---|---|---|---|---|",
     ]
-    pf_tally: dict[str, int] = {l: 0 for l in DEGREE_LABEL.values()}
-    pc_tally: dict[str, int] = {l: 0 for l in DEGREE_LABEL.values()}
+    pf_tally: dict[str, int] = {lbl: 0 for lbl in all_labels}
+    pc_tally: dict[str, int] = {lbl: 0 for lbl in all_labels}
     for name, profile, tv_raw, pf_d, pc_d in summary_rows:
-        pf_tally[pf_d.label] += 1
-        pc_tally[pc_d.label] += 1
+        pf_tally[pf_d.label] = pf_tally.get(pf_d.label, 0) + 1
+        pc_tally[pc_d.label] = pc_tally.get(pc_d.label, 0) + 1
+        pf_emoji = _LABEL_EMOJI.get(pf_d.label, "🔴")
+        pc_emoji = _LABEL_EMOJI.get(pc_d.label, "🔴")
         summary_lines.append(
             f"| {name} | {profile} | {tv_raw} / {pf_d.n_tv_in_window} | "
-            f"{_DEGREE_EMOJI[pf_d.degree]} {pf_d.label} ({pf_d.n_engine_in_window}) | "
-            f"{_DEGREE_EMOJI[pc_d.degree]} {pc_d.label} ({pc_d.n_engine_in_window}) |"
+            f"{pf_emoji} {pf_d.label} ({pf_d.n_engine_in_window}) | "
+            f"{pc_emoji} {pc_d.label} ({pc_d.n_engine_in_window}) |"
         )
     summary_lines.append("")
     n = len(summary_rows)
-    for label in ("excellent", "strong", "moderate", "weak", "minimal"):
-        summary_lines.append(
-            f"- **{label}**: PineForge {pf_tally[label]}/{n}, PyneCore {pc_tally[label]}/{n}"
-        )
+    for label in all_labels:
+        pf_cnt = pf_tally.get(label, 0)
+        pc_cnt = pc_tally.get(label, 0)
+        if pf_cnt or pc_cnt:
+            summary_lines.append(
+                f"- **{label}**: PineForge {pf_cnt}/{n}, PyneCore {pc_cnt}/{n}"
+            )
 
     if args.no_write:
         print("\n".join(sections))
