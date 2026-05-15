@@ -702,6 +702,285 @@ git commit -m "chore(bench): re-run PyneCore 6.4.6 trade lists"
 
 ---
 
+## Phase 4.0 — Validator alignment with run_corpus.sh (NEW, plan revision r3, 2026-05-16)
+
+**Why this phase exists:** User flagged that `benchmarks/compare.py` should match the validator logic in `pineforge-engine/scripts/run_corpus.sh` (which invokes `scripts/verify_corpus.py --all`). Audit found 6 divergences (TZ-per-strategy, window algorithm, interior trim, profile resolution, expected_tier override, validation_overrides override, tier classifier breakpoints). Decision: **surgical port** — copy the canonical functions from `verify_corpus.py` into `compare.py`. Both files duplicate the logic; future drift is a known cost.
+
+### Task 4.0.1: Surgical port of canonical validator into compare.py
+
+**Files:**
+- Modify: `benchmarks/compare.py`
+- Reference (read-only): `scripts/verify_corpus.py`
+
+- [ ] **Step 1: Replace TZ handling — per-strategy from inputs.json**
+
+In `compare.py`, replace the `TV_TZ_OFFSET_HOURS = 8` constant with the same lookup table + helper used by `verify_corpus.py`:
+
+```python
+# canonical: scripts/verify_corpus.py:213-220
+TV_CSV_TZ_OFFSET_HOURS = 8     # default, was TV_TZ_OFFSET_HOURS in earlier compare.py
+ENGINE_CSV_TZ_OFFSET_HOURS = 0
+TV_TZ_BY_NAME = {
+    "utc_plus_8": 8,
+    "asia_taipei": 8,
+    "utc": 0,
+}
+
+def load_strategy_metadata(strategy_dir: Path) -> dict:
+    inputs_path = strategy_dir / "inputs.json"
+    if not inputs_path.exists():
+        return {}
+    import json
+    with inputs_path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+def tv_timezone_offset(meta: dict) -> int:
+    tz_name = str(meta.get("tv_trades_csv_tz", "")).lower()
+    return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
+```
+
+Update `parse_trades(tv_path, TV_TZ_OFFSET_HOURS)` call sites in `main()` to:
+
+```python
+meta = load_strategy_metadata(strat_dir)
+tv = parse_trades(tv_path, tv_timezone_offset(meta))
+pf = parse_trades(pf_path, ENGINE_CSV_TZ_OFFSET_HOURS)
+pc = parse_trades(pc_path, ENGINE_CSV_TZ_OFFSET_HOURS)
+```
+
+- [ ] **Step 2: Replace profile resolution with inputs.json-aware version**
+
+Replace `detect_parity_profile(strat_dir / "strategy.pine")` call with:
+
+```python
+def resolve_profile(strategy_dir: Path, meta: dict) -> str:
+    """inputs.json wins; auto-detect from .pine fallback. Mirrors verify_corpus.py."""
+    forced = str(meta.get("parity_profile", "")).lower()
+    if forced in {"strict", "production"}:
+        return forced
+    pine_path = strategy_dir / "strategy.pine"
+    if pine_path.is_file():
+        try:
+            return detect_parity_profile_from_source(pine_path.read_text(encoding="utf-8"))
+        except OSError:
+            return "strict"
+    return "strict"
+
+def detect_parity_profile_from_source(pine_source: str) -> str:
+    cleaned = _BLOCK_COMMENT.sub("", pine_source)
+    cleaned = _LINE_COMMENT.sub("", cleaned)
+    return "production" if _TRAIL_PATTERN.search(cleaned) else "strict"
+```
+
+Existing `detect_parity_profile(pine_path: Path)` may stay as a thin wrapper if other code calls it; otherwise delete.
+
+In `main()`, replace `profile = detect_parity_profile(strat_dir / "strategy.pine")` with `profile = resolve_profile(strat_dir, meta)`.
+
+- [ ] **Step 3: Add interior_time_bounds + is_interior + _ohlcv_span_ms**
+
+Copy these three helpers verbatim from `scripts/verify_corpus.py:116-202`. They handle per-strategy edge/warmup trim from `inputs.json::trim_bars` + `warmup_bars`.
+
+Note: bench's per-strategy `_ohlcv_span_ms` should look for `ohlcv.csv`/`data.csv`/`candles.csv` next to `strategy.pine` (corpus-style); for bench strategies that don't have these (the existing 50), the function returns `(None, None, 0)` and `interior_time_bounds()` returns `None`, making `is_interior()` always-true → no-op. Future corpus-promoted bench strategies (Phase 5) WILL have these and will be honoured.
+
+- [ ] **Step 4: Replace common_window with align-then-trim (canonical algo)**
+
+The canonical sweep does NOT use OHLCV-span intersection. It uses `align_by_time` then `trim_to_common_match_window` (lo/hi from matched-trade entry times ± MATCH_WINDOW_SECONDS). Two-pass: align → trim → re-align. This is the actual logic in `verify_corpus.py:386-387`.
+
+Replace bench `common_window` + `filter_to_window` usages in `compute_diff` with:
+
+```python
+def trim_to_common_match_window(tv, eng, matched):
+    """Drop trades outside the matched window ± MATCH_WINDOW_S. Mirrors verify_corpus.py."""
+    if not matched:
+        return tv, eng
+    lo = min(min(t.entry_time, e.entry_time) for t, e in matched) - MATCH_WINDOW_S
+    hi = max(max(t.entry_time, e.entry_time) for t, e in matched) + MATCH_WINDOW_S
+    tv_trim = [t for t in tv if lo <= t.entry_time <= hi]
+    eng_trim = [e for e in eng if lo <= e.entry_time <= hi]
+    return tv_trim, eng_trim
+```
+
+Update `compute_diff` to:
+
+```python
+def compute_diff(name, eng_full, tv_full, *, profile, strategy_dir, meta) -> EngineDiff:
+    matched = align(tv_full, eng_full)
+    tv_cmp, eng_cmp = trim_to_common_match_window(tv_full, eng_full, matched)
+    matched = align(tv_cmp, eng_cmp)
+    if not matched:
+        all_zero = (len(tv_cmp) == 0 and len(eng_cmp) == 0)
+        deg = 5 if all_zero else 1
+        return EngineDiff(name, len(eng_full), len(eng_cmp), len(tv_cmp), 0,
+                          0.0, 0.0, 0.0, 0.0, profile, deg, DEGREE_LABEL[deg])
+
+    # Interior trim from inputs.json
+    trim_bars = int(meta.get("trim_bars", 0) or 0)
+    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
+    first_ms, last_ms, bar_ms = _ohlcv_span_ms(strategy_dir)
+    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
+
+    if bounds is not None:
+        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
+        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
+        gating_matched = [(t, e) for (t, e) in matched if is_interior(t.entry_time * 1000, bounds)]
+        if not gating_matched:
+            gating_matched = matched
+    else:
+        tv_gate, eng_gate, gating_matched = tv_cmp, eng_cmp, matched
+
+    count_delta = abs(len(tv_gate) - len(eng_gate)) / max(len(tv_gate), len(eng_gate), 1)
+    entry_p90 = percentile([relmax(t.entry_price, e.entry_price) for t, e in gating_matched], 0.9)
+    exit_p90  = percentile([relmax(t.exit_price,  e.exit_price)  for t, e in gating_matched], 0.9)
+    pnl_p90   = percentile(
+        [abs(t.pnl - e.pnl) / abs(t.pnl) for t, e in gating_matched if abs(t.pnl) >= PNL_NEAR_ZERO_USD],
+        0.9,
+    )
+    label = classify_match_degree_canonical(
+        count_d=count_delta, entry_p90=entry_p90, exit_p90=exit_p90, pnl_p90=pnl_p90,
+        gating_matched_n=len(gating_matched), tv_gate_n=len(tv_gate), profile=profile,
+    )
+
+    # Expected-tier override (mirrors verify_corpus.py:466-482)
+    expected_tier = str(meta.get("expected_tier", "")).strip().lower()
+    if expected_tier in {"anomaly", "engine_only"} and label != "excellent":
+        label = expected_tier
+    val_overrides = meta.get("validation_overrides") or {}
+    if not bool(val_overrides.get("expect_tv_match", True)) and label != "excellent":
+        label = "engine_only"
+
+    degree = LABEL_TO_DEGREE.get(label, 1)
+    return EngineDiff(name, len(eng_full), len(eng_gate), len(tv_gate), len(gating_matched),
+                      count_delta, entry_p90, exit_p90, pnl_p90, profile, degree, label)
+```
+
+Add `PNL_NEAR_ZERO_USD = 0.01` constant at top.
+
+- [ ] **Step 5: Replace tier classifier with canonical breakpoints**
+
+Drop bench's `classify_match_degree` + match-pct-based moderate/weak/minimal logic. Replace with:
+
+```python
+# Mirrors verify_corpus.py:439-454.
+def classify_match_degree_canonical(*, count_d, entry_p90, exit_p90, pnl_p90,
+                                    gating_matched_n, tv_gate_n, profile) -> str:
+    thresh = parity_for_profile(profile)
+    all_ok = (count_d  < thresh["count"]
+              and entry_p90 < thresh["entry"]
+              and exit_p90  < thresh["exit"]
+              and pnl_p90   < thresh["pnl"])
+    if all_ok:
+        return "excellent"
+    match_pct = gating_matched_n / max(tv_gate_n, 1)
+    strong = (match_pct >= 0.99
+              and count_d  < STRONG_COUNT_DELTA
+              and entry_p90 < STRONG_ENTRY_DELTA
+              and exit_p90  < STRONG_EXIT_DELTA
+              and pnl_p90   < STRONG_PNL_DELTA)
+    if strong:
+        return "strong"
+    if match_pct >= 0.90:
+        return "moderate"
+    if gating_matched_n > 0:
+        return "weak"
+    return "minimal"
+
+def parity_for_profile(profile: str) -> dict:
+    if profile == "production":
+        return {"count": 0.01, "entry": 0.0001, "exit": 0.0005, "pnl": 1.0}
+    return {"count": 0.01, "entry": 0.0001, "exit": 0.0001, "pnl": 0.01}
+
+# Add at top:
+STRONG_COUNT_DELTA = 0.05
+STRONG_ENTRY_DELTA = 0.001
+STRONG_EXIT_DELTA  = 0.005
+STRONG_PNL_DELTA   = 1.0
+
+LABEL_TO_DEGREE = {"excellent": 5, "strong": 4, "moderate": 3,
+                   "weak": 2, "minimal": 1, "anomaly": 4, "engine_only": 4}
+```
+
+- [ ] **Step 6: Update render_strategy_block + summary table to expose new labels**
+
+The `EngineDiff.label` may now be `"anomaly"` or `"engine_only"`. Update `_DEGREE_EMOJI` to handle these (e.g., 🔵 anomaly, 🟣 engine_only). Update summary table column headers if needed; document new labels in the report intro paragraph.
+
+```python
+_LABEL_EMOJI = {
+    "excellent": "🟢", "strong": "🟢", "moderate": "🟡",
+    "weak": "🟠", "minimal": "🔴",
+    "anomaly": "🔵", "engine_only": "🟣",
+}
+```
+
+Replace `_DEGREE_EMOJI[d.degree]` lookups with `_LABEL_EMOJI.get(d.label, "🔴")`.
+
+- [ ] **Step 7: Update intro paragraph in trade_comparison.md output**
+
+Replace the "Window-clipped comparison ... `[OHLCV span] ∩ [TV entry span] ∩ [engine entry span]`" paragraph with text matching the new algorithm (align→trim-to-matched-window). Note the new tier classifier and that inputs.json overrides are honoured.
+
+- [ ] **Step 8: Smoke run — verify it executes**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks
+uv run python compare.py --strategy 01-sma-cross --no-write 2>&1 | tail -20
+```
+
+Expected: no Python errors. Per-strategy summary printed with profile + tier label.
+
+- [ ] **Step 9: Commit**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine
+git add benchmarks/compare.py
+git commit -m "fix(bench): port canonical validator from scripts/verify_corpus.py
+
+Bench compare.py drifted from canonical run_corpus.sh validator
+(verify_corpus.py) on six axes: TZ-per-strategy, profile resolution
+from inputs.json, interior_time_bounds (trim_bars/warmup_bars),
+expected_tier override, validation_overrides.expect_tv_match
+relabel to engine_only, align-then-trim window algo, and tier
+classifier breakpoints. Surgical port of canonical functions into
+compare.py to match scripts/run_corpus.sh logic exactly. Future
+corpus-promoted bench strategies (Phase 5) will be validated under
+the same rules as the corpus."
+```
+
+### Task 4.0.2: Differential validation of refactored compare.py
+
+**Files:** No code changes. Validation only.
+
+- [ ] **Step 1: Snapshot current results/ baseline**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine
+cp benchmarks/results/summary.md /tmp/summary_pre_port.md 2>/dev/null || echo "no prior summary"
+cp benchmarks/results/trade_comparison.md /tmp/tc_pre_port.md 2>/dev/null || true
+```
+
+- [ ] **Step 2: Run full sweep with new compare.py**
+
+```bash
+cd /Users/haoliangwen/code/pineforge-engine/benchmarks
+uv run python compare.py --quiet 2>&1 | tail -20
+```
+
+- [ ] **Step 3: Diff vs prior summary.md (if exists)**
+
+```bash
+test -f /tmp/summary_pre_port.md && diff /tmp/summary_pre_port.md benchmarks/results/summary.md | head -50 || echo "no prior baseline to diff"
+```
+
+- [ ] **Step 4: Sanity check tier shifts**
+
+The validator change may legitimately shift some tiers (e.g., bench compare.py was using a stricter classifier; canonical may relabel some "moderate" → "strong"). Document any shifts in a brief note for the Phase 4.2 root-cause table.
+
+- [ ] **Step 5: Decide commit strategy**
+
+If the new sweep results look correct (no obvious regressions, expected tier shifts only), they will be committed in Task 4.2. **Do NOT commit results/ files in this task.**
+
+If the new sweep produces nonsensical output (e.g., 100% strategies tier-degrade, or zero tiers shift when material changes were expected), STOP and report — likely a port bug.
+
+---
+
 ## Phase 4 — Indicator + comparator refresh
 
 ### Task 4.1: Re-run canonical indicators (3 engines)
