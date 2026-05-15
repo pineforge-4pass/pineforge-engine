@@ -174,6 +174,16 @@ if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
     endif()
 endif()
 
+# === Speed bench (opt-in) =============================================
+# Google Benchmark target for per-strategy PineForge timing.
+# Build with: cmake -B build -DPINEFORGE_BUILD_SPEED_BENCH=ON
+# Requires bench-built strategy dylibs in benchmarks/_workdir/build_strategies/
+# (produced by: cd benchmarks && uv run python runners/compile_bench_strategy.py)
+option(PINEFORGE_BUILD_SPEED_BENCH "Build benchmarks/speed GBench target" OFF)
+if(PINEFORGE_BUILD_SPEED_BENCH)
+    add_subdirectory(benchmarks/speed)
+endif()
+
 # === Install / package config =========================================
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
