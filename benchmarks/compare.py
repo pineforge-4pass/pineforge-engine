@@ -24,7 +24,7 @@ The window algorithm mirrors the canonical PineForge parity sweep
 
 This is critical: TV's chart export typically covers ~3 weeks BEFORE
 our OHLCV CSV starts (so we can't reproduce those trades — no bars),
-and our 36k-bar OHLCV extends ~4 weeks AFTER TV's export ends (so the
+and our 41,307-bar OHLCV extends ~4 weeks AFTER TV's export ends (so the
 engine fires entries TV's export doesn't include). Comparing without
 clipping inflates the "count delta" by the union of those two
 overhangs even when the engine is bit-perfect inside the window where
@@ -684,7 +684,7 @@ def main() -> int:
     sections: list[str] = [
         "# Trade comparison\n",
         "Each strategy is run through PineForge and PyneCore against the\n"
-        "same 36k-bar OHLCV feed. PineTS is excluded from this report —\n"
+        "same 41,307-bar OHLCV feed. PineTS is excluded from this report —\n"
         "their strategy backtester is a roadmap item (per [their\n"
         "README](https://github.com/LuxAlgo/PineTS#roadmap)). Both columns\n"
         "are diffed against the same `tv_trades.csv` ground truth.\n",

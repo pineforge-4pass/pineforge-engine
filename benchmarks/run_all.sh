@@ -209,12 +209,12 @@ if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
         || fail "speed harness build failed (configure with -DPINEFORGE_BUILD_SPEED_BENCH=ON)"
     "${ROOT_DIR}/build/bin/pineforge_bench" \
         --benchmark_format=json > "${WORKDIR}/pf_speed.json"
-    uv run python speed/time_pynecore.py > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
-    node speed/time_pinets.mjs > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"
-    uv run python speed/aggregate.py \
+    (cd "${BENCH_DIR}" && uv run python speed/time_pynecore.py) > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
+    (cd "${BENCH_DIR}" && node speed/time_pinets.mjs) > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"
+    (cd "${BENCH_DIR}" && uv run python speed/aggregate.py \
         --pineforge "${WORKDIR}/pf_speed.json" \
         --pynecore  "${WORKDIR}/pc_speed.json" \
-        --pinets    "${WORKDIR}/pt_speed.json"
+        --pinets    "${WORKDIR}/pt_speed.json")
 fi
 
 # --- 7) reports -------------------------------------------------------

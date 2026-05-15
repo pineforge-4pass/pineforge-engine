@@ -135,11 +135,10 @@ therefore a fair comparison of the per-strategy cost a real consumer would see.
 - **Median speedup PineForge vs PyneCore** (across 49 commonly-timed strategies): **56×**
 - **PineTS canonical indicator:** 334.0 ms median
 
-## Marketing claim refresh (TODO)
+## Notes
 
-The public badge cites '0.4 ms MACD-672 bars'. The current harness runs over
-the full 41,307-bar OHLCV feed; a 672-bar slice requires a separate GBench
-invocation or a bespoke harness. The full-OHLCV time for `04-macd-histogram`
-is **20.03 ms** median.
-Defer 672-bar slice timing to a follow-up task.
+The `0.4 ms MACD-672 bars` claim from the v0.1 badge has been retired and
+replaced with the full-OHLCV median speedup badge (56×). The full-OHLCV time
+for `04-macd-histogram` (41,307 bars) is **20.03 ms** median.
+A 672-bar slice timing would require a bespoke GBench harness (deferred follow-up).
 
