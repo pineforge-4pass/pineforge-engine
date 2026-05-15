@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Regenerate `pineforge_trades.csv` for every bench strategy by
-codegen+building each `assets/strategies/<NN>/strategy.pine` and
-running it through `scripts/run_strategy.py` against the pinned OHLCV.
-
-This script no longer depends on the corpus-side bootstrap_strategies
-DEFAULT_PLAN (which became stale after corpus consolidation in
-commit ef6ce58). The bench is now the source of truth for its own
-50+N strategy.pine files.
+"""Regenerate `pineforge_trades.csv` for every bench strategy by loading
+the pre-built `strategy.dylib` / `strategy.so` (built by cmake) and running
+it through `scripts/run_strategy.py` against the pinned OHLCV.
 
 Pre-requisites:
-    - cmake -B build -DPINEFORGE_BUILD_TESTS=ON
-      cmake --build build --target pineforge -j
-    - sibling pineforge-codegen repo checked out next to engine
-      (or PINEFORGE_CODEGEN_PATH env var set)
+    cmake -B build -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON
+    cmake --build build --target pineforge bench_strategies -j
+
+The strategy shared libraries must be co-located with their `generated.cpp`
+(i.e. at `assets/strategies/<NN-slug>/strategy.dylib`).  They are produced
+by the cmake bench_strategies aggregate target — no call to pineforge-codegen
+is made here.
 """
 from __future__ import annotations
 
@@ -29,26 +27,37 @@ RUN_STRATEGY = REPO_ROOT / "scripts" / "run_strategy.py"
 sys.path.insert(0, str(BENCH))
 from paths import DATA, STRATEGIES  # noqa: E402
 
-sys.path.insert(0, str(BENCH / "runners"))
-from compile_bench_strategy import compile_one  # noqa: E402
-
 DEFAULT_OHLCV = DATA / "ETHUSDT_15.csv"
 
 
 def regen_one(bench_dir: Path, ohlcv: Path) -> tuple[bool, str]:
-    try:
-        dylib = compile_one(bench_dir)
-    except Exception as e:
-        return False, f"compile failed: {str(e).splitlines()[0][:200]}"
+    # Prefer .dylib (macOS) then .so (Linux).
+    dylib = bench_dir / "strategy.dylib"
+    if not dylib.exists():
+        dylib = bench_dir / "strategy.so"
+    if not dylib.exists():
+        return (
+            False,
+            "no strategy.dylib — run: "
+            "cmake -B build -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON && "
+            "cmake --build build --target bench_strategies -j",
+        )
 
     dst = bench_dir / "pineforge_trades.csv"
     cmd = [
-        sys.executable, str(RUN_STRATEGY),
-        str(dylib.parent),
-        "--ohlcv", str(ohlcv.resolve()),
-        "--output", str(dst.resolve()),
+        sys.executable,
+        str(RUN_STRATEGY),
+        str(bench_dir),
+        "--ohlcv",
+        str(ohlcv.resolve()),
+        "--output",
+        str(dst.resolve()),
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return False, "run_strategy.py timed out (300 s)"
+
     if res.returncode != 0:
         msg = (res.stderr.strip().splitlines() or [f"rc={res.returncode}"])[-1][:200]
         return False, f"run_strategy.py failed: {msg}"
@@ -58,8 +67,10 @@ def regen_one(bench_dir: Path, ohlcv: Path) -> tuple[bool, str]:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     ap.add_argument("--ohlcv", type=Path, default=DEFAULT_OHLCV)
     ap.add_argument("--only", help="Substring filter on bench slug")
     args = ap.parse_args()
