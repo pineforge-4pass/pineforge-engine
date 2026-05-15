@@ -5,12 +5,22 @@
 # through PyneCore + PineTS + PineForge, and produces the comparison
 # reports under benchmarks/results/.
 #
+# Prerequisites:
+#   - cmake >= 3.16 + a C++17 compiler (clang or gcc)
+#   - uv (Python package manager) + Python 3.11+
+#   - node >= 20
+#   - git submodule update --init benchmarks/assets  (assets data + strategies)
+#   - PYNESYS_API_KEY env var  (only if you want to refresh strategy_pyne.py;
+#     the committed .py files work as-is for parity reproduction — see SKIP_PYNE_REFRESH)
+#
 # Honours these env vars:
-#   SKIP_BUILD     — skip the runtime build step
-#   SKIP_PYNE      — skip PyneCore strategy + indicator runs
-#   SKIP_PINETS    — skip PineTS indicator run
-#   SKIP_SPEED     — skip the per-strategy speed sweep (pineforge_bench + timers)
-#   SKIP_REPORTS   — skip the compare.py / compare_indicators.py step
+#   SKIP_BUILD          — skip the runtime + bench-strategy build step
+#   SKIP_PYNE_REFRESH   — skip cloud_compile (default 1: strategy_pyne.py committed)
+#   SKIP_PYNE           — skip PyneCore strategy + indicator runs
+#   SKIP_PINETS         — skip PineTS indicator run
+#   SKIP_PINEFORGE      — skip PineForge trade regeneration
+#   SKIP_SPEED          — skip the per-strategy speed sweep (pineforge_bench + timers)
+#   SKIP_REPORTS        — skip the compare.py / compare_indicators.py step
 
 set -euo pipefail
 
@@ -38,15 +48,18 @@ submodule (init: git submodule update --init benchmarks/assets).
 See CONTRIBUTING.md.
 
 Note: an inline benchmarks/strategies tree exists only in pre-migration /
-private monorepo checkouts — do not publish those paths in public history."
+private monorepo checkouts — do not publish those paths in public Git
+history once the repo is open-sourced (see CONTRIBUTING.md)."
 fi
 
-# --- 1) build runtime ------------------------------------------------
+# --- 1) build runtime + bench strategies --------------------------------
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-    log "configuring + building libpineforge"
-    cmake -B build -DPINEFORGE_BUILD_TESTS=ON >/dev/null
-    cmake --build build --target pineforge -j >/dev/null
+    log "configuring + building libpineforge + bench strategy dylibs"
+    cmake -B build \
+        -DPINEFORGE_BUILD_TESTS=ON \
+        -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON >/dev/null
+    cmake --build build --target pineforge bench_strategies -j >/dev/null
 fi
 
 # --- 2) ensure benchmark deps ----------------------------------------
@@ -98,14 +111,21 @@ elif [[ ! -f "${LIVE_CSV}" ]]; then
     exit 1
 fi
 
-# --- 3a) bootstrap strategy folders + cloud-compile -----------------
+# --- 3a) bootstrap strategy folders ---------------------------------
 
 if [[ "${SKIP_BOOTSTRAP:-0}" != "1" ]]; then
     log "bootstrapping benchmark strategy folders from corpus/"
     python3 "${BENCH_DIR}/runners/bootstrap_strategies.py" >/dev/null
 fi
 
-if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
+# --- 3b) cloud-compile .pine -> @pyne (default: SKIP — strategy_pyne.py committed) ---
+#
+# Set SKIP_PYNE_REFRESH=0 and provide PYNESYS_API_KEY to re-compile via PyneSys.
+# This is only needed when you want to update strategy_pyne.py files from updated
+# .pine sources.  The committed strategy_pyne.py files work as-is for parity
+# reproduction without any API key.
+
+if [[ "${SKIP_PYNE_REFRESH:-1}" != "1" ]]; then
     log "cloud-compiling .pine -> @pyne via PyneSys (skip if strategy_pyne.py exists)"
     force_compile=0
     if [[ "${REFRESH_COMPILE:-0}" == "1" ]]; then
@@ -141,6 +161,7 @@ if [[ "${SKIP_COMPILE:-0}" != "1" ]]; then
 fi
 
 # --- 3c) regenerate PineForge trades on the extended OHLCV ----------
+# Reads strategy.dylib built by cmake --target bench_strategies (step 1).
 
 if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
     log "regenerating PineForge trades against extended OHLCV"
@@ -148,7 +169,7 @@ if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
         || warn "regenerate_pineforge_trades.py reported failures; continuing"
 fi
 
-# --- 3b) run all strategies through PyneCore ------------------------
+# --- 3d) run all strategies through PyneCore ------------------------
 
 if [[ "${SKIP_PYNE:-0}" != "1" ]]; then
     n_strats=$(ls -d "${STRATEGIES_DIR}"/[0-9][0-9]-*/ 2>/dev/null | wc -l | tr -d ' ')
