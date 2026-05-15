@@ -52,6 +52,22 @@ REFERENCE_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
 WARMUP_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m_warmup6m.csv"
 DEFAULT_OHLCV = WARMUP_OHLCV if WARMUP_OHLCV.exists() else REFERENCE_OHLCV
 
+# Keys in inputs.json that are validator/harness metadata, not Pine input()
+# values. Mirrors the canonical validator's VALIDATION_INPUT_META_KEYS so
+# they are not forwarded to ``strategy_set_input`` (which would either
+# silently no-op or pollute the strategy's input table).
+_VALIDATION_META_KEYS = frozenset({
+    "tv_trades_csv_tz",
+    "tv_trades_csv",
+    "runtime_overrides",
+    "validation_overrides",
+    "ohlcv_csv",
+    "ohlcv_start_ms",
+    "script_tf",
+    "input_tf",
+    "chart_timezone",
+})
+
 
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
 #
@@ -170,11 +186,45 @@ class Strategy:
             L.strategy_set_trace_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
         if hasattr(L, "strategy_set_trade_start_time"):
             L.strategy_set_trade_start_time.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+        # ``strategy_set_chart_timezone`` lets the harness tell the engine
+        # which IANA wall-clock zone Pine's ``hour`` / ``minute`` /
+        # ``dayofweek`` (and the 1-arg function overloads) should produce.
+        # Without it the engine stays on UTC and silently diverges by N
+        # hours from a TV chart exported under a non-UTC tz. Older .so
+        # files predate this export, so we hasattr-guard the wiring and
+        # fall back to UTC for them.
+        if hasattr(L, "strategy_set_chart_timezone"):
+            L.strategy_set_chart_timezone.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            L.strategy_set_chart_timezone.restype = None
+        # Optional volume-weighted magnifier toggle. Older .so builds
+        # may predate this export — hasattr-guarded so the rest of the
+        # harness keeps working with the legacy ABI.
+        if hasattr(L, "strategy_set_magnifier_volume_weighted"):
+            L.strategy_set_magnifier_volume_weighted.argtypes = [
+                ctypes.c_void_p, ctypes.c_int]
+            L.strategy_set_magnifier_volume_weighted.restype = None
 
     def run(self, bars_csv: Path, params: dict | None = None,
-            *, trace_enabled: bool = False, trade_start_time_ms: int | None = None) -> dict:
-        """Read OHLCV from CSV, drive the engine, return a report dict."""
-        bars, n = _load_bars(bars_csv)
+            *, trace_enabled: bool = False, trade_start_time_ms: int | None = None,
+            chart_timezone: str | None = None,
+            input_tf: str | None = None, script_tf: str | None = None,
+            ohlcv_start_ms: int | None = None,
+            bar_magnifier: bool = False,
+            magnifier_samples: int = 4,
+            magnifier_distribution: str = "ENDPOINTS",
+            magnifier_volume_weighted: bool = False) -> dict:
+        """Read OHLCV from CSV, drive the engine, return a report dict.
+
+        ``ohlcv_start_ms`` (when provided) trims the loaded OHLCV so the
+        engine's first bar is at-or-after that timestamp. This is required
+        for probes that pin matrix/array warmup depth to the user's TV
+        chart history (e.g. ``var matrix<bool>`` accumulators, where
+        feeding the full 6-month warmup CSV pre-fills the mask before the
+        comparison window begins and the entry gate becomes a no-op).
+        Mirrors the per-probe ``inputs.json::ohlcv_start_ms`` metadata
+        the validator already honours.
+        """
+        bars, n = _load_bars(bars_csv, ohlcv_start_ms=ohlcv_start_ms)
         params = params or {}
         params_json = json.dumps(params).encode()
 
@@ -185,19 +235,56 @@ class Strategy:
                 self.lib.strategy_set_trace_enabled(state, 1)
             if trade_start_time_ms is not None and hasattr(self.lib, "strategy_set_trade_start_time"):
                 self.lib.strategy_set_trade_start_time(state, int(trade_start_time_ms))
+            # Wire chart TZ before the run so date builtins (hour/minute/
+            # dayofweek + the 1-arg function overloads) land on the same
+            # wall clock TV used at export time. Empty/None == leave the
+            # engine on its UTC fast path. See validator/_runner.py for
+            # the upstream pattern this mirrors.
+            if chart_timezone and hasattr(self.lib, "strategy_set_chart_timezone"):
+                self.lib.strategy_set_chart_timezone(state, str(chart_timezone).encode())
             if hasattr(self.lib, "strategy_set_input"):
                 for key, value in params.items():
                     if key.startswith("tv_"):
+                        continue
+                    if key in _VALIDATION_META_KEYS:
                         continue
                     self.lib.strategy_set_input(
                         state,
                         str(key).encode(),
                         str(value).encode(),
                     )
+            input_tf_b = (input_tf or "").encode()
+            script_tf_b = (script_tf or "").encode()
+            # Map magnifier_distribution string → enum int (must mirror
+            # MagnifierDistribution in include/pineforge/magnifier.hpp and
+            # PF_MAGNIFIER_* in include/pineforge/pineforge.h).
+            _MAG_DIST_INT = {
+                "UNIFORM": 0,
+                "COSINE": 1,
+                "TRIANGLE": 2,
+                "ENDPOINTS": 3,
+                "FRONT_LOADED": 4,
+                "BACK_LOADED": 5,
+                # Volume-weighted is a separate runtime toggle (see
+                # strategy_set_magnifier_volume_weighted) but probe inputs
+                # often spell it as a distribution; honour both spellings.
+                "VOLUME_WEIGHTED": 3,  # falls back to ENDPOINTS for the t-grid
+            }
+            mag_dist_int = _MAG_DIST_INT.get(
+                str(magnifier_distribution or "ENDPOINTS").upper(), 3)
+            mag_on = 1 if bar_magnifier else 0
+            mag_samples_int = int(magnifier_samples) if magnifier_samples else 4
+            # VOLUME_WEIGHTED toggles a separate runtime knob; flip it
+            # whenever the caller asked for that distribution OR set the
+            # explicit ``magnifier_volume_weighted`` flag.
+            vw_on = bool(magnifier_volume_weighted) or (
+                str(magnifier_distribution or "").upper() == "VOLUME_WEIGHTED")
+            if mag_on and vw_on and hasattr(self.lib, "strategy_set_magnifier_volume_weighted"):
+                self.lib.strategy_set_magnifier_volume_weighted(state, 1)
             self.lib.run_backtest_full(
                 state, bars, n,
-                b"", b"",            # auto-detect input_tf, default script_tf
-                0, 4, 3,             # bar_magnifier off, samples=4, dist=ENDPOINTS
+                input_tf_b, script_tf_b,  # empty -> auto-detect input_tf, default script_tf=input_tf
+                mag_on, mag_samples_int, mag_dist_int,
                 ctypes.byref(report),
             )
             if hasattr(self.lib, "strategy_get_last_error"):
@@ -214,19 +301,27 @@ class Strategy:
             self.lib.strategy_free(state)
 
 
-def _load_bars(csv_path: Path) -> tuple[ctypes.Array, int]:
-    """Read OHLCV CSV (timestamp, open, high, low, close, volume) into BarC[]."""
+def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None) -> tuple[ctypes.Array, int]:
+    """Read OHLCV CSV (timestamp, open, high, low, close, volume) into BarC[].
+
+    When ``ohlcv_start_ms`` is given, drop bars whose timestamp is below
+    that bound. Used by probes that pin warmup depth to the user's TV
+    chart history (per-probe ``inputs.json::ohlcv_start_ms`` metadata).
+    """
     rows: list[tuple[float, float, float, float, float, int]] = []
     with csv_path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            ts = int(row["timestamp"])
+            if ohlcv_start_ms is not None and ts < ohlcv_start_ms:
+                continue
             rows.append((
                 float(row["open"]),
                 float(row["high"]),
                 float(row["low"]),
                 float(row["close"]),
                 float(row["volume"]),
-                int(row["timestamp"]),
+                ts,
             ))
     n = len(rows)
     bars = (BarC * n)()
@@ -274,6 +369,10 @@ def _report_to_dict(r: ReportC) -> dict:
         "total_trades": int(r.total_trades),
         "net_profit": float(r.net_profit),
         "input_bars_processed": int(r.input_bars_processed),
+        "script_bars_processed": int(r.script_bars_processed),
+        "magnifier_sub_bars_total": int(r.magnifier_sub_bars_total),
+        "magnifier_sample_ticks_total": int(r.magnifier_sample_ticks_total),
+        "bar_magnifier_enabled": int(r.bar_magnifier_enabled),
         "trades": trades,
         "trace": trace,
         "trace_names": trace_names,
@@ -425,6 +524,14 @@ def main() -> int:
                     help="Emit all trades from the full OHLCV input, including warmup trades.")
     ap.add_argument("--disable-trading-before-window", action="store_true",
                     help="Warm indicators on pre-window bars but ignore strategy order commands until the emit window starts.")
+    ap.add_argument("--chart-tz", default="",
+                    help="IANA timezone the engine should use for Pine date builtins "
+                         "(hour/minute/dayofweek and their 1-arg function overloads) "
+                         "and intraday-cap rollover. Empty (default) keeps the engine "
+                         "on its UTC fast path, matching how the corpus's TV exports "
+                         "were recorded. Pass an IANA name (e.g. 'Asia/Taipei') only "
+                         "for probes that genuinely need a non-UTC chart-tz. "
+                         "Per-probe override: set 'chart_timezone' in inputs.json.")
     args = ap.parse_args()
 
     strategy_dir = args.strategy_dir.resolve()
@@ -450,20 +557,84 @@ def main() -> int:
     if inputs_path.exists():
         with inputs_path.open(encoding="utf-8") as f:
             params = json.load(f)
+    # Per-probe inputs.json::ohlcv_csv override wins over --ohlcv. Used by
+    # probes that need a different OHLCV than the global default — e.g.
+    # ``request.security_lower_tf`` probes that need a real 1m feed
+    # routed through the engine's input-passthrough LTF path instead of
+    # the synthesis path's waypoint walk. Mirrors the canonical
+    # validator's per-probe override (validate.py docstring lines 63-71).
+    if isinstance(params, dict) and "ohlcv_csv" in params:
+        _csv_val = params["ohlcv_csv"]
+        ohlcv_path = (Path(_csv_val) if str(_csv_val).startswith("/")
+                      else (strategy_dir / _csv_val)).resolve()
+    else:
+        ohlcv_path = args.ohlcv.resolve()
     tv_window_used = False
     if args.no_trim_output:
         emit_window = None
     elif args.emit_window_ohlcv is not None:
         emit_window = _load_window_ms(args.emit_window_ohlcv.resolve())
     else:
-        emit_window = _load_tv_entry_window(strategy_dir, params, _infer_bar_interval_ms(args.ohlcv.resolve()))
+        emit_window = _load_tv_entry_window(strategy_dir, params, _infer_bar_interval_ms(ohlcv_path))
         tv_window_used = emit_window is not None
         if emit_window is None:
             emit_window = _load_window_ms(REFERENCE_OHLCV)
     trade_start_ms = emit_window[0] if (emit_window is not None and (tv_window_used or args.disable_trading_before_window)) else None
-    report = strat.run(args.ohlcv.resolve(), params=params,
+    # Per-probe inputs.json override wins over the CLI default. Empty
+    # string is honoured (treated as "use engine UTC fast path").
+    if isinstance(params, dict) and "chart_timezone" in params:
+        chart_tz = str(params.get("chart_timezone") or "")
+    else:
+        chart_tz = args.chart_tz or ""
+    # Optional per-probe input_tf / script_tf overrides. Used together
+    # with ``ohlcv_csv`` when the override OHLCV is a finer feed than
+    # the strategy's native chart TF — e.g. feeding 1m bars to a 15m
+    # strategy so request.security_lower_tf("1", ...) takes the
+    # input-passthrough LTF path. Empty string => engine uses its
+    # auto-detect (input_tf) / input_tf default (script_tf).
+    input_tf_override = (str(params.get("input_tf") or "")
+                        if isinstance(params, dict) else "")
+    script_tf_override = (str(params.get("script_tf") or "")
+                          if isinstance(params, dict) else "")
+    # Per-probe ``ohlcv_start_ms`` trims the loaded OHLCV so the engine's
+    # first bar matches the user's TV chart history start. Required for
+    # probes whose state accumulators (var matrix<bool>, var array<>, etc.)
+    # would behave differently when fed extra warmup bars not present on
+    # the original TV chart at export time.
+    ohlcv_start_ms_val: int | None = None
+    if isinstance(params, dict) and "ohlcv_start_ms" in params:
+        try:
+            ohlcv_start_ms_val = int(params["ohlcv_start_ms"])
+        except (TypeError, ValueError):
+            ohlcv_start_ms_val = None
+    # Per-probe ``runtime_overrides`` block forwards engine-level knobs
+    # (bar magnifier toggle, magnifier sample distribution, etc.) that
+    # don't have Pine ``input.*()`` counterparts. Mirrors the canonical
+    # validator's ``runtime_overrides`` schema. Unknown keys are silently
+    # ignored so future runtime knobs don't break older harness builds.
+    runtime_overrides = (params.get("runtime_overrides") or {}) \
+        if isinstance(params, dict) else {}
+    if not isinstance(runtime_overrides, dict):
+        runtime_overrides = {}
+    bar_magnifier_flag = bool(runtime_overrides.get("bar_magnifier", False))
+    magnifier_dist_str = str(runtime_overrides.get("magnifier_distribution",
+                                                  "ENDPOINTS") or "ENDPOINTS")
+    try:
+        magnifier_samples_int = int(runtime_overrides.get("magnifier_samples", 4) or 4)
+    except (TypeError, ValueError):
+        magnifier_samples_int = 4
+    magnifier_vw_flag = bool(runtime_overrides.get("magnifier_volume_weighted", False))
+    report = strat.run(ohlcv_path, params=params,
                        trace_enabled=args.trace_json is not None,
-                       trade_start_time_ms=trade_start_ms)
+                       trade_start_time_ms=trade_start_ms,
+                       chart_timezone=chart_tz,
+                       input_tf=input_tf_override or None,
+                       script_tf=script_tf_override or None,
+                       ohlcv_start_ms=ohlcv_start_ms_val,
+                       bar_magnifier=bar_magnifier_flag,
+                       magnifier_samples=magnifier_samples_int,
+                       magnifier_distribution=magnifier_dist_str,
+                       magnifier_volume_weighted=magnifier_vw_flag)
     raw_trade_count = len(report["trades"])
     trades_to_write = _filter_trades_to_window(report["trades"], emit_window)
     write_engine_trades_csv(trades_to_write, out_path)
@@ -473,7 +644,7 @@ def main() -> int:
         with args.trace_json.open("w", encoding="utf-8") as f:
             json.dump({
                 "strategy": str(strategy_dir),
-                "ohlcv": str(args.ohlcv.resolve()),
+                "ohlcv": str(ohlcv_path),
                 "emit_window": None if emit_window is None else {"start_ms": emit_window[0], "end_ms": emit_window[1]},
                 "trace_names": report["trace_names"],
                 "trace": trace_to_write,

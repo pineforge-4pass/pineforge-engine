@@ -236,54 +236,100 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         // resulting LTF bar to the codegen via evaluate_security. The
         // codegen detects ``lower_tf_sub_bar_index == 0`` to clear its
         // accumulator vector and pushes once per dispatch.
-        state.lower_tf_input_buffer.push_back(input_bar);
+        //
+        // Bucket-aware dispatch (mirrors feed_ratio_mode in
+        // src/timeframe.cpp:270): when the incoming bar belongs to a
+        // different wall-clock script-TF bucket than the buffered
+        // window, we MUST flush the buffer (even if partial) BEFORE
+        // pushing — otherwise a feed gap, warmup misalignment, or
+        // sparse-data run leaks bars across the chart-bar boundary
+        // (e.g. a 16-bar window dispatched per 15m chart bar instead
+        // of 15). Pure count-based dispatch is preserved as a
+        // secondary trigger so dense gap-free feeds still flush
+        // promptly when the chunk fills.
         int input_seconds = tf_to_seconds(input_tf_);
         int script_seconds = tf_to_seconds(script_tf_);
         if (input_seconds <= 0 || script_seconds <= 0) {
+            // Cannot compute bucket math — fall back to original
+            // count-only behaviour.
+            state.lower_tf_input_buffer.push_back(input_bar);
             return;
         }
         int chunk_size = script_seconds / input_seconds;
-        if (chunk_size <= 0 ||
-            static_cast<int>(state.lower_tf_input_buffer.size()) < chunk_size) {
+        if (chunk_size <= 0) {
+            state.lower_tf_input_buffer.push_back(input_bar);
             return;
         }
-        int agg_ratio = state.lower_tf_input_aggregation_ratio;
-        if (agg_ratio < 1) agg_ratio = 1;
-        std::vector<Bar> ltf_bars;
-        ltf_bars.reserve(static_cast<std::size_t>(chunk_size / agg_ratio));
-        if (agg_ratio == 1) {
-            for (const Bar& b : state.lower_tf_input_buffer) {
-                ltf_bars.push_back(b);
+        int64_t bucket_ms = static_cast<int64_t>(script_seconds) * 1000;
+        int64_t this_bucket = input_bar.timestamp / bucket_ms;
+        bool boundary_crossed = false;
+        if (!state.lower_tf_input_buffer.empty()) {
+            int64_t buffer_bucket =
+                state.lower_tf_input_buffer.front().timestamp / bucket_ms;
+            if (this_bucket != buffer_bucket) {
+                boundary_crossed = true;
             }
-        } else {
-            for (int i = 0; i + agg_ratio <= chunk_size; i += agg_ratio) {
-                Bar acc = state.lower_tf_input_buffer[
-                    static_cast<std::size_t>(i)];
-                acc.high = acc.high;
-                acc.low = acc.low;
-                double vol = acc.volume;
-                for (int j = 1; j < agg_ratio; ++j) {
-                    const Bar& nxt = state.lower_tf_input_buffer[
-                        static_cast<std::size_t>(i + j)];
-                    if (nxt.high > acc.high) acc.high = nxt.high;
-                    if (nxt.low < acc.low) acc.low = nxt.low;
-                    acc.close = nxt.close;
-                    vol += nxt.volume;
+        }
+
+        // Lambda: aggregate + dispatch the current buffer (length may
+        // be < chunk_size on a boundary-triggered partial flush) and
+        // clear it. Uses the same agg_ratio rollup as before but is
+        // length-driven by the actual buffer size rather than
+        // chunk_size, so partial windows don't index out of bounds.
+        auto dispatch_and_clear = [&]() {
+            int agg_ratio = state.lower_tf_input_aggregation_ratio;
+            if (agg_ratio < 1) agg_ratio = 1;
+            int buf_len = static_cast<int>(state.lower_tf_input_buffer.size());
+            std::vector<Bar> ltf_bars;
+            ltf_bars.reserve(static_cast<std::size_t>(buf_len / agg_ratio + 1));
+            if (agg_ratio == 1) {
+                for (const Bar& b : state.lower_tf_input_buffer) {
+                    ltf_bars.push_back(b);
                 }
-                acc.volume = vol;
-                ltf_bars.push_back(acc);
+            } else {
+                for (int i = 0; i + agg_ratio <= buf_len; i += agg_ratio) {
+                    Bar acc = state.lower_tf_input_buffer[
+                        static_cast<std::size_t>(i)];
+                    double vol = acc.volume;
+                    for (int j = 1; j < agg_ratio; ++j) {
+                        const Bar& nxt = state.lower_tf_input_buffer[
+                            static_cast<std::size_t>(i + j)];
+                        if (nxt.high > acc.high) acc.high = nxt.high;
+                        if (nxt.low < acc.low) acc.low = nxt.low;
+                        acc.close = nxt.close;
+                        vol += nxt.volume;
+                    }
+                    acc.volume = vol;
+                    ltf_bars.push_back(acc);
+                }
             }
+            state.lower_tf_sub_bar_index = 0;
+            for (const Bar& b : ltf_bars) {
+                state.feed_count++;
+                state.current_bar = b;
+                state.current_sub_bar_count = 1;
+                state.eval_complete_count++;
+                evaluate_security(state.sec_id, b, true);
+                state.lower_tf_sub_bar_index++;
+            }
+            state.lower_tf_input_buffer.clear();
+        };
+
+        if (boundary_crossed) {
+            // Flush stale bucket BEFORE pushing the new bar so the
+            // new bar starts a fresh window aligned to its own bucket.
+            dispatch_and_clear();
         }
-        state.lower_tf_sub_bar_index = 0;
-        for (const Bar& b : ltf_bars) {
-            state.feed_count++;
-            state.current_bar = b;
-            state.current_sub_bar_count = 1;
-            state.eval_complete_count++;
-            evaluate_security(state.sec_id, b, true);
-            state.lower_tf_sub_bar_index++;
+
+        state.lower_tf_input_buffer.push_back(input_bar);
+
+        // Secondary trigger: if the buffer happens to fill to
+        // chunk_size mid-bucket (the dense gap-free case), flush
+        // immediately. This preserves the original count-based
+        // behaviour for the common path.
+        if (static_cast<int>(state.lower_tf_input_buffer.size()) >= chunk_size) {
+            dispatch_and_clear();
         }
-        state.lower_tf_input_buffer.clear();
         return;
     }
     if (state.lower_tf_emulation) {

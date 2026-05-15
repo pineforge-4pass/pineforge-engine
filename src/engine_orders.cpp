@@ -311,7 +311,8 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // Update risk state: intraday PnL and consecutive loss day tracking
     intraday_pnl_ += pnl;
     if (pnl < 0.0) {
-        int cur_day = _decompose_bar_time().dayofmonth * 100 + _decompose_bar_time().month;
+        BarTime bt = _decompose_bar_time_chart_tz();
+        int cur_day = bt.dayofmonth * 100 + bt.month;
         if (cur_day != last_loss_day_) {
             last_loss_day_ = cur_day;
             cons_loss_day_count_++;

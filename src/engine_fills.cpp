@@ -295,17 +295,51 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
-    // Check max_intraday_filled_orders limit
+    // Check max_intraday_filled_orders limit.
+    //
+    // TV's broker emulator (LATCH-TILL-DAY-ROLLOVER semantics):
+    //   1. Track fills on the current chart-day. When the Nth fill
+    //      (== max_intraday_filled_orders) lands and the resulting
+    //      position is non-flat, TV synthesises a full close at the
+    //      SAME BAR / SAME FILL PRICE tagged
+    //      "Close Position (Max number of filled orders in one day)".
+    //   2. After the synthetic close fires, a LATCH (intraday_cap_hit_)
+    //      is set. ALL subsequent fills on that chart-day are silently
+    //      rejected — TV emits at most one cap-close per chart-day.
+    //   3. The latch (and the counter) reset only at chart-day rollover.
+    //
+    // Verified empirically against validation probe 97b's tv_trades.csv:
+    //   - 382 cap-close exits across 13 months of data (~one per
+    //     chart-day where the cap fires). NOT multiple per day.
+    //   - cap-trigger entry + synthetic close share the same timestamp
+    //     and price (close trade carries pnl == 0)
+    //
+    // Two prior bugs:
+    //   - First impl just early-returned when the cap was hit, leaving
+    //     the position carried open across day boundaries (382 cap-
+    //     close exits in TV, 0 in engine).
+    //   - Second impl recharged the counter after each cap-cycle so
+    //     multiple cap-closes fired per chart-day (3459 engine vs
+    //     1957 TV trades on 97b — 43% over-count).
+    bool will_trigger_cap = false;
     if (max_intraday_filled_orders_ > 0) {
-        int cur_day = _decompose_bar_time().dayofmonth * 100 + _decompose_bar_time().month;
+        BarTime bt = _decompose_bar_time_chart_tz();
+        int cur_day = bt.dayofmonth * 100 + bt.month;
         if (cur_day != intraday_day_) {
             intraday_day_ = cur_day;
             intraday_fill_count_ = 0;
+            intraday_cap_hit_ = false;  // RESET LATCH on chart-day rollover
         }
-        if (intraday_fill_count_ >= max_intraday_filled_orders_) {
-            return;  // skip this fill, limit reached
+        if (intraday_cap_hit_) {
+            // Latched: drop this pending order and skip dispatch.
+            // Removing from pending_orders_ matches TV's behaviour of
+            // silently consuming/rejecting fills past the daily cap.
+            filled_indices.push_back(order_index);
+            return;
         }
         intraday_fill_count_++;
+        will_trigger_cap =
+            (intraday_fill_count_ >= max_intraday_filled_orders_);
     }
 
     filled_indices.push_back(order_index);
@@ -374,6 +408,71 @@ void BacktestEngine::apply_filled_order_to_state(
     // When an exit fill causes position to go flat, subsequent EXIT
     // orders in this iteration are naturally skipped by the flat guard
     // earlier in the inner loop body.
+
+    // max_intraday_filled_orders auto-close: if this fill was the
+    // cap-triggering one and the position is still non-flat after
+    // dispatch (entries leave a position open; exits that flatten
+    // already need no synthetic close), emit TV's synthetic
+    // "Close Position (Max number of filled orders in one day)" exit at
+    // the same fill price, then LATCH so all subsequent fills on this
+    // chart-day are silently rejected. TV emits at most one cap-close
+    // per chart-day (probe 97b: 382 cap-closes across 13 months,
+    // ~one per chart-day where the cap fires). The latch is reset
+    // only on chart-day rollover (see top of this function).
+    if (will_trigger_cap) {
+        if (position_side_ != PositionSide::FLAT) {
+            // TV cap-close exit price empirics (probe 97 stop-entry +
+            // cap composition):
+            //
+            //   When the cap-triggering fill is a STOP entry that fired
+            //   INTRA-bar (stop > bar.open for long, stop < bar.open
+            //   for short), TV's synthetic "Close Position (Max number
+            //   of filled orders in one day)" exit emits at the bar's
+            //   FAVORABLE extreme — bar.high for a long, bar.low for a
+            //   short — not at the entry's stop trigger price. The
+            //   model: TV's broker traces the bar path past the stop
+            //   trigger to the next extreme (continuation through the
+            //   stop direction is the "worst case" assumption Pine uses
+            //   for path resolution), and the cap-close fires at that
+            //   reached extreme. Verified against 152 cap-close trades
+            //   in probe 97: long stop-entry fills with stop > open
+            //   close at bar.high; short stop-entry fills with
+            //   stop < open close at bar.low.
+            //
+            //   When the entry filled AT bar.open (gap-fill: long stop
+            //   <= open, short stop >= open, or a market entry — no
+            //   intra-bar travel was needed to reach the trigger), TV's
+            //   cap-close emits at fill_price = bar.open. Probe 97b
+            //   (market entries only, no stops) confirms 382/382 cap-
+            //   closes at fill_price = entry_price = bar.open.
+            //
+            //   This ONLY applies to ENTRY/MARKET fills that opened the
+            //   position. Other fill types (RAW_ORDER bracket exits,
+            //   EXIT close-deferred orders) reach this path only when
+            //   they themselves flatten — but a flatten leaves
+            //   position_side_ FLAT, so the outer guard already skips
+            //   the synthetic close emit. So we only need the bar-
+            //   extreme adjustment for the entry-fill cases.
+            double cap_close_price = fill_price;
+            const bool entry_kind = (order.type == OrderType::ENTRY ||
+                                     order.type == OrderType::MARKET);
+            if (entry_kind) {
+                if (position_side_ == PositionSide::LONG && fill_price > bar.open) {
+                    cap_close_price = bar.high;
+                } else if (position_side_ == PositionSide::SHORT && fill_price < bar.open) {
+                    cap_close_price = bar.low;
+                }
+            }
+            size_t close_trades_before = trades_.size();
+            execute_market_exit(cap_close_price);
+            for (size_t ti = close_trades_before; ti < trades_.size(); ++ti) {
+                trades_[ti].exit_comment =
+                    "Close Position (Max number of filled orders in one day)";
+                trades_[ti].exit_id = "";
+            }
+        }
+        intraday_cap_hit_ = true;  // latch — block further fills until day rollover
+    }
 }
 
 
@@ -507,7 +606,48 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
     } else {
         PositionSide side_before_raw = position_side_;
         PositionSide requested = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
-        if (position_side_ != requested) {
+        if (position_side_ == requested) {
+            // Same-direction RAW_ORDER fill = pyramid-add. Most commonly,
+            // this fires when an OCA-reduce bracket placed during a PRIOR
+            // opposite-direction position survives a same-bar flip and
+            // gap-fills at the next bar's open as a leftover same-direction
+            // entry. TV's broker emulator gap-fills these as a real
+            // pyramid-add; previously we silently dropped them.
+            //
+            // Probe 97a reference: short→long MA-cross flip leaves the
+            // pre-existing buy-stop bracket alive; the bracket's
+            // ``created_position_side`` is SHORT but the live position is
+            // now LONG — the ``pre_armed_opposite_priced`` semantic in
+            // ``add_to_pyramid_market`` admits the add even when the
+            // pyramiding limit would otherwise reject it.
+            //
+            // We mirror that semantic here directly (rather than calling
+            // ``add_to_pyramid_market``) because the strategy.order path
+            // does not carry an explicit qty_type and lacks the
+            // execute_market_entry preamble (carry consumption, risk
+            // gating, etc.) that the high-level helper assumes.
+            bool is_priced_entry = !std::isnan(order.limit_price)
+                                   || !std::isnan(order.stop_price);
+            bool flat_armed_priced =
+                is_priced_entry && order.created_position_side == PositionSide::FLAT;
+            bool pre_armed_opposite_priced =
+                is_priced_entry
+                && order.created_position_side != PositionSide::FLAT
+                && order.created_position_side != requested;
+            if (!flat_armed_priced && !pre_armed_opposite_priced
+                && position_entry_count_ >= pyramiding_) {
+                return;
+            }
+            fill_price = apply_slippage(fill_price, order.is_long);
+            double new_qty = std::isnan(order.qty) ? calc_qty(fill_price) : order.qty;
+            double total_qty = position_qty_ + new_qty;
+            position_entry_price_ =
+                (position_entry_price_ * position_qty_ + fill_price * new_qty) / total_qty;
+            position_qty_ = total_qty;
+            position_entry_count_++;
+            trail_best_price_ = fill_price;
+            pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+        } else {
             execute_market_exit(fill_price);
             if (position_side_ == PositionSide::FLAT) {
                 exit_closed_from_bar = order.created_bar;

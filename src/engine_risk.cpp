@@ -15,7 +15,41 @@
 
 #include <pineforge/engine.hpp>
 
+#include <ctime>
+
+#include "timezone.hpp"
+
 namespace pineforge {
+
+// See declaration in include/pineforge/engine.hpp. Used only by the
+// intraday-day rollover gates below and the analogous gates in
+// engine_fills.cpp / engine_orders.cpp. When ``chart_timezone_`` is
+// empty we keep the cheap UTC fast path; otherwise we route through
+// ``ScopedTimezone`` + ``localtime_r`` so IANA names like "Asia/Taipei"
+// resolve correctly (POSIX-numeric offsets inside the same string syntax
+// would silently disagree with the rest of the engine's TZ handling).
+BacktestEngine::BarTime BacktestEngine::_decompose_bar_time_chart_tz() const {
+    if (chart_timezone_.empty() || chart_timezone_ == "UTC" ||
+        chart_timezone_ == "Etc/UTC") {
+        return _decompose_bar_time();
+    }
+    time_t secs = static_cast<time_t>(current_bar_.timestamp / 1000);
+    struct tm tm_buf {};
+    {
+        pine_tz::ScopedTimezone guard(chart_timezone_);
+        localtime_r(&secs, &tm_buf);
+    }
+    BarTime bt;
+    bt.year = tm_buf.tm_year + 1900;
+    bt.month = tm_buf.tm_mon + 1;
+    bt.dayofmonth = tm_buf.tm_mday;
+    bt.hour = tm_buf.tm_hour;
+    bt.minute = tm_buf.tm_min;
+    bt.second = tm_buf.tm_sec;
+    bt.dayofweek = tm_buf.tm_wday + 1;
+    bt.weekofyear = (tm_buf.tm_yday + 7 - ((tm_buf.tm_wday + 6) % 7)) / 7;
+    return bt;
+}
 
 bool BacktestEngine::check_risk_allow_entry(bool is_long) const {
     if (risk_halted_) return false;
@@ -43,7 +77,8 @@ void BacktestEngine::update_risk_state() {
 
     // Check max_intraday_loss
     if (risk_max_intraday_loss_ > 0.0) {
-        int cur_day = _decompose_bar_time().dayofmonth * 100 + _decompose_bar_time().month;
+        BarTime bt = _decompose_bar_time_chart_tz();
+        int cur_day = bt.dayofmonth * 100 + bt.month;
         if (cur_day != intraday_pnl_day_) {
             intraday_pnl_day_ = cur_day;
             intraday_pnl_ = 0.0;

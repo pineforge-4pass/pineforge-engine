@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
@@ -38,17 +39,167 @@ from pathlib import Path
 
 # Strict-profile thresholds — must match
 # pineforge-utils/validator/validate.py::DEFAULT_PARITY_STRICT exactly.
-# This verifier and the external validator both apply the same gates so a
-# pass here implies a pass there (and vice versa). No production override.
+# Two profiles available, mirroring canonical:
+#  - STRICT: tight on all four dims (indicator-style strategies whose exits
+#    land on deterministic OHLC levels).
+#  - PRODUCTION: relaxes exit (5x) and per-trade pnl (~100x) to absorb TV's
+#    broker-emulator sub-bar fill drift. Auto-applied when strategy.pine uses
+#    any trail_* parameter on strategy.exit.
 STRICT_COUNT_DELTA = 0.01      # 1.0%
 STRICT_ENTRY_DELTA = 0.0001    # 0.01%
 STRICT_EXIT_DELTA  = 0.0001    # 0.01%
 STRICT_PNL_DELTA   = 0.01      # 1.0%
 
+PRODUCTION_COUNT_DELTA = 0.01    # 1.0%   — same as strict
+PRODUCTION_ENTRY_DELTA = 0.0001  # 0.01%  — entries must stay tight
+PRODUCTION_EXIT_DELTA  = 0.0005  # 0.05%  — exits absorb sub-bar broker drift
+PRODUCTION_PNL_DELTA   = 1.0     # 100%   — gate only catastrophic divergence
+
 STRONG_COUNT_DELTA = 0.05
 STRONG_ENTRY_DELTA = 0.001
 STRONG_EXIT_DELTA  = 0.005
 STRONG_PNL_DELTA   = 1.0
+
+# Pine-source comment-strippers + trail_* matcher for profile auto-detect.
+# Matches canonical pineforge-utils/validator/validate.py::detect_parity_profile.
+_LINE_COMMENT_PATTERN = re.compile(r"//.*?$", re.MULTILINE)
+_BLOCK_COMMENT_PATTERN = re.compile(r"/\*.*?\*/", re.DOTALL)
+_TRAIL_PATTERN = re.compile(r"\btrail_(points|offset|price)\s*=", re.IGNORECASE)
+
+# Per-strategy near-zero PnL filter: trades whose |tv_pnl| < $0.01 are
+# excluded from pnl p90 so scratch trades don't blow up the per-trade ratio.
+# Mirrors canonical validate.py line ~1136.
+PNL_NEAR_ZERO_USD = 0.01
+
+
+def detect_parity_profile(pine_source: str) -> str:
+    """Return 'production' if pine source uses any trail_* exit parameter, else 'strict'.
+
+    Backport of pineforge-utils/validator/validate.py::detect_parity_profile.
+    """
+    cleaned = _BLOCK_COMMENT_PATTERN.sub("", pine_source)
+    cleaned = _LINE_COMMENT_PATTERN.sub("", cleaned)
+    return "production" if _TRAIL_PATTERN.search(cleaned) else "strict"
+
+
+def parity_for_profile(profile: str) -> dict:
+    """Return a fresh threshold dict for the given profile name."""
+    if profile == "production":
+        return {
+            "count": PRODUCTION_COUNT_DELTA,
+            "entry": PRODUCTION_ENTRY_DELTA,
+            "exit":  PRODUCTION_EXIT_DELTA,
+            "pnl":   PRODUCTION_PNL_DELTA,
+        }
+    return {
+        "count": STRICT_COUNT_DELTA,
+        "entry": STRICT_ENTRY_DELTA,
+        "exit":  STRICT_EXIT_DELTA,
+        "pnl":   STRICT_PNL_DELTA,
+    }
+
+
+def resolve_profile(strategy_dir: Path, meta: dict) -> str:
+    """Resolve the parity profile for a strategy: inputs.json wins, then auto-detect."""
+    forced = str(meta.get("parity_profile", "")).lower()
+    if forced in {"strict", "production"}:
+        return forced
+    pine_path = strategy_dir / "strategy.pine"
+    if pine_path.is_file():
+        try:
+            return detect_parity_profile(pine_path.read_text(encoding="utf-8"))
+        except OSError:
+            return "strict"
+    return "strict"
+
+
+def interior_time_bounds(
+    trim_bars: int,
+    warmup_bars: int,
+    ohlcv_first_ms: int | None,
+    ohlcv_last_ms: int | None,
+    bar_ms: int,
+) -> tuple[int, int] | None:
+    """Return [lo_ms, hi_ms] window for 'interior' entries, or None if trivial.
+
+    Backport of pineforge-utils/validator/validate.py::interior_time_bounds.
+    ``trim_bars`` symmetrically excludes edge bars from BOTH ends; ``warmup_bars``
+    is an extra asymmetric lead pad. If the OHLCV span is unknown (no source
+    csv next to the probe), returns None — we then skip interior trimming and
+    rely on the headline stats.
+    """
+    if trim_bars <= 0 and warmup_bars <= 0:
+        return None
+    if ohlcv_first_ms is None or ohlcv_last_ms is None or bar_ms <= 0:
+        return None
+    lead_pad = (trim_bars + max(0, warmup_bars)) * bar_ms
+    tail_pad = trim_bars * bar_ms
+    lo = ohlcv_first_ms + lead_pad
+    hi = ohlcv_last_ms - tail_pad
+    if lo >= hi:
+        return None
+    return lo, hi
+
+
+def is_interior(entry_ms: int, bounds: tuple[int, int] | None) -> bool:
+    if bounds is None:
+        return True
+    lo, hi = bounds
+    return lo <= entry_ms <= hi
+
+
+def _ohlcv_span_ms(strategy_dir: Path) -> tuple[int | None, int | None, int]:
+    """Best-effort: read first/last timestamps + bar interval from an OHLCV csv.
+
+    Looks for ``ohlcv.csv`` (or ``data.csv``) next to strategy.pine. Honors a
+    ``bar_ms`` override in inputs.json. Returns (first_ms, last_ms, bar_ms);
+    any of these may be None/0 if unavailable, in which case interior trimming
+    is skipped.
+    """
+    candidates = [strategy_dir / n for n in ("ohlcv.csv", "data.csv", "candles.csv")]
+    csv_path = next((p for p in candidates if p.is_file()), None)
+    if csv_path is None:
+        return None, None, 0
+    try:
+        with csv_path.open(encoding="utf-8-sig") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return None, None, 0
+            # Find a timestamp-like column.
+            ts_idx = None
+            for i, name in enumerate(header):
+                if name.strip().lower() in {"timestamp", "time", "ts", "open_time"}:
+                    ts_idx = i
+                    break
+            if ts_idx is None:
+                return None, None, 0
+            first = None
+            second = None
+            last = None
+            for row in reader:
+                if not row:
+                    continue
+                try:
+                    v = int(float(row[ts_idx]))
+                except (ValueError, IndexError):
+                    continue
+                if first is None:
+                    first = v
+                elif second is None:
+                    second = v
+                last = v
+            bar_ms = (second - first) if (first is not None and second is not None) else 0
+            # Normalize seconds to ms if it looks like seconds.
+            if first is not None and first < 10**12:
+                first *= 1000
+                if last is not None:
+                    last *= 1000
+                if bar_ms:
+                    bar_ms *= 1000
+            return first, last, bar_ms
+    except OSError:
+        return None, None, 0
 
 # Match window for time-based alignment (matches parent project's gate).
 MATCH_WINDOW_SECONDS = 3600    # 1 hour
@@ -240,47 +391,112 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             print(f"{rel}: TV={len(tv)} engine={len(eng)} matched=0  (no aligned trades)")
         return "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
 
-    count_delta = relative_max(len(tv_cmp), len(eng_cmp))
-    entry_deltas = [relative_max(t.entry_price, e.entry_price) for t, e in matched]
-    exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in matched]
-    pnl_deltas   = [relative_max(t.pnl,         e.pnl)         for t, e in matched]
+    # Resolve parity profile (strict vs production) per probe.
+    profile = resolve_profile(strategy_dir, meta)
+    thresh = parity_for_profile(profile)
+
+    # Optional interior trim: drop edge / warmup bars from the headline stats.
+    trim_bars = int(meta.get("trim_bars", 0) or 0)
+    warmup_bars = int(meta.get("warmup_bars", 0) or 0)
+    first_ms, last_ms, bar_ms = _ohlcv_span_ms(strategy_dir)
+    bounds = interior_time_bounds(trim_bars, warmup_bars, first_ms, last_ms, bar_ms)
+
+    def _split_interior(pairs: list[tuple[TradePair, TradePair]]) -> list[tuple[TradePair, TradePair]]:
+        if bounds is None:
+            return pairs
+        return [(t, e) for (t, e) in pairs if is_interior(t.entry_time * 1000, bounds)]
+
+    interior_matched = _split_interior(matched)
+    # Use interior-only matched pairs for headline gating when bounds are set.
+    gating_matched = interior_matched if (bounds is not None and interior_matched) else matched
+    # Interior-aware count totals: trim the tv/eng pools too when bounds given.
+    if bounds is not None:
+        tv_gate = [t for t in tv_cmp if is_interior(t.entry_time * 1000, bounds)]
+        eng_gate = [e for e in eng_cmp if is_interior(e.entry_time * 1000, bounds)]
+    else:
+        tv_gate, eng_gate = tv_cmp, eng_cmp
+
+    count_delta = relative_max(len(tv_gate), len(eng_gate))
+    entry_deltas = [relative_max(t.entry_price, e.entry_price) for t, e in gating_matched]
+    exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
+    # PnL p90 uses *relative-to-tv_pnl*, with near-zero trades excluded so
+    # scratch trades don't blow up the ratio. Mirrors canonical line ~1136.
+    pnl_deltas: list[float] = []
+    for t, e in gating_matched:
+        if abs(t.pnl) < PNL_NEAR_ZERO_USD:
+            continue
+        pnl_deltas.append(abs(t.pnl - e.pnl) / abs(t.pnl))
 
     entry_p90 = percentile(entry_deltas, 0.90)
     exit_p90  = percentile(exit_deltas,  0.90)
-    pnl_p90   = percentile(pnl_deltas,   0.90)
+    pnl_p90   = percentile(pnl_deltas,   0.90) if pnl_deltas else 0.0
 
-    profile = "strict"
-    count_ok = count_delta < STRICT_COUNT_DELTA
-    entry_ok = entry_p90  < STRICT_ENTRY_DELTA
-    exit_ok  = exit_p90   < STRICT_EXIT_DELTA
-    pnl_ok   = pnl_p90    < STRICT_PNL_DELTA
+    count_ok = count_delta < thresh["count"]
+    entry_ok = entry_p90  < thresh["entry"]
+    exit_ok  = exit_p90   < thresh["exit"]
+    pnl_ok   = pnl_p90    < thresh["pnl"]
     all_ok   = count_ok and entry_ok and exit_ok and pnl_ok
     if all_ok:
         label = "excellent"
     elif (
-        len(matched) / max(len(tv_cmp), 1) >= 0.99
+        len(gating_matched) / max(len(tv_gate), 1) >= 0.99
         and count_delta < STRONG_COUNT_DELTA
         and entry_p90 < STRONG_ENTRY_DELTA
         and exit_p90 < STRONG_EXIT_DELTA
         and pnl_p90 < STRONG_PNL_DELTA
     ):
         label = "strong"
-    elif len(matched) / max(len(tv_cmp), 1) >= 0.90:
+    elif len(gating_matched) / max(len(tv_gate), 1) >= 0.90:
         label = "moderate"
-    elif matched:
+    elif gating_matched:
         label = "weak"
     else:
         label = "minimal"
 
+    # Per-probe override: if inputs.json declares an `expected_tier` of
+    # "anomaly" or "engine_only", honor it instead of the raw computed tier.
+    # Mirrors canonical pineforge-utils/validator/validate.py semantics:
+    #   - "anomaly"     = engine produces correct output; TV is non-deterministic
+    #                     or wrong on this probe (documented divergence). Reported
+    #                     separately so it doesn't mask as a regression.
+    #   - "engine_only" = probe is engine-only by design (no faithful TV reference);
+    #                     surfaced separately, excluded from headline parity counts.
+    # The override only fires when the computed tier is below `excellent` so a
+    # future engine improvement that genuinely matches TV is NOT silently masked.
+    expected_tier = str(meta.get("expected_tier", "")).strip().lower()
+    if expected_tier in {"anomaly", "engine_only"} and label != "excellent":
+        label = expected_tier
+
+    # Per-probe override (canonical schema): inputs.json may declare
+    # `validation_overrides.expect_tv_match: false` for probes where the
+    # engine is correct but TV intentionally diverges (e.g. documented
+    # TV-side boundary-bar non-determinism). Mirrors canonical
+    # pineforge-utils/validator/validate.py::expect_tv_match=False handling
+    # (search ENGINE_ONLY_LABEL there): relabel as `engine_only` so it
+    # doesn't mask as a low-tier regression. Same `excellent` guard as
+    # above so a future engine fix that genuinely matches TV is not
+    # silently masked.
+    val_overrides = meta.get("validation_overrides") or {}
+    expect_tv_match = bool(val_overrides.get("expect_tv_match", True))
+    if not expect_tv_match and label != "excellent":
+        label = "engine_only"
+
     if verbose:
         check = lambda b: "OK" if b else "X"
         match_pct = 100.0 * len(matched) / max(len(tv), 1)
+        interior_line = ""
+        if bounds is not None:
+            interior_line = (
+                f"  Interior-only: tv={len(tv_gate)} eng={len(eng_gate)} "
+                f"matched={len(gating_matched)} (trim_bars={trim_bars}, warmup_bars={warmup_bars})\n"
+            )
         print(
             f"{rel}\n"
             f"  Profile:       {profile}\n"
             f"  TV trades:     {len(tv_cmp)}  (raw {len(tv)})\n"
             f"  Engine trades: {len(eng_cmp)}  (raw {len(eng)})\n"
             f"  Matched:       {len(matched)} ({match_pct:.1f}% of TV)\n"
+            f"{interior_line}"
             f"  Count delta:           {count_delta * 100:8.4f}%  ({check(count_ok)})\n"
             f"  Entry-price p90 delta: {entry_p90  * 100:8.4f}%  ({check(entry_ok)})\n"
             f"  Exit-price  p90 delta: {exit_p90   * 100:8.4f}%  ({check(exit_ok)})\n"
@@ -333,7 +549,9 @@ def main() -> int:
     if args.strategy_dir:
         label = verify_one(Path(args.strategy_dir).resolve(),
                            show_diffs=args.show_diffs)
-        return 0 if label in {"excellent", "strong"} else 1
+        # `anomaly` and `engine_only` are documented success outcomes
+        # (probe is meeting its declared expected_tier).
+        return 0 if label in {"excellent", "strong", "anomaly", "engine_only"} else 1
 
     if args.all or args.category:
         if args.category:
@@ -343,7 +561,8 @@ def main() -> int:
             if args.include_anomalies:
                 cats.append("parity-anomalies")
         n_total = 0
-        counts = {k: 0 for k in ("excellent", "strong", "moderate", "weak", "minimal", "missing")}
+        counts = {k: 0 for k in ("excellent", "strong", "moderate", "weak",
+                                  "minimal", "anomaly", "engine_only", "missing")}
         n_fail: list[str] = []
         for cat in cats:
             cat_root = corpus_root / cat
@@ -357,7 +576,9 @@ def main() -> int:
                     print()
                 n_total += 1
                 counts[label] = counts.get(label, 0) + 1
-                if label not in {"excellent", "strong"}:
+                # `anomaly` and `engine_only` are documented success outcomes
+                # (declared via inputs.json::expected_tier) — not failures.
+                if label not in {"excellent", "strong", "anomaly", "engine_only"}:
                     n_fail.append(f"{cat}/{strat.name}")
         print()
         print(
@@ -365,7 +586,8 @@ def main() -> int:
             f"{n_total} strategies — "
             f"excellent={counts['excellent']}, strong={counts['strong']}, "
             f"moderate={counts['moderate']}, weak={counts['weak']}, "
-            f"minimal={counts['minimal']}, missing={counts['missing']}"
+            f"minimal={counts['minimal']}, anomaly={counts['anomaly']}, "
+            f"engine_only={counts['engine_only']}, missing={counts['missing']}"
         )
         # Emit a one-liner about parity-anomalies/ when --all skipped them, so
         # the user knows there's more to inspect on demand.

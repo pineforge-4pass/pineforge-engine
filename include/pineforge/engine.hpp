@@ -319,8 +319,49 @@ protected:
     double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
 
     // --- Intraday fill counter ---
+    // Counts every fill processed by ``apply_filled_order_to_state`` on
+    // the current chart-day. When the count reaches
+    // ``max_intraday_filled_orders_`` the engine emits TV's synthetic
+    // "Close Position (Max number of filled orders in one day)" exit at
+    // the cap-triggering fill's price and LATCHES (intraday_cap_hit_)
+    // until the chart-day rolls over. Once latched, ALL further fills
+    // on that chart-day are silently rejected — TV's broker emulator
+    // emits at most one cap-close per chart-day (probe 97b: 382
+    // cap-closes across 13 months of data, ~one per chart-day where
+    // the cap fires). Pre-latch the engine recharged the counter
+    // after each cap-cycle, which over-fired cap-closes (3459 engine
+    // vs 1957 TV trades on probe 97b). Pre-fix-fix the engine just
+    // skipped fills past the cap, leaving the position carried open
+    // across day boundaries.
     int intraday_fill_count_ = 0;
-    int intraday_day_ = -1;  // day of year for reset
+    int intraday_day_ = -1;       // day key (dayofmonth*100+month) for reset
+    bool intraday_cap_hit_ = false;  // latched once per chart-day; reset on day rollover
+
+    // True iff the intraday cap is currently latched on the CURRENT bar's
+    // chart-day. Performs a lazy day-rollover reset so callers outside the
+    // fill path (notably ``strategy_entry`` / ``strategy_order``) see a
+    // consistent view: TV silently drops *order placement* during the
+    // latched window in addition to dropping fills (Pine docs: "all
+    // subsequent orders are blocked until the start of the next trading
+    // day"). Without the placement-time gate, an entry placed during the
+    // latched bar (e.g., bar 04-06 23:45 with arm_long true while the
+    // cap fired earlier on 04-06 07:00) would carry into the next chart-
+    // day and fire on the first new-day bar (04-07 00:00) at a price TV
+    // never reports, fabricating a phantom trade. Probe 97 trades #22..
+    // are the canonical victim — the residual exit-price drift after the
+    // 97a/97b composition fixes was driven by these phantom new-day
+    // entries followed by mismatched cap-close exit prices below.
+    bool _intraday_cap_currently_latched() {
+        if (max_intraday_filled_orders_ <= 0) return false;
+        BarTime bt = _decompose_bar_time_chart_tz();
+        int cur_day = bt.dayofmonth * 100 + bt.month;
+        if (cur_day != intraday_day_) {
+            intraday_day_ = cur_day;
+            intraday_fill_count_ = 0;
+            intraday_cap_hit_ = false;
+        }
+        return intraday_cap_hit_;
+    }
 
     // --- Cached trade metrics (updated incrementally in execute_market_exit) ---
     double net_profit_sum_ = 0.0;
@@ -579,6 +620,21 @@ protected:
         bt.weekofyear = (tm_buf.tm_yday + 7 - ((tm_buf.tm_wday + 6) % 7)) / 7;
         return bt;
     }
+
+    // Chart-timezone-aware decomposition. ONLY for intraday-day rollover
+    // gates (max_intraday_filled_orders, max_intraday_loss, consecutive
+    // loss-day tracking) — those must roll over at the chart's wall-clock
+    // 00:00, matching TV's broker emulator (which keys off the chart's
+    // display TZ, not the exchange TZ).
+    //
+    // Falls back to plain ``_decompose_bar_time()`` (UTC) when no chart
+    // timezone has been set, preserving the legacy fast path for
+    // engine consumers that don't call ``set_chart_timezone``.
+    //
+    // Defined out-of-line in src/engine_risk.cpp so we can use the
+    // private ``ScopedTimezone`` helper without leaking its header into
+    // the public engine.hpp surface.
+    BarTime _decompose_bar_time_chart_tz() const;
 
     int _bar_hour() const { return _decompose_bar_time().hour; }
     int _bar_minute() const { return _decompose_bar_time().minute; }

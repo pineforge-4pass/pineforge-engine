@@ -2,6 +2,7 @@ set(TEST_SOURCES
     test_timeframe
     test_magnifier
     test_magnifier_real_bars
+    test_magnifier_distributions
     test_path_at
     test_na_runtime
     test_recompute
@@ -13,14 +14,18 @@ set(TEST_SOURCES
     test_matrix
     test_session_time
     test_chart_timezone
+    test_intraday_rollover_chart_tz
+    test_intraday_cap_auto_close
     test_dmi_parity
     test_integration
     test_request_security
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
+    test_ltf_buffer_no_leak
     test_security_lower_tf_script_bound
     test_engine_trade_accessors
     test_strategy_oca
+    test_oca_raw_pyramid_add
     test_strategy_pyramiding
     test_same_id_stop_replace
     test_generic_matrix_primitives

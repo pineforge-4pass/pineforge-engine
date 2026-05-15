@@ -76,6 +76,26 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      int qty_type) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
 
+    // TradingView intraday-cap freeze gate (Pine docs:
+    // ``strategy.risk.max_intraday_filled_orders``):
+    //   "If the limit is reached during the day, the strategy is closed
+    //    at the close of the next bar of the day, and all subsequent
+    //    orders are blocked until the start of the next trading day."
+    //
+    // The fill-time gate in apply_filled_order_to_state already drops
+    // FILLS during the latched window. But TV blocks ORDER PLACEMENT
+    // too — a strategy.entry call inside a latched bar must not enter
+    // the pending queue at all, otherwise the order survives until the
+    // next chart-day rollover and fires a phantom entry on the first
+    // new-day bar at a price TV never reports. Probe 97 trade #22
+    // (UTC 04-07 00:00 long @ 1581.99) is the canonical victim — the
+    // residual exit-price drift after the 97a/97b composition fixes
+    // was driven by these phantom new-day entries (long-stop placed on
+    // bar 04-06 23:45 with arm_long=true while the cap had already
+    // latched on 04-06 07:00, then carrying to fire on the new chart-
+    // day before the script's else-branch could cancel it).
+    if (_intraday_cap_currently_latched()) return;
+
     // TradingView broker rule: market-entry orders are admitted only
     // when ``qty * <signal-bar close> * margin_pct/100 <= equity``.
     // The check happens HERE (at signal time, with current_bar_.close
