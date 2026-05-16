@@ -263,7 +263,7 @@ corpus/                 - public submodule: 228 strategies; see CONTRIBUTING.md
   ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
 benchmarks/             - three-way comparison harness vs PyneCore + PineTS
-  ├── assets/           - private submodule: data/ (OHLCV) + strategies/ (100 folders, TV-linked CSVs + generated.cpp + strategy_pyne.py)
+  ├── assets/           - public submodule: data/ (OHLCV) + strategies/ (100 folders, TV-linked CSVs + generated.cpp + strategy_pyne.py)
   ├── runners/          - 3 runtime runners (run_pynecore.py + run_pinets_canonical.mjs + run_pineforge_canonical.cpp)
   ├── speed/            - Google Benchmark harness + subprocess timers + aggregator
   ├── results/          - summary.md, trade_comparison.md, indicator_comparison.md, speed.md
@@ -325,12 +325,12 @@ and prints the canonical corpus summary described in
 
 ## Cross-engine comparison
 
-`[benchmarks/](benchmarks/)` runs **100 strategies** through PineForge, PyneCore, and PineTS to spot engine-specific defects vs TV-side semantics. Strategy folders + the 53,930-bar Binance ETH/USDT-USDT 15m OHLCV live under the `benchmarks/assets` submodule (separate from `corpus/`, currently private). PyneCore Python sources are official PyneSys cloud-compiler output (no hand-ports). PineTS handles indicators only — their strategy backtester is upstream roadmap.
+`[benchmarks/](benchmarks/)` runs **100 strategies** through PineForge, PyneCore, and PineTS to spot engine-specific defects vs TV-side semantics. Strategy folders + the 53,930-bar Binance ETH/USDT-USDT 15m OHLCV live under the [`benchmarks/assets`](https://github.com/fullpass-4pass/pineforge-benchmarks-assets) public submodule. PyneCore Python sources are official PyneSys cloud-compiler output (no hand-ports). PineTS handles indicators only — their strategy backtester is upstream roadmap.
 
 **Scale:** 100 strategies × ~167,000 TV trades verified.
 
 ```bash
-git submodule update --init benchmarks/assets        # private submodule with 100 strategies + OHLCV
+git submodule update --init benchmarks/assets        # public submodule with 100 strategies + OHLCV
 cmake -B build -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON # build engine + 100 bench dylibs
 cmake --build build --target pineforge bench_strategies -j
 cd benchmarks && uv sync && npm install && cd ..      # bench Python + Node deps
