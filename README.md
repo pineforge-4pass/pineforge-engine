@@ -304,6 +304,8 @@ PineForge strategy from a fresh clone. The corpus ships
 `generated.cpp` for every probe, so no transpiler access is required —
 just the engine, the corpus submodule, and a C++17 compiler.
 
+**Scale:** 228 strategies × ~313,000 trades verified against TradingView.
+
 ```bash
 git clone https://github.com/fullpass-4pass/pineforge-engine.git
 cd pineforge-engine
@@ -319,18 +321,13 @@ python3 scripts/regen_validation_report.py
 That builds `libpineforge.a` plus one `strategy.so` per probe, runs each
 against the reference OHLCV feed, rewrites each `engine_trades.csv`,
 and prints the canonical corpus summary described in
-`corpus/README.md`.
+`corpus/README.md`. Headline result: **227 / 228 excellent + 1 documented TV-side anomaly** (`anomaly-equity-mirror-strategy-equity-01`, TV broker non-deterministic at 1× equity boundary). Total trades: TV 312,829, engine 312,920 (`+91` ≈ 0.03 % over TV).
 
 ## Cross-engine comparison
 
-`[benchmarks/](benchmarks/)` runs the same 50 strategies through
-PineForge, PyneCore, and PineTS to spot engine-specific defects vs
-TV-side semantics. **Strategy folders and** the 41,307-bar Binance
-ETH/USDT:USDT 15m OHLCV live under the `**benchmarks/assets`**
-submodule (`assets/strategies/`, `assets/data/`) — a separate optional submodule from `corpus/`, currently private; public clones omit them.
-PyneCore Python sources are the official PyneSys cloud compiler output
-(no hand-ports). PineTS handles indicators only — their
-strategy backtester is upstream roadmap.
+`[benchmarks/](benchmarks/)` runs **100 strategies** through PineForge, PyneCore, and PineTS to spot engine-specific defects vs TV-side semantics. Strategy folders + the 53,930-bar Binance ETH/USDT-USDT 15m OHLCV live under the `benchmarks/assets` submodule (separate from `corpus/`, currently private). PyneCore Python sources are official PyneSys cloud-compiler output (no hand-ports). PineTS handles indicators only — their strategy backtester is upstream roadmap.
+
+**Scale:** 100 strategies × ~167,000 TV trades verified.
 
 ```bash
 git submodule update --init benchmarks/assets        # private submodule with 100 strategies + OHLCV
@@ -341,26 +338,20 @@ bash benchmarks/run_all.sh                            # ~5 min; no API keys
 cat benchmarks/results/summary.md
 ```
 
-Current standings (window-clipped 4-dimension diff vs TV):
+Current standings (canonical align-then-trim window, 4-dimension diff vs TV):
 
+| | PineForge | PyneCore | TV ground truth |
+|---|---:|---:|---:|
+| Strategies | 100 | 100 | 100 |
+| Trades emitted | 167,381 | 253,031 | 167,301 |
+| 🟢 excellent | **100 / 100** | 85 / 100 | — |
+| 🟢 strong | 0 / 100 | 2 / 100 | — |
+| 🟡 moderate | 0 / 100 | 10 / 100 | — |
+| 🟠 weak | 0 / 100 | 3 / 100 | — |
 
-| Match degree | PineForge   | PyneCore |
-| ------------ | ----------- | -------- |
-| 🟢 excellent | **50 / 50** | 47 / 50  |
-| 🟢 strong    | 0 / 50      | 0 / 50   |
-| 🟡 moderate  | 0           | 2        |
-| 🟠 weak      | 0           | 1        |
+The 15 PyneCore-only outliers from excellent involve `strategy.exit(stop=…, limit=…)` brackets, `trail_*` exits, `strategy.close(qty_percent=…)` partial exits, and bar-magnifier paths — categories where PyneCore's broker emulator differs from TV and PineForge does not. See [`benchmarks/results/summary.md`](benchmarks/results/summary.md) for the per-strategy table and methodology.
 
-
-The 3 PyneCore-only outliers from excellent (`liquidity-sweep`, `scalping-strategy`,
-`partial-exit-qty-percent`) involve `strategy.exit(stop=…, limit=…)`
-brackets, `trail_`* exits, or `strategy.close(qty_percent=…)` partial
-exits — categories where PyneCore's broker emulator differs from TV
-and PineForge does not. (`13-parabolic-asr` is strong on both engines — a TV-side
-semantic, not a PyneCore defect.) See [`benchmarks/results/summary.md`](benchmarks/results/summary.md)
-for the full per-strategy table and methodology.
-
-Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Per-strategy speed table at [`benchmarks/results/speed.md`](benchmarks/results/speed.md) — median 56× faster than PyneCore on 49 commonly-timed strategies.
+Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Per-strategy speed table at [`benchmarks/results/speed.md`](benchmarks/results/speed.md) — median **56× faster than PyneCore** on 49 commonly-timed strategies.
 
 ## Status
 
