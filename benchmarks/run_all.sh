@@ -107,11 +107,24 @@ fi
 
 # --- 3c) regenerate PineForge trades on the extended OHLCV ----------
 # Reads strategy.dylib built by cmake --target bench_strategies (step 1).
+# Drives scripts/run_strategy.py (engine-level harness) per strategy dir.
 
 if [[ "${SKIP_PINEFORGE:-0}" != "1" ]]; then
-    log "regenerating PineForge trades against extended OHLCV"
-    python3 "${BENCH_DIR}/runners/regenerate_pineforge_trades.py" >/dev/null \
-        || warn "regenerate_pineforge_trades.py reported failures; continuing"
+    n_strats=$(ls -d "${STRATEGIES_DIR}"/[0-9][0-9]*-*/ 2>/dev/null | wc -l | tr -d ' ')
+    log "regenerating PineForge trades for ${n_strats} strategies"
+    failed=()
+    for s in "${STRATEGIES_DIR}"/[0-9][0-9]*-*/; do
+        s="${s%/}"
+        [[ -f "$s/strategy.dylib" || -f "$s/strategy.so" ]] || continue
+        if ! python3 "${ROOT_DIR}/scripts/run_strategy.py" "$s" \
+                --ohlcv "${SNAPSHOT_CSV}" \
+                --output "$s/pineforge_trades.csv" >/dev/null 2>&1; then
+            failed+=("$(basename "$s")")
+        fi
+    done
+    if (( ${#failed[@]} > 0 )); then
+        warn "PineForge regen failed on ${#failed[@]} strategies (${failed[*]})"
+    fi
 fi
 
 # --- 3d) run all strategies through PyneCore ------------------------
