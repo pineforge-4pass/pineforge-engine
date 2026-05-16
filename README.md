@@ -263,10 +263,12 @@ corpus/                 - public submodule: 228 strategies; see CONTRIBUTING.md
   ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
 benchmarks/             - three-way comparison harness vs PyneCore + PineTS
-  ├── assets/           - private submodule (separate from corpus, currently private): data/ (OHLCV) + strategies/ (50 folders, TV-linked CSVs) — OSS omit
-  ├── runners/          - cloud_compile, fetch_extended_ohlcv, regenerate_pineforge_trades, ...
-  ├── results/          - summary.md, trade_comparison.md, indicator_comparison.md (methodology samples)
-  └── run_all.sh        - one-shot: bootstrap + cloud-compile + run + diff (needs assets submodule)
+  ├── assets/           - private submodule: data/ (OHLCV) + strategies/ (100 folders, TV-linked CSVs + generated.cpp + strategy_pyne.py)
+  ├── runners/          - 3 runtime runners (run_pynecore.py + run_pinets_canonical.mjs + run_pineforge_canonical.cpp)
+  ├── speed/            - Google Benchmark harness + subprocess timers + aggregator
+  ├── results/          - summary.md, trade_comparison.md, indicator_comparison.md, speed.md
+  ├── compare.py        - 3-way trade-list comparator (mirrors scripts/verify_corpus.py)
+  └── run_all.sh        - one-shot reproducer: cmake build + run all 3 engines + diff (zero API keys)
 scripts/                - reproducibility tooling
   ├── run_strategy.py   - load any strategy.so via ctypes, write engine_trades.csv
   ├── run_corpus.sh     - one-shot: build all 228 .so + run + verify
@@ -331,9 +333,11 @@ PyneCore Python sources are the official PyneSys cloud compiler output
 strategy backtester is upstream roadmap.
 
 ```bash
-git submodule update --init corpus benchmarks/assets   # if you have access
-git lfs install && git lfs pull   # when OHLCV is LFS-tracked in-repo
-bash benchmarks/run_all.sh        # ~3 min from cold; zero API calls
+git submodule update --init benchmarks/assets        # private submodule with 100 strategies + OHLCV
+cmake -B build -DPINEFORGE_BUILD_BENCH_STRATEGIES=ON # build engine + 100 bench dylibs
+cmake --build build --target pineforge bench_strategies -j
+cd benchmarks && uv sync && npm install && cd ..      # bench Python + Node deps
+bash benchmarks/run_all.sh                            # ~5 min; no API keys
 cat benchmarks/results/summary.md
 ```
 
