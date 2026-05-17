@@ -4,30 +4,31 @@
 
 ## Headline
 
-**231 / 234 corpus probes excellent (98.7%)** post-sprint. Zero regressions
-introduced. 5 new sprint probes captured + verified bit-exact against TV.
+**233 / 234 corpus probes excellent (99.6%)** post-sprint. Zero regressions
+introduced. 6 new sprint probes all excellent (5 on first TV capture, 1
+after `ohlcv_csv` switch to 15m direct). Only remaining non-excellent is
+the documented anomaly probe.
 
 ## Final corpus state
 
 | Bucket | Count |
 |---|---|
-| **excellent** | **231** |
-| strong | 2 |
-| weak | 1 |
+| **excellent** | **233** |
+| strong | 0 |
+| weak | 1 (anomaly, intentional) |
 | **Total** | **234** |
 
 vs pre-sprint baseline (corpus commit ef6ce58): **227 excellent + 1 anomaly**.
 
-Net delta: **+4 excellent**. Sources:
+Net delta: **+6 excellent**. Sources:
 - cap-max-intraday-filled-orders-isolate-01: weak → excellent (validator
   `engine_chart_timezone=""` override; see GitHub issue
   [#16](https://github.com/fullpass-4pass/pineforge-engine/issues/16)).
 - 5 of 6 new sprint probes excellent on first TV-trade capture.
-- composite-trendmaster-three-tier-ema-state-01: moderate → strong (probe
-  `ohlcv_start_ms` + `tv_trades_csv_tz=utc` config fix; pre-existing warmup
-  sensitivity in multi-tier EMA state).
-- vwap-bands-mean-reversion-2sigma-01: new probe at strong (97.5%); count
-  drift at anchor-day edges is VWAP variance precision artifact, not a bug.
+- vwap-bands-mean-reversion-2sigma-01: strong (97.5%) → excellent (100%)
+  via `ohlcv_csv` override to 15m non-warmup OHLCV.
+- composite-trendmaster-three-tier-ema-state-01: moderate → excellent (100%)
+  via same `ohlcv_csv` 15m override.
 
 ## Sprint additions (5 of 6 excellent)
 
