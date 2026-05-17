@@ -13,6 +13,7 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_matrix
     test_session_time
+    test_time_tradingday
     test_chart_timezone
     test_intraday_rollover_chart_tz
     test_intraday_cap_auto_close
