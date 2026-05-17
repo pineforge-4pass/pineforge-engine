@@ -71,6 +71,37 @@ print(f'n_tv={s[\"n_tv_in_compare_window\"]} n_engine={s[\"n_engine_trades\"]}')
   display offset → match_pct dropped to **1.3%** (net worse). Reverted at
   corpus commit `30fb66c`.
 
+## Additional findings (2026-05-17 deep dive)
+
+Trade-by-trade diff between `tv_trades.csv` (1958 trades) and validator-mode
+fresh engine output (1971 trades in compare window):
+
+- **First 15 trades match bit-exact** (timestamps + prices). Cap hasn't
+  triggered yet in this window. Proves engine signal generation + entry
+  logic + price emission are correct.
+- **1003 matched trades** total — all with `time_diff_ms == 0` and
+  `entry_diff == 0`. Cap-close pairs within matched set show
+  `exit_diff` outliers (~80-135) where one side fires synthetic cap-close
+  with P&L != 0 and other side fires regular ma-cross exit with P&L == 0
+  (or vice versa). Same instant, different exit interpretation.
+- **968 engine_extra** + **955 unmatched_tv** = cascade divergence after
+  cap fires on different bars. Once cap fires on a bar TV doesn't (or
+  vice versa), the latch silences subsequent trades for the rest of the
+  chart-day, producing entirely different trade lists going forward.
+
+The `engine_trades.csv` committed in the corpus (mtime May 15, generated
+by `run_strategy.py` with 15m bars + `--chart-tz ""` UTC) matches TV 1958
+bit-exactly. **Validator does NOT rewrite engine_trades.csv** — it's a
+fossil. The validator runs the engine in-memory and compares the fresh
+in-memory trade list (1971 trades).
+
+## Failed remediation attempts (cont'd)
+
+- **Setting `ohlcv_csv` to 15m non-warmup OHLCV in probe inputs.json:**
+  match_pct stayed at 51.3% (n_engine=1847 vs n_tv=1835). Bar-source
+  granularity is NOT the bug; aggregation produces correct 15m bars.
+  Reverted.
+
 ## Investigation directions
 
 1. **Diff cap-close trade-by-trade:** dump TV's 1958 trades and engine's
