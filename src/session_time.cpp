@@ -57,8 +57,9 @@ int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
 }
 
 // =========================================================================
-// File-private helpers
+// File-private helpers (anonymous namespace — file-local only)
 // =========================================================================
+
 
 namespace {
 
@@ -104,70 +105,6 @@ static bool minute_in_window(int mod, int start, int end) {
     if (start <= end)
         return mod >= start && mod < end;
     return mod >= start || mod < end;
-}
-
-static bool local_time_in_session_windows(const std::string& windows_body,
-                                          const struct tm& local_tm) {
-    if (windows_body.empty() || windows_body == "24x7")
-        return true;
-
-    int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
-
-    std::string s = windows_body;
-    trim_inplace(s);
-
-    std::vector<std::string> parts;
-    std::size_t pos = 0;
-    while (pos < s.size()) {
-        std::size_t comma = s.find(',', pos);
-        std::string seg = (comma == std::string::npos) ? s.substr(pos)
-                                                       : s.substr(pos, comma - pos);
-        trim_inplace(seg);
-        if (!seg.empty())
-            parts.push_back(seg);
-        if (comma == std::string::npos)
-            break;
-        pos = comma + 1;
-    }
-    if (parts.empty())
-        parts.push_back(s);
-
-    for (const std::string& win : parts) {
-        std::size_t dash = win.find('-');
-        if (dash == std::string::npos || dash < 4 || win.size() < dash + 4)
-            continue;
-        std::string left = win.substr(0, 4);
-        std::string right = win.substr(dash + 1, 4);
-        int sm = hhmm_to_minutes(left);
-        int em = hhmm_to_minutes(right);
-        if (sm < 0 || em < 0)
-            continue;
-        if (minute_in_window(mod, sm, em))
-            return true;
-    }
-    return false;
-}
-
-static bool passes_session_filter(const std::string& session,
-                                  const std::string& tz,
-                                  int64_t bar_ms) {
-    if (session.empty() || session == "24x7")
-        return true;
-
-    std::string windows;
-    std::unordered_set<int> day_filter;
-    parse_day_filter(session, windows, &day_filter);
-
-    pine_tz::ScopedTimezone guard(tz);
-    time_t secs = static_cast<time_t>(bar_ms / 1000);
-    struct tm local_tm {};
-    localtime_r(&secs, &local_tm);
-
-    int tv_dow = local_tm.tm_wday + 1;  // 1=Sunday
-    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
-        return false;
-
-    return local_time_in_session_windows(windows, local_tm);
 }
 
 static int64_t utc_bucket_open_ms(int64_t bar_ms, int period_sec) {
@@ -316,7 +253,166 @@ static bool is_allday_session(const std::string& session) {
     return (start4 == "0000" && (end4 == "2400" || end4 == "0000"));
 }
 
-}  // namespace
+}  // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// Public session predicate helpers (exposed via session_time.hpp)
+// (hhmm_to_minutes already defined at top of file from G1's promotion)
+// ---------------------------------------------------------------------------
+
+bool local_time_in_session_windows(const std::string& windows_body,
+                                   const struct tm& local_tm) {
+    if (windows_body.empty() || windows_body == "24x7")
+        return true;
+
+    int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
+
+    std::string s = windows_body;
+    // trim_inplace is file-local; inline it here via a lambda approach would
+    // require capturing s — simpler to just duplicate the trim logic inline.
+    while (!s.empty() && std::isspace((unsigned char)s.front())) s.erase(s.begin());
+    while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
+
+    std::vector<std::string> parts;
+    std::size_t pos = 0;
+    while (pos < s.size()) {
+        std::size_t comma = s.find(',', pos);
+        std::string seg = (comma == std::string::npos) ? s.substr(pos)
+                                                       : s.substr(pos, comma - pos);
+        while (!seg.empty() && std::isspace((unsigned char)seg.front())) seg.erase(seg.begin());
+        while (!seg.empty() && std::isspace((unsigned char)seg.back())) seg.pop_back();
+        if (!seg.empty())
+            parts.push_back(seg);
+        if (comma == std::string::npos)
+            break;
+        pos = comma + 1;
+    }
+    if (parts.empty())
+        parts.push_back(s);
+
+    for (const std::string& win : parts) {
+        std::size_t dash = win.find('-');
+        if (dash == std::string::npos || dash < 4 || win.size() < dash + 4)
+            continue;
+        std::string left = win.substr(0, 4);
+        std::string right = win.substr(dash + 1, 4);
+        int sm = hhmm_to_minutes(left);
+        int em = hhmm_to_minutes(right);
+        if (sm < 0 || em < 0)
+            continue;
+        bool in_win = (sm <= em) ? (mod >= sm && mod < em)
+                                 : (mod >= sm || mod < em);
+        if (in_win)
+            return true;
+    }
+    return false;
+}
+
+bool passes_session_filter(const std::string& session,
+                           const std::string& tz,
+                           int64_t bar_ms) {
+    if (session.empty() || session == "24x7")
+        return true;
+
+    std::string windows;
+    std::unordered_set<int> day_filter;
+    parse_day_filter(session, windows, &day_filter);
+
+    pine_tz::ScopedTimezone guard(tz);
+    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    struct tm local_tm {};
+    localtime_r(&secs, &local_tm);
+
+    int tv_dow = local_tm.tm_wday + 1;  // 1=Sunday
+    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
+        return false;
+
+    return local_time_in_session_windows(windows, local_tm);
+}
+
+// ---------------------------------------------------------------------------
+// Session predicate public free functions
+// ---------------------------------------------------------------------------
+
+bool pine_session_ismarket(const std::string& session,
+                           const std::string& tz,
+                           int64_t bar_ms) {
+    return passes_session_filter(session, tz, bar_ms);
+}
+
+bool pine_session_ispremarket(const std::string& session,
+                              const std::string& tz,
+                              int64_t bar_ms) {
+    if (session.empty() || session == "24x7")
+        return false;
+
+    std::string windows;
+    std::unordered_set<int> day_filter;
+    parse_day_filter(session, windows, &day_filter);
+
+    std::string rth_open_str;
+    {
+        std::size_t dash = windows.find('-');
+        if (dash >= 4)
+            rth_open_str = windows.substr(0, 4);
+    }
+    int rth_open_min = hhmm_to_minutes(rth_open_str);
+    if (rth_open_min < 0)
+        return false;
+
+    int pre_open_min = 4 * 60;
+
+    pine_tz::ScopedTimezone guard(tz);
+    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    struct tm local_tm {};
+    localtime_r(&secs, &local_tm);
+
+    int tv_dow = local_tm.tm_wday + 1;
+    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
+        return false;
+
+    int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
+    return (mod >= pre_open_min && mod < rth_open_min);
+}
+
+bool pine_session_ispostmarket(const std::string& session,
+                               const std::string& tz,
+                               int64_t bar_ms) {
+    if (session.empty() || session == "24x7")
+        return false;
+
+    std::string windows;
+    std::unordered_set<int> day_filter;
+    parse_day_filter(session, windows, &day_filter);
+
+    std::string rth_close_str;
+    {
+        std::size_t dash = windows.find('-');
+        if (dash != std::string::npos && dash + 4 < windows.size())
+            rth_close_str = windows.substr(dash + 1, 4);
+    }
+    int rth_close_min = hhmm_to_minutes(rth_close_str);
+    if (rth_close_min < 0)
+        return false;
+
+    int post_close_min = 20 * 60;
+
+    pine_tz::ScopedTimezone guard(tz);
+    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    struct tm local_tm {};
+    localtime_r(&secs, &local_tm);
+
+    int tv_dow = local_tm.tm_wday + 1;
+    if (!day_filter.empty() && day_filter.count(tv_dow) == 0)
+        return false;
+
+    int mod = local_tm.tm_hour * 60 + local_tm.tm_min;
+    return (mod >= rth_close_min && mod < post_close_min);
+}
+
+// ---------------------------------------------------------------------------
+// pine_time / pine_time_close (existing public API)
+// ---------------------------------------------------------------------------
 
 // =========================================================================
 // Public functions

@@ -1,12 +1,15 @@
 #pragma once
 #include <cstdint>
+#include <ctime>
 #include <string>
 
 namespace pineforge {
 
+// ---------------------------------------------------------------------------
 // Pine time(timeframe, session?, timezone?) and time_close(...).
 // Returns Unix milliseconds, or na<int64_t>() when the bar is outside the
 // requested session (TradingView semantics for filtered sessions).
+// ---------------------------------------------------------------------------
 
 int64_t pine_time(int64_t bar_ms,
                   const std::string& tf,
@@ -20,14 +23,23 @@ int64_t pine_time_close(int64_t bar_ms,
                         const std::string& tz,
                         const std::string& chart_tf);
 
-// -------------------------------------------------------------------------
-// Helpers promoted from file-static for use by pine_time_tradingday and
-// session predicates (Agent A).
-// -------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Low-level session helpers (exposed for engine_run.cpp, unit tests,
+// pine_time_tradingday, and session predicates).
+// ---------------------------------------------------------------------------
 
-// Parse a 4-digit HHMM string (e.g., "0930") into minutes since midnight.
-// Returns -1 on parse error.
+// Convert "HHMM" string to minutes-since-midnight.  Returns -1 on parse error.
 int hhmm_to_minutes(const std::string& hhmm);
+
+// True when local_tm falls within any of the comma-separated HHMM-HHMM
+// windows in windows_body.  "24x7" or empty always returns true.
+bool local_time_in_session_windows(const std::string& windows_body,
+                                   const struct tm& local_tm);
+
+// True when bar_ms (Unix ms) falls inside the session string for the given tz.
+bool passes_session_filter(const std::string& session,
+                           const std::string& tz,
+                           int64_t bar_ms);
 
 // Floor bar_ms to local-calendar midnight in the given IANA timezone.
 // DST edge-case: if mktime() returns -1 (non-existent midnight — e.g.,
@@ -36,31 +48,46 @@ int hhmm_to_minutes(const std::string& hhmm);
 // (i.e. uses the first available second after the gap). A warning is
 // logged once per occurrence via fprintf(stderr). The fallback is
 // conservative: the returned timestamp is never more than 2 hours later
-// than the true calendar-day start; downstream consumers (pine_time_tradingday)
-// inherit the same semantics.
+// than the true calendar-day start; downstream consumers
+// (pine_time_tradingday) inherit the same semantics.
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz);
 
 // -------------------------------------------------------------------------
 // time_tradingday built-in
 // -------------------------------------------------------------------------
 // Returns the Unix-ms timestamp of the session-open of the trading day
-// that contains bar_ms.
-//
-// Algorithm:
-//   1. Parse session start from the first window in `session` (e.g.,
-//      "0930-1600" → 570 minutes).
-//   2. Obtain bar's local time in `tz`.
-//   3. If bar's local minutes-of-day >= session_start_minutes:
-//        trading_day_open = today's session_start in `tz`.
-//      Else:
-//        trading_day_open = yesterday's session_start in `tz`.
-//   4. Edge case — 24/7 session (empty string, "24x7", or "0000-2400"):
-//        fall back to UTC calendar-day midnight.
-//
-// DST handling: delegates to calendar_day_open_local_ms() which already
-// contains the mktime-retry fallback. See that function's header comment.
+// that contains bar_ms.  See implementation for full algorithm + DST notes.
 int64_t pine_time_tradingday(int64_t bar_ms,
                              const std::string& session,
                              const std::string& tz);
+
+// ---------------------------------------------------------------------------
+// Session predicates backing session.is* Pine v6 variables.
+//
+// LIMITATION: The engine has a single syminfo.session string and cannot
+// distinguish RTH from ETH.  Therefore:
+//   session.isfirstbar_regular  == session.isfirstbar
+//   session.islastbar_regular   == session.islastbar
+// in the current architecture.  Future work: add SymInfo.regular_session
+// field for strict RTH separation (deferred — separate sprint).
+//
+// Pre/post-market predicates assume standard US ETH windows:
+//   premarket : 04:00 – RTH_open  (RTH_open parsed from session string)
+//   postmarket: RTH_close – 20:00
+// For exchanges with non-standard ETH (e.g. LSE auctions), accuracy may
+// degrade.  This is documented behaviour, not a bug.
+// ---------------------------------------------------------------------------
+
+bool pine_session_ismarket(const std::string& session,
+                           const std::string& tz,
+                           int64_t bar_ms);
+
+bool pine_session_ispremarket(const std::string& session,
+                              const std::string& tz,
+                              int64_t bar_ms);
+
+bool pine_session_ispostmarket(const std::string& session,
+                               const std::string& tz,
+                               int64_t bar_ms);
 
 } // namespace pineforge
