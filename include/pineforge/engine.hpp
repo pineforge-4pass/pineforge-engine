@@ -376,6 +376,14 @@ protected:
     double max_runup_ = 0.0;     // maximum runup (positive number)
     double min_equity_ = 0.0;    // trough equity for runup
 
+    // --- Position-size extremes (strategy.max_contracts_held_*) ---
+    double max_contracts_held_all_ = 0.0;
+    double max_contracts_held_long_ = 0.0;
+    double max_contracts_held_short_ = 0.0;
+
+    // --- Even-trade counter (strategy.eventrades) ---
+    int eventrades_count_ = 0;
+
     // --- Risk management (strategy.risk.*) ---
     enum class RiskDirection { BOTH, LONG_ONLY, SHORT_ONLY };
     RiskDirection risk_direction_ = RiskDirection::BOTH;
@@ -786,6 +794,16 @@ protected:
         if (dd > max_drawdown_) max_drawdown_ = dd;
         double ru = eq - min_equity_;
         if (ru > max_runup_) max_runup_ = ru;
+
+        // --- Update max_contracts_held_* running peaks ---
+        double abs_qty = std::abs(position_qty_);
+        if (position_side_ != PositionSide::FLAT) {
+            if (abs_qty > max_contracts_held_all_) max_contracts_held_all_ = abs_qty;
+            if (position_side_ == PositionSide::LONG && abs_qty > max_contracts_held_long_)
+                max_contracts_held_long_ = abs_qty;
+            if (position_side_ == PositionSide::SHORT && abs_qty > max_contracts_held_short_)
+                max_contracts_held_short_ = abs_qty;
+        }
     }
 
     // --- Trade history accessors (for strategy.closedtrades.*) ---
@@ -1075,6 +1093,15 @@ public:
 
     int trade_count() const { return (int)trades_.size(); }
     const Trade& get_trade(int i) const { return trades_[i]; }
+
+    // --- Position-size extremes (strategy.max_contracts_held_*) ---
+    double max_contracts_held_all() const { return max_contracts_held_all_; }
+    double max_contracts_held_long() const { return max_contracts_held_long_; }
+    double max_contracts_held_short() const { return max_contracts_held_short_; }
+
+    // --- Even-trade count (strategy.eventrades) ---
+    int eventrades() const { return eventrades_count_; }
+
     void fill_report(ReportC* out) const;
     static void free_report(ReportC* report);
 

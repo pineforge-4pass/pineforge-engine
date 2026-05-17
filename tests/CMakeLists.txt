@@ -29,6 +29,7 @@ set(TEST_SOURCES
     test_oca_raw_pyramid_add
     test_strategy_pyramiding
     test_same_id_stop_replace
+    test_max_contracts_held
     test_generic_matrix_primitives
     test_generic_matrix_udt
     test_generic_matrix_bool_proxy
