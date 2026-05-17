@@ -1,9 +1,40 @@
-# Engine Bug — `max_intraday_filled_orders` cap-day boundary precision in chart-TZ-aware mode
+# Engine Bug — `max_intraday_filled_orders` cap-day boundary uses chart_timezone instead of exchange timezone
 
 **Filed:** 2026-05-17
-**Severity:** Moderate (1 corpus probe affected: `cap-max-intraday-filled-orders-isolate-01`)
+**Resolved (workaround):** 2026-05-17 — validator-level override; engine fix deferred to pineforge-data integration
+**Severity:** Moderate (was: 1 corpus probe weak; now: probe excellent via validator override)
 **Introduced by:** engine commit `6b062fc` (2026-05-15) — "feat(engine): 5 bug fixes + chart-TZ + harness overrides + 5 ctests"
 **Pre-existing relative to Pine v6 sprint:** YES (not introduced this sprint)
+
+## Workaround shipped (2026-05-17)
+
+Validator gained per-probe `engine_chart_timezone` key in `inputs.json` schema
+(commit `8a7cabd` in pineforge-utils). When set, bypasses the
+`_engine_chart_tz_for_csv_tz(csv_tz)` auto-derivation and passes the value
+directly to `strategy_set_chart_timezone`. Empty string forces UTC fast path.
+
+Probe `cap-max-intraday-filled-orders-isolate-01` now sets
+`engine_chart_timezone: ""` in its `inputs.json` (corpus commit `5449e35`):
+**weak (51.2% match) → excellent (100% bit-exact, 1958/1958)**.
+
+## Long-term fix (deferred to pineforge-data)
+
+Per Pine v6 docs, "intraday day" boundary for `max_intraday_filled_orders` /
+`max_intraday_loss` should follow the **symbol's exchange timezone**
+(`syminfo.timezone`), NOT the chart display timezone.
+
+Currently the engine has `syminfo_.timezone` field but no harness populates
+it (defaults to "UTC"). Once `pineforge-data` provides per-symbol metadata
+(see `docs/pine_v6_dispatch_scope.html` Rule 2), the proper fix is:
+
+1. Engine: change all four call sites that currently use
+   `_decompose_bar_time_chart_tz()` for intraday-counter logic (see
+   "Related code paths" below) to use a new `_decompose_bar_time_intraday_tz()`
+   helper that reads `syminfo_.timezone` instead of `chart_timezone_`.
+2. Harness: query pineforge-data for the symbol's exchange tz, plumb into
+   `syminfo_.timezone` via a new C ABI setter.
+3. Validator: deprecate the `engine_chart_timezone` override key (no longer
+   needed once syminfo.timezone is populated correctly per symbol).
 
 ## Symptom
 

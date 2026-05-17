@@ -27,15 +27,22 @@
 
 | Bucket | Count |
 |---|---|
-| **excellent** | **224** (same as baseline) |
-| strong (pre-existing) | 2 |
-| weak (pre-existing) | 2 |
+| **excellent** | **226** (+2 vs baseline 224, after validator engine_chart_timezone fix) |
+| strong (pre-existing) | 1 |
+| weak (pre-existing) | 1 |
 | TV_RUN_NEEDED placeholders (no CSV yet) | 15 |
 | **Total probes** | **243** (228 baseline + 15 new from sprint) |
 
-Note: `ticker-heikinashi-rejected-01` removed post-sprint — expected-reject
-probes belong in codegen pytest, not corpus. Coverage retained at
-`pineforge_codegen/tests/test_support_checker.py:482 test_ticker_heikinashi_rejected`.
+Notes:
+- `ticker-heikinashi-rejected-01` removed post-sprint — expected-reject probes
+  belong in codegen pytest, not corpus. Coverage retained at
+  `pineforge_codegen/tests/test_support_checker.py:482 test_ticker_heikinashi_rejected`.
+- `cap-max-intraday-filled-orders-isolate-01`: weak (51.2%) → excellent (100%
+  bit-exact 1958/1958) via validator `engine_chart_timezone=""` override
+  (no engine change). See `docs/issues/cap-day-boundary-chart-tz-precision.md`
+  for full analysis + long-term pineforge-data dependency.
+- `composite-bracket-cap-range-pending-stop-01`: strong → excellent
+  (no explicit change — likely flaky probe stabilising after rebuild).
 
 ## Per-merge regression check
 
