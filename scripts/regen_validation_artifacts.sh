@@ -50,8 +50,10 @@ command -v "${PANDOC}" >/dev/null 2>&1 || {
     echo "  apt install pandoc    (Debian/Ubuntu)"
     exit 1
 }
+CSS="${ROOT_DIR}/scripts/validation_report.css"
 "${PANDOC}" --standalone --metadata "title=PineForge Corpus Validation Report" \
     --from gfm --to html5 \
+    --css "${CSS}" --embed-resources \
     --output "${HTML}" "${MD}"
 
 # --- Step 3: HTML → PDF via headless Chrome --------------------------------
@@ -62,11 +64,16 @@ if [[ ! -x "${CHROME}" ]]; then
     exit 0
 fi
 # Chrome prints whatever's at the URL. file:// scheme needs absolute path.
+# Chrome's --print-to-pdf honours CSS @page rules; we set landscape A4
+# in scripts/validation_report.css so the wide per-strategy table fits.
+# --virtual-time-budget gives the page CSS time to apply before snapshot.
 "${CHROME}" \
     --headless \
     --disable-gpu \
     --no-pdf-header-footer \
+    --virtual-time-budget=5000 \
     --print-to-pdf="${PDF}" \
+    --print-to-pdf-no-header \
     "file://${HTML}" 2>/dev/null
 
 echo

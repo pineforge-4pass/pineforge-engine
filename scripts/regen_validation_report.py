@@ -5,6 +5,10 @@ Standalone Python (stdlib only) that imports `verify_corpus.py`'s tier-
 classification machinery and emits the canonical Markdown report for the
 single-tree `corpus/validation/` layout introduced post-publication.
 
+Probe links resolve to the public GitHub blob URL by default
+(``CORPUS_REPO_BLOB``). Override via ``--blob-url`` for forks / mirrors,
+or pass ``--blob-url ""`` to fall back to local relative paths.
+
 Sections:
   1. Headline       — total + tier counts, generation date, commit SHAs.
   2. Anomalies      — every probe NOT excellent, with one-line reason.
@@ -194,7 +198,21 @@ def _fmt_pct(x: float) -> str:
     return f"{x*100:.4f}%"
 
 
-def _emit(rows: list[dict], engine_sha: str, corpus_sha: str) -> str:
+CORPUS_REPO_BLOB = (
+    "https://github.com/fullpass-4pass/pineforge-corpus/tree/main"
+)
+
+
+def _probe_link(slug: str, blob_url: str) -> str:
+    """Render probe slug as Markdown link. Uses GitHub blob URL when set;
+    falls back to local relative path when ``blob_url`` is empty."""
+    if blob_url:
+        return f"[`{slug}`]({blob_url}/validation/{slug}/)"
+    return f"[`{slug}`](./validation/{slug}/)"
+
+
+def _emit(rows: list[dict], engine_sha: str, corpus_sha: str,
+          blob_url: str = CORPUS_REPO_BLOB) -> str:
     counts = {k: 0 for k in TIER_ORDER}
     for r in rows:
         counts[r["tier"]] = counts.get(r["tier"], 0) + 1
@@ -242,7 +260,7 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str) -> str:
         lines.append("| Tier | Probe | TV | Eng | Count Δ | PnL p90 | Reason |")
         lines.append("|---|---|---:|---:|---:|---:|---|")
         for r in sorted(non_excellent, key=lambda x: (x["tier"], x["slug"])):
-            link = f"[`{r['slug']}`](./validation/{r['slug']}/)"
+            link = _probe_link(r['slug'], blob_url)
             lines.append(
                 f"| **{r['tier']}** | {link} | {r['tv']} | {r['eng']} | "
                 f"{_fmt_pct(r['count_delta'])} | {_fmt_pct(r['pnl_p90'])} | "
@@ -277,7 +295,7 @@ def _emit(rows: list[dict], engine_sha: str, corpus_sha: str) -> str:
     lines.append("| Slug | Category | Tier | Profile | TV | Engine | Matched | Count Δ | Entry p90 | Exit p90 | PnL p90 |")
     lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
     for r in sorted(rows, key=lambda x: (_category_of(x["slug"]), x["slug"])):
-        link = f"[`{r['slug']}`](./validation/{r['slug']}/)"
+        link = _probe_link(r['slug'], blob_url)
         lines.append(
             f"| {link} | `{_category_of(r['slug'])}` | {r['tier']} | "
             f"`{r.get('profile','strict')}` | "
@@ -295,6 +313,9 @@ def main() -> int:
     ap.add_argument("--output", type=Path,
                     default=CORPUS_ROOT / "validation_report.md",
                     help="Output path (default: corpus/validation_report.md)")
+    ap.add_argument("--blob-url", type=str, default=CORPUS_REPO_BLOB,
+                    help=(f"Base URL for probe links (default: {CORPUS_REPO_BLOB!r}). "
+                          "Pass empty string to fall back to local relative paths."))
     args = ap.parse_args()
 
     if not VALIDATION_ROOT.is_dir():
@@ -314,7 +335,7 @@ def main() -> int:
     for p in probes:
         rows.append(_verify_probe(p))
 
-    md = _emit(rows, engine_sha, corpus_sha)
+    md = _emit(rows, engine_sha, corpus_sha, blob_url=args.blob_url)
     args.output.write_text(md, encoding="utf-8")
     counts = {k: 0 for k in TIER_ORDER}
     for r in rows:

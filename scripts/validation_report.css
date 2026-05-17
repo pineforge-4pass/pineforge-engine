@@ -1,0 +1,67 @@
+/* Custom CSS for corpus validation report.
+ * Overrides pandoc's default 36em body max-width so the wide
+ * per-strategy parity table doesn't get clipped in PDF print.
+ */
+body {
+    max-width: 1400px !important;
+    padding-left: 32px;
+    padding-right: 32px;
+}
+
+/* Tight, compact table layout for the long per-strategy section */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.85em;
+    margin-bottom: 1em;
+}
+th, td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #d0d7de;
+    text-align: left;
+    vertical-align: top;
+}
+th {
+    background-color: #f6f8fa;
+    font-weight: 600;
+}
+/* Numeric columns right-align */
+th:nth-child(n+5), td:nth-child(n+5) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+/* Probe slug column allows wrapping but keeps tight */
+td code {
+    white-space: nowrap;
+    font-size: 0.9em;
+}
+
+/* Print: keep body wide; reduce padding to use page space */
+@media print {
+    body {
+        max-width: 100% !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        font-size: 9pt;
+    }
+    table {
+        font-size: 8pt;
+        page-break-inside: auto;
+    }
+    tr {
+        page-break-inside: avoid;
+        page-break-after: auto;
+    }
+    thead {
+        display: table-header-group;
+    }
+    h1, h2, h3 {
+        page-break-after: avoid;
+    }
+}
+
+/* PDF page setup: landscape for the wide tables */
+@page {
+    size: A4 landscape;
+    margin: 12mm 10mm;
+}
