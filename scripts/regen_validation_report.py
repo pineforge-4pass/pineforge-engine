@@ -304,7 +304,12 @@ def main() -> int:
     engine_sha = _git_sha(SCRIPT_DIR.parent)
     corpus_sha = _git_sha(CORPUS_ROOT)
 
-    probes = sorted(p for p in VALIDATION_ROOT.iterdir() if p.is_dir())
+    # Skip the symbol-specified/ container — its children require non-default
+    # OHLCV + per-symbol syminfo (pending pineforge-data integration).
+    # Excluded from corpus headline; engine correctness for those surfaces
+    # is validated via ctest, not corpus parity.
+    probes = sorted(p for p in VALIDATION_ROOT.iterdir()
+                    if p.is_dir() and p.name != "symbol-specified")
     rows: list[dict] = []
     for p in probes:
         rows.append(_verify_probe(p))

@@ -571,6 +571,13 @@ def main() -> int:
             for strat in sorted(cat_root.iterdir()):
                 if not strat.is_dir():
                     continue
+                # Skip the symbol-specified/ container — its children
+                # require non-default OHLCV + per-symbol syminfo (pending
+                # pineforge-data). Excluded from corpus headline; engine
+                # correctness for those surfaces is validated via ctest.
+                if (strat / "strategy.pine").is_file() is False and \
+                   strat.name == "symbol-specified":
+                    continue
                 label = verify_one(strat, verbose=not args.quiet)
                 if not args.quiet:
                     print()
