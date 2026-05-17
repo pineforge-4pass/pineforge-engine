@@ -61,3 +61,4 @@ tutorial/**/trades.csv
 # Session-local handoff notes (not for public history)
 HANDOFF.md
 BENCH_REFRESH_HANDOFF.md
+.claude/

@@ -957,7 +957,7 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 
 Pine v6 HIGH+MEDIUM sprint added ~50 identifiers to the supported surface
 (✅ Runtime + 🔧 Transpiler) and reclassified ~20 from ❓/❌ to explicit
-buckets. Full final-state regression report: `docs/pine_v6_sprint_regression_report.md`.
+buckets. Full final-state release notes: [v0.5.0 release](https://github.com/fullpass-4pass/pineforge-engine/releases/tag/v0.5.0).
 
 ### ✅ Runtime additions (17)
 
