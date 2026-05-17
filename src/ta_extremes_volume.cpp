@@ -443,6 +443,7 @@ double III::compute(double high, double low, double close, double volume) {
 double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
     saved_cum_pv_ = cum_pv_;
     saved_cum_vol_ = cum_vol_;
+    saved_cum_pv_sq_ = cum_pv_sq_;
     saved_anchor_day_ = anchor_day_;
     if (is_na(src) || is_na(volume)) return na<double>();
     int64_t day = timestamp_ms / 86400000LL;
@@ -451,12 +452,41 @@ double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
     } else if (day != anchor_day_) {
         cum_pv_ = 0.0;
         cum_vol_ = 0.0;
+        cum_pv_sq_ = 0.0;
         anchor_day_ = day;
     }
     cum_pv_ += src * volume;
+    cum_pv_sq_ += src * src * volume;
     cum_vol_ += volume;
     if (cum_vol_ == 0.0) return na<double>();
     return cum_pv_ / cum_vol_;
+}
+
+VWAPBandsResult VWAP::compute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult) {
+    saved_cum_pv_ = cum_pv_;
+    saved_cum_vol_ = cum_vol_;
+    saved_cum_pv_sq_ = cum_pv_sq_;
+    saved_anchor_day_ = anchor_day_;
+    if (is_na(src) || is_na(volume)) return {na<double>(), na<double>(), na<double>()};
+    int64_t day = timestamp_ms / 86400000LL;
+    if (anchor_day_ == std::numeric_limits<int64_t>::min()) {
+        anchor_day_ = day;
+    } else if (day != anchor_day_) {
+        cum_pv_ = 0.0;
+        cum_vol_ = 0.0;
+        cum_pv_sq_ = 0.0;
+        anchor_day_ = day;
+    }
+    cum_pv_ += src * volume;
+    cum_pv_sq_ += src * src * volume;
+    cum_vol_ += volume;
+    if (cum_vol_ == 0.0) return {na<double>(), na<double>(), na<double>()};
+    double mean = cum_pv_ / cum_vol_;
+    double variance = cum_pv_sq_ / cum_vol_ - mean * mean;
+    if (variance < 0.0) variance = 0.0;  // guard against floating-point underflow
+    double stdev = std::sqrt(variance);
+    double band_offset = stdev_mult * stdev;
+    return {mean, mean + band_offset, mean - band_offset};
 }
 
 // --- Mode ---
@@ -689,8 +719,17 @@ double III::recompute(double high, double low, double close, double volume) {
 double VWAP::recompute(double src, double volume, int64_t timestamp_ms) {
     cum_pv_ = saved_cum_pv_;
     cum_vol_ = saved_cum_vol_;
+    cum_pv_sq_ = saved_cum_pv_sq_;
     anchor_day_ = saved_anchor_day_;
     return compute(src, volume, timestamp_ms);
+}
+
+VWAPBandsResult VWAP::recompute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult) {
+    cum_pv_ = saved_cum_pv_;
+    cum_vol_ = saved_cum_vol_;
+    cum_pv_sq_ = saved_cum_pv_sq_;
+    anchor_day_ = saved_anchor_day_;
+    return compute_bands(src, volume, timestamp_ms, stdev_mult);
 }
 
 // --- Mode ---
