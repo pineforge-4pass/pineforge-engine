@@ -307,6 +307,7 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     net_profit_sum_ += trade.pnl;
     if (trade.pnl > 0) { gross_profit_sum_ += trade.pnl; win_trades_count_++; }
     else if (trade.pnl < 0) { gross_loss_sum_ += trade.pnl; loss_trades_count_++; }
+    else { ++eventrades_count_; }  // strategy.eventrades: exact zero P&L (TV uses == 0)
 
     // Update risk state: intraday PnL and consecutive loss day tracking
     intraday_pnl_ += pnl;
