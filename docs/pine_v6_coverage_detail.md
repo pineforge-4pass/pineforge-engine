@@ -2,22 +2,24 @@
 
 | Field | Value |
 |---|---|
-| **Generated** | 2026-05-16 |
+| **Generated** | 2026-05-17 (post Pine v6 HIGH+MEDIUM sprint) |
 | **Pine v6 reference** | https://www.tradingview.com/pine-script-reference/v6/ (JS-rendered, scraped 2026-05-16) |
-| **PineForge engine version** | 0.4.1 |
+| **PineForge engine version** | 0.4.1 + sprint |
 | **Total Pine v6 identifiers** | 941 |
 
 ## Headline totals
 
 | Bucket | Count | % of 941 |
 |---|---|---|
-| ✅ Runtime | 182 | 19% |
-| 🔧 Transpiler | 198 | 21% |
-| ⏭️ Parse-and-skip | 208 | 22% |
-| ❌ Unsupported | 133 | 14% |
-| ❓ Unknown / not classified | 220 | 23% |
+| ✅ Runtime | 199 | 21% |
+| 🔧 Transpiler | 219 | 23% |
+| ⏭️ Parse-and-skip | 220 | 23% |
+| ❌ Unsupported | 142 | 15% |
+| ❓ Unknown / not classified | 161 | 17% |
 
-> **"Fully runs" headline:** PineForge executes **380 of 941** Pine v6 identifiers (✅ Runtime + 🔧 Transpiler = 40%). An additional 22% parse-and-skip silently (no error, no effect). 14% are rejected or produce na-returns. 23% are lower-priority items not yet audited to single-identifier precision.
+> **"Fully runs" headline:** PineForge executes **418 of 941** Pine v6 identifiers (✅ Runtime + 🔧 Transpiler = **44%**, up from 40% pre-sprint). An additional 23% parse-and-skip silently (no error, no effect — drawing/plotting + syminfo na-accepts). 15% are rejected at transpile or produce na-returns (fundamentals + cross-symbol + ticker.* chart-type modifiers + library system). 17% remain not-yet-audited at single-identifier precision (down from 23% — ~60 resolved this sprint).
+
+> **Sprint delta (2026-05-17):** +17 ✅ Runtime, +21 🔧 Transpiler, +12 ⏭️ Parse-and-skip, +9 ❌ Unsupported (ticker.* split), −59 ❓ Unknown. See [Sprint changes](#sprint-changes-2026-05-17) section below.
 
 ---
 
@@ -89,7 +91,7 @@
 | `second` | var | ✅ Runtime | `_bar_second()` on `BacktestEngine` | |
 | `time` | var | ✅ Runtime | `current_bar_.timestamp` | |
 | `time_close` | var | ✅ Runtime | `pine_time_close(...)` in `session_time.hpp` | |
-| `time_tradingday` | var | ❓ Unknown | Not in runtime; trading-day semantics unclear | |
+| `time_tradingday` | var | ✅ Runtime | `pine_time_tradingday(bar_ms, session, tz)` in `session_time.hpp` | Sprint G1; derives session-day open in `syminfo_.timezone`; DST-edge fallback for Havana/Lord_Howe |
 | `timenow` | var | ❌ Unsupported | No live clock; always na in batch mode | |
 | `volume` | var | ✅ Runtime | `current_bar_.volume` on `BacktestEngine` | |
 | `weekofyear` | var | ✅ Runtime | `_bar_weekofyear()` on `BacktestEngine` | |
@@ -113,13 +115,13 @@
 |---|---|---|---|---|
 | `chart.bg_color` | var | ⏭️ Parse-and-skip | Rendering property; no backtesting role | |
 | `chart.fg_color` | var | ⏭️ Parse-and-skip | Rendering property | |
-| `chart.is_heikinashi` | var | ❓ Unknown | Chart type; no runtime flag | |
-| `chart.is_kagi` | var | ❓ Unknown | Chart type; no runtime flag | |
-| `chart.is_linebreak` | var | ❓ Unknown | Chart type; no runtime flag | |
-| `chart.is_pnf` | var | ❓ Unknown | Chart type; no runtime flag | |
-| `chart.is_range` | var | ❓ Unknown | Chart type; no runtime flag | |
-| `chart.is_renko` | var | ❓ Unknown | Chart type; no runtime flag | |
-| `chart.is_standard` | var | ❓ Unknown | Chart type; no runtime flag | |
+| `chart.is_heikinashi` | var | 🔧 Transpiler | Constant `false` emitted by `visit_expr` | Sprint E |
+| `chart.is_kagi` | var | 🔧 Transpiler | Constant `false` | Sprint E |
+| `chart.is_linebreak` | var | 🔧 Transpiler | Constant `false` | Sprint E |
+| `chart.is_pnf` | var | 🔧 Transpiler | Constant `false` | Sprint E |
+| `chart.is_range` | var | 🔧 Transpiler | Constant `false` | Sprint E |
+| `chart.is_renko` | var | 🔧 Transpiler | Constant `false` | Sprint E |
+| `chart.is_standard` | var | 🔧 Transpiler | Constant `true` (engine always batches standard OHLCV) | Sprint E |
 | `chart.left_visible_bar_time` | var | ❌ Unsupported | Viewport/UI concept; no batch equivalent | |
 | `chart.right_visible_bar_time` | var | ❌ Unsupported | Viewport/UI concept; no batch equivalent | |
 
@@ -150,13 +152,13 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `session.isfirstbar` | var | ❓ Unknown | Session boundary detection; partial via `session_time.hpp` | |
-| `session.isfirstbar_regular` | var | ❓ Unknown | Regular session variant | |
-| `session.islastbar` | var | ❓ Unknown | Session boundary | |
-| `session.islastbar_regular` | var | ❓ Unknown | Regular session variant | |
-| `session.ismarket` | var | ❓ Unknown | Session market hours check | |
-| `session.ispostmarket` | var | ❓ Unknown | Post-market check | |
-| `session.ispremarket` | var | ❓ Unknown | Pre-market check | |
+| `session.isfirstbar` | var | ✅ Runtime | `session_isfirstbar_` on engine; per-bar lookahead in `engine_run.cpp` | Sprint A |
+| `session.isfirstbar_regular` | var | ✅ Runtime | Aliased to `session.isfirstbar` — engine has single session string, cannot distinguish RTH vs ETH (documented limitation) | Sprint A |
+| `session.islastbar` | var | ✅ Runtime | `session_islastbar_` on engine; per-bar lookahead | Sprint A |
+| `session.islastbar_regular` | var | ✅ Runtime | Aliased to `session.islastbar` | Sprint A |
+| `session.ismarket` | var | ✅ Runtime | `pine_session_ismarket(session, tz, bar_ms)` in `session_time.hpp` | Sprint A |
+| `session.ispostmarket` | var | ✅ Runtime | `pine_session_ispostmarket(...)` — standard ETH window `RTH_close-2000` local | Sprint A |
+| `session.ispremarket` | var | ✅ Runtime | `pine_session_ispremarket(...)` — standard ETH window `0400-RTH_open` local | Sprint A |
 
 ### Variables — strategy
 
@@ -172,7 +174,7 @@
 | `strategy.closedtrades` | var | ✅ Runtime | `trades_.size()` | |
 | `strategy.closedtrades.first_index` | var | ✅ Runtime | Computed from closed-trade list | |
 | `strategy.equity` | var | ✅ Runtime | `current_equity()` | |
-| `strategy.eventrades` | var | ❓ Unknown | Even-trades count; not in public header | |
+| `strategy.eventrades` | var | ✅ Runtime | `eventrades_count_` incremented in `engine_orders.cpp` when trade.profit == 0 | Sprint F |
 | `strategy.grossloss` | var | ✅ Runtime | `gross_loss()` | |
 | `strategy.grossloss_percent` | var | ✅ Runtime | `grossloss_percent()` | |
 | `strategy.grossprofit` | var | ✅ Runtime | `gross_profit()` | |
@@ -180,9 +182,9 @@
 | `strategy.initial_capital` | var | ✅ Runtime | `initial_capital_` | |
 | `strategy.losstrades` | var | ✅ Runtime | `count_losstrades()` | |
 | `strategy.margin_liquidation_price` | var | ✅ Runtime | `margin_liquidation_price()` → always na | Returns na per docs |
-| `strategy.max_contracts_held_all` | var | ❓ Unknown | Not tracked in current engine | |
-| `strategy.max_contracts_held_long` | var | ❓ Unknown | Not tracked in current engine | |
-| `strategy.max_contracts_held_short` | var | ❓ Unknown | Not tracked in current engine | |
+| `strategy.max_contracts_held_all` | var | ✅ Runtime | `max_contracts_held_all_` per-bar `std::max(|position_qty_|)` in `update_equity_extremes()` | Sprint F |
+| `strategy.max_contracts_held_long` | var | ✅ Runtime | `max_contracts_held_long_` (gated on `position_side_ == LONG`) | Sprint F |
+| `strategy.max_contracts_held_short` | var | ✅ Runtime | `max_contracts_held_short_` (gated on `position_side_ == SHORT`) | Sprint F |
 | `strategy.max_drawdown` | var | ✅ Runtime | `max_drawdown_` | |
 | `strategy.max_drawdown_percent` | var | ✅ Runtime | `max_runup_percent()` (drawdown variant) | |
 | `strategy.max_runup` | var | ✅ Runtime | `max_runup_` | |
@@ -203,40 +205,40 @@
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
 | `syminfo.basecurrency` | var | ✅ Runtime | `syminfo_.basecurrency` on `SymInfo` | |
-| `syminfo.country` | var | ❌ Unsupported | Not in `SymInfo` struct | |
+| `syminfo.country` | var | 🔧 Transpiler | Derived from `syminfo_.tickerid` prefix via `_pf_derive_country()` (NASDAQ→US, LSE→UK, TSE→JP, ...30 exchanges) | Sprint G2 (audit rescue from Rule 2 defer) |
 | `syminfo.currency` | var | ✅ Runtime | `syminfo_.currency` | |
-| `syminfo.current_contract` | var | ❓ Unknown | Futures-specific; not in struct | |
+| `syminfo.current_contract` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()`; conditional-use warning emitted | Sprint G2; pineforge-data scope |
 | `syminfo.description` | var | ✅ Runtime | `syminfo_.description` | |
-| `syminfo.employees` | var | ❌ Unsupported | Fundamental data; not in struct | |
-| `syminfo.expiration_date` | var | ❓ Unknown | Futures-specific; not in struct | |
-| `syminfo.industry` | var | ❌ Unsupported | Fundamental data; not in struct | |
-| `syminfo.isin` | var | ❌ Unsupported | Not in struct | |
-| `syminfo.main_tickerid` | var | ❓ Unknown | Not in current `SymInfo` | |
-| `syminfo.mincontract` | var | ❓ Unknown | Not in current `SymInfo` | |
-| `syminfo.minmove` | var | ✅ Runtime | Derived from `syminfo_.mintick` / `syminfo_.pricescale` | |
+| `syminfo.employees` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 LOW na-accept |
+| `syminfo.expiration_date` | var | ⏭️ Parse-and-skip | Returns `na<int64_t>()`; conditional-use warning emitted | Sprint G2; pineforge-data scope |
+| `syminfo.industry` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()`; conditional-use warning emitted | Sprint G2; pineforge-data scope |
+| `syminfo.isin` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()`; conditional-use warning emitted | Sprint G2; pineforge-data scope |
+| `syminfo.main_tickerid` | var | 🔧 Transpiler | Derived from `syminfo_.tickerid` via `_pf_derive_main_tickerid()` (strips futures `N!` suffix) | Sprint G2 (audit rescue) |
+| `syminfo.mincontract` | var | ⏭️ Parse-and-skip | Returns `na<double>()`; conditional-use warning emitted | Sprint G2 (audit fix) — was previously silently emitting 0; pineforge-data scope |
+| `syminfo.minmove` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 critical fix — was silently emitting 0 (field NOT in `SymInfo` struct, contrary to prior audit) |
 | `syminfo.mintick` | var | ✅ Runtime | `syminfo_.mintick` | |
 | `syminfo.pointvalue` | var | ✅ Runtime | `syminfo_.pointvalue` | |
-| `syminfo.prefix` | var | ✅ Runtime | `syminfo_.prefix` (via `syminfo_prefix()` free fn) | |
-| `syminfo.pricescale` | var | ✅ Runtime | `syminfo_.pricescale` | |
-| `syminfo.recommendations_buy` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.recommendations_buy_strong` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.recommendations_date` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.recommendations_hold` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.recommendations_sell` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.recommendations_sell_strong` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.recommendations_total` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.root` | var | ✅ Runtime | `syminfo_.root` (via `SymInfo`) | |
-| `syminfo.sector` | var | ❌ Unsupported | Fundamental; not ingested | |
+| `syminfo.prefix` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()` | Sprint G2 critical fix — was silently emitting 0 (field NOT in `SymInfo` struct) |
+| `syminfo.pricescale` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 critical fix — was silently emitting 0 (field NOT in `SymInfo` struct) |
+| `syminfo.recommendations_buy` | var | ⏭️ Parse-and-skip | Returns `na<double>()` (was ❌) | Sprint G2 — pineforge-data scope |
+| `syminfo.recommendations_buy_strong` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.recommendations_date` | var | ⏭️ Parse-and-skip | Returns `na<int64_t>()` | Sprint G2 |
+| `syminfo.recommendations_hold` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.recommendations_sell` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.recommendations_sell_strong` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.recommendations_total` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.root` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()` | Sprint G2 critical fix — was silently emitting 0 (field NOT in `SymInfo` struct) |
+| `syminfo.sector` | var | ⏭️ Parse-and-skip | Returns `na<std::string>()`; conditional-use warning | Sprint G2; pineforge-data scope |
 | `syminfo.session` | var | ✅ Runtime | `syminfo_.session` | |
-| `syminfo.shareholders` | var | ❌ Unsupported | Fundamental; not ingested | |
-| `syminfo.shares_outstanding_float` | var | ❌ Unsupported | Fundamental; not ingested | |
-| `syminfo.shares_outstanding_total` | var | ❌ Unsupported | Fundamental; not ingested | |
-| `syminfo.target_price_average` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.target_price_date` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.target_price_estimates` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.target_price_high` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.target_price_low` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
-| `syminfo.target_price_median` | var | ❌ Unsupported | Analyst-data feed; not ingested | |
+| `syminfo.shareholders` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.shares_outstanding_float` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.shares_outstanding_total` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.target_price_average` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.target_price_date` | var | ⏭️ Parse-and-skip | Returns `na<int64_t>()` | Sprint G2 |
+| `syminfo.target_price_estimates` | var | ⏭️ Parse-and-skip | Returns `na<int>()` | Sprint G2 |
+| `syminfo.target_price_high` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.target_price_low` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
+| `syminfo.target_price_median` | var | ⏭️ Parse-and-skip | Returns `na<double>()` | Sprint G2 |
 | `syminfo.ticker` | var | ✅ Runtime | `syminfo_.ticker` | |
 | `syminfo.tickerid` | var | ✅ Runtime | `syminfo_.tickerid` | |
 | `syminfo.timezone` | var | ✅ Runtime | `syminfo_.timezone` | |
@@ -268,9 +270,9 @@
 | `timeframe.isminutes` | var | ✅ Runtime | Intraday and not seconds | |
 | `timeframe.ismonthly` | var | ✅ Runtime | `tf_is_monthly(script_tf_)` | |
 | `timeframe.isseconds` | var | ✅ Runtime | `tf_is_seconds(script_tf_)` | |
-| `timeframe.isticks` | var | ❓ Unknown | Tick-based TF; no tick-TF handling in runtime | |
+| `timeframe.isticks` | var | 🔧 Transpiler | Constant `false` (engine has no tick TF support) | Sprint E |
 | `timeframe.isweekly` | var | ✅ Runtime | `tf_is_weekly(script_tf_)` | |
-| `timeframe.main_period` | var | ❓ Unknown | MTF context; not clearly in runtime | |
+| `timeframe.main_period` | var | ✅ Runtime | `main_period()` getter on `BacktestEngine` → returns `script_tf_` | Sprint E |
 | `timeframe.multiplier` | var | ✅ Runtime | `tf_multiplier(script_tf_)` | |
 | `timeframe.period` | var | ✅ Runtime | `script_tf_` string | |
 
@@ -280,9 +282,9 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `adjustment.dividends` | const | ❌ Unsupported | No dividend-adjusted data feed | |
-| `adjustment.none` | const | 🔧 Transpiler | Emitted as string constant; passed to `request.security` | |
-| `adjustment.splits` | const | ❌ Unsupported | No splits-adjusted feed | |
+| `adjustment.dividends` | const | 🔧 Transpiler | Integer passthrough (1) to `request.security`; engine ignores | Sprint G2 |
+| `adjustment.none` | const | 🔧 Transpiler | Integer passthrough (0) | |
+| `adjustment.splits` | const | 🔧 Transpiler | Integer passthrough (2) | Sprint G2 |
 
 ### Constants — alert
 
@@ -296,9 +298,9 @@
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `backadjustment.inherit` | const | ❓ Unknown | Not in runtime | |
-| `backadjustment.off` | const | ❓ Unknown | Not in runtime | |
-| `backadjustment.on` | const | ❓ Unknown | Not in runtime | |
+| `backadjustment.inherit` | const | 🔧 Transpiler | Integer passthrough (2) to `request.security`; engine ignores | Sprint G2 |
+| `backadjustment.off` | const | 🔧 Transpiler | Integer passthrough (0) | Sprint G2 |
+| `backadjustment.on` | const | 🔧 Transpiler | Integer passthrough (1) | Sprint G2 |
 
 ### Constants — barmerge
 
@@ -418,7 +420,7 @@ All 6 `line.style_*` constants are **⏭️ Parse-and-skip** — drawing style c
 | `scale.*` (3) | const | ⏭️ Parse-and-skip | Rendering | |
 | `session.extended` | const | 🔧 Transpiler | Session string constant | |
 | `session.regular` | const | 🔧 Transpiler | Session string constant | |
-| `settlement_as_close.*` (3) | const | ❓ Unknown | Not in runtime | |
+| `settlement_as_close.on/off/inherit` | const | 🔧 Transpiler | Integer passthrough (1/0/2) to `request.security`; engine ignores | Sprint G2 |
 | `shape.*` (12) | const | ⏭️ Parse-and-skip | Plotshape style | |
 | `size.*` (6) | const | ⏭️ Parse-and-skip | Label/table size; rendering | |
 | `strategy.cash` | const | ✅ Runtime | `QtyType::CASH` enum | |
@@ -799,7 +801,7 @@ All **✅ Runtime** — backed by `PineMatrix` (`matrix.hpp` / `matrix.cpp`) for
 | `ta.tsi()` | fn | ✅ Runtime | `ta::TSI` class | |
 | `ta.valuewhen()` | fn | ✅ Runtime | `ta::ValueWhen` class | |
 | `ta.variance()` | fn | ✅ Runtime | `ta::Variance` class | |
-| `ta.vwap()` | fn | ✅ Runtime | `ta::VWAP` class | Single-value form only; 3-tuple (stdev_mult) rejected |
+| `ta.vwap()` | fn | ✅ Runtime | `ta::VWAP` (single value) + `ta::VWAPBands` 3-tuple class (`VWAPBandsResult{vwap,upper,lower}`) | Both overloads supported; Sprint B added 3-arg `(src, anchor, stdev_mult)` form with running variance |
 | `ta.vwma()` | fn | ✅ Runtime | `ta::VWMA` class | |
 | `ta.wma()` | fn | ✅ Runtime | `ta::WMA` class | |
 | `ta.wpr()` | fn | ✅ Runtime | `ta::WPR` class | |
@@ -812,15 +814,15 @@ All **⏭️ Parse-and-skip** — table drawing methods; no runtime backing.
 
 | Identifier | Kind | Status | Backing | Notes |
 |---|---|---|---|---|
-| `ticker.heikinashi()` | fn | ❓ Unknown | Chart-type modifier; no runtime | |
-| `ticker.inherit()` | fn | ❓ Unknown | Chart-type modifier | |
-| `ticker.kagi()` | fn | ❓ Unknown | Chart-type modifier | |
-| `ticker.linebreak()` | fn | ❓ Unknown | Chart-type modifier | |
-| `ticker.modify()` | fn | ❓ Unknown | Ticker modification | |
-| `ticker.new()` | fn | ❓ Unknown | Custom ticker; no runtime | |
-| `ticker.pointfigure()` | fn | ❓ Unknown | Chart-type modifier | |
-| `ticker.renko()` | fn | ❓ Unknown | Chart-type modifier | |
-| `ticker.standard()` | fn | ❓ Unknown | Standard ticker | |
+| `ticker.heikinashi()` | fn | ❌ Unsupported | Hard-reject: "chart-type modifier not supported" | Sprint G2 explicit reject (was blanket namespace reject) |
+| `ticker.inherit()` | fn | 🔧 Transpiler | Passthrough — emits `symbol` argument unchanged | Sprint G2 rescue (same-symbol passthrough is valid) |
+| `ticker.kagi()` | fn | ❌ Unsupported | Hard-reject | Sprint G2 |
+| `ticker.linebreak()` | fn | ❌ Unsupported | Hard-reject | Sprint G2 |
+| `ticker.modify()` | fn | ❌ Unsupported | Hard-reject: "cross-symbol construction not supported" | Sprint G2 |
+| `ticker.new()` | fn | ❌ Unsupported | Hard-reject: "cross-symbol construction not supported" | Sprint G2 |
+| `ticker.pointfigure()` | fn | ❌ Unsupported | Hard-reject | Sprint G2 |
+| `ticker.renko()` | fn | ❌ Unsupported | Hard-reject | Sprint G2 |
+| `ticker.standard()` | fn | 🔧 Transpiler | Passthrough — emits `symbol` argument unchanged | Sprint G2 rescue |
 
 ### Functions — time / time_close / timeframe.* / timestamp
 
@@ -854,7 +856,7 @@ All **❓ Unknown** — footprint chart type; no runtime module.
 | `switch` | kw | 🔧 Transpiler | C++ `switch` | |
 | `type` | kw | 🔧 Transpiler | UDT struct generation | |
 | `var` | kw | 🔧 Transpiler | Persistent variable (static in on_bar) | |
-| `varip` | kw | ❌ Unsupported | Intrabar persistence; rejected | |
+| `varip` | kw | 🔧 Transpiler | Treated as `var` (semantically identical in batch mode); transpile warning emitted | Sprint C |
 | `while` | kw | 🔧 Transpiler | C++ `while` | |
 
 ### Operators
@@ -917,7 +919,7 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 
 ### Analyst and fundamental syminfo fields (return na)
 
-`syminfo.recommendations_buy`, `syminfo.recommendations_sell`, `syminfo.target_price_*`, `syminfo.employees`, `syminfo.shareholders`, `syminfo.shares_outstanding_*`, `syminfo.sector`, `syminfo.industry`, `syminfo.country`, `syminfo.isin` — these fields are not in the `SymInfo` struct and return na. Strategies that gate logic on these values will compile but behave incorrectly.
+`syminfo.recommendations_buy`, `syminfo.recommendations_sell`, `syminfo.target_price_*`, `syminfo.employees`, `syminfo.shareholders`, `syminfo.shares_outstanding_*`, `syminfo.sector`, `syminfo.industry`, `syminfo.isin`, `syminfo.expiration_date`, `syminfo.current_contract`, `syminfo.mincontract` — these fields are not in the `SymInfo` struct and return na (sprint G2 moved them from silent ❌ to explicit ⏭️ na-accept). Strategies that gate logic on these values via `if` / `?:` get a transpile-time **warning** so the silent-suppression issue is surfaced. `syminfo.country` and `syminfo.main_tickerid` are derived from `syminfo.tickerid` at codegen-time (no external data needed). Long-term: pineforge-data integration will populate these fields per symbol.
 
 ### Dividend / earnings / splits variables (return na)
 
@@ -929,9 +931,9 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 - `timenow` — live clock. Batch mode has no "now". Always na.
 - `chart.left_visible_bar_time` / `chart.right_visible_bar_time` — viewport concept. No equivalent in batch.
 
-### varip (keyword — hard reject)
+### varip (keyword — accepted as var with warning)
 
-`varip` is rejected by PineForge's transpiler. Strategies using `varip` cannot compile. Use `var` as a workaround (same semantics in batch mode; difference only matters for live tick sub-bar persistence).
+**Sprint C update:** `varip` is now accepted by PineForge's transpiler and treated identically to `var` (semantically equivalent in batch mode — `varip`'s intrabar-tick distinction has no meaning when bars are evaluated once). A transpile-time warning is emitted to remind authors of the substitution. Strategies using `varip` now compile cleanly.
 
 ### Library system (hard reject)
 
@@ -945,9 +947,81 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 
 `alert()` / `alertcondition()` — compiled silently; no alert is ever sent. PineForge is a batch engine with no live alert capability.
 
-### ta.vwap 3-tuple form (partial gap)
+### ta.vwap 3-tuple form
 
-`ta.vwap(source, anchor, stdev_mult)` when `stdev_mult` is provided returns a 3-tuple `[vwap, upper_band, lower_band]`. The runtime `VWAP` class only returns the single `vwap` value. The transpiler must reject or inline the band computation.
+**Sprint B update — RESOLVED.** `ta.vwap(source, anchor, stdev_mult)` 3-tuple form `[vwap, upper_band, lower_band]` is now fully supported. The engine's `ta::VWAP` class was extended with running variance (`cum_pv_sq_` field) and a `VWAPBandsResult{vwap,upper,lower}` struct (modelled on `ta::BBResult`). Codegen dispatches the 3-arg overload via `signatures.py` dual-overload (matching the `ta.highest`/`lowest` pattern) and routes through `vwap_bands` in `analyzer/call_handlers.py`. Verified bit-exact against TV at 916/916 (breakout 1σ) and 225/225 (mean-reversion 2σ) corpus probes.
+
+---
+
+## Sprint changes (2026-05-17)
+
+Pine v6 HIGH+MEDIUM sprint added ~50 identifiers to the supported surface
+(✅ Runtime + 🔧 Transpiler) and reclassified ~20 from ❓/❌ to explicit
+buckets. Full final-state regression report: `docs/pine_v6_sprint_regression_report.md`.
+
+### ✅ Runtime additions (17)
+
+| Identifiers | Group |
+|---|---|
+| `session.ismarket`, `session.ispremarket`, `session.ispostmarket`, `session.isfirstbar(_regular)`, `session.islastbar(_regular)` (7) | A |
+| `ta.vwap` 3-tuple bands overload (1) | B |
+| `timeframe.main_period` (1) | E |
+| `strategy.max_contracts_held_all/_long/_short`, `strategy.eventrades` (4) | F |
+| `time_tradingday` (1) | G1 |
+| `pine_session_ismarket/ispremarket/ispostmarket` engine helpers + `pine_time_tradingday` (3, internal) | A + G1 |
+
+### 🔧 Transpiler additions (21)
+
+| Identifiers | Group |
+|---|---|
+| `chart.is_standard/heikinashi/kagi/linebreak/pnf/range/renko` (7) | E |
+| `timeframe.isticks` (1) | E |
+| `backadjustment.inherit/on/off` (3) | G2 |
+| `settlement_as_close.on/off/inherit` (3) | G2 |
+| `adjustment.dividends/splits` (2; `none` was already ✅) | G2 |
+| `syminfo.main_tickerid`, `syminfo.country` (2 — derived from `syminfo_.tickerid` via `helpers_syminfo.py`) | G2 |
+| `varip` (1 — now warn-then-emit-as-var) | C |
+| `ticker.inherit`, `ticker.standard` (2 — passthrough for same-symbol use) | G2 |
+
+### ⏭️ Parse-and-skip additions (12) — most are silent-gap remediation
+
+| Identifiers | Group | Note |
+|---|---|---|
+| `syminfo.prefix`, `syminfo.root`, `syminfo.pricescale`, `syminfo.minmove` (4) | G2 | **Critical fix** — were silently emitting `0` (fields NOT in `SymInfo` struct, contrary to prior audit); now `na<T>()` |
+| `syminfo.mincontract`, `syminfo.current_contract`, `syminfo.expiration_date`, `syminfo.isin`, `syminfo.sector`, `syminfo.industry` (6) | G2 | Was ❓; now ⏭️ na-accept; conditional-use warning |
+| ~14 LOW-tier `syminfo.recommendations_*`, `syminfo.target_price_*`, `syminfo.employees`, etc. moved from ❌ to ⏭️ | G2 | Reclassification only; behaviour unchanged (still `na`) |
+
+### ❌ Unsupported (additions: 9; all explicit ticker.* hard-reject)
+
+| Identifiers | Group |
+|---|---|
+| `ticker.heikinashi/renko/kagi/linebreak/pointfigure` (5) — chart-type modifiers, engine doesn't synthesize alt bars | G2 |
+| `ticker.new`, `ticker.modify` (2) — cross-symbol construction not supported | G2 |
+| `request.footprint`, `footprint.*` (counted in unchanged ❌ but now explicitly noted) | — |
+
+(Previously these were blanket-rejected via namespace; sprint G2 made per-function rejection explicit with clearer error message.)
+
+### Engine bug filed during sprint
+
+- **GitHub Issue [#16](https://github.com/fullpass-4pass/pineforge-engine/issues/16):** `max_intraday_filled_orders` cap-day boundary uses `chart_timezone` instead of exchange `syminfo.timezone`. Workaround shipped: validator `engine_chart_timezone` override key (per-probe). Long-term fix blocked on pineforge-data integration.
+
+### Validator workflow improvements (pineforge-utils)
+
+- Eigen auto-detect at homebrew/macports/apt paths — recovered 6 matrix probes regressing to compile-fail.
+- New `engine_chart_timezone` key in `inputs.json` schema for per-probe override of `_engine_chart_tz_for_csv_tz` auto-derivation.
+- Validator default sweep skips `corpus/validation/symbol-specified/` subtree (5 stock probes blocked on pineforge-data).
+
+### Final corpus parity
+
+After sprint + 6 new TV-parity probes + 2 strong→excellent config tweaks:
+
+| Bucket | Count |
+|---|---|
+| Excellent | **233 / 234** (99.6%) |
+| Strong | 0 |
+| Weak | 1 (`anomaly-equity-mirror-strategy-equity-01` — intentional) |
+
+vs pre-sprint baseline 227 excellent + 1 anomaly: **+6 excellent, 0 regressions**.
 
 ---
 
