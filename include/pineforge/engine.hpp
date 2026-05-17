@@ -1127,6 +1127,10 @@ public:
     }
     const std::string& chart_timezone() const { return chart_timezone_; }
 
+    // Returns the script's active timeframe string (e.g. "15" for 15-minute,
+    // "D" for daily). Backs timeframe.main_period in generated Pine v6 code.
+    const std::string& main_period() const { return script_tf_; }
+
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.
     void set_magnifier_volume_weighted(bool on) {
