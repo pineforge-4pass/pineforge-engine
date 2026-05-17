@@ -888,9 +888,19 @@ public:
     double recompute(double high, double low, double close, double volume);
 };
 
+// --- VWAP Bands result (3-tuple: vwap, upper_band, lower_band) ---
+struct VWAPBandsResult {
+    double vwap;
+    double upper;
+    double lower;
+};
+
 class VWAP {
     double cum_pv_ = 0.0;
     double cum_vol_ = 0.0;
+    // Sum of (price^2 * volume) for running variance computation used by
+    // compute_bands(). Variance = cum_pv_sq_ / cum_vol_ - mean^2.
+    double cum_pv_sq_ = 0.0;
     // Anchor day index (Unix-day = timestamp_ms / 86_400_000). On the
     // first compute() call we record this from the bar timestamp; on
     // every subsequent compute() the cumulator is reset whenever the
@@ -898,13 +908,32 @@ class VWAP {
     // anchor (`anchor = timeframe.change("1D")`); engine matches that.
     int64_t anchor_day_ = std::numeric_limits<int64_t>::min();
 
-    double saved_cum_pv_, saved_cum_vol_;
+    double saved_cum_pv_, saved_cum_vol_, saved_cum_pv_sq_;
     int64_t saved_anchor_day_ = std::numeric_limits<int64_t>::min();
 
 public:
     VWAP() = default;
     double compute(double src, double volume, int64_t timestamp_ms);
     double recompute(double src, double volume, int64_t timestamp_ms);
+    VWAPBandsResult compute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult);
+    VWAPBandsResult recompute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult);
+};
+
+// --- VWAP Bands wrapper class (3-tuple form: ta.vwap(src, anchor, stdev_mult)) ---
+// Wraps VWAP and routes compute/recompute to compute_bands/recompute_bands with
+// a fixed stdev_mult supplied at construction time. This lets the codegen use
+// the standard .compute()/.recompute() dispatch pattern for tuple returns.
+class VWAPBands {
+    VWAP vwap_;
+    double stdev_mult_;
+public:
+    explicit VWAPBands(double stdev_mult) : stdev_mult_(stdev_mult) {}
+    VWAPBandsResult compute(double src, double volume, int64_t timestamp_ms) {
+        return vwap_.compute_bands(src, volume, timestamp_ms, stdev_mult_);
+    }
+    VWAPBandsResult recompute(double src, double volume, int64_t timestamp_ms) {
+        return vwap_.recompute_bands(src, volume, timestamp_ms, stdev_mult_);
+    }
 };
 
 // --- Statistical ---
