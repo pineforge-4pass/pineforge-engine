@@ -12,6 +12,7 @@
 #include "bar.hpp"
 #include "timeframe.hpp"
 #include "magnifier.hpp"
+#include "session_time.hpp"
 
 namespace pineforge {
 
@@ -656,6 +657,17 @@ protected:
     // (sub_bar.volume / mean_sub_bar_volume) within each script bar — dense
     // tick approximation on high-volume sub-bars without real tick data.
     bool magnifier_volume_weighted_ = false;
+
+    // --- Session predicate bar-state tracking ---
+    // Tracks whether the previous bar was inside the regular session.
+    // Used to compute session.isfirstbar (in_session && !prev_in_session_)
+    // and session.islastbar (prev_in_session_ && !in_session).
+    bool prev_in_session_ = false;
+    // Current-bar session predicates — recomputed at the start of each bar
+    // by update_session_state() in engine_run.cpp.
+    bool session_ismarket_ = false;
+    bool session_isfirstbar_ = false;
+    bool session_islastbar_ = false;
 
     // --- Timeframe state ---
     std::string input_tf_;

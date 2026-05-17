@@ -328,6 +328,23 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
             feed_security_eval_state(state, input_bars[i]);
         }
 
+        // Update session predicates for session.ismarket / isfirstbar / islastbar.
+        session_ismarket_  = pine_session_ismarket(syminfo_.session, syminfo_.timezone,
+                                                    current_bar_.timestamp);
+        session_isfirstbar_ = session_ismarket_ && !prev_in_session_;
+        // islastbar: fire when this bar is in-session but the NEXT bar won't be
+        // (lookahead: peek at next bar's timestamp if available, else fire on last bar).
+        if (session_ismarket_) {
+            bool next_in_session = false;
+            if (i + 1 < n_input) {
+                next_in_session = pine_session_ismarket(syminfo_.session, syminfo_.timezone,
+                                                         input_bars[i + 1].timestamp);
+            }
+            session_islastbar_ = !next_in_session;
+        } else {
+            session_islastbar_ = false;
+        }
+
         if (process_orders_on_close_) {
             process_pending_orders(current_bar_);
             update_per_trade_extremes();
@@ -338,6 +355,7 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
             update_per_trade_extremes();
             on_bar(current_bar_);
         }
+        prev_in_session_ = session_ismarket_;
         update_equity_extremes();
         prev_bar_timestamp_ = current_bar_.timestamp;
     }
@@ -383,12 +401,23 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
             pending_close_qty_in_bar_ = 0.0;
 
             if (bar_magnifier && !group_sub_bars.empty()) {
-                // Magnifier mode: process sub-bars with price path sampling
+                // Magnifier mode: update session state using script-bar timestamp
+                // (first sub-bar's timestamp represents the aggregated bar).
+                session_ismarket_  = pine_session_ismarket(syminfo_.session, syminfo_.timezone,
+                                                            group_sub_bars.front().timestamp);
+                session_isfirstbar_ = session_ismarket_ && !prev_in_session_;
+                session_islastbar_  = false;  // not deterministic in magnifier mode without lookahead
                 run_magnified_bar(group_sub_bars);
+                prev_in_session_ = session_ismarket_;
                 group_sub_bars.clear();
             } else {
                 // No magnifier: use aggregated bar directly
                 current_bar_ = ab.bar;
+                // Update session predicates.
+                session_ismarket_  = pine_session_ismarket(syminfo_.session, syminfo_.timezone,
+                                                            current_bar_.timestamp);
+                session_isfirstbar_ = session_ismarket_ && !prev_in_session_;
+                session_islastbar_  = session_ismarket_ && barstate_islast_;
                 if (process_orders_on_close_) {
                     process_pending_orders(current_bar_);
                     update_per_trade_extremes();
@@ -399,6 +428,7 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                     update_per_trade_extremes();
                     on_bar(current_bar_);
                 }
+                prev_in_session_ = session_ismarket_;
             }
             update_equity_extremes();
             prev_bar_timestamp_ = current_bar_.timestamp;
