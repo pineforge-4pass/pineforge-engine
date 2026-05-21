@@ -1,8 +1,14 @@
 # Pine v6 Coverage — Identifier-by-Identifier Audit
 
+> ⚠️ **STALE — DO NOT TRUST INDIVIDUAL ROWS WITHOUT CROSS-CHECK.**
+> Exhaustive 2026-05-21 audit ([`pine_v6_audit_master.md`](pine_v6_audit_master.md)) found **38 critical issues** (wrong bucket / wrong backing / silent miscompile) + **~62 minor issues** across the rows below. Headline totals are also affected — bucket counts have not been re-derived post-audit.
+>
+> This file will be regenerated after the fix sprint. Until then, treat it as a snapshot of *what the doc claimed*, not *what the engine actually does*. The master audit contains consolidated critical-issue tables + minor-issue themes; chunk-level cite-by-line-number reports were merged into the master and removed.
+
 | Field | Value |
 |---|---|
 | **Generated** | 2026-05-17 (post Pine v6 HIGH+MEDIUM sprint) |
+| **Audit status** | ⚠️ Superseded by `pine_v6_audit_master.md` (2026-05-21) |
 | **Pine v6 reference** | https://www.tradingview.com/pine-script-reference/v6/ (JS-rendered, scraped 2026-05-16) |
 | **PineForge engine version** | 0.4.1 + sprint |
 | **Total Pine v6 identifiers** | 941 |
