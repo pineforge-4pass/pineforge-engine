@@ -1,10 +1,8 @@
 #include "timezone.hpp"
-
 #include <cstdlib>
 #include <ctime>
 
 namespace pineforge {
-
 namespace pine_tz {
 namespace {
 
@@ -13,33 +11,39 @@ std::mutex& timezone_mutex() {
     return mutex;
 }
 
+std::string g_active_tz = "NOT_SET";
+
 }  // namespace
 
 ScopedTimezone::ScopedTimezone(const std::string& tz)
-    : lock_(timezone_mutex()) {
+    : lock_(timezone_mutex(), std::defer_lock) {
+
+    std::string target = (tz.empty() || tz == "UTC" || tz == "Etc/UTC") ? "UTC" : tz;
+
+    lock_.lock();
+    if (g_active_tz == target) {
+        lock_.unlock();
+        had_old_ = false;
+        return;
+    }
+
     const char* old = std::getenv("TZ");
     if (old != nullptr) {
         old_tz_ = old;
         had_old_ = true;
+    } else {
+        had_old_ = false;
     }
 
-    if (tz.empty() || tz == "UTC" || tz == "Etc/UTC") {
-        ::setenv("TZ", "UTC", 1);
-    } else {
-        ::setenv("TZ", tz.c_str(), 1);
-    }
+    ::setenv("TZ", target.c_str(), 1);
     ::tzset();
+    g_active_tz = target;
+    lock_.unlock();
 }
 
 ScopedTimezone::~ScopedTimezone() {
-    if (had_old_) {
-        ::setenv("TZ", old_tz_.c_str(), 1);
-    } else {
-        ::unsetenv("TZ");
-    }
-    ::tzset();
+    // Destructor does nothing to allow lazy caching across calls!
 }
 
 }  // namespace pine_tz
-
 } // namespace pineforge
