@@ -925,6 +925,19 @@ protected:
     double open_trade_max_runup(int idx) const;
     double open_trade_max_runup_percent(int idx) const;
 
+    std::string position_entry_name() const {
+        if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return "";
+        return pyramid_entries_.back().entry_id;
+    }
+
+    double max_drawdown_percent() const {
+        return (initial_capital_ > 0.0) ? (max_drawdown_ / initial_capital_) * 100.0 : 0.0;
+    }
+
+    int64_t time_close() const {
+        return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session, syminfo_.timezone, script_tf_);
+    }
+
 private:
     double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
     void execute_market_entry(const std::string& id, bool is_long, double fill_price,

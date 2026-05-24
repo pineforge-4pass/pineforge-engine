@@ -294,6 +294,15 @@ public:
     double pub_profit_pct(int i)  const { return open_trade_profit_percent(i); }
     double pub_max_dd_pct(int i)  const { return open_trade_max_drawdown_percent(i); }
     double pub_max_run_pct(int i) const { return open_trade_max_runup_percent(i); }
+    std::string pub_position_entry_name() const { return position_entry_name(); }
+    double pub_max_drawdown_percent() const { return max_drawdown_percent(); }
+    int64_t pub_time_close() const { return time_close(); }
+    void set_initial_capital(double val) { initial_capital_ = val; }
+    void set_max_drawdown(double val) { max_drawdown_ = val; }
+    void set_current_bar_timestamp(int64_t ts) { current_bar_.timestamp = ts; }
+    void set_script_tf(const std::string& tf) { script_tf_ = tf; }
+    void set_syminfo_session(const std::string& sess) { syminfo_.session = sess; }
+    void set_syminfo_timezone(const std::string& tz) { syminfo_.timezone = tz; }
     void on_bar(const Bar& bar) override { (void)bar; }
 };
 }  // namespace
@@ -309,10 +318,34 @@ static void test_open_trade_zero_price_guard() {
     CHECK(near(p.pub_max_run_pct(0), 0.0));
 }
 
+static void test_engine_core_helpers() {
+    std::printf("test_engine_core_helpers\n");
+    ZeroPriceProbe p;
+    // Test flat position / initial states
+    CHECK(p.pub_position_entry_name() == "");
+    p.set_initial_capital(100000.0);
+    p.set_max_drawdown(5000.0);
+    CHECK(near(p.pub_max_drawdown_percent(), 5.0));
+
+    // Test time_close
+    p.set_current_bar_timestamp(1716595200000LL); // some epoch ms
+    p.set_script_tf("60");
+    p.set_syminfo_session("24x7");
+    p.set_syminfo_timezone("UTC");
+    // Verify it doesn't throw or crash and returns a non-zero timestamp
+    int64_t tc = p.pub_time_close();
+    CHECK(tc > 0);
+
+    // Now populate/test active states
+    p.inject_zero_priced_pyramid_entry();
+    CHECK(p.pub_position_entry_name() == "Z");
+}
+
 int main() {
     test_open_trade_accessors_flat_then_pyramid();
     test_open_trade_short_path();
     test_open_trade_zero_price_guard();
+    test_engine_core_helpers();
 
     std::printf("\nengine_trade_accessors: %d passed, %d failed\n",
                 tests_passed, tests_failed);
