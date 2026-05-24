@@ -40,6 +40,7 @@ namespace fs = std::filesystem;
 
 using fn_strategy_create = pf_strategy_t (*)(const char*);
 using fn_run_backtest    = void (*)(pf_strategy_t, pf_bar_t*, int, pf_report_t*);
+using fn_run_backtest_full = void (*)(pf_strategy_t, pf_bar_t*, int, const char*, const char*, int, int, pf_magnifier_distribution_t, pf_report_t*);
 using fn_report_free     = void (*)(pf_report_t*);
 using fn_strategy_free   = void (*)(pf_strategy_t);
 
@@ -96,6 +97,7 @@ const BarVec& get_bars() {
 // ---------------------------------------------------------------------------
 
 void register_strategy(const std::string& slug, const std::string& dylib_path) {
+    // 1. Cold-load (default)
     benchmark::RegisterBenchmark(
         slug.c_str(),
         [dylib_path](benchmark::State& state) {
@@ -134,6 +136,92 @@ void register_strategy(const std::string& slug, const std::string& dylib_path) {
                 sfree(s);
                 dlclose(h);
             }
+        })
+        ->Unit(benchmark::kMicrosecond)
+        ->Iterations(20);
+
+    // 2. Hot-loop throughput without magnifier
+    benchmark::RegisterBenchmark(
+        (slug + "/throughput/no_magnifier").c_str(),
+        [dylib_path](benchmark::State& state) {
+            const BarVec& bars = get_bars();
+            const int     n    = static_cast<int>(bars.size());
+
+            void* h = dlopen(dylib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!h) {
+                state.SkipWithError(dlerror());
+                return;
+            }
+
+            auto create = reinterpret_cast<fn_strategy_create>(
+                dlsym(h, "strategy_create"));
+            auto run = reinterpret_cast<fn_run_backtest>(
+                dlsym(h, "run_backtest"));
+            auto rfree = reinterpret_cast<fn_report_free>(
+                dlsym(h, "report_free"));
+            auto sfree = reinterpret_cast<fn_strategy_free>(
+                dlsym(h, "strategy_free"));
+
+            if (!create || !run || !rfree || !sfree) {
+                dlclose(h);
+                state.SkipWithError("missing required ABI symbol");
+                return;
+            }
+
+            for (auto _ : state) {
+                pf_strategy_t s = create(nullptr);
+                pf_report_t   report{};
+                run(s, const_cast<pf_bar_t*>(bars.data()), n, &report);
+                benchmark::DoNotOptimize(report.total_trades);
+                rfree(&report);
+                sfree(s);
+            }
+            dlclose(h);
+
+            state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(n));
+        })
+        ->Unit(benchmark::kMicrosecond)
+        ->Iterations(20);
+
+    // 3. Hot-loop throughput with bar magnifier (4 samples, endpoints)
+    benchmark::RegisterBenchmark(
+        (slug + "/throughput/with_magnifier").c_str(),
+        [dylib_path](benchmark::State& state) {
+            const BarVec& bars = get_bars();
+            const int     n    = static_cast<int>(bars.size());
+
+            void* h = dlopen(dylib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!h) {
+                state.SkipWithError(dlerror());
+                return;
+            }
+
+            auto create = reinterpret_cast<fn_strategy_create>(
+                dlsym(h, "strategy_create"));
+            auto run_full = reinterpret_cast<fn_run_backtest_full>(
+                dlsym(h, "run_backtest_full"));
+            auto rfree = reinterpret_cast<fn_report_free>(
+                dlsym(h, "report_free"));
+            auto sfree = reinterpret_cast<fn_strategy_free>(
+                dlsym(h, "strategy_free"));
+
+            if (!create || !run_full || !rfree || !sfree) {
+                dlclose(h);
+                state.SkipWithError("missing required ABI symbol");
+                return;
+            }
+
+            for (auto _ : state) {
+                pf_strategy_t s = create(nullptr);
+                pf_report_t   report{};
+                run_full(s, const_cast<pf_bar_t*>(bars.data()), n, "", "", 1, 4, PF_MAGNIFIER_ENDPOINTS, &report);
+                benchmark::DoNotOptimize(report.total_trades);
+                rfree(&report);
+                sfree(s);
+            }
+            dlclose(h);
+
+            state.SetItemsProcessed(state.iterations() * static_cast<int64_t>(n));
         })
         ->Unit(benchmark::kMicrosecond)
         ->Iterations(20);
