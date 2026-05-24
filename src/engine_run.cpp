@@ -17,6 +17,13 @@ using namespace internal;
 // open_trade_* accessors moved to engine_trade_accessors.cpp.
 void BacktestEngine::run(const Bar* bars, int n) {
     last_error_.clear();
+    if (n > 0 && bars != nullptr) {
+        last_bar_time_ = bars[n - 1].timestamp;
+        last_bar_index_ = n - 1;
+    } else {
+        last_bar_time_ = 0;
+        last_bar_index_ = 0;
+    }
     try {
     trades_.reserve(256);
     max_equity_ = initial_capital_;
@@ -185,6 +192,11 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                           int magnifier_samples,
                           MagnifierDistribution magnifier_dist) {
     last_error_.clear();
+    if (n_input > 0 && input_bars != nullptr) {
+        last_bar_time_ = input_bars[n_input - 1].timestamp;
+    } else {
+        last_bar_time_ = 0;
+    }
     try {
     // Auto-detect input_tf from bar timestamps if not provided
     std::string effective_input_tf = input_tf;
@@ -236,6 +248,7 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
 
     int expected_script_bars =
         count_expected_script_bars(input_bars, n_input, needs_aggregation);
+    last_bar_index_ = expected_script_bars - 1;
 
     validate_security_timeframes(effective_input_tf);
 

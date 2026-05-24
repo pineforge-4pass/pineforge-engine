@@ -286,6 +286,8 @@ protected:
 
     // --- SymInfo + Input injection ---
     SymInfo syminfo_;
+    int64_t last_bar_time_ = 0;
+    int last_bar_index_ = 0;
     // Chart's display timezone — separate from ``syminfo_.timezone`` (the
     // exchange TZ). Set by ``set_chart_timezone`` / the C ABI's
     // ``strategy_set_chart_timezone``. See the doc on ``set_chart_timezone``
