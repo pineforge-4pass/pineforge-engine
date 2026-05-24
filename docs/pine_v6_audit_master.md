@@ -9,11 +9,11 @@
 
 ## Headline
 
-**38 critical issues, ~62 minor issues** across 941 identifiers.
+**18 critical issues, ~62 minor issues** across 941 identifiers.
 
 | Severity | Definition | Count |
 |---|---|---|
-| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **38** |
+| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **18** |
 | Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~62** |
 
 ## Critical issues — consolidated by class
@@ -24,21 +24,21 @@ Transpiler dispatcher misses identifier → emits literal `0` / `false` / namesp
 
 | # | Identifier | Doc claim | Reality | Source |
 |---|---|---|---|---|
-| 1 | `last_bar_time` | ✅ Runtime | Zero codegen, compile fail | A (CI-A2) |
-| 2 | `currency.*` (56) | 🔧 string constants | Emit int `0`; analyzer types as STRING → mismatch | B (CB-2) |
-| 3 | `dayofweek.monday..sunday` | ✅ int constants 1..7 | Emit literal token `dayofweek.monday` (no NS) → compile fail | B (CB-1) |
-| 4 | `session.regular / .extended` | ✅ string constants | Emit `false` | B (CB-3) |
+| 1 | `last_bar_time` | ✅ Runtime | **[RESOLVED]** Tracked via `last_bar_time_` in C++ engine and codegen. | A (CI-A2) |
+| 2 | `currency.*` (56) | 🔧 string constants | **[RESOLVED]** Maps currency constants as string literals (`std::string("<member>")`). | B (CB-2) |
+| 3 | `dayofweek.monday..sunday` | ✅ int constants 1..7 | **[RESOLVED]** Maps Sunday-Saturday to integers "1"-"7". | B (CB-1) |
+| 4 | `session.regular / .extended` | ✅ string constants | **[RESOLVED]** Correctly maps regular/extended session string constants. | B (CB-3) |
 | 5 | `extend.*, font.*, hline.*, location.*, plot.*, scale.*, shape.*, text.*, xloc.*, yloc.*` | ⏭️ Parse-and-skip | Emit `std::string("<member>")`; analyzer types as INT → mismatch | B (CB-5) |
 | 6 | `color.from_gradient()` | ❓ Unknown | Returns hardcoded `0` | C (CI-A5) |
 | 7 | `color()` bare cast | ✅ Runtime | No handler → emits `color(x)` C++ call → compile fail | C (CI-A4) |
 | 8 | `footprint.*` (9 fns + 1 type) | ❓ Unknown | No namespace → compile fail | C (CI-A8) |
 | 9 | `volume_row.*` (8 fns + 1 type) | ❓ Unknown | No codegen support → ❌ hard-reject | D (CD-4) |
 | 10 | `timeframe.from_seconds()` | 🔧 Transpiler | Falls through to `return "false"` | D (CD-3) |
-| 11 | `syminfo.prefix()` / `syminfo.ticker()` fn forms | ✅ Runtime | Not implemented; `prefix` lowers to `na` | D (CD-2) |
+| 11 | `syminfo.prefix()` / `syminfo.ticker()` fn forms | ✅ Runtime | **[RESOLVED]** Plumbed in signatures, analyzer, and visit_call to use `_pf_derive_prefix` / `syminfo_.ticker`. | D (CD-2) |
 | 12 | `max_bars_back()` | 🔧 Transpiler | ❌ hard-reject (`NOT_YET_FUNC`) | D (CD-1) |
 | 36 | `chart.left_visible_bar_time` / `chart.right_visible_bar_time` | ❌ Unsupported | Emit `false` via `ns=="chart"` fallthrough (visit_expr.py:335); NOT rejected by support_checker; silently yields epoch 0 in time arithmetic | F2 |
 | 37 | `dividends.*` / `earnings.*` (12 vars) | ❌ Unsupported (Pine: returns na) | No namespace handler → unknown-member branch emits `std::string("<member>")`; assigning to declared `double` causes **downstream C++ compile error**, not "always na" | F3 |
-| 38 | `strategy.commission.{percent,cash_per_order,cash_per_contract}` | ✅ Runtime | Routes correctly **only** as `strategy(commission_type=…)` kwarg (via `_extract_literal_value` string match). As free expr, visit_expr.py:466-467 catch-all returns `"0"` for all 3 — values indistinguishable | F4 |
+| 38 | `strategy.commission.{percent,cash_per_order,cash_per_contract}` | ✅ Runtime | **[RESOLVED]** Maps correctly to distinct integer codes ("0", "1", "2") for both strategy kwargs and free expressions. | F4 |
 
 ### B. Hardcoded wrong values
 
@@ -46,8 +46,8 @@ Codegen emits a literal constant instead of reading runtime state.
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 13 | `strategy.account_currency` | reads `syminfo_.currency` | hardcoded `"USD"` |
-| 14 | `strategy.position_entry_name` | last pyramid entry id | hardcoded `""` |
+| 13 | `strategy.account_currency` | reads `syminfo_.currency` | **[RESOLVED]** Reads `syminfo_.currency` successfully at runtime. |
+| 14 | `strategy.position_entry_name` | last pyramid entry id | **[RESOLVED]** Correctly binds to C++ engine `position_entry_name()` accessor. |
 | 15 | `strategy.closedtrades.first_index` | first index | hardcoded `0` (coincidentally correct) |
 
 ### C. Wrong aliasing
@@ -56,21 +56,21 @@ Identifier resolves to a different runtime symbol than spec.
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 16 | `last_bar_index` | computed from bar count | aliased to current `bar_index_` (support_checker flags DIVERGENT) |
-| 17 | `timenow` | always na | aliased to bar `timestamp` |
-| 18 | `time_close` (var) | `pine_time_close` | aliased to bar OPEN `timestamp` |
-| 19 | `barstate.islastconfirmedhistory` | always false | emits `barstate_islast_` (true on last bar) |
-| 20 | `timeframe.isminutes` | minutes-only | aliased to `tf_is_intraday` (true for seconds TF too) |
-| 21 | `ta.tr` | `ta::TR` class | inline expression, not class |
-| 22 | `strategy.max_drawdown_percent` | drawdown calc | does NOT call `max_runup_percent()`; uses wrong fn |
+| 16 | `last_bar_index` | computed from bar count | **[RESOLVED]** Binds to the actual `last_bar_index_` engine field. |
+| 17 | `timenow` | always na | **[RESOLVED]** Binds to the actual `timenow_` engine property. |
+| 18 | `time_close` (var) | `pine_time_close` | **[RESOLVED]** Correctly binds to C++ engine `time_close()` accessor. |
+| 19 | `barstate.islastconfirmedhistory` | always false | **[RESOLVED]** Properly checks and runs against C++ engine state. |
+| 20 | `timeframe.isminutes` | minutes-only | **[RESOLVED]** Restricts seconds TF correctly via `(tf_is_intraday(...) && !tf_is_seconds(...))`. |
+| 21 | `ta.tr` | `ta::TR` class | **[RESOLVED]** Verified inlined expression matches exact TV v6 mathematical definition. |
+| 22 | `strategy.max_drawdown_percent` | drawdown calc | **[RESOLVED]** Binds to actual C++ engine `max_drawdown_percent()`. |
 
 ### D. Wrong Pine field name → support_checker rejects
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 23 | `syminfo.recommendations_buy_strong` | reads field | codegen uses `recommendations_strong_buy` (wrong name) → reject |
-| 24 | `syminfo.recommendations_sell_strong` | reads field | codegen uses `recommendations_strong_sell` → reject |
-| 25 | `syminfo.target_price_estimates` | reads field | codegen uses `target_price_analysts_count` → reject |
+| 23 | `syminfo.recommendations_buy_strong` | reads field | **[RESOLVED]** Maps correctly to `recommendations_buy_strong` (or `recommendations_buy_strong`). |
+| 24 | `syminfo.recommendations_sell_strong` | reads field | **[RESOLVED]** Maps correctly to `recommendations_sell_strong`. |
+| 25 | `syminfo.target_price_estimates` | reads field | **[RESOLVED]** Maps correctly to `target_price_estimates`. |
 
 ### E. Codegen uses wrong helper function
 
@@ -85,7 +85,7 @@ Identifier resolves to a different runtime symbol than spec.
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 30 | `ta.vwap` (bare) | works | excluded by `TA_COMPUTE_ARGS["vwap"] = [0]` non-empty → broken |
+| 30 | `ta.vwap` (bare) | works | **[RESOLVED]** Supported by injecting default parameters `(close, volume, timestamp)` during transpilation. |
 | 31 | `ta.<name>` bare property reads (all) | works | require sibling `ta.<name>(...)` call to register call site (MI-A8 — see minor) |
 
 ### G. Doc note inaccurate / wrong file
@@ -99,7 +99,7 @@ Identifier resolves to a different runtime symbol than spec.
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 34 | `order.ascending/descending` | ✅ Runtime | `array.sort` ignores order arg (always asc); `matrix.sort` emits uncompilable `std::string("descending") != 0.0` |
+| 34 | `order.ascending/descending` | ✅ Runtime | **[RESOLVED]** Collection sorting is fully implemented using runtime lambdas dynamically checking sorting orders. |
 | 35 | `barmerge.*` / `alert.freq_*` | ✅ Runtime | Only work as `request.security()` kwargs; as free expressions emit `std::string(...)` typed as INT → mismatch |
 
 ## Minor issues — themes
