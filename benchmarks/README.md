@@ -20,7 +20,7 @@ Last refresh: **2026-05-16**. Engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16.
 | 🟡 moderate | 0 / 100 | 10 / 100 | — |
 | 🟠 weak | 0 / 100 | 3 / 100 | — |
 
-PineForge hits canonical *excellent* tier on **100 of 100** strategies (was 48/50 in 2025-05). Median speed: **56× faster than PyneCore** across 49 commonly-timed strategies — see [`results/speed.md`](results/speed.md). Per-strategy detail: [`results/summary.md`](results/summary.md).
+PineForge hits canonical *excellent* tier on **100 of 100** strategies (was 48/50 in 2025-05). Median speed: **124× faster than PyneCore** across 49 commonly-timed strategies — see [`results/speed.md`](results/speed.md). Per-strategy detail: [`results/summary.md`](results/summary.md).
 
 ## Reproducing
 

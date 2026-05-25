@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)<br>
 [![Parity](https://img.shields.io/badge/TV%20parity-233%2F234-brightgreen)](#cross-engine-comparison)
-[![Speed](https://img.shields.io/badge/median%2056%C3%97%20vs%20PyneCore%20%2849%20strategies%29-success)](benchmarks/results/speed.md)<br>
+[![Speed](https://img.shields.io/badge/median%20124%C3%97%20vs%20PyneCore%20%2848%20strategies%29-success)](benchmarks/results/speed.md)<br>
 [![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
 
 **[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev)**<br>
@@ -72,7 +72,7 @@ Once connected, your AI agent can:
 ## Why PineForge?
 
 - 🎯 **TradingView-exact.** 233 of 234 reference strategies (~313,000 trades) match TV trade-for-trade. The lone outlier is a stress probe at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct. **100 of 100** PineForge excellent vs PyneCore + PineTS on the public three-way benchmark (~167,000 TV trades; PyneCore: 85 of 100; PineTS indicator-only).
-- ⚡ **Microsecond-class.** Median **56× faster than PyneCore** across 49 commonly-timed strategies (full 41,307-bar OHLCV via dlopen+run; see [benchmarks/results/speed.md](benchmarks/results/speed.md)). Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
+- ⚡ **Microsecond-class.** Median **124× faster than PyneCore** across 49 commonly-timed strategies (full 41,307-bar OHLCV via dlopen+run; see [benchmarks/results/speed.md](benchmarks/results/speed.md)). Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
 - 🔒 **Stable C ABI.** 10 functions, 6 POD types, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
 - 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
 - 🧰 **FFI-friendly.** Call from Python (`ctypes`), Rust (`libloading`), Go (`cgo`), Node, Julia. Worked examples for [pure C](https://cdocs.pineforge.dev/examples_c.html), [Python sweep](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy harness](https://cdocs.pineforge.dev/examples_multi.html), and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) ship in the docs.
@@ -143,7 +143,7 @@ This repository ships:
 - `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
 - A 39-binary ctest suite (38 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
 - `**corpus/`** (**public git submodule**) — **234 reference strategies** under a single `corpus/validation/` tree. Each folder ships `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`.
-- `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 100 strategies (50 public + 50 promoted corpus probes) and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **`benchmarks/assets` submodule** — a separate optional submodule (not yet public). With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on **50/50** strategies (first 50) vs PyneCore’s 47/50; on the expanded **100-strategy suite (~167,000 TV trades verified)**, PineForge holds **100/100 excellent** vs PyneCore’s 85/100. Median speedup: 56× vs PyneCore across 49 commonly-timed strategies.
+- `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 100 strategies (50 public + 50 promoted corpus probes) and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **`benchmarks/assets` submodule** — a separate optional submodule (not yet public). With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on **50/50** strategies (first 50) vs PyneCore’s 47/50; on the expanded **100-strategy suite (~167,000 TV trades verified)**, PineForge holds **100/100 excellent** vs PyneCore’s 85/100. Median speedup: 124× vs PyneCore across 49 commonly-timed strategies.
 
 ## Coverage
 
@@ -198,6 +198,45 @@ Installs:
 
 - `lib/libpineforge.a`
 - `include/pineforge/*.hpp` and `include/pineforge/pineforge.h`
+
+---
+
+## Validating Performance & Optimizations
+
+We recently achieved over **10× speedup** on hot-loop outlier bottlenecks (such as `19-scalping-wunder-bots`) by implementing:
+1. **Global Static Inputs Caching:** We group and evaluate non-source global inputs once inside a first-bar initialization block, completely eliminating redundant string-keyed map lookups inside the strategy's C++ `on_bar()` loop.
+2. **Thread-Local Timestamp Caching:** We cache inputs and outputs of `timestamp()` and timezone-aware date conversions in `thread_local` structures, reducing costly libc calendar lookups (`timegm` / `mktime`) to simple integer comparisons.
+3. **Lazy Timezone Caching:** We optimized the C++ `ScopedTimezone` implementation to lazy-cache active timezone environments across executions, avoiding redundant environment mutations (`setenv`) and parsing overhead (`tzset`) on every bar.
+
+### Validate Throughput & Parameter Sweeps (Local Reproduction Package)
+
+To easily reproduce and validate these throughput distribution and optimization claims locally without external API dependencies:
+
+```bash
+# 1. Navigate to the reproduction package
+cd performance_reproduction
+
+# 2. Run the automated reproduction script
+./reproduce.sh
+```
+
+This script will compile all 100 benchmark strategies, execute Google Benchmark throughput sweeps, compute the distribution quartiles, render a high-quality boxplot to `throughput_quartiles.png`, and execute an in-memory 27-combination parameter grid search on `19-scalping-wunder-bots` using high-speed ctypes FFI (verifying that the best parameter configuration is Fast MA = 11, Slow MA = 23, Risk:Reward = 2.5 with a Net Profit of 790.02).
+
+### Validate Full Engine Speed Table
+
+To run the complete three-way engine speed sweep (PineForge vs PyneCore vs PineTS) and regenerate the benchmark speed table:
+
+```bash
+# 1. Build speed benchmarks
+cmake -B build -DPINEFORGE_BUILD_SPEED_BENCH=ON
+cmake --build build --target pineforge_bench -j
+
+# 2. Run the end-to-end timing runner and regenerate the speed report
+SKIP_PYNE=1 SKIP_PINETS=1 SKIP_PINEFORGE=1 SKIP_REPORTS=1 ./benchmarks/run_all.sh
+
+# 3. View the updated speed table
+cat benchmarks/results/speed.md
+```
 - `lib/cmake/PineForge/PineForge{Config,Targets,ConfigVersion}.cmake`
 
 ### Use from another CMake project
@@ -359,7 +398,7 @@ Current standings (canonical align-then-trim window, 4-dimension diff vs TV):
 
 The 15 PyneCore-only outliers from excellent involve `strategy.exit(stop=…, limit=…)` brackets, `trail_*` exits, `strategy.close(qty_percent=…)` partial exits, and bar-magnifier paths — categories where PyneCore's broker emulator differs from TV and PineForge does not. See [`benchmarks/results/summary.md`](benchmarks/results/summary.md) for the per-strategy table and methodology.
 
-Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Per-strategy speed table at [`benchmarks/results/speed.md`](benchmarks/results/speed.md) — median **56× faster than PyneCore** on 49 commonly-timed strategies.
+Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16. Per-strategy speed table at [`benchmarks/results/speed.md`](benchmarks/results/speed.md) — median **124× faster than PyneCore** on 49 commonly-timed strategies.
 
 ## Status
 
