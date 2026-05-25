@@ -402,6 +402,7 @@ Last refresh: **2026-05-16** against engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.1
 
 ## Status
 
+- v0.6.0 — Performance Optimization Sprint. Grouped and cached global static inputs to avoid string-keyed map getters on every bar. Implemented highly optimized thread-local timestamp caching, accelerating backtest throughput by over 13x (up to 6.7M bars/sec). Added end-to-end performance reproduction package and strict input.source() chart series validation.
 - v0.5.0 — Pine v6 HIGH+MEDIUM sprint. Resolved 20 critical compatibility issues across symbol mappings, constant namespaces, timezone-aware timestamp overloads, collection sorting, and bare TA property reads. Corpus expanded to 234 probes (233 excellent + 1 documented anomaly). Expanded ctest suite to 39 binaries.
 - v0.4.1 — corpus rewritten as 228 clean-room probes; corpus submodule flipped public; 5 engine bug fixes (OCA same-direction RAW_ORDER, intraday-cap latch, etc.) + chart-TZ infra + 5 new ctests. **227 excellent + 1 documented anomaly = 228/228 strong-or-better**.
 - v0.1 — initial public release. C ABI defined and pinned. Reported **165 strict-excellent + 2 strong = 167/168** TV parity on the internal corpus (private submodule, 168 strategies including 5 parity probes + 1 anomaly probe); the lone outlier is a 1×-margin stress probe on an undocumented TV edge case. 48/50 strategies hit canonical *excellent* tier in the three-way benchmark. CI runs on Ubuntu + macOS (ctest + install smoke; no corpus).
