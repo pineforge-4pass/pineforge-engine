@@ -1,5 +1,3 @@
-// PineForge tutorial — C++ shape that the runtime loads as
-// strategy.so. Mirrors the logic in the sibling strategy.pine.
 #include <pineforge/engine.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/math.hpp>
@@ -14,6 +12,7 @@
 #include <vector>
 #include <tuple>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_map>
 #include <pineforge/color.hpp>
@@ -22,6 +21,83 @@
 #include <pineforge/session_time.hpp>
 
 using namespace pineforge;
+
+// --- syminfo derivation helpers (PineForge G2) ---
+static inline std::string _pf_derive_prefix(const std::string& tickerid) {
+    std::size_t colon = tickerid.find(':');
+    return (colon == std::string::npos) ? tickerid : tickerid.substr(0, colon);
+}
+
+static inline std::string _pf_derive_main_tickerid(const std::string& tickerid) {
+    // Strip trailing digits (optionally followed by '!') from the symbol part.
+    // e.g. "CME_MINI:ES1!" -> "CME_MINI:ES", "NYMEX:CL2!" -> "NYMEX:CL"
+    std::string result = tickerid;
+    std::size_t colon = result.find(':');
+    std::size_t start = (colon == std::string::npos) ? 0 : colon + 1;
+    // Find end of base symbol (strip trailing digits + optional '!')
+    std::size_t end = result.size();
+    if (end > start && result[end - 1] == '!') {
+        --end;
+    }
+    while (end > start && std::isdigit((unsigned char)result[end - 1])) {
+        --end;
+    }
+    return result.substr(0, end);
+}
+
+static inline std::string _pf_derive_country(const std::string& tickerid) {
+    // Lookup country by exchange prefix (text before ':').
+    std::size_t colon = tickerid.find(':');
+    std::string prefix = (colon == std::string::npos)
+        ? tickerid : tickerid.substr(0, colon);
+    static const std::unordered_map<std::string, std::string> _tbl = {
+        {"AMEX", "US"},
+        {"AQUIS", "UK"},
+        {"ARCA", "US"},
+        {"ASX", "AU"},
+        {"B3", "BR"},
+        {"BINANCE", "GLOBAL"},
+        {"BITMEX", "GLOBAL"},
+        {"BMF", "BR"},
+        {"BMFBOVESPA", "BR"},
+        {"BSE", "IN"},
+        {"BYBIT", "GLOBAL"},
+        {"CBOE", "US"},
+        {"CBOT", "US"},
+        {"CME", "US"},
+        {"CME_MINI", "US"},
+        {"COINBASE", "US"},
+        {"COMEX", "US"},
+        {"DERIBIT", "GLOBAL"},
+        {"EURONEXT", "EU"},
+        {"HKEX", "HK"},
+        {"JSE", "ZA"},
+        {"KOSPI", "KR"},
+        {"KRAKEN", "GLOBAL"},
+        {"KRX", "KR"},
+        {"LSE", "UK"},
+        {"MOEX", "RU"},
+        {"NASDAQ", "US"},
+        {"NSE", "IN"},
+        {"NYMEX", "US"},
+        {"NYSE", "US"},
+        {"OKX", "GLOBAL"},
+        {"OSE", "JP"},
+        {"OTC", "US"},
+        {"SGX", "SG"},
+        {"SIX", "CH"},
+        {"SSE", "CN"},
+        {"SZSE", "CN"},
+        {"TSE", "JP"},
+        {"TSX", "CA"},
+        {"UPBIT", "KR"},
+        {"VENTURE", "CA"},
+        {"XETRA", "DE"}
+    };
+    auto it = _tbl.find(prefix);
+    return (it != _tbl.end()) ? it->second : na<std::string>();
+}
+// --- end syminfo derivation helpers ---
 
 class GeneratedStrategy : public BacktestEngine {
 public:
@@ -35,6 +111,7 @@ public:
     bool longCond = false;
     bool shortCond = false;
     bool _ta_initialized_ = false;
+    bool _inputs_initialized_ = false;
 
     explicit GeneratedStrategy() : _ta_macd_1(12, 26, 9) {
         initial_capital_ = 1000000.0;
@@ -69,13 +146,16 @@ public:
     }
 
     void on_bar(const Bar& bar) override {
+        if (!_inputs_initialized_) {
+            fastLen = get_input_int("Fast Length", 12);
+            slowLen = get_input_int("Slow Length", 26);
+            signalLen = get_input_int("Signal Length", 9);
+            _inputs_initialized_ = true;
+        }
         if (!_ta_initialized_) {
             _ta_macd_1 = ta::MACD(get_input_int("Fast Length", 12), get_input_int("Slow Length", 26), get_input_int("Signal Length", 9));
             _ta_initialized_ = true;
         }
-        fastLen = get_input_int("Fast Length", 12);
-        slowLen = get_input_int("Slow Length", 26);
-        signalLen = get_input_int("Signal Length", 9);
         src = get_input_double("Source", current_bar_.close);
         auto _result__ta_macd_1 = (is_first_tick_ ? _ta_macd_1.compute(src) : _ta_macd_1.recompute(src));
         double macdLine = _result__ta_macd_1.macd_line;
@@ -110,7 +190,9 @@ extern "C" {
         auto* strat = static_cast<GeneratedStrategy*>(s);
         std::string itf = input_tf ? input_tf : "";
         std::string stf = script_tf ? script_tf : "";
-        if (itf.empty() || stf.empty() || itf == stf) {
+        bool needs_full_run = (bar_magnifier != 0)
+            || (!itf.empty() && !stf.empty() && itf != stf);
+        if (!needs_full_run) {
             strat->run(bars, n);
         } else {
             strat->run(bars, n, itf, stf, bar_magnifier != 0, magnifier_samples,
@@ -137,4 +219,3 @@ extern "C" {
         static_cast<GeneratedStrategy*>(s)->set_magnifier_volume_weighted(on != 0);
     }
 }
-
