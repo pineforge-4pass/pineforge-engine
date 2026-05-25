@@ -56,30 +56,55 @@ double RMA::compute(double src) {
 // --- SMA ---
 
 SMA::SMA(int length)
-    : length(length), bar_count(0) {}
+    : buffer(length), length(length), bar_count(0), running_sum(0.0) {}
+
+double SMA::recalculate_exact_sum() const {
+    double sum = 0.0;
+    std::size_t sz = buffer.size();
+    for (std::size_t i = 0; i < sz; ++i) {
+        double val = buffer[i];
+        if (!is_na(val)) {
+            sum += val;
+        }
+    }
+    return sum;
+}
 
 double SMA::compute(double src) {
     if (is_na(src)) {
         return na<double>();
     }
 
-    buffer.push_back(src);
+    double popped = buffer[length - 1];
+    buffer.push_front(src);
     bar_count++;
 
     if (bar_count < length) {
+        if (!is_na(src)) {
+            running_sum += src;
+        }
         return na<double>();
     }
 
-    // Keep only the last `length` values
-    while ((int)buffer.size() > length) {
-        buffer.pop_front();
+    if (bar_count == length) {
+        if (!is_na(src)) {
+            running_sum += src;
+        }
+        running_sum = recalculate_exact_sum();
+        return running_sum / length;
     }
 
-    double sum = 0.0;
-    for (double v : buffer) {
-        sum += v;
+    if (!is_na(popped)) {
+        running_sum -= popped;
     }
-    return sum / length;
+    running_sum += src;
+
+    // Self-correct precision drift periodically using bitwise AND
+    if ((bar_count & 255) == 0) {
+        running_sum = recalculate_exact_sum();
+    }
+
+    return running_sum / length;
 }
 
 // --- EMA ---
@@ -274,14 +299,27 @@ double EMA::recompute(double src) {
 
 // --- SMA ---
 double SMA::recompute(double src) {
-    if (buffer.empty()) return compute(src); // nothing to undo
-    buffer.back() = src;
+    if (is_na(src)) {
+        return na<double>();
+    }
+    if (buffer.size() == 0) {
+        return compute(src);
+    }
+
+    double old_val = buffer[0];
+    buffer.update_front(src);
+
+    if (!is_na(old_val)) {
+        running_sum -= old_val;
+    }
+    if (!is_na(src)) {
+        running_sum += src;
+    }
+
     if (bar_count < length) {
         return na<double>();
     }
-    double s = 0.0;
-    for (double v : buffer) s += v;
-    return s / length;
+    return running_sum / length;
 }
 
 // --- WMA ---

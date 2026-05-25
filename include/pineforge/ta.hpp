@@ -1,5 +1,6 @@
 #pragma once
 #include "na.hpp"
+#include "series.hpp"
 #include <deque>
 #include <cmath>
 #include <vector>
@@ -71,9 +72,12 @@ public:
 // --- SMA ---
 
 class SMA {
-    std::deque<double> buffer;
+    DynamicRingBuffer<double> buffer;
     int length;
     int bar_count;
+    double running_sum;
+
+    double recalculate_exact_sum() const;
 
 public:
     explicit SMA(int length);
