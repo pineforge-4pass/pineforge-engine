@@ -214,7 +214,7 @@ To easily reproduce and validate these throughput distribution and optimization 
 
 ```bash
 # 1. Navigate to the reproduction package
-cd performance_reproduction
+cd performance
 
 # 2. Run the automated reproduction script
 ./reproduce.sh

@@ -15,6 +15,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -59,25 +60,40 @@ def main() -> None:
                     help=f"Repetitions per strategy (default: {DEFAULT_N})")
     ap.add_argument("--only", default=None,
                     help="Filter: only time strategies whose name contains this string")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="Number of concurrent workers (default: 8)")
     args = ap.parse_args()
 
-    out: dict[str, dict] = {}
+    strat_dirs = []
     for d in sorted(STRATEGIES.iterdir()):
         if not d.is_dir() or d.name.startswith("_") or d.name.startswith("."):
             continue
         if args.only and args.only not in d.name:
             continue
-        result = time_one(d, args.n)
-        if result is not None:
-            out[d.name] = result
-            print(
-                f"{d.name}: median={result['median_ms']:.1f}ms  p95={result['p95_ms']:.1f}ms",
-                file=sys.stderr,
-            )
-        else:
-            print(f"{d.name}: SKIP (no strategy_pyne.py or subprocess error)", file=sys.stderr)
+        strat_dirs.append(d)
 
-    json.dump(out, sys.stdout, indent=2)
+    out: dict[str, dict] = {}
+
+    def process_strat(d: Path) -> tuple[str, dict | None]:
+        res = time_one(d, args.n)
+        return d.name, res
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {executor.submit(process_strat, d): d for d in strat_dirs}
+        for fut in as_completed(futures):
+            name, result = fut.result()
+            if result is not None:
+                out[name] = result
+                print(
+                    f"{name}: median={result['median_ms']:.1f}ms  p95={result['p95_ms']:.1f}ms",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"{name}: SKIP (no strategy_pyne.py or subprocess error)", file=sys.stderr)
+
+    # Sort final output alphabetically by strategy name
+    sorted_out = {k: out[k] for k in sorted(out.keys())}
+    json.dump(sorted_out, sys.stdout, indent=2)
     print(file=sys.stdout)  # trailing newline
 
 
