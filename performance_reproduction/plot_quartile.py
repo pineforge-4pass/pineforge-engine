@@ -120,15 +120,6 @@ def main():
     plt.text(q3, 0.73, f"Q3\n{q3:.2f}", ha='center', fontweight='bold', color="#1f6feb")
     plt.text(max_v, 1.25, f"Max\n{max_v:.2f}", ha='center', fontweight='bold', color="#1f6feb")
 
-    # Highlighting wunder-bots strategy optimization marker
-    if "19-scalping-wunder-bots" in results:
-        wunder_val = results["19-scalping-wunder-bots"]
-        plt.scatter([wunder_val], [1.0], color="#d12420", s=150, marker='*', label="Optimized Wunder-Bots (6.72 M/s)", zorder=5)
-        plt.annotate("Optimized Wunder-Bots\n(6.72 M/s, ~13.5x speedup)",
-                     xy=(wunder_val, 1.02), xytext=(wunder_val - 2, 1.35),
-                     arrowprops=dict(facecolor='#d12420', shrink=0.08, width=2, headwidth=8),
-                     fontweight='bold', color="#d12420")
-
     plt.title("PineForge Strategy Backtest Throughput Distribution (N=100)", fontsize=14, fontweight='bold', pad=20)
     plt.xlabel("Backtest Throughput (Millions of Bars per Second - M/s)", fontsize=12, labelpad=10)
     plt.yticks([], []) # Hide standard y-axis numbers
