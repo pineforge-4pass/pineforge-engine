@@ -7,7 +7,7 @@ Apples-to-apples comparison of **PineForge** against two open-source PineScript 
 
 ## Headline
 
-Last refresh: **2026-05-16**. Engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16.
+Last refresh: **2026-05-26**. Engine v0.6.0, PyneCore 6.4.6, PineTS 0.9.16.
 
 **Scale:** 100 strategies × ~167,000 TV trades verified.
 
@@ -20,7 +20,7 @@ Last refresh: **2026-05-16**. Engine v0.4.1, PyneCore 6.4.6, PineTS 0.9.16.
 | 🟡 moderate | 0 / 100 | 10 / 100 | — |
 | 🟠 weak | 0 / 100 | 3 / 100 | — |
 
-PineForge hits canonical *excellent* tier on **100 of 100** strategies (was 48/50 in 2025-05). Median speed: **124× faster than PyneCore** across 49 commonly-timed strategies — see [`results/speed.md`](results/speed.md). Per-strategy detail: [`results/summary.md`](results/summary.md).
+PineForge hits canonical *excellent* tier on **100 of 100** strategies (was 48/50 in 2025-05). Median speed: **119× faster than PyneCore** across 99 commonly-timed strategies — see [`results/speed.md`](results/speed.md). Per-strategy detail: [`results/summary.md`](results/summary.md).
 
 ## Reproducing
 

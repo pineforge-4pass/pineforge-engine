@@ -24,15 +24,6 @@ As of: 2026-05-16. Engine: v0.4.1.
   PineTS does not have a strategy backtester yet (roadmap item); the canonical
   indicator script (10 indicators × 41,307 bars) is timed as a representative
   indicator-layer cost. Single entry, not per-strategy.
-- **vectorbt:** In-process Python wall-time using `vectorbt` Portfolio API over the
-  pinned 41,307-bar series (N=20 iterations). Simple strategies (SMA cross, Keltner,
-  ROC) leverage fully vectorized Pandas/NumPy operations. Supertrend uses JIT-compiled Numba
-  loops. Hull Moving Average (HMA) uses sliding-window `.rolling().apply(...)` with custom
-  lambdas, demonstrating the real-world vectorized cost when pure matrix operations are difficult.
-- **PyneCore slots 51–75:** PyneSys cloud-compile quota was exhausted during
-  Task 5.2 (corpus probe promotion); `strategy_pyne.py` was not generated for
-  strategies 51–75. PyneCore column shows `—` for those slots.
-  **Will backfill once daily quota resets.**
 
 **Mixed-methodology note:** PineForge uses GBench in-process timing while
 PyneCore/PineTS use subprocess wall-time. This is intentional: GBench in-process
@@ -47,20 +38,7 @@ therefore a fair comparison of the per-strategy cost a real consumer would see.
 
 | Run | median_ms | p95_ms | N |
 |---|---:|---:|---:|
-| canonical (10 indicators × 41,307 bars) | 490.4 | 503.5 | 20 |
-
-
-## PineForge vs. vectorbt Speed Comparison
-
-| Strategy | PF median (ms) | vbt median (ms) | Speedup PF vs. vbt |
-|---|---:|---:|---:|
-| 01-sma-cross | 9.76 | 2.76 | 0.28× |
-| 03-supertrend | 8.45 | 5.85 | 0.69× |
-| 12-keltner | 9.12 | 2.96 | 0.32× |
-| 22-hma-cross | 11.73 | 149.23 | 13× |
-| 32-momentum-roc | 11.07 | 2.52 | 0.23× |
-
-*Throughput benchmark over 41,307-bar ETHUSDT_15 OHLCV series (N=20 iterations).*
+| canonical (10 indicators × 41,307 bars) | 459.9 | 474.3 | 20 |
 
 
 ## Per-strategy timing (PineForge vs PyneCore)
@@ -69,119 +47,119 @@ therefore a fair comparison of the per-strategy cost a real consumer would see.
 
 | Strategy | PF median (ms) | PF p95 (ms) | PC median (ms) | PC p95 (ms) | Speedup PF vs PC |
 |---|---:|---:|---:|---:|---:|
-| 01-sma-cross | 9.76 | 9.76 | 1152 | 1178 | 118× |
-| 02-inside-bar | 10.60 | 10.60 | 917 | 958 | 87× |
-| 03-supertrend | 8.45 | 8.45 | 1094 | 1126 | 130× |
-| 04-macd-histogram | 9.47 | 9.47 | 1569 | 1610 | 166× |
-| 05-stoch-rsi | 11.31 | 11.31 | 2050 | 2087 | 181× |
-| 06-liquidity-sweep | 18.00 | 18.00 | 2517 | 2576 | 140× |
-| 07-scalping-strategy | 9.18 | 9.18 | 2236 | 2299 | 244× |
-| 08-4ema-rsi | 9.73 | 9.73 | 1841 | 1902 | 189× |
-| 09-kkb-kalman | 14.17 | 14.17 | 1471 | 1512 | 104× |
-| 10-market-shift | 18.46 | 18.46 | — | — | — |
-| 100-matrix-bool-mask-no-transpose-01 | 14.70 | 14.70 | 5770 | 5820 | 393× |
-| 11-greedy | 8.83 | 8.83 | 782 | 809 | 89× |
-| 12-keltner | 9.12 | 9.12 | 1170 | 1200 | 128× |
-| 13-stoch-slow-k-d-cross | 12.56 | 12.56 | 2233 | 2284 | 178× |
-| 14-pivot-ext | 11.31 | 11.31 | 2134 | 2174 | 189× |
-| 15-stochastic-slow | 10.08 | 10.08 | 1745 | 1775 | 173× |
-| 16-volty-expan | 38.83 | 38.83 | 1564 | 1594 | 40× |
-| 17-bos-curv | 11.21 | 11.21 | 3986 | 4031 | 356× |
-| 18-kanuck | 50.81 | 50.81 | 4531 | 4554 | 89× |
-| 19-scalping-wunder-bots | 18.09 | 18.09 | 5252 | 5295 | 290× |
-| 20-bb-squeeze | 11.45 | 11.45 | 1817 | 1846 | 159× |
-| 21-dmi-adx-trend | 9.33 | 9.33 | 1563 | 1607 | 167× |
-| 22-hma-cross | 11.73 | 11.73 | 1970 | 1992 | 168× |
-| 23-cci-momentum | 11.36 | 11.36 | 1768 | 1790 | 156× |
-| 24-tsi-signal | 9.60 | 9.60 | 1576 | 1604 | 164× |
-| 25-linreg-channel | 13.15 | 13.15 | 1385 | 1403 | 105× |
-| 26-aroon-oscillator | 12.74 | 12.74 | 2747 | 2776 | 216× |
-| 27-donchian-breakout | 11.15 | 11.15 | 2487 | 2518 | 223× |
-| 28-elder-ray | 11.53 | 11.53 | 1431 | 1449 | 124× |
-| 29-chandelier-exit | 10.13 | 10.13 | 2060 | 2092 | 203× |
-| 30-atr-trailing-stop | 10.48 | 10.48 | 1703 | 1735 | 162× |
-| 31-vwma-divergence | 9.83 | 9.83 | 1757 | 1785 | 179× |
-| 32-momentum-roc | 11.07 | 11.07 | 1952 | 1976 | 176× |
-| 33-mean-reversion-bb | 10.62 | 10.62 | 1646 | 1664 | 155× |
-| 34-dual-ma-switch | 8.94 | 8.94 | 1379 | 1398 | 154× |
-| 35-ema-ribbon-loop | 8.59 | 8.59 | 1314 | 1332 | 153× |
-| 36-pivot-array-breakout | 9.96 | 9.96 | 2216 | 2243 | 223× |
-| 37-range-filter-while | 8.18 | 8.18 | 1150 | 1169 | 141× |
-| 38-adaptive-ma-func | 10.56 | 10.56 | 1573 | 1595 | 149× |
-| 39-candle-pattern | 10.39 | 10.39 | 1396 | 1409 | 134× |
-| 40-dual-thrust | 10.97 | 10.97 | 2591 | 2619 | 236× |
-| 41-volume-breakout | 10.21 | 10.21 | 1053 | 1070 | 103× |
-| 42-ma-stack-array | 11.10 | 11.10 | 1627 | 1650 | 147× |
-| 43-swing-pivot-atr | 19.86 | 19.86 | 2402 | 2442 | 121× |
-| 44-median-cross | 19.39 | 19.39 | 1608 | 1636 | 83× |
-| 45-multi-indicator-score | 13.07 | 13.07 | 2234 | 2271 | 171× |
-| 46-rsi-bands | 13.11 | 13.11 | 1660 | 1695 | 127× |
-| 47-supertrend-adx-filter | 9.21 | 9.21 | 1932 | 1967 | 210× |
-| 48-bracket-exit-tp-sl | 10.89 | 10.89 | 667 | 684 | 61× |
-| 49-partial-exit-qty-percent | 18.53 | 18.53 | 897 | 913 | 48× |
-| 50-close-immediate-vs-next-bar | 15.00 | 15.00 | 704 | 725 | 47× |
-| 51-order-deferred-flip-guaranteed-gap-stops-01 | 13.62 | 13.62 | 801 | 816 | 59× |
-| 52-barstate-isconfirmed-magnifier-off-01b | 8.76 | 8.76 | 836 | 859 | 95× |
-| 53-barstate-isconfirmed-magnifier-on-01a | 8.82 | 8.82 | 845 | 864 | 96× |
-| 54-composite-ies-integration-01 | 12.07 | 12.07 | 2062 | 2080 | 171× |
-| 55-composite-ies-pressure-gauge-01 | 10.09 | 10.09 | 987 | 1002 | 98× |
-| 56-composite-vcp-integration-01 | 30.11 | 30.11 | 4295 | 4378 | 143× |
-| 57-oca-exit-bracket-internal-cancel-01 | 10.28 | 10.28 | 1047 | 1070 | 102× |
-| 58-oca-multi-bracket-isolation-01 | 14.92 | 14.92 | 1204 | 1233 | 81× |
-| 59-order-deferred-flip-pooc-cross-bar-01 | 13.93 | 13.93 | 873 | 882 | 63× |
-| 60-recompute-alma-sar-corr-magnifier-01 | 11.84 | 11.84 | 1054 | 1082 | 89× |
-| 61-analyzer-parity-edge-margin-50-pct-01 | 9.85 | 9.85 | 718 | 729 | 73× |
-| 62-analyzer-parity-percent-of-equity-sizing-01 | 10.03 | 10.03 | 670 | 678 | 67× |
-| 63-analyzer-parity-small-equity-fraction-01 | 10.03 | 10.03 | 714 | 734 | 71× |
-| 64-composite-vcp-cumulative-volume-delta-01 | 11.00 | 11.00 | 944 | 962 | 86× |
-| 65-bracket-atr-trail-series-int-points-01 | 11.75 | 11.75 | 834 | 860 | 71× |
-| 66-bracket-entry-exit-same-pass-attach-01 | 14.54 | 14.54 | 707 | 719 | 49× |
-| 67-bracket-exit-stop-limit-trail-same-bar-01 | 11.84 | 11.84 | 901 | 914 | 76× |
-| 68-bracket-exit-three-way-set-once-entry-01 | 11.87 | 11.87 | 705 | 713 | 59× |
-| 69-bracket-exit-tp-sl-fixed-01 | 10.50 | 10.50 | 671 | 710 | 64× |
-| 70-bracket-narrow-stop-limit-with-trail8-01 | 11.95 | 11.95 | 705 | 749 | 59× |
-| 71-bracket-partial-exit-qty-percent-01 | 18.15 | 18.15 | 900 | 940 | 50× |
-| 72-bracket-same-id-exit-replace-01 | 10.42 | 10.42 | 694 | 732 | 67× |
-| 73-bracket-tp-sl-oca-reduce-isolate-01 | 10.89 | 10.89 | 1148 | 1189 | 105× |
-| 74-bracket-trail-points-no-offset-explicit-01 | 12.62 | 12.62 | 711 | 737 | 56× |
-| 75-composite-4emarsi-rsi-pullback-latch-01 | 8.82 | 8.82 | 979 | 1021 | 111× |
-| 76-analyzer-parity-choch-bos-isolator-01 | 10.02 | 10.02 | 1572 | 1628 | 157× |
-| 77-composite-scalping-fast-ma-cross-trigger-01 | 9.26 | 9.26 | 984 | 1010 | 106× |
-| 78-cap-max-intraday-filled-orders-isolate-01 | 9.86 | 9.86 | 1104 | 1121 | 112× |
-| 79-composite-kanuck-kama-state-recurrence-01 | 10.30 | 10.30 | 1219 | 1266 | 118× |
-| 80-magnifier-tick-dist-volume-weighted-on-01 | 10.52 | 10.52 | 815 | 831 | 78× |
-| 81-magnifier-tick-dist-endpoints-rsi-cross-08a | 15.04 | 15.04 | 1068 | 1093 | 71× |
-| 82-matrix-covariance-eigen-pca-01 | 32.07 | 32.07 | 1976 | 2010 | 62× |
-| 83-matrix-bool-mask-explicit-utc-tz-01 | 61.73 | 61.73 | 6506 | 6621 | 105× |
-| 84-na-nz-fixnan-history-chain-01 | 10.71 | 10.71 | 1079 | 1121 | 101× |
-| 85-oca-raw-strategy-order-reduce-01 | 9.65 | 9.65 | 705 | 720 | 73× |
-| 86-order-range-expansion-pending-stop-01 | 16.08 | 16.08 | 1172 | 1193 | 73× |
-| 87-pyramid-deferred-flip-close-all-01 | 17.59 | 17.59 | 1322 | 1344 | 75× |
-| 88-order-stop-entry-cancel-opposite-01 | 27.07 | 27.07 | 988 | 999 | 36× |
-| 89-session-ny-spring-forward-dst-01 | 21.84 | 21.84 | 1034 | 1063 | 47× |
-| 90-ta-hma-55-close-cross-01 | 11.88 | 11.88 | 1271 | 1292 | 107× |
-| 91-pyramid-close-id-grouping-01 | 21.84 | 21.84 | 817 | 840 | 37× |
-| 92-session-hour-minute-pulse-filter-01 | 11.49 | 11.49 | 660 | 672 | 57× |
-| 93-analyzer-parity-stop-limit-timing-01 | 14.81 | 14.81 | 860 | 878 | 58× |
-| 94-ta-hma-fast-slow-cross-01 | 11.79 | 11.79 | 1966 | 2015 | 167× |
-| 95-cap-risk-gates-allow-max-intraday-01 | 17.10 | 17.10 | 785 | 797 | 46× |
-| 96-composite-ies-rsi-macd-momentum-01 | 12.09 | 12.09 | 1388 | 1409 | 115× |
-| 97-composite-scalping-integration-01 | 10.06 | 10.06 | 977 | 998 | 97× |
-| 98-magnifier-tick-dist-endpoints-01 | 10.73 | 10.73 | 817 | 843 | 76× |
-| 99-matrix-eigen-rank-deficient-cov-01 | 25.97 | 25.97 | 1547 | 1571 | 60× |
+| 01-sma-cross | 8.05 | 8.05 | 1152 | 1178 | 143× |
+| 02-inside-bar | 9.42 | 9.42 | 917 | 958 | 97× |
+| 03-supertrend | 7.70 | 7.70 | 1094 | 1126 | 142× |
+| 04-macd-histogram | 8.52 | 8.52 | 1569 | 1610 | 184× |
+| 05-stoch-rsi | 9.99 | 9.99 | 2050 | 2087 | 205× |
+| 06-liquidity-sweep | 17.33 | 17.33 | 2517 | 2576 | 145× |
+| 07-scalping-strategy | 8.10 | 8.10 | 2236 | 2299 | 276× |
+| 08-4ema-rsi | 8.89 | 8.89 | 1841 | 1902 | 207× |
+| 09-kkb-kalman | 7.52 | 7.52 | 1471 | 1512 | 196× |
+| 10-market-shift | 13.03 | 13.03 | — | — | — |
+| 100-matrix-bool-mask-no-transpose-01 | 13.09 | 13.09 | 5770 | 5820 | 441× |
+| 11-greedy | 7.72 | 7.72 | 782 | 809 | 101× |
+| 12-keltner | 7.67 | 7.67 | 1170 | 1200 | 153× |
+| 13-stoch-slow-k-d-cross | 11.04 | 11.04 | 2233 | 2284 | 202× |
+| 14-pivot-ext | 10.19 | 10.19 | 2134 | 2174 | 209× |
+| 15-stochastic-slow | 8.79 | 8.79 | 1745 | 1775 | 199× |
+| 16-volty-expan | 35.71 | 35.71 | 1564 | 1594 | 44× |
+| 17-bos-curv | 9.73 | 9.73 | 3986 | 4031 | 410× |
+| 18-kanuck | 44.95 | 44.95 | 4531 | 4554 | 101× |
+| 19-scalping-wunder-bots | 14.76 | 14.76 | 5252 | 5295 | 356× |
+| 20-bb-squeeze | 11.55 | 11.55 | 1817 | 1846 | 157× |
+| 21-dmi-adx-trend | 8.92 | 8.92 | 1563 | 1607 | 175× |
+| 22-hma-cross | 10.39 | 10.39 | 1970 | 1992 | 190× |
+| 23-cci-momentum | 10.35 | 10.35 | 1768 | 1790 | 171× |
+| 24-tsi-signal | 9.20 | 9.20 | 1576 | 1604 | 171× |
+| 25-linreg-channel | 11.75 | 11.75 | 1385 | 1403 | 118× |
+| 26-aroon-oscillator | 11.41 | 11.41 | 2747 | 2776 | 241× |
+| 27-donchian-breakout | 9.77 | 9.77 | 2487 | 2518 | 255× |
+| 28-elder-ray | 10.16 | 10.16 | 1431 | 1449 | 141× |
+| 29-chandelier-exit | 9.00 | 9.00 | 2060 | 2092 | 229× |
+| 30-atr-trailing-stop | 9.03 | 9.03 | 1703 | 1735 | 189× |
+| 31-vwma-divergence | 8.52 | 8.52 | 1757 | 1785 | 206× |
+| 32-momentum-roc | 10.16 | 10.16 | 1952 | 1976 | 192× |
+| 33-mean-reversion-bb | 9.70 | 9.70 | 1646 | 1664 | 170× |
+| 34-dual-ma-switch | 7.72 | 7.72 | 1379 | 1398 | 178× |
+| 35-ema-ribbon-loop | 7.72 | 7.72 | 1314 | 1332 | 170× |
+| 36-pivot-array-breakout | 9.26 | 9.26 | 2216 | 2243 | 239× |
+| 37-range-filter-while | 7.32 | 7.32 | 1150 | 1169 | 157× |
+| 38-adaptive-ma-func | 9.23 | 9.23 | 1573 | 1595 | 170× |
+| 39-candle-pattern | 8.70 | 8.70 | 1396 | 1409 | 160× |
+| 40-dual-thrust | 9.91 | 9.91 | 2591 | 2619 | 261× |
+| 41-volume-breakout | 10.31 | 10.31 | 1053 | 1070 | 102× |
+| 42-ma-stack-array | 8.31 | 8.31 | 1627 | 1650 | 196× |
+| 43-swing-pivot-atr | 18.45 | 18.45 | 2402 | 2442 | 130× |
+| 44-median-cross | 17.18 | 17.18 | 1608 | 1636 | 94× |
+| 45-multi-indicator-score | 11.23 | 11.23 | 2234 | 2271 | 199× |
+| 46-rsi-bands | 11.20 | 11.20 | 1660 | 1695 | 148× |
+| 47-supertrend-adx-filter | 8.28 | 8.28 | 1932 | 1967 | 233× |
+| 48-bracket-exit-tp-sl | 10.07 | 10.07 | 667 | 684 | 66× |
+| 49-partial-exit-qty-percent | 16.64 | 16.64 | 897 | 913 | 54× |
+| 50-close-immediate-vs-next-bar | 13.22 | 13.22 | 704 | 725 | 53× |
+| 51-order-deferred-flip-guaranteed-gap-stops-01 | 11.97 | 11.97 | 801 | 816 | 67× |
+| 52-barstate-isconfirmed-magnifier-off-01b | 7.79 | 7.79 | 836 | 859 | 107× |
+| 53-barstate-isconfirmed-magnifier-on-01a | 7.76 | 7.76 | 845 | 864 | 109× |
+| 54-composite-ies-integration-01 | 10.13 | 10.13 | 2062 | 2080 | 204× |
+| 55-composite-ies-pressure-gauge-01 | 9.00 | 9.00 | 987 | 1002 | 110× |
+| 56-composite-vcp-integration-01 | 27.08 | 27.08 | 4295 | 4378 | 159× |
+| 57-oca-exit-bracket-internal-cancel-01 | 9.39 | 9.39 | 1047 | 1070 | 111× |
+| 58-oca-multi-bracket-isolation-01 | 12.94 | 12.94 | 1204 | 1233 | 93× |
+| 59-order-deferred-flip-pooc-cross-bar-01 | 12.45 | 12.45 | 873 | 882 | 70× |
+| 60-recompute-alma-sar-corr-magnifier-01 | 10.42 | 10.42 | 1054 | 1082 | 101× |
+| 61-analyzer-parity-edge-margin-50-pct-01 | 9.33 | 9.33 | 718 | 729 | 77× |
+| 62-analyzer-parity-percent-of-equity-sizing-01 | 8.92 | 8.92 | 670 | 678 | 75× |
+| 63-analyzer-parity-small-equity-fraction-01 | 9.02 | 9.02 | 714 | 734 | 79× |
+| 64-composite-vcp-cumulative-volume-delta-01 | 9.96 | 9.96 | 944 | 962 | 95× |
+| 65-bracket-atr-trail-series-int-points-01 | 10.69 | 10.69 | 834 | 860 | 78× |
+| 66-bracket-entry-exit-same-pass-attach-01 | 13.18 | 13.18 | 707 | 719 | 54× |
+| 67-bracket-exit-stop-limit-trail-same-bar-01 | 10.85 | 10.85 | 901 | 914 | 83× |
+| 68-bracket-exit-three-way-set-once-entry-01 | 10.88 | 10.88 | 705 | 713 | 65× |
+| 69-bracket-exit-tp-sl-fixed-01 | 9.79 | 9.79 | 671 | 710 | 69× |
+| 70-bracket-narrow-stop-limit-with-trail8-01 | 10.74 | 10.74 | 705 | 749 | 66× |
+| 71-bracket-partial-exit-qty-percent-01 | 16.61 | 16.61 | 900 | 940 | 54× |
+| 72-bracket-same-id-exit-replace-01 | 9.25 | 9.25 | 694 | 732 | 75× |
+| 73-bracket-tp-sl-oca-reduce-isolate-01 | 9.07 | 9.07 | 1148 | 1189 | 127× |
+| 74-bracket-trail-points-no-offset-explicit-01 | 11.28 | 11.28 | 711 | 737 | 63× |
+| 75-composite-4emarsi-rsi-pullback-latch-01 | 7.88 | 7.88 | 979 | 1021 | 124× |
+| 76-analyzer-parity-choch-bos-isolator-01 | 9.00 | 9.00 | 1572 | 1628 | 175× |
+| 77-composite-scalping-fast-ma-cross-trigger-01 | 8.36 | 8.36 | 984 | 1010 | 118× |
+| 78-cap-max-intraday-filled-orders-isolate-01 | 8.68 | 8.68 | 1104 | 1121 | 127× |
+| 79-composite-kanuck-kama-state-recurrence-01 | 9.24 | 9.24 | 1219 | 1266 | 132× |
+| 80-magnifier-tick-dist-volume-weighted-on-01 | 9.82 | 9.82 | 815 | 831 | 83× |
+| 81-magnifier-tick-dist-endpoints-rsi-cross-08a | 13.45 | 13.45 | 1068 | 1093 | 79× |
+| 82-matrix-covariance-eigen-pca-01 | 27.97 | 27.97 | 1976 | 2010 | 71× |
+| 83-matrix-bool-mask-explicit-utc-tz-01 | 54.61 | 54.61 | 6506 | 6621 | 119× |
+| 84-na-nz-fixnan-history-chain-01 | 9.34 | 9.34 | 1079 | 1121 | 116× |
+| 85-oca-raw-strategy-order-reduce-01 | 8.48 | 8.48 | 705 | 720 | 83× |
+| 86-order-range-expansion-pending-stop-01 | 14.14 | 14.14 | 1172 | 1193 | 83× |
+| 87-pyramid-deferred-flip-close-all-01 | 15.80 | 15.80 | 1322 | 1344 | 84× |
+| 88-order-stop-entry-cancel-opposite-01 | 23.50 | 23.50 | 988 | 999 | 42× |
+| 89-session-ny-spring-forward-dst-01 | 19.20 | 19.20 | 1034 | 1063 | 54× |
+| 90-ta-hma-55-close-cross-01 | 10.73 | 10.73 | 1271 | 1292 | 118× |
+| 91-pyramid-close-id-grouping-01 | 19.38 | 19.38 | 817 | 840 | 42× |
+| 92-session-hour-minute-pulse-filter-01 | 10.31 | 10.31 | 660 | 672 | 64× |
+| 93-analyzer-parity-stop-limit-timing-01 | 13.46 | 13.46 | 860 | 878 | 64× |
+| 94-ta-hma-fast-slow-cross-01 | 10.67 | 10.67 | 1966 | 2015 | 184× |
+| 95-cap-risk-gates-allow-max-intraday-01 | 15.01 | 15.01 | 785 | 797 | 52× |
+| 96-composite-ies-rsi-macd-momentum-01 | 10.29 | 10.29 | 1388 | 1409 | 135× |
+| 97-composite-scalping-integration-01 | 9.10 | 9.10 | 977 | 998 | 107× |
+| 98-magnifier-tick-dist-endpoints-01 | 9.37 | 9.37 | 817 | 843 | 87× |
+| 99-matrix-eigen-rank-deficient-cov-01 | 22.82 | 22.82 | 1547 | 1571 | 68× |
 
 
 ## Headline numbers
 
-- **PineForge per-strategy range:** 8.18 ms … 61.73 ms (median 11.26 ms)
+- **PineForge per-strategy range:** 7.32 ms … 54.61 ms (median 10.10 ms)
 - **PyneCore per-strategy range:** 660 ms … 6506 ms (median 1271 ms)
-- **Median speedup PineForge vs PyneCore** (across 99 commonly-timed strategies): **105×**
-- **PineTS canonical indicator:** 490.4 ms median
+- **Median speedup PineForge vs PyneCore** (across 99 commonly-timed strategies): **119×**
+- **PineTS canonical indicator:** 459.9 ms median
 
 ## Notes
 
 The `0.4 ms MACD-672 bars` claim from the v0.1 badge has been retired and
 replaced with the full-OHLCV median speedup badge (56×). The full-OHLCV time
-for `04-macd-histogram` (41,307 bars) is **9.47 ms** median.
+for `04-macd-histogram` (41,307 bars) is **8.52 ms** median.
 A 672-bar slice timing would require a bespoke GBench harness (deferred follow-up).
 

@@ -29,6 +29,13 @@ void BacktestEngine::run(const Bar* bars, int n) {
     max_equity_ = initial_capital_;
     min_equity_ = initial_capital_;
 
+    std::string detected_tf = "";
+    if (n >= 2 && bars != nullptr) {
+        detected_tf = detect_timeframe(bars, n);
+    }
+    input_tf_ = detected_tf;
+    script_tf_ = detected_tf;
+
     // Runtime diagnostics (single-timeframe path)
     diag_input_bars_processed_ = n;
     diag_script_bars_processed_ = 0;
