@@ -1,4 +1,5 @@
 set(TEST_SOURCES
+    test_ringbuffer
     test_timeframe
     test_magnifier
     test_magnifier_real_bars
