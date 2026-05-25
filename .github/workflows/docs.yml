@@ -41,7 +41,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends graphviz
-          curl -sSL "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
+          curl -sSL "https://github.com/doxygen/doxygen/releases/download/Release_1_13_2/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
             | sudo tar -xz -C /opt
           sudo ln -sf "/opt/doxygen-${DOXYGEN_VERSION}/bin/doxygen" /usr/local/bin/doxygen
           doxygen --version
