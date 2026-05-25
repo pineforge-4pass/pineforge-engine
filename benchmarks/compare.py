@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Three-way trade-list comparator: TV ↔ PineForge ↔ PyneCore.
+"""Multi-way trade-list comparator: TV ↔ PineForge ↔ PyneCore ↔ vectorbt.
 
 For each strategy folder under `benchmarks/` strategy fixtures (`data/` +
 `strategies/` inline, or `assets/data` + `assets/strategies` submodule), reads
-`tv_trades.csv`, `pineforge_trades.csv`, and `pynecore_trades.csv`,
+`tv_trades.csv`, `pineforge_trades.csv`, `pynecore_trades.csv`, and optional `vectorbt_trades.csv`,
 aligns trades by direction + entry-time within the mutually matched window,
 and reports:
 
-    - Trade count (TV / PineForge / PyneCore) inside the common window
+    - Trade count (TV / PineForge / PyneCore / vectorbt) inside the common window
     - Entry-price p90 delta vs TV
     - Exit-price  p90 delta vs TV
     - PnL        p90 delta vs TV
@@ -84,6 +84,8 @@ ENTRY_PRICE_GATE = 3.00
 # Mirrors canonical verify_corpus.py / validate.py.
 PNL_NEAR_ZERO_USD = 0.01
 
+ENGINES = ["PineForge", "PyneCore", "vectorbt"]
+
 # Parity thresholds copied from the canonical
 # `validate_detailed_report.py::DEFAULT_PARITY_{STRICT,PRODUCTION}`.
 STRICT_COUNT = 0.01      # 1.0%
@@ -145,7 +147,7 @@ class Trade:
 
 
 def parse_dt(s: str, tz_offset_hours: int) -> int:
-    fmts = ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"]
+    fmts = ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"]
     last_err: Exception | None = None
     for fmt in fmts:
         try:
@@ -382,6 +384,60 @@ def parse_trades(path: Path, tz_offset_hours: int) -> list[Trade]:
         ))
     pairs.sort(key=lambda t: t.entry_time)
     return pairs
+
+
+def parse_vectorbt_trades(path: Path, tz_offset_hours: int) -> list[Trade]:
+    """Read vectorbt CSV flat schema.
+    Schema: id, direction, entry_time, entry_price, exit_time, exit_price, pnl, qty
+    """
+    trades: list[Trade] = []
+    with path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            direction = str(row["direction"]).strip().lower()
+            if "long" in direction or direction == "buy":
+                direction = "long"
+            elif "short" in direction or direction == "sell":
+                direction = "short"
+
+            # parse entry_time
+            entry_time_str = row["entry_time"].strip()
+            try:
+                # Try parsing as float/int timestamp
+                entry_time = int(float(entry_time_str))
+                if entry_time > 10**12: # ms to s
+                    entry_time //= 1000
+            except ValueError:
+                # Fallback to string datetime
+                entry_time = parse_dt(entry_time_str, tz_offset_hours)
+
+            # parse exit_time
+            exit_time_str = row["exit_time"].strip()
+            try:
+                # Try parsing as float/int timestamp
+                exit_time = int(float(exit_time_str))
+                if exit_time > 10**12: # ms to s
+                    exit_time //= 1000
+            except ValueError:
+                # Fallback to string datetime
+                exit_time = parse_dt(exit_time_str, tz_offset_hours)
+
+            entry_price = float(row["entry_price"])
+            exit_price = float(row["exit_price"])
+            pnl = float(row["pnl"])
+            qty = float(row["qty"])
+
+            trades.append(Trade(
+                direction=direction,
+                entry_time=entry_time,
+                entry_price=entry_price,
+                exit_time=exit_time,
+                exit_price=exit_price,
+                qty=qty,
+                pnl=pnl,
+            ))
+    trades.sort(key=lambda t: t.entry_time)
+    return trades
 
 
 def align(a: list[Trade], b: list[Trade]) -> list[tuple[Trade, Trade]]:
@@ -683,10 +739,10 @@ def main() -> int:
 
     sections: list[str] = [
         "# Trade comparison\n",
-        "Each strategy is run through PineForge and PyneCore against the\n"
+        "Each strategy is run through PineForge, PyneCore, and vectorbt against the\n"
         "same 41,307-bar OHLCV feed. PineTS is excluded from this report —\n"
         "their strategy backtester is a roadmap item (per [their\n"
-        "README](https://github.com/LuxAlgo/PineTS#roadmap)). Both columns\n"
+        "README](https://github.com/LuxAlgo/PineTS#roadmap)). All columns\n"
         "are diffed against the same `tv_trades.csv` ground truth.\n",
         "**Window algorithm (align-then-trim).** TV's chart export typically covers\n"
         "~3 weeks of history *before* this repo's OHLCV begins, and our\n"
@@ -709,7 +765,7 @@ def main() -> int:
         "production threshold profile (exit p90 <0.05%, PnL p90 <100%) "
         "matching the canonical sweep.\n",
     ]
-    summary_rows: list[tuple[str, str, int, EngineDiff, EngineDiff]] = []
+    summary_rows: list[tuple[str, str, int, EngineDiff, EngineDiff, EngineDiff | None]] = []
 
     for strat_dir in strategy_dirs:
         if not strat_dir.is_dir():
@@ -717,6 +773,7 @@ def main() -> int:
         tv_path = strat_dir / "tv_trades.csv"
         pf_path = strat_dir / "pineforge_trades.csv"
         pc_path = strat_dir / "pynecore_trades.csv"
+        vbt_path = strat_dir / "vectorbt_trades.csv"
         if not (tv_path.exists() and pf_path.exists() and pc_path.exists()):
             print(f"SKIP {strat_dir.name}: missing input(s) "
                   f"(tv={tv_path.exists()}, pf={pf_path.exists()}, pc={pc_path.exists()})",
@@ -728,6 +785,7 @@ def main() -> int:
         tv = parse_trades(tv_path, tv_timezone_offset(meta))
         pf = parse_trades(pf_path, ENGINE_CSV_TZ_OFFSET_HOURS)
         pc = parse_trades(pc_path, ENGINE_CSV_TZ_OFFSET_HOURS)
+        vbt = parse_vectorbt_trades(vbt_path, ENGINE_CSV_TZ_OFFSET_HOURS) if vbt_path.exists() else None
 
         diffs = [
             compute_diff("PineForge", pf, tv, profile=profile,
@@ -735,11 +793,18 @@ def main() -> int:
             compute_diff("PyneCore",  pc, tv, profile=profile,
                          strategy_dir=strat_dir, meta=meta),
         ]
-        summary_rows.append((strat_dir.name, profile, len(tv), diffs[0], diffs[1]))
+        vbt_diff = None
+        if vbt is not None:
+            vbt_diff = compute_diff("vectorbt", vbt, tv, profile=profile,
+                                    strategy_dir=strat_dir, meta=meta)
+            diffs.append(vbt_diff)
+
+        summary_rows.append((strat_dir.name, profile, len(tv), diffs[0], diffs[1], vbt_diff))
 
         if not args.quiet:
             print(f"=== {strat_dir.name}  ({profile}) ===")
-            print(f"  raw counts:    TV={len(tv)}  PineForge={len(pf)}  PyneCore={len(pc)}")
+            vbt_count_str = f"  vectorbt={len(vbt)}" if vbt is not None else ""
+            print(f"  raw counts:    TV={len(tv)}  PineForge={len(pf)}  PyneCore={len(pc)}{vbt_count_str}")
             for d in diffs:
                 emoji = _LABEL_EMOJI.get(d.label, "🔴")
                 print(f"  {d.name:9s} {emoji} {d.label:11s}  "
@@ -762,30 +827,47 @@ def main() -> int:
         "Match degree per the canonical PineForge parity sweep "
         "(align-then-trim window; trail_* strategies use production thresholds; "
         "inputs.json overrides honoured).\n",
-        "| Strategy | Profile | TV (raw) | PineForge (eng / TV-in-win) | PyneCore (eng / TV-in-win) |",
-        "|---|---|---|---|---|",
+        "| Strategy | Profile | TV (raw) | PineForge (eng / TV-in-win) | PyneCore (eng / TV-in-win) | vectorbt (eng / TV-in-win) |",
+        "|---|---|---|---|---|---|",
     ]
     pf_tally: dict[str, int] = {lbl: 0 for lbl in all_labels}
     pc_tally: dict[str, int] = {lbl: 0 for lbl in all_labels}
-    for name, profile, tv_raw, pf_d, pc_d in summary_rows:
+    vbt_tally: dict[str, int] = {lbl: 0 for lbl in all_labels}
+    vbt_available = sum(1 for row in summary_rows if row[5] is not None)
+    for name, profile, tv_raw, pf_d, pc_d, vbt_d in summary_rows:
         pf_tally[pf_d.label] = pf_tally.get(pf_d.label, 0) + 1
         pc_tally[pc_d.label] = pc_tally.get(pc_d.label, 0) + 1
         pf_emoji = _LABEL_EMOJI.get(pf_d.label, "🔴")
         pc_emoji = _LABEL_EMOJI.get(pc_d.label, "🔴")
+
+        if vbt_d is not None:
+            vbt_tally[vbt_d.label] = vbt_tally.get(vbt_d.label, 0) + 1
+            vbt_emoji = _LABEL_EMOJI.get(vbt_d.label, "🔴")
+            vbt_str = f"{vbt_emoji} {vbt_d.label} ({vbt_d.n_engine_in_window} / {vbt_d.n_tv_in_window})"
+        else:
+            vbt_str = "—"
+
         summary_lines.append(
             f"| {name} | {profile} | {tv_raw} | "
             f"{pf_emoji} {pf_d.label} ({pf_d.n_engine_in_window} / {pf_d.n_tv_in_window}) | "
-            f"{pc_emoji} {pc_d.label} ({pc_d.n_engine_in_window} / {pc_d.n_tv_in_window}) |"
+            f"{pc_emoji} {pc_d.label} ({pc_d.n_engine_in_window} / {pc_d.n_tv_in_window}) | "
+            f"{vbt_str} |"
         )
     summary_lines.append("")
     n = len(summary_rows)
     for label in all_labels:
         pf_cnt = pf_tally.get(label, 0)
         pc_cnt = pc_tally.get(label, 0)
-        if pf_cnt or pc_cnt:
-            summary_lines.append(
-                f"- **{label}**: PineForge {pf_cnt}/{n}, PyneCore {pc_cnt}/{n}"
-            )
+        vbt_cnt = vbt_tally.get(label, 0)
+        if pf_cnt or pc_cnt or vbt_cnt:
+            if vbt_available > 0:
+                summary_lines.append(
+                    f"- **{label}**: PineForge {pf_cnt}/{n}, PyneCore {pc_cnt}/{n}, vectorbt {vbt_cnt}/{vbt_available}"
+                )
+            else:
+                summary_lines.append(
+                    f"- **{label}**: PineForge {pf_cnt}/{n}, PyneCore {pc_cnt}/{n}"
+                )
 
     if args.no_write:
         print("\n".join(sections))

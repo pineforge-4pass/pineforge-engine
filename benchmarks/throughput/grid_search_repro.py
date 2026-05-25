@@ -77,7 +77,7 @@ class pf_report_t(ctypes.Structure):
     ]
 
 def main():
-    repo_root = Path(__file__).parent.parent.resolve()
+    repo_root = Path(__file__).parent.parent.parent.resolve()
     dylib_path = repo_root / "benchmarks/assets/strategies/19-scalping-wunder-bots/strategy.dylib"
     csv_path = repo_root / "benchmarks/assets/data/ETHUSDT_15.csv"
 

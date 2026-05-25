@@ -5,15 +5,9 @@ Inputs:
   --pineforge   GBench JSON output from pineforge_bench --benchmark_format=json
   --pynecore    JSON from speed/time_pynecore.py  {strategy: {median_ms, p95_ms, n}}
   --pinets      JSON from speed/time_pinets.mjs   {canonical: {median_ms, p95_ms, n}}
+  --vectorbt    JSON from speed/time_vectorbt.py  {strategy: {median_ms, p95_ms, n}} (optional)
 
 Output: benchmarks/results/speed.md
-
-Design notes (adapted for Task 7.3 reality):
-  - PineForge column: all strategies found in GBench JSON.
-  - PyneCore column: populated for up to 50 existing strategies.
-    Slots 51-75 show "—" (PyneSys quota exhausted in Task 5.2).
-  - PineTS: single canonical row ONLY (no strategy backtester upstream).
-    Reported in a dedicated section; NOT merged into the per-strategy table.
 """
 from __future__ import annotations
 
@@ -115,6 +109,8 @@ def main() -> None:
                     help="PyneCore JSON (speed/time_pynecore.py)")
     ap.add_argument("--pinets", type=Path, required=True,
                     help="PineTS JSON (speed/time_pinets.mjs)")
+    ap.add_argument("--vectorbt", type=Path, default=None,
+                    help="VectorBT JSON (speed/time_vectorbt.py)")
     ap.add_argument("--out", type=Path, default=RESULTS / "speed.md",
                     help="Output path (default: benchmarks/results/speed.md)")
     args = ap.parse_args()
@@ -122,24 +118,34 @@ def main() -> None:
     pf = load_gbench(args.pineforge)
     pc = load_subproc(args.pynecore)
     pt = load_subproc(args.pinets)
+    vbt = load_subproc(args.vectorbt) if args.vectorbt and args.vectorbt.exists() else {}
 
     # PineTS single canonical entry
     pinets_canonical = pt.get("canonical")
 
-    # All strategies: union of PineForge + PyneCore keys (PineTS has none per-strategy).
-    all_strategies = sorted(set(pf) | set(pc))
+    # All strategies: union of PineForge + PyneCore + VectorBT keys
+    all_strategies = sorted(set(pf) | set(pc) | set(vbt))
 
-    # Compute speedup for commonly-timed strategies (both pf and pc present).
-    speedups = []
+    # Compute speedups
+    pc_speedups = []
+    vbt_speedups = []
     for slug in all_strategies:
         pf_v = pf.get(slug, {}).get("median_ms")
         pc_v = pc.get(slug, {}).get("median_ms")
-        if pf_v and pc_v and pf_v > 0:
-            speedups.append(pc_v / pf_v)
+        vbt_v = vbt.get(slug, {}).get("median_ms")
 
-    median_speedup = _median(speedups) if speedups else None
+        if pf_v and pf_v > 0:
+            if pc_v:
+                pc_speedups.append(pc_v / pf_v)
+            if vbt_v:
+                vbt_speedups.append(vbt_v / pf_v)
+
+    median_pc_speedup = _median(pc_speedups) if pc_speedups else None
+    median_vbt_speedup = _median(vbt_speedups) if vbt_speedups else None
+
     pf_times = [v["median_ms"] for v in pf.values()]
     pc_times = [v["median_ms"] for v in pc.values()]
+    vbt_times = [v["median_ms"] for v in vbt.values()]
 
     lines: list[str] = []
 
@@ -177,6 +183,8 @@ def main() -> None:
         "- **PyneCore:** Subprocess wall-time of `uv run python runners/run_pynecore.py",
         "  <strategy> --no-write`. Includes Python interpreter startup, PyneCore framework",
         "  import, and full backtest execution. Median over `N=20` invocations.",
+        "- **vectorbt:** In-process timing of modular TradingView-linked strategies using",
+        "  vectorized Pandas/Numpy operations and JIT-compiled Numba loops. Median over `N=20` iterations.",
         "- **PineTS:** Subprocess wall-time of `node runners/run_pinets_canonical.mjs`.",
         "  PineTS does not have a strategy backtester yet (roadmap item); the canonical",
         "  indicator script (10 indicators × 41,307 bars) is timed as a representative",
@@ -186,10 +194,10 @@ def main() -> None:
         "  strategies 51–75. PyneCore column shows `—` for those slots.",
         "  **Will backfill once daily quota resets.**",
         "",
-        "**Mixed-methodology note:** PineForge uses GBench in-process timing while",
+        "**Mixed-methodology note:** PineForge and vectorbt use in-process timing while",
         "PyneCore/PineTS use subprocess wall-time. This is intentional: GBench in-process",
-        "is the realistic cost for an FFI-callable native engine (host amortizes `dlopen`",
-        "over long-running processes). Subprocess wall-time is the realistic cost for",
+        "and in-process vectorbt are the realistic costs for FFI-callable native and interactive libraries",
+        "(host amortizes startup/import costs). Subprocess wall-time is the realistic cost for",
         "engines whose API entry point IS the subprocess. The reported speedup is",
         "therefore a fair comparison of the per-strategy cost a real consumer would see.",
         "",
@@ -216,20 +224,21 @@ def main() -> None:
     lines += ["", ""]
 
     # ------------------------------------------------------------------
-    # Per-strategy table (PineForge vs PyneCore only)
+    # Per-strategy table (PineForge vs PyneCore vs VectorBT)
     # ------------------------------------------------------------------
     lines += [
-        "## Per-strategy timing (PineForge vs PyneCore)",
+        "## Per-strategy timing (PineForge vs PyneCore vs vectorbt)",
         "",
         "*(PineTS omitted from this table — see canonical section above.)*",
         "",
-        "| Strategy | PF median (ms) | PF p95 (ms) | PC median (ms) | PC p95 (ms) | Speedup PF vs PC |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Strategy | PF median (ms) | PF p95 (ms) | PC median (ms) | PC p95 (ms) | vbt median (ms) | vbt p95 (ms) | Speedup PF vs PC | Speedup PF vs vbt |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
 
     for slug in all_strategies:
         pf_entry = pf.get(slug)
         pc_entry = pc.get(slug)
+        vbt_entry = vbt.get(slug)
 
         pf_med = f"{pf_entry['median_ms']:.2f}" if pf_entry else "—"
         pf_p95 = f"{pf_entry['p95_ms']:.2f}" if pf_entry else "—"
@@ -252,14 +261,36 @@ def main() -> None:
             pc_med = no_pynecore_reason
             pc_p95 = "—"
 
-        if pf_entry and pc_med_v:
-            ratio = pc_med_v / pf_entry["median_ms"]
-            speedup = f"{ratio:.0f}×"
+        if vbt_entry:
+            vbt_med_v = vbt_entry["median_ms"]
+            vbt_p95_v = vbt_entry["p95_ms"]
+            vbt_med = f"{vbt_med_v:.1f}"
+            vbt_p95 = f"{vbt_p95_v:.1f}"
         else:
-            speedup = "—"
+            vbt_med_v = None
+            vbt_p95_v = None
+            vbt_med = "—"
+            vbt_p95 = "—"
+
+        if pf_entry and pc_med_v:
+            pc_ratio = pc_med_v / pf_entry["median_ms"]
+            pc_speedup = f"{pc_ratio:.0f}×"
+        else:
+            pc_speedup = "—"
+
+        if pf_entry and vbt_med_v:
+            vbt_ratio = vbt_med_v / pf_entry["median_ms"]
+            if vbt_ratio < 1.0:
+                vbt_speedup = f"{vbt_ratio:.2f}×"
+            elif vbt_ratio < 10.0:
+                vbt_speedup = f"{vbt_ratio:.1f}×"
+            else:
+                vbt_speedup = f"{vbt_ratio:.0f}×"
+        else:
+            vbt_speedup = "—"
 
         lines.append(
-            f"| {slug} | {pf_med} | {pf_p95} | {pc_med} | {pc_p95} | {speedup} |"
+            f"| {slug} | {pf_med} | {pf_p95} | {pc_med} | {pc_p95} | {vbt_med} | {vbt_p95} | {pc_speedup} | {vbt_speedup} |"
         )
 
     lines += ["", ""]
@@ -275,8 +306,12 @@ def main() -> None:
         lines.append(f"- **PineForge per-strategy range:** {min(pf_times):.2f} ms … {max(pf_times):.2f} ms (median {_median(pf_times):.2f} ms)")
     if pc_times:
         lines.append(f"- **PyneCore per-strategy range:** {min(pc_times):.0f} ms … {max(pc_times):.0f} ms (median {_median(pc_times):.0f} ms)")
-    if median_speedup is not None:
-        lines.append(f"- **Median speedup PineForge vs PyneCore** (across {len(speedups)} commonly-timed strategies): **{median_speedup:.0f}×**")
+    if vbt_times:
+        lines.append(f"- **vectorbt per-strategy range:** {min(vbt_times):.1f} ms … {max(vbt_times):.1f} ms (median {_median(vbt_times):.1f} ms)")
+    if median_pc_speedup is not None:
+        lines.append(f"- **Median speedup PineForge vs PyneCore** (across {len(pc_speedups)} commonly-timed strategies): **{median_pc_speedup:.0f}×**")
+    if median_vbt_speedup is not None:
+        lines.append(f"- **Median speedup PineForge vs vectorbt** (across {len(vbt_speedups)} commonly-timed strategies): **{median_vbt_speedup:.1f}×**")
     if pinets_canonical:
         lines.append(f"- **PineTS canonical indicator:** {pinets_canonical['median_ms']:.1f} ms median")
 
@@ -300,9 +335,13 @@ def main() -> None:
     # Summary to stderr for quick sanity check
     print(f"  PineForge strategies: {len(pf)}", file=sys.stderr)
     print(f"  PyneCore strategies:  {len(pc)}", file=sys.stderr)
+    if vbt:
+        print(f"  vectorbt strategies:  {len(vbt)}", file=sys.stderr)
     print(f"  PineTS canonical:     {'yes' if pinets_canonical else 'no'}", file=sys.stderr)
-    if median_speedup:
-        print(f"  Median speedup (PF vs PC, n={len(speedups)}): {median_speedup:.0f}×", file=sys.stderr)
+    if median_pc_speedup:
+        print(f"  Median speedup (PF vs PC, n={len(pc_speedups)}): {median_pc_speedup:.0f}×", file=sys.stderr)
+    if median_vbt_speedup:
+        print(f"  Median speedup (PF vs vbt, n={len(vbt_speedups)}): {median_vbt_speedup:.1f}×", file=sys.stderr)
 
 
 def _median(vals: list[float]) -> float:

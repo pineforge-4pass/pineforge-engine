@@ -3,7 +3,7 @@ set -e
 
 # Resolve script directory and engine root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENGINE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENGINE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "=== PineForge Performance & Optimization Reproduction Pipeline ==="
 echo "Engine root: $ENGINE_ROOT"

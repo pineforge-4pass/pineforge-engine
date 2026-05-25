@@ -118,7 +118,7 @@ benchmarks/
 └── run_all.sh                       Single-command reproducer
 ```
 
-Maintenance scripts (add new bench slots, refresh OHLCV, refresh strategy_pyne.py via PyneSys, re-emit generated.cpp via codegen) live in **[pineforge-utils/bench-maintenance/](https://github.com/fullpass-4pass/pineforge-utils)** — not needed for reproduction.
+Maintenance scripts (add new bench slots, refresh OHLCV, refresh strategy_pyne.py via PyneSys, re-emit generated.cpp via codegen) live in maintainer-only bench-maintenance scripts — not needed for reproduction.
 
 ## Methodology
 
