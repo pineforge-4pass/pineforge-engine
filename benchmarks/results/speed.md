@@ -24,6 +24,11 @@ As of: 2026-05-16. Engine: v0.4.1.
   PineTS does not have a strategy backtester yet (roadmap item); the canonical
   indicator script (10 indicators × 41,307 bars) is timed as a representative
   indicator-layer cost. Single entry, not per-strategy.
+- **vectorbt:** In-process Python wall-time using `vectorbt` Portfolio API over the
+  pinned 41,307-bar series (N=20 iterations). Simple strategies (SMA cross, Keltner,
+  ROC) leverage fully vectorized Pandas/NumPy operations. Supertrend uses JIT-compiled Numba
+  loops. Hull Moving Average (HMA) uses sliding-window `.rolling().apply(...)` with custom
+  lambdas, demonstrating the real-world vectorized cost when pure matrix operations are difficult.
 - **PyneCore slots 51–75:** PyneSys cloud-compile quota was exhausted during
   Task 5.2 (corpus probe promotion); `strategy_pyne.py` was not generated for
   strategies 51–75. PyneCore column shows `—` for those slots.
@@ -43,6 +48,19 @@ therefore a fair comparison of the per-strategy cost a real consumer would see.
 | Run | median_ms | p95_ms | N |
 |---|---:|---:|---:|
 | canonical (10 indicators × 41,307 bars) | 490.4 | 503.5 | 20 |
+
+
+## PineForge vs. vectorbt Speed Comparison
+
+| Strategy | PF median (ms) | vbt median (ms) | Speedup PF vs. vbt |
+|---|---:|---:|---:|
+| 01-sma-cross | 9.76 | 2.76 | 0.28× |
+| 03-supertrend | 8.45 | 5.85 | 0.69× |
+| 12-keltner | 9.12 | 2.96 | 0.32× |
+| 22-hma-cross | 11.73 | 149.23 | 13× |
+| 32-momentum-roc | 11.07 | 2.52 | 0.23× |
+
+*Throughput benchmark over 41,307-bar ETHUSDT_15 OHLCV series (N=20 iterations).*
 
 
 ## Per-strategy timing (PineForge vs PyneCore)
