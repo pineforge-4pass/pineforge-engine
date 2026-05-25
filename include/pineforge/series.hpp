@@ -83,32 +83,24 @@ public:
 
 template<typename T>
 class Series {
-    std::deque<T> buf;
-    int max_len;
+    DynamicRingBuffer<T> buf;
 
 public:
-    explicit Series(int max_len = 500) : max_len(max_len) {}
+    explicit Series(int max_len = 500) : buf(max_len) {}
 
     void push(T value) {
         buf.push_front(value);
-        if ((int)buf.size() > max_len) {
-            buf.pop_back();
-        }
     }
 
     void update(T value) {
-        if (buf.empty()) {
-            push(value);
-        } else {
-            buf.front() = value;
-        }
+        buf.update_front(value);
     }
 
     T operator[](int offset) const {
-        if (offset < 0 || offset >= (int)buf.size()) {
+        if (offset < 0) {
             return na<T>();
         }
-        return buf[offset];
+        return buf[static_cast<std::size_t>(offset)];
     }
 
     T current() const {
@@ -116,7 +108,7 @@ public:
     }
 
     int size() const {
-        return (int)buf.size();
+        return static_cast<int>(buf.size());
     }
 
     void clear() {
