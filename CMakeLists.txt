@@ -47,6 +47,12 @@ option(PINEFORGE_ENABLE_COVERAGE
 #   cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPINEFORGE_ENABLE_SANITIZERS=ON
 option(PINEFORGE_ENABLE_SANITIZERS
     "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
+# Opt-in strict conversion warnings. Off by default — would flood output.
+# Build with:
+#   cmake -B build -DPINEFORGE_STRICT_WARNINGS=ON
+# to quantify implicit-conversion debt. Not -Werror; never fails the build.
+option(PINEFORGE_STRICT_WARNINGS
+    "Enable -Wconversion / -Wsign-conversion (does not imply -Werror)" OFF)
 
 # === Eigen3 ============================================================
 # Used for matrix-typed PineScript (matrix.* API). Tries system install
@@ -168,6 +174,12 @@ if(PINEFORGE_ENABLE_SANITIZERS)
         -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(pineforge PUBLIC -fsanitize=address,undefined)
     message(STATUS "Sanitizers: -fsanitize=address,undefined")
+endif()
+
+# === Strict warnings (opt-in) =========================================
+if(PINEFORGE_STRICT_WARNINGS)
+    target_compile_options(pineforge PRIVATE -Wconversion -Wsign-conversion)
+    message(STATUS "Strict warnings: -Wconversion -Wsign-conversion")
 endif()
 
 # === Tests =============================================================
