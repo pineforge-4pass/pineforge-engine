@@ -137,28 +137,31 @@ double EMA::compute(double src) {
 
 // --- WMA (Weighted Moving Average) ---
 
-WMA::WMA(int length) : length_(length) {}
+WMA::WMA(int length)
+    : length_(length), buffer_(static_cast<std::size_t>(length)) {}
 
 double WMA::compute(double src) {
     if (is_na(src)) {
         return na<double>();
     }
 
-    buffer_.push_back(src);
-    while ((int)buffer_.size() > length_) {
-        buffer_.pop_front();
-    }
+    // Ring buffer is capacity-bounded at length_: push_front drops the
+    // oldest sample automatically once full (the deque pop_front evict).
+    buffer_.push_front(src);
 
     if ((int)buffer_.size() < length_) {
         return na<double>();
     }
 
-    // Linear weights: oldest has weight 1, newest has weight length_
+    // Linear weights: oldest has weight 1, newest has weight length_.
+    // buffer_ holds newest at offset 0, so the oldest sample (weight 1)
+    // is at offset length_-1. Walk oldest→newest to keep the exact
+    // accumulation order — parity is ULP-sensitive (WMA feeds HMA).
     double weighted_sum = 0.0;
     double weight_total = 0.0;
     for (int i = 0; i < length_; i++) {
         double weight = i + 1;
-        weighted_sum += buffer_[i] * weight;
+        weighted_sum += buffer_[static_cast<std::size_t>(length_ - 1 - i)] * weight;
         weight_total += weight;
     }
     return weighted_sum / weight_total;
@@ -324,8 +327,8 @@ double SMA::recompute(double src) {
 
 // --- WMA ---
 double WMA::recompute(double src) {
-    if (buffer_.empty()) return compute(src);
-    buffer_.back() = src;
+    if (buffer_.size() == 0) return compute(src);
+    buffer_.update_front(src);  // overwrite newest in place (deque back())
 
     if (is_na(src)) return na<double>();
     if ((int)buffer_.size() < length_) return na<double>();
@@ -334,7 +337,7 @@ double WMA::recompute(double src) {
     double weight_total = 0.0;
     for (int i = 0; i < length_; i++) {
         double weight = i + 1;
-        weighted_sum += buffer_[i] * weight;
+        weighted_sum += buffer_[static_cast<std::size_t>(length_ - 1 - i)] * weight;
         weight_total += weight;
     }
     return weighted_sum / weight_total;
