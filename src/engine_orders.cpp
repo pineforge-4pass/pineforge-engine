@@ -116,7 +116,7 @@ void BacktestEngine::execute_market_exit(double fill_price) {
 void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_close) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
     qty_to_close = std::clamp(qty_to_close, 0.0, position_qty_);
-    if (qty_to_close <= 1e-10) return;
+    if (qty_to_close <= kQtyEpsilon) return;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
     fill_price = apply_slippage(fill_price, is_buy);
@@ -126,7 +126,7 @@ void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_c
     double qty_closed = 0.0;
     std::vector<PyramidEntry> remaining;
     for (auto& pe : pyramid_entries_) {
-        if (qty_closed >= qty_to_close - 1e-10) {
+        if (qty_closed >= qty_to_close - kQtyEpsilon) {
             remaining.push_back(pe);
             continue;
         }
@@ -136,7 +136,7 @@ void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_c
 
         emit_close_trade(pe, close_qty, fill_price, was_long);
 
-        if (keep_qty > 1e-10) {
+        if (keep_qty > kQtyEpsilon) {
             remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id, pe.entry_bar_index, pe.entry_comment, pe.max_runup, pe.max_drawdown});
         }
     }
@@ -192,16 +192,16 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
     for (const auto& pe : pyramid_entries_) {
         if (pe.entry_id == from_entry) matched_qty += pe.qty;
     }
-    if (matched_qty <= 1e-10) return;
+    if (matched_qty <= kQtyEpsilon) return;
 
     double pct = std::clamp(qty_percent, 0.0, 100.0);
     double qty_to_close = matched_qty * (pct / 100.0);
-    if (qty_to_close <= 1e-10) return;
+    if (qty_to_close <= kQtyEpsilon) return;
 
     double qty_closed = 0.0;
     std::vector<PyramidEntry> remaining;
     for (auto& pe : pyramid_entries_) {
-        if (pe.entry_id != from_entry || qty_closed >= qty_to_close - 1e-10) {
+        if (pe.entry_id != from_entry || qty_closed >= qty_to_close - kQtyEpsilon) {
             remaining.push_back(pe);
             continue;
         }
@@ -213,7 +213,7 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
         emit_close_trade(pe, close_qty, fill_price, was_long);
         position_qty_ -= close_qty;
 
-        if (keep_qty > 1e-10) {
+        if (keep_qty > kQtyEpsilon) {
             remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id, pe.entry_bar_index,
                                  pe.entry_comment, pe.max_runup, pe.max_drawdown});
         }
@@ -253,7 +253,7 @@ void BacktestEngine::reduce_oca_group(const std::string& oca_name,
                 if (o.oca_name != oca_name || o.id == exclude_id) return false;
                 if (std::isnan(o.qty)) return true;  // default-sized: cancel
                 o.qty -= filled_qty;
-                return o.qty <= 1e-12;
+                return o.qty <= kOcaQtyEpsilon;
             }),
         pending_orders_.end());
 }
@@ -346,7 +346,7 @@ void BacktestEngine::reset_position_state_to_flat() {
 // Body was previously inlined identically at the end of every partial-exit
 // path.
 void BacktestEngine::settle_position_after_partial_exit() {
-    if (position_qty_ <= 1e-10 || pyramid_entries_.empty()) {
+    if (position_qty_ <= kQtyEpsilon || pyramid_entries_.empty()) {
         reset_position_state_to_flat();
     } else {
         double total_qty = 0, weighted_sum = 0;
@@ -546,7 +546,7 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
     execute_partial_exit_qty(exit_fill, close_qty);
     purge_exit_orders();
     double remainder = tx_qty - close_qty;
-    if (remainder <= 1e-10) {
+    if (remainder <= kQtyEpsilon) {
         return;
     }
     fill_price = apply_slippage(fill_price, is_long);

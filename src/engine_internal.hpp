@@ -27,6 +27,17 @@
 namespace pineforge {
 namespace internal {
 
+// Shared quantity-comparison epsilons. Both values are unchanged from the
+// bare literals they replaced — they exist purely to name the magic numbers
+// the order/fill mechanics use when deciding whether a residual quantity is
+// effectively zero.
+//
+//   kQtyEpsilon    — general partial-exit / position-quantity slack (1e-10).
+//   kOcaQtyEpsilon — tighter slack used by OCA residual-qty bookkeeping
+//                    (reduce_oca_group / OCA fully-filled check) (1e-12).
+inline constexpr double kQtyEpsilon = 1e-10;
+inline constexpr double kOcaQtyEpsilon = 1e-12;
+
 // Among flat pending opposite ENTRY stop-only orders, which stop price is touched
 // first on the synthesized OHLC path (exactly one long + one short, both touched).
 // Forward-declared in <pineforge/engine.hpp> with the same underlying type
