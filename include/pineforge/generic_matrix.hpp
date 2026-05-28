@@ -9,6 +9,121 @@
 
 namespace pineforge {
 
+namespace detail {
+
+// Storage-agnostic structural helpers parameterized on the underlying
+// row container type. Used by both PineGenericMatrix<T> (T != bool;
+// row = std::vector<T>) and PineGenericMatrix<bool> (row =
+// std::vector<char>) so both share a single implementation for every
+// method that doesn't care about the element type at the boundary.
+
+template <typename Row>
+inline void erase_row(std::vector<Row>& data, int idx) {
+    data.erase(data.begin() + idx);
+}
+
+template <typename Row>
+inline void erase_col(std::vector<Row>& data, int idx) {
+    // Strong guarantee: build a new buffer, swap on success.
+    std::vector<Row> next;
+    next.reserve(data.size());
+    for (const auto& r : data) {
+        Row row = r;
+        row.erase(row.begin() + idx);
+        next.push_back(std::move(row));
+    }
+    data.swap(next);
+}
+
+template <typename Row>
+inline void swap_rows_impl(std::vector<Row>& data, int i, int j) {
+    std::swap(data[i], data[j]);
+}
+
+template <typename Row>
+inline void swap_cols_impl(std::vector<Row>& data, int i, int j) {
+    // Strong guarantee: build a new buffer, swap on success.
+    std::vector<Row> next = data;
+    for (auto& r : next) std::swap(r[i], r[j]);
+    data.swap(next);
+}
+
+template <typename Row>
+inline std::vector<Row> copy_submatrix(const std::vector<Row>& data,
+                                       int from_row, int to_row,
+                                       int from_col, int to_col) {
+    std::vector<Row> out;
+    out.reserve(static_cast<size_t>(to_row - from_row));
+    for (int r = from_row; r < to_row; ++r) {
+        Row row(data[r].begin() + from_col, data[r].begin() + to_col);
+        out.push_back(std::move(row));
+    }
+    return out;
+}
+
+template <typename Row>
+inline std::vector<Row> transpose_impl(const std::vector<Row>& data,
+                                       int r, int c,
+                                       const typename Row::value_type& zero) {
+    std::vector<Row> out(static_cast<size_t>(c),
+                         Row(static_cast<size_t>(r), zero));
+    for (int i = 0; i < r; ++i)
+        for (int j = 0; j < c; ++j)
+            out[j][i] = data[i][j];
+    return out;
+}
+
+template <typename Row>
+inline void concat_impl(std::vector<Row>& m, const std::vector<Row>& other,
+                        bool horizontal) {
+    if (horizontal) {
+        for (size_t r = 0; r < m.size(); ++r)
+            m[r].insert(m[r].end(), other[r].begin(), other[r].end());
+    } else {
+        for (const auto& row : other) m.push_back(row);
+    }
+}
+
+template <typename Row>
+inline void reshape_impl(std::vector<Row>& data, int new_rows, int new_cols,
+                         const typename Row::value_type& zero) {
+    if (new_rows < 0 || new_cols < 0)
+        throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
+    int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
+    if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        throw std::runtime_error("matrix.reshape: dimension overflow");
+    std::vector<typename Row::value_type> flat;
+    flat.reserve(static_cast<size_t>(total));
+    for (const auto& r : data) for (const auto& v : r) flat.push_back(v);
+    flat.resize(static_cast<size_t>(total), zero);
+    std::vector<Row> next(static_cast<size_t>(new_rows),
+                          Row(static_cast<size_t>(new_cols), zero));
+    size_t k = 0;
+    for (int r = 0; r < new_rows; ++r)
+        for (int c = 0; c < new_cols; ++c)
+            next[r][c] = flat[k++];
+    data.swap(next);
+}
+
+template <typename Row>
+inline int elements_count_impl(const std::vector<Row>& data) {
+    int64_t total = 0;
+    for (const auto& r : data) total += static_cast<int64_t>(r.size());
+    if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        throw std::overflow_error("matrix.elements_count: total exceeds int range");
+    return static_cast<int>(total);
+}
+
+template <typename Row>
+inline void sort_impl(std::vector<Row>& data, int column, bool ascending) {
+    std::sort(data.begin(), data.end(),
+        [column, ascending](const Row& a, const Row& b) {
+            return ascending ? (a[column] < b[column]) : (b[column] < a[column]);
+        });
+}
+
+} // namespace detail
+
 template <typename T>
 class PineGenericMatrix {
     std::vector<std::vector<T>> data_;
@@ -112,34 +227,25 @@ public:
     void remove_row(int idx) {
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.remove_row: row index out of range");
-        data_.erase(data_.begin() + idx);
+        detail::erase_row(data_, idx);
     }
 
     void remove_col(int idx) {
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.remove_col: column index out of range");
-        std::vector<std::vector<T>> next;
-        next.reserve(data_.size());
-        for (const auto& r : data_) {
-            std::vector<T> row = r;
-            row.erase(row.begin() + idx);
-            next.push_back(std::move(row));
-        }
-        data_.swap(next);
+        detail::erase_col(data_, idx);
     }
 
     void swap_rows(int i, int j) {
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
             throw std::out_of_range("matrix.swap_rows: row index out of range");
-        std::swap(data_[i], data_[j]);
+        detail::swap_rows_impl(data_, i, j);
     }
 
     void swap_columns(int i, int j) {
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             throw std::out_of_range("matrix.swap_columns: column index out of range");
-        std::vector<std::vector<T>> next = data_;
-        for (auto& r : next) std::swap(r[i], r[j]);
-        data_.swap(next);
+        detail::swap_cols_impl(data_, i, j);
     }
 
     [[nodiscard]] PineGenericMatrix copy() const {
@@ -159,12 +265,7 @@ public:
         if (from_col > to_col)
             throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
         PineGenericMatrix m;
-        m.data_.reserve(static_cast<size_t>(to_row - from_row));
-        for (int r = from_row; r < to_row; ++r) {
-            std::vector<T> row(data_[r].begin() + from_col,
-                               data_[r].begin() + to_col);
-            m.data_.push_back(std::move(row));
-        }
+        m.data_ = detail::copy_submatrix(data_, from_row, to_row, from_col, to_col);
         return m;
     }
 
@@ -172,11 +273,7 @@ public:
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.transpose: requires default-constructible element type");
         PineGenericMatrix m;
-        int r = rows(), c = columns();
-        m.data_.assign(static_cast<size_t>(c), std::vector<T>(static_cast<size_t>(r), T{}));
-        for (int i = 0; i < r; ++i)
-            for (int j = 0; j < c; ++j)
-                m.data_[j][i] = data_[i][j];
+        m.data_ = detail::transpose_impl(data_, rows(), columns(), T{});
         return m;
     }
 
@@ -189,37 +286,14 @@ public:
                 throw std::invalid_argument("matrix.concat: column count mismatch");
         }
         PineGenericMatrix m = copy();
-        if (horizontal) {
-            for (size_t r = 0; r < m.data_.size(); ++r) {
-                m.data_[r].insert(m.data_[r].end(),
-                                  other.data_[r].begin(),
-                                  other.data_[r].end());
-            }
-        } else {
-            for (const auto& row : other.data_) m.data_.push_back(row);
-        }
+        detail::concat_impl(m.data_, other.data_, horizontal);
         return m;
     }
 
     void reshape(int new_rows, int new_cols) {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.reshape: requires default-constructible element type");
-        if (new_rows < 0 || new_cols < 0)
-            throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
-        int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
-        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
-            throw std::runtime_error("matrix.reshape: dimension overflow");
-        std::vector<T> flat;
-        flat.reserve(static_cast<size_t>(total));
-        for (const auto& r : data_) for (const auto& v : r) flat.push_back(v);
-        flat.resize(static_cast<size_t>(total), T{});
-        std::vector<std::vector<T>> next(static_cast<size_t>(new_rows),
-                                         std::vector<T>(static_cast<size_t>(new_cols), T{}));
-        size_t k = 0;
-        for (int r = 0; r < new_rows; ++r)
-            for (int c = 0; c < new_cols; ++c)
-                next[r][c] = flat[k++];
-        data_.swap(next);
+        detail::reshape_impl(data_, new_rows, new_cols, T{});
     }
 
     void reverse() { std::reverse(data_.begin(), data_.end()); }
@@ -229,26 +303,17 @@ public:
                       std::is_same_v<T, bool> ||
                       std::is_same_v<T, std::string>,
                       "matrix.sort: requires int, bool, or std::string element type");
-        std::sort(data_.begin(), data_.end(),
-            [column, ascending](const std::vector<T>& a, const std::vector<T>& b) {
-                return ascending ? (a[column] < b[column]) : (b[column] < a[column]);
-            });
+        detail::sort_impl(data_, column, ascending);
     }
 
-    int elements_count() const {
-        int64_t total = 0;
-        for (const auto& r : data_) total += static_cast<int64_t>(r.size());
-        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
-            throw std::overflow_error("matrix.elements_count: total exceeds int range");
-        return static_cast<int>(total);
-    }
+    int elements_count() const { return detail::elements_count_impl(data_); }
 };
 
-// TODO(n3): The bool specialization duplicates ~140 LOC of validation,
-// strong-exception-guarantee, and shape logic from the general spec because
-// std::vector<bool>'s proxy storage forces a separate vector<char> backing.
-// A future refactor could factor out a CRTP base or thin pImpl to share the
-// invariants; deferred until proxy-related ABI considerations are revisited.
+// PineGenericMatrix<bool> uses std::vector<char> as the row container because
+// std::vector<bool>'s proxy storage doesn't expose a stable element reference.
+// Only the boundary methods (get/set/fill/row/col/add_row/add_col) need
+// char<->bool conversion; every storage-agnostic structural method delegates
+// to the same detail:: helpers used by the primary template.
 template <>
 class PineGenericMatrix<bool> {
     std::vector<std::vector<char>> data_;
@@ -345,31 +410,25 @@ public:
     void remove_row(int idx) {
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.remove_row: row index out of range");
-        data_.erase(data_.begin() + idx);
+        detail::erase_row(data_, idx);
     }
+
     void remove_col(int idx) {
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.remove_col: column index out of range");
-        std::vector<std::vector<char>> next;
-        next.reserve(data_.size());
-        for (const auto& r : data_) {
-            std::vector<char> row = r;
-            row.erase(row.begin() + idx);
-            next.push_back(std::move(row));
-        }
-        data_.swap(next);
+        detail::erase_col(data_, idx);
     }
+
     void swap_rows(int i, int j) {
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
             throw std::out_of_range("matrix.swap_rows: row index out of range");
-        std::swap(data_[i], data_[j]);
+        detail::swap_rows_impl(data_, i, j);
     }
+
     void swap_columns(int i, int j) {
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             throw std::out_of_range("matrix.swap_columns: column index out of range");
-        std::vector<std::vector<char>> next = data_;
-        for (auto& r : next) std::swap(r[i], r[j]);
-        data_.swap(next);
+        detail::swap_cols_impl(data_, i, j);
     }
 
     [[nodiscard]] PineGenericMatrix copy() const {
@@ -387,43 +446,19 @@ public:
         if (from_col > to_col)
             throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
         PineGenericMatrix m;
-        m.data_.reserve(static_cast<size_t>(to_row - from_row));
-        for (int r = from_row; r < to_row; ++r) {
-            std::vector<char> row(data_[r].begin() + from_col,
-                                  data_[r].begin() + to_col);
-            m.data_.push_back(std::move(row));
-        }
+        m.data_ = detail::copy_submatrix(data_, from_row, to_row, from_col, to_col);
         return m;
     }
 
     void reshape(int new_rows, int new_cols) {
-        if (new_rows < 0 || new_cols < 0)
-            throw std::runtime_error("PineGenericMatrix::reshape: negative dimension");
-        int64_t total = static_cast<int64_t>(new_rows) * static_cast<int64_t>(new_cols);
-        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
-            throw std::runtime_error("matrix.reshape: dimension overflow");
-        std::vector<char> flat;
-        flat.reserve(static_cast<size_t>(total));
-        for (const auto& r : data_) for (char v : r) flat.push_back(v);
-        flat.resize(static_cast<size_t>(total), 0);
-        std::vector<std::vector<char>> next(static_cast<size_t>(new_rows),
-                                            std::vector<char>(static_cast<size_t>(new_cols), 0));
-        size_t k = 0;
-        for (int r = 0; r < new_rows; ++r)
-            for (int c = 0; c < new_cols; ++c)
-                next[r][c] = flat[k++];
-        data_.swap(next);
+        detail::reshape_impl(data_, new_rows, new_cols, static_cast<char>(0));
     }
 
     void reverse() { std::reverse(data_.begin(), data_.end()); }
 
     [[nodiscard]] PineGenericMatrix transpose() const {
         PineGenericMatrix m;
-        int r = rows(), c = columns();
-        m.data_.assign(static_cast<size_t>(c), std::vector<char>(static_cast<size_t>(r), 0));
-        for (int i = 0; i < r; ++i)
-            for (int j = 0; j < c; ++j)
-                m.data_[j][i] = data_[i][j];
+        m.data_ = detail::transpose_impl(data_, rows(), columns(), static_cast<char>(0));
         return m;
     }
 
@@ -436,13 +471,7 @@ public:
                 throw std::invalid_argument("matrix.concat: column count mismatch");
         }
         PineGenericMatrix m = copy();
-        if (horizontal) {
-            for (size_t r = 0; r < m.data_.size(); ++r)
-                m.data_[r].insert(m.data_[r].end(),
-                                  other.data_[r].begin(), other.data_[r].end());
-        } else {
-            for (const auto& row : other.data_) m.data_.push_back(row);
-        }
+        detail::concat_impl(m.data_, other.data_, horizontal);
         return m;
     }
 
@@ -452,13 +481,7 @@ public:
                       "matrix.sort: not supported on bool element type");
     }
 
-    int elements_count() const {
-        int64_t total = 0;
-        for (const auto& r : data_) total += static_cast<int64_t>(r.size());
-        if (total > static_cast<int64_t>(std::numeric_limits<int>::max()))
-            throw std::overflow_error("matrix.elements_count: total exceeds int range");
-        return static_cast<int>(total);
-    }
+    int elements_count() const { return detail::elements_count_impl(data_); }
 };
 
 } // namespace pineforge
