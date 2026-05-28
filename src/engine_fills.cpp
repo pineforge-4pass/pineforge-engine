@@ -419,7 +419,7 @@ void BacktestEngine::apply_filled_order_to_state(
     // reduce_oca_group already isolates groups from each other.
     if (!order.oca_name.empty()) {
         bool fully_filled = std::isnan(order.qty)
-            || filled_qty + 1e-12 >= order.qty;
+            || filled_qty + kOcaQtyEpsilon >= order.qty;
         if (order.oca_type == 1 && fully_filled) {
             cancel_oca_group(order.oca_name, order.id);
         } else if (order.oca_type == 2) {
