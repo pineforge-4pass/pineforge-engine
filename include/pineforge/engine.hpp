@@ -1066,6 +1066,16 @@ private:
     // engine_orders.cpp).
     void emit_close_trade(const PyramidEntry& pe, double close_qty,
                           double fill_price, bool was_long);
+    // FIFO-drain up to qty_limit from pyramid_entries_, in order, splitting the
+    // boundary entry as needed. When from_entry is non-null only entries whose
+    // entry_id == *from_entry are eligible (others are kept untouched); null
+    // drains across all entries. Emits one close Trade per drained slice at
+    // fill_price (already slippage-adjusted) and rebuilds pyramid_entries_ /
+    // decrements position_qty_ by the amount drained. Returns the total qty
+    // drained. Shared by execute_partial_exit_qty and
+    // execute_partial_exit_by_entry_percent.
+    double fifo_drain(const std::string* from_entry, double qty_limit,
+                      double fill_price, bool was_long);
     void reset_position_state_to_flat();
     void settle_position_after_partial_exit();
     void enter_market_from_flat(const std::string& id, bool is_long,
