@@ -34,7 +34,10 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     int exit_closed_from_bar = -1;   // created_bar of the last full-close exit
     bool exit_closed_was_long = false;  // direction of the closed position
 
-    std::unordered_set<std::string> pass0_opposing_skip_ids;
+    // Reusable member scratchpad (capacity persists across calls; avoids a
+    // heap allocation per process_pending_orders call). Must start empty.
+    std::unordered_set<std::string>& pass0_opposing_skip_ids = scratch_skip_ids_;
+    pass0_opposing_skip_ids.clear();
     DualEntryStopPathWinner dual_entry_path_ = DualEntryStopPathWinner::None;
     if (position_side_ == PositionSide::FLAT) {
         dual_entry_path_ = dual_entry_stop_path_winner(bar, pending_orders_);
@@ -103,6 +106,18 @@ void BacktestEngine::update_trail_best_for_bar_open(const Bar& bar) {
 // intra-bar OHLC path trigger when neither uses trail; otherwise full
 // (100%) before partial. Stable so PineScript source order is preserved
 // for ties.
+//
+// PERF NOTE (P3): this stable_sort and the following sort_orders_by_fill_phase
+// stable_sort are intentionally kept as two passes. They CANNOT be merged into
+// one combined comparator without risking a change in fill order:
+//   - This pass orders exit siblings by a path-fill metric (or full-before-
+//     partial) that the fill-phase comparator has no knowledge of.
+//   - The fill-phase pass breaks final ties by created_seq, NOT by current
+//     array position, so it does not preserve this pass's path-fill ordering
+//     for orders that tie on fill phase. Folding the path-fill metric into the
+//     fill-phase comparator would re-rank those ties and alter which sibling
+//     fills first.
+// Correctness over perf: leave as two sequential stable_sorts.
 void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
         [&](const PendingOrder& a, const PendingOrder& b) {
@@ -250,7 +265,13 @@ void BacktestEngine::compact_filled_pending_orders(
         int exit_closed_from_bar,
         bool exit_closed_was_long) {
     if (filled_indices.empty()) return;
-    std::unordered_set<size_t> filled_set(filled_indices.begin(), filled_indices.end());
+    // filled_indices is built by push_back(i) with i strictly increasing over
+    // the inner fill loop (at most one push per iteration), so it is already
+    // sorted ascending with no duplicates. A binary search over the vector
+    // replaces a per-call hash-table build for the membership test below.
+    auto is_filled = [&](size_t idx) {
+        return std::binary_search(filled_indices.begin(), filled_indices.end(), idx);
+    };
     PositionSide closed_side =
         exit_closed_was_long ? PositionSide::LONG : PositionSide::SHORT;
     size_t write = 0;
@@ -261,7 +282,7 @@ void BacktestEngine::compact_filled_pending_orders(
                 || pending_orders_[read].type == OrderType::MARKET)
             && pending_orders_[read].is_long == exit_closed_was_long
             && pending_orders_[read].created_position_side == closed_side;
-        if (filled_set.find(read) == filled_set.end()
+        if (!is_filled(read)
             && !stale_same_direction_entry_after_exit) {
             if (write != read) pending_orders_[write] = std::move(pending_orders_[read]);
             ++write;
