@@ -27,6 +27,7 @@ set(TEST_SOURCES
     test_security_lower_tf_script_bound
     test_lower_tf_seconds_suffix
     test_engine_trade_accessors
+    test_engine_risk
     test_strategy_oca
     test_oca_raw_pyramid_add
     test_strategy_pyramiding
