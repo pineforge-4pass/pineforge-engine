@@ -15,6 +15,31 @@ using namespace internal;
 
 
 // open_trade_* accessors moved to engine_trade_accessors.cpp.
+
+// Standard per-script-bar dispatch sequence, shared by the simple run() loop,
+// run_simple_bar_loop, and the no-magnifier aggregation path. Operates on
+// current_bar_ (already set by the caller).
+//
+// TradingView process_orders_on_close semantics:
+//   1. Evaluate existing stop/limit orders from previous bars
+//   2. Update per-trade extremes so on_bar reads current values
+//   3. Strategy logic runs at bar close (creates new orders)
+//   4. New market orders fill at bar.close; new stop/limit wait for next bar
+// When process_orders_on_close_ is false, only steps 1-3 run.
+void BacktestEngine::dispatch_bar() {
+    if (process_orders_on_close_) {
+        process_pending_orders(current_bar_);   // step 1: old stop/limit
+        update_per_trade_extremes();             // step 2: update before strategy reads
+        on_bar(current_bar_);                    // step 3: strategy logic
+        process_pending_orders(current_bar_);    // step 4: new market orders
+    } else {
+        process_pending_orders(current_bar_);
+        update_per_trade_extremes();
+        on_bar(current_bar_);
+    }
+}
+
+
 void BacktestEngine::run(const Bar* bars, int n) {
     last_error_.clear();
     if (n > 0 && bars != nullptr) {
@@ -63,21 +88,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
         // captures fresh ``strategy.close*`` qty for the same-bar
         // close-then-entry source-order rule (see engine.hpp).
         pending_close_qty_in_bar_ = 0.0;
-        if (process_orders_on_close_) {
-            // TradingView process_orders_on_close semantics:
-            //   1. Evaluate existing stop/limit orders from previous bars
-            //   2. Update per-trade extremes so on_bar reads current values
-            //   3. Strategy logic runs at bar close (creates new orders)
-            //   4. New market orders fill at bar.close; new stop/limit wait for next bar
-            process_pending_orders(current_bar_);   // step 1: old stop/limit
-            update_per_trade_extremes();            // step 2: update before strategy reads
-            on_bar(current_bar_);                   // step 3: strategy logic
-            process_pending_orders(current_bar_);   // step 4: new market orders
-        } else {
-            process_pending_orders(current_bar_);
-            update_per_trade_extremes();
-            on_bar(current_bar_);
-        }
+        dispatch_bar();
         update_equity_extremes();
         prev_bar_timestamp_ = current_bar_.timestamp;
     }
@@ -369,16 +380,7 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
             session_islastbar_ = false;
         }
 
-        if (process_orders_on_close_) {
-            process_pending_orders(current_bar_);
-            update_per_trade_extremes();
-            on_bar(current_bar_);
-            process_pending_orders(current_bar_);
-        } else {
-            process_pending_orders(current_bar_);
-            update_per_trade_extremes();
-            on_bar(current_bar_);
-        }
+        dispatch_bar();
         prev_in_session_ = session_ismarket_;
         update_equity_extremes();
         prev_bar_timestamp_ = current_bar_.timestamp;
@@ -450,16 +452,7 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                                                             current_bar_.timestamp);
                 session_isfirstbar_ = session_ismarket_ && !prev_in_session_;
                 session_islastbar_  = session_ismarket_ && barstate_islast_;
-                if (process_orders_on_close_) {
-                    process_pending_orders(current_bar_);
-                    update_per_trade_extremes();
-                    on_bar(current_bar_);
-                    process_pending_orders(current_bar_);
-                } else {
-                    process_pending_orders(current_bar_);
-                    update_per_trade_extremes();
-                    on_bar(current_bar_);
-                }
+                dispatch_bar();
                 prev_in_session_ = session_ismarket_;
             }
             update_equity_extremes();

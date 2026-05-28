@@ -1095,6 +1095,14 @@ private:
     int  count_expected_script_bars(const Bar* input_bars, int n_input,
                                     bool needs_aggregation) const;
     void init_security_eval_states_for_run(const std::string& effective_input_tf);
+    // Runs the standard per-script-bar order/strategy sequence on current_bar_:
+    //   process_pending_orders -> update_per_trade_extremes -> on_bar,
+    // plus a second process_pending_orders when process_orders_on_close_ is set
+    // (TV process_orders_on_close: new market orders fill at this bar's close).
+    // Shared by run(), run_simple_bar_loop, and the no-magnifier aggregation
+    // path. The magnifier tick loop does NOT use this — it gates the sequence
+    // on is_last_tick_ and forces is_first_tick_ before on_bar.
+    void dispatch_bar();
     void run_simple_bar_loop(const Bar* input_bars, int n_input);
     void run_aggregation_bar_loop(const Bar* input_bars, int n_input,
                                   bool bar_magnifier, int expected_script_bars);
