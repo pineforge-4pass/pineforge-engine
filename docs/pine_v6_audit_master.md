@@ -3,18 +3,28 @@
 | Field | Value |
 |---|---|
 | **Audit date** | 2026-05-21 (initial); enriched same day with F1–F22 clarifications |
+| **Last update** | 2026-05-29 — Phase B/C/D merges (codegen rejections + analyzer matrix arm) |
 | **Audited doc** | `pine_v6_coverage_detail.md` (1039 lines, 941 identifiers) |
 | **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, Playwright MCP for Pine v6 ref + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
 | **Status** | Standalone — chunk reports and clarification reports consolidated below and removed. |
 
 ## Headline
 
-**18 critical issues, ~62 minor issues** across 941 identifiers.
+**~9 critical issues remain (down from 18 after Phase B/C/D merges 2026-05-29), ~55 minor issues** across 941 identifiers.
 
 | Severity | Definition | Count |
 |---|---|---|
-| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **18** |
-| Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~62** |
+| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **~9** (was 18; 7 closed by Phase B rejections, 1 by Phase C, 1 verified false-positive) |
+| Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~55** |
+
+### Phase B/C/D resolutions (2026-05-29)
+
+Codegen now rejects loudly via `support_checker.py` tables instead of silently emitting `"false"` / undeclared C++ symbols. Cross-repo PRs:
+- pineforge-codegen [#12](https://github.com/fullpass-4pass/pineforge-codegen/pull/12) — Phase B (6 hard-rejects)
+- pineforge-codegen [#13](https://github.com/fullpass-4pass/pineforge-codegen/pull/13) — Phase C (varip + input.color + security adjustment)
+- pineforge-codegen [#14](https://github.com/fullpass-4pass/pineforge-codegen/pull/14) — Phase D (analyzer matrix arm + plan audit)
+
+Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-positive; #26 partially resolved (analyzer guard added; codegen helper deferred).
 
 ## Critical issues — consolidated by class
 
@@ -30,14 +40,14 @@ Transpiler dispatcher misses identifier → emits literal `0` / `false` / namesp
 | 4 | `session.regular / .extended` | ✅ string constants | **[RESOLVED]** Correctly maps regular/extended session string constants. | B (CB-3) |
 | 5 | `extend.*, font.*, hline.*, location.*, plot.*, scale.*, shape.*, text.*, xloc.*, yloc.*` | ⏭️ Parse-and-skip | Emit `std::string("<member>")`; analyzer types as INT → mismatch | B (CB-5) |
 | 6 | `color.from_gradient()` | ❓ Unknown | Returns hardcoded `0` | C (CI-A5) |
-| 7 | `color()` bare cast | ✅ Runtime | No handler → emits `color(x)` C++ call → compile fail | C (CI-A4) |
-| 8 | `footprint.*` (9 fns + 1 type) | ❓ Unknown | No namespace → compile fail | C (CI-A8) |
-| 9 | `volume_row.*` (8 fns + 1 type) | ❓ Unknown | No codegen support → ❌ hard-reject | D (CD-4) |
-| 10 | `timeframe.from_seconds()` | 🔧 Transpiler | Falls through to `return "false"` | D (CD-3) |
+| 7 | `color()` bare cast | ✅ Runtime | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_BARE_FUNCS` in `support_checker.py`. | C (CI-A4) |
+| 8 | `footprint.*` (9 fns + 1 type) | ❓ Unknown | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_NAMESPACES`. | C (CI-A8) |
+| 9 | `volume_row.*` (8 fns + 1 type) | ❓ Unknown | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_NAMESPACES`. | D (CD-4) |
+| 10 | `timeframe.from_seconds()` | 🔧 Transpiler | **[RESOLVED 2026-05-29, PR codegen#12]** Added to `NOT_YET_FUNC`; `visit_call.py:809` fallthrough now raises `ValueError` defensively. | D (CD-3) |
 | 11 | `syminfo.prefix()` / `syminfo.ticker()` fn forms | ✅ Runtime | **[RESOLVED]** Plumbed in signatures, analyzer, and visit_call to use `_pf_derive_prefix` / `syminfo_.ticker`. | D (CD-2) |
 | 12 | `max_bars_back()` | 🔧 Transpiler | ❌ hard-reject (`NOT_YET_FUNC`) | D (CD-1) |
-| 36 | `chart.left_visible_bar_time` / `chart.right_visible_bar_time` | ❌ Unsupported | Emit `false` via `ns=="chart"` fallthrough (visit_expr.py:335); NOT rejected by support_checker; silently yields epoch 0 in time arithmetic | F2 |
-| 37 | `dividends.*` / `earnings.*` (12 vars) | ❌ Unsupported (Pine: returns na) | No namespace handler → unknown-member branch emits `std::string("<member>")`; assigning to declared `double` causes **downstream C++ compile error**, not "always na" | F3 |
+| 36 | `chart.left_visible_bar_time` / `chart.right_visible_bar_time` | ❌ Unsupported | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_MEMBERS`. `visit_expr.py:340` fallthrough now raises `ValueError`. | F2 |
+| 37 | `dividends.*` / `earnings.*` (12 vars) | ❌ Unsupported (Pine: returns na) | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_NAMESPACE_VARS` (`dividends`, `earnings`). | F3 |
 | 38 | `strategy.commission.{percent,cash_per_order,cash_per_contract}` | ✅ Runtime | **[RESOLVED]** Maps correctly to distinct integer codes ("0", "1", "2") for both strategy kwargs and free expressions. | F4 |
 
 ### B. Hardcoded wrong values
@@ -76,10 +86,10 @@ Identifier resolves to a different runtime symbol than spec.
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 26 | `input.color()` | `get_input_string()` + color parse | uses `get_input_int` |
-| 27 | `input.source()` | series source | uses `get_input_double` → static scalar, NOT a series |
+| 26 | `input.color()` | `get_input_string()` + color parse | **[PARTIAL RESOLVED 2026-05-29, PR codegen#13]** Analyzer now requires defval to be `color.<const>` / `color.new(...)` / `color.rgb(...)`; rejects arbitrary expressions. Codegen still emits `get_input_int` (engine has no `get_input_color` helper — full fix is cross-repo follow-up). |
+| 27 | `input.source()` | series source | **[BLOCKED]** Codegen still emits `get_input_double` → frozen scalar (verified Phase C investigation: `current_bar_.close` captured once at call site). Fix requires new `get_input_source(name, default_series) → const Series<double>&` helper in pineforge-engine; tracked as cross-repo follow-up on codegen issue #9. |
 | 28 | `input.time()` | `get_input_double()` | uses `get_input_int` |
-| 29 | `color.rgb()` | optional `transp` arg | silently drops 4th arg → alpha always 0 |
+| 29 | `color.rgb()` | optional `transp` arg | **[RESOLVED — false-positive in original audit]** Verified `visit_call.py:1095-1098` correctly passes `args[3]` as transparency in the 4-arg form; 3-arg fallback defaults to 0. Original audit claim was wrong. |
 
 ### F. Broken bare-property form
 
@@ -93,7 +103,7 @@ Identifier resolves to a different runtime symbol than spec.
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
 | 32 | Date/time fn-forms (`dayofmonth(...)`, etc.) | section "1-arg", uses `pine_time` | spec is 2-arg w/ tz; codegen uses inline `gmtime_r/localtime_r` lambdas |
-| 33 | `varip` (sprint claim) | "transpile-time warning emitted" | no warning; silently merged into `is_var` |
+| 33 | `varip` (sprint claim) | "transpile-time warning emitted" | **[RESOLVED 2026-05-29, PR codegen#13]** `support_checker.py:412-425` now raises `_err` (was `_warn`) — varip declarations reject loudly. Both corpus probes using varip removed (`varip-counter-state-positive-01`, `varip-var-udt-in-security-positive-01`). |
 
 ### H. New (chunk D)
 
@@ -112,7 +122,7 @@ Identifier resolves to a different runtime symbol than spec.
 - **`array.* (54 entries)`** matches spec.
 
 ### Spec-type divergence
-- **`adjustment.*` / `backadjustment.*` / `settlement_as_close.*` (9 entries)** [F5]: Pine spec types `const string`; codegen emits int `0/1/2`; analyzer types as `PineType.INT`. Engine ignores `request.security(adjustment=…)` value, masking divergence. Latent compile-fail if assigned then fed to string slot.
+- **`adjustment.*` / `backadjustment.*` / `settlement_as_close.*` (9 entries)** [F5]: **[PARTIALLY RESOLVED 2026-05-29, PR codegen#13]** `request.security(adjustment=…)` non-no-op values (e.g. `adjustment.splits`, `backadjustment.on`, `settlement_as_close.on`) now reject loudly via `SECURITY_ADJUSTMENT_ALLOWED_VALUES` in `support_checker.py`. The underlying constant-type drift (string vs int) is unchanged but no longer masks engine silent-drop because the kwarg path itself is gated.
 - **`currency.*`** typed STRING by analyzer but emit int 0 (already class A).
 - **`syminfo.recommendations_date` / `target_price_date`** [F17]: emit `na<double>()` even though Pine types `series int`; inconsistent with sibling `expiration_date` (`na<int64_t>()`). Risk of double→int coercion surprise.
 
@@ -150,7 +160,7 @@ Identifier resolves to a different runtime symbol than spec.
 ### Diagnostic / warning coverage gaps
 - **Syminfo na-fields "conditional-use" warning** [F22]: warning DOES exist (`support_checker._SYMINFO_SILENT_GAP_FIELDS`) but covers only 6 fields (`sector, industry, isin, expiration_date, current_contract, mincontract`). Other na-accept fields (`employees, shareholders, shares_outstanding_*, recommendations_*, target_price_*`) silently return `na<double>()` even in `if/?:` context — NO warning.
 - **`ta.<name>` bare property reads** require sibling `ta.<name>(...)` call to register call site, else falls to `std::string("<name>")`.
-- **`varip` warning** claimed in doc — actually NOT emitted (already class G item 33).
+- **`varip` warning** claimed in doc — actually NOT emitted (originally class G item 33). **[RESOLVED 2026-05-29, PR codegen#13]** Now raises a hard `CompileError` instead. See item 33 above.
 
 ## Methodology
 
@@ -174,8 +184,13 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 ## Recommended next steps
 
-1. **Triage the 35 critical issues** — split into (a) silent miscompile (must fix), (b) wrong-bucket doc fix only, (c) feature gap requiring engine work.
-2. **Fix `dayofweek.*`, `session.regular/extended`, `extend/font/.../yloc` constant namespaces** — these crash or miscompile any script touching them.
-3. **Fix transpiler silent fallthrough** — `return "0"` for unrecognized identifier is the common root cause; convert to hard-error so future drift surfaces immediately.
-4. **Update doc** to reflect actual buckets + remove "1-arg function form" stale wording on date/time fn-forms section.
-5. **Regenerate doc headline counts** after fixes.
+**Phase B/C/D status (2026-05-29):** Steps 2 and 3 substantially addressed by the codegen rejection sweep — `support_checker.py` now carries 4 new rejection tables (`UNSUPPORTED_BARE_FUNCS`, `UNSUPPORTED_NAMESPACES`, `UNSUPPORTED_MEMBERS`, `UNSUPPORTED_NAMESPACE_VARS`) plus `varip` and `request.security` adjustment guards. Two defensive `raise ValueError` guards added at `visit_call.py:809` and `visit_expr.py:340` so any future drift surfaces loudly.
+
+**Remaining open work:**
+
+1. **`input.source` series emission** (#27, codegen issue #9): cross-repo blocker — needs `get_input_source(name, default_series) → const Series<double>&` helper in pineforge-engine. Currently produces frozen scalar.
+2. **Remaining class A items** — #5 (`extend.*, font.*, hline.*, ...` namespaces) and #6 (`color.from_gradient`) still emit `std::string("<member>")` or hardcoded `0`. Same rejection pattern applies.
+3. **`input.time`** (#28) — still uses `get_input_int` where doc claims `get_input_double`. Verify which is correct against Pine v6 spec.
+4. **Class H #35** — `barmerge.*` / `alert.freq_*` as free expressions still emit `std::string(...)` typed as INT. Same fix pattern as #36/#37.
+5. **Doc** — refresh `pine_v6_coverage_detail.md` bucket assignments now that rejections moved several identifiers from "✅ Runtime" or "❓ Unknown" to "❌ Unsupported (loud reject)".
+6. **Regenerate headline counts** after the remaining fixes.
