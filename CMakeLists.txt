@@ -41,6 +41,12 @@ option(PINEFORGE_BUILD_TUTORIAL
     "Build the tutorial MACD strategy.so under tutorial/" ON)
 option(PINEFORGE_ENABLE_COVERAGE
     "Instrument the runtime + tests for source-level coverage (Clang or GCC)" OFF)
+# Opt-in AddressSanitizer + UndefinedBehaviorSanitizer. Off by default
+# (slows the runtime and is incompatible with bit-exact perf builds).
+# Build with:
+#   cmake -B build -DCMAKE_BUILD_TYPE=Debug -DPINEFORGE_ENABLE_SANITIZERS=ON
+option(PINEFORGE_ENABLE_SANITIZERS
+    "Build with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 
 # === Eigen3 ============================================================
 # Used for matrix-typed PineScript (matrix.* API). Tries system install
@@ -152,6 +158,16 @@ if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(pineforge PRIVATE ${_pf_cov_flags})
     target_link_options(pineforge PUBLIC ${_pf_cov_flags})
     message(STATUS "Coverage instrumentation: ${_pf_cov_flags}")
+endif()
+
+# === Sanitizers (opt-in) ==============================================
+# ASan + UBSan. Link options are PUBLIC so anything linking libpineforge.a
+# (tests, corpus strategy.so) picks up the runtime.
+if(PINEFORGE_ENABLE_SANITIZERS)
+    target_compile_options(pineforge PRIVATE
+        -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(pineforge PUBLIC -fsanitize=address,undefined)
+    message(STATUS "Sanitizers: -fsanitize=address,undefined")
 endif()
 
 # === Tests =============================================================
