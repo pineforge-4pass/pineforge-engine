@@ -215,7 +215,12 @@ public:
 
 class WMA {
     int length_;
-    std::deque<double> buffer_;
+    // Ring buffer (capacity == length_) instead of std::deque to avoid
+    // per-bar node allocation. Newest sample at offset 0, oldest at
+    // offset length_-1. The per-bar O(length) weighted-sum recompute is
+    // unchanged — see WMA::compute for the oldest→newest weight 1..length
+    // accumulation order that parity depends on.
+    DynamicRingBuffer<double> buffer_;
 
 public:
     explicit WMA(int length);
