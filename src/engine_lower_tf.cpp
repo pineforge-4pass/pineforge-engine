@@ -18,9 +18,24 @@ bool is_fixed_intraday_minute_tf(const std::string& tf) {
     if (tf.empty()) {
         return false;
     }
-    return std::all_of(tf.begin(), tf.end(), [](unsigned char c) {
-        return std::isdigit(c) != 0;
-    });
+    // Accept all-digit minute TFs ("1", "5", "15") and digit-prefixed
+    // seconds TFs ("15S", "30S", "45S"). The seconds form must be
+    // exactly one or more digits followed by a single trailing 'S'
+    // (case-insensitive); a bare "S" with no digits is rejected.
+    std::size_t digit_end = tf.size();
+    char last = tf.back();
+    if (last == 'S' || last == 's') {
+        digit_end = tf.size() - 1;
+        if (digit_end == 0) {
+            return false;  // bare "S"
+        }
+    }
+    for (std::size_t i = 0; i < digit_end; ++i) {
+        if (std::isdigit(static_cast<unsigned char>(tf[i])) == 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 
