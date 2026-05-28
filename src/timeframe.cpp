@@ -89,6 +89,15 @@ int tf_to_seconds(const std::string& tf) {
         return n * 604800;
     }
 
+    if (last == 'S') {
+        // Pine sub-minute literals: "15S", "30S", etc. Bare "S" has no
+        // canonical meaning in Pine; reject by returning 0 so callers
+        // treat it as a parse failure.
+        if (tf.size() == 1) return 0;
+        int n = std::stoi(tf.substr(0, tf.size() - 1));
+        return n;
+    }
+
     // All-numeric: minutes
     int minutes = std::stoi(tf);
     return minutes * 60;
