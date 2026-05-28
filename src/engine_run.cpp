@@ -476,6 +476,15 @@ int BacktestEngine::get_input_int(const std::string& key, int default_val) const
 }
 
 
+int64_t BacktestEngine::get_input_int64(const std::string& key, int64_t default_val) const {
+    auto it = inputs_.find(key);
+    if (it != inputs_.end()) {
+        try { return std::stoll(it->second); } catch (...) {}
+    }
+    return default_val;
+}
+
+
 bool BacktestEngine::get_input_bool(const std::string& key, bool default_val) const {
     auto it = inputs_.find(key);
     if (it != inputs_.end()) {

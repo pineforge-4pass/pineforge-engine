@@ -39,6 +39,7 @@ set(TEST_SOURCES
     test_generic_matrix_bool_dispatch
     test_session_predicates
     test_vwap_bands
+    test_get_input_int64
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test

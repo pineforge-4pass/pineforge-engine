@@ -298,6 +298,7 @@ protected:
     // Input injection helpers for generated code
     double get_input_double(const std::string& key, double default_val) const;
     int get_input_int(const std::string& key, int default_val) const;
+    int64_t get_input_int64(const std::string& key, int64_t default_val) const;
     bool get_input_bool(const std::string& key, bool default_val) const;
     std::string get_input_string(const std::string& key, const std::string& default_val) const;
 
