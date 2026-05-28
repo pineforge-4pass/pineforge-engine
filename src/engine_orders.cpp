@@ -111,6 +111,39 @@ void BacktestEngine::execute_market_exit(double fill_price) {
 }
 
 
+// FIFO-drain up to qty_limit from pyramid_entries_, optionally restricted to a
+// single from_entry id. See engine.hpp for the contract. Mirrors TradingView's
+// per-pyramid trade reporting: one Trade per drained slice. Returns total qty
+// drained so callers can assert / log if needed.
+double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limit,
+                                  double fill_price, bool was_long) {
+    double qty_closed = 0.0;
+    std::vector<PyramidEntry> remaining;
+    for (auto& pe : pyramid_entries_) {
+        bool eligible = (from_entry == nullptr) || (pe.entry_id == *from_entry);
+        if (!eligible || qty_closed >= qty_limit - kQtyEpsilon) {
+            remaining.push_back(pe);
+            continue;
+        }
+        double close_qty = std::min(pe.qty, qty_limit - qty_closed);
+        double keep_qty = pe.qty - close_qty;
+        qty_closed += close_qty;
+
+        emit_close_trade(pe, close_qty, fill_price, was_long);
+
+        if (keep_qty > kQtyEpsilon) {
+            remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id,
+                                 pe.entry_bar_index, pe.entry_comment,
+                                 pe.max_runup, pe.max_drawdown});
+        }
+    }
+
+    pyramid_entries_ = remaining;
+    position_qty_ -= qty_closed;
+    return qty_closed;
+}
+
+
 // Internal helper: execute a partial exit (reduce position by qty, create trade records)
 // TradingView creates individual trade records for each partial exit.
 void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_close) {
@@ -122,27 +155,8 @@ void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_c
     fill_price = apply_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
 
-    // Close FIFO from pyramid entries, creating trade records
-    double qty_closed = 0.0;
-    std::vector<PyramidEntry> remaining;
-    for (auto& pe : pyramid_entries_) {
-        if (qty_closed >= qty_to_close - kQtyEpsilon) {
-            remaining.push_back(pe);
-            continue;
-        }
-        double close_qty = std::min(pe.qty, qty_to_close - qty_closed);
-        double keep_qty = pe.qty - close_qty;
-        qty_closed += close_qty;
-
-        emit_close_trade(pe, close_qty, fill_price, was_long);
-
-        if (keep_qty > kQtyEpsilon) {
-            remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id, pe.entry_bar_index, pe.entry_comment, pe.max_runup, pe.max_drawdown});
-        }
-    }
-
-    pyramid_entries_ = remaining;
-    position_qty_ -= qty_closed;
+    // Close FIFO across all pyramid entries, creating trade records.
+    fifo_drain(/*from_entry=*/nullptr, qty_to_close, fill_price, was_long);
     settle_position_after_partial_exit();
 }
 
@@ -198,28 +212,8 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
     double qty_to_close = matched_qty * (pct / 100.0);
     if (qty_to_close <= kQtyEpsilon) return;
 
-    double qty_closed = 0.0;
-    std::vector<PyramidEntry> remaining;
-    for (auto& pe : pyramid_entries_) {
-        if (pe.entry_id != from_entry || qty_closed >= qty_to_close - kQtyEpsilon) {
-            remaining.push_back(pe);
-            continue;
-        }
-
-        double close_qty = std::min(pe.qty, qty_to_close - qty_closed);
-        double keep_qty = pe.qty - close_qty;
-        qty_closed += close_qty;
-
-        emit_close_trade(pe, close_qty, fill_price, was_long);
-        position_qty_ -= close_qty;
-
-        if (keep_qty > kQtyEpsilon) {
-            remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id, pe.entry_bar_index,
-                                 pe.entry_comment, pe.max_runup, pe.max_drawdown});
-        }
-    }
-
-    pyramid_entries_ = remaining;
+    // Close FIFO, but only from entries matching from_entry.
+    fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
     settle_position_after_partial_exit();
 }
 
