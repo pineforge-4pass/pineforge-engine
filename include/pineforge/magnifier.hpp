@@ -25,6 +25,13 @@ double path_at(double t, double p0, double p1, double p2, double p3,
 std::vector<double> sample_price_path(const Bar& bar, int n_samples,
                                        MagnifierDistribution dist = MagnifierDistribution::ENDPOINTS);
 
+/// Out-parameter overload of sample_price_path. Writes the sampled prices into
+/// `out` (cleared first; retained capacity is reused), avoiding a per-call heap
+/// allocation in hot sampling loops. Behaviour is identical to the
+/// value-returning overload.
+void sample_price_path(const Bar& bar, int n_samples,
+                       MagnifierDistribution dist, std::vector<double>& out);
+
 /// Sample n_samples points along the OHLC price path, weighting the sample
 /// density by the ratio of this bar's volume to a reference `mean_volume`. A
 /// bar with 2x average volume receives up to 2x as many samples as a bar at
@@ -38,5 +45,16 @@ std::vector<double> sample_price_path_volume_weighted(const Bar& bar,
                                                        int min_samples = 2,
                                                        int max_samples = 64,
                                                        MagnifierDistribution dist = MagnifierDistribution::ENDPOINTS);
+
+/// Out-parameter overload of sample_price_path_volume_weighted. Writes into
+/// `out` (cleared first; retained capacity reused). Behaviour is identical to
+/// the value-returning overload.
+void sample_price_path_volume_weighted(const Bar& bar,
+                                       int base_samples,
+                                       double mean_volume,
+                                       int min_samples,
+                                       int max_samples,
+                                       MagnifierDistribution dist,
+                                       std::vector<double>& out);
 
 } // namespace pineforge

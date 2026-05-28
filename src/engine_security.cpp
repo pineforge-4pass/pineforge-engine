@@ -260,6 +260,10 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
             state.lower_tf_input_buffer.push_back(input_bar);
             return;
         }
+        // The buffer fills to at most chunk_size input bars before it is
+        // dispatched and cleared. Reserve once (no-op when capacity already
+        // suffices) so the repeated fill/clear cycle reuses one allocation.
+        state.lower_tf_input_buffer.reserve(static_cast<std::size_t>(chunk_size));
         int64_t bucket_ms = static_cast<int64_t>(script_seconds) * 1000;
         int64_t this_bucket = input_bar.timestamp / bucket_ms;
         bool boundary_crossed = false;

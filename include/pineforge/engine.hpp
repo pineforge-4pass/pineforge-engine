@@ -318,6 +318,14 @@ protected:
     // strategy.exit partial orders are one-shot per open position for a given id
     std::unordered_set<std::string> consumed_partial_exit_ids_;
 
+    // Reusable scratchpad for the per-call opposing-stop deferral set in
+    // process_pending_orders. Holds the ids of flat-issued entry stops that
+    // lost the intra-bar path race in pass 0 and are reconsidered in pass 1.
+    // Cleared at the start of each process_pending_orders call; the retained
+    // capacity avoids a fresh heap allocation 2-4x per bar. Typically tiny
+    // (0-1 entries). Not state — must be empty across calls.
+    std::unordered_set<std::string> scratch_skip_ids_;
+
     // --- Trailing stop state ---
     // Best favorable price since position entry (for trailing stop computation)
     double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();

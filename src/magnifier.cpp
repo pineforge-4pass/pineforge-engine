@@ -138,6 +138,13 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
 
 std::vector<double> sample_price_path(const Bar& bar, int n_samples,
                                        MagnifierDistribution dist) {
+    std::vector<double> result;
+    sample_price_path(bar, n_samples, dist, result);
+    return result;
+}
+
+void sample_price_path(const Bar& bar, int n_samples,
+                       MagnifierDistribution dist, std::vector<double>& out) {
     if (n_samples < 2) n_samples = 2;
 
     OhlcPathLegs legs = compute_ohlc_path_legs(bar);
@@ -199,27 +206,23 @@ std::vector<double> sample_price_path(const Bar& bar, int n_samples,
     }
     }
 
-    // Map t-values to prices
-    std::vector<double> result(N);
+    // Map t-values to prices. Reuse the caller's buffer (clear keeps capacity).
+    out.clear();
+    out.resize(N);
     for (int i = 0; i < N; ++i)
-        result[i] = path_at(t_values[i], legs.p0, legs.p1, legs.p2, legs.p3,
-                            legs.len0, legs.len1, legs.len2, legs.total);
+        out[i] = path_at(t_values[i], legs.p0, legs.p1, legs.p2, legs.p3,
+                         legs.len0, legs.len1, legs.len2, legs.total);
 
     // Guarantee exact endpoints
-    result[0] = legs.p0;
-    result[N - 1] = legs.p3;
-
-    return result;
+    out[0] = legs.p0;
+    out[N - 1] = legs.p3;
 }
 
 // ─── sample_price_path_volume_weighted ───────────────────────────────────────
 
-std::vector<double> sample_price_path_volume_weighted(const Bar& bar,
-                                                       int base_samples,
-                                                       double mean_volume,
-                                                       int min_samples,
-                                                       int max_samples,
-                                                       MagnifierDistribution dist) {
+static int volume_weighted_sample_count(const Bar& bar, int base_samples,
+                                        double mean_volume, int min_samples,
+                                        int max_samples) {
     int n = base_samples;
     // Only scale when we have a meaningful volume reference.
     if (mean_volume > 0.0 && bar.volume > 0.0) {
@@ -231,7 +234,30 @@ std::vector<double> sample_price_path_volume_weighted(const Bar& bar,
     }
     if (n < min_samples) n = min_samples;
     if (n > max_samples) n = max_samples;
+    return n;
+}
+
+std::vector<double> sample_price_path_volume_weighted(const Bar& bar,
+                                                       int base_samples,
+                                                       double mean_volume,
+                                                       int min_samples,
+                                                       int max_samples,
+                                                       MagnifierDistribution dist) {
+    int n = volume_weighted_sample_count(bar, base_samples, mean_volume,
+                                         min_samples, max_samples);
     return sample_price_path(bar, n, dist);
+}
+
+void sample_price_path_volume_weighted(const Bar& bar,
+                                       int base_samples,
+                                       double mean_volume,
+                                       int min_samples,
+                                       int max_samples,
+                                       MagnifierDistribution dist,
+                                       std::vector<double>& out) {
+    int n = volume_weighted_sample_count(bar, base_samples, mean_volume,
+                                         min_samples, max_samples);
+    sample_price_path(bar, n, dist, out);
 }
 
 } // namespace pineforge

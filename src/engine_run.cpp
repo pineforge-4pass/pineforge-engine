@@ -99,6 +99,11 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
     double cumulative_vol = 0.0;
     int64_t timestamp = sub_bars.front().timestamp;
 
+    // Hoisted out of the sub-bar loops below; cleared/refilled each iteration
+    // via the out-param sample_price_path overloads so the buffer's capacity
+    // is reused instead of heap-allocating a fresh vector per sub-bar.
+    std::vector<double> samples;
+
     int total_sub = (int)sub_bars.size();
     diag_magnifier_sub_bars_processed_ += total_sub;
 
@@ -135,19 +140,18 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
             feed_security_eval_state(state, sb);
         }
 
-        std::vector<double> samples;
         if (real_bar_magnifier_mode) {
             // Each real sub-bar's OHLC turning points are the ticks. Always 4
             // samples = [O, H, L, C] in TV-style path order.
-            samples = sample_price_path(sb, 4, MagnifierDistribution::ENDPOINTS);
+            sample_price_path(sb, 4, MagnifierDistribution::ENDPOINTS, samples);
         } else if (magnifier_volume_weighted_) {
-            samples = sample_price_path_volume_weighted(
+            sample_price_path_volume_weighted(
                 sb, magnifier_samples_, mean_vol,
                 /*min_samples=*/2,
                 /*max_samples=*/std::max(magnifier_samples_ * 4, 8),
-                magnifier_dist_);
+                magnifier_dist_, samples);
         } else {
-            samples = sample_price_path(sb, magnifier_samples_, magnifier_dist_);
+            sample_price_path(sb, magnifier_samples_, magnifier_dist_, samples);
         }
         int n_samples = (int)samples.size();
         diag_magnifier_sample_ticks_processed_ += n_samples;
@@ -393,6 +397,14 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                                                 bool bar_magnifier,
                                                 int expected_script_bars) {
     std::vector<Bar> group_sub_bars;
+    // Each completed script bar collects up to `ratio` input sub-bars before
+    // run_magnified_bar drains and clears the buffer. Reserve once so the
+    // per-script-bar push_back churn reuses one allocation. diag_script_tf_ratio_
+    // holds the input→script ratio set just before this loop; only a fixed
+    // ratio (>1) gives a meaningful bound (variable/-1 left to grow naturally).
+    if (bar_magnifier && diag_script_tf_ratio_ > 1) {
+        group_sub_bars.reserve(static_cast<std::size_t>(diag_script_tf_ratio_));
+    }
     int script_bar_index = 0;
     int emitted_script_bars = 0;
 
