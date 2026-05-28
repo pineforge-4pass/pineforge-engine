@@ -96,7 +96,11 @@ add_library(PineForge::pineforge ALIAS pineforge)
 # statically links libpineforge.a. Internal C++ classes (BacktestEngine,
 # ta::*, internal::*) remain hidden post-link.
 target_compile_options(pineforge PRIVATE
-    -O2
+    # Optimization level only for non-Debug configs — baking -O2 here
+    # unconditionally would defeat -DCMAKE_BUILD_TYPE=Debug (no breakpoints
+    # / inlined-away locals). The FP flags below stay unconditional because
+    # parity depends on them in every build type.
+    $<$<NOT:$<CONFIG:Debug>>:-O2>
     -fPIC
     -fvisibility=hidden
     -fvisibility-inlines-hidden
