@@ -155,7 +155,12 @@ def main() -> None:
     lines += [
         "# Per-strategy speed table",
         "",
-        "As of: 2026-05-16. Engine: v0.4.1.",
+        "As of: 2026-05-29. Engine: v0.6.3.",
+        "",
+        "Full three-way sweep re-measured same-session on 2026-05-29 (all of"
+        " PineForge / PyneCore / vectorbt / PineTS re-timed together) after the"
+        " per-bar heap-allocation-churn reduction in the PineForge fill/run/"
+        "security hot paths.",
         "",
     ]
 
