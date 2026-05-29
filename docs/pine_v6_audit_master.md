@@ -3,19 +3,19 @@
 | Field | Value |
 |---|---|
 | **Audit date** | 2026-05-21 (initial); enriched same day with F1–F22 clarifications |
-| **Last update** | 2026-05-29 — Phase B/C/D merges (codegen rejections + analyzer matrix arm) |
+| **Last update** | 2026-05-29 — Phase B/C/D merges + follow-up fixes (input.time int64, UDT drawing-field cleanup) |
 | **Audited doc** | `pine_v6_coverage_detail.md` (1039 lines, 941 identifiers) |
 | **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, Playwright MCP for Pine v6 ref + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
 | **Status** | Standalone — chunk reports and clarification reports consolidated below and removed. |
 
 ## Headline
 
-**~9 critical issues remain (down from 18 after Phase B/C/D merges 2026-05-29), ~55 minor issues** across 941 identifiers.
+**~8 critical issues remain (down from 18 after Phase B/C/D merges + follow-up fixes 2026-05-29), ~54 minor issues** across 941 identifiers.
 
 | Severity | Definition | Count |
 |---|---|---|
-| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **~9** (was 18; 7 closed by Phase B rejections, 1 by Phase C, 1 verified false-positive) |
-| Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~55** |
+| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **~8** (was 18; 7 closed by Phase B rejections, 1 by Phase C, 1 by input.time int64 fix, 1 verified false-positive) |
+| Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~54** |
 
 ### Phase B/C/D resolutions (2026-05-29)
 
@@ -25,6 +25,12 @@ Codegen now rejects loudly via `support_checker.py` tables instead of silently e
 - pineforge-codegen [#14](https://github.com/fullpass-4pass/pineforge-codegen/pull/14) — Phase D (analyzer matrix arm + plan audit)
 
 Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-positive; #26 partially resolved (analyzer guard added; codegen helper deferred).
+
+### Follow-up fixes (2026-05-29, post-Phase-D)
+
+- **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/fullpass-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen [#15](https://github.com/fullpass-4pass/pineforge-codegen/pull/15) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
+- **Drawing-var dangling-identifier minor** — RESOLVED. codegen [#16](https://github.com/fullpass-4pass/pineforge-codegen/pull/16) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
+- **#26 / #27 `input.color` / `input.source`** — remaining codegen-helper work tracked by [pineforge-engine#23](https://github.com/fullpass-4pass/pineforge-engine/issues/23) (`get_input_source` + `get_input_color` engine helpers) and codegen issue #9.
 
 ## Critical issues — consolidated by class
 
@@ -88,7 +94,7 @@ Identifier resolves to a different runtime symbol than spec.
 |---|---|---|---|
 | 26 | `input.color()` | `get_input_string()` + color parse | **[PARTIAL RESOLVED 2026-05-29, PR codegen#13]** Analyzer now requires defval to be `color.<const>` / `color.new(...)` / `color.rgb(...)`; rejects arbitrary expressions. Codegen still emits `get_input_int` (engine has no `get_input_color` helper — full fix is cross-repo follow-up). |
 | 27 | `input.source()` | series source | **[BLOCKED]** Codegen still emits `get_input_double` → frozen scalar (verified Phase C investigation: `current_bar_.close` captured once at call site). Fix requires new `get_input_source(name, default_series) → const Series<double>&` helper in pineforge-engine; tracked as cross-repo follow-up on codegen issue #9. |
-| 28 | `input.time()` | `get_input_double()` | uses `get_input_int` |
+| 28 | `input.time()` | `get_input_double()` | **[RESOLVED 2026-05-29, PR engine#22 + codegen#15]** Routes to `get_input_int64` (Pine v6 `input.time` returns `series int` Unix-ms; int32 `get_input_int` overflowed). |
 | 29 | `color.rgb()` | optional `transp` arg | **[RESOLVED — false-positive in original audit]** Verified `visit_call.py:1095-1098` correctly passes `args[3]` as transparency in the 4-arg form; 3-arg fallback defaults to 0. Original audit claim was wrong. |
 
 ### F. Broken bare-property form
@@ -114,7 +120,7 @@ Identifier resolves to a different runtime symbol than spec.
 
 ## Minor issues — themes
 
-(~62 total. F-numbered items verified individually via live transpile harness.)
+(~54 total. F-numbered items verified individually via live transpile harness.)
 
 ### Counts / spec drift
 - **Off-by-one counts**: `label.style_*` 21 not 22; `plot.style_*` 11 not 12; `text.*` 10 not 8; `box/label/line` counts 29/21/21 not 27/20/20; `table.*` 22 fns + 1 var not 20; `matrix.*` 48 fns (PineForge implements 47 — `median` omitted intentionally per `KNOWN_MATRIX_OMISSIONS`).
@@ -155,7 +161,7 @@ Identifier resolves to a different runtime symbol than spec.
 - **`array.size()` / `matrix.size()`** [F18]: emit `(double)v.size()`; Pine returns `series int`. Comparisons promote OK; explicit int-overload dispatch would surprise.
 - **Array silent gaps**: `array.new_color/_label/_line/_linefill/_box/_table` silently emit `0` (only 5 of 11 `new_*` handled); `array.copy/slice` hardcode element type to `double`; `array.join` numeric-only; `array.sort/stdev/variance` drop 2nd arg.
 - **`string(x)`** numerics only; `int(x)` no NaN propagate.
-- **Drawing-var method calls** produce dangling C++ identifiers (label/line/box/linefill — `var label l = label.new(...)` dropped, then `l.set_text(...)` references undeclared identifier).
+- **Drawing-var method calls** ~~produce dangling C++ identifiers~~ **[RESOLVED 2026-05-29, PR codegen#16]** — omitted drawing-typed UDT fields tracked in `_udt_omitted_fields`; reads rewrite to `/* drawing field omitted */ 0`, writes stripped (closes codegen issue #10).
 
 ### Diagnostic / warning coverage gaps
 - **Syminfo na-fields "conditional-use" warning** [F22]: warning DOES exist (`support_checker._SYMINFO_SILENT_GAP_FIELDS`) but covers only 6 fields (`sector, industry, isin, expiration_date, current_contract, mincontract`). Other na-accept fields (`employees, shareholders, shares_outstanding_*, recommendations_*, target_price_*`) silently return `na<double>()` even in `if/?:` context — NO warning.
@@ -188,9 +194,8 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 **Remaining open work:**
 
-1. **`input.source` series emission** (#27, codegen issue #9): cross-repo blocker — needs `get_input_source(name, default_series) → const Series<double>&` helper in pineforge-engine. Currently produces frozen scalar.
+1. **`input.source` / `input.color` series-/color-aware emission** (#26, #27, codegen issue #9): cross-repo blocker — needs `get_input_source(name, default_series) → const Series<double>&` and `get_input_color` helpers in pineforge-engine. Tracked by [pineforge-engine#23](https://github.com/fullpass-4pass/pineforge-engine/issues/23). `input.source` currently produces a frozen scalar.
 2. **Remaining class A items** — #5 (`extend.*, font.*, hline.*, ...` namespaces) and #6 (`color.from_gradient`) still emit `std::string("<member>")` or hardcoded `0`. Same rejection pattern applies.
-3. **`input.time`** (#28) — still uses `get_input_int` where doc claims `get_input_double`. Verify which is correct against Pine v6 spec.
-4. **Class H #35** — `barmerge.*` / `alert.freq_*` as free expressions still emit `std::string(...)` typed as INT. Same fix pattern as #36/#37.
-5. **Doc** — refresh `pine_v6_coverage_detail.md` bucket assignments now that rejections moved several identifiers from "✅ Runtime" or "❓ Unknown" to "❌ Unsupported (loud reject)".
-6. **Regenerate headline counts** after the remaining fixes.
+3. **Class H #35** — `barmerge.*` / `alert.freq_*` as free expressions still emit `std::string(...)` typed as INT. Same fix pattern as #36/#37.
+4. **Doc** — refresh `pine_v6_coverage_detail.md` bucket assignments now that rejections moved several identifiers from "✅ Runtime" or "❓ Unknown" to "❌ Unsupported (loud reject)".
+5. **Regenerate headline counts** after the remaining fixes.
