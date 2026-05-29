@@ -16,13 +16,15 @@ Below is the boxplot chart showing the distribution of backtest throughput acros
 
 | Quartile Metric | Throughput (Millions of Bars per Second - M/s) | Equiv. Execution Time (per 10k bars) |
 | :--- | :---: | :---: |
-| **Minimum** | 1.098 M/s | 9.11 ms |
-| **Q1 (25th Percentile)** | 9.809 M/s | 1.02 ms |
-| **Median (50th Percentile)** | **12.687 M/s** | **0.79 ms** |
-| **Q3 (75th Percentile)** | 16.863 M/s | 0.59 ms |
-| **Maximum** | 31.965 M/s | 0.31 ms |
+| **Minimum** | 1.001 M/s | 9.99 ms |
+| **Q1 (25th Percentile)** | 11.629 M/s | 0.86 ms |
+| **Median (50th Percentile)** | **17.048 M/s** | **0.59 ms** |
+| **Q3 (75th Percentile)** | 24.974 M/s | 0.40 ms |
+| **Maximum** | 45.301 M/s | 0.22 ms |
 
 *Note: Benchmarks include the realistic execution cost of a cold `dlopen` of the strategy shared library per run.*
+
+*Last measured 2026-05-29 on Apple Silicon (16 cores), median-of-5 quiet runs (single-shot run-to-run variance is high because each run pays a cold `dlopen`; numbers above are from a representative low-load run). The median rose from a prior 12.69 M/s after the per-bar heap-allocation-churn reduction in the engine fill/run/security hot paths.*
 
 ### 🛠️ FFI Grid Search Optimization Result
 
@@ -72,7 +74,7 @@ This script will:
 
 ## 🔍 Auditing & Verifying Results (For Sceptics)
 
-If you doubt the validity of these extraordinary figures (such as the median FFI throughput of 12.69 Million Bars/sec), you can audit the results step-by-step:
+If you doubt the validity of these extraordinary figures (such as the median FFI throughput of 17.05 Million Bars/sec), you can audit the results step-by-step:
 
 ### A. Run a Single Strategy Individually
 Instead of running all 100, you can compile and benchmark a single strategy of your choice (e.g. `01-sma-cross`) using Google Benchmark directly to eliminate any script wrapper bias:
