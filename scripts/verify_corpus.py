@@ -244,11 +244,19 @@ def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
     with csv_path.open(encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            n = int(row["Trade #"])
+            # TradingView renamed export columns over time: "Trade #" ->
+            # "Trade number", "Net P&L *" -> "Net PnL *", and the price column
+            # is quote-currency-suffixed ("Price USDT" / "Price USD" / bare
+            # "Price"). Accept all spellings so both legacy and current
+            # exports parse.
+            n = int(row.get("Trade #") or row["Trade number"])
             r = by_num.setdefault(n, {})
             kind = row["Type"]
             time_field = row["Date and time"]
-            price_field = "Price USDT" if "Price USDT" in row else "Price"
+            price_field = next(
+                (c for c in row if c == "Price" or c.startswith("Price ")),
+                None,
+            )
             price = float(row[price_field])
             qty = float(
                 row.get("Position size (qty)")
@@ -256,7 +264,10 @@ def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
                 or row.get("Qty")
                 or 0.0
             )
-            pnl = float(row.get("Net P&L USD") or row.get("Net PnL") or 0.0)
+            pnl = float(
+                row.get("Net P&L USD") or row.get("Net PnL USD")
+                or row.get("Net P&L") or row.get("Net PnL") or 0.0
+            )
             direction = "long" if "long" in kind.lower() else "short"
             r["direction"] = direction
             r["qty"] = qty
