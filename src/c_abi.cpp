@@ -151,6 +151,28 @@ PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz) {
         tz ? std::string(tz) : std::string());
 }
 
+/* Plumb the symbol's exchange timezone / session string from the data feed
+ * into syminfo_ (feeds session.ismarket / time(session)). NULL is ignored. */
+PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz) {
+    if (!s || !tz) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_timezone(std::string(tz));
+}
+
+PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session) {
+    if (!s || !session) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_session(std::string(session));
+}
+
+/* Inject a fundamental/exchange metadata value (shares_outstanding_total,
+ * recommendations_*, target_price_*, …) by Pine member name. Without an
+ * injection the corresponding syminfo.* read returns na. NULL key ignored. */
+PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
+                                          double value) {
+    if (!s || !key) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_metadata(
+        std::string(key), value);
+}
+
 /* Return the runtime library version. */
 PF_API pf_version_t pf_version_get(void) {
     pf_version_t v;

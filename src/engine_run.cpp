@@ -27,6 +27,12 @@ using namespace internal;
 //   4. New market orders fill at bar.close; new stop/limit wait for next bar
 // When process_orders_on_close_ is false, only steps 1-3 run.
 void BacktestEngine::dispatch_bar() {
+    // Advance native source-series history before strategy logic so
+    // get_input_source()'s returned series is current for this bar. Covers
+    // the simple run() loop, run_simple_bar_loop, and the no-magnifier
+    // aggregation path (all route through dispatch_bar). The magnifier path
+    // inlines its own on_bar call and pushes there instead.
+    _push_source_series();
     if (process_orders_on_close_) {
         process_pending_orders(current_bar_);   // step 1: old stop/limit
         update_per_trade_extremes();             // step 2: update before strategy reads
@@ -188,6 +194,7 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
                 if (is_last_tick_) {
                     // Force is_first_tick_ true so that on_bar advances the series history.
                     is_first_tick_ = true;
+                    _push_source_series();
                     on_bar(current_bar_);
                     process_pending_orders(current_bar_);
                 }
@@ -197,6 +204,7 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
                 if (is_last_tick_) {
                     // Force is_first_tick_ true so that on_bar advances the series history.
                     is_first_tick_ = true;
+                    _push_source_series();
                     on_bar(current_bar_);
                 }
             }
@@ -523,6 +531,27 @@ std::string BacktestEngine::get_input_string(const std::string& key, const std::
     auto it = inputs_.find(key);
     if (it != inputs_.end()) return it->second;
     return default_val;
+}
+
+
+const Series<double>& BacktestEngine::get_input_source(
+        const std::string& key, const Series<double>& default_series) const {
+    auto it = inputs_.find(key);
+    if (it == inputs_.end()) return default_series;
+    const std::string& v = it->second;
+    if (v == "open")   return _src_open_;
+    if (v == "high")   return _src_high_;
+    if (v == "low")    return _src_low_;
+    if (v == "close")  return _src_close_;
+    if (v == "volume") return _src_volume_;
+    if (v == "hl2")    return _src_hl2_;
+    if (v == "hlc3")   return _src_hlc3_;
+    if (v == "ohlc4")  return _src_ohlc4_;
+    if (v == "hlcc4")  return _src_hlcc4_;
+    // Non-native override string (only reachable via an operator-supplied
+    // input value; analyzer rejects non-native defvals). Fall back to the
+    // codegen-resolved default rather than crash.
+    return default_series;
 }
 
 
