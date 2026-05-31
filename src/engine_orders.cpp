@@ -536,8 +536,10 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
                                                int explicit_qty_type) {
     double tx_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     double close_qty = std::min(tx_qty, position_qty_);
-    double exit_fill = apply_slippage(fill_price, position_side_ == PositionSide::SHORT);
-    execute_partial_exit_qty(exit_fill, close_qty);
+    // execute_partial_exit_qty applies slippage internally (mirrors its other
+    // callers, e.g. execute_partial_exit_by_percent). Pass the RAW fill_price —
+    // pre-slipping here would double-slip the close leg (issue #27).
+    execute_partial_exit_qty(fill_price, close_qty);
     purge_exit_orders();
     double remainder = tx_qty - close_qty;
     if (remainder <= kQtyEpsilon) {
