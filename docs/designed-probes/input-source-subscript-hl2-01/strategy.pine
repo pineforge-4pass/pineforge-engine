@@ -1,0 +1,27 @@
+// This Pine Script® code is licensed under Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
+// © PineForge contributors 2026
+//
+// PF probe — input.source HISTORY SUBSCRIPT (#23 / codegen #9)
+// Purpose: parity test for subscripting an input.source variable (src[1],
+// src[2]). Pre-fix input.source was a scalar double, so src[1] either
+// compile-failed or froze; post-fix the analyzer tracks the subscripted
+// source var as a Series and codegen pushes the resolved source's current
+// value, so src[k] is a real history read. Defaults to hl2 to also exercise
+// a derived native source (_src_hl2_).
+//
+//@version=6
+strategy("input.source history subscript", overlay=true, initial_capital=1000000, currency=currency.USD, process_orders_on_close=false, pyramiding=1, commission_type=strategy.commission.percent, commission_value=0, slippage=0, default_qty_type=strategy.fixed, default_qty_value=1)
+
+// === Input: derived native source, read with history ===
+src = input.source(hl2, "Source")
+
+// Two-bar momentum turn detector — uses src[0], src[1], src[2].
+mom     = src - src[1]
+momPrev = src[1] - src[2]
+
+// Long when momentum turns up; short when it turns down.
+if mom > 0 and momPrev <= 0
+    strategy.entry("Long", strategy.long)
+if mom < 0 and momPrev >= 0
+    strategy.entry("Short", strategy.short)

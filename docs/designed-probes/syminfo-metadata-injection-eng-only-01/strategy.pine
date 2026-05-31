@@ -1,0 +1,31 @@
+// This Pine Script® code is licensed under Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
+// © PineForge contributors 2026
+//
+// PF probe — syminfo metadata INJECTION (#19, ENGINE-ONLY)
+// Purpose: prove the fundamental-metadata injection path reaches strategy
+// behavior. syminfo.shares_outstanding_total has no OHLCV source; the engine
+// returns na unless a feed injects a value via strategy_set_syminfo_metadata
+// (here through inputs.json::runtime_overrides.syminfo_metadata).
+//
+// ENGINE-ONLY: this is NOT a TV-parity probe. TV would use the *real*
+// fundamental for the charted symbol, which won't match an injected synthetic
+// value. Validate the two engine runs below instead (no tv_trades.csv).
+//
+//@version=6
+strategy("syminfo metadata injection", overlay=true, initial_capital=1000000, currency=currency.USD, process_orders_on_close=false, pyramiding=1, default_qty_type=strategy.fixed, default_qty_value=1)
+
+sharesOut = syminfo.shares_outstanding_total
+
+// Gate entries on an injected large-cap threshold. With no injection the
+// field is na -> gate is false -> ZERO trades. With injection above the
+// threshold -> the dual-MA crossover entries fire.
+bigCap = not na(sharesOut) and sharesOut > 1000000000.0
+
+fast = ta.sma(close, 10)
+slow = ta.sma(close, 30)
+
+if bigCap and ta.crossover(fast, slow)
+    strategy.entry("Long", strategy.long)
+if bigCap and ta.crossunder(fast, slow)
+    strategy.entry("Short", strategy.short)
