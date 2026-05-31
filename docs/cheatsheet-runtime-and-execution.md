@@ -1,22 +1,16 @@
 # PineForge Engine — Runtime Overrides & Order-Execution Cheatsheet
 
-> **Source-verified.** Every claim was adversarially checked against the code
-> (file:line) on `feat/input-source-syminfo-issues` (engine) /
-> `feat/input-source-color-syminfo` (codegen). Corrections from that pass are
-> folded in (notably: `engine_chart_timezone` is validator-only not a harness
-> key; the `pending_close_qty_in_bar_` reset is in the outer bar loop not
-> `dispatch_bar`; stop-entry mintick rounding is skipped on gap fills;
-> `PERCENT_OF_EQUITY` includes open profit only on the explicit-`qty_type` path).
+> **Source-verified** against `main` (engine PR #25 merged; codegen PR #18).
+> Every Part 1/2 claim was adversarially checked (file:line). Part 3 collects
+> cross-cutting behaviors + caveats a forward executor needs (also audited).
+> File:line refs are approximate — grep the symbol.
 
 Reference for driving the engine and for building a **forward / real-time**
-executor that matches backtest semantics. Two parts:
+executor that matches backtest semantics. Three parts:
 
 1. [Runtime-overrideable parameters](#part-1--runtime-overrideable-parameters)
 2. [Order-execution rules](#part-2--order-execution-rules) (the hard part)
-
-> Surface note: `get_input_source`, `strategy_set_syminfo_timezone/_session/_metadata`
-> land with the input.source/syminfo feature (engine PR #25 + codegen PR #18).
-> Everything else is on `main`. File:line refs are approximate — grep the symbol.
+3. [Cross-cutting behaviors & caveats](#part-3--cross-cutting-behaviors--caveats)
 
 ---
 
@@ -304,3 +298,140 @@ timestamp — see `engine_run.cpp` dispatch comment.)
 10. Under LTF/real-time, stamp fills with the **sub-bar** time, not the aggregate bar.
 11. Market vs priced timing: market next-open (POOC off) / this-close (POOC on); priced waits a bar.
 12. Reused handle keeps risk state — reset/recreate per session if you don't want carryover.
+
+---
+
+# Part 3 — Cross-cutting behaviors & caveats
+
+Audited gaps a forward/real-time executor must know (beyond per-order fills).
+
+## 3.1 PnL / accounting model
+
+- **`pointvalue` is IGNORED in all PnL math.** Raw PnL = `(exit−entry)·qty`
+  everywhere (`engine_orders.cpp:277-279`); `syminfo_.pointvalue` is stored but
+  never read. Futures/FX (ES=$50/pt, etc.) come out N× wrong unless you scale
+  prices externally. `currency`/`basecurrency` are also decoration — no FX
+  conversion.
+- **Two equity definitions.** `current_equity() = initial_capital_ +
+  net_profit_sum_` (closed PnL; `strategy.equity` reads this). Explicit
+  `qty_type=percent_of_equity` sizing adds `open_profit(close)`; default sizing
+  does not.
+- **`update_equity_extremes()` runs once per bar AFTER on_bar**; samples
+  `initial_capital_+net_profit_sum_+open_profit(close)`. On a new equity peak,
+  `min_equity_` is **reset to the peak** → `max_runup_` measures from the most
+  recent trough (TV behavior), not inception.
+- **`pnl_pct` excludes commission** (`pnl` includes both sides). `CASH_PER_ORDER`
+  commission is charged **in full per partial-exit slice** (multi-leg pyramids
+  overpay). `open_trade_*` deduct entry commission only.
+- **`calc_qty` fallback:** when `fill_price ≤ 0`, percent/cash sizing silently
+  returns `default_qty_value_` (phantom size on bad data).
+
+## 3.2 Order APIs the doc's Part 2 omits
+
+- **`strategy.cancel(id)` / `strategy.cancel_all()`** exist
+  (`engine_strategy_commands.cpp:367-376`): remove pending orders by id / clear
+  all — **including EXIT/bracket orders**, same-bar ones too.
+- **`RAW_ORDER`** (`strategy.order`): bypasses margin gate, intraday-cap
+  placement gate, and deferred-flip carry; closes-only into an opposite position
+  (no re-entry); same pyramiding bypasses as ENTRY; OCA-cancel fires on any fill
+  for NaN-qty siblings.
+- **Trail caveats:** `trail_price` param is **accepted but ignored**;
+  `trail_points`/`trail_offset` are `ceil`-ed to whole ticks before computing
+  the activation level; **no-offset trail** (`exits_at_activation`) fires at the
+  activation level itself; `trail_best_price_` resets to `close` on the first
+  `strategy.exit` for an id (preserved on re-issue).
+- **Entry-bar wrong-side exit:** non-magnifier, an exit whose stop is on the
+  wrong side of entry is **silently skipped** on the entry bar (na-stop guard);
+  magnifier evaluates it (gap-fills at sub-bar open).
+- **`consumed_partial_exit_ids_`:** a partial exit id is one-shot for the whole
+  open-position lifetime — re-issuing same-id partial each bar is dropped until
+  flat/new position.
+
+## 3.3 Bar lifecycle & barstate
+
+- `barstate.isfirst = (bar_index_==0)`; `isnew = is_first_tick_`;
+  `isconfirmed = is_last_tick_`; `ishistory = true`; `isrealtime = false`;
+  `islast/islastconfirmedhistory = barstate_islast_`. Engine has **no
+  history-vs-realtime** concept; `on_bar` runs **once per script bar** (no
+  `calc_on_every_tick`).
+- `Series<T>` default depth = **500 bars**; `max_bars_back` is silently dropped
+  → lookbacks > 500 return `na`.
+- The **simple `run(bars,n)`** entry point does NOT set session predicates
+  (`session.ismarket/isfirstbar/islastbar` stay false) — use the TF-aware
+  overload if the script uses sessions.
+- `session.islastbar` is always `false` under the magnifier; in simple mode it's
+  computed by **next-bar lookahead** — a live feed has no `i+1`, infer from the
+  session string instead.
+
+## 3.4 Timeframe aggregation (input_tf < script_tf)
+
+- **CALENDAR (D/W/M):** a period completes on the **last input bar of the
+  period** (next-bar-would-cross test), stamped at that bar — not on the next
+  period's first bar.
+- **RATIO + feed gaps:** the bucket flushes/completes when
+  `timestamp/bucket_ms` changes, **even if sub-bar count < ratio** → missing
+  input bars yield a short (partial) but correctly-merged script bar.
+- Script-bar timestamp = **first-present** sub-bar (see `engine_run.cpp`
+  aggregation comment).
+
+## 3.5 Session / timezone
+
+- Bare `hour`/`minute`/`dayofweek` use **UTC** (`gmtime_r`) regardless of
+  syminfo tz; `hour(time)` uses `syminfo_.timezone`; `hour(time,tz)` explicit.
+  Intraday-cap rollover uses **chart_timezone_** (see §2.11).
+- `session.ispremarket`/`ispostmarket` windows are **hardcoded** 04:00 / 20:00
+  exchange-local.
+
+## 3.6 request.security / MTF (if used)
+
+- `gaps_on=true`: on a partial HTF bar the engine **clears** the security series
+  to `na` (no stale carry). LTF emulation **synthesizes** sub-bars (ENDPOINTS),
+  not real ticks. With `lookahead_on`, the first sub-bar of a period pushes,
+  later ones `update()` the same slot. Security evaluators run **before**
+  `on_bar` each input bar.
+
+## 3.7 NA / gaps
+
+- Engine is **feed-agnostic**: it dispatches every bar in the array, incl.
+  NaN/zero OHLCV. **No NA-bar suppression** — filter junk bars upstream.
+
+## 3.8 Determinism
+
+- Build with **`-ffp-contract=off`** (CMake default) to match TV's no-FMA JS
+  math — otherwise TA values (RMA/EMA) drift after many bars. Mintick rounding
+  uses a `1e-9` boundary epsilon.
+
+## 3.9 Report surface (C ABI)
+
+- `pf_report_t`/`pf_trade_t` expose `entry/exit time/price`, `pnl`, `pnl_pct`,
+  `is_long`, `qty`, `max_runup/drawdown` + run diagnostics. **No equity curve**
+  and **no `entry_id`/`exit_id`/comments/`bar_index`** over the C ABI — those
+  are C++-accessor-only. Derive equity/profit-factor/Sharpe from the trades.
+- `pf_version_get()` / `pf_version_string()` for ABI gating.
+
+## 3.10 Multi-run state (reused handle)
+
+- **Reset per run:** `max_equity_`/`min_equity_`→`initial_capital_`, security
+  feed counters, aggregator state.
+- **NOT reset:** `trades_`, `net_profit_sum_`, win/loss/even counts,
+  `cons_loss_day_count_`, `risk_halted_`, `intraday_pnl_`, position/pyramid
+  state, `pending_orders_`, `trail_best_price_`, `consumed_partial_exit_ids_`,
+  trace buffer. Walk-forward on one handle **accumulates** — recreate the handle
+  per independent run.
+
+## 3.11 Harness foot-gun
+
+- `scripts/run_strategy.py` does **NOT** wire `strategy_set_override` — a
+  `strategy()` key (e.g. `initial_capital`) placed in `inputs.json` is forwarded
+  to `strategy_set_input` and silently no-ops. Use `docker/run_json.py` or the C
+  ABI directly for `strategy()` overrides. CLI flags `--trace-json` and
+  `--disable-trading-before-window` (→ `strategy_set_trade_start_time`) affect
+  the run.
+
+## ⚠️ Possible bug (flagged, not confirmed)
+
+`close_opposite_then_enter` (`engine_orders.cpp:539`) calls `apply_slippage`,
+then `execute_partial_exit_qty` (`engine_orders.cpp:154-155`) applies it
+**again** → the bracket close-then-enter exit may be **double-slipped**. Masked
+in the corpus because all probes run `slippage=0` (double-rounding is
+idempotent there). Worth a targeted test before trusting slippage on that path.
