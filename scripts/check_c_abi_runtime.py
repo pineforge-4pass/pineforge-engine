@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """CI guardrail: runtime-side PF_API implementations in c_abi.cpp stay documented.
 
-The header lists eleven harness-facing symbols; only the three in EXPECTED_RUNTIME
-are defined in the static runtime — the rest are emitted per-strategy by the
+The header lists the harness-facing symbols; only those in EXPECTED_RUNTIME are
+defined in the static runtime — the rest are emitted per-strategy by the
 transpiler (see comment in src/c_abi.cpp). If that split changes, update
 EXPECTED_RUNTIME below and the comment block in c_abi.cpp together.
 """
@@ -19,6 +19,9 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_trace_enabled",
     "strategy_set_trade_start_time",
     "strategy_set_chart_timezone",
+    "strategy_set_syminfo_timezone",
+    "strategy_set_syminfo_session",
+    "strategy_set_syminfo_metadata",
     "strategy_get_last_error",
     "pf_version_get",
     "pf_version_string",

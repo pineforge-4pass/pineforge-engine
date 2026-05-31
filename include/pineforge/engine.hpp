@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include "na.hpp"
 #include "bar.hpp"
+#include "series.hpp"
 #include "timeframe.hpp"
 #include "magnifier.hpp"
 #include "session_time.hpp"
@@ -295,12 +296,85 @@ protected:
     std::string chart_timezone_;
     std::unordered_map<std::string, std::string> inputs_;
 
+    // Injected symbol metadata (syminfo.shares_outstanding_*,
+    // recommendations_*, target_price_*, pricescale, minmove, …). These
+    // have no source in an OHLCV feed, so the engine returns na<double>()
+    // unless a data feed pushes a value via ``set_syminfo_metadata``. Keyed
+    // by the Pine member name (e.g. "shares_outstanding_total").
+    std::unordered_map<std::string, double> syminfo_metadata_;
+
     // Input injection helpers for generated code
     double get_input_double(const std::string& key, double default_val) const;
     int get_input_int(const std::string& key, int default_val) const;
     int64_t get_input_int64(const std::string& key, int64_t default_val) const;
     bool get_input_bool(const std::string& key, bool default_val) const;
     std::string get_input_string(const std::string& key, const std::string& default_val) const;
+    // input.source: resolve a runtime override string ("open"/"high"/"low"/
+    // "close"/"volume"/"hl2"/"hlc3"/"ohlc4"/"hlcc4") to the matching native
+    // source series. Returns ``default_series`` (the codegen-resolved defval
+    // series) when the key is absent OR the override string is non-native —
+    // the analyzer hard-rejects non-native defvals, so a non-native override
+    // can only arrive from an operator-supplied input value; never crash on it.
+    const Series<double>& get_input_source(const std::string& key,
+                                           const Series<double>& default_series) const;
+
+    // syminfo.* fundamental/exchange metadata that has no OHLCV source.
+    // Returns the value injected via ``set_syminfo_metadata`` for ``key``,
+    // or na<double>() when none was injected. Codegen routes the
+    // na-by-default SYMINFO_MEMBER_MAP double fields here.
+    double get_syminfo_metadata(const std::string& key) const {
+        auto it = syminfo_metadata_.find(key);
+        return it != syminfo_metadata_.end() ? it->second : na<double>();
+    }
+
+    // --- Native source-series history (input.source) ---
+    // input.source supports runtime override of WHICH price series feeds an
+    // indicator. The generated subclass only materializes ``_s_<field>`` for
+    // fields whose history it subscripts, so those cannot back a runtime
+    // override to an arbitrary native source. These base-class series are the
+    // canonical, always-resolvable backing store. They are advanced exactly
+    // once per script bar (same cadence as the subclass ``_s_<field>``) by
+    // ``_push_source_series()`` and only when ``_src_series_active_`` — the
+    // generated ctor sets it true iff the script uses at least one
+    // input.source, so scripts that don't pay nothing but the (small) member
+    // footprint.
+    bool _src_series_active_ = false;
+    Series<double> _src_open_;
+    Series<double> _src_high_;
+    Series<double> _src_low_;
+    Series<double> _src_close_;
+    Series<double> _src_volume_;
+    Series<double> _src_hl2_;
+    Series<double> _src_hlc3_;
+    Series<double> _src_ohlc4_;
+    Series<double> _src_hlcc4_;
+
+    // Advance every native source series by the current bar. Mirrors the
+    // subclass ``_s_<field>`` idiom: push on the first tick, update intrabar
+    // (magnifier). Called at each on_bar dispatch point; no-op when inactive.
+    void _push_source_series() {
+        if (!_src_series_active_) return;
+        const double o = current_bar_.open;
+        const double h = current_bar_.high;
+        const double l = current_bar_.low;
+        const double c = current_bar_.close;
+        const double v = current_bar_.volume;
+        const double hl2   = (h + l) / 2.0;
+        const double hlc3  = (h + l + c) / 3.0;
+        const double ohlc4 = (o + h + l + c) / 4.0;
+        const double hlcc4 = (h + l + c + c) / 4.0;
+        if (is_first_tick_) {
+            _src_open_.push(o);   _src_high_.push(h);   _src_low_.push(l);
+            _src_close_.push(c);  _src_volume_.push(v);
+            _src_hl2_.push(hl2);  _src_hlc3_.push(hlc3);
+            _src_ohlc4_.push(ohlc4); _src_hlcc4_.push(hlcc4);
+        } else {
+            _src_open_.update(o);   _src_high_.update(h);   _src_low_.update(l);
+            _src_close_.update(c);  _src_volume_.update(v);
+            _src_hl2_.update(hl2);  _src_hlc3_.update(hlc3);
+            _src_ohlc4_.update(ohlc4); _src_hlcc4_.update(hlcc4);
+        }
+    }
 
     // --- Runtime state ---
     Bar current_bar_;
@@ -1207,6 +1281,26 @@ public:
         chart_timezone_ = tz;
     }
     const std::string& chart_timezone() const { return chart_timezone_; }
+
+    // --- Symbol metadata injection (data feed → syminfo.*) ---
+    // The exchange timezone + session feed session.ismarket / time(session)
+    // predicates. They default to UTC / 24x7 (crypto); a data feed pushes
+    // the real values via these setters before run().
+    //
+    // NOTE on intraday-day rollover gates (max_intraday_filled_orders,
+    // max_intraday_loss, consecutive-loss day): these intentionally key off
+    // ``chart_timezone_`` (see ``_decompose_bar_time_chart_tz``), which is
+    // what TV's broker emulator matched on the only validated case (probe-97,
+    // crypto on a UTC+8 chart). For real-session instruments (e.g. US
+    // equities), the serving layer should set ``set_chart_timezone`` to the
+    // exchange timezone so the gate rolls over on the exchange trading day —
+    // we deliberately do NOT switch the gates to ``syminfo_.timezone`` (that
+    // would regress the crypto-on-shifted-chart case).
+    void set_syminfo_timezone(const std::string& tz) { syminfo_.timezone = tz; }
+    void set_syminfo_session(const std::string& s) { syminfo_.session = s; }
+    void set_syminfo_metadata(const std::string& key, double value) {
+        syminfo_metadata_[key] = value;
+    }
 
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,
     // "D" for daily). Backs timeframe.main_period in generated Pine v6 code.

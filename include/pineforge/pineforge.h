@@ -340,6 +340,25 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
  *  across runs on the same strategy handle until overridden. */
 PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz);
 
+/** Plumb the symbol's exchange timezone (IANA string) into syminfo. Feeds
+ *  ``session.ismarket`` / ``time(session)`` predicates. Defaults to "UTC"
+ *  (crypto). Distinct from #strategy_set_chart_timezone — the chart TZ
+ *  drives wall-clock builtins and intraday-cap day rollover; this drives
+ *  session membership. `NULL` is ignored. Call before #run_backtest*. */
+PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz);
+
+/** Set the symbol's session string (e.g. "0930-1600:23456", default
+ *  "24x7"). Feeds ``session.ismarket`` / ``time(session)``. `NULL`
+ *  ignored. Call before #run_backtest*. */
+PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session);
+
+/** Inject a fundamental/exchange metadata value by Pine member name
+ *  (e.g. "shares_outstanding_total", "target_price_average"). These have
+ *  no OHLCV source; reads of un-injected members return na. Call before
+ *  #run_backtest*. */
+PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
+                                          double value);
+
 /** Returns the error message captured by the most recent #run_backtest /
  *  #run_backtest_full call on this strategy.
  *

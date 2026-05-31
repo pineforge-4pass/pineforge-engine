@@ -203,10 +203,27 @@ class Strategy:
             L.strategy_set_magnifier_volume_weighted.argtypes = [
                 ctypes.c_void_p, ctypes.c_int]
             L.strategy_set_magnifier_volume_weighted.restype = None
+        # Symbol metadata plumbing (#19). Exchange tz / session feed
+        # session.ismarket / time(session); the metadata setter injects
+        # fundamental fields (shares_outstanding_*, target_price_*, ...).
+        # Older .so builds predate these exports — hasattr-guarded.
+        if hasattr(L, "strategy_set_syminfo_timezone"):
+            L.strategy_set_syminfo_timezone.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            L.strategy_set_syminfo_timezone.restype = None
+        if hasattr(L, "strategy_set_syminfo_session"):
+            L.strategy_set_syminfo_session.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            L.strategy_set_syminfo_session.restype = None
+        if hasattr(L, "strategy_set_syminfo_metadata"):
+            L.strategy_set_syminfo_metadata.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
+            L.strategy_set_syminfo_metadata.restype = None
 
     def run(self, bars_csv: Path, params: dict | None = None,
             *, trace_enabled: bool = False, trade_start_time_ms: int | None = None,
             chart_timezone: str | None = None,
+            syminfo_timezone: str | None = None,
+            syminfo_session: str | None = None,
+            syminfo_metadata: dict | None = None,
             input_tf: str | None = None, script_tf: str | None = None,
             ohlcv_start_ms: int | None = None,
             bar_magnifier: bool = False,
@@ -242,6 +259,21 @@ class Strategy:
             # the upstream pattern this mirrors.
             if chart_timezone and hasattr(self.lib, "strategy_set_chart_timezone"):
                 self.lib.strategy_set_chart_timezone(state, str(chart_timezone).encode())
+            # Plumb exchange tz / session / fundamental metadata into syminfo
+            # (#19). Exchange tz feeds session.ismarket; for real-session
+            # instruments the serving layer should ALSO pass it as
+            # chart_timezone so the intraday-cap day rollover aligns.
+            if syminfo_timezone and hasattr(self.lib, "strategy_set_syminfo_timezone"):
+                self.lib.strategy_set_syminfo_timezone(state, str(syminfo_timezone).encode())
+            if syminfo_session and hasattr(self.lib, "strategy_set_syminfo_session"):
+                self.lib.strategy_set_syminfo_session(state, str(syminfo_session).encode())
+            if syminfo_metadata and hasattr(self.lib, "strategy_set_syminfo_metadata"):
+                for mkey, mval in syminfo_metadata.items():
+                    try:
+                        self.lib.strategy_set_syminfo_metadata(
+                            state, str(mkey).encode(), float(mval))
+                    except (TypeError, ValueError):
+                        continue
             if hasattr(self.lib, "strategy_set_input"):
                 for key, value in params.items():
                     if key.startswith("tv_"):
@@ -624,10 +656,20 @@ def main() -> int:
     except (TypeError, ValueError):
         magnifier_samples_int = 4
     magnifier_vw_flag = bool(runtime_overrides.get("magnifier_volume_weighted", False))
+    # Symbol metadata overrides (#19): exchange tz / session feed
+    # session.ismarket; ``syminfo_metadata`` injects fundamental fields.
+    syminfo_tz = str(runtime_overrides.get("timezone") or "") or None
+    syminfo_session = str(runtime_overrides.get("session") or "") or None
+    syminfo_metadata = runtime_overrides.get("syminfo_metadata")
+    if not isinstance(syminfo_metadata, dict):
+        syminfo_metadata = None
     report = strat.run(ohlcv_path, params=params,
                        trace_enabled=args.trace_json is not None,
                        trade_start_time_ms=trade_start_ms,
                        chart_timezone=chart_tz,
+                       syminfo_timezone=syminfo_tz,
+                       syminfo_session=syminfo_session,
+                       syminfo_metadata=syminfo_metadata,
                        input_tf=input_tf_override or None,
                        script_tf=script_tf_override or None,
                        ohlcv_start_ms=ohlcv_start_ms_val,

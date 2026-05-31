@@ -41,6 +41,8 @@ set(TEST_SOURCES
     test_session_predicates
     test_vwap_bands
     test_get_input_int64
+    test_get_input_source
+    test_syminfo_metadata
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
