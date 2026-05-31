@@ -445,7 +445,25 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                 prev_in_session_ = session_ismarket_;
                 group_sub_bars.clear();
             } else {
-                // No magnifier: use aggregated bar directly
+                // No magnifier: use aggregated bar directly.
+                //
+                // ab.bar.timestamp is the FIRST-PRESENT sub-bar's timestamp
+                // (TimeframeAggregator keeps the opening sub-bar's ts through
+                // the merge). When a feed gap eats the bucket-opening sub-bar(s)
+                // — e.g. an exchange outage at HH:00 — this label drifts forward
+                // (09:00 bucket whose first surviving bar is 09:03 → ts=09:03,
+                // where TV would label it 09:00).
+                //
+                // We intentionally do NOT floor to the bucket boundary
+                // ((ts/bucket_ms)*bucket_ms). That floor assumes UTC-epoch-aligned
+                // buckets, which is only true for 24/7 instruments. Session-anchored
+                // TFs (e.g. US-equity 4h anchored to the 09:30 session open) are
+                // NOT UTC-aligned, so flooring would mislabel every bar there —
+                // worse than the rare gap-at-open drift. First-present is also the
+                // truthful timestamp: it is the real first bar that traded in the
+                // bucket. The drift never moves PnL (cosmetic entry/exit time +
+                // time-gated logic only); the sole risk is a strategy gating on an
+                // exact bucket-open instant, which is not a pattern TV scripts use.
                 current_bar_ = ab.bar;
                 // Update session predicates.
                 session_ismarket_  = pine_session_ismarket(syminfo_.session, syminfo_.timezone,
