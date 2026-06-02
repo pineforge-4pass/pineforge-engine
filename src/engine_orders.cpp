@@ -26,10 +26,12 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
     if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
         double equity = current_equity() + open_profit(current_bar_.close);
         double cash = equity * (qty_value / 100.0);
-        return (fill_price > 0.0) ? (cash / fill_price) : qty_value;
+        // Reject (qty 0) on a non-finite / non-positive fill price — a degenerate
+        // $0/NaN print must NOT size as the raw % number (silent wrong-qty bug).
+        return (std::isfinite(fill_price) && fill_price > 0.0) ? (cash / fill_price) : 0.0;
     }
     if (qty_type == static_cast<int>(QtyType::CASH)) {
-        return (fill_price > 0.0) ? (qty_value / fill_price) : qty_value;
+        return (std::isfinite(fill_price) && fill_price > 0.0) ? (qty_value / fill_price) : 0.0;
     }
     return qty_value;
 }
@@ -50,6 +52,10 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                           bool is_priced_entry,
                                           double tv_carry_qty,
                                           int created_bar) {
+    // Degenerate-bar guard: never open a position at a non-finite fill price
+    // (e.g. a NaN/Inf print). Dropping the fill keeps trade output finite and
+    // a single bad tick from poisoning the backtest. Clean feeds never hit this.
+    if (!std::isfinite(fill_price)) return;
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     bool is_opposite_entry = position_side_ != PositionSide::FLAT && position_side_ != requested;
     bool direction_blocked =
