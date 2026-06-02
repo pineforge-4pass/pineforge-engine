@@ -1312,6 +1312,14 @@ public:
     // would regress the crypto-on-shifted-chart case).
     void set_syminfo_timezone(const std::string& tz) { syminfo_.timezone = tz; }
     void set_syminfo_session(const std::string& s) { syminfo_.session = s; }
+    // Runtime syminfo injection (by design — the engine stores no instrument
+    // metadata of its own; the harness supplies it per run). mintick drives the
+    // directional fill snap + slippage*tick economics; pointvalue is the
+    // futures $-per-point multiplier applied to realized PnL and excursions.
+    // Both default to crypto/equity values (0.01 / 1.0) and only matter when the
+    // harness sets a non-default instrument.
+    void set_syminfo_mintick(double m) { if (m > 0.0) { syminfo_.mintick = m; syminfo_mintick_ = m; } }
+    void set_syminfo_pointvalue(double pv) { if (pv > 0.0) { syminfo_.pointvalue = pv; } }
     void set_syminfo_metadata(const std::string& key, double value) {
         syminfo_metadata_[key] = value;
     }
