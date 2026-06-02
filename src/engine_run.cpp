@@ -87,11 +87,17 @@ void BacktestEngine::reset_run_state() {
     intraday_cap_hit_ = false;
     intraday_fill_count_ = 0;
 
-    // Per-bar cursor state.
+    // Per-bar cursor + session-predicate state.
     bar_index_ = 0;
     prev_bar_timestamp_ = 0;
+    prev_in_session_ = false;
+    session_ismarket_ = false;
+    session_isfirstbar_ = false;
+    session_islastbar_ = false;
 
-    // Native source-series history (input.source(...) ring buffers).
+    // Native source-series history (input.source(...) ring buffers). Must list
+    // EVERY _src_*_ member declared in engine.hpp — a missing one leaks history
+    // into a reused handle (see test_handle_reuse_reset all-series coverage).
     _src_open_.clear();
     _src_high_.clear();
     _src_low_.clear();
@@ -99,6 +105,13 @@ void BacktestEngine::reset_run_state() {
     _src_volume_.clear();
     _src_hl2_.clear();
     _src_hlc3_.clear();
+    _src_ohlc4_.clear();
+    _src_hlcc4_.clear();
+
+    // Per-bar trace/diagnostic buffers (trace_enabled_ is config — preserved).
+    trace_buffer_.clear();
+    trace_names_.clear();
+    trace_name_index_.clear();
 }
 
 
