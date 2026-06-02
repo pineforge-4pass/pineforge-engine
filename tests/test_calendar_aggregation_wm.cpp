@@ -122,9 +122,22 @@ static void test_weekly_full_weeks_are_seven() {
     CHECK(sevens >= 6);                    // most interior weeks are full
 }
 
+// The ISO week straddling the year boundary (Mon 2025-12-29 .. Sun 2026-01-04)
+// must aggregate as ONE 7-day week, not split at Jan 1. Regression for the
+// weekly-HTF year-rollover bug found via the proposed-probes weekly probe.
+static void test_weekly_year_boundary_not_split() {
+    std::printf("test_weekly_year_boundary_not_split\n");
+    TimeframeAggregator agg("W", "D");
+    // 2025-12-22 (Mon) .. 2026-01-19 (Mon): interior completed weeks must all be 7.
+    std::vector<int> got = completed_subcounts(agg, 2025, 12, 22, 2026, 1, 19);
+    CHECK(got.size() >= 3);
+    for (int c : got) CHECK(c == 7);   // pre-fix: the Dec29-Jan4 week split into 3+4
+}
+
 int main() {
     test_monthly_subcounts_match_day_count();
     test_weekly_full_weeks_are_seven();
+    test_weekly_year_boundary_not_split();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

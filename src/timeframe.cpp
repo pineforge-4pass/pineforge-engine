@@ -147,15 +147,26 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period) {
             return prev_tm.tm_yday != curr_tm.tm_yday ||
                    prev_tm.tm_year != curr_tm.tm_year;
         case CalendarPeriod::WEEK: {
-            // ISO week boundary: Monday is start of week.
-            // Compare (year, week-of-year) using Monday-based week number.
-            auto monday_week = [](const struct tm& t) -> int {
-                // tm_wday: 0=Sunday..6=Saturday. Convert to Mon=0..Sun=6.
-                int dow = (t.tm_wday + 6) % 7;
-                return (t.tm_yday - dow + 7) / 7;
+            // Monday-start weeks, CONTINUOUS across the year boundary: the ISO
+            // week that straddles Dec/Jan (e.g. Mon 2025-12-29 .. Sun 2026-01-04)
+            // is ONE week, not two. The previous (year || week-of-year) test
+            // forced a spurious boundary at every Jan 1, splitting that week and
+            // updating weekly request.security a bar early — visible as flipped
+            // crosses in a chop-at-level month (proposed-probes weekly probe).
+            // Fix: compare the absolute calendar date of each timestamp's Monday.
+            auto monday_epoch_day = [](const struct tm& t) -> long {
+                // days since 1970-01-01 (proleptic Gregorian), then back up to Monday.
+                int y = t.tm_year + 1900, m = t.tm_mon + 1, d = t.tm_mday;
+                y -= (m <= 2);
+                long era = (y >= 0 ? y : y - 399) / 400;
+                unsigned yoe = (unsigned)(y - era * 400);
+                unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+                unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+                long day = era * 146097L + (long)doe - 719468L;
+                int dow = (t.tm_wday + 6) % 7;   // Mon=0..Sun=6
+                return day - dow;                // the Monday that starts this week
             };
-            return prev_tm.tm_year != curr_tm.tm_year ||
-                   monday_week(prev_tm) != monday_week(curr_tm);
+            return monday_epoch_day(prev_tm) != monday_epoch_day(curr_tm);
         }
         case CalendarPeriod::MONTH:
             return prev_tm.tm_mon != curr_tm.tm_mon ||

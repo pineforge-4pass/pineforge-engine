@@ -137,7 +137,14 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
         // "abc" produces a precise diagnostic instead of an opaque
         // std::invalid_argument from stoi.
         int requested_seconds = safe_tf_to_seconds(state.tf);
-        if (requested_seconds <= 0) {
+        // Calendar month ("M" / "NM") has no fixed second count; tf_to_seconds
+        // returns -1 as a calendar marker (a genuine parse failure returns 0).
+        // Month is always a COARSER HTF, so admit it for request.security and
+        // let the CALENDAR TimeframeAggregator (tf_ratio == -1) aggregate it.
+        // request.security_lower_tf("M") stays invalid — month is never an
+        // intrabar TF. (Weekly/daily already pass: they return positive seconds.)
+        bool is_calendar_month = (requested_seconds == -1 && !state.lower_tf_array_requested);
+        if (requested_seconds <= 0 && !is_calendar_month) {
             const char* api = state.lower_tf_array_requested
                 ? "request.security_lower_tf" : "request.security";
             throw std::runtime_error(
@@ -145,7 +152,7 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
             );
         }
 
-        if (requested_seconds < input_seconds) {
+        if (!is_calendar_month && requested_seconds < input_seconds) {
             // Finer than input — only valid for security_lower_tf with
             // an integer divisor ratio.
             if (!state.lower_tf_array_requested) {
