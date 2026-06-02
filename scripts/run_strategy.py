@@ -217,6 +217,12 @@ class Strategy:
             L.strategy_set_syminfo_metadata.argtypes = [
                 ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
             L.strategy_set_syminfo_metadata.restype = None
+        if hasattr(L, "strategy_set_syminfo_mintick"):
+            L.strategy_set_syminfo_mintick.argtypes = [ctypes.c_void_p, ctypes.c_double]
+            L.strategy_set_syminfo_mintick.restype = None
+        if hasattr(L, "strategy_set_syminfo_pointvalue"):
+            L.strategy_set_syminfo_pointvalue.argtypes = [ctypes.c_void_p, ctypes.c_double]
+            L.strategy_set_syminfo_pointvalue.restype = None
 
     def run(self, bars_csv: Path, params: dict | None = None,
             *, trace_enabled: bool = False, trade_start_time_ms: int | None = None,
@@ -224,6 +230,8 @@ class Strategy:
             syminfo_timezone: str | None = None,
             syminfo_session: str | None = None,
             syminfo_metadata: dict | None = None,
+            syminfo_mintick: float | None = None,
+            syminfo_pointvalue: float | None = None,
             input_tf: str | None = None, script_tf: str | None = None,
             ohlcv_start_ms: int | None = None,
             bar_magnifier: bool = False,
@@ -274,6 +282,10 @@ class Strategy:
                             state, str(mkey).encode(), float(mval))
                     except (TypeError, ValueError):
                         continue
+            if syminfo_mintick is not None and hasattr(self.lib, "strategy_set_syminfo_mintick"):
+                self.lib.strategy_set_syminfo_mintick(state, float(syminfo_mintick))
+            if syminfo_pointvalue is not None and hasattr(self.lib, "strategy_set_syminfo_pointvalue"):
+                self.lib.strategy_set_syminfo_pointvalue(state, float(syminfo_pointvalue))
             if hasattr(self.lib, "strategy_set_input"):
                 for key, value in params.items():
                     if key.startswith("tv_"):
@@ -490,14 +502,26 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
 
 
 
-def _tv_timezone_offset(meta: dict) -> int:
-    tz_name = str(meta.get("tv_trades_csv_tz", "")).lower()
-    return {"utc_plus_8": 8, "asia_taipei": 8, "utc": 0}.get(tz_name, 8)
-
-
-def _parse_trade_dt(s: str, tz_offset_hours: int) -> int:
+def _tv_tzinfo(meta: dict):
+    """Resolve the TV export tz to a tzinfo. Fixed aliases (utc/utc_plus_8/
+    asia_taipei) OR any IANA name (DST-aware, e.g. America/New_York) so the
+    emit-window for a DST-bearing exchange is computed correctly."""
     from datetime import timedelta
-    tz = timezone(timedelta(hours=tz_offset_hours))
+    name = str(meta.get("tv_trades_csv_tz", "")).strip()
+    low = name.lower()
+    fixed = {"utc_plus_8": 8, "asia_taipei": 8, "utc": 0}
+    if low in fixed:
+        return timezone(timedelta(hours=fixed[low]))
+    if "/" in name:
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return timezone(timedelta(hours=8))
+
+
+def _parse_trade_dt(s: str, tz) -> int:
     return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=tz).timestamp() * 1000)
 
 
@@ -506,7 +530,7 @@ def _load_tv_entry_window(strategy_dir: Path, meta: dict, bar_interval_ms: int) 
     tv_path = strategy_dir / tv_name
     if not tv_path.exists():
         return None
-    tz_offset = _tv_timezone_offset(meta)
+    tz_offset = _tv_tzinfo(meta)
     entries: list[int] = []
     with tv_path.open(encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
@@ -663,6 +687,11 @@ def main() -> int:
     syminfo_metadata = runtime_overrides.get("syminfo_metadata")
     if not isinstance(syminfo_metadata, dict):
         syminfo_metadata = None
+    def _num(v):
+        try: return float(v)
+        except (TypeError, ValueError): return None
+    syminfo_mintick = _num(runtime_overrides.get("mintick"))
+    syminfo_pointvalue = _num(runtime_overrides.get("pointvalue"))
     report = strat.run(ohlcv_path, params=params,
                        trace_enabled=args.trace_json is not None,
                        trade_start_time_ms=trade_start_ms,
@@ -670,6 +699,8 @@ def main() -> int:
                        syminfo_timezone=syminfo_tz,
                        syminfo_session=syminfo_session,
                        syminfo_metadata=syminfo_metadata,
+                       syminfo_mintick=syminfo_mintick,
+                       syminfo_pointvalue=syminfo_pointvalue,
                        input_tf=input_tf_override or None,
                        script_tf=script_tf_override or None,
                        ohlcv_start_ms=ohlcv_start_ms_val,
