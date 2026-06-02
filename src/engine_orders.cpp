@@ -280,9 +280,15 @@ void BacktestEngine::purge_exit_orders() {
 // execute_market_entry. Mirrors TradingView's per-pyramid trade reporting.
 void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
                                       double fill_price, bool was_long) {
-    double pnl = was_long
-        ? (fill_price - pe.price) * close_qty
-        : (pe.price - fill_price) * close_qty;
+    // Realized PnL scales by the instrument point value ($ per point per
+    // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
+    // multiply the price-difference PnL. pnl_pct is a price-return % and is
+    // point-value-invariant. Commission is in account currency (cash-per-* is
+    // already absolute; percent-commission notional×pointvalue is a follow-up
+    // and does not affect cash-per-contract instruments like ES).
+    const double pv = syminfo_.pointvalue;
+    double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
+                 * close_qty * pv;
     double pnl_pct = was_long
         ? (fill_price / pe.price - 1.0) * 100.0
         : (pe.price / fill_price - 1.0) * 100.0;
@@ -301,8 +307,8 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     trade.exit_bar_index = bar_index_;
     trade.entry_id = pe.entry_id;
     trade.entry_comment = pe.entry_comment;
-    trade.max_runup = pe.max_runup;
-    trade.max_drawdown = pe.max_drawdown;
+    trade.max_runup = pe.max_runup * pv;       // $ excursion per unit scales with point value
+    trade.max_drawdown = pe.max_drawdown * pv;
     trades_.push_back(trade);
     net_profit_sum_ += trade.pnl;
     if (trade.pnl > 0) { gross_profit_sum_ += trade.pnl; win_trades_count_++; }

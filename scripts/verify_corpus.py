@@ -237,13 +237,38 @@ class TradePair:
     mae: float = 0.0
 
 
-def parse_dt(s: str, tz_offset_hours: int) -> int:
-    """Parse 'YYYY-MM-DD HH:MM' (wall time in tz_offset_hours) as unix seconds (UTC)."""
-    tz = timezone(timedelta(hours=tz_offset_hours))
+def tv_tzinfo(meta: dict):
+    """Resolve the TV export timezone to a tzinfo.
+
+    Accepts the legacy fixed-offset aliases (utc / utc_plus_8 / asia_taipei) AND
+    any IANA zone name (e.g. 'America/New_York', 'Europe/London') so DST-bearing
+    exchanges parse correctly — a fixed integer offset silently mis-aligns trades
+    across a DST transition (e.g. US equities flip UTC-4 -> UTC-5 in November).
+    """
+    name = str(meta.get("tv_trades_csv_tz", "")).strip()
+    low = name.lower()
+    if low in TV_TZ_BY_NAME:
+        return timezone(timedelta(hours=TV_TZ_BY_NAME[low]))
+    if "/" in name:  # looks like an IANA zone -> DST-aware
+        try:
+            from zoneinfo import ZoneInfo
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    return timezone(timedelta(hours=TV_CSV_TZ_OFFSET_HOURS))  # default Asia/Taipei
+
+
+def parse_dt(s: str, tz) -> int:
+    """Parse 'YYYY-MM-DD HH:MM' (wall time in tz) as unix seconds (UTC).
+
+    ``tz`` is any datetime.tzinfo — a fixed timezone(...) or a DST-aware
+    zoneinfo.ZoneInfo. localizing the naive wall clock then taking .timestamp()
+    yields the correct POSIX instant including DST.
+    """
     return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=tz).timestamp())
 
 
-def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
+def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
     by_num: dict[int, dict] = {}
     # TradingView exports include a UTF-8 BOM; utf-8-sig strips it.
     with csv_path.open(encoding="utf-8-sig") as f:
@@ -291,10 +316,10 @@ def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
             r["mfe"] = mfe
             r["mae"] = mae
             if kind.startswith("Entry"):
-                r["entry_time"] = parse_dt(time_field, tz_offset_hours)
+                r["entry_time"] = parse_dt(time_field, tz)
                 r["entry_price"] = price
             else:
-                r["exit_time"] = parse_dt(time_field, tz_offset_hours)
+                r["exit_time"] = parse_dt(time_field, tz)
                 r["exit_price"] = price
 
     pairs: list[TradePair] = []
@@ -412,8 +437,8 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             print(f"{rel}\n  MISSING (tv: {tv_path.exists()}, engine: {eng_path.exists()})")
         return "missing"
 
-    tv = parse_trades(tv_path, tz_offset_hours=tv_timezone_offset(meta))
-    eng = parse_trades(eng_path, tz_offset_hours=ENGINE_CSV_TZ_OFFSET_HOURS)
+    tv = parse_trades(tv_path, tz=tv_tzinfo(meta))
+    eng = parse_trades(eng_path, tz=timezone.utc)
     matched = align_by_time(tv, eng)
     tv_cmp, eng_cmp = trim_to_common_match_window(tv, eng, matched)
     matched = align_by_time(tv_cmp, eng_cmp)

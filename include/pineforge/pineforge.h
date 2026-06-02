@@ -358,6 +358,18 @@ PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz);
  *  ignored. Call before #run_backtest*. */
 PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session);
 
+/** Set the instrument tick size (``syminfo.mintick``, default 0.01). Drives the
+ *  directional stop-entry snap and ``slippage = N*mintick`` economics. Set
+ *  per-instrument (e.g. 0.25 for ES, 0.00001 for FX). Non-positive ignored.
+ *  Call before #run_backtest*. */
+PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
+
+/** Set the instrument point value (``syminfo.pointvalue``, default 1.0) — the
+ *  $-per-point-per-contract multiplier applied to realized PnL and MFE/MAE. Set
+ *  per-instrument (e.g. 50 for ES). Non-positive ignored. Call before
+ *  #run_backtest*. */
+PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
+
 /** Inject a fundamental/exchange metadata value by Pine member name
  *  (e.g. "shares_outstanding_total", "target_price_average"). These have
  *  no OHLCV source; reads of un-injected members return na. Call before

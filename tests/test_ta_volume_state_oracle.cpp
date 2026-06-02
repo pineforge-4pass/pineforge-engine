@@ -69,13 +69,41 @@ static void test_bounds_hold() {
     ta::MFI mfi(14);
     ta::CMO cmo(14);
     ta::WPR wpr(14);
+    ta::TSI tsi(25, 13);
+    ta::RCI rci(14);
     for (const auto& b : f) {
         double m = mfi.compute(b.c, b.v);
         double cm = cmo.compute(b.c);
         double w = wpr.compute(b.c, b.h, b.l);
+        double t = tsi.compute(b.c);
+        double r = rci.compute(b.c);
         if (!is_na(m)) CHECK(m >= 0.0 - 1e-9 && m <= 100.0 + 1e-9);
         if (!is_na(cm)) CHECK(cm >= -100.0 - 1e-9 && cm <= 100.0 + 1e-9);
         if (!is_na(w)) CHECK(w >= -100.0 - 1e-9 && w <= 0.0 + 1e-9);
+        if (!is_na(t)) CHECK(t >= -100.0 - 1e-9 && t <= 100.0 + 1e-9);
+        if (!is_na(r)) CHECK(r >= -100.0 - 1e-9 && r <= 100.0 + 1e-9);
+    }
+}
+
+// NVI changes ONLY on a volume DECREASE; PVI ONLY on a volume INCREASE. This is
+// a structural invariant of the indicators independent of the exact ROC formula
+// (so it needs no TV oracle): on an up/equal-volume bar NVI must be unchanged,
+// on a down/equal-volume bar PVI must be unchanged.
+static void test_nvi_pvi_update_rule() {
+    std::printf("test_nvi_pvi_update_rule\n");
+    auto f = osc_feed(200);
+    ta::NVI nvi;
+    ta::PVI pvi;
+    double prev_nvi = 0.0, prev_pvi = 0.0, prev_vol = 0.0;
+    bool have_prev = false;
+    for (const auto& b : f) {
+        double n = nvi.compute(b.c, b.v);
+        double p = pvi.compute(b.c, b.v);
+        if (have_prev) {
+            if (b.v >= prev_vol) CHECK(n == prev_nvi);   // no volume decrease -> NVI frozen
+            if (b.v <= prev_vol) CHECK(p == prev_pvi);   // no volume increase -> PVI frozen
+        }
+        prev_nvi = n; prev_pvi = p; prev_vol = b.v; have_prev = true;
     }
 }
 
@@ -171,6 +199,7 @@ int main() {
     test_falling_saturates_low();
     test_wpr_endpoints();
     test_forward_sum_identities();
+    test_nvi_pvi_update_rule();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

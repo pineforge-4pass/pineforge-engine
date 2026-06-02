@@ -163,6 +163,23 @@ PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session) {
     static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_session(std::string(session));
 }
 
+/* Inject the instrument tick size (syminfo.mintick). Drives the directional
+ * stop-entry snap (long ceil / short floor) and slippage = N*mintick economics.
+ * Defaults to 0.01 (crypto/equity); set per-instrument (e.g. 0.25 for ES,
+ * 0.00001 for FX). Non-positive values are ignored. */
+PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick) {
+    if (!s) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_mintick(mintick);
+}
+
+/* Inject the instrument point value (syminfo.pointvalue) — the $ per point per
+ * contract multiplier applied to realized PnL and MFE/MAE. Defaults to 1.0
+ * (crypto/equity); set per-instrument (e.g. 50 for ES). Non-positive ignored. */
+PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue) {
+    if (!s) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_pointvalue(pointvalue);
+}
+
 /* Inject a fundamental/exchange metadata value (shares_outstanding_total,
  * recommendations_*, target_price_*, …) by Pine member name. Without an
  * injection the corresponding syminfo.* read returns na. NULL key ignored. */
