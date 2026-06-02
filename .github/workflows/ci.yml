@@ -66,3 +66,31 @@ jobs:
           cmake --build smoke_build -j 4
           expected="$(tr -d '[:space:]' < VERSION)"
           ./smoke_build/smoke_version | grep -qxF "${expected}"
+
+  # Dedicated AddressSanitizer + UndefinedBehaviorSanitizer lane. Without this,
+  # the determinism / NaN-propagation / handle-reuse / C-ABI-lifecycle probes
+  # would run un-instrumented and could not actually trip the leak / double-free
+  # / UB they target. The library is built with the sanitizers PUBLIC so the
+  # instrumentation propagates into every test binary (CMakeLists.txt option
+  # PINEFORGE_ENABLE_SANITIZERS).
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Eigen3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Configure (ASan + UBSan)
+        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DPINEFORGE_ENABLE_SANITIZERS=ON
+
+      - name: Build
+        run: cmake --build build-asan -j 4
+
+      - name: Test under sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build-asan --output-on-failure

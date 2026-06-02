@@ -46,6 +46,75 @@ void BacktestEngine::dispatch_bar() {
 }
 
 
+// Reset all per-run STATE (not configuration) so a reused handle's run N is
+// bit-identical to a fresh handle's run 1. See header doc + tests/
+// test_handle_reuse_reset.cpp. Configuration fields (initial_capital_,
+// pyramiding_, slippage_, commission_*, default_qty_*, syminfo_, inputs_, risk
+// thresholds) are intentionally NOT touched — they are set before run().
+void BacktestEngine::reset_run_state() {
+    // Closed-trade list + cached P&L / count accumulators.
+    trades_.clear();
+    trades_.reserve(256);
+    net_profit_sum_ = 0.0;
+    gross_profit_sum_ = 0.0;
+    gross_loss_sum_ = 0.0;
+    win_trades_count_ = 0;
+    loss_trades_count_ = 0;
+    eventrades_count_ = 0;
+
+    // Open position + pending orders.
+    reset_position_state_to_flat();   // position_side_/qty/price/time/count,
+                                      // pyramid_entries_, trail, partial ids
+    pending_orders_.clear();
+    pending_close_qty_in_bar_ = 0.0;
+
+    // Equity + position-size extremes.
+    max_equity_ = initial_capital_;
+    min_equity_ = initial_capital_;
+    max_drawdown_ = 0.0;
+    max_runup_ = 0.0;
+    max_contracts_held_all_ = 0.0;
+    max_contracts_held_long_ = 0.0;
+    max_contracts_held_short_ = 0.0;
+
+    // Risk halt latch + day trackers (one-way halt must not survive a rerun).
+    risk_halted_ = false;
+    cons_loss_day_count_ = 0;
+    last_loss_day_ = -1;
+    intraday_pnl_ = 0.0;
+    intraday_pnl_day_ = -1;
+    intraday_day_ = -1;
+    intraday_cap_hit_ = false;
+    intraday_fill_count_ = 0;
+
+    // Per-bar cursor + session-predicate state.
+    bar_index_ = 0;
+    prev_bar_timestamp_ = 0;
+    prev_in_session_ = false;
+    session_ismarket_ = false;
+    session_isfirstbar_ = false;
+    session_islastbar_ = false;
+
+    // Native source-series history (input.source(...) ring buffers). Must list
+    // EVERY _src_*_ member declared in engine.hpp — a missing one leaks history
+    // into a reused handle (see test_handle_reuse_reset all-series coverage).
+    _src_open_.clear();
+    _src_high_.clear();
+    _src_low_.clear();
+    _src_close_.clear();
+    _src_volume_.clear();
+    _src_hl2_.clear();
+    _src_hlc3_.clear();
+    _src_ohlc4_.clear();
+    _src_hlcc4_.clear();
+
+    // Per-bar trace/diagnostic buffers (trace_enabled_ is config — preserved).
+    trace_buffer_.clear();
+    trace_names_.clear();
+    trace_name_index_.clear();
+}
+
+
 void BacktestEngine::run(const Bar* bars, int n) {
     last_error_.clear();
     if (n > 0 && bars != nullptr) {
@@ -56,9 +125,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
         last_bar_index_ = 0;
     }
     try {
-    trades_.reserve(256);
-    max_equity_ = initial_capital_;
-    min_equity_ = initial_capital_;
+    reset_run_state();
 
     std::string detected_tf = "";
     if (n >= 2 && bars != nullptr) {
@@ -251,9 +318,7 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     diag_magnifier_sub_bars_processed_ = 0;
     diag_magnifier_sample_ticks_processed_ = 0;
 
-    trades_.reserve(256);
-    max_equity_ = initial_capital_;
-    min_equity_ = initial_capital_;
+    reset_run_state();
 
     // Determine aggregation ratio for script TF
     int ratio = tf_ratio(effective_input_tf, effective_script_tf);

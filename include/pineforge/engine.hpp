@@ -600,10 +600,12 @@ protected:
             case QtyType::PERCENT_OF_EQUITY: {
                 double equity = current_equity();
                 double cash = equity * (default_qty_value_ / 100.0);
-                return (fill_price > 0) ? (cash / fill_price) : default_qty_value_;
+                // Reject (qty 0) on a non-finite / non-positive fill price — a
+                // degenerate $0/NaN print must NOT size as the raw % number.
+                return (std::isfinite(fill_price) && fill_price > 0) ? (cash / fill_price) : 0.0;
             }
             case QtyType::CASH:
-                return (fill_price > 0) ? (default_qty_value_ / fill_price) : default_qty_value_;
+                return (std::isfinite(fill_price) && fill_price > 0) ? (default_qty_value_ / fill_price) : 0.0;
         }
         return default_qty_value_;
     }
@@ -1021,8 +1023,12 @@ protected:
         return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session, syminfo_.timezone, script_tf_);
     }
 
-private:
+    // Internal sizing helper; protected (alongside calc_qty) so the sizing-guard
+    // test can exercise the fill_price<=0 / NaN rejection path directly. See
+    // tests/test_adversarial_ohlcv.cpp.
     double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
+
+private:
     void execute_market_entry(const std::string& id, bool is_long, double fill_price,
                               double explicit_qty = std::numeric_limits<double>::quiet_NaN(),
                               int explicit_qty_type = -1,
@@ -1151,6 +1157,14 @@ private:
     double fifo_drain(const std::string* from_entry, double qty_limit,
                       double fill_price, bool was_long);
     void reset_position_state_to_flat();
+    // Reset ALL per-run state (trades, accumulators, position, pending orders,
+    // equity extremes, risk latches, intraday/day counters, source-series
+    // history) so a reused handle's run N is bit-identical to a fresh handle's
+    // run 1. Preserves configuration (initial_capital_, pyramiding_, slippage_,
+    // commission_*, default_qty_*, syminfo_, inputs_, risk thresholds) — those
+    // are set before run() and must survive it. Called at the top of every
+    // run() loop entrypoint. See tests/test_handle_reuse_reset.cpp.
+    void reset_run_state();
     void settle_position_after_partial_exit();
     void enter_market_from_flat(const std::string& id, bool is_long,
                                 double fill_price, double explicit_qty,

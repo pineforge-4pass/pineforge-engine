@@ -230,6 +230,11 @@ class TradePair:
     qty: float
     pnl: float
     trade_num: int = 0
+    # Report-only fields (compared but NOT gated — see the field-coverage
+    # disclosure). pnl_pct is in percent; mfe/mae are $ per unit qty.
+    pnl_pct: float = 0.0
+    mfe: float = 0.0
+    mae: float = 0.0
 
 
 def parse_dt(s: str, tz_offset_hours: int) -> int:
@@ -268,10 +273,23 @@ def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
                 row.get("Net P&L USD") or row.get("Net PnL USD")
                 or row.get("Net P&L") or row.get("Net PnL") or 0.0
             )
+            # Report-only fields (TV vs engine column spellings differ).
+            pnl_pct = float(
+                row.get("Net P&L %") or row.get("Net PnL %") or 0.0
+            )
+            mfe = float(
+                row.get("Favorable excursion USD") or row.get("MFE") or 0.0
+            )
+            mae = float(
+                row.get("Adverse excursion USD") or row.get("MAE") or 0.0
+            )
             direction = "long" if "long" in kind.lower() else "short"
             r["direction"] = direction
             r["qty"] = qty
             r["pnl"] = pnl
+            r["pnl_pct"] = pnl_pct
+            r["mfe"] = mfe
+            r["mae"] = mae
             if kind.startswith("Entry"):
                 r["entry_time"] = parse_dt(time_field, tz_offset_hours)
                 r["entry_price"] = price
@@ -293,6 +311,9 @@ def parse_trades(csv_path: Path, *, tz_offset_hours: int) -> list[TradePair]:
             qty=r["qty"],
             pnl=r["pnl"],
             trade_num=n,
+            pnl_pct=r.get("pnl_pct", 0.0),
+            mfe=r.get("mfe", 0.0),
+            mae=r.get("mae", 0.0),
         ))
     pairs.sort(key=lambda t: t.entry_time)
     return pairs
@@ -442,6 +463,24 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     exit_p90  = percentile(exit_deltas,  0.90)
     pnl_p90   = percentile(pnl_deltas,   0.90) if pnl_deltas else 0.0
 
+    # --- Report-only field-coverage deltas (NOT gated) ---
+    # Extends the historical 4-dimension gate (count/entry/exit/pnl) to qty,
+    # pnl_pct, MFE, MAE, plus p100 worst-case and an unmatched-in-window count,
+    # so tail / masked divergences are surfaced rather than absorbed. These do
+    # NOT affect the tier label (report-only field coverage).
+    qty_deltas    = [relative_max(t.qty, e.qty) for t, e in gating_matched]
+    pnlpct_deltas = [abs(t.pnl_pct - e.pnl_pct) for t, e in gating_matched]  # pct-points
+    mfe_deltas    = [relative_max(t.mfe, e.mfe) for t, e in gating_matched if abs(t.mfe) > 1e-9]
+    mae_deltas    = [relative_max(t.mae, e.mae) for t, e in gating_matched if abs(t.mae) > 1e-9]
+    entry_p100  = max(entry_deltas)  if entry_deltas  else 0.0
+    exit_p100   = max(exit_deltas)   if exit_deltas   else 0.0
+    pnl_p100    = max(pnl_deltas)    if pnl_deltas    else 0.0
+    qty_p100    = max(qty_deltas)    if qty_deltas    else 0.0
+    pnlpct_p100 = max(pnlpct_deltas) if pnlpct_deltas else 0.0
+    mfe_p90     = percentile(mfe_deltas, 0.90) if mfe_deltas else 0.0
+    mae_p90     = percentile(mae_deltas, 0.90) if mae_deltas else 0.0
+    unmatched_in_window = max(len(tv_gate), len(eng_gate)) - len(gating_matched)
+
     count_ok = count_delta < thresh["count"]
     entry_ok = entry_p90  < thresh["entry"]
     exit_ok  = exit_p90   < thresh["exit"]
@@ -512,6 +551,12 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             f"  Entry-price p90 delta: {entry_p90  * 100:8.4f}%  ({check(entry_ok)})\n"
             f"  Exit-price  p90 delta: {exit_p90   * 100:8.4f}%  ({check(exit_ok)})\n"
             f"  PnL         p90 delta: {pnl_p90    * 100:8.4f}%  ({check(pnl_ok)})\n"
+            f"  -- report-only (not gated) --\n"
+            f"  Entry/Exit/PnL p100:   {entry_p100*100:.4f}% / {exit_p100*100:.4f}% / {pnl_p100*100:.4f}%\n"
+            f"  Qty   p90/p100 delta:  {percentile(qty_deltas,0.90)*100:.4f}% / {qty_p100*100:.4f}%\n"
+            f"  PnL%  p90/p100 (pts):  {percentile(pnlpct_deltas,0.90):.4f} / {pnlpct_p100:.4f}\n"
+            f"  MFE/MAE p90 delta:     {mfe_p90*100:.4f}% / {mae_p90*100:.4f}%\n"
+            f"  Unmatched-in-window:   {unmatched_in_window}\n"
             f"  -> {label}"
         )
         if show_diffs > 0:
