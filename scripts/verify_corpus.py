@@ -467,7 +467,7 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     # Extends the historical 4-dimension gate (count/entry/exit/pnl) to qty,
     # pnl_pct, MFE, MAE, plus p100 worst-case and an unmatched-in-window count,
     # so tail / masked divergences are surfaced rather than absorbed. These do
-    # NOT affect the tier label. See docs/production-readiness-findings.md.
+    # NOT affect the tier label (report-only field coverage).
     qty_deltas    = [relative_max(t.qty, e.qty) for t, e in gating_matched]
     pnlpct_deltas = [abs(t.pnl_pct - e.pnl_pct) for t, e in gating_matched]  # pct-points
     mfe_deltas    = [relative_max(t.mfe, e.mfe) for t, e in gating_matched if abs(t.mfe) > 1e-9]

@@ -62,3 +62,7 @@ tutorial/**/trades.csv
 HANDOFF.md
 BENCH_REFRESH_HANDOFF.md
 .claude/
+
+# Internal process artifacts + working notes (kept local, not public history)
+docs/superpowers/
+docs/production-readiness-findings.md

@@ -35,7 +35,7 @@ zero gaps. None of the following market-structure properties are exercised:
 |---|---|---|
 | `symbol-equity-rth-gaps-aapl-01` | `NASDAQ:AAPL` 5m, RTH `0930-1600` America/New_York | overnight gap fills, RTH session filter, holiday calendar, exchange-tz vs chart-tz day boundary |
 | `symbol-index-rth-spx-01` | `SP:SPX` 5m (extends `special-validation/`) | RTH session + chart-tz intraday-cap rollover on a real session (already scaffolded) |
-| `symbol-futures-pointvalue-es-01` | `CME_MINI:ES1!` 5m, tick 0.25, point value $50 | **point-value PnL multiplier (O2)** + 0.25-tick directional snap economics |
+| `symbol-futures-pointvalue-es-01` | `CME_MINI:ES1!` 5m, tick 0.25, point value $50 | **point-value PnL multiplier** (currently `syminfo.pointvalue` is not applied to PnL) + 0.25-tick directional snap economics |
 | `symbol-fx-5dp-eurusd-01` | `OANDA:EURUSD` 15m, mintick 0.00001 | 5-decimal pricing, sub-pip slippage rounding, FX session |
 | `symbol-pricemag-penny-01` / `-sixfig-01` | a sub-$1 stock / `BINANCE:BTCUSDT` | price-magnitude extremes (qty precision at $0.x and $100k) |
 | `commission-per-contract-es-01` | ES, `commission_type=cash_per_contract` | the commission type never exercised by the crypto-% corpus |
@@ -57,9 +57,9 @@ if ta.crossunder(fast, slow)
     strategy.close("L")
 ```
 Expected: PnL per point == `(exit-entry) * $50 * qty − commission`. **Will FAIL
-until O2 (point-value wiring) lands** — capture TV first, then implement to match.
+until point-value wiring lands** — capture TV first, then implement to match.
 
-## Family B — Leverage / margin-call / forced liquidation (O-finding #8/K)
+## Family B — Leverage / margin-call / forced liquidation
 
 `margin_liquidation_price()` is hardwired `na` and margin is only checked at
 signal time, so a leveraged position that should be liquidated runs to its own
@@ -74,7 +74,7 @@ account."
   loss greater than posted collateral; position is flat after liquidation) can be
   guarded now, but the *price* needs the TV oracle.
 
-## Family C — TA volume/state family TV parity (M-finding)
+## Family C — TA volume/state family TV parity
 
 12 built-ins appear in **zero** corpus probes and are guarded only by
 author-computed references that share the formula with the impl:
@@ -102,12 +102,12 @@ this promotes it to TV-backed:
 Once the validator field extension lands (report-only first), capture probes that
 specifically stress the under-checked fields:
 - fractional/`percent_of_equity` qty (qty parity), a high-MFE-then-reversal trade
-  (MFE/MAE parity), and a commissioned trade (pnl_pct parity → resolves O5).
+  (MFE/MAE parity), and a commissioned trade (pnl_pct parity — pins the gross-vs-net convention).
 
 ## Suggested order
 
-1. Family A futures + FX (forces O2 point-value + tick economics).
-2. Family E commissioned probe (resolves O5 pnl_pct) — pairs with the validator
+1. Family A futures + FX (forces point-value + tick economics).
+2. Family E commissioned probe (pins the pnl_pct convention) — pairs with the validator
    field extension.
 3. Family B leverage/liquidation (largest engine work).
 4. Families C + D (breadth; lower per-probe risk).

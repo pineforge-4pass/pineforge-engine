@@ -115,8 +115,8 @@ typedef struct pf_trade_s {
                              *   price-return %, computed before commission and independent
                              *   of qty (it equals pnl/entry_capital only at qty=1, zero
                              *   commission). TradingView's "Net P&L %" uses a net-of-
-                             *   commission return-on-cost convention; aligning to it is a
-                             *   tracked correction — see docs/production-readiness-findings.md. */
+                             *   commission return-on-cost convention; aligning the engine
+                             *   to it is a tracked correction. */
     int     is_long;        /**< 1 if long, 0 if short. */
     double  max_runup;      /**< Peak favorable price travel during the trade ($/unit qty). */
     double  max_drawdown;   /**< Peak adverse  price travel during the trade ($/unit qty). */
