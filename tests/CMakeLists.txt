@@ -43,6 +43,14 @@ set(TEST_SOURCES
     test_get_input_int64
     test_get_input_source
     test_syminfo_metadata
+    test_determinism_reproducibility
+    test_exit_path_segment_tiebreak
+    test_accounting_reconciliation
+    test_ta_volume_state_oracle
+    test_market_structure_fills
+    test_handle_reuse_reset
+    test_calendar_aggregation_wm
+    test_adversarial_ohlcv
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
