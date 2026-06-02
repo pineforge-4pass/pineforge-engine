@@ -170,10 +170,20 @@ endif()
 # ASan + UBSan. Link options are PUBLIC so anything linking libpineforge.a
 # (tests, corpus strategy.so) picks up the runtime.
 if(PINEFORGE_ENABLE_SANITIZERS)
-    target_compile_options(pineforge PRIVATE
+    # Compile options must be PUBLIC, not PRIVATE: a consumer TU (test, strategy
+    # .so) that links the instrumented library but compiles WITHOUT -fsanitize
+    # gets a different Eigen alignment view than matrix.cpp, so an Eigen matrix
+    # allocated in the library and freed (header-inlined) in the consumer hits a
+    # cross-TU aligned-free mismatch -> ASan "bad-free" (seen on Linux; masked by
+    # macOS's allocator). PUBLIC keeps instrumentation consistent everywhere.
+    target_compile_options(pineforge PUBLIC
         -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(pineforge PUBLIC -fsanitize=address,undefined)
-    message(STATUS "Sanitizers: -fsanitize=address,undefined")
+    # Belt-and-suspenders: disable Eigen's manual over-alignment under the
+    # sanitizer build so Eigen uses plain malloc/free (no offset pointers to
+    # mis-free). Sanitizer-lane only; normal builds keep full alignment.
+    target_compile_definitions(pineforge PUBLIC EIGEN_MAX_ALIGN_BYTES=0)
+    message(STATUS "Sanitizers: -fsanitize=address,undefined (Eigen alignment disabled)")
 endif()
 
 # === Strict warnings (opt-in) =========================================
