@@ -6,9 +6,13 @@
 > libpineforge version, hardened entrypoint, image signing, etc.).
 > Use this one to learn the inputs/outputs and as a starting point.
 
-Self-contained image for running a backtest of any pre-generated
-PineForge strategy translation unit against an OHLCV CSV. JSON
-report on stdout, build/compile noise on stderr.
+Self-contained image for backtesting a PineScript v6 strategy against an
+OHLCV CSV. The image bundles the **`pineforge-codegen` transpiler** (pip,
+source-available), so you can mount a `strategy.pine` directly — it
+transpiles → compiles → runs locally, **no hosted API, no API key, source
+never leaves the container**. A pre-transpiled `strategy.cpp` is still
+accepted for back-compat. JSON report on stdout, build/transpile noise on
+stderr.
 
 ## Pull (prebuilt)
 
@@ -16,9 +20,9 @@ Each push to `main` (and every semver tag `vX.Y.Z`) publishes a
 multi-arch image to GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/fullpass-4pass/pineforge-engine:latest
+docker pull ghcr.io/pineforge-4pass/pineforge-engine:latest
 # or pin a release:
-docker pull ghcr.io/fullpass-4pass/pineforge-engine:0.1.0
+docker pull ghcr.io/pineforge-4pass/pineforge-engine:0.1.0
 ```
 
 Available tags: `latest`, `main`, `vX.Y.Z`, `X.Y`, and `sha-<short>`.
@@ -32,25 +36,38 @@ with a PAT (`read:packages` scope) first.
 docker build -t pineforge -f docker/Dockerfile .
 ```
 
-Multi-stage build: stage 1 compiles `libpineforge.a`, stage 2 keeps
-only the static lib, public headers, `g++`, `python3`, and the JSON
-harness (~250 MB final). One-time cost; per-run compile is ~1 second.
+Multi-stage build: stage 1 compiles `libpineforge.a`, stage 2 keeps only the
+static lib, public headers, `g++`, `python3`, the `pineforge-codegen`
+transpiler, and the JSON harness. One-time cost; per-run transpile+compile is
+~1 second.
 
 ## Run
 
 ```bash
 docker run --rm \
-  -v $(pwd)/strategy.cpp:/in/strategy.cpp:ro \
+  -v $(pwd)/strategy.pine:/in/strategy.pine:ro \
   -v $(pwd)/ohlcv.csv:/in/ohlcv.csv:ro \
   pineforge > report.json
 ```
 
-Mount points:
+Mount points (provide exactly one of `strategy.pine` / `strategy.cpp`):
 
 | Host path        | Container path        | Required | Notes                             |
 | ---------------- | --------------------- | :------: | --------------------------------- |
-| `strategy.cpp`   | `/in/strategy.cpp`    | yes      | Generated PineForge translation unit |
+| `strategy.pine`  | `/in/strategy.pine`   | preferred | PineScript v6 source; transpiled in-container |
+| `strategy.cpp`   | `/in/strategy.cpp`    | back-compat | Pre-transpiled PineForge translation unit (used only if no `.pine`) |
 | `ohlcv.csv`      | `/in/ohlcv.csv`       | yes      | `timestamp,open,high,low,close,volume` |
+
+### Transpile only (Pine → C++, no backtest)
+
+Set `PINEFORGE_TRANSPILE_ONLY=1` to emit the generated C++ on stdout and exit
+— no OHLCV needed:
+
+```bash
+docker run --rm -e PINEFORGE_TRANSPILE_ONLY=1 \
+  -v $(pwd)/strategy.pine:/in/strategy.pine:ro \
+  pineforge > strategy.cpp
+```
 
 Optional env vars apply parameter overrides before the backtest runs:
 
@@ -118,12 +135,13 @@ flags, unknown-input-TF, etc.) into `strategy_get_last_error()`; the
 container surfaces these as `{"engine":"pineforge","error":"..."}` on
 stdout with exit code `1` instead of crashing.
 
-The `strategy.cpp` is the C++ source produced by your codegen step
-(see the project that owns the transpiler). It must export the
-PineForge C ABI declared in `<pineforge/pineforge.h>` — i.e. compile
-unchanged against `libpineforge.a` and yield the standard 10-symbol
-strategy `.so`. Inputs are read-only mounts; the image performs no
-network I/O at run time.
+Mount a `strategy.pine` and the bundled `pineforge-codegen`
+([source-available](https://github.com/pineforge-4pass/pineforge-codegen-oss),
+`pip install pineforge-codegen`) transpiles it in-container. Advanced users may
+instead mount a pre-transpiled `strategy.cpp` (the C++ must export the PineForge
+C ABI in `<pineforge/pineforge.h>` — i.e. compile unchanged against
+`libpineforge.a` into the standard 10-symbol strategy `.so`). Inputs are
+read-only mounts; the image performs no network I/O at run time.
 
 ## Output schema
 
@@ -186,19 +204,20 @@ network I/O at run time.
 
 | Code | Meaning |
 | ---: | ------- |
-|  `0` | Success — JSON written to stdout |
-|  `2` | Missing `/in/strategy.cpp` or `/in/ohlcv.csv` mount |
+|  `0` | Success — JSON report (or C++ in transpile-only mode) on stdout |
+|  `2` | Missing input mount (`/in/strategy.pine` or `/in/strategy.cpp`, and `/in/ohlcv.csv`) |
 |  `3` | `g++` compile of the strategy translation unit failed |
 |  `4` | Backtest aborted at runtime |
+|  `5` | Transpile failed (unsupported Pine construct or syntax error) |
 
 ## Smoke test
 
-The repo's `tutorial/macd/generated.cpp` and
+The repo's `tutorial/macd/strategy.pine` and
 `tutorial/data/btcusdt_15m_7d.csv` make a convenient smoke pair:
 
 ```bash
 docker run --rm \
-  -v $(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro \
+  -v $(pwd)/tutorial/macd/strategy.pine:/in/strategy.pine:ro \
   -v $(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro \
   pineforge | jq '.summary'
 ```

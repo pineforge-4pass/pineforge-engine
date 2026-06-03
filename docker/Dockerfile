@@ -62,14 +62,22 @@ LABEL org.opencontainers.image.title="pineforge" \
       org.opencontainers.image.version="${PINEFORGE_VERSION}" \
       org.opencontainers.image.revision="${PINEFORGE_GIT_SHA}" \
       org.opencontainers.image.created="${PINEFORGE_BUILD_DATE}" \
-      org.opencontainers.image.source="https://github.com/luisleo526/pineforge-engine" \
+      org.opencontainers.image.source="https://github.com/pineforge-4pass/pineforge-engine" \
       org.opencontainers.image.licenses="Apache-2.0"
 
+# g++ + Eigen to compile the generated TU; python3 for the JSON harness and
+# the bundled PineScript->C++ transpiler (pineforge-codegen, source-available
+# on PyPI). With codegen baked in, the container accepts strategy.pine directly
+# and transpiles locally — no hosted API, no API key, source never leaves the
+# box. (bookworm python3 ships no pip and is PEP-668 externally-managed, hence
+# python3-pip + --break-system-packages. codegen is pure-Python, zero deps.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ \
         libeigen3-dev \
         python3 \
+        python3-pip \
         ca-certificates \
+    && pip3 install --break-system-packages --no-cache-dir pineforge-codegen \
     && rm -rf /var/lib/apt/lists/*
 
 # Bundle the prebuilt static library, the public headers (curated +

@@ -4,7 +4,7 @@
 
 ### **The fastest deterministic PineScript v6 backtest runtime — validated trade-for-trade against TradingView.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/fullpass-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/fullpass-4pass/pineforge-engine/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
 [![Docs](https://img.shields.io/badge/docs-cdocs.pineforge.dev-1565c0?logo=readthedocs&logoColor=white)](https://cdocs.pineforge.dev)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)<br>
@@ -23,20 +23,20 @@
 
 The fastest way to use PineForge: let your AI agent write, run, and optimize strategies for you via the **[`@pineforge/codegen-mcp`](https://www.npmjs.com/package/@pineforge/codegen-mcp)** MCP server.
 
-**The workflow:**
+**The workflow (fully local — no API key, source never leaves your machine):**
 1. Agent writes (or you paste) PineScript v6 source
-2. MCP transpiles Pine → C++ via the hosted API (source leaves your machine; OHLCV never does)
-3. Engine runs locally in Docker — microsecond-class, bit-reproducible results
+2. MCP runs the engine container, which transpiles Pine → C++ in-container with
+   the bundled [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) transpiler
+3. Engine compiles + runs locally in Docker — microsecond-class, bit-reproducible results
 4. Agent reads the trade list, suggests improvements, sweeps parameters
 
-**Prerequisites:** Node ≥ 20, Docker, a PineForge API key ([free tier at pineforge.dev](https://www.pineforge.dev))
+**Prerequisites:** Node ≥ 20 and Docker. No API key — transpile and backtest run entirely on your machine.
 
 ### Claude Code (one command)
 
 ```bash
 claude mcp add pineforge-codegen \
   --transport stdio \
-  --env PINEFORGE_API_KEY=pf_... \
   -- npx -y @pineforge/codegen-mcp
 ```
 
@@ -47,8 +47,7 @@ claude mcp add pineforge-codegen \
   "mcpServers": {
     "pineforge-codegen": {
       "command": "npx",
-      "args": ["-y", "@pineforge/codegen-mcp"],
-      "env": { "PINEFORGE_API_KEY": "pf_..." }
+      "args": ["-y", "@pineforge/codegen-mcp"]
     }
   }
 }
@@ -63,9 +62,8 @@ Once connected, your AI agent can:
 | "Sweep fast length 8–21, slow 21–55, rank by net PnL" | `backtest_pine_grid` |
 | "What broker overrides are available?" | `list_engine_params` |
 
-> **Try it first.** Paste any Pine v6 strategy at [codegen.pineforge.dev](https://codegen.pineforge.dev) to see the generated C++ before running anything locally.
-
-> **Free tier included.** Sign up at [pineforge.dev](https://www.pineforge.dev) — no credit card required to start.
+> **Transpiler is open.** The Pine → C++ transpiler is source-available
+> (`pip install pineforge-codegen`, [repo](https://github.com/pineforge-4pass/pineforge-codegen-oss)) and ships inside the engine image — the whole loop is local. Paste any Pine v6 strategy at [codegen.pineforge.dev](https://codegen.pineforge.dev) to preview the generated C++.
 
 ---
 
@@ -140,7 +138,7 @@ This repository ships:
 
 - `libpineforge.a` — the static runtime library
 - `<pineforge/pineforge.h>` — the public C ABI (the canonical, stability-pinned consumer surface)
-- `<pineforge/*.hpp>` — the internal C++ headers (used by the closed PineForge transpiler; not part of the stability guarantee)
+- `<pineforge/*.hpp>` — the internal C++ headers (the PineForge transpiler emits against these; not part of the stability guarantee)
 - A 39-binary ctest suite (38 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
 - `**corpus/`** (**public git submodule**) — **232 reference strategies** under a single `corpus/validation/` tree. Each folder ships `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`.
 - `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 100 strategies (50 public + 50 promoted corpus probes) and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship only via an optional **`benchmarks/assets` submodule** — a separate optional submodule (not yet public). With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on **50/50** strategies (first 50) vs PyneCore’s 47/50; on the expanded **100-strategy suite (~167,000 TV trades verified)**, PineForge holds **100/100 excellent** vs PyneCore’s 85/100. Median speedup: 104× vs PyneCore across 99 commonly-timed strategies.
@@ -164,7 +162,7 @@ If you encounter day-boundary alignment issues or want to force the engine to pr
 
 ## What this is, and what it isn't
 
-**This is the runtime, not the compiler.** PineForge's PineScript-to-C++ transpiler is closed-source and ships separately. This library is what every compiled strategy `.so` links against: it provides the implementations of `ta.ema`, `strategy.entry`, `request.security`, the bar magnifier, and so on, behind a stable C ABI.
+**This is the runtime, not the compiler.** PineForge's PineScript-to-C++ transpiler ships separately as [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (source-available, `pip install pineforge-codegen`) and is bundled inside the engine Docker image. This library is what every compiled strategy `.so` links against: it provides the implementations of `ta.ema`, `strategy.entry`, `request.security`, the bar magnifier, and so on, behind a stable C ABI.
 
 **This is a backtest engine, not a charting library.** PineScript drawing primitives (`plot`, `bgcolor`, `label`, …) compile cleanly but do nothing at runtime. The runtime computes trade execution and reports — it does not render.
 
@@ -278,7 +276,7 @@ POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_tr
 
 **Stability guarantee:** within the same `PINEFORGE_VERSION_MAJOR`, struct layouts and `extern "C"` signatures are append-only. New fields may be appended; existing fields are never reordered, removed, or retyped. New functions may be added; existing functions are never removed or signature-changed. Compile-time `static_assert`s in `src/c_abi.cpp` pin the layouts against drift.
 
-The C++ headers (`<pineforge/engine.hpp>`, `<pineforge/ta.hpp>`, ...) are *internal* implementation surface — used by the closed PineForge transpiler, not part of the stability guarantee, and not recommended for external consumption.
+The C++ headers (`<pineforge/engine.hpp>`, `<pineforge/ta.hpp>`, ...) are *internal* implementation surface — what the PineForge transpiler emits against, not part of the stability guarantee, and not recommended for external consumption.
 
 ## Repository layout
 
@@ -347,18 +345,27 @@ A pre-compiled strategy `.so` against runtime `0.X.Y` will keep working against 
 ## Reproducing the corpus run end-to-end
 
 The validation corpus lets anyone rebuild and rerun every compiled
-PineForge strategy from a fresh clone. The corpus ships
-`generated.cpp` for every probe, so no transpiler access is required —
-just the engine, the corpus submodule, and a C++17 compiler.
+PineForge strategy from a fresh clone — now genuinely **from source**:
+the transpiler ([`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss))
+is bundled in the engine Docker image, so each `generated.cpp` can be
+re-derived from its `strategy.pine`. The committed `generated.cpp` still
+ships, so the build also works with just a C++17 compiler and no Docker.
 
 **Scale:** 232 strategies × ~312,000 trades verified against TradingView.
 
 ```bash
-git clone https://github.com/fullpass-4pass/pineforge-engine.git
+git clone https://github.com/pineforge-4pass/pineforge-engine.git
 cd pineforge-engine
 git submodule update --init corpus
 
-# Build + run + verify (no codegen needed — generated.cpp ships in corpus)
+# (Optional) Reproduce the C++ from strategy.pine via the engine image.
+# VERIFY=1 proves the shipped generated.cpp is byte-identical to the
+# transpiler output (drift guard, no overwrite); drop it to regenerate.
+docker pull ghcr.io/pineforge-4pass/pineforge-engine:latest
+VERIFY=1 scripts/regen_corpus_cpp.sh
+
+# Build + run + verify TV parity. (Add REGEN=1 to regenerate the C++
+# from strategy.pine via the image first — needs Docker.)
 JOBS=8 scripts/run_corpus.sh
 
 # Optional: regen the report
@@ -372,7 +379,7 @@ and prints the canonical corpus summary described in
 
 ## Cross-engine comparison
 
-`[benchmarks/](benchmarks/)` runs **100 strategies** through PineForge, PyneCore, and PineTS to spot engine-specific defects vs TV-side semantics. Strategy folders + the 53,930-bar Binance ETH/USDT-USDT 15m OHLCV live under the [`benchmarks/assets`](https://github.com/fullpass-4pass/pineforge-benchmarks-assets) public submodule. PyneCore Python sources are official PyneSys cloud-compiler output (no hand-ports). PineTS handles indicators only — their strategy backtester is upstream roadmap.
+`[benchmarks/](benchmarks/)` runs **100 strategies** through PineForge, PyneCore, and PineTS to spot engine-specific defects vs TV-side semantics. Strategy folders + the 53,930-bar Binance ETH/USDT-USDT 15m OHLCV live under the [`benchmarks/assets`](https://github.com/pineforge-4pass/pineforge-benchmarks-assets) public submodule. PyneCore Python sources are official PyneSys cloud-compiler output (no hand-ports). PineTS handles indicators only — their strategy backtester is upstream roadmap.
 
 **Scale:** 100 strategies × ~167,000 TV trades verified.
 

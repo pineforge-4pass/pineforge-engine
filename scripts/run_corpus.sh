@@ -40,6 +40,17 @@ Maintainers:   git submodule update --init corpus
 Public clones: the TV validation corpus lives in a private submodule only; see CONTRIBUTING.md."
 fi
 
+# --- 0) (optional) regenerate generated.cpp from strategy.pine --------
+# REGEN=1 re-derives every corpus/*/*/generated.cpp from its strategy.pine
+# through the engine Docker image (which bundles the transpiler), so the
+# build below compiles freshly-transpiled C++ instead of the committed copy.
+# Requires Docker. Honours ONLY. Off by default → committed C++ is used.
+
+if [[ "${REGEN:-0}" == "1" ]]; then
+    log "regenerating generated.cpp from strategy.pine via the engine image"
+    "$ROOT_DIR/scripts/regen_corpus_cpp.sh"
+fi
+
 # --- 1) build ---------------------------------------------------------
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
