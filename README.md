@@ -13,7 +13,7 @@
 [![codegen on PyPI](https://img.shields.io/pypi/v/pineforge-codegen?label=codegen&logo=pypi&logoColor=white)](https://pypi.org/project/pineforge-codegen/)
 [![MCP](https://img.shields.io/npm/v/@pineforge/codegen-mcp?label=MCP&logo=npm)](https://www.npmjs.com/package/@pineforge/codegen-mcp)
 
-**[🐳 Run locally (Docker + MCP)](https://www.npmjs.com/package/@pineforge/codegen-mcp) · [🎮 Live Playground](https://codegen.pineforge.dev) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
+**[🐳 Run locally (Docker + MCP)](https://www.npmjs.com/package/@pineforge/codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
 **[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
@@ -64,7 +64,7 @@ Once connected, your AI agent can:
 | "What broker overrides are available?" | `list_engine_params` |
 
 > **Transpiler is open.** The Pine → C++ transpiler is source-available
-> (`pip install pineforge-codegen`, [repo](https://github.com/pineforge-4pass/pineforge-codegen-oss)) and ships inside the engine image — the whole loop is local. Paste any Pine v6 strategy at [codegen.pineforge.dev](https://codegen.pineforge.dev) to preview the generated C++.
+> (`pip install pineforge-codegen`, [repo](https://github.com/pineforge-4pass/pineforge-codegen-oss)) and ships inside the engine image — so the whole transpile→backtest loop runs on your machine.
 
 ---
 
