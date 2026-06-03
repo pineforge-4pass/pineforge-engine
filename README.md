@@ -352,7 +352,7 @@ is bundled in the engine Docker image, so each `generated.cpp` can be
 re-derived from its `strategy.pine`. The committed `generated.cpp` still
 ships, so the build also works with just a C++17 compiler and no Docker.
 
-**Scale:** 246 strategies verified trade-for-trade against TradingView.
+**Scale:** 246 strategies × ~375,000 trades verified trade-for-trade against TradingView.
 
 ```bash
 git clone https://github.com/pineforge-4pass/pineforge-engine.git
@@ -376,7 +376,7 @@ python3 scripts/regen_validation_report.py
 That builds `libpineforge.a` plus one `strategy.so` per probe, runs each
 against the reference OHLCV feed, rewrites each `engine_trades.csv`,
 and prints the canonical corpus summary described in
-`corpus/README.md`. Headline result: **245 / 246 excellent + 1 documented TV-side anomaly** (`anomaly-equity-mirror-strategy-equity-01`, TV broker non-deterministic at 1× equity boundary).
+`corpus/README.md`. Headline result: **245 / 246 excellent + 1 documented TV-side anomaly** (`anomaly-equity-mirror-strategy-equity-01`, TV broker non-deterministic at 1× equity boundary). Total trades: TV 375,453, engine 375,548 (`+95` ≈ 0.03 % over TV).
 
 ## Cross-engine comparison
 
