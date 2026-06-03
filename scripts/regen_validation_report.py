@@ -84,8 +84,8 @@ def _verify_probe(strategy_dir: Path) -> dict:
             "profile": "n/a", "notes": "tv_trades.csv or engine_trades.csv missing",
         }
 
-    tv = vc.parse_trades(tv_path, tz_offset_hours=vc.tv_timezone_offset(meta))
-    eng = vc.parse_trades(eng_path, tz_offset_hours=vc.ENGINE_CSV_TZ_OFFSET_HOURS)
+    tv = vc.parse_trades(tv_path, tz=vc.tv_tzinfo(meta))
+    eng = vc.parse_trades(eng_path, tz=vc.timezone.utc)
     matched = vc.align_by_time(tv, eng)
     tv_cmp, eng_cmp = vc.trim_to_common_match_window(tv, eng, matched)
     matched = vc.align_by_time(tv_cmp, eng_cmp)
@@ -199,7 +199,7 @@ def _fmt_pct(x: float) -> str:
 
 
 CORPUS_REPO_BLOB = (
-    "https://github.com/fullpass-4pass/pineforge-corpus/tree/main"
+    "https://github.com/pineforge-4pass/pineforge-corpus/tree/main"
 )
 
 
