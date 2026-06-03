@@ -10,9 +10,10 @@
 [![Language](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](#)<br>
 [![Parity](https://img.shields.io/badge/TV%20parity-231%2F232-brightgreen)](#cross-engine-comparison)
 [![Speed](https://img.shields.io/badge/median%20104%C3%97%20vs%20PyneCore%20%2899%20strategies%29-success)](benchmarks/results/speed.md)<br>
-[![Free tier](https://img.shields.io/badge/free%20tier-pineforge.dev-22c55e?logo=rocket&logoColor=white)](https://www.pineforge.dev)
+[![codegen on PyPI](https://img.shields.io/pypi/v/pineforge-codegen?label=codegen&logo=pypi&logoColor=white)](https://pypi.org/project/pineforge-codegen/)
+[![MCP](https://img.shields.io/npm/v/@pineforge/codegen-mcp?label=MCP&logo=npm)](https://www.npmjs.com/package/@pineforge/codegen-mcp)
 
-**[🚀 Get API Key (free)](https://www.pineforge.dev) · [🎮 Live Playground](https://codegen.pineforge.dev)**<br>
+**[🐳 Run locally (Docker + MCP)](https://www.npmjs.com/package/@pineforge/codegen-mcp) · [🎮 Live Playground](https://codegen.pineforge.dev) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
 **[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
