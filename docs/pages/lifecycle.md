@@ -142,5 +142,5 @@ The C ABI does not return error codes. Instead:
   evaluation or terminate the strategy bar — never the host process.
 
 If you need finer-grained error reporting, attach a logger via the
-runtime's internal log hook (closed-source-only API; not part of the
+runtime's internal log hook (internal API; not part of the
 public ABI).

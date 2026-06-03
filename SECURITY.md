@@ -10,9 +10,9 @@ Please allow reasonable time for a fix before discussing the issue in public.
 
 ## Scope
 
-This repository is the **PineScript v6 backtest runtime** (C/C++ library). Reports about the closed-source transpiler, TradingView’s platform, or third-party strategy code are out of scope for this tracker unless they concern this runtime’s build or execution of untrusted native code.
+This repository is the **PineScript v6 backtest runtime** (C/C++ library). Reports about the separate `pineforge-codegen` transpiler, TradingView’s platform, or third-party strategy code are out of scope for this tracker unless they concern this runtime’s build or execution of untrusted native code.
 
-TradingView-linked CSV exports and related validation fixtures are maintained in **private** `corpus/` and `benchmarks/assets/` submodules; if you suspect those were exposed or committed to a public branch by mistake, report that as a data-handling concern privately as well.
+TradingView-linked CSV exports live in the **public** `corpus/` and `benchmarks/assets/` submodules as factual parity references (see [LEGAL.md](LEGAL.md)). If you find genuinely sensitive data (secrets, credentials, private keys) committed by mistake, report it as a data-handling concern privately.
 
 ## Supported versions
 

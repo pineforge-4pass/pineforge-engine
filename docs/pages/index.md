@@ -119,5 +119,5 @@ Build: `cc demo.c -lpineforge -lstdc++ -lm`. That's it.
 - License: Apache-2.0
 
 @note PineForge ships as a **static library** (`libpineforge.a`). The
-PineScript-to-C++ **transpiler** is a separate, closed-source product;
+PineScript-to-C++ **transpiler** is a separate, source-available product (PolyForm Noncommercial);
 this runtime is what every compiled strategy `.so` links against.

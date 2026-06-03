@@ -18,7 +18,7 @@ from PineScript sources we own, and the corpus ships under the same
 Apache-2.0 license as the engine. The corpus also ships the per-probe
 `generated.cpp` (transpiler output of our own clean-room
 `strategy.pine`) so public users can rebuild without access to the
-closed-source `pineforge-codegen` transpiler. The compiled
+separate `pineforge-codegen` transpiler (source-available, PolyForm Noncommercial). The compiled
 `strategy.dylib` / `strategy.so` / `strategy.dll` artefacts are
 platform-specific and rebuilt locally by `scripts/run_corpus.sh`.
 

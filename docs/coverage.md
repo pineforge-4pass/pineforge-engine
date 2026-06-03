@@ -15,7 +15,7 @@
 >
 > **Two layers of "supported".** PineForge as a whole = (a) this runtime
 >
-> - (b) PineForge's closed-source PineScript-to-C++transpiler. Some Pine
+> - (b) PineForge's separate, source-available PineScript-to-C++ transpiler. Some Pine
 > surface (arrays, maps, UDTs, most scalar `math.`* calls) has no
 > dedicated runtime class because the transpiler emits the implementation
 > inline using the C++ standard library or generated structs. Those are
