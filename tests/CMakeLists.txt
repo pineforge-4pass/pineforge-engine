@@ -51,6 +51,21 @@ set(TEST_SOURCES
     test_handle_reuse_reset
     test_calendar_aggregation_wm
     test_adversarial_ohlcv
+    test_report_trace
+    test_path_resolve_extra
+    test_security_validation_throws
+    test_session_calendar_extra
+    test_run_inputs_overrides
+    test_matrix_ops_extra
+    test_timeframe_aggregator_extra
+    test_c_abi_setters
+    test_fills_edge
+    test_strategy_commands_extra
+    test_lower_tf_parse_extra
+    test_ta_ma_warmup_extra
+    test_ta_osc_edge
+    test_ta_extremes_edge
+    test_ta_voltrend_edge
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
