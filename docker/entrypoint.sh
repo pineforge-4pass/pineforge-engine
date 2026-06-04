@@ -45,11 +45,16 @@
 set -euo pipefail
 
 PREFIX="${PINEFORGE_PREFIX:-/opt/pineforge}"
-PINE=/in/strategy.pine
-SRC_CPP=/in/strategy.cpp
-OHLCV=/in/ohlcv.csv
-GEN=/tmp/strategy.cpp
-SO=/tmp/strategy.so
+IN_DIR="${PINEFORGE_IN_DIR:-/in}"
+PINE="${IN_DIR}/strategy.pine"
+SRC_CPP="${IN_DIR}/strategy.cpp"
+OHLCV="${IN_DIR}/ohlcv.csv"
+# Per-run work dir so parallel in-process invocations never collide on the
+# generated TU / shared object. Cleaned up on exit. (Was fixed /tmp/strategy.*)
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+GEN="${WORK}/strategy.cpp"
+SO="${WORK}/strategy.so"
 
 # Transpile Pine -> C++. $1 = pine path, $2 = output path ('-' for stdout).
 # Maps any transpile/parse error to exit 5 with a clean message on stderr.
