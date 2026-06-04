@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src=".github/assets/pineforge-banner.png" alt="PineForge — Deterministic PineScript v6 backtests, on your data." width="640">
+
 # PineForge
 
 ### **The fastest deterministic PineScript v6 backtest runtime — validated trade-for-trade against TradingView.**
