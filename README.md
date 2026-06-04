@@ -24,6 +24,12 @@
 
 ## Backtest PineScript with AI — no build step
 
+<div align="center">
+
+![PineForge MCP demo — an AI agent transpiling, backtesting, and sweeping a PineScript strategy in the terminal](.github/assets/demo.gif)
+
+</div>
+
 The fastest way to use PineForge: let your AI agent write, run, and optimize
 strategies for you via the **[`pineforge-codegen-mcp`](https://github.com/pineforge-4pass/pineforge-codegen-mcp)**
 container — a single self-contained image with the transpiler **and** the engine
