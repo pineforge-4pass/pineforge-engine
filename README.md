@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/pineforge-banner.png" alt="PineForge — Deterministic PineScript v6 backtests, on your data." width="640">
+<img src=".github/assets/pineforge-banner.jpg" alt="PineForge — deterministic PineScript v6 backtests, validated trade-for-trade against TradingView" width="860">
 
 # PineForge
 
