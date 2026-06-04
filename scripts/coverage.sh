@@ -144,6 +144,18 @@ if [[ "$COMPILER" == "clang" ]]; then
         [[ -f "$f" ]] && SOURCES+=( "$f" )
     done
 
+    # llvm-cov prints "N functions have mismatched data" to stderr when the same
+    # inline/template function is instrumented in many test binaries with
+    # differing coverage-mapping hashes (our header-only Pine wrappers:
+    # series.hpp / generic_matrix.hpp / ta.hpp + engine.hpp inline accessors).
+    # The merged profile splinters per hash, so the single cross-binary report
+    # drops the unmatched variants. This is BENIGN for .cpp (compiled once into
+    # libpineforge.a → one hash) and only undercounts a few template-heavy
+    # headers. We capture that stderr, suppress the raw scary line, and emit a
+    # plain-language note instead. See scripts/cov_union.py to verify exact
+    # header line coverage on demand (per-binary union recovers the undercount;
+    # e.g. generic_matrix.hpp reads ~77% here but is ~86% true).
+    COV_STDERR="$COV_DIR/llvm-cov.stderr"
     {
         echo "PineForge coverage — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "Compiler: $($CXX_BIN --version | head -n1)"
@@ -151,28 +163,43 @@ if [[ "$COMPILER" == "clang" ]]; then
         "${LLVM_COV[@]}" report "${BINS[@]:1}" \
             -instr-profile="$PROFDATA" \
             "${SHARED_FILTER[@]}" \
-            "${SOURCES[@]}"
+            "${SOURCES[@]}" 2> "$COV_STDERR"
+        if grep -q 'mismatched data' "$COV_STDERR" 2>/dev/null; then
+            _mm="$(grep -oE '[0-9]+ functions? have mismatched data' "$COV_STDERR" | head -n1)"
+            echo
+            echo "NOTE: llvm-cov reported \"${_mm}\" — this is BENIGN, not a coverage gap."
+            echo "      Cause: header inline/template Pine code is instantiated in every test"
+            echo "      binary with differing mapping hashes; the multi-binary merge drops the"
+            echo "      unmatched variants. .cpp line coverage is UNAFFECTED (single hash via"
+            echo "      libpineforge.a). Only template-heavy headers are undercounted here —"
+            echo "      e.g. generic_matrix.hpp shows ~77% but is ~86% true. engine.hpp's lower"
+            echo "      figure is real (unexercised inline overloads), not an artifact."
+            echo "      Verify exact header coverage: scripts/cov_union.py --profdata \"$PROFDATA\" \\"
+            echo "                                    --bindir \"$BUILD_DIR/bin\" include/pineforge/*.hpp"
+        fi
     } | tee "$COV_DIR/totals.txt"
 
-    # Per-file annotated listings (text, fast to grep).
+    # Per-file annotated listings (text, fast to grep). stderr re-emits the same
+    # benign mismatch warning already explained above → discard it.
     "${LLVM_COV[@]}" show "${BINS[@]:1}" \
         -instr-profile="$PROFDATA" \
         "${SHARED_FILTER[@]}" \
         -format=text \
         -output-dir="$COV_DIR/per-file" \
         "${SOURCES[@]}" \
-        > /dev/null
+        > /dev/null 2>&1
 
-    # Sortable per-file totals (lowest-covered first → easy hole-spotter).
-    # The text report rows look like:
-    #   src/engine_orders.cpp                        87       12    86.21%   ...
-    # so column 4 is line-coverage percent.
+    # Sortable per-file totals (lowest line-covered first → easy hole-spotter).
+    # `llvm-cov report` rows carry stats in fixed columns:
+    #   $1 file  $2 Regions $3 MissedReg $4 Cover(region)
+    #   $5 Funcs $6 MissedFn $7 Exec%   $8 Lines $9 MissedLines $10 Cover(line)
+    # so column 10 is the line-coverage percent (column 4 is region coverage).
     "${LLVM_COV[@]}" report "${BINS[@]:1}" \
         -instr-profile="$PROFDATA" \
         "${SHARED_FILTER[@]}" \
-        "${SOURCES[@]}" \
+        "${SOURCES[@]}" 2>/dev/null \
         | awk '/^[A-Za-z0-9_\/\.\-]+\.(cpp|hpp|h|cc|c)[[:space:]]/ {print $0}' \
-        | sort -k4n \
+        | sort -k10n \
         > "$COV_DIR/uncovered.txt"
 
     if [[ "$FORMAT" == "html" ]]; then
