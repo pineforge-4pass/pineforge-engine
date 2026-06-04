@@ -13,7 +13,7 @@
 [![codegen on PyPI](https://img.shields.io/pypi/v/pineforge-codegen?label=codegen&logo=pypi&logoColor=white)](https://pypi.org/project/pineforge-codegen/)
 [![MCP](https://img.shields.io/npm/v/@pineforge/codegen-mcp?label=MCP&logo=npm)](https://www.npmjs.com/package/@pineforge/codegen-mcp)
 
-**[🐳 Run locally (Docker + MCP)](https://www.npmjs.com/package/@pineforge/codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
+**[🐳 Run locally (Docker MCP)](https://github.com/pineforge-4pass/pineforge-codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
 **[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
@@ -22,23 +22,31 @@
 
 ## Backtest PineScript with AI — no build step
 
-The fastest way to use PineForge: let your AI agent write, run, and optimize strategies for you via the **[`@pineforge/codegen-mcp`](https://www.npmjs.com/package/@pineforge/codegen-mcp)** MCP server.
+The fastest way to use PineForge: let your AI agent write, run, and optimize
+strategies for you via the **[`pineforge-codegen-mcp`](https://github.com/pineforge-4pass/pineforge-codegen-mcp)**
+container — a single self-contained image with the transpiler **and** the engine
+bundled in-process. Pull it, mount a working dir, done. **No host build step, no
+docker-in-docker, no API key — nothing leaves the box.**
 
-**The workflow (fully local — no API key, source never leaves your machine):**
+**The workflow (fully local — source never leaves your machine):**
 1. Agent writes (or you paste) PineScript v6 source
-2. MCP runs the engine container, which transpiles Pine → C++ in-container with
-   the bundled [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) transpiler
-3. Engine compiles + runs locally in Docker — microsecond-class, bit-reproducible results
+2. The container transpiles Pine → C++ in-process with the bundled
+   [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) transpiler
+3. Engine compiles + runs inside the same container — microsecond-class, bit-reproducible results
 4. Agent reads the trade list, suggests improvements, sweeps parameters
 
-**Prerequisites:** Node ≥ 20 and Docker. No API key — transpile and backtest run entirely on your machine.
+**Prerequisites:** Docker only (plus outbound network for the Binance fetch
+tools). The MCP server *is* the container — there's no separate Node process and
+no host Docker daemon called from inside it.
+
+Mount a directory at `/work` and point the OHLCV paths there. `-i` is required;
+never add `-t` (a TTY corrupts the stdio JSON-RPC stream).
 
 ### Claude Code (one command)
 
 ```bash
 claude mcp add pineforge-codegen \
-  --transport stdio \
-  -- npx -y @pineforge/codegen-mcp
+  -- docker run --rm -i -v "$PWD:/work" ghcr.io/pineforge-4pass/pineforge-codegen-mcp:latest
 ```
 
 ### Claude Desktop / Cursor / any MCP client
@@ -47,8 +55,12 @@ claude mcp add pineforge-codegen \
 {
   "mcpServers": {
     "pineforge-codegen": {
-      "command": "npx",
-      "args": ["-y", "@pineforge/codegen-mcp"]
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "${workspaceFolder}:/work",
+        "ghcr.io/pineforge-4pass/pineforge-codegen-mcp:latest"
+      ]
     }
   }
 }
@@ -59,12 +71,21 @@ Once connected, your AI agent can:
 | What to ask | Tool used |
 |---|---|
 | "Fetch BTC/USDT 15m data for the last 30 days" | `fetch_binance_ohlcv` |
+| "List BTC USDT-perp symbols" | `binance_symbols` |
 | "Backtest this SMA-cross strategy on that data" | `backtest_pine` |
 | "Sweep fast length 8–21, slow 21–55, rank by net PnL" | `backtest_pine_grid` |
 | "What broker overrides are available?" | `list_engine_params` |
 
+See the [server README](https://github.com/pineforge-4pass/pineforge-codegen-mcp)
+for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWHERE`,
+`PINEFORGE_IMAGE`, …).
+
 > **Transpiler is open.** The Pine → C++ transpiler is source-available
-> (`pip install pineforge-codegen`, [repo](https://github.com/pineforge-4pass/pineforge-codegen-oss)) and ships inside the engine image — so the whole transpile→backtest loop runs on your machine.
+> (`pip install pineforge-codegen`, [repo](https://github.com/pineforge-4pass/pineforge-codegen-oss)) and ships inside the container — so the whole transpile→backtest loop runs on your machine.
+
+> **The npm package** [`@pineforge/codegen-mcp`](https://www.npmjs.com/package/@pineforge/codegen-mcp)
+> mirrors the same server for discoverability; the container above is the
+> recommended way to run it (engine bundled in-process, one image, no host setup).
 
 ---
 
