@@ -2,6 +2,7 @@
 
 <img src=".github/assets/pineforge-banner.jpg" alt="PineScript backtests, deterministic, on your data — v0.8.0 · 93.06% line coverage · 245/246 strict TV parity · 0 engine bugs" width="900">
 
+# PineForge
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
 [![Docs](https://img.shields.io/badge/docs-cdocs.pineforge.dev-1565c0?logo=readthedocs&logoColor=white)](https://cdocs.pineforge.dev)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
