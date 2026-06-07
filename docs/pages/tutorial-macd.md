@@ -3,7 +3,7 @@
 @tableofcontents
 
 End-to-end backtest you can reproduce from a fresh clone in under a
-minute. Source: [`tutorial/`](https://github.com/fullpass-4pass/pineforge-engine/tree/main/tutorial).
+minute. Source: [`tutorial/`](https://github.com/pineforge-4pass/pineforge-engine/tree/main/tutorial).
 
 ## What this tutorial covers
 
@@ -91,7 +91,7 @@ report on stdout.
 docker run --rm \
   -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
   -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
-  ghcr.io/fullpass-4pass/pineforge-engine:latest > report.json
+  ghcr.io/pineforge-4pass/pineforge-engine:latest > report.json
 
 jq '.summary' report.json
 ```

@@ -15,7 +15,7 @@ A minimal end-to-end build, install, and link in under a minute.
 ## Build + test
 
 ```bash
-git clone https://github.com/fullpass-4pass/pineforge-engine.git
+git clone https://github.com/pineforge-4pass/pineforge-engine.git
 cd pineforge-engine
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j

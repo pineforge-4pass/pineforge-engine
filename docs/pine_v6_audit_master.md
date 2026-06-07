@@ -20,17 +20,17 @@
 ### Phase B/C/D resolutions (2026-05-29)
 
 Codegen now rejects loudly via `support_checker.py` tables instead of silently emitting `"false"` / undeclared C++ symbols. Cross-repo PRs:
-- pineforge-codegen [#12](https://github.com/fullpass-4pass/pineforge-codegen/pull/12) — Phase B (6 hard-rejects)
-- pineforge-codegen [#13](https://github.com/fullpass-4pass/pineforge-codegen/pull/13) — Phase C (varip + input.color + security adjustment)
-- pineforge-codegen [#14](https://github.com/fullpass-4pass/pineforge-codegen/pull/14) — Phase D (analyzer matrix arm + plan audit)
+- pineforge-codegen [#12](https://github.com/pineforge-4pass/pineforge-codegen/pull/12) — Phase B (6 hard-rejects)
+- pineforge-codegen [#13](https://github.com/pineforge-4pass/pineforge-codegen/pull/13) — Phase C (varip + input.color + security adjustment)
+- pineforge-codegen [#14](https://github.com/pineforge-4pass/pineforge-codegen/pull/14) — Phase D (analyzer matrix arm + plan audit)
 
 Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-positive; #26 partially resolved (analyzer guard added; codegen helper deferred).
 
 ### Follow-up fixes (2026-05-29, post-Phase-D)
 
-- **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/fullpass-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen [#15](https://github.com/fullpass-4pass/pineforge-codegen/pull/15) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
-- **Drawing-var dangling-identifier minor** — RESOLVED. codegen [#16](https://github.com/fullpass-4pass/pineforge-codegen/pull/16) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
-- **#26 / #27 `input.color` / `input.source`** — remaining codegen-helper work tracked by [pineforge-engine#23](https://github.com/fullpass-4pass/pineforge-engine/issues/23) (`get_input_source` + `get_input_color` engine helpers) and codegen issue #9.
+- **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/pineforge-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen [#15](https://github.com/pineforge-4pass/pineforge-codegen/pull/15) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
+- **Drawing-var dangling-identifier minor** — RESOLVED. codegen [#16](https://github.com/pineforge-4pass/pineforge-codegen/pull/16) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
+- **#26 / #27 `input.color` / `input.source`** — remaining codegen-helper work tracked by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) (`get_input_source` + `get_input_color` engine helpers) and codegen issue #9.
 
 ## Critical issues — consolidated by class
 
@@ -194,7 +194,7 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 **Remaining open work:**
 
-1. **`input.source` / `input.color` series-/color-aware emission** (#26, #27, codegen issue #9): cross-repo blocker — needs `get_input_source(name, default_series) → const Series<double>&` and `get_input_color` helpers in pineforge-engine. Tracked by [pineforge-engine#23](https://github.com/fullpass-4pass/pineforge-engine/issues/23). `input.source` currently produces a frozen scalar.
+1. **`input.source` / `input.color` series-/color-aware emission** (#26, #27, codegen issue #9): cross-repo blocker — needs `get_input_source(name, default_series) → const Series<double>&` and `get_input_color` helpers in pineforge-engine. Tracked by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23). `input.source` currently produces a frozen scalar.
 2. **Remaining class A items** — #5 (`extend.*, font.*, hline.*, ...` namespaces) and #6 (`color.from_gradient`) still emit `std::string("<member>")` or hardcoded `0`. Same rejection pattern applies.
 3. **Class H #35** — `barmerge.*` / `alert.freq_*` as free expressions still emit `std::string(...)` typed as INT. Same fix pattern as #36/#37.
 4. **Doc** — refresh `pine_v6_coverage_detail.md` bucket assignments now that rejections moved several identifiers from "✅ Runtime" or "❓ Unknown" to "❌ Unsupported (loud reject)".

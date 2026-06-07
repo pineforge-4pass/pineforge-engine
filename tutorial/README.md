@@ -53,7 +53,7 @@ JSON report on stdout.
 docker run --rm \
   -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
   -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
-  ghcr.io/fullpass-4pass/pineforge-engine:latest > report.json
+  ghcr.io/pineforge-4pass/pineforge-engine:latest > report.json
 
 jq '.summary' report.json
 ```
@@ -99,7 +99,7 @@ docker run --rm \
   -e PINEFORGE_OVERRIDES='{"default_qty_value": "5", "commission_value": "0.04"}' \
   -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
   -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
-  ghcr.io/fullpass-4pass/pineforge-engine:latest \
+  ghcr.io/pineforge-4pass/pineforge-engine:latest \
   | jq '{applied_inputs, applied_overrides, summary}'
 ```
 

@@ -963,7 +963,7 @@ These identifiers are rejected at transpile time with a loud error or produce a 
 
 Pine v6 HIGH+MEDIUM sprint added ~50 identifiers to the supported surface
 (✅ Runtime + 🔧 Transpiler) and reclassified ~20 from ❓/❌ to explicit
-buckets. Full final-state release notes: [v0.5.0 release](https://github.com/fullpass-4pass/pineforge-engine/releases/tag/v0.5.0).
+buckets. Full final-state release notes: [v0.5.0 release](https://github.com/pineforge-4pass/pineforge-engine/releases/tag/v0.5.0).
 
 ### ✅ Runtime additions (17)
 
@@ -1009,7 +1009,7 @@ buckets. Full final-state release notes: [v0.5.0 release](https://github.com/ful
 
 ### Engine bug filed during sprint
 
-- **GitHub Issue [#16](https://github.com/fullpass-4pass/pineforge-engine/issues/16):** `max_intraday_filled_orders` cap-day boundary uses `chart_timezone` instead of exchange `syminfo.timezone`. Workaround shipped: validator `engine_chart_timezone` override key (per-probe). Long-term fix blocked on pineforge-data integration.
+- **GitHub Issue [#16](https://github.com/pineforge-4pass/pineforge-engine/issues/16):** `max_intraday_filled_orders` cap-day boundary uses `chart_timezone` instead of exchange `syminfo.timezone`. Workaround shipped: validator `engine_chart_timezone` override key (per-probe). Long-term fix blocked on pineforge-data integration.
 
 ### Validator workflow improvements (pineforge-utils)
 

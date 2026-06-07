@@ -114,8 +114,8 @@ Build: `cc demo.c -lpineforge -lstdc++ -lm`. That's it.
 
 ## Project links
 
-- Source: <https://github.com/fullpass-4pass/pineforge-engine>
-- Issues: <https://github.com/fullpass-4pass/pineforge-engine/issues>
+- Source: <https://github.com/pineforge-4pass/pineforge-engine>
+- Issues: <https://github.com/pineforge-4pass/pineforge-engine/issues>
 - License: Apache-2.0
 
 @note PineForge ships as a **static library** (`libpineforge.a`). The

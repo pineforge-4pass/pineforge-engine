@@ -144,5 +144,5 @@ memory-bandwidth-bound.
 - [ABI stability](@ref abi_stability) — symbol isolation guarantees
 - [Lifecycle](@ref lifecycle) — handle thread-safety rule
 - The shipping
-  [`benchmarks/`](https://github.com/fullpass-4pass/pineforge-engine/tree/main/benchmarks)
+  [`benchmarks/`](https://github.com/pineforge-4pass/pineforge-engine/tree/main/benchmarks)
   harness uses this exact pattern across 50 strategies.

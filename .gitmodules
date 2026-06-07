@@ -1,6 +1,6 @@
 [submodule "corpus"]
 	path = corpus
-	url = https://github.com/fullpass-4pass/pineforge-corpus.git
+	url = https://github.com/pineforge-4pass/pineforge-corpus.git
 [submodule "benchmarks/assets"]
 	path = benchmarks/assets
-	url = https://github.com/fullpass-4pass/pineforge-benchmarks-assets.git
+	url = https://github.com/pineforge-4pass/pineforge-benchmarks-assets.git

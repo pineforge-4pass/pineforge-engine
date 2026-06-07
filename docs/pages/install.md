@@ -7,7 +7,7 @@
 The canonical install path. Works on Linux and macOS.
 
 ```bash
-git clone https://github.com/fullpass-4pass/pineforge-engine.git
+git clone https://github.com/pineforge-4pass/pineforge-engine.git
 cd pineforge-engine
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
@@ -59,7 +59,7 @@ The published image bundles the runtime plus a one-shot transpile + run
 harness for ad-hoc strategy execution.
 
 ```bash
-docker pull ghcr.io/fullpass-4pass/pineforge-engine:latest
+docker pull ghcr.io/pineforge-4pass/pineforge-engine:latest
 ```
 
 Run the tutorial MACD strategy entirely inside the container:
@@ -68,10 +68,10 @@ Run the tutorial MACD strategy entirely inside the container:
 docker run --rm \
   -v "$(pwd)/tutorial/macd/generated.cpp:/in/strategy.cpp:ro" \
   -v "$(pwd)/tutorial/data/btcusdt_15m_7d.csv:/in/ohlcv.csv:ro" \
-  ghcr.io/fullpass-4pass/pineforge-engine:latest > report.json
+  ghcr.io/pineforge-4pass/pineforge-engine:latest > report.json
 ```
 
-See [`docker/README.md`](https://github.com/fullpass-4pass/pineforge-engine/blob/main/docker/README.md)
+See [`docker/README.md`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/docker/README.md)
 for the full mount + JSON schema reference.
 
 ## Verifying the install

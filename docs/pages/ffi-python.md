@@ -194,7 +194,7 @@ lib.strategy_free(s)
 ## See also
 
 - The full working example lives in
-  [`tutorial/run.py`](https://github.com/fullpass-4pass/pineforge-engine/blob/main/tutorial/run.py)
+  [`tutorial/run.py`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/tutorial/run.py)
   and a parameter-sweep variant in
-  [`tutorial/run_advanced.py`](https://github.com/fullpass-4pass/pineforge-engine/blob/main/tutorial/run_advanced.py).
+  [`tutorial/run_advanced.py`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/tutorial/run_advanced.py).
 - [Tutorial: MACD](@ref tutorial_macd) walks through the harness end-to-end.

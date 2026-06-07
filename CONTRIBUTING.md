@@ -25,7 +25,7 @@ platform-specific and rebuilt locally by `scripts/run_corpus.sh`.
 ## Development setup
 
 ```bash
-git clone https://github.com/fullpass-4pass/pineforge-engine.git pineforge-engine
+git clone https://github.com/pineforge-4pass/pineforge-engine.git pineforge-engine
 cd pineforge-engine
 git submodule update --init corpus benchmarks/assets
 cmake -B build -DCMAKE_BUILD_TYPE=Debug

@@ -66,3 +66,6 @@ BENCH_REFRESH_HANDOFF.md
 # Internal process artifacts + working notes (kept local, not public history)
 docs/superpowers/
 docs/production-readiness-findings.md
+
+# Cloudflare wrangler local cache (never commit)
+.wrangler/

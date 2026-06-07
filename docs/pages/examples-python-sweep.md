@@ -176,5 +176,5 @@ the engine.
 - [Tutorial: MACD](@ref tutorial_macd) — the single-run baseline
 - [Lifecycle](@ref lifecycle) — why one handle per run
 - [Configuration](@ref configuration) — every override key
-- [`tutorial/run_advanced.py`](https://github.com/fullpass-4pass/pineforge-engine/blob/main/tutorial/run_advanced.py)
+- [`tutorial/run_advanced.py`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/tutorial/run_advanced.py)
   — the shipping reference implementation this example mirrors

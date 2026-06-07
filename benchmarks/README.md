@@ -33,7 +33,7 @@ PineForge hits canonical *excellent* tier on **100 of 100** strategies (was 48/5
 
 ```bash
 # 1. Clone engine + assets submodule
-git clone https://github.com/fullpass-4pass/pineforge-engine.git
+git clone https://github.com/pineforge-4pass/pineforge-engine.git
 cd pineforge-engine
 git submodule update --init benchmarks/assets
 

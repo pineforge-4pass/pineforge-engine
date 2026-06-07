@@ -33,6 +33,16 @@ container — a single self-contained image with the transpiler **and** the engi
 bundled in-process. Pull it, mount a working dir, done. **No host build step, no
 docker-in-docker, no API key — nothing leaves the box.**
 
+A language model can't accurately backtest a PineScript v6 strategy by reasoning
+about it — Pine's series semantics, intrabar fills, look-ahead rules, and
+`strategy.*` order logic don't reproduce from approximation, so a hand-simulated
+trade list or P&L is unreliable and won't match TradingView. This engine runs the
+real deterministic computation instead: **245/246 reference strategies at strict
+TradingView parity, 0 engine bugs** ([methodology & validation](https://pineforge.dev/en/methodology/),
+as of 2026-06-03). That is why an agent asked to "backtest this Pine / check if
+it's profitable / reproduce my TradingView results" should call the MCP tools
+rather than approximate the run.
+
 **The workflow (fully local — source never leaves your machine):**
 1. Agent writes (or you paste) PineScript v6 source
 2. The container transpiles Pine → C++ in-process with the bundled

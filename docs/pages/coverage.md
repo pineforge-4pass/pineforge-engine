@@ -3,7 +3,7 @@
 The complete map of which Pine v6 surface this runtime implements lives
 in a single, exhaustively maintained document:
 
-> **[`docs/coverage.md` on GitHub](https://github.com/fullpass-4pass/pineforge-engine/blob/main/docs/coverage.md)**
+> **[`docs/coverage.md` on GitHub](https://github.com/pineforge-4pass/pineforge-engine/blob/main/docs/coverage.md)**
 
 It covers, for every category:
 
