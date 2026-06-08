@@ -10,7 +10,7 @@
 [![Parity](https://img.shields.io/badge/TV%20parity-245%2F246-brightgreen)](#cross-engine-comparison)
 [![Speed](https://img.shields.io/badge/median%20104%C3%97%20vs%20PyneCore%20%2899%20strategies%29-success)](benchmarks/results/speed.md)<br>
 [![codegen on PyPI](https://img.shields.io/pypi/v/pineforge-codegen?label=codegen&logo=pypi&logoColor=white)](https://pypi.org/project/pineforge-codegen/)
-[![MCP](https://img.shields.io/npm/v/@pineforge/codegen-mcp?label=MCP&logo=npm)](https://www.npmjs.com/package/@pineforge/codegen-mcp)
+[![MCP server](https://img.shields.io/badge/MCP-server-1565c0?logo=docker&logoColor=white)](https://github.com/pineforge-4pass/pineforge-codegen-mcp)
 
 **[🌐 pineforge.dev](https://www.pineforge.dev) · [🐳 Run locally (Docker MCP)](https://github.com/pineforge-4pass/pineforge-codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
 **[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
