@@ -12,7 +12,7 @@
 [![codegen on PyPI](https://img.shields.io/pypi/v/pineforge-codegen?label=codegen&logo=pypi&logoColor=white)](https://pypi.org/project/pineforge-codegen/)
 [![MCP server](https://img.shields.io/badge/MCP-server-1565c0?logo=docker&logoColor=white)](https://github.com/pineforge-4pass/pineforge-codegen-mcp)
 
-**[🌐 pineforge.dev](https://www.pineforge.dev) · [🐳 Run locally (Docker MCP)](https://github.com/pineforge-4pass/pineforge-codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
+**[🌐 pineforge.dev](https://www.pineforge.dev) · [☁️ Hosted MCP (no install)](https://mcp.pineforge.dev/mcp) · [🐳 Run locally (Docker MCP)](https://github.com/pineforge-4pass/pineforge-codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
 **[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
@@ -101,6 +101,13 @@ for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWH
 > **The npm package** [`@pineforge/codegen-mcp`](https://www.npmjs.com/package/@pineforge/codegen-mcp)
 > mirrors the same server for discoverability; the container above is the
 > recommended way to run it (engine bundled in-process, one image, no host setup).
+
+> **Prefer zero-install?** A hosted public MCP server runs at
+> **[`https://mcp.pineforge.dev/mcp`](https://mcp.pineforge.dev/mcp)** (Streamable HTTP, no Docker, no
+> API key, 8 tools — [repo](https://github.com/pineforge-4pass/pineforge-mcp-public)). It backtests
+> against a sealed write-once R2 crypto data-lake (Binance spot + USDT-perp) and is *metered*
+> (per-IP weekly quota on `backtest_pine` + edge rate-limit). Run the Docker MCP above instead when
+> you want it *unmetered* and on your own data.
 
 ---
 
