@@ -91,7 +91,6 @@ class EMA {
     double output_val;
     double alpha;
     double sum;
-    int length;
     int bar_count;
 
     // saved state for recompute
@@ -171,7 +170,6 @@ public:
 class Stoch {
     Highest highest;
     Lowest lowest;
-    int length;
 
 public:
     explicit Stoch(int length);
@@ -231,11 +229,9 @@ public:
 // --- HMA (Hull Moving Average) ---
 
 class HMA {
-    int length_;
     WMA wma_half_;
     WMA wma_full_;
     WMA wma_sqrt_;
-    std::deque<double> diff_buffer_;
 
 public:
     explicit HMA(int length);
@@ -290,8 +286,6 @@ struct DMIResult {
 };
 
 class DMI {
-    int di_length_;
-    int adx_smoothing_;
     RMA rma_plus_, rma_minus_, rma_tr_;
     RMA rma_adx_;
     double prev_high_, prev_low_, prev_close_;
@@ -338,7 +332,6 @@ struct BBResult {
 };
 
 class BB {
-    int length_;
     double mult_;
     SMA sma_;
     StdDev stdev_;
@@ -358,7 +351,6 @@ struct KCResult {
 };
 
 class KC {
-    int length_;
     double mult_;
     EMA ema_;
     EMA range_ema_;
@@ -678,7 +670,6 @@ public:
 // --- WPR (Williams %R) ---
 
 class WPR {
-    int length_;
     Highest highest_;
     Lowest lowest_;
 

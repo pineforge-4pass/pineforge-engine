@@ -111,7 +111,7 @@ double SMA::compute(double src) {
 
 EMA::EMA(int length)
     : output_val(na<double>()), alpha(2.0 / (length + 1)), sum(0.0),
-      length(length), bar_count(0) {}
+      bar_count(0) {}
 
 double EMA::compute(double src) {
     save();
@@ -173,8 +173,7 @@ double WMA::compute(double src) {
 // verified by `validation/05-hma-cross` matching 100% of TV trades with this behavior.
 
 HMA::HMA(int length)
-    : length_(length),
-      wma_half_(std::max(length / 2, 1)),
+    : wma_half_(std::max(length / 2, 1)),
       wma_full_(length),
       wma_sqrt_(std::max((int)std::sqrt((double)length), 1)) {}
 
@@ -355,8 +354,6 @@ double HMA::recompute(double src) {
     }
 
     double diff = 2.0 * half_val - full_val;
-    // HMA also has diff_buffer_ which was populated in compute
-    // but diff_buffer_ is not used directly - wma_sqrt_ handles its own buffer
     return wma_sqrt_.recompute(diff);
 }
 

@@ -213,8 +213,7 @@ SupertrendResult Supertrend::compute(double high, double low, double close) {
 // --- DMI (Directional Movement Index) ---
 
 DMI::DMI(int di_length, int adx_smoothing)
-    : di_length_(di_length), adx_smoothing_(adx_smoothing),
-      rma_plus_(di_length), rma_minus_(di_length), rma_tr_(di_length),
+    : rma_plus_(di_length), rma_minus_(di_length), rma_tr_(di_length),
       rma_adx_(adx_smoothing),
       prev_high_(na<double>()), prev_low_(na<double>()),
       prev_close_(na<double>()), first_bar_(true) {}
@@ -396,7 +395,7 @@ double SAR::compute(double high, double low, double close) {
 // --- BB (Bollinger Bands) ---
 
 BB::BB(int length, double mult)
-    : length_(length), mult_(mult), sma_(length), stdev_(length) {}
+    : mult_(mult), sma_(length), stdev_(length) {}
 
 BBResult BB::compute(double src) {
     BBResult result;
@@ -420,7 +419,7 @@ BBResult BB::compute(double src) {
 // --- KC (Keltner Channels) ---
 
 KC::KC(int length, double mult)
-    : length_(length), mult_(mult), ema_(length), range_ema_(length) {}
+    : mult_(mult), ema_(length), range_ema_(length) {}
 
 KCResult KC::compute(double src, double high, double low, double close) {
     KCResult result;

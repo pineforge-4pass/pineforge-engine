@@ -1,8 +1,9 @@
 /*
  * engine_strategy_commands.cpp — the strategy.* command surface.
  *
- * Carved out of engine.cpp during the v0.1 file-split (phase 6) so the
- * BacktestEngine implementation becomes navigable. Each function is a
+ * Carved out of the original monolithic engine source during the v0.1
+ * file-split (phase 6) — the BacktestEngine implementation now spans the
+ * src/engine_*.cpp family. Each function is a
  * direct translation of one PineScript strategy.* call into a pending
  * order placement (and possibly an immediate fill when
  * `process_orders_on_close` or `immediately=true` is set).
@@ -15,9 +16,10 @@
  *   strategy_cancel_all  - drop all pending orders
  *   strategy_order       - low-level RAW_ORDER placement
  *
- * Order matching itself lives in process_pending_orders (engine.cpp);
- * the actual fill mechanics are in execute_market_entry / exit /
- * partial_exit (also engine.cpp).
+ * Order matching itself lives in process_pending_orders
+ * (engine_fills.cpp); the actual fill mechanics are in
+ * execute_market_entry / execute_market_exit / execute_partial_exit
+ * (engine_orders.cpp).
  */
 
 #include "engine_internal.hpp"

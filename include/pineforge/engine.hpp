@@ -391,7 +391,7 @@ protected:
     int64_t next_order_seq_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
-    // opposing-stop resolution (see engine.cpp).
+    // opposing-stop resolution (see engine_fills.cpp).
     int priced_entry_activity_bar_ = -1;
     bool priced_entry_filled_this_bar_ = false;
 
@@ -1384,7 +1384,7 @@ public:
     // --- Runtime trace API ---
     // Default off so existing strategies pay zero cost. The validator
     // flips this on per-strategy via ``strategy_set_trace_enabled`` (the
-    // FFI shim defined in engine.cpp) before running a backtest whose
+    // FFI shim defined in c_abi.cpp) before running a backtest whose
     // per-bar values it wants to cross-reference against TradingView.
     void set_trace_enabled(bool on) { trace_enabled_ = on; }
     bool trace_enabled() const { return trace_enabled_; }
