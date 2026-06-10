@@ -43,7 +43,7 @@ void BacktestEngine::fill_report(ReportC* out) const {
     out->magnifier_sub_bars_total = diag_magnifier_sub_bars_processed_;
     out->magnifier_sample_ticks_total = diag_magnifier_sample_ticks_processed_;
     out->input_tf_seconds = tf_to_seconds(input_tf_);
-    out->script_tf_seconds = tf_to_seconds(script_tf_);
+    out->script_tf_seconds = script_tf_seconds_;
     out->script_tf_ratio = diag_script_tf_ratio_;
     out->needs_aggregation = diag_needs_aggregation_ ? 1 : 0;
     out->bar_magnifier_enabled = bar_magnifier_enabled_ ? 1 : 0;

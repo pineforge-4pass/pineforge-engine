@@ -136,6 +136,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
     }
     input_tf_ = detected_tf;
     script_tf_ = detected_tf;
+    script_tf_seconds_ = tf_to_seconds(script_tf_);
 
     // Runtime diagnostics (single-timeframe path)
     diag_input_bars_processed_ = n;
@@ -309,6 +310,7 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     // Store parameters
     input_tf_ = effective_input_tf;
     script_tf_ = effective_script_tf;
+    script_tf_seconds_ = tf_to_seconds(script_tf_);
     bar_magnifier_enabled_ = bar_magnifier;
     magnifier_samples_ = magnifier_samples;
     magnifier_dist_ = magnifier_dist;

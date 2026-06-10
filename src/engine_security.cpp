@@ -105,7 +105,7 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
     // when the script_tf/input_tf ratio is invalid. We do not re-check
     // that invariant here.
     int input_seconds = tf_to_seconds(input_tf);
-    int script_seconds = tf_to_seconds(script_tf_);
+    int script_seconds = script_tf_seconds_;
     for (auto& state : security_eval_states_) {
         state.lower_tf_requested = false;
         state.lower_tf_emulation = false;
@@ -255,7 +255,7 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         // secondary trigger so dense gap-free feeds still flush
         // promptly when the chunk fills.
         int input_seconds = tf_to_seconds(input_tf_);
-        int script_seconds = tf_to_seconds(script_tf_);
+        int script_seconds = script_tf_seconds_;
         if (input_seconds <= 0 || script_seconds <= 0) {
             // Cannot compute bucket math — fall back to original
             // count-only behaviour.

@@ -83,7 +83,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
 
     // TradingView intraday-cap freeze gate (Pine docs:
     // ``strategy.risk.max_intraday_filled_orders``):
@@ -227,7 +227,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
 
 void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
                                     double qty, double qty_percent, bool immediately) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
@@ -282,7 +282,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double trail_price, double qty_percent,
                                     const std::string& comment,
                                     double qty, const std::string& oca_name) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
     // If an explicit qty is given, derive an effective qp from the current
@@ -390,7 +390,7 @@ void BacktestEngine::strategy_cancel_all() {
 void BacktestEngine::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, tf_to_seconds(script_tf_))) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     int64_t preserved_seq = 0;
     for (const auto& o : pending_orders_) {
         if (o.id == id) {
