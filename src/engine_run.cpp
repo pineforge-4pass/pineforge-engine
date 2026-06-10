@@ -112,7 +112,11 @@ void BacktestEngine::reset_run_state() {
     _src_hlcc4_.clear();
 
     // Per-bar trace/diagnostic buffers (trace_enabled_ is config — preserved).
-    trace_buffer_.clear();
+    if (trace_enabled_) {
+        trace_buffer_.clear();                       // keep capacity for the next traced run
+    } else {
+        std::vector<TraceEntryC>().swap(trace_buffer_);  // release retained capacity
+    }
     trace_names_.clear();
     trace_name_index_.clear();
 }
