@@ -155,12 +155,14 @@ def main() -> None:
     lines += [
         "# Per-strategy speed table",
         "",
-        "As of: 2026-05-29. Engine: v0.6.3.",
+        "As of: 2026-06-11. Engine: v0.9.0 + core-improvements-wave01 (git v0.9.0-17-g94596bf).",
         "",
-        "Full three-way sweep re-measured same-session on 2026-05-29 (all of"
+        "Full sweep re-measured same-session on 2026-06-11 (all of"
         " PineForge / PyneCore / vectorbt / PineTS re-timed together) after the"
-        " per-bar heap-allocation-churn reduction in the PineForge fill/run/"
-        "security hot paths.",
+        " Wave-1 bit-exact perf pass (fill-path early-outs + scratch reuse,"
+        " fixed-capacity cross-event list, ring-buffer indexing, lazy series"
+        " allocation, move semantics, cached TF seconds, bar-time memoization,"
+        " magnifier scratch reuse).",
         "",
     ]
 
