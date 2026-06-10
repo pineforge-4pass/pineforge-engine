@@ -44,8 +44,8 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     }
 
     for (int opposing_pass = 0; opposing_pass < 2; ++opposing_pass) {
-    std::vector<size_t> filled_indices;
-    filled_indices.reserve(pending_orders_.size());
+    std::vector<size_t>& filled_indices = scratch_filled_indices_;
+    filled_indices.clear();
     // TV cancels pending SAME-DIRECTION entries placed on a prior on_bar when
     // a full strategy.exit closes the position on this bar. Opposite-direction
     // (reversal) entries still fire. Entries placed on the SAME on_bar as the
@@ -119,6 +119,7 @@ void BacktestEngine::update_trail_best_for_bar_open(const Bar& bar) {
 //     fills first.
 // Correctness over perf: leave as two sequential stable_sorts.
 void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
+    if (pending_orders_.size() < 2) return;  // nothing to order; skips stable_sort's temp-buffer alloc
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
         [&](const PendingOrder& a, const PendingOrder& b) {
             if (a.type != OrderType::EXIT || b.type != OrderType::EXIT
@@ -172,6 +173,7 @@ void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
 // share that same fill point; other priced orders evaluate later on the
 // synthetic OHLC path. This avoids broad type-based reordering.
 void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
+    if (pending_orders_.size() < 2) return;  // nothing to order; skips stable_sort's temp-buffer alloc
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
         [&](const PendingOrder& a, const PendingOrder& b) {
             auto fill_phase = [&](const PendingOrder& o) {

@@ -427,6 +427,10 @@ protected:
     // (0-1 entries). Not state — must be empty across calls.
     std::unordered_set<std::string> scratch_skip_ids_;
 
+    // Reusable scratch for process_pending_orders (capacity persists across
+    // calls, mirroring scratch_skip_ids_). Always cleared before use.
+    std::vector<size_t> scratch_filled_indices_;
+
     // --- Trailing stop state ---
     // Best favorable price since position entry (for trailing stop computation)
     double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
