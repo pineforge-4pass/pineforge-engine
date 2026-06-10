@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Audit date** | 2026-05-21 (initial); enriched same day with F1–F22 clarifications |
-| **Last update** | 2026-06-10 — audit-fix sweep (codegen `974cda7`, engine `6aa1d13`): remaining class-A/H rejections + semantic emission fixes; corpus regenerated (`f143504`), parity unchanged 245 excellent + 1 anomaly |
+| **Last update** | 2026-06-10 — audit-fix sweep (codegen-oss `7bd20eb` (orig. `974cda7`), engine `6aa1d13`): remaining class-A/H rejections + semantic emission fixes; corpus regenerated (`f143504`), parity unchanged 245 excellent + 1 anomaly |
 | **Audited doc** | `pine_v6_coverage_detail.md` (1039 lines, 941 identifiers) |
 | **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, Playwright MCP for Pine v6 ref + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
 | **Status** | Standalone — chunk reports and clarification reports consolidated below and removed. |
@@ -19,20 +19,20 @@
 
 ### Phase B/C/D resolutions (2026-05-29)
 
-Codegen now rejects loudly via `support_checker.py` tables instead of silently emitting `"false"` / undeclared C++ symbols. Cross-repo PRs:
-- pineforge-codegen [#12](https://github.com/pineforge-4pass/pineforge-codegen/pull/12) — Phase B (6 hard-rejects)
-- pineforge-codegen [#13](https://github.com/pineforge-4pass/pineforge-codegen/pull/13) — Phase C (varip + input.color + security adjustment)
-- pineforge-codegen [#14](https://github.com/pineforge-4pass/pineforge-codegen/pull/14) — Phase D (analyzer matrix arm + plan audit)
+Codegen now rejects loudly via `support_checker.py` tables instead of silently emitting `"false"` / undeclared C++ symbols. Cross-repo PRs (merged in the pre-extraction private codegen repo; the changes ship in [`pineforge-codegen-oss`](https://github.com/pineforge-4pass/pineforge-codegen-oss) since v0.6.4):
+- codegen PR #12 — Phase B (6 hard-rejects)
+- codegen PR #13 — Phase C (varip + input.color + security adjustment)
+- codegen PR #14 — Phase D (analyzer matrix arm + plan audit)
 
 Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-positive; #26 partially resolved (analyzer guard added; codegen helper deferred).
 
 ### Follow-up fixes (2026-05-29, post-Phase-D)
 
-- **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/pineforge-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen [#15](https://github.com/pineforge-4pass/pineforge-codegen/pull/15) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
-- **Drawing-var dangling-identifier minor** — RESOLVED. codegen [#16](https://github.com/pineforge-4pass/pineforge-codegen/pull/16) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
+- **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/pineforge-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen PR #15 (pre-extraction repo; in `pineforge-codegen-oss` since v0.6.4) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
+- **Drawing-var dangling-identifier minor** — RESOLVED. codegen PR #16 (pre-extraction repo; in `pineforge-codegen-oss` since v0.6.4) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
 - **#26 / #27 `input.color` / `input.source`** — RESOLVED (verified against pineforge-codegen source 2026-06-10, commit `64fc886` "input.source series binding, packed-color defval"). Engine ships `get_input_source(title, default_series) → const Series<double>&` and codegen emits `get_input_source("title", _src_<field>_)[0]` for `input.source`; `input.color` routes to `get_input_int64` with a packed-ARGB defval, so the `get_input_color` engine helper contemplated by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) was deemed unnecessary.
 
-### Audit-fix sweep (2026-06-10, codegen `974cda7`)
+### Audit-fix sweep (2026-06-10, codegen-oss `7bd20eb` (orig. `974cda7`))
 
 One codegen commit closed the remaining class-A/H criticals and most behavioural minors:
 
@@ -180,7 +180,7 @@ Identifier resolves to a different runtime symbol than spec.
 
 Phase 1 — 4 parallel chunk agents:
 1. Loaded official Pine v6 reference via Playwright MCP (`https://www.tradingview.com/pine-script-reference/v6/` — JS SPA, `<h3>` enumeration).
-2. Read transpiler emitters under `/Users/haoliangwen/code/pineforge-codegen/pineforge_codegen/codegen/`.
+2. Read transpiler emitters under `/Users/haoliangwen/code/pineforge-codegen-oss/pineforge_codegen/codegen/`.
 3. Read engine headers under `/Users/haoliangwen/code/pineforge-engine/include/pineforge/`.
 4. Verified bucket + backing + notes + emitted-value for EVERY row (no skipping, no spot-check exemption).
 5. Cross-checked grouped sections (`array.*`, `currency.*`, `matrix.*`, etc.) member-by-member against Pine spec.
@@ -200,7 +200,7 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 **Phase B/C/D status (2026-05-29):** Steps 2 and 3 substantially addressed by the codegen rejection sweep — `support_checker.py` now carries 4 new rejection tables (`UNSUPPORTED_BARE_FUNCS`, `UNSUPPORTED_NAMESPACES`, `UNSUPPORTED_MEMBERS`, `UNSUPPORTED_NAMESPACE_VARS`) plus `varip` and `request.security` adjustment guards. Two defensive `raise ValueError` guards added at `visit_call.py:809` and `visit_expr.py:340` so any future drift surfaces loudly.
 
-**Audit-fix sweep status (2026-06-10):** #5, #6, #31, #32, #35 and ~14 minors closed by codegen `974cda7` (see the sweep section above). `pine_v6_coverage_detail.md` rows and bucket totals reconciled the same day (surgical refresh against codegen `974cda7` / engine `6aa1d13`).
+**Audit-fix sweep status (2026-06-10):** #5, #6, #31, #32, #35 and ~14 minors closed by codegen-oss `7bd20eb` (orig. `974cda7`) (see the sweep section above). `pine_v6_coverage_detail.md` rows and bucket totals reconciled the same day (surgical refresh against codegen-oss `7bd20eb` (orig. `974cda7`) / engine `6aa1d13`).
 
 **Remaining open work:**
 

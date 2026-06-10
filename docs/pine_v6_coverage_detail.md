@@ -1,11 +1,11 @@
 # Pine v6 Coverage — Identifier-by-Identifier Audit
 
-> ✅ **RECONCILED 2026-06-10** against pineforge-codegen `974cda7` ("audit-fix sweep") and pineforge-engine `6aa1d13`. Every row flagged wrong by the 2026-05-21 master audit ([`pine_v6_audit_master.md`](pine_v6_audit_master.md)) — and every row touched by the Phase B/C/D rejections and the 2026-06-10 audit-fix sweep — has been corrected against the current code. This was a **surgical refresh**, not a full per-identifier re-derivation: untouched rows still carry the 2026-05-17 sprint snapshot, and the ❓ bucket has not been re-audited. Headline totals are delta-reconciled (see the footnote under the totals table).
+> ✅ **RECONCILED 2026-06-10** against pineforge-codegen-oss `7bd20eb` (orig. `974cda7`) ("audit-fix sweep") and pineforge-engine `6aa1d13`. Every row flagged wrong by the 2026-05-21 master audit ([`pine_v6_audit_master.md`](pine_v6_audit_master.md)) — and every row touched by the Phase B/C/D rejections and the 2026-06-10 audit-fix sweep — has been corrected against the current code. This was a **surgical refresh**, not a full per-identifier re-derivation: untouched rows still carry the 2026-05-17 sprint snapshot, and the ❓ bucket has not been re-audited. Headline totals are delta-reconciled (see the footnote under the totals table).
 
 | Field | Value |
 |---|---|
 | **Generated** | 2026-05-17 (post Pine v6 HIGH+MEDIUM sprint) |
-| **Reconciled** | 2026-06-10 — vs codegen `974cda7` / engine `6aa1d13`; audit-flagged rows fixed, bucket totals re-counted by delta |
+| **Reconciled** | 2026-06-10 — vs codegen-oss `7bd20eb` (orig. `974cda7`) / engine `6aa1d13`; audit-flagged rows fixed, bucket totals re-counted by delta |
 | **Audit trail** | `pine_v6_audit_master.md` (2026-05-21 audit + per-fix [RESOLVED] tags) |
 | **Pine v6 reference** | https://www.tradingview.com/pine-script-reference/v6/ (JS-rendered, scraped 2026-05-16) |
 | **PineForge engine version** | 0.4.1 + sprint + 2026-06-10 fixes |
