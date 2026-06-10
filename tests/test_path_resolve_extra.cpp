@@ -200,26 +200,26 @@ static void test_path_cross_kind_priority_order() {
 
     // All three cross at the midpoint of a 100->110 leg (pos 0.5). The sort
     // comparator must emit them STOP, TRAIL, LIMIT.
-    std::vector<PathCrossEvent> ev =
+    CrossEventList ev =
         collect_cross_events(100, 110, /*stop=*/105, /*limit=*/105, /*trail=*/105);
-    CHECK(ev.size() == 3);
-    CHECK(ev[0].kind == PathCrossKind::STOP);
-    CHECK(ev[1].kind == PathCrossKind::TRAIL);
-    CHECK(ev[2].kind == PathCrossKind::LIMIT);
-    CHECK(near(ev[0].path_pos, 0.5));
-    CHECK(near(ev[2].path_pos, 0.5));
+    CHECK(ev.n == 3);
+    CHECK(ev.ev[0].kind == PathCrossKind::STOP);
+    CHECK(ev.ev[1].kind == PathCrossKind::TRAIL);
+    CHECK(ev.ev[2].kind == PathCrossKind::LIMIT);
+    CHECK(near(ev.ev[0].path_pos, 0.5));
+    CHECK(near(ev.ev[2].path_pos, 0.5));
 
     // A lone trail level still appends (kind TRAIL) at its interpolated pos.
-    std::vector<PathCrossEvent> trail_only =
+    CrossEventList trail_only =
         collect_cross_events(100, 110, kNaN, kNaN, /*trail=*/107);
-    CHECK(trail_only.size() == 1);
-    CHECK(trail_only[0].kind == PathCrossKind::TRAIL);
-    CHECK(near(trail_only[0].path_pos, 0.7));
+    CHECK(trail_only.n == 1);
+    CHECK(trail_only.ev[0].kind == PathCrossKind::TRAIL);
+    CHECK(near(trail_only.ev[0].path_pos, 0.7));
 
     // Levels outside the leg are not appended.
-    std::vector<PathCrossEvent> none =
+    CrossEventList none =
         collect_cross_events(100, 110, /*stop=*/120, /*limit=*/90, kNaN);
-    CHECK(none.empty());
+    CHECK(none.n == 0);
 }
 
 // ── resolve_exit_path_fill: trailing-stop activation + fill levels ──

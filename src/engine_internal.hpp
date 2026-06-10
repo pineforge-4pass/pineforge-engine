@@ -79,6 +79,16 @@ struct PathCrossEvent {
     PathCrossKind kind;
 };
 
+// Fixed-capacity event list: at most one STOP, one LIMIT, one TRAIL event
+// can exist per path segment. Replaces a heap vector in the innermost
+// fill-resolution loop.
+struct CrossEventList {
+    PathCrossEvent ev[3];
+    int n = 0;
+    const PathCrossEvent* begin() const { return ev; }
+    const PathCrossEvent* end() const { return ev + n; }
+};
+
 struct ExitPathFill {
     bool should_fill = false;
     double fill_price = std::numeric_limits<double>::quiet_NaN();
@@ -154,14 +164,14 @@ void fill_bar_path_points(const Bar& bar, double path[4]);
 int path_cross_kind_priority(PathCrossKind kind);
 
 
-void append_cross_event(std::vector<PathCrossEvent>* events,
+void append_cross_event(CrossEventList* events,
                                double from_price,
                                double to_price,
                                double level,
                                PathCrossKind kind);
 
 
-std::vector<PathCrossEvent> collect_cross_events(double from_price,
+CrossEventList collect_cross_events(double from_price,
                                                         double to_price,
                                                         double stop_level,
                                                         double limit_level,

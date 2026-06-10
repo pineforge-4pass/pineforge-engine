@@ -375,7 +375,7 @@ int path_cross_kind_priority(PathCrossKind kind) {
 }
 
 
-void append_cross_event(std::vector<PathCrossEvent>* events,
+void append_cross_event(CrossEventList* events,
                                double from_price,
                                double to_price,
                                double level,
@@ -392,27 +392,36 @@ void append_cross_event(std::vector<PathCrossEvent>* events,
         pos = (level - from_price) / denom;
     }
     pos = std::clamp(pos, 0.0, 1.0);
-    events->push_back({level, pos, kind});
+    if (events->n < 3) events->ev[events->n++] = {level, pos, kind};
 }
 
 
-std::vector<PathCrossEvent> collect_cross_events(double from_price,
+CrossEventList collect_cross_events(double from_price,
                                                         double to_price,
                                                         double stop_level,
                                                         double limit_level,
                                                         double trail_level) {
-    std::vector<PathCrossEvent> events;
+    CrossEventList events;
     append_cross_event(&events, from_price, to_price, stop_level, PathCrossKind::STOP);
     append_cross_event(&events, from_price, to_price, limit_level, PathCrossKind::LIMIT);
     append_cross_event(&events, from_price, to_price, trail_level, PathCrossKind::TRAIL);
 
-    std::sort(events.begin(), events.end(),
-              [](const PathCrossEvent& a, const PathCrossEvent& b) {
-                  const double eps = kPathPosEps;
-                  if (a.path_pos < b.path_pos - eps) return true;
-                  if (b.path_pos < a.path_pos - eps) return false;
-                  return path_cross_kind_priority(a.kind) < path_cross_kind_priority(b.kind);
-              });
+    // Insertion sort over <=3 elements with the same comparator the previous
+    // std::sort used. The three kinds are pairwise distinct, so the comparator
+    // is a strict total order here and any correct sort yields the identical
+    // sequence.
+    auto before = [](const PathCrossEvent& a, const PathCrossEvent& b) {
+        const double eps = kPathPosEps;
+        if (a.path_pos < b.path_pos - eps) return true;
+        if (b.path_pos < a.path_pos - eps) return false;
+        return path_cross_kind_priority(a.kind) < path_cross_kind_priority(b.kind);
+    };
+    for (int i = 1; i < events.n; ++i) {
+        PathCrossEvent key = events.ev[i];
+        int j = i - 1;
+        while (j >= 0 && before(key, events.ev[j])) { events.ev[j + 1] = events.ev[j]; --j; }
+        events.ev[j + 1] = key;
+    }
     return events;
 }
 
@@ -724,11 +733,11 @@ double exit_order_earliest_path_metric_no_trail(
                                             stop_price, limit_price,
                                             &stop_level, &limit_level);
 
-        std::vector<PathCrossEvent> events =
+        CrossEventList events =
             collect_cross_events(from_price, to_price, stop_level, limit_level, trail_level);
-        if (!events.empty()) {
+        if (events.n != 0) {
             const double eps = 1e-15;
-            return (seg_idx - 1) + events[0].path_pos - eps;
+            return (seg_idx - 1) + events.ev[0].path_pos - eps;
         }
     }
 
@@ -791,12 +800,12 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                    stop_price, limit_price, trail,
                                    &stop_level, &limit_level, &trail_level);
 
-        std::vector<PathCrossEvent> events =
+        CrossEventList events =
             collect_cross_events(from_price, to_price, stop_level, limit_level, trail_level);
-        if (!events.empty()) {
+        if (events.n != 0) {
             fill.should_fill = true;
-            fill.fill_price = events.front().price;
-            fill.is_trail = (events.front().kind == PathCrossKind::TRAIL);
+            fill.fill_price = events.ev[0].price;
+            fill.is_trail = (events.ev[0].kind == PathCrossKind::TRAIL);
             return fill;
         }
 
