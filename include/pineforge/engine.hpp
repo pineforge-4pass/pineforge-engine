@@ -746,7 +746,16 @@ protected:
         int year, month, dayofmonth, hour, minute, second, dayofweek, weekofyear;
     };
 
+    // Single-entry memo: generated scripts commonly read several time
+    // components per bar (hour + minute + dayofweek); decompose once per
+    // distinct bar timestamp instead of per accessor. Keyed on the raw
+    // timestamp, so no per-run invalidation is needed (same ts -> same
+    // UTC decomposition, run-independent).
+    mutable int64_t bar_time_memo_ts_ = std::numeric_limits<int64_t>::min();
+    mutable BarTime bar_time_memo_{};
+
     BarTime _decompose_bar_time() const {
+        if (current_bar_.timestamp == bar_time_memo_ts_) return bar_time_memo_;
         time_t secs = (time_t)(current_bar_.timestamp / 1000);
         struct tm tm_buf;
         gmtime_r(&secs, &tm_buf);
@@ -759,6 +768,8 @@ protected:
         bt.second = tm_buf.tm_sec;
         bt.dayofweek = tm_buf.tm_wday + 1;
         bt.weekofyear = (tm_buf.tm_yday + 7 - ((tm_buf.tm_wday + 6) % 7)) / 7;
+        bar_time_memo_ts_ = current_bar_.timestamp;
+        bar_time_memo_ = bt;
         return bt;
     }
 
