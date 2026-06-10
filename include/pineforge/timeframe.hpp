@@ -5,6 +5,11 @@
 
 namespace pineforge {
 
+// ─── Day-length constants ──────────────────────────────────────────────────────
+
+inline constexpr int64_t kSecPerDay = 86400;
+inline constexpr int64_t kMsPerDay  = 86400000;
+
 // ─── AggregatedBar ─────────────────────────────────────────────────────────────
 
 struct AggregatedBar {
@@ -34,11 +39,11 @@ inline int tf_multiplier(const std::string& tf) {
 
 inline bool tf_is_intraday(const std::string& tf) {
     int s = tf_to_seconds(tf);
-    return s > 0 && s < 86400;
+    return s > 0 && s < kSecPerDay;
 }
 
 inline bool tf_is_daily(const std::string& tf) {
-    return tf.find('D') != std::string::npos || tf_to_seconds(tf) == 86400;
+    return tf.find('D') != std::string::npos || tf_to_seconds(tf) == kSecPerDay;
 }
 
 inline bool tf_is_weekly(const std::string& tf) {

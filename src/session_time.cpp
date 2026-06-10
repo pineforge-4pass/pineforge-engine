@@ -162,7 +162,7 @@ static int64_t compute_tf_open_ms(int64_t bar_ms,
         return calendar_month_open_local_ms(bar_ms, tz);
 
     int sec = tf_to_seconds(tf);
-    if (sec > 0 && sec < 86400)
+    if (sec > 0 && sec < kSecPerDay)
         return utc_bucket_open_ms(bar_ms, sec);
     return bar_ms;
 }
@@ -173,7 +173,7 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
     CalendarPeriod cp = calendar_period_for(tf);
     int sec = tf_to_seconds(tf);
 
-    if (sec > 0 && sec < 86400) {
+    if (sec > 0 && sec < kSecPerDay) {
         return open_ms + static_cast<int64_t>(sec) * 1000 - 1;
     }
 
@@ -465,7 +465,7 @@ int64_t pine_time_tradingday(int64_t bar_ms,
         }
         // UTC midnight: truncate to day boundary
         time_t secs = static_cast<time_t>(bar_ms / 1000);
-        return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
+        return static_cast<int64_t>((secs / kSecPerDay) * kSecPerDay) * 1000;
     }
 
     int session_start_min = parse_session_start_minutes(session);
@@ -476,7 +476,7 @@ int64_t pine_time_tradingday(int64_t bar_ms,
             "— falling back to UTC calendar-day midnight.\n",
             session.c_str());
         time_t secs = static_cast<time_t>(bar_ms / 1000);
-        return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
+        return static_cast<int64_t>((secs / kSecPerDay) * kSecPerDay) * 1000;
     }
 
     // Obtain bar's local time in the given timezone.
@@ -498,7 +498,7 @@ int64_t pine_time_tradingday(int64_t bar_ms,
     if (bar_local_min < session_start_min) {
         // Bar is before today's session open → belongs to yesterday's trading day.
         // Go back one day: subtract 24 h and recompute the day open.
-        int64_t yesterday_ms = bar_ms - 86400LL * 1000;
+        int64_t yesterday_ms = bar_ms - kMsPerDay;
         day_open_ms = calendar_day_open_local_ms(yesterday_ms, eff_tz);
     }
 

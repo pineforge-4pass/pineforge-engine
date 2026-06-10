@@ -9,6 +9,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -446,7 +447,7 @@ double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
     saved_cum_pv_sq_ = cum_pv_sq_;
     saved_anchor_day_ = anchor_day_;
     if (is_na(src) || is_na(volume)) return na<double>();
-    int64_t day = timestamp_ms / 86400000LL;
+    int64_t day = timestamp_ms / kMsPerDay;
     if (anchor_day_ == std::numeric_limits<int64_t>::min()) {
         anchor_day_ = day;
     } else if (day != anchor_day_) {
@@ -468,7 +469,7 @@ VWAPBandsResult VWAP::compute_bands(double src, double volume, int64_t timestamp
     saved_cum_pv_sq_ = cum_pv_sq_;
     saved_anchor_day_ = anchor_day_;
     if (is_na(src) || is_na(volume)) return {na<double>(), na<double>(), na<double>()};
-    int64_t day = timestamp_ms / 86400000LL;
+    int64_t day = timestamp_ms / kMsPerDay;
     if (anchor_day_ == std::numeric_limits<int64_t>::min()) {
         anchor_day_ = day;
     } else if (day != anchor_day_) {
