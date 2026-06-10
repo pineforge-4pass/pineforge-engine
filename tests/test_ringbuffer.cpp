@@ -54,10 +54,25 @@ void test_wraparound_equivalence() {
     CHECK(is_na(rb[99]));
 }
 
+void test_lazy_alloc_characterization() {
+    using namespace pineforge;
+    std::printf("test_lazy_alloc_characterization\n");
+
+    // Reads before any push return na; first push materializes normally.
+    Series<double> s;            // default max_len 500
+    CHECK(is_na(s[0]));
+    CHECK(is_na(s[7]));
+    CHECK(s.size() == 0);
+    s.push(3.5);
+    CHECK(s[0] == 3.5);
+    CHECK(is_na(s[1]));
+}
+
 int main() {
     std::printf("=== DynamicRingBuffer Tests ===\n\n");
     test_basic_operations();
     test_wraparound_equivalence();
+    test_lazy_alloc_characterization();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

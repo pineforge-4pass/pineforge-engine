@@ -15,10 +15,11 @@ class DynamicRingBuffer {
 
 public:
     explicit DynamicRingBuffer(std::size_t capacity)
-        : buffer_(capacity, na<T>()), capacity_(capacity) {}
+        : capacity_(capacity) {}
 
     void push_front(T val) {
         if (capacity_ == 0) return;
+        if (buffer_.empty()) buffer_.resize(capacity_, na<T>());
         if (size_ == 0) {
             buffer_[0] = val;
             size_ = 1;
