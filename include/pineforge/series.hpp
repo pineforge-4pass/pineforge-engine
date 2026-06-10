@@ -44,7 +44,12 @@ public:
         if (offset >= size_ || capacity_ == 0) {
             return na<T>();
         }
-        return buffer_[(head_ + offset) % capacity_];
+        // offset < size_ <= capacity_ and head_ < capacity_, so
+        // head_ + offset < 2 * capacity_: one conditional subtract
+        // replaces the hardware divide of `% capacity_`.
+        std::size_t idx = head_ + offset;
+        if (idx >= capacity_) idx -= capacity_;
+        return buffer_[idx];
     }
 
     std::size_t size() const { return size_; }

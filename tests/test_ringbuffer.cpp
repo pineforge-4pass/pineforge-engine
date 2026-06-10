@@ -41,9 +41,23 @@ void test_basic_operations() {
     CHECK(is_na(rb[3]));
 }
 
+void test_wraparound_equivalence() {
+    using namespace pineforge;
+    std::printf("test_wraparound_equivalence\n");
+
+    // After capacity is exceeded, reads must walk newest -> oldest
+    // across the wrap seam.
+    DynamicRingBuffer<double> rb(5);
+    for (int i = 0; i < 13; ++i) rb.push_front((double)i);  // newest = 12
+    for (std::size_t k = 0; k < 5; ++k) CHECK(rb[k] == (double)(12 - (int)k));
+    CHECK(is_na(rb[5]));   // out of range -> na
+    CHECK(is_na(rb[99]));
+}
+
 int main() {
     std::printf("=== DynamicRingBuffer Tests ===\n\n");
     test_basic_operations();
+    test_wraparound_equivalence();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
