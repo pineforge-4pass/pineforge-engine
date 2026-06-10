@@ -162,7 +162,7 @@ Identifier resolves to a different runtime symbol than spec.
 - **TZ divergence**: **[RESOLVED 2026-06-10]** Bare `hour/minute/dayofweek/...` route through `tz_time_field_lambda(..., syminfo_.timezone)` (`BAR_BUILTINS` in `codegen/tables.py`) — exchange TZ per Pine spec; value-identical on UTC data.
 
 ### Behavioural gaps
-- **`str.tonumber`** lacks try/catch → throws `std::invalid_argument` on parse failure instead of returning na (real behaviour bug). *(still open)*
+- **`str.tonumber`** ~~lacks try/catch~~ **[RESOLVED]** Emits try/catch lambda returning `na<double>()` on parse failure (`tables.py` STR_FUNC_MAP "tonumber").
 - **`str.replace`** 4-arg form: **[RESOLVED 2026-06-10]** `occurrence` arg honored (0-based per Pine spec; out-of-range/negative → original string) in `visit_call.py`.
 - **`timestamp()`** [F21]: **[RESOLVED 2026-06-10]** Bad arities reject loudly (year/month/day required); `dateString` literals parsed at transpile time (ISO-8601 + "DD MMM YYYY" forms, GMT+0 default); non-literal `dateString` rejected; tz-first overload handled (`visit_call.py`).
 - **`/=` and `%=`**: **[RESOLVED 2026-06-10]** Lower to always-float division / `std::fmod` matching the binary `/` and `%` semantics (`visit_stmt._compound_assign_rhs`).
