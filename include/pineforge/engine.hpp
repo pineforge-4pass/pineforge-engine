@@ -823,8 +823,9 @@ protected:
     // --- Timeframe state ---
     std::string input_tf_;
     std::string script_tf_;
-    // Cached tf_to_seconds(script_tf_): refreshed wherever script_tf_ is
-    // assigned (engine_run.cpp). Avoids a string parse per strategy.* call.
+    // Cached tf_to_seconds(script_tf_). MUST be refreshed immediately after
+    // every assignment to script_tf_ (both sites live in engine_run.cpp).
+    // Avoids a string parse per strategy.* call.
     int script_tf_seconds_ = 0;
     TimeframeAggregator script_tf_agg_;
     int64_t prev_bar_timestamp_ = 0;

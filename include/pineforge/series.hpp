@@ -19,6 +19,9 @@ public:
 
     void push_front(T val) {
         if (capacity_ == 0) return;
+        // Lazy alloc: many Series are declared but never pushed; defer the
+        // allocation to first use. Invariant: buffer_.empty() implies
+        // size_ == 0, so no other member can read an unmaterialized buffer.
         if (buffer_.empty()) buffer_.resize(capacity_, na<T>());
         if (size_ == 0) {
             buffer_[0] = val;
