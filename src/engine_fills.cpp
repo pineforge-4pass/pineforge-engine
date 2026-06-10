@@ -44,6 +44,10 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     }
 
     for (int opposing_pass = 0; opposing_pass < 2; ++opposing_pass) {
+        // Pass 1 only re-evaluates orders pass 0 deferred into the skip set;
+        // with an empty set every order classifies Skip and the pass is a
+        // structural no-op. Bail before paying the scan.
+        if (opposing_pass == 1 && pass0_opposing_skip_ids.empty()) break;
     std::vector<size_t>& filled_indices = scratch_filled_indices_;
     filled_indices.clear();
     // TV cancels pending SAME-DIRECTION entries placed on a prior on_bar when
