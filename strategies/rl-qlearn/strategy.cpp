@@ -1,29 +1,43 @@
-// strategies/rl-qlearn/strategy.cpp — hand-written reinforcement-learning
-// demo strategy (tabular Q-learning, online).
+// strategies/rl-qlearn/strategy.cpp — tabular Q-learning trading agent
+// built WITH the PineForge engine (hand-written C++, not Pine-transpiled).
 //
-// Unlike corpus/tutorial strategies this file is NOT transpiled from
-// PineScript: PineScript has no mutable-2D-array-friendly RL idiom, so the
-// agent is written directly against the BacktestEngine API and exports the
-// same C ABI surface (strategy_create / run_backtest_full / ...) the Python
-// harnesses expect.
+// The agent trades ETH-USDT on 15-minute bars (the engine aggregates the
+// 1-minute corpus feed). It supports two modes driven by the harness:
+//
+//   training  — epsilon-greedy exploration + Q-updates; the harness replays
+//               the training slice for many epochs, persisting the Q-table
+//               between passes via strategy_save_qtable/strategy_load_qtable.
+//   greedy    — "Greedy Mode" input: epsilon = 0, learning rate = 0; the
+//               frozen policy is evaluated (out-of-sample when run on bars
+//               the agent never trained on).
 //
 // Agent design
 // ------------
-//   State  (60 discrete states): RSI(14) bucket [5] x EMA(10)>EMA(40) trend
-//          flag [2] x 1-bar momentum bucket [3] x ATR%-vs-baseline volatility
-//          regime [2].
-//   Action (3): FLAT, LONG, SHORT — executed as strategy_close_all() /
-//          strategy_entry(); a reversal is a single entry (TV semantics).
+//   State (108): RSI(14) bucket [3] x EMA(40)>EMA(160) trend [2] x 96-bar
+//          (24h) momentum [3] x ATR%-vs-SMA(96) volatility regime [2]
+//          x CURRENT POSITION [3].
+//          Two hard-won design points:
+//            - SLOW market features: on 15m ETH bars the persistent edge net
+//              of taker fees sits at the 10h/40h trend horizon — fast
+//              features (1-bar momentum, EMA 10/40) flip state every few
+//              bars and churn away the edge in commission.
+//            - The position MUST be part of the state. Without it the
+//              bootstrap term max_a' Q(s',a') is identical for every action,
+//              so the action choice degenerates to a one-step reward
+//              comparison: a +0.002%/bar conditional edge can never beat a
+//              0.1% entry cost and "always flat" becomes a self-consistent
+//              fixed point. With the position in the state, the value of
+//              BEING long in an uptrend accumulates across the regime
+//              (mean trend run ~121 bars) and amortises the entry cost.
+//   Action (3): FLAT, LONG, SHORT — strategy_close_all()/strategy_entry();
+//          a reversal is a single entry (TV semantics).
 //   Reward: direction held during the elapsed bar x bar log-return (in %),
-//          minus a switch penalty when the previous decision changed the
-//          target position (proxy for spread/slippage round-trip cost).
+//          minus a switch penalty proportional to the position change the
+//          previous decision caused (1 unit to enter or exit, 2 units to
+//          reverse) at the per-fill commission rate, so the agent
+//          internalises trading costs without double-charging round trips.
 //   Update: Q(s,a) += alpha * (r + gamma * max_a' Q(s',a') - Q(s,a)),
-//          epsilon-greedy with multiplicative epsilon decay, seeded
-//          xorshift64* PRNG so every run is bit-reproducible.
-//
-// The agent learns online during the single backtest pass — early trades are
-// exploration; the runner reports first-half vs second-half PnL to show the
-// effect of learning.
+//          epsilon-greedy, seeded xorshift64* PRNG — bit-reproducible.
 
 #include <pineforge/engine.hpp>
 #include <pineforge/ta.hpp>
@@ -33,6 +47,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <deque>
 #include <string>
 
 using namespace pineforge;
@@ -71,11 +87,11 @@ public:
     static constexpr int kActShort = 2;
     static constexpr int kNumActions = 3;
 
-    // 5 RSI buckets x 2 trend x 3 momentum x 2 volatility regimes.
-    static constexpr int kNumStates = 5 * 2 * 3 * 2;
+    // 3 RSI x 2 trend x 3 momentum(96-bar) x 2 volatility x 3 position.
+    static constexpr int kNumStates = 3 * 2 * 3 * 2 * 3;
 
     explicit RLQLearnStrategy()
-        : rsi_(14), ema_fast_(10), ema_slow_(40), atr_(14), atr_baseline_(96),
+        : rsi_(14), ema_fast_(40), ema_slow_(160), atr_(14), atr_baseline_(96),
           rng_(20240607ULL) {
         initial_capital_   = 1000000.0;
         default_qty_type_  = QtyType::FIXED;
@@ -116,19 +132,49 @@ public:
         }
     }
 
+    // --- Q-table persistence (harness replays epochs across runs) -------
+    bool save_qtable(const char* path) const {
+        std::FILE* f = std::fopen(path, "w");
+        if (!f) return false;
+        for (int s = 0; s < kNumStates; ++s)
+            std::fprintf(f, "%.17g %.17g %.17g\n", q_[s][0], q_[s][1], q_[s][2]);
+        std::fclose(f);
+        return true;
+    }
+
+    bool load_qtable(const char* path) {
+        std::FILE* f = std::fopen(path, "r");
+        if (!f) return false;
+        for (int s = 0; s < kNumStates; ++s) {
+            if (std::fscanf(f, "%lf %lf %lf", &q_[s][0], &q_[s][1], &q_[s][2]) != 3) {
+                std::fclose(f);
+                return false;
+            }
+        }
+        std::fclose(f);
+        return true;
+    }
+
     void on_bar(const Bar& bar) override {
         if (!inputs_initialized_) {
-            alpha_       = get_input_double("Learning Rate", 0.10);
-            gamma_       = get_input_double("Discount Factor", 0.95);
-            epsilon_     = get_input_double("Epsilon Start", 0.20);
-            eps_min_     = get_input_double("Epsilon Min", 0.02);
-            eps_decay_   = get_input_double("Epsilon Decay", 0.999);
-            switch_cost_ = get_input_double("Switch Cost Pct", 0.04);
-            mom_thresh_  = get_input_double("Momentum Threshold", 0.001);
-            warmup_bars_ = get_input_int("Warmup Bars", 100);
+            alpha_        = get_input_double("Learning Rate", 0.10);
+            gamma_        = get_input_double("Discount Factor", 0.998);
+            epsilon_      = get_input_double("Epsilon Start", 0.20);
+            eps_min_      = get_input_double("Epsilon Min", 0.02);
+            eps_decay_    = get_input_double("Epsilon Decay", 0.999);
+            switch_cost_  = get_input_double("Switch Cost Pct", 0.05);
+            mom_lookback_ = get_input_int("Momentum Lookback", 96);
+            mom_thresh_   = get_input_double("Momentum Threshold", 0.02);
+            warmup_bars_  = get_input_int("Warmup Bars", 200);
+            if (get_input_bool("Greedy Mode", false)) {
+                // Frozen-policy evaluation: no exploration, no learning.
+                epsilon_ = 0.0;
+                eps_min_ = 0.0;
+                alpha_   = 0.0;
+            }
             int rsi_len      = get_input_int("RSI Length", 14);
-            int ema_fast_len = get_input_int("EMA Fast Length", 10);
-            int ema_slow_len = get_input_int("EMA Slow Length", 40);
+            int ema_fast_len = get_input_int("EMA Fast Length", 40);
+            int ema_slow_len = get_input_int("EMA Slow Length", 160);
             int atr_len      = get_input_int("ATR Length", 14);
             int atr_base_len = get_input_int("ATR Baseline Length", 96);
             rsi_          = ta::RSI(rsi_len);
@@ -163,12 +209,24 @@ public:
         prev_close_ = close;
         bars_seen_++;
 
+        close_hist_.push_back(close);
+        double mom = na<double>();
+        if ((int)close_hist_.size() > mom_lookback_) {
+            double past = close_hist_.front();
+            close_hist_.pop_front();
+            if (past > 0.0) mom = std::log(close / past);
+        }
+
         bool features_ready = bars_seen_ > warmup_bars_
             && !std::isnan(rsi) && !std::isnan(ema_f) && !std::isnan(ema_s)
-            && !std::isnan(atr_pct) && !std::isnan(atr_base);
+            && !std::isnan(atr_pct) && !std::isnan(atr_base) && !std::isnan(mom);
         if (!features_ready) return;
 
-        int state = encode_state(rsi, ema_f, ema_s, log_ret, atr_pct, atr_base);
+        // Position actually held over the elapsed bar (entries fill on the
+        // bar open, so by on_bar time this reflects the previous decision).
+        double held = signed_position_size();
+        int pos_b = (held > 0.0) ? 1 : (held < 0.0 ? 2 : 0);
+        int state = encode_state(rsi, ema_f, ema_s, mom, atr_pct, atr_base, pos_b);
 
         if (have_prev_) {
             // Reward in percent units: direction actually held over the bar
@@ -176,7 +234,6 @@ public:
             // live position — not the requested action — keeps reward and
             // realised PnL aligned), minus the switch penalty booked when the
             // previous decision changed the target.
-            double held = signed_position_size();
             double dir = (held > 0.0) ? 1.0 : (held < 0.0 ? -1.0 : 0.0);
             double reward = dir * log_ret * 100.0 - pending_cost_;
             pending_cost_ = 0.0;
@@ -187,7 +244,7 @@ public:
         }
 
         int action;
-        if (rng_.uniform() < epsilon_) {
+        if (epsilon_ > 0.0 && rng_.uniform() < epsilon_) {
             action = rng_.uniform_int(kNumActions);
         } else {
             const auto& row = q_[state];
@@ -195,7 +252,14 @@ public:
         }
         epsilon_ = std::max(eps_min_, epsilon_ * eps_decay_);
 
-        if (have_prev_ && action != prev_action_) pending_cost_ = switch_cost_;
+        if (have_prev_) {
+            // Cost in units of position changed: FLAT<->LONG/SHORT moves 1
+            // unit, LONG<->SHORT reverses 2. switch_cost_ is the per-fill
+            // commission in %, so a round trip costs 2 x switch_cost_ total.
+            static constexpr int kTarget[kNumActions] = {0, 1, -1};
+            int units = std::abs(kTarget[action] - kTarget[prev_action_]);
+            pending_cost_ = switch_cost_ * units;
+        }
         apply_action(action);
 
         prev_state_  = state;
@@ -205,12 +269,13 @@ public:
 
 private:
     int encode_state(double rsi, double ema_f, double ema_s,
-                     double log_ret, double atr_pct, double atr_base) const {
-        int rsi_b = rsi < 30.0 ? 0 : rsi < 45.0 ? 1 : rsi < 55.0 ? 2 : rsi < 70.0 ? 3 : 4;
+                     double mom, double atr_pct, double atr_base,
+                     int pos_b) const {
+        int rsi_b = rsi < 40.0 ? 0 : rsi < 60.0 ? 1 : 2;
         int trend_b = (ema_f > ema_s) ? 1 : 0;
-        int mom_b = log_ret < -mom_thresh_ ? 0 : (log_ret > mom_thresh_ ? 2 : 1);
+        int mom_b = mom < -mom_thresh_ ? 0 : (mom > mom_thresh_ ? 2 : 1);
         int vol_b = (atr_pct > atr_base) ? 1 : 0;
-        return ((rsi_b * 2 + trend_b) * 3 + mom_b) * 2 + vol_b;
+        return (((rsi_b * 2 + trend_b) * 3 + mom_b) * 2 + vol_b) * 3 + pos_b;
     }
 
     void apply_action(int action) {
@@ -230,15 +295,17 @@ private:
     ta::EMA ema_slow_;
     ta::ATR atr_;
     ta::SMA atr_baseline_;  // baseline of ATR% — splits calm/volatile regimes
+    std::deque<double> close_hist_;  // last N closes for the momentum bucket
 
     // Q-learning state.
     std::array<std::array<double, kNumActions>, kNumStates> q_;
     rlq::Rng rng_;
-    double alpha_ = 0.10, gamma_ = 0.95;
+    double alpha_ = 0.10, gamma_ = 0.998;
     double epsilon_ = 0.20, eps_min_ = 0.02, eps_decay_ = 0.999;
-    double switch_cost_ = 0.04;   // % reward penalty per position change
-    double mom_thresh_ = 0.001;   // log-return bucket edge (0.1% per bar)
-    int warmup_bars_ = 100;
+    double switch_cost_ = 0.05;    // % reward penalty per unit of position change
+    int mom_lookback_ = 96;        // momentum horizon in bars (96 x 15m = 24h)
+    double mom_thresh_ = 0.02;     // momentum log-return bucket edge (2%)
+    int warmup_bars_ = 200;
 
     int prev_state_ = 0;
     int prev_action_ = kActFlat;
@@ -294,5 +361,13 @@ extern "C" {
     void strategy_set_magnifier_volume_weighted(void* s, int on) {
         if (!s) return;
         static_cast<RLQLearnStrategy*>(s)->set_magnifier_volume_weighted(on != 0);
+    }
+    int strategy_save_qtable(void* s, const char* path) {
+        if (!s || !path) return 0;
+        return static_cast<RLQLearnStrategy*>(s)->save_qtable(path) ? 1 : 0;
+    }
+    int strategy_load_qtable(void* s, const char* path) {
+        if (!s || !path) return 0;
+        return static_cast<RLQLearnStrategy*>(s)->load_qtable(path) ? 1 : 0;
     }
 }
