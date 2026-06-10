@@ -66,7 +66,11 @@ set(TEST_SOURCES
     test_ta_osc_edge
     test_ta_extremes_edge
     test_ta_voltrend_edge
+    test_timezone_concurrency
+    test_pointvalue
 )
+
+find_package(Threads REQUIRED)
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
 # binaries — header-only code (Series, na, color, log, math::pine_random)
@@ -91,6 +95,9 @@ foreach(test_name ${TEST_SOURCES})
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+# std::thread needs an explicit pthread link on some toolchains.
+target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 
 # Pure-C sanity test for <pineforge/pineforge.h>. Compiled with the C
 # compiler so any C++-only syntax leaking into the public header

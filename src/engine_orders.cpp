@@ -28,10 +28,15 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
         double cash = equity * (qty_value / 100.0);
         // Reject (qty 0) on a non-finite / non-positive fill price — a degenerate
         // $0/NaN print must NOT size as the raw % number (silent wrong-qty bug).
-        return (std::isfinite(fill_price) && fill_price > 0.0) ? (cash / fill_price) : 0.0;
+        // One contract's currency exposure is fill_price × pointvalue (1.0 for
+        // crypto/equity — legacy math unchanged; futures divide the budget by
+        // the full per-contract notional).
+        return (std::isfinite(fill_price) && fill_price > 0.0)
+            ? (cash / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     if (qty_type == static_cast<int>(QtyType::CASH)) {
-        return (std::isfinite(fill_price) && fill_price > 0.0) ? (qty_value / fill_price) : 0.0;
+        return (std::isfinite(fill_price) && fill_price > 0.0)
+            ? (qty_value / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     return qty_value;
 }
@@ -283,9 +288,9 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
     // multiply the price-difference PnL. pnl_pct is a price-return % and is
-    // point-value-invariant. Commission is in account currency (cash-per-* is
-    // already absolute; percent-commission notional×pointvalue is a follow-up
-    // and does not affect cash-per-contract instruments like ES).
+    // point-value-invariant. Commission is in account currency: cash-per-* is
+    // already absolute, and percent commission scales the notional by
+    // pointvalue inside calc_commission.
     const double pv = syminfo_.pointvalue;
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
                  * close_qty * pv;

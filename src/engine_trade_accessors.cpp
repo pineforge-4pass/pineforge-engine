@@ -23,7 +23,10 @@ double BacktestEngine::open_trade_profit(int idx) const {
     const PyramidEntry& pe = pyramid_entries_[(size_t)idx];
     bool is_long = (position_side_ == PositionSide::LONG);
     double px = current_bar_.close;
-    double pnl = is_long ? (px - pe.price) * pe.qty : (pe.price - px) * pe.qty;
+    // Currency PnL: price-points × qty × pointvalue, consistent with the
+    // realized-trade path in emit_close_trade (pointvalue=1 is unchanged).
+    double pnl = (is_long ? (px - pe.price) * pe.qty : (pe.price - px) * pe.qty)
+                 * syminfo_.pointvalue;
     pnl -= calc_commission(pe.price, pe.qty);
     return pnl;
 }
@@ -82,10 +85,15 @@ double BacktestEngine::open_trade_size(int idx) const {
     return pyramid_entries_[(size_t)idx].qty;
 }
 
+// pe.max_drawdown / pe.max_runup are tracked in price-points × qty
+// (update_per_trade_extremes); the currency accessors scale by pointvalue
+// so they match the closed-trade fields emitted by emit_close_trade. The
+// percent accessors below intentionally use the UNSCALED excursion over the
+// unscaled entry cost — pointvalue cancels in the ratio.
 double BacktestEngine::open_trade_max_drawdown(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return 0.0;
-    return pyramid_entries_[(size_t)idx].max_drawdown;
+    return pyramid_entries_[(size_t)idx].max_drawdown * syminfo_.pointvalue;
 }
 
 double BacktestEngine::open_trade_max_drawdown_percent(int idx) const {
@@ -99,7 +107,7 @@ double BacktestEngine::open_trade_max_drawdown_percent(int idx) const {
 double BacktestEngine::open_trade_max_runup(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return 0.0;
-    return pyramid_entries_[(size_t)idx].max_runup;
+    return pyramid_entries_[(size_t)idx].max_runup * syminfo_.pointvalue;
 }
 
 double BacktestEngine::open_trade_max_runup_percent(int idx) const {

@@ -116,7 +116,10 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     if (!std::isnan(qty) && std::isnan(limit_price) && std::isnan(stop_price)) {
         double margin_pct = is_long ? margin_long_ : margin_short_;
         if (margin_pct > 0.0 && !std::isnan(current_bar_.close)) {
+            // Position value in account currency includes the futures
+            // point-value multiplier (1.0 for crypto/equity — unchanged).
             double required_margin = std::abs(qty) * current_bar_.close
+                                     * syminfo_.pointvalue
                                      * (margin_pct / 100.0);
             double available_equity = current_equity();
             double epsilon = std::max(1e-9, std::abs(available_equity) * 1e-12);

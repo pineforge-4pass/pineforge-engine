@@ -580,10 +580,15 @@ protected:
     }
 
     // --- Commission helper ---
+    // PERCENT commission is a % of the order's notional value in account
+    // currency, which for futures includes the instrument point value
+    // (price points × $/point × contracts). pointvalue=1 (crypto/equity
+    // default) leaves the legacy formula bit-identical. Cash-per-order /
+    // cash-per-contract are already absolute currency amounts.
     double calc_commission(double fill_price, double qty) const {
         switch (commission_type_) {
             case CommissionType::PERCENT:
-                return fill_price * qty * (commission_value_ / 100.0);
+                return fill_price * qty * syminfo_.pointvalue * (commission_value_ / 100.0);
             case CommissionType::CASH_PER_ORDER:
                 return commission_value_;
             case CommissionType::CASH_PER_CONTRACT:
@@ -593,6 +598,10 @@ protected:
     }
 
     // --- Position sizing helper ---
+    // PERCENT_OF_EQUITY / CASH convert a currency budget into contracts, so
+    // one contract's currency exposure is fill_price × pointvalue (futures
+    // $-per-point multiplier; 1.0 for crypto/equity keeps the legacy math
+    // bit-identical).
     double calc_qty(double fill_price) const {
         switch (default_qty_type_) {
             case QtyType::FIXED:
@@ -602,10 +611,12 @@ protected:
                 double cash = equity * (default_qty_value_ / 100.0);
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
-                return (std::isfinite(fill_price) && fill_price > 0) ? (cash / fill_price) : 0.0;
+                return (std::isfinite(fill_price) && fill_price > 0)
+                    ? (cash / (fill_price * syminfo_.pointvalue)) : 0.0;
             }
             case QtyType::CASH:
-                return (std::isfinite(fill_price) && fill_price > 0) ? (default_qty_value_ / fill_price) : 0.0;
+                return (std::isfinite(fill_price) && fill_price > 0)
+                    ? (default_qty_value_ / (fill_price * syminfo_.pointvalue)) : 0.0;
         }
         return default_qty_value_;
     }
@@ -669,15 +680,18 @@ protected:
     double margin_liquidation_price() const { return na<double>(); }
     double open_trades_capital_held() const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
-        return std::abs(position_qty_ * position_entry_price_);
+        return std::abs(position_qty_ * position_entry_price_) * syminfo_.pointvalue;
     }
 
+    // Mark-to-market open profit in account currency. The point-value
+    // multiplier keeps this consistent with realized PnL (emit_close_trade)
+    // so equity = capital + net_profit + open_profit stays in one unit.
     double open_profit(double current_price) const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
         double diff = (position_side_ == PositionSide::LONG)
             ? (current_price - position_entry_price_)
             : (position_entry_price_ - current_price);
-        return diff * position_qty_;
+        return diff * position_qty_ * syminfo_.pointvalue;
     }
 
     int count_wintrades() const { return win_trades_count_; }
@@ -968,10 +982,14 @@ protected:
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
         return trades_[idx].max_runup;
     }
+    // Percent excursions: trade.max_runup / max_drawdown are stored in
+    // account currency (× pointvalue, see emit_close_trade), so the entry
+    // cost denominator must be in currency too (entry × qty × pointvalue).
+    // pointvalue=1 cancels out and matches the legacy ratio bit-for-bit.
     double closed_trade_max_runup_percent(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
         const Trade& t = trades_[idx];
-        double cost = t.entry_price * t.qty;
+        double cost = t.entry_price * t.qty * syminfo_.pointvalue;
         return (cost > 0.0) ? (t.max_runup / cost) * 100.0 : 0.0;
     }
     double closed_trade_max_drawdown(int idx) const {
@@ -981,7 +999,7 @@ protected:
     double closed_trade_max_drawdown_percent(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return 0.0;
         const Trade& t = trades_[idx];
-        double cost = t.entry_price * t.qty;
+        double cost = t.entry_price * t.qty * syminfo_.pointvalue;
         return (cost > 0.0) ? (t.max_drawdown / cost) * 100.0 : 0.0;
     }
 
@@ -1315,7 +1333,9 @@ public:
     // Runtime syminfo injection (by design — the engine stores no instrument
     // metadata of its own; the harness supplies it per run). mintick drives the
     // directional fill snap + slippage*tick economics; pointvalue is the
-    // futures $-per-point multiplier applied to realized PnL and excursions.
+    // futures $-per-point multiplier applied to every money path (realized
+    // PnL + excursions, open profit / equity, percent/cash sizing, percent
+    // commission notionals, margin check — see tests/test_pointvalue.cpp).
     // Both default to crypto/equity values (0.01 / 1.0) and only matter when the
     // harness sets a non-default instrument.
     void set_syminfo_mintick(double m) { if (m > 0.0) { syminfo_.mintick = m; syminfo_mintick_ = m; } }

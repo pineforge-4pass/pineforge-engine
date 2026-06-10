@@ -30,7 +30,7 @@ Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-posi
 
 - **#28 `input.time`** — RESOLVED. Engine [pineforge-engine#22](https://github.com/pineforge-4pass/pineforge-engine/pull/22) added `get_input_int64`; codegen [#15](https://github.com/pineforge-4pass/pineforge-codegen/pull/15) routes `input.time` to it (Pine v6 returns `series int` Unix-ms; old `get_input_int` int32 overflowed).
 - **Drawing-var dangling-identifier minor** — RESOLVED. codegen [#16](https://github.com/pineforge-4pass/pineforge-codegen/pull/16) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
-- **#26 / #27 `input.color` / `input.source`** — remaining codegen-helper work tracked by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) (`get_input_source` + `get_input_color` engine helpers) and codegen issue #9.
+- **#26 / #27 `input.color` / `input.source`** — RESOLVED (verified against pineforge-codegen source 2026-06-10, commit `64fc886` "input.source series binding, packed-color defval"). Engine ships `get_input_source(title, default_series) → const Series<double>&` and codegen emits `get_input_source("title", _src_<field>_)[0]` for `input.source`; `input.color` routes to `get_input_int64` with a packed-ARGB defval, so the `get_input_color` engine helper contemplated by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) was deemed unnecessary.
 
 ## Critical issues — consolidated by class
 
@@ -92,8 +92,8 @@ Identifier resolves to a different runtime symbol than spec.
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 26 | `input.color()` | `get_input_string()` + color parse | **[PARTIAL RESOLVED 2026-05-29, PR codegen#13]** Analyzer now requires defval to be `color.<const>` / `color.new(...)` / `color.rgb(...)`; rejects arbitrary expressions. Codegen still emits `get_input_int` (engine has no `get_input_color` helper — full fix is cross-repo follow-up). |
-| 27 | `input.source()` | series source | **[BLOCKED]** Codegen still emits `get_input_double` → frozen scalar (verified Phase C investigation: `current_bar_.close` captured once at call site). Fix requires new `get_input_source(name, default_series) → const Series<double>&` helper in pineforge-engine; tracked as cross-repo follow-up on codegen issue #9. |
+| 26 | `input.color()` | `get_input_string()` + color parse | **[RESOLVED — verified vs codegen source 2026-06-10]** Analyzer requires defval to be `color.<const>` / `color.new(...)` / `color.rgb(...)` (PR codegen#13); codegen now emits `get_input_int64` with a packed-ARGB defval (`0xAARRGGBB` overflows int32, hence int64). A dedicated engine `get_input_color` helper (engine issue #23) was deemed unnecessary. |
+| 27 | `input.source()` | series source | **[RESOLVED — verified vs codegen source 2026-06-10]** Engine ships `get_input_source(name, default_series) → const Series<double>&`; codegen emits `get_input_source("title", _src_<field>_)[0]` against the engine's always-materialized native source series (no more frozen scalar). Remaining engine issue #23 scope (`get_input_color`) deemed unnecessary — see #26. |
 | 28 | `input.time()` | `get_input_double()` | **[RESOLVED 2026-05-29, PR engine#22 + codegen#15]** Routes to `get_input_int64` (Pine v6 `input.time` returns `series int` Unix-ms; int32 `get_input_int` overflowed). |
 | 29 | `color.rgb()` | optional `transp` arg | **[RESOLVED — false-positive in original audit]** Verified `visit_call.py:1095-1098` correctly passes `args[3]` as transparency in the 4-arg form; 3-arg fallback defaults to 0. Original audit claim was wrong. |
 
@@ -194,7 +194,7 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 **Remaining open work:**
 
-1. **`input.source` / `input.color` series-/color-aware emission** (#26, #27, codegen issue #9): cross-repo blocker — needs `get_input_source(name, default_series) → const Series<double>&` and `get_input_color` helpers in pineforge-engine. Tracked by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23). `input.source` currently produces a frozen scalar.
+1. ~~**`input.source` / `input.color` series-/color-aware emission** (#26, #27, codegen issue #9)~~ — RESOLVED (verified vs codegen source 2026-06-10): engine `get_input_source` landed and codegen binds `input.source` to the native source series; `input.color` uses packed `get_input_int64` (the `get_input_color` helper from [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) deemed unnecessary).
 2. **Remaining class A items** — #5 (`extend.*, font.*, hline.*, ...` namespaces) and #6 (`color.from_gradient`) still emit `std::string("<member>")` or hardcoded `0`. Same rejection pattern applies.
 3. **Class H #35** — `barmerge.*` / `alert.freq_*` as free expressions still emit `std::string(...)` typed as INT. Same fix pattern as #36/#37.
 4. **Doc** — refresh `pine_v6_coverage_detail.md` bucket assignments now that rejections moved several identifiers from "✅ Runtime" or "❓ Unknown" to "❌ Unsupported (loud reject)".

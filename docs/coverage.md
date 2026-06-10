@@ -36,7 +36,7 @@
 | Engine / strategy lifecycle | Supported                                                                  | `BacktestEngine`, three `run(...)` overloads, bar loop, `on_bar(...)` hook, `ReportC` / `SecurityDiagC` reporting.                                                                                                                                                                                                                                                  |
 | Strategy orders             | Supported                                                                  | `strategy_entry / order / exit / close / close_all / cancel / cancel_all` with OHLC-path fill resolution, OCA, pyramiding, slippage, commissions, margin gates, partial / FIFO-vs-ANY closes, trailing stops, and TV deferred-flip carry handling.                                                                                                                  |
 | Strategy state / accessors  | Supported                                                                  | Position state, equity / drawdown / runup tracking, win / loss counts, full closed- and open-trade accessor methods, intraday fill counter.                                                                                                                                                                                                                         |
-| Strategy risk               | Partial                                                                    | Runtime fields cover position-size cap, drawdown cap (abs / %), intraday-loss cap (abs / %), consecutive losing days, and direction allow-list.                                                                                                                                                                                                                     |
+| Strategy risk               | Supported                                                                  | All six `strategy.risk.*` gates are wired (`engine_risk.cpp` + the fill/order gates): `allow_entry_in` direction allow-list, `max_position_size`, `max_drawdown` (abs / % of peak equity), `max_intraday_loss` (abs / % of equity), `max_cons_loss_days`, and `max_intraday_filled_orders` (latch-till-day-rollover cap-close).                                      |
 | Inputs                      | Value support only                                                         | `unordered_map<string,string>` injection plus typed getters (`get_input_`*). UI metadata is the consumer's problem.                                                                                                                                                                                                                                                 |
 | `ta.`*                      | Broad runtime support                                                      | 59 official Pine v6 `ta.`* functions plus 8 official `ta.`* series variables backed by stateful runtime classes, and a free `pivot_point_levels(...)`. Stateful classes expose both `compute(...)` (advance state) and `recompute(...)` (re-run on the same bar without permanently advancing history).                                                             |
 | `math.`*                    | Narrow runtime backing                                                     | Runtime owns only deterministic `pine_random(...)` and rolling `math::Sum`; everything else is left to consumer-emitted code.                                                                                                                                                                                                                                       |
@@ -58,22 +58,31 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**.
-Every compiled PineForge strategy `.so` exports exactly the 10 symbols
+Every compiled PineForge strategy `.so` exports exactly the 19 symbols
 declared there:
 
 
-| Symbol                                   | Role                                         |
-| ---------------------------------------- | -------------------------------------------- |
-| `strategy_create`                        | Allocate a strategy instance                 |
-| `strategy_free`                          | Release the instance                         |
-| `run_backtest`                           | Run with auto-detected timeframe             |
-| `run_backtest_full`                      | Run with timeframe + magnifier configuration |
-| `report_free`                            | Free arrays inside a filled `pf_report_t`    |
-| `strategy_set_input`                     | Override a Pine `input.*()` value            |
-| `strategy_set_override`                  | Override a `strategy(...)` declaration param |
-| `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier             |
-| `strategy_set_trace_enabled`             | Toggle per-bar trace recording               |
-| `pf_version_get`                         | Runtime version                              |
+| Symbol                                   | Role                                                              |
+| ---------------------------------------- | ----------------------------------------------------------------- |
+| `strategy_create`                        | Allocate a strategy instance                                      |
+| `strategy_free`                          | Release the instance                                              |
+| `run_backtest`                           | Run with auto-detected timeframe                                  |
+| `run_backtest_full`                      | Run with timeframe + magnifier configuration                      |
+| `report_free`                            | Free arrays inside a filled `pf_report_t`                         |
+| `strategy_set_input`                     | Override a Pine `input.*()` value                                 |
+| `strategy_set_override`                  | Override a `strategy(...)` declaration param                      |
+| `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier                                  |
+| `strategy_set_trace_enabled`             | Toggle per-bar trace recording                                    |
+| `strategy_set_trade_start_time`          | Earliest Unix-ms at which order commands may fire                 |
+| `strategy_set_chart_timezone`            | Chart display TZ (intraday-day rollover gates)                    |
+| `strategy_set_syminfo_timezone`          | Exchange TZ (`syminfo.timezone`)                                  |
+| `strategy_set_syminfo_session`           | Trading session string (`syminfo.session`)                        |
+| `strategy_set_syminfo_mintick`           | Instrument tick size (`syminfo.mintick`)                          |
+| `strategy_set_syminfo_pointvalue`        | Futures $-per-point multiplier (`syminfo.pointvalue`)             |
+| `strategy_set_syminfo_metadata`          | Inject fundamental / exchange metadata by Pine member name        |
+| `strategy_get_last_error`                | Error message from the most recent failed run                     |
+| `pf_version_get`                         | Runtime version (struct)                                          |
+| `pf_version_string`                      | Runtime version (string)                                          |
 
 
 POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`,
@@ -100,7 +109,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                  | The 10 documented C symbols every compiled strategy `.so` exports.                                                                                            |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                  | The 19 documented C symbols every compiled strategy `.so` exports.                                                                                            |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_risk.cpp`, `engine_report.cpp` | Strategy lifecycle, orders, fills, risk gating, reports, inputs / syminfo, magnifier loop, TF aggregation, `request.security` plumbing.                       |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::`* types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.`* functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
@@ -225,7 +234,7 @@ is silently rejected, matching TradingView's strategy engine behaviour.
 | `risk_max_drawdown_` (+ `_is_pct_`)                   | Halt strategy when peak-to-trough drawdown crosses the cap (absolute $ or % of peak equity).                  |
 | `risk_max_intraday_loss_` (+ `_is_pct_`)              | Halt strategy when running intraday P&L crosses the cap. Day boundary uses month / day-of-month, not session. |
 | `risk_max_cons_loss_days_`                            | Halt strategy after N consecutive losing days.                                                                |
-| `max_intraday_filled_orders_`                         | Skip pending fills past the per-day cap; counter resets on a new day-of-year.                                 |
+| `max_intraday_filled_orders_`                         | Latch-till-day-rollover fill cap: the cap-triggering fill emits TV's synthetic cap-close, then all further fills (and order placement) on that chart-day are dropped. The day key is `dayofmonth * 100 + month` computed in the chart timezone (`_decompose_bar_time_chart_tz`), so the counter resets at the chart's wall-clock midnight. |
 
 
 Risk halt is one-way: once `risk_halted_` is set, no new entries are
@@ -347,24 +356,30 @@ Trend / pivots (`src/ta_volatility_trend.cpp`): `Supertrend(factor, atr_period)`
 `DMI(di_length, adx_smoothing)`, `SAR(start, increment, maximum)`,
 `PivotHigh(left, right)`, `PivotLow(left, right)`.
 
-Cross / state machines (`src/ta_misc.cpp`): `Crossover`, `Crossunder`,
-`Cross`, `Rising(length)`, `Falling(length)`, `BarsSince`,
-`ValueWhen(max_occurrence=1)`, `Change(max_length=1)`. `Change::compute`
+Cross / state machines (`src/ta_oscillators.cpp`): `Crossover`,
+`Crossunder`, `Cross`, `Change(max_length=1)`, `Rising(length)`,
+`Falling(length)`; (`src/ta_misc.cpp`): `BarsSince`,
+`ValueWhen(max_occurrence=1)`. `Change::compute`
 takes a `double src`; Pine v6's `ta.change` also accepts a bool source
 (returns true on flip). The consumer compiler is responsible for
 casting bool → 0.0 / 1.0 before feeding the runtime, since the runtime
 class itself is numeric only.
 
-Statistical / windowed (`src/ta_misc.cpp`): `StdDev`, `Variance`,
-`Median`, `Mode`, `Range`, `Dev` (mean absolute deviation), `Highest`,
-`Lowest`, `HighestBars`, `LowestBars`, `PercentRank`,
-`PercentileNearestRank`, `PercentileLinearInterpolation`, `Correlation`.
+Statistical / windowed — split across three files:
+(`src/ta_volatility_trend.cpp`): `StdDev`, `Variance`, `Dev` (mean
+absolute deviation); (`src/ta_extremes_volume.cpp`): `Median`, `Mode`,
+`Range`, `Highest`, `Lowest`, `HighestBars`, `LowestBars`;
+(`src/ta_misc.cpp`): `PercentRank`, `PercentileNearestRank`,
+`PercentileLinearInterpolation`, `Correlation`.
 
 Volume indicators (`src/ta_extremes_volume.cpp`): official `ta.vwap(...)`
-is a function backed by `VWAP` — single-value form only. Pine v6's
-3-tuple form `[vwap, upper_band, lower_band] = ta.vwap(source, anchor, stdev_mult)`
-when `stdev_mult` is specified is not implemented at the runtime layer;
-the consumer compiler must reject or emit it inline. Official `ta.obv`,
+is a function backed by `VWAP`, in both forms. The single-value form maps
+to `VWAP::compute / recompute`; Pine v6's 3-tuple form
+`[vwap, upper_band, lower_band] = ta.vwap(source, anchor, stdev_mult)` is
+backed by the `VWAPBands` wrapper class (`ta.hpp`), which routes the
+standard `compute / recompute` dispatch to
+`VWAP::compute_bands / recompute_bands` with the construction-time
+`stdev_mult` (see `tests/test_vwap_bands.cpp`). Official `ta.obv`,
 `ta.accdist`, `ta.nvi`, `ta.pvi`, `ta.pvt`, `ta.wad`, `ta.wvad`, and
 `ta.iii` are series variables backed by `OBV`, `AccDist`, `NVI`, `PVI`,
 `PVT`, `WAD`, `WVAD`, and `III`. Parenthesized call forms such as
@@ -437,15 +452,25 @@ the engine. Generated strategy code reads them through typed getters
 that fall back to the Pine default on missing key or parse failure:
 
 ```cpp
-double  get_input_double(const std::string& key, double default_val) const;
-int     get_input_int   (const std::string& key, int    default_val) const;
-bool    get_input_bool  (const std::string& key, bool   default_val) const;
+double  get_input_double(const std::string& key, double  default_val) const;
+int     get_input_int   (const std::string& key, int     default_val) const;
+int64_t get_input_int64 (const std::string& key, int64_t default_val) const;
+bool    get_input_bool  (const std::string& key, bool    default_val) const;
 std::string get_input_string(const std::string& key, const std::string& default_val) const;
+const Series<double>& get_input_source(const std::string& key,
+                                       const Series<double>& default_series) const;
 ```
 
 `get_input_bool` accepts `"true" / "1"` and `"false" / "0"` (anything
-else returns the default). `get_input_double` / `_int` route through
-`std::stod` / `std::stoi` with a try / catch around parse errors.
+else returns the default). `get_input_double` / `_int` / `_int64` route
+through `std::stod` / `std::stoi` / `std::stoll` with a try / catch
+around parse errors. `get_input_int64` backs 64-bit input payloads such
+as `input.color` (packed ARGB). `get_input_source` backs `input.source`
+runtime overrides: it resolves a native source name (`"open"`, `"high"`,
+`"low"`, `"close"`, `"volume"`, `"hl2"`, `"hlc3"`, `"ohlc4"`, `"hlcc4"`)
+to the engine's always-materialized source-series history, falling back
+to the codegen-resolved default series when the key is absent or the
+override is non-native.
 
 The runtime is intentionally agnostic about the *kind* of input
 (`input.float / .int / .bool / .string / .source / .color / .timeframe / …`);
@@ -636,9 +661,12 @@ filtered sessions). They handle session string parsing and timezone
 conversion internally.
 
 `pine_tz::ScopedTimezone(tz)` is RAII — it grabs a process-wide mutex,
-swaps `TZ` (saving the prior value), restores `TZ` on destruction, and
-releases the mutex. This is the only reason `pine_str_format_time` and
-the session helpers are safe to call from a multi-strategy harness.
+swaps `TZ` (lazily: a same-zone request skips the `setenv` / `tzset`
+pair), and holds the mutex until the guard is destroyed, so the caller's
+`localtime_r` / `mktime` decomposition inside the scope runs under a
+stable `TZ`. This is the only reason `pine_str_format_time` and the
+session helpers are safe to call from a multi-strategy harness (see
+`tests/test_timezone_concurrency.cpp`).
 
 ## Matrices
 

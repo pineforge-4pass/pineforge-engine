@@ -365,9 +365,11 @@ PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session);
 PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick);
 
 /** Set the instrument point value (``syminfo.pointvalue``, default 1.0) — the
- *  $-per-point-per-contract multiplier applied to realized PnL and MFE/MAE. Set
- *  per-instrument (e.g. 50 for ES). Non-positive ignored. Call before
- *  #run_backtest*. */
+ *  $-per-point-per-contract multiplier applied to every money path: realized
+ *  PnL and MFE/MAE, open profit / mark-to-market equity (and the drawdown /
+ *  runup extremes), percent-of-equity and cash position sizing, percent
+ *  commission notionals, and the margin admission check. Set per-instrument
+ *  (e.g. 50 for ES). Non-positive ignored. Call before #run_backtest*. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 
 /** Inject a fundamental/exchange metadata value by Pine member name

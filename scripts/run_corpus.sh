@@ -61,7 +61,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
         -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON \
         -Wno-dev
 
-    log "building runtime + 162 strategy targets ($JOBS jobs)"
+    log "building runtime + 246 strategy targets ($JOBS jobs)"
     cmake --build "$BUILD_DIR" --target corpus_strategies -j "$JOBS"
 fi
 
