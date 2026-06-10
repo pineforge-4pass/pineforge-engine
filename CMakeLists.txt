@@ -203,6 +203,18 @@ if(PINEFORGE_BUILD_TUTORIAL)
     add_subdirectory(tutorial)
 endif()
 
+# === RL demo strategy (opt-in) ========================================
+# Hand-written tabular Q-learning strategy (not transpiled from Pine).
+# Build with:
+#   cmake -B build -DPINEFORGE_BUILD_RL_STRATEGY=ON
+#   cmake --build build --target strategy_rl_qlearn -j
+# then run strategies/rl-qlearn/run_rl.py against the corpus 1m feed.
+option(PINEFORGE_BUILD_RL_STRATEGY
+    "Build the reinforcement-learning demo strategy under strategies/rl-qlearn/" OFF)
+if(PINEFORGE_BUILD_RL_STRATEGY)
+    add_subdirectory(strategies/rl-qlearn)
+endif()
+
 # === Corpus strategies (opt-in) ========================================
 if(PINEFORGE_BUILD_CORPUS_STRATEGIES)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/corpus/CMakeLists.txt")
