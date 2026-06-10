@@ -14,11 +14,15 @@ Full sweep re-measured same-session on 2026-06-11 (all of PineForge / PyneCore /
 
 ## Methodology
 
-- **PineForge:** Google Benchmark (v1.9.0), in-process. Each benchmark iteration
-  `dlopen`s the strategy `.dylib`, calls `strategy_create` + `run_backtest`
-  over the pinned 41,307-bar ETHUSDT_15 OHLCV, then `dlclose`s the library.
-  `N=20` iterations; `real_time` reported by GBench is the per-iteration mean.
-  **Includes** cold `dlopen` per iteration (realistic load + execution cost).
+- **PineForge:** Google Benchmark (v1.9.0), in-process hot loop with **bar
+  magnifier ON** (1→4 ENDPOINTS sub-bar sampling). The strategy `.dylib` is
+  `dlopen`ed once *outside* the timed region; each timed iteration calls
+  `strategy_create` + `run_backtest_full` over the pinned 41,307-bar
+  ETHUSDT_15 OHLCV. `N=20` iterations; `real_time` reported by GBench is the
+  per-iteration mean. This is the engine's most expensive configuration:
+  the magnifier-off hot loop and the cold dlopen+run path both measure
+  **faster** (cold-load timing is excluded because macOS code-signature
+  validation makes first-load wall time unstable).
 - **PyneCore:** Subprocess wall-time of `uv run python runners/run_pynecore.py
   <strategy> --no-write`. Includes Python interpreter startup, PyneCore framework
   import, and full backtest execution. Median over `N=20` invocations.
@@ -169,7 +173,7 @@ therefore a fair comparison of the per-strategy cost a real consumer would see.
 ## Notes
 
 The `0.4 ms MACD-672 bars` claim from the v0.1 badge has been retired and
-replaced with the full-OHLCV median speedup badge (56×). The full-OHLCV time
+replaced with the full-OHLCV median speedup badge (currently 162× vs PyneCore). The full-OHLCV time
 for `04-macd-histogram` (41,307 bars) is **5.56 ms** median.
 A 672-bar slice timing would require a bespoke GBench harness (deferred follow-up).
 

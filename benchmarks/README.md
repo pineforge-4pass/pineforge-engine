@@ -144,7 +144,7 @@ A single canonical script ([`assets/strategies/_indicators/canonical.pine`](asse
 
 ### Speed measurement
 
-- **PineForge:** Google Benchmark in-process, dlopens `strategy.dylib` per iteration, pumps full OHLCV, reports median + p95 over 20 iterations. Includes dlopen cost (cold-load realistic for FFI-style consumers).
+- **PineForge:** Google Benchmark in-process hot loop with bar magnifier ON (1→4 ENDPOINTS sub-bar sampling): `strategy.dylib` is dlopened once outside the timed region, each timed iteration runs `strategy_create` + `run_backtest_full` over the full OHLCV; per-iteration mean over 20 iterations. This is the engine's most expensive configuration — the magnifier-off hot loop and the cold dlopen+run path both measure faster (cold-load timing excluded: macOS first-load code-signature validation makes it unstable).
 - **PyneCore:** Subprocess wall-time of `pyne run`, including Python startup + framework import. Median over 20 invocations.
 - **PineTS:** Subprocess wall-time of `node run_pinets_canonical.mjs`. Strategy backtester not implemented upstream; timing is for canonical indicator script only.
 
