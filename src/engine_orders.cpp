@@ -9,6 +9,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 namespace pineforge {
 using namespace internal;
@@ -156,7 +157,7 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
         }
     }
 
-    pyramid_entries_ = remaining;
+    pyramid_entries_ = std::move(remaining);
     position_qty_ -= qty_closed;
     return qty_closed;
 }
@@ -205,7 +206,7 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std:
         }
     }
 
-    pyramid_entries_ = remaining;
+    pyramid_entries_ = std::move(remaining);
     settle_position_after_partial_exit();
 }
 
@@ -383,10 +384,11 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     const double entry_commission = calc_commission(pe.price, close_qty);
     trade.max_runup = std::max(0.0, runup * pv - entry_commission);
     trade.max_drawdown = drawdown * pv + entry_commission;
-    trades_.push_back(trade);
-    net_profit_sum_ += trade.pnl;
-    if (trade.pnl > 0) { gross_profit_sum_ += trade.pnl; win_trades_count_++; }
-    else if (trade.pnl < 0) { gross_loss_sum_ += trade.pnl; loss_trades_count_++; }
+    const double trade_pnl = trade.pnl;
+    trades_.push_back(std::move(trade));
+    net_profit_sum_ += trade_pnl;
+    if (trade_pnl > 0) { gross_profit_sum_ += trade_pnl; win_trades_count_++; }
+    else if (trade_pnl < 0) { gross_loss_sum_ += trade_pnl; loss_trades_count_++; }
     else { ++eventrades_count_; }  // strategy.eventrades: exact zero P&L (TV uses == 0)
 
     // Update risk state: intraday PnL and consecutive loss day tracking

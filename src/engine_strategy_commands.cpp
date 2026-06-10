@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace pineforge {
 
@@ -221,7 +222,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         order.stop_price = stop_price;
     }
 
-    pending_orders_.push_back(order);
+    pending_orders_.push_back(std::move(order));
 }
 
 void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
@@ -372,7 +373,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.comment = comment;
     order.created_while_in_position = (position_side_ != PositionSide::FLAT);
 
-    pending_orders_.push_back(order);
+    pending_orders_.push_back(std::move(order));
 }
 
 void BacktestEngine::strategy_cancel(const std::string& id) {
@@ -433,7 +434,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
         order.stop_price = stop_price;
     }
 
-    pending_orders_.push_back(order);
+    pending_orders_.push_back(std::move(order));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -614,7 +615,7 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     order.comment = comment;
     order.created_while_in_position = true;
 
-    pending_orders_.push_back(order);
+    pending_orders_.push_back(std::move(order));
 }
 
 // Capture seq + reserved qty of an existing pending exit with the
