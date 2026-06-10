@@ -42,10 +42,15 @@ inline constexpr double kOcaQtyEpsilon = 1e-12;
 // bare literals they replace — naming them prevents accidental "harmonizing".
 //
 //   kFullPercentEps  — qty_percent >= 100 - eps means "full (100%) exit".
+//   kFullQtyEps      — qty-domain "is this a full exit" slack: qty within
+//                      1e-9 of the open position counts as full. Same value
+//                      as kFullPercentEps by coincidence, conceptually
+//                      distinct — do not merge.
 //   kPathPosEps      — intra-bar path-position comparisons (segment + [0..1]).
 //   kSegmentDenomEps — degenerate path-segment denominator guard.
 //   kPathTimeEps     — magnifier t-value dedupe tolerance.
 inline constexpr double kFullPercentEps  = 1e-9;
+inline constexpr double kFullQtyEps      = 1e-9;
 inline constexpr double kPathPosEps      = 1e-12;
 inline constexpr double kSegmentDenomEps = 1e-15;
 inline constexpr double kPathTimeEps     = 1e-12;

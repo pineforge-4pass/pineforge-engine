@@ -32,6 +32,7 @@
 namespace pineforge {
 
 using internal::kFullPercentEps;
+using internal::kFullQtyEps;
 using internal::kQtyEpsilon;
 
 namespace {
@@ -332,7 +333,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
             reserved_qty = std::min(qty, available);
             if (reserved_qty <= kQtyEpsilon) return;
         }
-        is_partial = reserved_qty < position_qty_ - 1e-9;
+        is_partial = reserved_qty < position_qty_ - kFullQtyEps;
     } else {
         if (!compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
                                        qp, is_partial, reserved_qty)) {
@@ -687,7 +688,7 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
         return false;
     }
     qp_io = (position_qty_ > kQtyEpsilon) ? (reserved_qty_out / position_qty_) * 100.0 : qp_io;
-    is_partial_io = reserved_qty_out < position_qty_ - 1e-9;
+    is_partial_io = reserved_qty_out < position_qty_ - kFullQtyEps;
 
     // If there is already a full exit pending for this from_entry, ignore
     // additional partial exits until that full exit is consumed/cancelled.

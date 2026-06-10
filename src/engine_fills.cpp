@@ -620,7 +620,7 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     bool has_explicit_qty_to_close = !std::isnan(order.qty);
     double qty_before_exit = position_qty_;
     bool is_partial = has_explicit_qty_to_close
-        ? order.qty < qty_before_exit - 1e-9
+        ? order.qty < qty_before_exit - kFullQtyEps
         : qp < 100.0 - kFullPercentEps;
     size_t trades_before_exit = trades_.size();
     PositionSide side_before_exit = position_side_;
