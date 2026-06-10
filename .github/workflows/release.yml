@@ -209,6 +209,21 @@ jobs:
             --notes-file "${NOTES}" \
             --verify-tag
 
+      # Every engine release rebuilds + redeploys the public MCP (its container
+      # bakes this engine image). See pineforge-mcp-public/docs/DESIGN.md §9.
+      # Needs a PAT with repo scope on pineforge-4pass/pineforge-mcp-public;
+      # falls back to RELEASE_TOKEN. Non-fatal: a notify failure must not fail
+      # the release itself (redeploy can be fired manually via `gh api .../dispatches`).
+      - name: Notify pineforge-mcp-public to rebuild + redeploy
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.MCP_PUBLIC_DISPATCH_PAT || secrets.RELEASE_TOKEN }}
+          ENGINE_TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          gh api repos/pineforge-4pass/pineforge-mcp-public/dispatches \
+            -f event_type=engine-release \
+            -F client_payload[engine_version]="$ENGINE_TAG"
+
   # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
   # to the GitHub Release created above. Tarball layout:
   #   pineforge-vX.Y.Z-{triple}/
