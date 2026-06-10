@@ -796,6 +796,7 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
         if (!events.empty()) {
             fill.should_fill = true;
             fill.fill_price = events.front().price;
+            fill.is_trail = (events.front().kind == PathCrossKind::TRAIL);
             return fill;
         }
 

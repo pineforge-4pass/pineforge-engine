@@ -143,9 +143,16 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
         emit_close_trade(pe, close_qty, fill_price, was_long);
 
         if (keep_qty > kQtyEpsilon) {
+            // Scale the accumulated USD excursion to the kept slice so the
+            // remaining entry's extremes stay consistent with its reduced
+            // qty (update_per_trade_extremes accumulates (diff) * pe.qty).
+            double keep_scale = keep_qty / pe.qty;
             remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id,
                                  pe.entry_bar_index, pe.entry_comment,
-                                 pe.max_runup, pe.max_drawdown});
+                                 pe.max_runup * keep_scale,
+                                 pe.max_drawdown * keep_scale,
+                                 pe.skip_entry_bar_high,
+                                 pe.skip_entry_bar_low});
         }
     }
 
@@ -312,8 +319,70 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     trade.exit_bar_index = bar_index_;
     trade.entry_id = pe.entry_id;
     trade.entry_comment = pe.entry_comment;
-    trade.max_runup = pe.max_runup * pv;       // $ excursion per unit scales with point value
-    trade.max_drawdown = pe.max_drawdown * pv;
+    // Excursions: TV's per-trade excursion includes the exit fill itself —
+    // a stop-out's adverse excursion is at least the loss at the SL fill and
+    // a take-profit's favorable excursion includes the move to the TP fill.
+    // The per-bar sampler (update_per_trade_extremes) cannot see this: exit
+    // fills happen inside process_pending_orders and the pyramid entry is
+    // removed before the next sample, so same-bar entry+exit trades would
+    // otherwise report 0/0. Fold the fill price in here. The carried
+    // per-entry extreme is scaled to the closed slice (close_qty/pe.qty) so
+    // a partial close reports the slice's USD excursion, matching TV's
+    // per-trade-record qty. Both fields stay >= 0 (Pine accessor convention);
+    // the TV-export sign flip happens only in the CSV writer.
+    double slice = (pe.qty > kQtyEpsilon) ? (close_qty / pe.qty) : 1.0;
+    double fill_fav = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
+                      * close_qty;
+    double runup = std::max(pe.max_runup * slice, fill_fav);
+    double drawdown = std::max(pe.max_drawdown * slice, -fill_fav);
+    // Priced (stop/limit/trail) exits fill mid-bar: the bar-path extremes the
+    // assumed OHLC path reaches BEFORE the exit fill belong to this trade's
+    // excursion, but per-bar sampling never sees them (the entry is removed
+    // before the next update_per_trade_extremes). Fold them in here, honoring
+    // the entry-side masks when the trade opened on this same bar (an extreme
+    // that precedes the ENTRY fill is not part of the trade either).
+    // TRAIL fills: the peak that armed the trail (fill +/- offset) is a
+    // pre-fill favorable excursion no bar-boundary sample sees (TV reports
+    // MFE == peak for trail exits).
+    if (!std::isnan(fold_exit_trail_peak_)) {
+        double peak_fav = (was_long ? (fold_exit_trail_peak_ - pe.price)
+                                    : (pe.price - fold_exit_trail_peak_))
+                          * close_qty;
+        runup = std::max(runup, peak_fav);
+    }
+    if (fold_exit_path_extremes_) {
+        double fill_pos = 0.0;
+        if (internal::first_touch_position(current_bar_, fill_price, &fill_pos)) {
+            const bool high_first = internal::bar_path_uses_high_first(current_bar_);
+            const double high_pos = high_first ? 1.0 : 2.0;
+            const double low_pos  = high_first ? 2.0 : 1.0;
+            const bool same_bar = (pe.entry_bar_index == bar_index_);
+            if (high_pos < fill_pos && !(same_bar && pe.skip_entry_bar_high)) {
+                double hi_fav = (was_long ? (current_bar_.high - pe.price)
+                                          : (pe.price - current_bar_.high)) * close_qty;
+                runup = std::max(runup, hi_fav);
+                drawdown = std::max(drawdown, -hi_fav);
+            }
+            if (low_pos < fill_pos && !(same_bar && pe.skip_entry_bar_low)) {
+                double lo_fav = (was_long ? (current_bar_.low - pe.price)
+                                          : (pe.price - current_bar_.low)) * close_qty;
+                runup = std::max(runup, lo_fav);
+                drawdown = std::max(drawdown, -lo_fav);
+            }
+        }
+    }
+    // TV reports excursions on the NET OPEN-PROFIT basis: the entry-leg
+    // commission is deducted from the favorable/adverse extremes (verified
+    // numerically on pyramid-cash-fractional-commission-01 — TV's exported
+    // excursions differ from the gross price excursion by exactly
+    // qty * cash_per_contract on every trade, both columns). Favorable is
+    // floored at 0 (TV never exports a negative favorable excursion —
+    // confirmed across all 757k corpus rows); adverse grows by the entry
+    // commission (open profit at the entry tick is already -commission).
+    // Both fields remain >= 0 here (Pine positive-drawdown convention).
+    const double entry_commission = calc_commission(pe.price, close_qty);
+    trade.max_runup = std::max(0.0, runup * pv - entry_commission);
+    trade.max_drawdown = drawdown * pv + entry_commission;
     trades_.push_back(trade);
     net_profit_sum_ += trade.pnl;
     if (trade.pnl > 0) { gross_profit_sum_ += trade.pnl; win_trades_count_++; }

@@ -67,6 +67,9 @@ void BacktestEngine::reset_run_state() {
                                       // pyramid_entries_, trail, partial ids
     pending_orders_.clear();
     pending_close_qty_in_bar_ = 0.0;
+    fold_exit_path_extremes_ = false;
+    fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
+    last_exit_fill_was_trail_ = false;
 
     // Equity + position-size extremes.
     max_equity_ = initial_capital_;

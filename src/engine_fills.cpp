@@ -377,6 +377,25 @@ void BacktestEngine::apply_filled_order_to_state(
     };
     double signed_pos_before = signed_pos();
 
+    // Priced (stop/limit) fills happen mid-bar: any trade they close must
+    // fold the pre-fill portion of the bar's path into its excursion
+    // (emit_close_trade reads this flag). Market fills land at the bar
+    // boundary (open / close) where the boundary sampling already covers
+    // the trade's bars, so the flag stays false for them.
+    fold_exit_path_extremes_ =
+        !std::isnan(order.stop_price) || !std::isnan(order.limit_price)
+        || !std::isnan(order.trail_points) || !std::isnan(order.trail_offset);
+    if (last_exit_fill_was_trail_) {
+        // TRAIL fills retrace exactly trail_offset from the armed peak, so
+        // peak = fill +/- offset — a pre-fill favorable excursion of the
+        // closing trade that no bar-boundary sample ever sees.
+        double off = std::isnan(order.trail_offset)
+                         ? 0.0
+                         : std::ceil(order.trail_offset) * syminfo_mintick_;
+        fold_exit_trail_peak_ = (position_side_ == PositionSide::LONG)
+                                    ? fill_price + off
+                                    : fill_price - off;
+    }
     if (order.type == OrderType::MARKET) {
         apply_market_order_fill(order, fill_price, bar, trail_best_path_state);
     } else if (order.type == OrderType::ENTRY) {
@@ -387,6 +406,8 @@ void BacktestEngine::apply_filled_order_to_state(
         apply_raw_order_fill(order, fill_price, trail_best_path_state,
                              exit_closed_from_bar, exit_closed_was_long);
     }
+    fold_exit_path_extremes_ = false;
+    fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
 
     double signed_pos_after = signed_pos();
     double filled_qty = std::abs(signed_pos_after - signed_pos_before);
@@ -499,6 +520,24 @@ void BacktestEngine::apply_filled_order_to_state(
 
 // ── Per-OrderType fill kernels (called from apply_filled_order_to_state) ──
 
+// Compute the pre-fill excursion masks for a priced (stop/limit) entry that
+// filled intrabar: on the assumed OHLC path, an extreme that occurs BEFORE
+// the fill position is not part of the new trade's excursion, so
+// update_per_trade_extremes must skip it on the fill bar (TV convention —
+// TV starts excursion tracking at the fill, the engine otherwise samples
+// the full bar range including the pre-fill leg). Open/gap fills resolve to
+// path position 0 and leave both masks false.
+static void set_entry_fill_excursion_masks(PyramidEntry& pe, const Bar& bar,
+                                           double fill_price) {
+    double fill_pos = 0.0;
+    if (!internal::first_touch_position(bar, fill_price, &fill_pos)) return;
+    const bool high_first = internal::bar_path_uses_high_first(bar);
+    const double high_pos = high_first ? 1.0 : 2.0;
+    const double low_pos  = high_first ? 2.0 : 1.0;
+    pe.skip_entry_bar_high = (high_pos < fill_pos);
+    pe.skip_entry_bar_low  = (low_pos < fill_pos);
+}
+
 void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_price,
                                              const Bar& bar,
                                              double& trail_best_path_state) {
@@ -560,6 +599,15 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
             trail_best_price_ = std::min(trail_best_price_, bar.low);
         if (was_priced_entry) {
             priced_entry_filled_this_bar_ = true;
+            // Mask pre-fill bar extremes for the entry this fill created
+            // (guard: back() really is this order's same-bar entry — a
+            // close-only-opposite fill creates no new entry).
+            if (!pyramid_entries_.empty()
+                && pyramid_entries_.back().entry_bar_index == bar_index_
+                && pyramid_entries_.back().entry_id == order.id) {
+                set_entry_fill_excursion_masks(pyramid_entries_.back(), bar,
+                                               pyramid_entries_.back().price);
+            }
         }
         trail_best_path_state = trail_best_after_fill;
     }
@@ -623,6 +671,9 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         trail_best_price_ = fill_price;
         pyramid_entries_.clear();
         pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
+        if (!std::isnan(order.stop_price) || !std::isnan(order.limit_price)) {
+            set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
+        }
         trail_best_path_state = trail_best_price_;
     } else {
         PositionSide side_before_raw = position_side_;
@@ -668,6 +719,9 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             position_entry_count_++;
             trail_best_price_ = fill_price;
             pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+            if (is_priced_entry) {
+                set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
+            }
         } else {
             execute_market_exit(fill_price);
             if (position_side_ == PositionSide::FLAT) {
@@ -854,6 +908,8 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool has_limit = !std::isnan(order.limit_price);
     bool has_trail = !std::isnan(order.trail_points);
 
+    last_exit_fill_was_trail_ = false;
+
     if (order.type == OrderType::RAW_ORDER && exit_style
         && oca_exit_sibling_hits_first(bar, pending_orders_, order_index, position_side_)) {
         return {FillEvaluation::Kind::NoFill, 0.0};
@@ -879,6 +935,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         if (exit_fill.should_fill) {
             fill_price = exit_fill.fill_price;
             should_fill = true;
+            last_exit_fill_was_trail_ = exit_fill.is_trail;
         }
     } else if (order.type == OrderType::MARKET ||
                (!has_stop && !has_limit && !has_trail)) {

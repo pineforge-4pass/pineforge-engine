@@ -65,6 +65,10 @@ struct PathCrossEvent {
 struct ExitPathFill {
     bool should_fill = false;
     double fill_price = std::numeric_limits<double>::quiet_NaN();
+    // True when the TRAIL leg produced the fill (vs stop/limit/gap-open).
+    // Consumers use it to reconstruct the trail's peak (fill +/- offset)
+    // for per-trade excursion reporting.
+    bool is_trail = false;
 };
 
 

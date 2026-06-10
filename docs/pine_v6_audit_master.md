@@ -206,6 +206,6 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 1. **#15 `strategy.closedtrades.first_index`** — hardcoded `0`; becomes wrong only when the engine implements the 9000-trade-list cap. Fix together with that feature.
 2. **`array.size` / `map.size` / `matrix.size` int typing** [F18] — emit `(double)`; Pine types `series int`. Low risk; needs an int-emission pass.
-3. **Engine economics findings O4 / O5 / O7** — percent-of-equity sizing base, `pnl_pct` net-of-commission, MFE/MAE convention — tracked in `production-readiness-findings.md`; each needs a TV-parity export to pin the convention before changing.
+3. **Engine economics findings O4 / O5** — percent-of-equity sizing base, `pnl_pct` net-of-commission — tracked in `production-readiness-findings.md`; each needs a TV-parity export to pin the convention before changing. (O7 — MFE/MAE convention — fixed 2026-06-10: TV-aligned export sign/names, exit-fill + trail-peak + pre-fill-path excursion folding, partial-slice scaling, net-of-entry-commission basis; MAE p90 now gated at 5% in `verify_corpus.py`.)
 4. **Doc** — `pine_v6_coverage_detail.md` totals are delta-reconciled, not re-derived from scratch; a full per-identifier regeneration is still the long-term fix for the ❓ bucket (141 left).
 5. **Corpus probe gaps** — no probe exercises `slippage≠0`, `close_entries_rule`, `risk.max_intraday_loss`/`max_cons_loss_days`, magnifier non-ENDPOINTS modes, `lookahead_on`, `input.color/time/symbol`, `str.format` family, `timestamp()`, `math.random`, `for-in`.

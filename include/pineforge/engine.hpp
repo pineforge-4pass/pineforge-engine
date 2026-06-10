@@ -35,6 +35,15 @@ struct PyramidEntry {
     std::string entry_comment;
     double max_runup = 0.0;
     double max_drawdown = 0.0;
+    // Intrabar-fill excursion masks: when a priced (stop/limit) entry fills
+    // mid-bar, the portion of the bar's range traversed BEFORE the fill is
+    // not part of the trade's excursion (TV convention). On the assumed
+    // OHLC path (bar_path_uses_high_first), an extreme that occurs before
+    // the fill position is excluded from update_per_trade_extremes sampling
+    // for the fill bar only. Both default false (market/open fills sample
+    // the full bar).
+    bool skip_entry_bar_high = false;
+    bool skip_entry_bar_low = false;
 };
 
 struct Trade {
@@ -385,6 +394,24 @@ protected:
     // opposing-stop resolution (see engine.cpp).
     int priced_entry_activity_bar_ = -1;
     bool priced_entry_filled_this_bar_ = false;
+
+    // Transient: true only while applying a priced (stop/limit/trail) fill
+    // (apply_filled_order_to_state). emit_close_trade reads it to fold the
+    // pre-exit-fill portion of the current bar's OHLC path into the closing
+    // trade's excursion (per-bar sampling can't see the exit bar — the
+    // pyramid entry is gone before the next update_per_trade_extremes).
+    bool fold_exit_path_extremes_ = false;
+    // Transient companion for TRAIL exits: the trail's best (peak) price at
+    // fill time. The peak that armed the trailing stop is by definition a
+    // pre-fill favorable excursion of the closing trade (TV reports
+    // MFE == fill + offset == peak), but first_touch_position can't place a
+    // trail fill on the bar path (the level is only active after the peak),
+    // so emit_close_trade folds the peak directly. NaN = not a trail fill.
+    double fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
+    // Set by evaluate_fill_price: the just-evaluated exit fill fired on the
+    // TRAIL leg (vs stop/limit/gap). Consumed by apply_filled_order_to_state
+    // to reconstruct the trail peak above.
+    bool last_exit_fill_was_trail_ = false;
 
     std::vector<Trade> trades_;
     std::vector<PendingOrder> pending_orders_;

@@ -468,7 +468,14 @@ def _filter_trace_to_window(trace: list[dict], window: tuple[int, int] | None) -
 
 def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
     """Emit one row per trade *side* (exit then entry) in reverse-chronological
-    order — byte-for-byte alignable with TradingView's `trades.csv` export."""
+    order — byte-for-byte alignable with TradingView's `trades.csv` export.
+
+    Excursion columns use TradingView's export convention: favorable excursion
+    is a non-negative total-USD run-up, adverse excursion is emitted as a
+    NEGATIVE total-USD drawdown (TV exports e.g. -8579.36). The engine ABI's
+    `max_drawdown` stays positive — that mirrors Pine's
+    `strategy.*trades.max_drawdown` accessors — so the sign flip happens only
+    here, in the TV-compatible export representation."""
     cum_pnls: dict[int, float] = {}
     running = 0.0
     for n, t in enumerate(trades, 1):
@@ -479,11 +486,15 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
         w = csv.writer(f)
         w.writerow([
             "Trade #", "Type", "Date and time", "Price", "Qty",
-            "Net PnL", "Net PnL %", "MFE", "MAE", "Cumulative PnL",
+            "Net PnL", "Net PnL %",
+            "Favorable excursion USD", "Adverse excursion USD",
+            "Cumulative PnL",
         ])
         for n, t in reversed(list(enumerate(trades, 1))):
             direction = "long" if t["is_long"] else "short"
             cum = cum_pnls[n]
+            # TV convention: adverse excursion is negative (or zero).
+            adverse = -t["max_drawdown"] or 0.0
             for side, time_key, price_key in (
                 (f"Exit {direction}", "exit_time", "exit_price"),
                 (f"Entry {direction}", "entry_time", "entry_price"),
@@ -496,7 +507,7 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
                     f"{t['pnl']:.6f}",
                     f"{t['pnl_pct']:.4f}",
                     f"{t['max_runup']:.6f}",
-                    f"{t['max_drawdown']:.6f}",
+                    f"{adverse:.6f}",
                     f"{cum:.6f}",
                 ])
 

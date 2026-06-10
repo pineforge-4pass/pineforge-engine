@@ -115,9 +115,21 @@ void BacktestEngine::update_per_trade_extremes() {
     double lo = current_bar_.low;
     double cl = current_bar_.close;
     for (auto& pe : pyramid_entries_) {
+        // Intrabar-fill masks: on the bar a priced entry filled mid-bar, an
+        // extreme that the assumed OHLC path reaches BEFORE the fill is not
+        // part of this trade's excursion — substitute the fill price (zero
+        // excursion) for that extreme. Post-fill path beyond the masked
+        // extreme is still captured by the close sample below. Later bars
+        // (entry_bar_index != bar_index_) always sample the full range.
+        double pe_hi = hi;
+        double pe_lo = lo;
+        if (pe.entry_bar_index == bar_index_) {
+            if (pe.skip_entry_bar_high) pe_hi = pe.price;
+            if (pe.skip_entry_bar_low) pe_lo = pe.price;
+        }
         // Favorable price: long -> high, short -> low
-        double fav_px = is_long ? hi : lo;
-        double adv_px = is_long ? lo : hi;
+        double fav_px = is_long ? pe_hi : pe_lo;
+        double adv_px = is_long ? pe_lo : pe_hi;
         double favorable = is_long ? (fav_px - pe.price) * pe.qty
                                    : (pe.price - fav_px) * pe.qty;
         double adverse   = is_long ? (pe.price - adv_px) * pe.qty

@@ -71,6 +71,18 @@ _TRAIL_PATTERN = re.compile(r"\btrail_(points|offset|price)\s*=", re.IGNORECASE)
 # Mirrors canonical validate.py line ~1136.
 PNL_NEAR_ZERO_USD = 0.01
 
+# MAE (adverse excursion) p90 gate — added after the O7 sign-convention
+# reconciliation (engine now exports TV's "Adverse excursion USD" semantics:
+# negative total-USD drawdown, exit-fill folded in). Post-fix the corpus-wide
+# worst MAE p90 delta is 2.35% (the documented anomaly probe; worst normal
+# probe 1.39%, median 0.08%), so 5% gives >3x margin while still catching
+# the regression classes this gate exists for: a sign flip reads ~200%, a
+# per-unit-vs-total qty error reads 50%+. MFE stays REPORT-ONLY: same-bar
+# stop/limit round-trips have a TV-side favorable excursion sourced from
+# intrabar (1m) data that 15m OHLC cannot reproduce (engine emits 0), which
+# pins MFE p90 at 100% on the magnifier tick-dist probes by construction.
+MAE_P90_DELTA_GATE = 0.05
+
 
 def detect_parity_profile(pine_source: str) -> str:
     """Return 'production' if pine source uses any trail_* exit parameter, else 'strict'.
@@ -231,7 +243,9 @@ class TradePair:
     pnl: float
     trade_num: int = 0
     # Report-only fields (compared but NOT gated — see the field-coverage
-    # disclosure). pnl_pct is in percent; mfe/mae are $ per unit qty.
+    # disclosure). pnl_pct is in percent. mfe/mae are TOTAL USD excursions
+    # ((price diff) * qty, summed over pyramid entries) in TV's export
+    # convention: mfe (favorable) >= 0, mae (adverse) <= 0.
     pnl_pct: float = 0.0
     mfe: float = 0.0
     mae: float = 0.0
@@ -305,9 +319,14 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             mfe = float(
                 row.get("Favorable excursion USD") or row.get("MFE") or 0.0
             )
-            mae = float(
-                row.get("Adverse excursion USD") or row.get("MAE") or 0.0
-            )
+            # TV exports adverse excursion as a NEGATIVE USD value; current
+            # engine CSVs use the same name + convention. Legacy engine CSVs
+            # ("MAE" column) emitted the positive magnitude — normalize those
+            # to TV's sign so old artifacts still compare correctly.
+            if row.get("Adverse excursion USD"):
+                mae = float(row["Adverse excursion USD"])
+            else:
+                mae = -abs(float(row.get("MAE") or 0.0)) or 0.0
             direction = "long" if "long" in kind.lower() else "short"
             r["direction"] = direction
             r["qty"] = qty
@@ -510,7 +529,8 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     entry_ok = entry_p90  < thresh["entry"]
     exit_ok  = exit_p90   < thresh["exit"]
     pnl_ok   = pnl_p90    < thresh["pnl"]
-    all_ok   = count_ok and entry_ok and exit_ok and pnl_ok
+    mae_ok   = mae_p90    < MAE_P90_DELTA_GATE
+    all_ok   = count_ok and entry_ok and exit_ok and pnl_ok and mae_ok
     if all_ok:
         label = "excellent"
     elif (
@@ -519,6 +539,8 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
         and entry_p90 < STRONG_ENTRY_DELTA
         and exit_p90 < STRONG_EXIT_DELTA
         and pnl_p90 < STRONG_PNL_DELTA
+        and mae_ok  # MAE gate applies to strong too, else a MAE-only
+                    # regression would still pass the sweep as "strong"
     ):
         label = "strong"
     elif len(gating_matched) / max(len(tv_gate), 1) >= 0.90:
@@ -576,6 +598,7 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             f"  Entry-price p90 delta: {entry_p90  * 100:8.4f}%  ({check(entry_ok)})\n"
             f"  Exit-price  p90 delta: {exit_p90   * 100:8.4f}%  ({check(exit_ok)})\n"
             f"  PnL         p90 delta: {pnl_p90    * 100:8.4f}%  ({check(pnl_ok)})\n"
+            f"  MAE         p90 delta: {mae_p90    * 100:8.4f}%  ({check(mae_ok)})\n"
             f"  -- report-only (not gated) --\n"
             f"  Entry/Exit/PnL p100:   {entry_p100*100:.4f}% / {exit_p100*100:.4f}% / {pnl_p100*100:.4f}%\n"
             f"  Qty   p90/p100 delta:  {percentile(qty_deltas,0.90)*100:.4f}% / {qty_p100*100:.4f}%\n"
