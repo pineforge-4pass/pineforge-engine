@@ -27,7 +27,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
         libeigen3-dev \
+        python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Stage the pure-Python transpiler here so the runtime never needs pip or
+# network: target-install gives a plain directory tree to COPY across.
+RUN pip3 install --break-system-packages --no-cache-dir --target /opt/codegen pineforge-codegen
 
 WORKDIR /src
 # VERSION file is the version source-of-truth inside the build context;
@@ -38,7 +43,6 @@ COPY CMakeLists.txt ./
 COPY cmake ./cmake
 COPY include ./include
 COPY src ./src
-COPY tests ./tests
 
 RUN cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
@@ -66,24 +70,22 @@ LABEL org.opencontainers.image.title="pineforge" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 # g++ + Eigen to compile the generated TU; python3 for the JSON harness and
-# the bundled PineScript->C++ transpiler (pineforge-codegen, source-available
-# on PyPI). With codegen baked in, the container accepts strategy.pine directly
-# and transpiles locally — no hosted API, no API key, source never leaves the
-# box. (bookworm python3 ships no pip and is PEP-668 externally-managed, hence
-# python3-pip + --break-system-packages. codegen is pure-Python, zero deps.)
+# the bundled PineScript->C++ transpiler (pineforge-codegen, target-installed
+# in the builder stage and COPY'd in — the runtime carries no pip, no
+# ca-certificates, and never touches the network). With codegen baked in, the
+# container accepts strategy.pine directly and transpiles locally — no hosted
+# API, no API key, source never leaves the box.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ \
         libeigen3-dev \
         python3 \
-        python3-pip \
-        ca-certificates \
-    && pip3 install --break-system-packages --no-cache-dir pineforge-codegen \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/locale /usr/share/info
 
 # Bundle the prebuilt static library, the public headers (curated +
 # generated version.h), and the JSON harness. Users only mount their
 # own code.
 RUN mkdir -p /opt/pineforge/lib /opt/pineforge/include /opt/pineforge/bin
+COPY --from=builder /opt/codegen /opt/pineforge/pycodegen
 COPY --from=builder /src/build/lib/libpineforge.a /opt/pineforge/lib/
 COPY --from=builder /src/include/pineforge        /opt/pineforge/include/pineforge
 
@@ -93,6 +95,11 @@ RUN chmod +x /opt/pineforge/bin/entrypoint.sh /opt/pineforge/bin/run_json.py
 
 ENV PINEFORGE_PREFIX=/opt/pineforge \
     PINEFORGE_VERSION=${PINEFORGE_VERSION} \
-    PINEFORGE_GIT_SHA=${PINEFORGE_GIT_SHA}
+    PINEFORGE_GIT_SHA=${PINEFORGE_GIT_SHA} \
+    PYTHONPATH=/opt/pineforge/pycodegen
+
+# Drop root: the entrypoint compiles and runs everything under mktemp dirs.
+RUN useradd -r -u 10001 -s /usr/sbin/nologin pineforge
+USER pineforge
 
 ENTRYPOINT ["/opt/pineforge/bin/entrypoint.sh"]
