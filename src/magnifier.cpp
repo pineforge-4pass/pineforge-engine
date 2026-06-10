@@ -89,7 +89,8 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
     double b1 = (len0 + len1) / total;
 
     // Collect mandatory points
-    std::vector<double> mandatory = {0.0, b0, b1, 1.0};
+    static thread_local std::vector<double> mandatory;
+    mandatory.assign({0.0, b0, b1, 1.0});
     // Remove duplicates (e.g. if a segment has zero length)
     std::sort(mandatory.begin(), mandatory.end());
     mandatory.erase(std::unique(mandatory.begin(), mandatory.end(),
@@ -114,7 +115,8 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
     }
     // Start with mandatory, fill remaining with uniform
     int remaining = N - static_cast<int>(mandatory.size());
-    std::vector<double> all_t = mandatory;
+    static thread_local std::vector<double> all_t;
+    all_t = mandatory;
     for (int i = 1; i <= remaining; ++i) {
         double t = static_cast<double>(i) / (remaining + 1);
         // Avoid duplicating mandatory points
@@ -154,7 +156,8 @@ void sample_price_path(const Bar& bar, int n_samples,
     OhlcPathLegs legs = compute_ohlc_path_legs(bar);
 
     // Generate t-values based on distribution
-    std::vector<double> t_values(n_samples);
+    static thread_local std::vector<double> t_values;
+    t_values.assign(n_samples, 0.0);
     int N = n_samples;
 
     switch (dist) {
