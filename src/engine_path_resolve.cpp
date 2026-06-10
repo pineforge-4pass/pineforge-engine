@@ -50,10 +50,10 @@ int price_path_priority(const Bar& bar, double stop_level, double limit_level) {
         if (stop_in_range && limit_in_range) {
             // First crossing along prev→curr: smaller parametric t hits first.
             double denom = curr - prev;
-            if (std::abs(denom) > 1e-15) {
+            if (std::abs(denom) > kSegmentDenomEps) {
                 double t_stop = (stop_level - prev) / denom;
                 double t_limit = (limit_level - prev) / denom;
-                const double eps = 1e-12;
+                const double eps = kPathPosEps;
                 if (t_stop < t_limit - eps) return -1;
                 if (t_limit < t_stop - eps) return 1;
             }
@@ -91,7 +91,7 @@ bool first_touch_position(const Bar& bar, double level, double* out_pos) {
 
         double pos = static_cast<double>(i - 1);
         double denom = curr - prev;
-        if (std::abs(denom) > 1e-15) {
+        if (std::abs(denom) > kSegmentDenomEps) {
             pos += (level - prev) / denom;
         }
         *out_pos = pos;
@@ -148,7 +148,7 @@ bool entry_stop_first_touch(const Bar& bar, double stop_level,
 
         double pos = static_cast<double>(i - 1);
         double denom = curr - prev;
-        if (std::abs(denom) > 1e-15) {
+        if (std::abs(denom) > kSegmentDenomEps) {
             pos += (stop_level - prev) / denom;
         }
         *out_pos = pos;
@@ -178,7 +178,7 @@ bool opposing_stop_entry_hits_first(const Bar& bar,
     if (!entry_stop_first_touch(bar, current.stop_price, current.is_long, &cur_pos))
         return false;
 
-    const double eps = 1e-12;
+    const double eps = kPathPosEps;
     for (std::size_t j = 0; j < orders.size(); ++j) {
         if (j == current_idx) continue;
         const PendingOrder& other = orders[j];
@@ -237,7 +237,7 @@ DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
         return DualEntryStopPathWinner::None;
     if (!entry_stop_first_touch(bar, short_ord->stop_price, false, &sp))
         return DualEntryStopPathWinner::None;
-    const double eps = 1e-12;
+    const double eps = kPathPosEps;
     if (lp < sp - eps) {
         return DualEntryStopPathWinner::LongFirst;
     }
@@ -313,7 +313,7 @@ bool oca_exit_sibling_hits_first(const Bar& bar,
     double cur_pos = 0.0;
     if (!exit_order_touch_position(bar, current, pos, &cur_pos)) return false;
 
-    const double eps = 1e-12;
+    const double eps = kPathPosEps;
     for (std::size_t j = 0; j < orders.size(); ++j) {
         if (j == current_idx) continue;
         const PendingOrder& other = orders[j];
@@ -388,7 +388,7 @@ void append_cross_event(std::vector<PathCrossEvent>* events,
 
     double pos = 0.0;
     double denom = to_price - from_price;
-    if (std::abs(denom) > 1e-15) {
+    if (std::abs(denom) > kSegmentDenomEps) {
         pos = (level - from_price) / denom;
     }
     pos = std::clamp(pos, 0.0, 1.0);
@@ -408,7 +408,7 @@ std::vector<PathCrossEvent> collect_cross_events(double from_price,
 
     std::sort(events.begin(), events.end(),
               [](const PathCrossEvent& a, const PathCrossEvent& b) {
-                  const double eps = 1e-12;
+                  const double eps = kPathPosEps;
                   if (a.path_pos < b.path_pos - eps) return true;
                   if (b.path_pos < a.path_pos - eps) return false;
                   return path_cross_kind_priority(a.kind) < path_cross_kind_priority(b.kind);

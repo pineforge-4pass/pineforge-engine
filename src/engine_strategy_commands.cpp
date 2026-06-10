@@ -20,6 +20,8 @@
  * partial_exit (also engine.cpp).
  */
 
+#include "engine_internal.hpp"
+
 #include <pineforge/engine.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -28,6 +30,9 @@
 #include <limits>
 
 namespace pineforge {
+
+using internal::kFullPercentEps;
+using internal::kQtyEpsilon;
 
 namespace {
 // TradingView replays the strategy continuously from the FIRST OHLCV bar.
@@ -231,7 +236,7 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         return;
     }
 
-    const double eps = 1e-10;
+    const double eps = kQtyEpsilon;
     bool closes_full_position = false;
     if (id.empty()) {
         closes_full_position = qty_to_close >= position_qty_ - eps;
@@ -281,11 +286,11 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     // already-reserved tally, etc.) sees a consistent fraction. The order
     // itself stores the absolute qty so the per-fill execution path
     // honours the literal request.
-    if (has_explicit_qty && position_qty_ > 1e-10) {
+    if (has_explicit_qty && position_qty_ > kQtyEpsilon) {
         double clamped_qty = std::min(qty, position_qty_);
         qp = (clamped_qty / position_qty_) * 100.0;
     }
-    bool is_partial = qp < 100.0 - 1e-9;
+    bool is_partial = qp < 100.0 - kFullPercentEps;
     bool has_trail_request = !std::isnan(trail_points);
 
     // Re-issued explicitly partial exits with the same id are one-shot for a live position.
@@ -325,7 +330,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
             }
             double available = std::max(0.0, position_qty_ - already_reserved);
             reserved_qty = std::min(qty, available);
-            if (reserved_qty <= 1e-10) return;
+            if (reserved_qty <= kQtyEpsilon) return;
         }
         is_partial = reserved_qty < position_qty_ - 1e-9;
     } else {
@@ -462,7 +467,7 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
         return false;
     }
 
-    const double eps = 1e-10;
+    const double eps = kQtyEpsilon;
     qty_to_close_out = matching_qty_out;
     if (!std::isnan(qty)) {
         qty_to_close_out = std::min(std::max(qty, 0.0), matching_qty_out);
@@ -544,7 +549,7 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
                                              bool closes_full_position,
                                              bool closes_fifo_qty,
                                              bool closes_any_qty) {
-    const double eps = 1e-10;
+    const double eps = kQtyEpsilon;
     size_t trades_before = trades_.size();
     if (closes_full_position) {
         execute_market_exit(current_bar_.close);
@@ -577,7 +582,7 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
                                                 double matching_qty,
                                                 bool closes_full_position,
                                                 bool closes_any_qty) {
-    const double eps = 1e-10;
+    const double eps = kQtyEpsilon;
     PendingOrder order;
     order.id = "__close__" + id;
     order.from_entry = close_entries_rule_any_ ? id : "";
@@ -678,10 +683,10 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
         double requested_qty = position_qty_ * (qp_io / 100.0);
         reserved_qty_out = std::min(requested_qty, available_qty);
     }
-    if (reserved_qty_out <= 1e-10) {
+    if (reserved_qty_out <= kQtyEpsilon) {
         return false;
     }
-    qp_io = (position_qty_ > 1e-10) ? (reserved_qty_out / position_qty_) * 100.0 : qp_io;
+    qp_io = (position_qty_ > kQtyEpsilon) ? (reserved_qty_out / position_qty_) * 100.0 : qp_io;
     is_partial_io = reserved_qty_out < position_qty_ - 1e-9;
 
     // If there is already a full exit pending for this from_entry, ignore
@@ -691,7 +696,7 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
             if (o.type != OrderType::EXIT) continue;
             if (o.from_entry != from_entry) continue;
             double oqp = std::isnan(o.qty_percent) ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
-            if (oqp >= 100.0 - 1e-9) {
+            if (oqp >= 100.0 - kFullPercentEps) {
                 return false;
             }
         }

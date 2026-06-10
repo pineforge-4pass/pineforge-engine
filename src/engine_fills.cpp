@@ -129,8 +129,8 @@ void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
                 double q = std::isnan(o.qty_percent) ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
                 return q;
             };
-            bool a_full = qp(a) >= 100.0 - 1e-9;
-            bool b_full = qp(b) >= 100.0 - 1e-9;
+            bool a_full = qp(a) >= 100.0 - kFullPercentEps;
+            bool b_full = qp(b) >= 100.0 - kFullPercentEps;
             const bool a_trail = !std::isnan(a.trail_points);
             const bool b_trail = !std::isnan(b.trail_points);
             if (a_trail || b_trail) {
@@ -145,7 +145,7 @@ void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
             double mb = exit_order_earliest_path_metric_no_trail(
                 bar, b, position_side_, is_ent_bar, position_entry_price_);
             const double inf = std::numeric_limits<double>::infinity();
-            const double eps = 1e-12;
+            const double eps = kPathPosEps;
             if (ma < inf && mb < inf) {
                 if (ma < mb - eps) {
                     return true;
@@ -236,7 +236,7 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 bool has_trail = !std::isnan(o.trail_points);
                 if (has_stop || has_limit || has_trail) return false;
                 double qp = std::isnan(o.qty_percent) ? 100.0 : o.qty_percent;
-                return qp >= 100.0 - 1e-9;
+                return qp >= 100.0 - kFullPercentEps;
             };
             auto is_opposite_priced_entry = [&](const PendingOrder& o) {
                 if (o.type != OrderType::ENTRY) return false;
@@ -621,7 +621,7 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     double qty_before_exit = position_qty_;
     bool is_partial = has_explicit_qty_to_close
         ? order.qty < qty_before_exit - 1e-9
-        : qp < 100.0 - 1e-9;
+        : qp < 100.0 - kFullPercentEps;
     size_t trades_before_exit = trades_.size();
     PositionSide side_before_exit = position_side_;
 

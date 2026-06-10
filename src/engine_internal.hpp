@@ -38,6 +38,18 @@ namespace internal {
 inline constexpr double kQtyEpsilon = 1e-10;
 inline constexpr double kOcaQtyEpsilon = 1e-12;
 
+// Additional named comparison thresholds. Values are byte-identical to the
+// bare literals they replace — naming them prevents accidental "harmonizing".
+//
+//   kFullPercentEps  — qty_percent >= 100 - eps means "full (100%) exit".
+//   kPathPosEps      — intra-bar path-position comparisons (segment + [0..1]).
+//   kSegmentDenomEps — degenerate path-segment denominator guard.
+//   kPathTimeEps     — magnifier t-value dedupe tolerance.
+inline constexpr double kFullPercentEps  = 1e-9;
+inline constexpr double kPathPosEps      = 1e-12;
+inline constexpr double kSegmentDenomEps = 1e-15;
+inline constexpr double kPathTimeEps     = 1e-12;
+
 // Among flat pending opposite ENTRY stop-only orders, which stop price is touched
 // first on the synthesized OHLC path (exactly one long + one short, both touched).
 // Forward-declared in <pineforge/engine.hpp> with the same underlying type

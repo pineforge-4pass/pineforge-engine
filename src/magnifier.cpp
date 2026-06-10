@@ -1,8 +1,12 @@
+#include "engine_internal.hpp"
+
 #include <pineforge/magnifier.hpp>
 #include <cmath>
 #include <algorithm>
 
 namespace pineforge {
+
+using internal::kPathTimeEps;
 
 // ─── path_at ─────────────────────────────────────────────────────────────────
 
@@ -89,7 +93,7 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
     // Remove duplicates (e.g. if a segment has zero length)
     std::sort(mandatory.begin(), mandatory.end());
     mandatory.erase(std::unique(mandatory.begin(), mandatory.end(),
-        [](double a, double b) { return std::fabs(a - b) < 1e-12; }),
+        [](double a, double b) { return std::fabs(a - b) < kPathTimeEps; }),
         mandatory.end());
 
     if (N == static_cast<int>(mandatory.size())) {
@@ -116,7 +120,7 @@ void fill_endpoints_t_values(std::vector<double>& t_values, int N,
         // Avoid duplicating mandatory points
         bool dup = false;
         for (double m : mandatory) {
-            if (std::fabs(t - m) < 1e-12) { dup = true; break; }
+            if (std::fabs(t - m) < kPathTimeEps) { dup = true; break; }
         }
         if (!dup) all_t.push_back(t);
     }
