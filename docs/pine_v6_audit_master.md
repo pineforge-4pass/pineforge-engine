@@ -3,19 +3,19 @@
 | Field | Value |
 |---|---|
 | **Audit date** | 2026-05-21 (initial); enriched same day with F1–F22 clarifications |
-| **Last update** | 2026-05-29 — Phase B/C/D merges + follow-up fixes (input.time int64, UDT drawing-field cleanup) |
+| **Last update** | 2026-06-10 — audit-fix sweep (codegen `974cda7`, engine `6aa1d13`): remaining class-A/H rejections + semantic emission fixes; corpus regenerated (`f143504`), parity unchanged 245 excellent + 1 anomaly |
 | **Audited doc** | `pine_v6_coverage_detail.md` (1039 lines, 941 identifiers) |
 | **Method** | 4 parallel C++/Pine v6 expert agents, line-by-line, Playwright MCP for Pine v6 ref + grep on engine + transpiler. Follow-up: 2 clarification agents with live transpile harness. |
 | **Status** | Standalone — chunk reports and clarification reports consolidated below and removed. |
 
 ## Headline
 
-**~8 critical issues remain (down from 18 after Phase B/C/D merges + follow-up fixes 2026-05-29), ~54 minor issues** across 941 identifiers.
+**1 critical issue remains (down from ~8 after the 2026-06-10 audit-fix sweep), ~40 minor issues** across 941 identifiers.
 
 | Severity | Definition | Count |
 |---|---|---|
-| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **~8** (was 18; 7 closed by Phase B rejections, 1 by Phase C, 1 by input.time int64 fix, 1 verified false-positive) |
-| Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~54** |
+| Critical | Doc claim provably wrong vs codegen/runtime/spec → wrong code or silent miscompile | **1** (#15 `first_index`; was ~8 — #5/#6/#31/#32/#35 closed 2026-06-10) |
+| Minor | Note stale, ambiguous, off-by-one count, undocumented divergence | **~40** (was ~54; ~14 closed 2026-06-10 — see [RESOLVED] tags below) |
 
 ### Phase B/C/D resolutions (2026-05-29)
 
@@ -32,6 +32,14 @@ Items resolved: #7, #8, #9, #10, #33, #36, #37, F5, F22; #29 verified false-posi
 - **Drawing-var dangling-identifier minor** — RESOLVED. codegen [#16](https://github.com/pineforge-4pass/pineforge-codegen/pull/16) tracks omitted drawing-typed UDT fields (`_udt_omitted_fields`) and rewrites reads to `/* drawing field omitted */ 0` / strips writes (closes codegen issue #10).
 - **#26 / #27 `input.color` / `input.source`** — RESOLVED (verified against pineforge-codegen source 2026-06-10, commit `64fc886` "input.source series binding, packed-color defval"). Engine ships `get_input_source(title, default_series) → const Series<double>&` and codegen emits `get_input_source("title", _src_<field>_)[0]` for `input.source`; `input.color` routes to `get_input_int64` with a packed-ARGB defval, so the `get_input_color` engine helper contemplated by [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) was deemed unnecessary.
 
+### Audit-fix sweep (2026-06-10, codegen `974cda7`)
+
+One codegen commit closed the remaining class-A/H criticals and most behavioural minors:
+
+- **New loud rejections:** constant-namespace free reads (`extend/font/hline/location/plot/scale/shape/text/xloc/yloc` + `barmerge.*` / `alert.freq_*`) via new `UNSUPPORTED_CONST_NAMESPACES` table — context-aware (`_const_arg_ctx_depth`): still allowed inside parse-and-skip visual calls, the `strategy()` declaration, and `request.security` kwargs. `chart.bg_color`/`fg_color` added to `UNSUPPORTED_MEMBERS`. Bare `ta.<name>` property reads without a registered call site reject in `visit_expr.py`. `export` outside library scripts rejects in `_visit_Identifier`. `_SYMINFO_SILENT_GAP_FIELDS` now derived from the `SYMINFO_MEMBER_MAP` emission table (26 fields — no more 6-field drift).
+- **Semantic fixes:** `/=`/`%=` lower to always-float division / `std::fmod`; `str.replace` honors the 4th `occurrence` arg; `timestamp()` rejects bad arities loudly and parses `dateString` literals at transpile time (no more silent 1970 epoch); `string(x)` routes through the `str.tostring` path (bool/string/numeric); `int(x)` propagates na; `strategy.openprofit_percent` divides by realized equity (`current_equity()`) with zero-guard; `syminfo.country` uses ISO 3166-1 alpha-2 (LSE/AQUIS→GB; EURONEXT / crypto-venue "GLOBAL" pseudo-codes removed → na); `math.round_to_mintick` calls the guarded engine method; `array.stdev/variance` honor the `biased` arg; `array.sort` honors the order arg; `array.join` handles string elements; `array.copy/slice` functional-form element typing fixed; bare `hour/minute/second/dayofmonth/dayofweek/month/year/weekofyear` are exchange-timezone aware via `syminfo_.timezone` (value-identical on UTC data); `format.*` members typed STRING by the analyzer; `display.pine_screener` got a distinct `DISPLAY_MAP` code ("6").
+- **Deliberately NOT changed (still open):** `strategy.closedtrades.first_index` hardcoded `0` (correct until trade-list capping; explanatory comment added); `array.size`/`map.size` emit `(double)`; `timestamp` non-literal `dateString` rejected; `input.source` non-native defvals rejected.
+
 ## Critical issues — consolidated by class
 
 ### A. Silent fallthrough → `return "0"` or `return "false"` (most dangerous)
@@ -44,8 +52,8 @@ Transpiler dispatcher misses identifier → emits literal `0` / `false` / namesp
 | 2 | `currency.*` (56) | 🔧 string constants | **[RESOLVED]** Maps currency constants as string literals (`std::string("<member>")`). | B (CB-2) |
 | 3 | `dayofweek.monday..sunday` | ✅ int constants 1..7 | **[RESOLVED]** Maps Sunday-Saturday to integers "1"-"7". | B (CB-1) |
 | 4 | `session.regular / .extended` | ✅ string constants | **[RESOLVED]** Correctly maps regular/extended session string constants. | B (CB-3) |
-| 5 | `extend.*, font.*, hline.*, location.*, plot.*, scale.*, shape.*, text.*, xloc.*, yloc.*` | ⏭️ Parse-and-skip | Emit `std::string("<member>")`; analyzer types as INT → mismatch | B (CB-5) |
-| 6 | `color.from_gradient()` | ❓ Unknown | Returns hardcoded `0` | C (CI-A5) |
+| 5 | `extend.*, font.*, hline.*, location.*, plot.*, scale.*, shape.*, text.*, xloc.*, yloc.*` | ⏭️ Parse-and-skip | **[RESOLVED 2026-06-10]** Free reads reject via `UNSUPPORTED_CONST_NAMESPACES` (`support_checker.py`); context-aware — still allowed as args to visual calls / `strategy()` / `request.security`. | B (CB-5) |
+| 6 | `color.from_gradient()` | ❓ Unknown | **[RESOLVED — verified 2026-06-10]** Rejected via `HARD_REJECT_FUNC` (`support_checker.py`). | C (CI-A5) |
 | 7 | `color()` bare cast | ✅ Runtime | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_BARE_FUNCS` in `support_checker.py`. | C (CI-A4) |
 | 8 | `footprint.*` (9 fns + 1 type) | ❓ Unknown | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_NAMESPACES`. | C (CI-A8) |
 | 9 | `volume_row.*` (8 fns + 1 type) | ❓ Unknown | **[RESOLVED 2026-05-29, PR codegen#12]** Rejected via `UNSUPPORTED_NAMESPACES`. | D (CD-4) |
@@ -64,7 +72,7 @@ Codegen emits a literal constant instead of reading runtime state.
 |---|---|---|---|
 | 13 | `strategy.account_currency` | reads `syminfo_.currency` | **[RESOLVED]** Reads `syminfo_.currency` successfully at runtime. |
 | 14 | `strategy.position_entry_name` | last pyramid entry id | **[RESOLVED]** Correctly binds to C++ engine `position_entry_name()` accessor. |
-| 15 | `strategy.closedtrades.first_index` | first index | hardcoded `0` (coincidentally correct) |
+| 15 | `strategy.closedtrades.first_index` | first index | hardcoded `0` — correct until the engine implements the 9000-trade-list cap; explanatory comment added 2026-06-10 (`visit_expr.py`). **Only remaining critical.** |
 
 ### C. Wrong aliasing
 
@@ -102,13 +110,13 @@ Identifier resolves to a different runtime symbol than spec.
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
 | 30 | `ta.vwap` (bare) | works | **[RESOLVED]** Supported by injecting default parameters `(close, volume, timestamp)` during transpilation. |
-| 31 | `ta.<name>` bare property reads (all) | works | require sibling `ta.<name>(...)` call to register call site (MI-A8 — see minor) |
+| 31 | `ta.<name>` bare property reads (all) | works | **[RESOLVED 2026-06-10]** Unbound property reads reject loudly (`visit_expr.py` codegen error) instead of falling to `std::string("<name>")`; sibling-call binding still works. |
 
 ### G. Doc note inaccurate / wrong file
 
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
-| 32 | Date/time fn-forms (`dayofmonth(...)`, etc.) | section "1-arg", uses `pine_time` | spec is 2-arg w/ tz; codegen uses inline `gmtime_r/localtime_r` lambdas |
+| 32 | Date/time fn-forms (`dayofmonth(...)`, etc.) | section "1-arg", uses `pine_time` | **[RESOLVED 2026-06-10]** Variable and fn forms share `tz_time_field_lambda` (`codegen/tables.py`): exchange TZ (`syminfo_.timezone`) by default, optional tz arg on fn form. |
 | 33 | `varip` (sprint claim) | "transpile-time warning emitted" | **[RESOLVED 2026-05-29, PR codegen#13]** `support_checker.py:412-425` now raises `_err` (was `_warn`) — varip declarations reject loudly. Both corpus probes using varip removed (`varip-counter-state-positive-01`, `varip-var-udt-in-security-positive-01`). |
 
 ### H. New (chunk D)
@@ -116,7 +124,7 @@ Identifier resolves to a different runtime symbol than spec.
 | # | Identifier | Doc claim | Reality |
 |---|---|---|---|
 | 34 | `order.ascending/descending` | ✅ Runtime | **[RESOLVED]** Collection sorting is fully implemented using runtime lambdas dynamically checking sorting orders. |
-| 35 | `barmerge.*` / `alert.freq_*` | ✅ Runtime | Only work as `request.security()` kwargs; as free expressions emit `std::string(...)` typed as INT → mismatch |
+| 35 | `barmerge.*` / `alert.freq_*` | ✅ Runtime | **[RESOLVED 2026-06-10]** Free-expression reads reject via `UNSUPPORTED_CONST_NAMESPACES`; `request.security` / `alert()` kwarg use unchanged. |
 
 ## Minor issues — themes
 
@@ -130,16 +138,16 @@ Identifier resolves to a different runtime symbol than spec.
 ### Spec-type divergence
 - **`adjustment.*` / `backadjustment.*` / `settlement_as_close.*` (9 entries)** [F5]: **[PARTIALLY RESOLVED 2026-05-29, PR codegen#13]** `request.security(adjustment=…)` non-no-op values (e.g. `adjustment.splits`, `backadjustment.on`, `settlement_as_close.on`) now reject loudly via `SECURITY_ADJUSTMENT_ALLOWED_VALUES` in `support_checker.py`. The underlying constant-type drift (string vs int) is unchanged but no longer masks engine silent-drop because the kwarg path itself is gated.
 - **`currency.*`** typed STRING by analyzer but emit int 0 (already class A).
-- **`syminfo.recommendations_date` / `target_price_date`** [F17]: emit `na<double>()` even though Pine types `series int`; inconsistent with sibling `expiration_date` (`na<int64_t>()`). Risk of double→int coercion surprise.
+- **`syminfo.recommendations_date` / `target_price_date`** [F17]: now route through `get_syminfo_metadata(...)` (returns `double`, na until a feed injects) even though Pine types `series int`; still inconsistent with sibling `expiration_date` (`na<int64_t>()`). Risk of double→int coercion surprise. *(backing updated 2026-06-10; type drift still open)*
 
 ### Codegen silent fallthrough fallout (beyond class A)
-- **`chart.bg_color` / `chart.fg_color`** [F1]: emit `false` via `ns=="chart"` fallthrough; analyzer types COLOR; latent type mismatch in non-trivial use.
-- **`display.pine_screener`** [F19]: falls through `_disp.get(…, "0")` — numerically equal to `display.all`. Cosmetic, but constant-equality probes will see spurious match.
-- **`format.mintick / .percent / .volume`** [F20]: emit raw `std::string("mintick"|"percent"|"volume")` via unknown-member fallback. Runtime `pine_str_tostring` string-matches; doc's "✅ runtime" is true in effect but constant carries no type info.
-- **`export` keyword** [F6]: no lexer KEYWORD entry. Library form blocked at `library()` hard-reject (clean). Non-library form (`x = export + 1`) silently passes support_checker; codegen verbatim-emits → downstream C++ "not declared" compile error.
+- **`chart.bg_color` / `chart.fg_color`** [F1]: **[RESOLVED 2026-06-10]** Reject via `UNSUPPORTED_MEMBERS` (`support_checker.py`).
+- **`display.pine_screener`** [F19]: **[RESOLVED 2026-06-10]** Distinct code `"6"` in `DISPLAY_MAP` (`codegen/tables.py`) — no longer collides with `display.all`.
+- **`format.mintick / .percent / .volume`** [F20]: **[RESOLVED 2026-06-10]** Analyzer types `format.*` reads STRING (`analyzer/base.py`), matching the `std::string` emission.
+- **`export` keyword** [F6]: **[RESOLVED 2026-06-10]** Stray `export` identifier rejects loudly in `support_checker._visit_Identifier` with an inline-the-library hint; library form still blocked at `library()`.
 
 ### Backing / note inaccuracies (behaviour OK, doc misleading)
-- **`math.round_to_mintick()`** [F7]: doc says backed by `BacktestEngine::round_to_mintick(price)`. Method does exist (engine.hpp:451-454, used by engine_fills.cpp) — but codegen does NOT call it; inlines `(std::round(x/syminfo_mintick_) * syminfo_mintick_)` without the engine method's NaN / `mintick<=0` guards.
+- **`math.round_to_mintick()`** [F7]: **[RESOLVED 2026-06-10]** Codegen now calls the guarded engine method `round_to_mintick(x)` (`visit_call.py`) instead of the unguarded inline round.
 - **`na(x)` function form** [F8]: lowers to `is_na(x)`, NOT `na<T>()`. Only the bare `na` identifier maps to `na<double>()`.
 - **`str.startswith` / `str.endswith`** [F9]: doc says `std::string::starts_with/ends_with`. Actually uses `substr(0,n)==pre` and length-check + `compare(off,len,suf)` (pre-C++20 portability). Functionally equivalent.
 - **`var` keyword** [F10]: doc says "static in on_bar". Actually class member + `_var_initialized` gate inside `on_bar` (per-instance, NOT C++ `static`). Pattern is safer — allows multiple `GeneratedStrategy` instances in one process.
@@ -149,23 +157,23 @@ Identifier resolves to a different runtime symbol than spec.
 - **`request.security()`** [F14]: 3 hard restrictions (support_checker.py:683-760): (1) same-chart symbol only (`syminfo.tickerid/.ticker`); (2) `lookahead_on` rejected outright; (3) `currency` / `ignore_invalid_symbol` rejected. Allowed params: `symbol, timeframe, expression, gaps, lookahead`.
 - **`ta.tr` (property) vs `ta.tr(handle_na)` (fn)** [F15]: property hardcodes `handle_na=true` via inline lambda; fn form dispatches `ta::TR` ctor with `handle_na=false` default. Matches Pine v6 spec divergence between forms.
 - **`strategy.equity`** [F16]: lowers to `(current_equity() + open_profit(current_bar_.close))` — includes mark-to-market open P&L. Doc's bare `current_equity()` understates.
-- **`strategy.openprofit_percent`** denominator: `(open_profit / initial_capital * 100)`; Pine: `openPL / realizedEquity * 100`. Diverges once `netprofit ≠ 0`.
-- **`syminfo.country` LSE → `"UK"`** but Pine spec ISO `"GB"`. Several other PREFIX_TO_COUNTRY entries warrant spot-check.
-- **TZ divergence**: bare `hour/minute/dayofweek/...` use UTC (`gmtime_r`), not exchange TZ per Pine spec.
+- **`strategy.openprofit_percent`** denominator: **[RESOLVED 2026-06-10]** Now `open_profit / current_equity() * 100` (realized equity) with zero-guard (`visit_expr.py`).
+- **`syminfo.country`**: **[RESOLVED 2026-06-10]** `PREFIX_TO_COUNTRY` (`helpers_syminfo.py`) is ISO 3166-1 alpha-2 (LSE/AQUIS→GB); EURONEXT and crypto-venue "GLOBAL" pseudo-codes removed — unknown prefix → na.
+- **TZ divergence**: **[RESOLVED 2026-06-10]** Bare `hour/minute/dayofweek/...` route through `tz_time_field_lambda(..., syminfo_.timezone)` (`BAR_BUILTINS` in `codegen/tables.py`) — exchange TZ per Pine spec; value-identical on UTC data.
 
 ### Behavioural gaps
-- **`str.tonumber`** lacks try/catch → throws `std::invalid_argument` on parse failure instead of returning na (real behaviour bug).
-- **`str.replace`** 4-arg form (with `occurrence`) unhandled.
-- **`timestamp()`** [F21]: only 1 of 6 Pine overloads. Silent bugs: returns `"0"` if <3 args; silently drops `second` arg; `(timezone, year, ...)` overload feeds string into year slot → UB; always UTC via `timegm`.
-- **`/=` and `%=`** NOT cast/fmod'd like `/` and `%` — int/float operand semantics mismatch (Pine v6 always-float `/`; PineForge integer-modulo `%=`).
-- **`array.size()` / `matrix.size()`** [F18]: emit `(double)v.size()`; Pine returns `series int`. Comparisons promote OK; explicit int-overload dispatch would surprise.
-- **Array silent gaps**: `array.new_color/_label/_line/_linefill/_box/_table` silently emit `0` (only 5 of 11 `new_*` handled); `array.copy/slice` hardcode element type to `double`; `array.join` numeric-only; `array.sort/stdev/variance` drop 2nd arg.
-- **`string(x)`** numerics only; `int(x)` no NaN propagate.
+- **`str.tonumber`** lacks try/catch → throws `std::invalid_argument` on parse failure instead of returning na (real behaviour bug). *(still open)*
+- **`str.replace`** 4-arg form: **[RESOLVED 2026-06-10]** `occurrence` arg honored (0-based per Pine spec; out-of-range/negative → original string) in `visit_call.py`.
+- **`timestamp()`** [F21]: **[RESOLVED 2026-06-10]** Bad arities reject loudly (year/month/day required); `dateString` literals parsed at transpile time (ISO-8601 + "DD MMM YYYY" forms, GMT+0 default); non-literal `dateString` rejected; tz-first overload handled (`visit_call.py`).
+- **`/=` and `%=`**: **[RESOLVED 2026-06-10]** Lower to always-float division / `std::fmod` matching the binary `/` and `%` semantics (`visit_stmt._compound_assign_rhs`).
+- **`array.size()` / `matrix.size()`** [F18]: emit `(double)v.size()`; Pine returns `series int`. Comparisons promote OK; explicit int-overload dispatch would surprise. *(still open — deliberate)*
+- **Array silent gaps**: **[RESOLVED 2026-06-10]** `array.new_color/_label/_line/_linefill/_box/_table` reject via the `SUPPORTED_ARRAY` whitelist; `array.copy/slice` functional form preserves element type (`codegen/types.py`); `array.join` handles string elements; `array.sort` honors order arg; `array.stdev/variance` honor `biased` arg (`codegen/tables.py`).
+- **`string(x)` / `int(x)`**: **[RESOLVED 2026-06-10]** `string(x)` routes through the `str.tostring` path (bool/string/numeric); `int(x)` propagates na via the engine int sentinel (`visit_call.py`).
 - **Drawing-var method calls** ~~produce dangling C++ identifiers~~ **[RESOLVED 2026-05-29, PR codegen#16]** — omitted drawing-typed UDT fields tracked in `_udt_omitted_fields`; reads rewrite to `/* drawing field omitted */ 0`, writes stripped (closes codegen issue #10).
 
 ### Diagnostic / warning coverage gaps
-- **Syminfo na-fields "conditional-use" warning** [F22]: warning DOES exist (`support_checker._SYMINFO_SILENT_GAP_FIELDS`) but covers only 6 fields (`sector, industry, isin, expiration_date, current_contract, mincontract`). Other na-accept fields (`employees, shareholders, shares_outstanding_*, recommendations_*, target_price_*`) silently return `na<double>()` even in `if/?:` context — NO warning.
-- **`ta.<name>` bare property reads** require sibling `ta.<name>(...)` call to register call site, else falls to `std::string("<name>")`.
+- **Syminfo na-fields "conditional-use" warning** [F22]: **[RESOLVED 2026-06-10]** `_SYMINFO_SILENT_GAP_FIELDS` is now derived from the `SYMINFO_MEMBER_MAP` emission table (every `na<T>()` / `get_syminfo_metadata(...)` entry — 26 fields), so new na-accept fields cannot drift out of the warning.
+- **`ta.<name>` bare property reads**: **[RESOLVED 2026-06-10]** Unbound reads reject loudly instead of falling to `std::string("<name>")` — see item #31.
 - **`varip` warning** claimed in doc — actually NOT emitted (originally class G item 33). **[RESOLVED 2026-05-29, PR codegen#13]** Now raises a hard `CompileError` instead. See item 33 above.
 
 ## Methodology
@@ -192,10 +200,12 @@ Phase 2 — 2 clarification agents (F1–F22):
 
 **Phase B/C/D status (2026-05-29):** Steps 2 and 3 substantially addressed by the codegen rejection sweep — `support_checker.py` now carries 4 new rejection tables (`UNSUPPORTED_BARE_FUNCS`, `UNSUPPORTED_NAMESPACES`, `UNSUPPORTED_MEMBERS`, `UNSUPPORTED_NAMESPACE_VARS`) plus `varip` and `request.security` adjustment guards. Two defensive `raise ValueError` guards added at `visit_call.py:809` and `visit_expr.py:340` so any future drift surfaces loudly.
 
+**Audit-fix sweep status (2026-06-10):** #5, #6, #31, #32, #35 and ~14 minors closed by codegen `974cda7` (see the sweep section above). `pine_v6_coverage_detail.md` rows and bucket totals reconciled the same day (surgical refresh against codegen `974cda7` / engine `6aa1d13`).
+
 **Remaining open work:**
 
-1. ~~**`input.source` / `input.color` series-/color-aware emission** (#26, #27, codegen issue #9)~~ — RESOLVED (verified vs codegen source 2026-06-10): engine `get_input_source` landed and codegen binds `input.source` to the native source series; `input.color` uses packed `get_input_int64` (the `get_input_color` helper from [pineforge-engine#23](https://github.com/pineforge-4pass/pineforge-engine/issues/23) deemed unnecessary).
-2. **Remaining class A items** — #5 (`extend.*, font.*, hline.*, ...` namespaces) and #6 (`color.from_gradient`) still emit `std::string("<member>")` or hardcoded `0`. Same rejection pattern applies.
-3. **Class H #35** — `barmerge.*` / `alert.freq_*` as free expressions still emit `std::string(...)` typed as INT. Same fix pattern as #36/#37.
-4. **Doc** — refresh `pine_v6_coverage_detail.md` bucket assignments now that rejections moved several identifiers from "✅ Runtime" or "❓ Unknown" to "❌ Unsupported (loud reject)".
-5. **Regenerate headline counts** after the remaining fixes.
+1. **#15 `strategy.closedtrades.first_index`** — hardcoded `0`; becomes wrong only when the engine implements the 9000-trade-list cap. Fix together with that feature.
+2. **`array.size` / `map.size` / `matrix.size` int typing** [F18] — emit `(double)`; Pine types `series int`. Low risk; needs an int-emission pass.
+3. **Engine economics findings O4 / O5 / O7** — percent-of-equity sizing base, `pnl_pct` net-of-commission, MFE/MAE convention — tracked in `production-readiness-findings.md`; each needs a TV-parity export to pin the convention before changing.
+4. **Doc** — `pine_v6_coverage_detail.md` totals are delta-reconciled, not re-derived from scratch; a full per-identifier regeneration is still the long-term fix for the ❓ bucket (141 left).
+5. **Corpus probe gaps** — no probe exercises `slippage≠0`, `close_entries_rule`, `risk.max_intraday_loss`/`max_cons_loss_days`, magnifier non-ENDPOINTS modes, `lookahead_on`, `input.color/time/symbol`, `str.format` family, `timestamp()`, `math.random`, `for-in`.
