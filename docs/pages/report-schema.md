@@ -46,8 +46,20 @@ typedef struct pf_report_s {
     int                 trace_len;
     const char**        trace_names;
     int                 trace_names_len;
+
+    /* Computed trading metrics (ABI v2) */
+    pf_metrics_t        metrics;
+
+    /* Per-script-bar equity curve (ABI v2) */
+    pf_equity_point_t*  equity_curve;
+    int64_t             equity_curve_len;   /* NOTE: int64, not int */
 } pf_report_t;
 ```
+
+@note The `metrics` / `equity_curve` fields were appended in **ABI
+version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
+consumers must check `pf_abi_version() == 2` before running — a `.so`
+with no `pf_abi_version` symbol is ABI v1 and predates these fields.
 
 ## Trade fields
 
@@ -72,6 +84,9 @@ typedef struct pf_trade_s {
     double  max_runup;      /* peak favorable price travel ($/unit qty) */
     double  max_drawdown;   /* peak adverse price travel ($/unit qty) */
     double  qty;            /* filled quantity */
+    double  commission;     /* ABI v2: entry+exit commission deducted from pnl */
+    int32_t entry_bar_index;/* ABI v2: script-bar index of entry fill (0-based) */
+    int32_t exit_bar_index; /* ABI v2: script-bar index of exit fill (0-based) */
 } pf_trade_t;
 ```
 
@@ -144,6 +159,67 @@ Populated only when:
 Trace records are zero-cost when disabled — no allocation, no
 formatting, no per-bar branch.
 
+## Metrics (ABI v2)
+
+`pf_report_t::metrics` is a `pf_metrics_t` — four embedded blocks
+computed at report time:
+
+| Block | Type | Scope |
+| --- | --- | --- |
+| `metrics.all` | `pf_trade_stats_t` | All closed trades. |
+| `metrics.longs` | `pf_trade_stats_t` | Long trades only. |
+| `metrics.shorts` | `pf_trade_stats_t` | Short trades only. |
+| `metrics.equity` | `pf_equity_stats_t` | Equity-curve-derived stats (all-trades only, like TV). |
+
+```c
+typedef struct pf_metrics_s {
+    pf_trade_stats_t  all, longs, shorts;
+    pf_equity_stats_t equity;
+} pf_metrics_t;
+```
+
+**Trade stats** (`pf_trade_stats_t`) cover counts (`num_trades`,
+`num_wins`, `num_losses`, `num_even`), profit aggregates
+(`net_profit`, `gross_profit`, `gross_loss`, `profit_factor`,
+`expectancy`), per-trade averages and extremes (`avg_trade`,
+`avg_win`, `avg_loss`, `largest_win`, `largest_loss` plus their `_pct`
+twins), `commission_paid`, win/loss streaks, and bar-duration averages.
+Loss-side fields (`gross_loss`, `avg_loss`, `largest_loss`) are
+**positive magnitudes**, matching the TV display convention. `_pct`
+fields are on a 0–100 percent scale.
+
+**Equity stats** (`pf_equity_stats_t`) cover the equity drawdown /
+run-up extremes (currency + percent), `buy_hold_return`, Sharpe and
+Sortino in two constructions — `sharpe_tv` / `sortino_tv` (TV-style
+month-end resampling in the chart timezone, 2%/yr risk-free,
+annualized by sqrt(12)) and `sharpe_bar` / `sortino_bar` (per-script-bar
+returns annualized by observed bar density) — plus `cagr`, `calmar`,
+`recovery_factor`, `time_in_market_pct`, and `open_pl`.
+
+**NaN convention:** any statistic whose denominator is empty or zero is
+`NaN`, never 0 or an infinity — e.g. `profit_factor` with zero gross
+loss, `avg_win` with no winning trades, `sharpe_tv` with fewer than two
+monthly returns or zero deviation, `calmar` with zero drawdown. A `0.0`
+in the report is always a real computed zero. See the per-field doxygen
+in `<pineforge/pineforge.h>` for the exact rule on every field.
+
+## Equity curve (ABI v2)
+
+One `pf_equity_point_t` per script bar:
+
+```c
+typedef struct pf_equity_point_s {
+    int64_t time_ms;       /* script-bar OPEN timestamp (Unix ms) */
+    double  equity;        /* initial_capital + net_profit + open_profit */
+    double  open_profit;   /* mark-to-market open P&L at bar close */
+} pf_equity_point_t;
+```
+
+`equity_curve_len` equals `script_bars_processed` on a clean run (an
+exception mid-run can truncate the curve — check
+`strategy_get_last_error`). The array is heap-allocated and freed by
+#report_free. Note the length field is `int64_t`, not `int`.
+
 ## Lifetime and ownership
 
 Every heap pointer in `pf_report_t` is freed by a single call to
@@ -153,7 +229,7 @@ Every heap pointer in `pf_report_t` is freed by a single call to
 pf_report_t r = {0};
 run_backtest(s, bars, n, &r);
 /* ... use r ... */
-report_free(&r);   /* frees trades, security_diag, trace */
+report_free(&r);   /* frees trades, security_diag, trace, equity_curve */
 ```
 
 @warning `trace_names` points into a string table owned by the **strategy

@@ -56,6 +56,59 @@ struct PfTrade {
     is_long: c_int,
     max_runup: f64, max_drawdown: f64,
     qty: f64,
+    // ABI v2
+    commission: f64,
+    entry_bar_index: i32,
+    exit_bar_index: i32,
+}
+
+// ── ABI v2 metrics PODs ──────────────────────────────────────────────
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct PfTradeStats {
+    num_trades: i32, num_wins: i32, num_losses: i32, num_even: i32,
+    percent_profitable: f64,
+    net_profit: f64, net_profit_pct: f64,
+    gross_profit: f64, gross_profit_pct: f64,
+    gross_loss: f64, gross_loss_pct: f64,
+    profit_factor: f64,
+    avg_trade: f64, avg_trade_pct: f64,
+    avg_win: f64, avg_win_pct: f64,
+    avg_loss: f64, avg_loss_pct: f64,
+    ratio_avg_win_avg_loss: f64,
+    largest_win: f64, largest_win_pct: f64,
+    largest_loss: f64, largest_loss_pct: f64,
+    commission_paid: f64,
+    expectancy: f64,
+    max_consecutive_wins: i32, max_consecutive_losses: i32,
+    avg_bars_in_trade: f64, avg_bars_in_wins: f64, avg_bars_in_losses: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct PfEquityStats {
+    max_equity_drawdown: f64, max_equity_drawdown_pct: f64,
+    max_equity_runup: f64, max_equity_runup_pct: f64,
+    buy_hold_return: f64, buy_hold_return_pct: f64,
+    sharpe_tv: f64, sortino_tv: f64,
+    sharpe_bar: f64, sortino_bar: f64,
+    cagr: f64, calmar: f64,
+    recovery_factor: f64, time_in_market_pct: f64,
+    open_pl: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct PfMetrics {
+    all: PfTradeStats, longs: PfTradeStats, shorts: PfTradeStats,
+    equity: PfEquityStats,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct PfEquityPoint {
+    time_ms: i64, equity: f64, open_profit: f64,
 }
 
 #[repr(C)]
@@ -102,9 +155,18 @@ struct PfReport {
     trace_len: c_int,
     trace_names: *mut *const c_char,
     trace_names_len: c_int,
+
+    // ABI v2: computed metrics + per-script-bar equity curve
+    metrics: PfMetrics,
+    equity_curve: *mut PfEquityPoint,
+    equity_curve_len: i64,
 }
 
 const PF_MAGNIFIER_ENDPOINTS: c_int = 3;
+
+// PfReport is CALLER-allocated: before any run, resolve `pf_abi_version`
+// via libloading and assert it returns 2 (PF_ABI_VERSION) — an old .so
+// writing into this larger struct (or vice versa) corrupts memory silently.
 
 // ── Safe wrapper ──────────────────────────────────────────────────────
 
