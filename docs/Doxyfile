@@ -91,6 +91,7 @@ INPUT                  = ../include/pineforge/pineforge.h \
                          pages/integration-cmake.md \
                          pages/lifecycle.md \
                          pages/report-schema.md \
+                         pages/metrics.md \
                          pages/configuration.md \
                          pages/magnifier.md \
                          pages/timeframes.md \

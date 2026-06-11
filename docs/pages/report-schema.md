@@ -163,7 +163,8 @@ formatting, no per-bar branch.
 ## Metrics (ABI v2)
 
 `pf_report_t::metrics` is a `pf_metrics_t` — four embedded blocks
-computed at report time:
+computed at report time. The complete per-metric reference (definitions,
+units, NaN rules, validation status) lives on @ref metrics.
 
 | Block | Type | Scope |
 | --- | --- | --- |
