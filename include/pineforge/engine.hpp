@@ -961,6 +961,8 @@ protected:
     virtual void finalize_bar() {}
 
     // --- Equity extremes update (called after each on_bar) ---
+    // NOTE: the dd/runup walk in src/engine_metrics.cpp (compute_equity_stats)
+    // MUST mirror this trough-reset logic; keep in lockstep.
     void update_equity_extremes() {
         double eq = initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close);
         if (eq > max_equity_) {

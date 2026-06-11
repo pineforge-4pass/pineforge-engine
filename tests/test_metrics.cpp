@@ -63,6 +63,8 @@ public:
     }
     const std::vector<pf_equity_point_t>& curve() const { return equity_curve_; }
     int64_t bim() const { return bars_in_market_; }
+    double max_dd() const { return max_drawdown_; }
+    double max_ru() const { return max_runup_; }
 };
 
 std::vector<Bar> make_feed(int n) {
@@ -249,10 +251,15 @@ static void test_equity_stats_sharpe_sortino_tv() {
     pf_equity_stats_t e = pineforge::metrics::compute_equity_stats(
         c, 4, 1000.0, "", /*first_open=*/100.0, /*last_close=*/110.0,
         /*bars_in_market=*/2, /*net_profit=*/89.0);
-    // Python oracle (statistics.stdev sample N-1 for Sharpe; population
-    // downside vs rf for Sortino), rf = 0.02/12, annualized sqrt(12):
-    CHECK(std::fabs(e.sharpe_tv  - 0.95) < 1e-9);
-    CHECK(std::fabs(e.sortino_tv - 1.8688524590163935) < 1e-9);
+    // Python oracle (closed forms: sharpe = 19/20, sortino = 114/61):
+    //   r = [0.1, -0.1, 0.1]; rf = 0.02/12
+    //   mean = 1/30; sd = sqrt(1/75) = 1/(5*sqrt(3))
+    //   sharpe = (mean - rf) / sd * sqrt(12) = 19/20 = 0.95
+    //   sortino numerator same; population downside dev vs rf:
+    //     d = min(0, -0.1 - rf)^2 / 3 => dd = |(-61/600)| / sqrt(3)
+    //     sortino = (mean - rf) / dd * sqrt(12) = 114/61
+    CHECK(std::fabs(e.sharpe_tv  - 0.95) < 1e-9);                   // 19/20
+    CHECK(std::fabs(e.sortino_tv - 1.8688524590163935) < 1e-9);     // 114/61
     CHECK(std::fabs(e.buy_hold_return - 100.0) < 1e-12);       // 1000*(110/100-1)
     CHECK(std::fabs(e.buy_hold_return_pct - 10.0) < 1e-12);
     CHECK(std::fabs(e.time_in_market_pct - 50.0) < 1e-12);     // 2/4
@@ -269,8 +276,9 @@ static void test_equity_stats_drawdown_walk() {
     CHECK(std::fabs(e.max_equity_drawdown - 300.0) < 1e-12);
     CHECK(std::fabs(e.max_equity_drawdown_pct - 25.0) < 1e-12);
     // trough resets to eq on each new peak (update_equity_extremes semantics):
-    // runup = 1100 - 900 = 200; pct vs trough.
+    // runup = 1100 - 900 = 200; pct vs trough = 200/900*100 = 200/9.
     CHECK(std::fabs(e.max_equity_runup - 200.0) < 1e-12);
+    CHECK(std::fabs(e.max_equity_runup_pct - 200.0 / 9.0) < 1e-9);
     CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
     CHECK(!std::isnan(e.cagr));
     CHECK(std::isnan(e.sharpe_tv));   // single month bucket -> <2 returns
@@ -291,6 +299,12 @@ static void test_equity_stats_edges() {
     CHECK(std::isnan(z.cagr));
     CHECK(std::isnan(z.buy_hold_return));
     CHECK(z.max_equity_drawdown == 0.0);
+    CHECK(std::isnan(z.time_in_market_pct));
+    // first_open <= 0 => buy_hold NaN
+    pf_equity_stats_t bh = pineforge::metrics::compute_equity_stats(
+        flat, 3, 1000.0, "", /*first_open=*/0.0, /*last_close=*/100.0, 0, 0.0);
+    CHECK(std::isnan(bh.buy_hold_return));
+    CHECK(std::isnan(bh.buy_hold_return_pct));
 }
 
 // ---------- Flat-strategy bars-in-market pin (carried review item) -----------
@@ -370,6 +384,121 @@ static void test_trade_commission_cash_per_contract() {
     BacktestEngine::free_report(&rep);
 }
 
+// ---------- Engine-vs-walk integration: dd/runup invariant (Task 1) --------
+// The compute_equity_stats dd/runup walk over the equity curve MUST reproduce
+// the engine's running max_drawdown_ / max_runup_ exactly. This holds when
+// the walk seeds peak=trough=curve[0].equity and the engine seeds at
+// initial_capital_ -- identical when the strategy is flat on bar 0
+// (MomoFlip enters from bar 1, so curve[0].equity == initial_capital).
+// A strategy that trades on bar 0 may see a seed asymmetry; see the NOTE
+// on update_equity_extremes in engine.hpp.
+
+static void test_engine_vs_walk_dd_invariant() {
+    std::printf("engine-vs-walk: dd/runup integration invariant\n");
+    MomoFlip s;
+    std::vector<Bar> bars = make_feed(300);
+    s.run(bars.data(), (int)bars.size());
+
+    ReportC rep{};
+    s.fill_report(&rep);
+
+    pf_equity_stats_t walk = pineforge::metrics::compute_equity_stats(
+        s.curve().data(), (int64_t)s.curve().size(),
+        1'000'000.0, "",
+        /*first_open=*/bars.front().open,
+        /*last_close=*/bars.back().close,
+        s.bim(), rep.net_profit);
+
+    CHECK(std::fabs(walk.max_equity_drawdown - s.max_dd()) < 1e-9);
+    CHECK(std::fabs(walk.max_equity_runup - s.max_ru()) < 1e-9);
+    BacktestEngine::free_report(&rep);
+}
+
+// ---------- Per-bar sharpe/sortino oracle (Task 4a) -----------------------
+// Synthetic 5-point curve spaced exactly 1 day (86'400'000 ms):
+//   equities {1000, 1010, 999.9, 1009.899, 1019.99799}
+//   -> returns  [0.01, -0.01, 0.01, 0.01] (FP-exact via chained multiply)
+//
+// Python3 oracle snippet:
+//   import math
+//   e = [1000.0, 1010.0, 999.9, 1009.899, 1019.99799]
+//   r = [e[i]/e[i-1]-1.0 for i in range(1,len(e))]
+//   span_years = 4*86400000 / (365.25*86400*1000)  # 0.010951403...
+//   bpy = 4/span_years                             # 365.25
+//   rf = 0.02/bpy
+//   mean = sum(r)/len(r)
+//   sd = math.sqrt(sum((x-mean)**2 for x in r)/(len(r)-1))
+//   sharpe = (mean-rf)/sd*math.sqrt(bpy)           # 9.451108474837675
+//   dd = math.sqrt(sum(min(0,x-rf)**2 for x in r)/len(r))
+//   sortino = (mean-rf)/dd*math.sqrt(bpy)          # 18.79927771509577
+
+static void test_equity_stats_per_bar_oracle() {
+    std::printf("equity stats: per-bar sharpe/sortino oracle\n");
+    const int64_t day = 86'400'000LL;
+    const int64_t base = 1700000000000LL;
+    pf_equity_point_t c[5] = {
+        pt(base + 0*day, 1000.0),
+        pt(base + 1*day, 1010.0),
+        pt(base + 2*day, 999.9),
+        pt(base + 3*day, 1009.899),
+        pt(base + 4*day, 1019.99799),
+    };
+    pf_equity_stats_t e = pineforge::metrics::compute_equity_stats(
+        c, 5, 1000.0, "", /*first_open=*/100.0, /*last_close=*/100.0,
+        /*bars_in_market=*/0, /*net_profit=*/19.99799);
+    // All 5 points in same UTC month -> single bucket -> sharpe_tv NaN.
+    CHECK(std::isnan(e.sharpe_tv));
+    // Per-bar values from python oracle above.
+    CHECK(std::fabs(e.sharpe_bar  - 9.451108474837675) < 1e-9);
+    CHECK(std::fabs(e.sortino_bar - 18.79927771509577) < 1e-9);
+}
+
+// ---------- Non-UTC bucketing sharpe (Task 4b) ----------------------------
+// 3-point curve under chart_tz "America/New_York":
+//   2024-02-01T00:30:00Z (= Jan 31 19:30 ET -> JANUARY bucket)
+//   2024-02-15T12:00:00Z (-> February)
+//   2024-03-15T12:00:00Z (-> March)
+//   equities: 1000, 1100, 990
+//
+// Under NY: month-ends [1000, 1100, 990] -> 2 returns [0.1, -0.1]
+// Under UTC: first point lands in February -> month-ends [1100, 990]
+//   -> 1 return -> NaN sharpe.
+//
+// Timestamps verified via python3:
+//   from datetime import datetime, timezone
+//   datetime.fromtimestamp(1706747400000/1000, tz=timezone.utc)
+//   # -> 2024-02-01 00:30:00+00:00
+//   datetime.fromtimestamp(1707998400000/1000, tz=timezone.utc)
+//   # -> 2024-02-15 12:00:00+00:00
+//   datetime.fromtimestamp(1710504000000/1000, tz=timezone.utc)
+//   # -> 2024-03-15 12:00:00+00:00
+//
+// NY sharpe/sortino oracle (python3):
+//   r=[0.1,-0.1]; rf=0.02/12; mean=0; sd=0.14142135623730953
+//   sharpe = (0 - rf)/sd * sqrt(12) = -0.04082482904638629
+//   dd=sqrt(sum(min(0,x-rf)**2 for x in r)/2) = 0.07188918942063234
+//   sortino = (0 - rf)/dd * sqrt(12) = -0.08031113910764517
+
+static void test_equity_stats_non_utc_bucketing() {
+    std::printf("equity stats: non-UTC tz bucketing pins month_key_local\n");
+    pf_equity_point_t c[3] = {
+        pt(1706747400000LL, 1000.0),
+        pt(1707998400000LL, 1100.0),
+        pt(1710504000000LL, 990.0),
+    };
+    // UTC: first point in Feb -> 2 buckets (Feb, Mar) -> 1 return -> NaN.
+    pf_equity_stats_t utc = pineforge::metrics::compute_equity_stats(
+        c, 3, 1000.0, "", 100.0, 100.0, 0, -10.0);
+    CHECK(std::isnan(utc.sharpe_tv));
+
+    // NY: first point in Jan -> 3 buckets (Jan, Feb, Mar) -> 2 returns -> finite.
+    pf_equity_stats_t ny = pineforge::metrics::compute_equity_stats(
+        c, 3, 1000.0, "America/New_York", 100.0, 100.0, 0, -10.0);
+    CHECK(!std::isnan(ny.sharpe_tv));
+    CHECK(std::fabs(ny.sharpe_tv  - (-0.04082482904638629)) < 1e-9);
+    CHECK(std::fabs(ny.sortino_tv - (-0.08031113910764517)) < 1e-9);
+}
+
 int main() {
     test_trade_commission_and_bar_indexes();
     test_trade_commission_cash_per_contract();
@@ -381,6 +510,9 @@ int main() {
     test_equity_stats_drawdown_walk();
     test_equity_stats_edges();
     test_flat_strategy_bars_in_market();
+    test_engine_vs_walk_dd_invariant();
+    test_equity_stats_per_bar_oracle();
+    test_equity_stats_non_utc_bucketing();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

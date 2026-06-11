@@ -27,12 +27,14 @@ inline bool match(const TradeC& t, TradeFilter f) {
 // ScopedTimezone guard around the whole walk — per-point guards are a
 // process-global setenv/tzset round trip each (see timezone.hpp).
 inline int month_key_utc(int64_t ts_ms) {
+    // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
     time_t secs = (time_t)(ts_ms / 1000);
     struct tm tb {};
     gmtime_r(&secs, &tb);
     return (tb.tm_year + 1900) * 12 + tb.tm_mon;
 }
 inline int month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
+    // ts >= 0 assumed (pre-epoch truncation shifts month for negative ts)
     time_t secs = (time_t)(ts_ms / 1000);
     struct tm tb {};
     localtime_r(&secs, &tb);
@@ -45,8 +47,8 @@ inline int month_key_local(int64_t ts_ms) {   // call ONLY under ScopedTimezone
 // spec; corpus probe pins it).
 inline void sharpe_sortino(const std::vector<double>& r, double rf_period,
                            double ann, double* sharpe, double* sortino) {
-    *sharpe = std::numeric_limits<double>::quiet_NaN();
-    *sortino = std::numeric_limits<double>::quiet_NaN();
+    *sharpe = kNaN;
+    *sortino = kNaN;
     const size_t n = r.size();
     if (n < 2) return;
     double mean = 0.0;
@@ -155,13 +157,13 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
     if (n <= 0 || curve == nullptr) return e;
 
     e.open_pl = curve[n - 1].open_profit;
-    if (n > 0) e.time_in_market_pct = (double)bars_in_market / (double)n * 100.0;
+    e.time_in_market_pct = (double)bars_in_market / (double)n * 100.0;
 
     // --- Drawdown / runup walk. MUST mirror update_equity_extremes
     // (engine.hpp): trough resets to eq on every new peak. The walk over the
-    // curve reproduces the engine's scalar extremes exactly (integration
-    // invariant in test_metrics). Percent vs the peak (dd) / trough (runup)
-    // in effect when the extreme was hit.
+    // curve reproduces the engine's scalar extremes exactly (verified by the
+    // engine-vs-walk integration test in test_metrics.cpp). Percent vs the
+    // peak (dd) / trough (runup) in effect when the extreme was hit.
     double peak = curve[0].equity, trough = curve[0].equity;
     for (int64_t i = 0; i < n; ++i) {
         const double eq = curve[i].equity;
@@ -195,6 +197,8 @@ pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n
 
     // --- TV-method monthly Sharpe/Sortino: last point of each chart-tz
     // (year,month) bucket; simple returns between consecutive month-ends.
+    // TODO(perf): decompose only at month boundaries (O(months)) instead
+    // of per point; shrinks the non-UTC critical section.
     {
         std::vector<double> month_end;
         const bool utc = chart_tz.empty() || chart_tz == "UTC" || chart_tz == "Etc/UTC";

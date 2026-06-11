@@ -16,6 +16,9 @@ enum class TradeFilter { ALL, LONG, SHORT };
 pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
                                      TradeFilter filter, double initial_capital);
 
+// Acquires the global timezone lock (pine_tz::ScopedTimezone) when chart_tz
+// is non-UTC; MUST NOT be called while already holding a ScopedTimezone
+// (non-recursive mutex -- deadlock). See src/timezone.hpp.
 pf_equity_stats_t compute_equity_stats(const pf_equity_point_t* curve, int64_t n,
                                        double initial_capital,
                                        const std::string& chart_tz,
