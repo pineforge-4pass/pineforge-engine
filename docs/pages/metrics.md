@@ -77,15 +77,30 @@ truncated curve and metrics over the truncated prefix.
 | Surface | Validated against | Result |
 | --- | --- | --- |
 | Trade statistics (counts, PF, percent bases, averages, largest-%, bars) | Real TradingView Strategy Tester export (`composite-4emarsi-integration-01`, 336 trades, All/Long/Short panels) | Match within TV 2-dp rounding; three TV conventions arbitrated and adopted (net return-on-cost `pnl_pct`, independent largest-%, inclusive bar counts) |
+| Commission + slippage economics | Second TV export, same strategy: commission 0.1 % percent + slippage 2 ticks via `strategy_set_override` (`validation-adhoc/.../inputs.json`) | All 672 fill prices bit-exact (slippage rules pinned: market/stop fills, directional, mintick-composed); commission formula `rate·(entry+exit)·qty·pointvalue` exact — residual per-trade deltas fully explained by TV's account-currency conversion (USDT→USD at previous-UTC-day close; 335/336 trades reproduced to the cent) |
+| TV risk panel (Sharpe, Sortino, drawdown/run-up rows, CAGR) | TV xlsx export (Performance + Risk-adjusted performance sheets) | Every panel value reproduced from the engine curve once TV's conventions are applied — see the definition-delta table below |
 | Equity statistics (max DD ±%, Sharpe/Sortino both variants, CAGR, Calmar, recovery) | quantstats 0.0.81 + empyrical-reloaded 0.5.12 (`scripts/crossvalidate_metrics.py --all`) | All 246 corpus strategies ran, 0 skipped, 0 mismatches; worst engine-convention \|rel Δ\| = 1.886e-11 (`pyramid-cash-fractional-commission-01`, sharpe/sortino_bar vs empyrical); 3 degenerate NaN fields (sharpe_tv, zero monthly variance) agree on degeneracy across engine/numpy/empyrical/quantstats; known library-convention deltas labelled in single-strategy mode |
 | Closed-form unit oracles | `tests/test_metrics.cpp` (e.g. monthly Sharpe 19/20, Sortino 114/61 exact rationals) | Bit-level |
 
-Known open deltas: TradingView's "Max run-up (close-to-close)" uses a
-different run-up definition than the engine's trough-reset semantics; TV's
-own Sharpe/Sortino/max-DD panel values have not yet been exported for
-comparison (engine values are library-validated meanwhile). TV-only fields
-not computed: outliers, average run-up/duration, intrabar excursion
-variants.
+### TV risk-panel definition deltas (arbitrated 2026-06-12, all reproduced)
+
+The engine's fields are NOT wrong where they differ from TV's panel — TV
+uses different constructions. Each was reverse-engineered and reproduced
+exactly from the engine curve:
+
+| TV panel row | TV's actual construction | Engine field & difference |
+| --- | --- | --- |
+| Sharpe ratio | Monthly returns of **realized** equity (open profit excluded), account-currency, UTC months, rf 2 %/12, **population** stddev, **not annualized** | `sharpe_tv`: mark-to-market equity, chart-tz months, sample stddev, ×√12 |
+| Sortino ratio | Same series, population downside dev vs rf, not annualized | `sortino_tv` = TV × √12 (same convention otherwise — matches to 4 decimals after de-annualizing) |
+| Max/avg drawdown & run-up "(close-to-close)" | Realized equity sampled at **trade exits only**, split into alternating phases at the global max/min; phase value = endpoint-to-endpoint change (durations in days corroborate) | `max_equity_drawdown/runup`: per-script-bar curve with trough-reset walk |
+| Max DD / run-up "(intrabar)" | Settled realized curve (with entry-commission dips) vs per-trade excursion extremes | closest to the engine's per-bar walk; reproduced exactly from trade MFE/MAE |
+| CAGR | Net over the **configured backtesting range** day count, 365-day year | `cagr`: traded calendar span, 365.25 |
+| All currency rows | Converted to **account currency** at previous-UTC-day close of the quote-currency pair | engine reports symbol currency (USDT here) |
+
+TV-only fields not computed by the engine: outliers, run-up/drawdown
+durations, intrabar excursion variants, account-size/margin rows. The
+reverse-engineering scripts live in
+`validation-adhoc/4emarsi-commission-slippage-ethusdt/`.
 
 ## Consuming from Python
 

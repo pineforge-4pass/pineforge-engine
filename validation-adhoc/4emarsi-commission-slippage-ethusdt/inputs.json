@@ -1,0 +1,14 @@
+{
+  "_comment": "Ad-hoc TV-parity probe: commission + slippage arbitration on BINANCE:ETHUSDT.P 15m (2026-06-12). Run against corpus/validation/composite-4emarsi-integration-01 with --inputs-json. TV chart properties at export time: commission 0.1 %, slippage 2 ticks; syminfo passed at runtime below.",
+  "strategy_overrides": {
+    "commission_type": "percent",
+    "commission_value": 0.1,
+    "slippage": 2
+  },
+  "runtime_overrides": {
+    "timezone": "UTC",
+    "session": "24x7",
+    "mintick": 0.01,
+    "pointvalue": 1.0
+  }
+}
