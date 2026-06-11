@@ -21,7 +21,7 @@ from pathlib import Path
 # Reuse the ctypes struct mirrors + paths from run.py — same engine,
 # same ABI, no need to retype 60 lines of struct fields.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run import BarC, ReportC, SO, OHLCV  # noqa: E402
+from run import BarC, ReportC, SO, OHLCV, check_abi  # noqa: E402
 
 import csv  # noqa: E402
 
@@ -40,6 +40,7 @@ def load_bars():
 
 def load_lib():
     lib = ctypes.CDLL(str(SO))
+    check_abi(lib)
     lib.strategy_create.argtypes = [ctypes.c_char_p]
     lib.strategy_create.restype  = ctypes.c_void_p
     lib.strategy_set_input.argtypes    = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]

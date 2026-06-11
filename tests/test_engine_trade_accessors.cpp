@@ -184,8 +184,10 @@ static void test_open_trade_accessors_flat_then_pyramid() {
         // open profit: (close - entry_price) * qty - commission.
         // close=108, entry=105, qty=1, commission = 105 * 1 * 0.1 / 100 = 0.105
         CHECK(near(s.profit_0, (108.0 - 105.0) * 1.0 - 0.105));
-        // profit_percent: long path (close / entry - 1) * 100
-        CHECK(near(s.profit_pct_0, (108.0 / 105.0 - 1.0) * 100.0));
+        // profit_percent: net return-on-cost (TV convention, 2026-06-12) =
+        // open_trade_profit / entry_cost * 100 = (3 - 0.105) / (105*1) * 100
+        // = 2.895/105*100 ≈ 2.7571% (was gross (108/105-1)*100 ≈ 2.857%).
+        CHECK(near(s.profit_pct_0, (3.0 - 0.105) / 105.0 * 100.0));
         CHECK(near(s.commission_0, 0.105));
     }
 
@@ -261,8 +263,10 @@ static void test_open_trade_short_path() {
     // Entry filled at open=99 short, qty=2, commission=0.
     // profit (short) = (entry - close) * qty - commission = (99 - 92) * 2 = 14
     CHECK(near(strat.profit_at_close, 14.0));
-    // profit_percent (short) = (entry / close - 1) * 100 = (99/92 - 1) * 100 ≈ 7.608
-    CHECK(near(strat.pct_at_close, (99.0 / 92.0 - 1.0) * 100.0, 1e-6));
+    // profit_percent: net return-on-cost (TV convention, 2026-06-12) =
+    // profit / entry_cost * 100 = 14 / (99*2) * 100 ≈ 7.0707%
+    // (was the gross short price-ratio (99/92-1)*100 ≈ 7.6087%).
+    CHECK(near(strat.pct_at_close, 14.0 / (99.0 * 2.0) * 100.0, 1e-6));
 }
 
 // Zero-price guard branches in open_trade_profit_percent /

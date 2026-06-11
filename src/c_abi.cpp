@@ -7,13 +7,18 @@
  *     and the internal C++ types they mirror. If any of these trip,
  *     the C ABI has drifted from the internal representation — fix
  *     BEFORE shipping a .so that consumers depend on.
- *   - The runtime-library-side `extern "C"` symbols (currently just
- *     strategy_set_trace_enabled and pf_version_get). The other
+ *   - The runtime-library-side `extern "C"` symbols (the setters,
+ *     strategy_get_last_error, pf_version_get/pf_version_string,
+ *     pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
+ *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
  *     codegen, not here.
  */
 
+// Include order is load-bearing: pineforge.h BEFORE engine.hpp keeps the
+// per-strategy declarations visible so definitions here are prototype-checked.
+// engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/bar.hpp>
@@ -49,6 +54,12 @@ static_assert(offsetof(pf_trade_t, entry_price) == offsetof(pineforge::TradeC, e
               "pf_trade_t::entry_price offset mismatch");
 static_assert(offsetof(pf_trade_t, qty) == offsetof(pineforge::TradeC, qty),
               "pf_trade_t::qty offset mismatch");
+static_assert(offsetof(pf_trade_t, commission) == offsetof(pineforge::TradeC, commission),
+              "pf_trade_t::commission offset mismatch");
+static_assert(offsetof(pf_trade_t, entry_bar_index) == offsetof(pineforge::TradeC, entry_bar_index),
+              "pf_trade_t::entry_bar_index offset mismatch");
+static_assert(offsetof(pf_trade_t, exit_bar_index) == offsetof(pineforge::TradeC, exit_bar_index),
+              "pf_trade_t::exit_bar_index offset mismatch");
 
 /* ── SecurityDiag layout parity ─────────────────────────────────── */
 /* The middle two fields differ in name (complete_count / partial_count
@@ -85,6 +96,12 @@ static_assert(offsetof(pf_report_t, security_diag) == offsetof(pineforge::Report
               "pf_report_t::security_diag offset mismatch");
 static_assert(offsetof(pf_report_t, trace_names_len) == offsetof(pineforge::ReportC, trace_names_len),
               "pf_report_t::trace_names_len tail offset mismatch");
+static_assert(offsetof(pf_report_t, metrics) == offsetof(pineforge::ReportC, metrics),
+              "pf_report_t::metrics offset mismatch");
+static_assert(offsetof(pf_report_t, equity_curve) == offsetof(pineforge::ReportC, equity_curve),
+              "pf_report_t::equity_curve offset mismatch");
+static_assert(offsetof(pf_report_t, equity_curve_len) == offsetof(pineforge::ReportC, equity_curve_len),
+              "pf_report_t::equity_curve_len offset mismatch");
 
 /* ── Magnifier distribution enum parity ─────────────────────────── */
 
@@ -189,6 +206,9 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
     static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_metadata(
         std::string(key), value);
 }
+
+/* See PF_ABI_VERSION doc in pineforge.h. */
+PF_API int pf_abi_version(void) { return PF_ABI_VERSION; }
 
 /* Return the runtime library version. */
 PF_API pf_version_t pf_version_get(void) {

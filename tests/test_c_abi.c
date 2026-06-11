@@ -35,6 +35,23 @@ int main(void) {
     CHECK(v.patch == PINEFORGE_VERSION_PATCH, "version patch mismatch");
     CHECK(v.commit_sha != NULL,               "commit_sha is NULL");
 
+    /* ── ABI version ────────────────────────────────────────────── */
+    CHECK(pf_abi_version() == PF_ABI_VERSION, "pf_abi_version() != PF_ABI_VERSION");
+
+    /* ── Metrics / equity-point field-access smoke ──────────────── */
+    {
+        pf_metrics_t m;
+        pf_equity_point_t p;
+        memset(&m, 0, sizeof(m));
+        memset(&p, 0, sizeof(p));
+        m.all.num_trades = 42;
+        m.equity.sharpe_tv = 1.5;
+        p.time_ms = 1700000000000LL;
+        CHECK(m.all.num_trades == 42,             "m.all.num_trades roundtrip");
+        CHECK(m.equity.sharpe_tv == 1.5,          "m.equity.sharpe_tv roundtrip");
+        CHECK(p.time_ms == 1700000000000LL,       "p.time_ms roundtrip");
+    }
+
     /* ── Bar field access ────────────────────────────────────────── */
     pf_bar_t bar;
     memset(&bar, 0, sizeof(bar));
@@ -79,8 +96,10 @@ int main(void) {
           "pf_bar_t too small for OHLCV + timestamp");
     CHECK(sizeof(pf_trade_t)          >= 80,
           "pf_trade_t unexpectedly small");
-    CHECK(sizeof(pf_report_t)         >= 80,
-          "pf_report_t unexpectedly small");
+    CHECK(sizeof(pf_report_t)         >= 80 + sizeof(pf_metrics_t)
+                                              + sizeof(pf_equity_point_t*)
+                                              + sizeof(int64_t),
+          "pf_report_t unexpectedly small (must include metrics + equity_curve ptr + len)");
     CHECK(sizeof(pf_security_diag_t)  == 4 + 8 + 8 + 8 + /* possible padding */ 0
           || sizeof(pf_security_diag_t) == 32,
           "pf_security_diag_t unexpected size");

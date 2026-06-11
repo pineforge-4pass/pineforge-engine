@@ -33,6 +33,8 @@
  * the canonical Release (-DNDEBUG) build where bare assert() is a no-op.
  */
 
+// Include order is load-bearing: pineforge.h BEFORE engine.hpp keeps the
+// per-strategy declarations visible (engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS).
 #include <pineforge/pineforge.h>   // the C ABI under test (extern "C")
 #include <pineforge/engine.hpp>    // BacktestEngine (to mint a valid handle)
 #include <pineforge/bar.hpp>

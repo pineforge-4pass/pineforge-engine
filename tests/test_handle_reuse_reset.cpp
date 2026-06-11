@@ -65,6 +65,7 @@ public:
     // reuse test isolates ENGINE state reset, not subclass member reset.
     void reset_strategy_state() { prev_close_ = std::numeric_limits<double>::quiet_NaN(); }
     double net() const { return net_profit_sum_; }
+    const std::vector<pf_equity_point_t>& curve() const { return equity_curve_; }
 };
 
 std::vector<Bar> make_feed(int n) {
@@ -115,6 +116,13 @@ static void test_reused_handle_equals_fresh() {
     CHECK(reused.trade_count() == fresh.trade_count());  // RED before reset_run_state()
     CHECK(reused.net() == fresh.net());
     CHECK(trades_equal(reused, fresh));
+
+    // Equity curve must reset between runs: reused-handle run 2 == fresh run.
+    CHECK(fresh.curve().size() == reused.curve().size());
+    for (size_t i = 0; i < fresh.curve().size() && i < reused.curve().size(); ++i) {
+        CHECK(fresh.curve()[i].time_ms == reused.curve()[i].time_ms);
+        CHECK(fresh.curve()[i].equity  == reused.curve()[i].equity);
+    }
 }
 
 static void test_reused_handle_script_tf_overload() {
@@ -132,6 +140,13 @@ static void test_reused_handle_script_tf_overload() {
     CHECK(reused.trade_count() == fresh.trade_count());
     CHECK(reused.net() == fresh.net());
     CHECK(trades_equal(reused, fresh));
+
+    // Equity curve must reset between runs on the TF overload path too.
+    CHECK(fresh.curve().size() == reused.curve().size());
+    for (size_t i = 0; i < fresh.curve().size() && i < reused.curve().size(); ++i) {
+        CHECK(fresh.curve()[i].time_ms == reused.curve()[i].time_ms);
+        CHECK(fresh.curve()[i].equity  == reused.curve()[i].equity);
+    }
 }
 
 int main() {

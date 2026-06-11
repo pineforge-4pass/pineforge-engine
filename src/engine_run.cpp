@@ -79,6 +79,9 @@ void BacktestEngine::reset_run_state() {
     max_contracts_held_all_ = 0.0;
     max_contracts_held_long_ = 0.0;
     max_contracts_held_short_ = 0.0;
+    equity_curve_.clear();           // retain capacity (handle-reuse sweep pattern)
+    bars_in_market_ = 0;
+    first_bar_open_ = std::numeric_limits<double>::quiet_NaN();
 
     // Risk halt latch + day trackers (one-way halt must not survive a rerun).
     risk_halted_ = false;
@@ -133,6 +136,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
     }
     try {
     reset_run_state();
+    equity_curve_.reserve((size_t)std::max(n, 0));
 
     std::string detected_tf = "";
     if (n >= 2 && bars != nullptr) {
@@ -171,6 +175,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
         pending_close_qty_in_bar_ = 0.0;
         dispatch_bar();
         update_equity_extremes();
+        record_equity_point(current_bar_.timestamp);  // ts not mutated on this path
         prev_bar_timestamp_ = current_bar_.timestamp;
     }
     } catch (const std::exception& e) {
@@ -353,6 +358,10 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     int expected_script_bars =
         count_expected_script_bars(input_bars, n_input, needs_aggregation);
     last_bar_index_ = expected_script_bars - 1;
+    // reset_run_state() already ran above — reserve AFTER it so the capacity
+    // hint isn't wiped (clear() retains capacity but order still matters for
+    // any future reset that releases).
+    equity_curve_.reserve((size_t)std::max(expected_script_bars, 0));
 
     validate_security_timeframes(effective_input_tf);
 
@@ -465,6 +474,7 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
         dispatch_bar();
         prev_in_session_ = session_ismarket_;
         update_equity_extremes();
+        record_equity_point(current_bar_.timestamp);  // ts not mutated on this path
         prev_bar_timestamp_ = current_bar_.timestamp;
     }
 }
@@ -506,6 +516,20 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
         }
 
         if (ab.is_complete) {
+            // Script-bar label for the equity curve: ab.bar.timestamp — the
+            // aggregator's first-present sub-bar ts of the COMPLETED bucket.
+            // The aggregator is fed identically with magnifier on and off, so
+            // this label is magnifier-invariant by construction. Captured
+            // here because run_magnified_bar overwrites
+            // current_bar_.timestamp with each sub-bar's ts.
+            //
+            // Deliberately NOT group_sub_bars.front().timestamp: when a
+            // bucket completes via the boundary path (irregular/partial first
+            // bucket), the boundary-triggering input bar is walked with the
+            // PREVIOUS script bar's group but belongs to the new aggregator
+            // bucket, so the group front lags ab.bar.timestamp by one input
+            // bar and the on/off curves would disagree on that label.
+            const int64_t script_bar_ts = ab.bar.timestamp;
             bar_index_ = script_bar_index++;
             emitted_script_bars++;
             barstate_islast_ = (emitted_script_bars == expected_script_bars);
@@ -556,6 +580,7 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                 prev_in_session_ = session_ismarket_;
             }
             update_equity_extremes();
+            record_equity_point(script_bar_ts);
             prev_bar_timestamp_ = current_bar_.timestamp;
         }
     }

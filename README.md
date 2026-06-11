@@ -299,7 +299,7 @@ int main(void) {
 
 ## Public C ABI (the stability surface)
 
-`<pineforge/pineforge.h>` is the **single canonical consumer header**. Every compiled PineForge strategy `.so` exports exactly the 10 symbols declared there:
+`<pineforge/pineforge.h>` is the **single canonical consumer header**. Every compiled PineForge strategy `.so` exports the symbols declared there:
 
 
 | Symbol                                   | Role                                         |
@@ -314,9 +314,10 @@ int main(void) {
 | `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier             |
 | `strategy_set_trace_enabled`             | Toggle per-bar trace recording               |
 | `pf_version_get`                         | Runtime version                              |
+| `pf_abi_version`                         | Struct-layout version (`PF_ABI_VERSION`)     |
 
 
-POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`) and the `pf_magnifier_distribution_t` enum complete the surface.
+POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, and — since ABI v2 — `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`) and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 (`PF_ABI_VERSION == 2`, exported as `pf_abi_version()`) appends computed trading metrics and a per-script-bar equity curve to `pf_report_t`; callers must verify the version before running since the report struct is caller-allocated.
 
 **Stability guarantee:** within the same `PINEFORGE_VERSION_MAJOR`, struct layouts and `extern "C"` signatures are append-only. New fields may be appended; existing fields are never reordered, removed, or retyped. New functions may be added; existing functions are never removed or signature-changed. Compile-time `static_assert`s in `src/c_abi.cpp` pin the layouts against drift.
 

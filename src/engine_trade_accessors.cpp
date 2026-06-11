@@ -36,10 +36,15 @@ double BacktestEngine::open_trade_profit_percent(int idx) const {
         return na<double>();
     const PyramidEntry& pe = pyramid_entries_[(size_t)idx];
     if (pe.price <= 0.0) return na<double>();
-    bool is_long = (position_side_ == PositionSide::LONG);
-    double px = current_bar_.close;
-    if (is_long) return (px / pe.price - 1.0) * 100.0;
-    return (pe.price / px - 1.0) * 100.0;
+    // TV net return-on-cost convention (same shape as the closed-trade
+    // pnl_pct fixed 2026-06-12 in emit_close_trade): the profit value this
+    // accessor pairs with — open_trade_profit, which is net of the
+    // entry-leg commission — as a percent of entry cost
+    // (entry_price * qty * pointvalue). No new commission handling is
+    // invented here; the percent just mirrors open_trade_profit.
+    const double entry_cost = pe.price * pe.qty * syminfo_.pointvalue;
+    if (!(entry_cost > 0.0)) return na<double>();
+    return open_trade_profit(idx) / entry_cost * 100.0;
 }
 
 double BacktestEngine::open_trade_commission(int idx) const {

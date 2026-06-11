@@ -68,6 +68,7 @@ set(TEST_SOURCES
     test_ta_voltrend_edge
     test_timezone_concurrency
     test_pointvalue
+    test_metrics
 )
 
 find_package(Threads REQUIRED)

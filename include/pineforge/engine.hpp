@@ -14,6 +14,15 @@
 #include "timeframe.hpp"
 #include "magnifier.hpp"
 #include "session_time.hpp"
+// Suppress per-strategy function declarations (strategy_create, run_backtest,
+// etc.) whose pf_*_t parameter types conflict with the internal C++ types
+// used in codegen-emitted extern "C" blocks that include this header.
+// NOTE: this macro leaks into every TU that includes engine.hpp; include
+// pineforge.h FIRST in any TU that needs the per-strategy declarations
+// (see src/c_abi.cpp).
+#define PINEFORGE_NO_STRATEGY_DECLS
+// Angle-bracket form is the installed public path (deliberate).
+#include <pineforge/pineforge.h>
 
 namespace pineforge {
 
@@ -63,6 +72,7 @@ struct Trade {
     std::string exit_id;
     double max_runup = 0.0;
     double max_drawdown = 0.0;
+    double commission = 0.0;
 };
 
 struct TradeC {
@@ -79,6 +89,9 @@ struct TradeC {
     double max_runup;
     double max_drawdown;
     double qty;
+    double commission;           // mirrors pf_trade_t tail; semantics documented in pineforge.h
+    int32_t entry_bar_index;
+    int32_t exit_bar_index;
 };
 
 struct SecurityDiagC {
@@ -133,6 +146,9 @@ struct ReportC {
     int trace_len;
     const char** trace_names;
     int trace_names_len;
+    pf_metrics_t metrics;
+    pf_equity_point_t* equity_curve;
+    int64_t equity_curve_len;
 };
 
 enum class OrderType { MARKET, ENTRY, EXIT, RAW_ORDER };
@@ -492,6 +508,11 @@ protected:
     double max_drawdown_ = 0.0;  // maximum drawdown (positive number)
     double max_runup_ = 0.0;     // maximum runup (positive number)
     double min_equity_ = 0.0;    // trough equity for runup
+
+    // --- Per-script-bar equity curve (metrics + pf_report_t exposure) ---
+    std::vector<pf_equity_point_t> equity_curve_;
+    int64_t bars_in_market_ = 0;     // script bars with an open position at close
+    double first_bar_open_ = std::numeric_limits<double>::quiet_NaN();  // buy&hold basis
 
     // --- Position-size extremes (strategy.max_contracts_held_*) ---
     double max_contracts_held_all_ = 0.0;
@@ -940,6 +961,8 @@ protected:
     virtual void finalize_bar() {}
 
     // --- Equity extremes update (called after each on_bar) ---
+    // NOTE: the dd/runup walk in src/engine_metrics.cpp (compute_equity_stats)
+    // MUST mirror this trough-reset logic; keep in lockstep.
     void update_equity_extremes() {
         double eq = initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close);
         if (eq > max_equity_) {
@@ -965,6 +988,20 @@ protected:
         }
     }
 
+    // Record one equity point per SCRIPT bar. ``script_bar_ts`` must be the
+    // script-bar open timestamp captured BEFORE dispatch — current_bar_.timestamp
+    // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
+    // make the curve differ between magnifier on/off.
+    void record_equity_point(int64_t script_bar_ts) {
+        if (equity_curve_.empty()) first_bar_open_ = current_bar_.open;
+        pf_equity_point_t p;
+        p.time_ms = script_bar_ts;
+        p.open_profit = open_profit(current_bar_.close);
+        p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
+        equity_curve_.push_back(p);
+        if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
+    }
+
     // --- Trade history accessors (for strategy.closedtrades.*) ---
     double closed_trade_profit(int index) const {
         if (index >= 0 && index < (int)trades_.size())
@@ -977,8 +1014,7 @@ protected:
     }
     double closed_trade_commission(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        const Trade& t = trades_[idx];
-        return calc_commission(t.entry_price, t.qty) + calc_commission(t.exit_price, t.qty);
+        return trades_[idx].commission;
     }
     int closed_trade_entry_bar_index(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return na<int>();
@@ -1271,6 +1307,7 @@ private:
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;
+    void fill_metrics_section(ReportC* out) const;
     void fill_security_diag_section(ReportC* out) const;
     void fill_trace_section(ReportC* out) const;
 

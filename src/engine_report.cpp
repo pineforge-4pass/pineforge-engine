@@ -4,6 +4,8 @@
 
 #include "engine_internal.hpp"
 
+#include <pineforge/metrics.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -48,6 +50,8 @@ void BacktestEngine::fill_report(ReportC* out) const {
     out->needs_aggregation = diag_needs_aggregation_ ? 1 : 0;
     out->bar_magnifier_enabled = bar_magnifier_enabled_ ? 1 : 0;
 
+    fill_metrics_section(out);  // reads out->trades — keep after fill_trades_section
+
     fill_security_diag_section(out);
     fill_trace_section(out);
 }
@@ -77,6 +81,9 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].max_runup = t.max_runup;
             out->trades[i].max_drawdown = t.max_drawdown;
             out->trades[i].qty = t.qty;
+            out->trades[i].commission = t.commission;
+            out->trades[i].entry_bar_index = t.entry_bar_index;
+            out->trades[i].exit_bar_index = t.exit_bar_index;
             net_profit += t.pnl;
         }
 
@@ -85,6 +92,36 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         out->trades = nullptr;
         out->net_profit = 0.0;
     }
+}
+
+
+// Copy the equity curve out and compute all metric blocks. Must run AFTER
+// fill_trades_section (reads out->trades). Owns the curve allocation;
+// freed by free_report (which expects new pf_equity_point_t[n]).
+// equity_curve_len derives from the vector size, NOT script_bars_processed:
+// an exception mid-run can truncate the curve (metrics then describe the
+// truncated prefix; consumers must check strategy_get_last_error).
+// No ScopedTimezone may be held here: compute_equity_stats takes the
+// non-recursive global tz lock when chart_timezone_ is non-UTC.
+void BacktestEngine::fill_metrics_section(ReportC* out) const {
+    const int64_t n = (int64_t)equity_curve_.size();
+    out->equity_curve_len = n;
+    if (n > 0) {
+        out->equity_curve = new pf_equity_point_t[n];
+        std::copy(equity_curve_.begin(), equity_curve_.end(), out->equity_curve);
+    } else {
+        out->equity_curve = nullptr;
+    }
+    using metrics::TradeFilter;
+    out->metrics.all = metrics::compute_trade_stats(
+        out->trades, out->trades_len, TradeFilter::ALL, initial_capital_);
+    out->metrics.longs = metrics::compute_trade_stats(
+        out->trades, out->trades_len, TradeFilter::LONG, initial_capital_);
+    out->metrics.shorts = metrics::compute_trade_stats(
+        out->trades, out->trades_len, TradeFilter::SHORT, initial_capital_);
+    out->metrics.equity = metrics::compute_equity_stats(
+        out->equity_curve, n, initial_capital_, chart_timezone_,
+        first_bar_open_, current_bar_.close, bars_in_market_, net_profit_sum_);
 }
 
 
@@ -169,6 +206,13 @@ void BacktestEngine::free_report(ReportC* report) {
         delete[] report->trace_names;
         report->trace_names = nullptr;
         report->trace_names_len = 0;
+    }
+    if (report && report->equity_curve) {
+        // Allocation site (fill_metrics_section) must use
+        // `new pf_equity_point_t[n]` to match this delete[].
+        delete[] report->equity_curve;
+        report->equity_curve = nullptr;
+        report->equity_curve_len = 0;
     }
 }
 
