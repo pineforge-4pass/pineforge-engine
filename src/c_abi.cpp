@@ -7,8 +7,10 @@
  *     and the internal C++ types they mirror. If any of these trip,
  *     the C ABI has drifted from the internal representation — fix
  *     BEFORE shipping a .so that consumers depend on.
- *   - The runtime-library-side `extern "C"` symbols (currently just
- *     strategy_set_trace_enabled and pf_version_get). The other
+ *   - The runtime-library-side `extern "C"` symbols (the setters,
+ *     strategy_get_last_error, pf_version_get/pf_version_string,
+ *     pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
+ *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
  *     codegen, not here.
