@@ -41,6 +41,13 @@ consumption.
   **[Pure C](@ref examples_c)** or **[Rust](@ref examples_rust)** worked
   examples.
 
+- <b class="tab-title">I'm analysing backtest results</b>
+  Read the **[Trading metrics reference](@ref metrics)** — every
+  `pf_metrics_t` field with units, NaN rules, and TV / quant-library
+  validation status — alongside the
+  **[Report schema](@ref report_schema)** for the surrounding
+  `pf_report_t` layout and the equity curve.
+
 - <b class="tab-title">I'm a transpiler / backend author</b>
   Read **[Coverage](@ref coverage)** — the complete map of which Pine v6
   surface this runtime owns versus what your codegen has to emit inline.
