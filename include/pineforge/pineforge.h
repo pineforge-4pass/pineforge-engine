@@ -65,6 +65,15 @@
   #define PF_API
 #endif
 
+/** Monotonic ABI version of pf_report_t / pf_trade_t layout. Bumped
+ *  whenever a caller-allocated struct grows. Consumers MUST verify
+ *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest —
+ *  pf_report_t is caller-allocated, so a layout mismatch is silent
+ *  stack corruption, not an error. Value 2 = first versioned layout
+ *  (metrics + equity curve); .so files predating this macro have no
+ *  pf_abi_version symbol — treat dlsym failure as version 1. */
+#define PF_ABI_VERSION 2
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -121,7 +130,79 @@ typedef struct pf_trade_s {
     double  max_runup;      /**< Peak favorable price travel during the trade ($/unit qty). */
     double  max_drawdown;   /**< Peak adverse  price travel during the trade ($/unit qty). */
     double  qty;            /**< Filled quantity. */
+    double  commission;     /**< Entry+exit commission actually deducted from pnl
+                             *   (account currency). pnl is already net of this. */
+    int32_t entry_bar_index;/**< Script-bar index of the entry fill (0-based). */
+    int32_t exit_bar_index; /**< Script-bar index of the exit fill (0-based). */
 } pf_trade_t;
+
+/** Trade-level statistics block — computed once each for all / long / short.
+ *
+ *  Loss-side fields (`gross_loss`, `avg_loss`, `largest_loss`) are
+ *  **positive magnitudes** (absolute values of the underlying negative PnL).
+ *
+ *  NaN conventions (doxygen per-field):
+ *  - `profit_factor`: NaN when `gross_loss` is zero.
+ *  - `ratio_avg_win_avg_loss`: NaN when either side has zero trades.
+ *  - Per-trade averages (`avg_win`, `avg_loss`, etc.): NaN when the
+ *    denominator count is zero.
+ *  - `expectancy`: NaN when `num_trades` is zero. */
+typedef struct pf_trade_stats_s {
+    int32_t num_trades, num_wins, num_losses;
+    int32_t num_even;                  /**< Zero-PnL trades; fills padding hole.
+                                        *   Invariant: num_trades == num_wins + num_losses + num_even. */
+    double  percent_profitable;
+    double  net_profit,   net_profit_pct;
+    double  gross_profit, gross_profit_pct;
+    double  gross_loss,   gross_loss_pct;
+    double  profit_factor;
+    double  avg_trade, avg_trade_pct;
+    double  avg_win,   avg_win_pct;
+    double  avg_loss,  avg_loss_pct;
+    double  ratio_avg_win_avg_loss;
+    double  largest_win,  largest_win_pct;
+    double  largest_loss, largest_loss_pct;
+    double  commission_paid;
+    double  expectancy;
+    int32_t max_consecutive_wins, max_consecutive_losses;
+    double  avg_bars_in_trade, avg_bars_in_wins, avg_bars_in_losses;
+} pf_trade_stats_t;
+
+/** Equity-curve-derived statistics (all-trades only, like TV).
+ *
+ *  NaN conventions:
+ *  - `sharpe_tv` / `sortino_tv`: NaN when < 2 monthly returns or zero
+ *    standard / downside deviation.
+ *  - `sharpe_bar` / `sortino_bar`: NaN when < 2 bar returns or zero
+ *    deviation.
+ *  - `calmar`: NaN when `max_equity_drawdown_pct` is zero.
+ *  - `recovery_factor`: NaN when `max_equity_drawdown` is zero. */
+typedef struct pf_equity_stats_s {
+    double max_equity_drawdown, max_equity_drawdown_pct;
+    double max_equity_runup,    max_equity_runup_pct;
+    double buy_hold_return,     buy_hold_return_pct;
+    double sharpe_tv,  sortino_tv;     /**< Monthly resample, RF = 2%/yr. */
+    double sharpe_bar, sortino_bar;    /**< Per-bar, density-annualized. */
+    double cagr, calmar, recovery_factor, time_in_market_pct;
+    double open_pl;                    /**< Open profit at final bar. */
+} pf_equity_stats_t;
+
+/** Composite metrics container: trade stats (all / long / short) +
+ *  equity-curve stats. */
+typedef struct pf_metrics_s {
+    pf_trade_stats_t  all, longs, shorts;
+    pf_equity_stats_t equity;
+} pf_metrics_t;
+
+/** Single per-script-bar equity point.
+ *
+ *  `time_ms` is the script-bar **open** timestamp (Unix ms).
+ *  `equity` = `initial_capital` + `net_profit` + `open_profit` at bar close. */
+typedef struct pf_equity_point_s {
+    int64_t time_ms;       /**< Script-bar OPEN timestamp (Unix ms). */
+    double  equity;        /**< initial_capital + net_profit + open_profit. */
+    double  open_profit;   /**< Mark-to-market open P&L at bar close. */
+} pf_equity_point_t;
 
 /** Per-`request.security()` site diagnostic counters.
  *
@@ -151,10 +232,11 @@ typedef struct pf_trace_entry_s {
  *
  *  ### Ownership and lifetime
  *  The struct itself is caller-owned (typically stack). The embedded
- *  arrays (`trades`, `security_diag`, `trace`, `trace_names`) are
- *  heap-allocated by the runtime; the caller must invoke #report_free
- *  exactly once on each filled report. `trace_names` string pointers
- *  remain owned by the strategy handle until #strategy_free. */
+ *  arrays (`trades`, `security_diag`, `trace`, `trace_names`,
+ *  `equity_curve`) are heap-allocated by the runtime; the caller must
+ *  invoke #report_free exactly once on each filled report.
+ *  `trace_names` string pointers remain owned by the strategy handle
+ *  until #strategy_free. */
 
 typedef struct pf_report_s {
     /* Trades */
@@ -192,6 +274,18 @@ typedef struct pf_report_s {
     int                 trace_len;          /**< Length of #trace. */
     const char**        trace_names;        /**< Names indexed by pf_trace_entry_t::name_id. */
     int                 trace_names_len;    /**< Length of #trace_names. */
+
+    /* Computed trading metrics. Trade-based blocks reported for all /
+     * long-only / short-only; equity-based stats are all-trades only.
+     * Loss-side fields are positive magnitudes. Undefined values are NaN
+     * (see per-field docs). */
+    pf_metrics_t        metrics;
+    /* Per-script-bar equity curve. time_ms is the script-bar OPEN
+     * timestamp; equity = initial_capital + net_profit + open_profit at
+     * bar close. Heap-allocated; freed by report_free. len ==
+     * script_bars_processed. NOTE int64_t length (ctypes: c_int64). */
+    pf_equity_point_t*  equity_curve;
+    int64_t             equity_curve_len;
 } pf_report_t;
 
 /** @} */ /* end of pf_types */
@@ -216,7 +310,16 @@ typedef void* pf_strategy_t;
 /** @defgroup pf_lifecycle Strategy lifecycle
  *  @brief Create, run, and destroy a compiled strategy instance.
  *  @{
+ *
+ *  NOTE: Per-strategy symbols (strategy_create, run_backtest, etc.) are
+ *  emitted by the codegen with internal C++ types (ReportC, Bar) that are
+ *  layout-compatible but type-distinct from the public C PODs below.
+ *  Guard with PINEFORGE_NO_STRATEGY_DECLS so engine.hpp can include this
+ *  header for its POD types without conflicting with per-strategy TU
+ *  definitions.
  */
+
+#ifndef PINEFORGE_NO_STRATEGY_DECLS
 
 /** Allocate a new strategy instance.
  *
@@ -308,6 +411,8 @@ PF_API void strategy_set_override(pf_strategy_t s,
  *  #run_backtest_full. */
 PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t s,
                                                    int on);
+
+#endif /* PINEFORGE_NO_STRATEGY_DECLS */
 
 /* ───────────────────────────────────────────────────────────────────
  * RUNTIME LIBRARY EXPORTS — implemented in libruntime
@@ -414,6 +519,9 @@ typedef struct pf_version_s {
 
 /** @return Linked runtime version. */
 PF_API pf_version_t pf_version_get(void);
+
+/** @return Monotonic ABI version (see #PF_ABI_VERSION). */
+PF_API int pf_abi_version(void);
 
 /** Full git-derived version descriptor.
  *

@@ -14,6 +14,11 @@
 #include "timeframe.hpp"
 #include "magnifier.hpp"
 #include "session_time.hpp"
+// Suppress per-strategy function declarations (strategy_create, run_backtest,
+// etc.) whose pf_*_t parameter types conflict with the internal C++ types
+// used in codegen-emitted extern "C" blocks that include this header.
+#define PINEFORGE_NO_STRATEGY_DECLS
+#include <pineforge/pineforge.h>
 
 namespace pineforge {
 
@@ -63,6 +68,7 @@ struct Trade {
     std::string exit_id;
     double max_runup = 0.0;
     double max_drawdown = 0.0;
+    double commission = 0.0;
 };
 
 struct TradeC {
@@ -79,6 +85,9 @@ struct TradeC {
     double max_runup;
     double max_drawdown;
     double qty;
+    double commission;
+    int32_t entry_bar_index;
+    int32_t exit_bar_index;
 };
 
 struct SecurityDiagC {
@@ -133,6 +142,9 @@ struct ReportC {
     int trace_len;
     const char** trace_names;
     int trace_names_len;
+    pf_metrics_t metrics;
+    pf_equity_point_t* equity_curve;
+    int64_t equity_curve_len;
 };
 
 enum class OrderType { MARKET, ENTRY, EXIT, RAW_ORDER };

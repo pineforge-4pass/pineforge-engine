@@ -48,6 +48,11 @@ void BacktestEngine::fill_report(ReportC* out) const {
     out->needs_aggregation = diag_needs_aggregation_ ? 1 : 0;
     out->bar_magnifier_enabled = bar_magnifier_enabled_ ? 1 : 0;
 
+    // Metrics + curve are zero/empty until engine_metrics lands (plan Task 6).
+    out->metrics = pf_metrics_t{};
+    out->equity_curve = nullptr;
+    out->equity_curve_len = 0;
+
     fill_security_diag_section(out);
     fill_trace_section(out);
 }
@@ -77,6 +82,9 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].max_runup = t.max_runup;
             out->trades[i].max_drawdown = t.max_drawdown;
             out->trades[i].qty = t.qty;
+            out->trades[i].commission = t.commission;
+            out->trades[i].entry_bar_index = t.entry_bar_index;
+            out->trades[i].exit_bar_index = t.exit_bar_index;
             net_profit += t.pnl;
         }
 
@@ -169,6 +177,11 @@ void BacktestEngine::free_report(ReportC* report) {
         delete[] report->trace_names;
         report->trace_names = nullptr;
         report->trace_names_len = 0;
+    }
+    if (report && report->equity_curve) {
+        delete[] report->equity_curve;
+        report->equity_curve = nullptr;
+        report->equity_curve_len = 0;
     }
 }
 

@@ -49,6 +49,12 @@ static_assert(offsetof(pf_trade_t, entry_price) == offsetof(pineforge::TradeC, e
               "pf_trade_t::entry_price offset mismatch");
 static_assert(offsetof(pf_trade_t, qty) == offsetof(pineforge::TradeC, qty),
               "pf_trade_t::qty offset mismatch");
+static_assert(offsetof(pf_trade_t, commission) == offsetof(pineforge::TradeC, commission),
+              "pf_trade_t::commission offset mismatch");
+static_assert(offsetof(pf_trade_t, entry_bar_index) == offsetof(pineforge::TradeC, entry_bar_index),
+              "pf_trade_t::entry_bar_index offset mismatch");
+static_assert(offsetof(pf_trade_t, exit_bar_index) == offsetof(pineforge::TradeC, exit_bar_index),
+              "pf_trade_t::exit_bar_index offset mismatch");
 
 /* ── SecurityDiag layout parity ─────────────────────────────────── */
 /* The middle two fields differ in name (complete_count / partial_count
@@ -85,6 +91,12 @@ static_assert(offsetof(pf_report_t, security_diag) == offsetof(pineforge::Report
               "pf_report_t::security_diag offset mismatch");
 static_assert(offsetof(pf_report_t, trace_names_len) == offsetof(pineforge::ReportC, trace_names_len),
               "pf_report_t::trace_names_len tail offset mismatch");
+static_assert(offsetof(pf_report_t, metrics) == offsetof(pineforge::ReportC, metrics),
+              "pf_report_t::metrics offset mismatch");
+static_assert(offsetof(pf_report_t, equity_curve) == offsetof(pineforge::ReportC, equity_curve),
+              "pf_report_t::equity_curve offset mismatch");
+static_assert(offsetof(pf_report_t, equity_curve_len) == offsetof(pineforge::ReportC, equity_curve_len),
+              "pf_report_t::equity_curve_len offset mismatch");
 
 /* ── Magnifier distribution enum parity ─────────────────────────── */
 
@@ -189,6 +201,9 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
     static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_metadata(
         std::string(key), value);
 }
+
+/* See PF_ABI_VERSION doc in pineforge.h. */
+PF_API int pf_abi_version(void) { return PF_ABI_VERSION; }
 
 /* Return the runtime library version. */
 PF_API pf_version_t pf_version_get(void) {
