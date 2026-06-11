@@ -129,7 +129,7 @@ static void test_equity_curve_basic() {
     CHECK(std::fabs(last.equity - (1'000'000.0 + rep.net_profit + last.open_profit)) < 1e-9);
     for (size_t i = 1; i < s.curve().size(); ++i)
         CHECK(s.curve()[i].time_ms > s.curve()[i - 1].time_ms);
-    // report-side curve (Task 6): fill_report copies the internal curve out
+    // report-side curve: fill_report copies the internal curve out
     CHECK(rep.equity_curve_len == (int64_t)s.curve().size());
     CHECK(rep.equity_curve != nullptr);
     BacktestEngine::free_report(&rep);
@@ -516,17 +516,39 @@ static void test_report_metrics_integration() {
     CHECK(std::fabs(m.all.net_profit - rep.net_profit) < 1e-9);
     CHECK(m.all.num_trades == m.longs.num_trades + m.shorts.num_trades);
     CHECK(m.all.num_trades == m.all.num_wins + m.all.num_losses + m.all.num_even);
+    CHECK(std::fabs(m.all.net_profit - (m.longs.net_profit + m.shorts.net_profit)) < 1e-9);
     CHECK(rep.equity_curve_len == (int64_t)s.curve().size());
     CHECK(rep.equity_curve != nullptr);
-    const pf_equity_point_t& last = rep.equity_curve[rep.equity_curve_len - 1];
-    CHECK(std::fabs(last.equity - (1'000'000.0 + rep.net_profit + m.equity.open_pl)) < 1e-9);
-    // curve dd walk must reproduce the engine's internal scalar extreme
-    CHECK(std::fabs(m.equity.max_equity_drawdown - s.max_dd()) < 1e-9);
-    // report curve must be a faithful copy of the internal one
-    for (int64_t i = 0; i < rep.equity_curve_len; ++i) {
-        CHECK(rep.equity_curve[i].time_ms == s.curve()[(size_t)i].time_ms);
-        CHECK(rep.equity_curve[i].equity  == s.curve()[(size_t)i].equity);
+    // Guarded so a regression CHECK-fails (above) instead of segfaulting here.
+    if (rep.equity_curve != nullptr && rep.equity_curve_len > 0) {
+        const pf_equity_point_t& last = rep.equity_curve[rep.equity_curve_len - 1];
+        CHECK(std::fabs(last.equity - (1'000'000.0 + rep.net_profit + m.equity.open_pl)) < 1e-9);
+        // curve dd walk must reproduce the engine's internal scalar extreme
+        CHECK(std::fabs(m.equity.max_equity_drawdown - s.max_dd()) < 1e-9);
+        // report curve must be a faithful copy of the internal one
+        for (int64_t i = 0; i < rep.equity_curve_len; ++i) {
+            CHECK(rep.equity_curve[i].time_ms == s.curve()[(size_t)i].time_ms);
+            CHECK(rep.equity_curve[i].equity  == s.curve()[(size_t)i].equity);
+        }
     }
+    BacktestEngine::free_report(&rep);
+}
+
+// ---------- Empty-run fill_report (zero bars) -------------------------------
+// run(nullptr, 0) is safe: engine_run.cpp guards the bar loop on n > 0 and
+// reset_run_state() still executes, so fill_report sees an empty curve and
+// zero trades. Pins the nullptr/0/NaN conventions of the empty report.
+
+static void test_report_empty_run() {
+    std::printf("report metrics: empty run (n=0 bars)\n");
+    MomoFlip s;
+    s.run(nullptr, 0);
+    ReportC rep{};
+    s.fill_report(&rep);
+    CHECK(rep.equity_curve == nullptr);
+    CHECK(rep.equity_curve_len == 0);
+    CHECK(std::isnan(rep.metrics.equity.sharpe_tv));
+    CHECK(rep.metrics.all.num_trades == 0);
     BacktestEngine::free_report(&rep);
 }
 
@@ -545,6 +567,7 @@ int main() {
     test_equity_stats_per_bar_oracle();
     test_equity_stats_non_utc_bucketing();
     test_report_metrics_integration();
+    test_report_empty_run();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

@@ -50,7 +50,7 @@ void BacktestEngine::fill_report(ReportC* out) const {
     out->needs_aggregation = diag_needs_aggregation_ ? 1 : 0;
     out->bar_magnifier_enabled = bar_magnifier_enabled_ ? 1 : 0;
 
-    fill_metrics_section(out);
+    fill_metrics_section(out);  // reads out->trades — keep after fill_trades_section
 
     fill_security_diag_section(out);
     fill_trace_section(out);
@@ -96,7 +96,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
 
 
 // Copy the equity curve out and compute all metric blocks. Must run AFTER
-// fill_trades_section (consumes out->trades). Owns the curve allocation;
+// fill_trades_section (reads out->trades). Owns the curve allocation;
 // freed by free_report (which expects new pf_equity_point_t[n]).
 // equity_curve_len derives from the vector size, NOT script_bars_processed:
 // an exception mid-run can truncate the curve (metrics then describe the
@@ -208,7 +208,7 @@ void BacktestEngine::free_report(ReportC* report) {
         report->trace_names_len = 0;
     }
     if (report && report->equity_curve) {
-        // Allocation site (fill_metrics_section, plan Task 6) must use
+        // Allocation site (fill_metrics_section) must use
         // `new pf_equity_point_t[n]` to match this delete[].
         delete[] report->equity_curve;
         report->equity_curve = nullptr;
