@@ -60,6 +60,7 @@ _VALIDATION_META_KEYS = frozenset({
     "tv_trades_csv_tz",
     "tv_trades_csv",
     "runtime_overrides",
+    "strategy_overrides",
     "validation_overrides",
     "ohlcv_csv",
     "ohlcv_start_ms",
@@ -277,6 +278,9 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
     runtime_overrides = params.get("runtime_overrides") or {}
     if not isinstance(runtime_overrides, dict):
         runtime_overrides = {}
+    strategy_overrides = params.get("strategy_overrides") or {}
+    if not isinstance(strategy_overrides, dict):
+        strategy_overrides = {}
     try:
         magnifier_samples = int(runtime_overrides.get("magnifier_samples", 4) or 4)
     except (TypeError, ValueError):
@@ -292,6 +296,7 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
             return None
 
     kwargs = dict(
+        strategy_overrides=strategy_overrides or None,
         chart_timezone=chart_tz,
         syminfo_timezone=str(runtime_overrides.get("timezone") or "") or None,
         syminfo_session=str(runtime_overrides.get("session") or "") or None,
@@ -345,6 +350,8 @@ class Strategy:
             L.strategy_get_last_error.restype = ctypes.c_char_p
         if hasattr(L, "strategy_set_input"):
             L.strategy_set_input.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        if hasattr(L, "strategy_set_override"):
+            L.strategy_set_override.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
         if hasattr(L, "strategy_set_trace_enabled"):
             L.strategy_set_trace_enabled.argtypes = [ctypes.c_void_p, ctypes.c_int]
         if hasattr(L, "strategy_set_trade_start_time"):
@@ -389,6 +396,7 @@ class Strategy:
 
     def run(self, bars_csv: Path, params: dict | None = None,
             *, trace_enabled: bool = False, trade_start_time_ms: int | None = None,
+            strategy_overrides: dict | None = None,
             chart_timezone: str | None = None,
             syminfo_timezone: str | None = None,
             syminfo_session: str | None = None,
@@ -431,6 +439,16 @@ class Strategy:
         state = self.lib.strategy_create(params_json)
         report = ReportC()
         try:
+            # Strategy-property overrides (commission/slippage/pyramiding/...)
+            # via the per-strategy ``strategy_set_override`` export. Keys and
+            # value grammar: codegen emit_top.py set_strategy_override —
+            # e.g. commission_type "percent"/"cash_per_order"/"cash_per_contract",
+            # commission_value/initial_capital/default_qty_value as decimals,
+            # slippage/pyramiding as ints. Applied before any input/run call.
+            if strategy_overrides and hasattr(self.lib, "strategy_set_override"):
+                for okey, oval in strategy_overrides.items():
+                    self.lib.strategy_set_override(
+                        state, str(okey).encode(), str(oval).encode())
             if trace_enabled and hasattr(self.lib, "strategy_set_trace_enabled"):
                 self.lib.strategy_set_trace_enabled(state, 1)
             if trade_start_time_ms is not None and hasattr(self.lib, "strategy_set_trade_start_time"):
@@ -776,6 +794,10 @@ def main() -> int:
                     help="Emit all trades from the full OHLCV input, including warmup trades.")
     ap.add_argument("--disable-trading-before-window", action="store_true",
                     help="Warm indicators on pre-window bars but ignore strategy order commands until the emit window starts.")
+    ap.add_argument("--inputs-json", type=Path, default=None,
+                    help="Use this inputs.json instead of strategy_dir/inputs.json. "
+                         "Lets ad-hoc validation runs override strategy properties "
+                         "(strategy_overrides block) without touching the corpus probe.")
     ap.add_argument("--chart-tz", default="",
                     help="IANA timezone the engine should use for Pine date builtins "
                          "(hour/minute/dayofweek and their 1-arg function overloads) "
@@ -798,7 +820,8 @@ def main() -> int:
 
     started = time.time()
     strat = Strategy(so_path)
-    inputs_path = strategy_dir / "inputs.json"
+    inputs_path = (args.inputs_json.resolve() if args.inputs_json
+                   else strategy_dir / "inputs.json")
     params = {}
     if inputs_path.exists():
         with inputs_path.open(encoding="utf-8") as f:
