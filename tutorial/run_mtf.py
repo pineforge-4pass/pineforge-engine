@@ -18,7 +18,7 @@ from pathlib import Path
 
 # Reuse the ctypes mirrors + paths from run.py — same engine, same ABI.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from run import BarC, ReportC, OHLCV  # noqa: E402
+from run import BarC, ReportC, OHLCV, check_abi  # noqa: E402
 
 ROOT   = Path(__file__).resolve().parent
 SO_HTF = ROOT / "mtf" / "strategy_htf.so"
@@ -39,6 +39,7 @@ def load_bars():
 
 def load_lib(so_path: Path):
     lib = ctypes.CDLL(str(so_path))
+    check_abi(lib)
     lib.strategy_create.argtypes = [ctypes.c_char_p]
     lib.strategy_create.restype  = ctypes.c_void_p
     lib.strategy_set_input.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]

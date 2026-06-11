@@ -81,7 +81,60 @@ class TradeC(ctypes.Structure):
         ("max_runup",    ctypes.c_double),
         ("max_drawdown", ctypes.c_double),
         ("qty",          ctypes.c_double),
+        ("commission",      ctypes.c_double),
+        ("entry_bar_index", ctypes.c_int32),
+        ("exit_bar_index",  ctypes.c_int32),
     ]
+
+
+class TradeStatsC(ctypes.Structure):
+    """Mirror of pf_trade_stats_t (ABI v2)."""
+    _fields_ = [
+        ("num_trades", ctypes.c_int32), ("num_wins", ctypes.c_int32),
+        ("num_losses", ctypes.c_int32), ("num_even", ctypes.c_int32),
+        ("percent_profitable", ctypes.c_double),
+        ("net_profit", ctypes.c_double), ("net_profit_pct", ctypes.c_double),
+        ("gross_profit", ctypes.c_double), ("gross_profit_pct", ctypes.c_double),
+        ("gross_loss", ctypes.c_double), ("gross_loss_pct", ctypes.c_double),
+        ("profit_factor", ctypes.c_double),
+        ("avg_trade", ctypes.c_double), ("avg_trade_pct", ctypes.c_double),
+        ("avg_win", ctypes.c_double), ("avg_win_pct", ctypes.c_double),
+        ("avg_loss", ctypes.c_double), ("avg_loss_pct", ctypes.c_double),
+        ("ratio_avg_win_avg_loss", ctypes.c_double),
+        ("largest_win", ctypes.c_double), ("largest_win_pct", ctypes.c_double),
+        ("largest_loss", ctypes.c_double), ("largest_loss_pct", ctypes.c_double),
+        ("commission_paid", ctypes.c_double),
+        ("expectancy", ctypes.c_double),
+        ("max_consecutive_wins", ctypes.c_int32), ("max_consecutive_losses", ctypes.c_int32),
+        ("avg_bars_in_trade", ctypes.c_double), ("avg_bars_in_wins", ctypes.c_double),
+        ("avg_bars_in_losses", ctypes.c_double),
+    ]
+
+
+class EquityStatsC(ctypes.Structure):
+    """Mirror of pf_equity_stats_t (ABI v2)."""
+    _fields_ = [
+        ("max_equity_drawdown", ctypes.c_double), ("max_equity_drawdown_pct", ctypes.c_double),
+        ("max_equity_runup", ctypes.c_double), ("max_equity_runup_pct", ctypes.c_double),
+        ("buy_hold_return", ctypes.c_double), ("buy_hold_return_pct", ctypes.c_double),
+        ("sharpe_tv", ctypes.c_double), ("sortino_tv", ctypes.c_double),
+        ("sharpe_bar", ctypes.c_double), ("sortino_bar", ctypes.c_double),
+        ("cagr", ctypes.c_double), ("calmar", ctypes.c_double),
+        ("recovery_factor", ctypes.c_double), ("time_in_market_pct", ctypes.c_double),
+        ("open_pl", ctypes.c_double),
+    ]
+
+
+class MetricsC(ctypes.Structure):
+    """Mirror of pf_metrics_t (ABI v2)."""
+    _fields_ = [("all", TradeStatsC), ("longs", TradeStatsC),
+                ("shorts", TradeStatsC), ("equity", EquityStatsC)]
+
+
+class EquityPointC(ctypes.Structure):
+    """Mirror of pf_equity_point_t (ABI v2)."""
+    _fields_ = [("time_ms", ctypes.c_int64), ("equity", ctypes.c_double),
+                ("open_profit", ctypes.c_double)]
 
 
 class SecurityDiagC(ctypes.Structure):
@@ -126,7 +179,29 @@ class ReportC(ctypes.Structure):
         ("trace_len",                    ctypes.c_int),
         ("trace_names",                  ctypes.POINTER(ctypes.c_char_p)),
         ("trace_names_len",              ctypes.c_int),
+        ("metrics",                      MetricsC),
+        ("equity_curve",                 ctypes.POINTER(EquityPointC)),
+        ("equity_curve_len",             ctypes.c_int64),  # int64, NOT c_int
     ]
+
+
+# pf_report_t is CALLER-allocated: a .so built against a different ABI
+# writes past (or short of) our ReportC buffer. Assert version up front.
+EXPECTED_PF_ABI = 2
+
+
+def check_abi(lib: ctypes.CDLL) -> None:
+    try:
+        lib.pf_abi_version.restype = ctypes.c_int
+        abi = lib.pf_abi_version()
+    except AttributeError:
+        raise RuntimeError(
+            "strategy .so predates pf_abi_version (ABI v1); rebuild it against "
+            "the current pineforge runtime (pf_report_t grew).")
+    if abi != EXPECTED_PF_ABI:
+        raise RuntimeError(
+            f"pineforge ABI mismatch: .so reports {abi}, harness expects "
+            f"{EXPECTED_PF_ABI}; rebuild.")
 
 
 # --- helpers ----------------------------------------------------------
@@ -158,6 +233,7 @@ def load_bars(csv_path: Path) -> tuple[ctypes.Array, int]:
 
 def load_strategy(so_path: Path) -> ctypes.CDLL:
     lib = ctypes.CDLL(str(so_path))
+    check_abi(lib)
 
     lib.strategy_create.argtypes = [ctypes.c_char_p]
     lib.strategy_create.restype  = ctypes.c_void_p
