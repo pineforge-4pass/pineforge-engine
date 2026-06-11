@@ -1307,6 +1307,7 @@ private:
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;
+    void fill_metrics_section(ReportC* out) const;
     void fill_security_diag_section(ReportC* out) const;
     void fill_trace_section(ReportC* out) const;
 

@@ -129,6 +129,9 @@ static void test_equity_curve_basic() {
     CHECK(std::fabs(last.equity - (1'000'000.0 + rep.net_profit + last.open_profit)) < 1e-9);
     for (size_t i = 1; i < s.curve().size(); ++i)
         CHECK(s.curve()[i].time_ms > s.curve()[i - 1].time_ms);
+    // report-side curve (Task 6): fill_report copies the internal curve out
+    CHECK(rep.equity_curve_len == (int64_t)s.curve().size());
+    CHECK(rep.equity_curve != nullptr);
     BacktestEngine::free_report(&rep);
 }
 
@@ -499,6 +502,34 @@ static void test_equity_stats_non_utc_bucketing() {
     CHECK(std::fabs(ny.sortino_tv - (-0.08031113910764517)) < 1e-9);
 }
 
+// ---------- fill_report metrics integration (Task 6) -----------------------
+
+static void test_report_metrics_integration() {
+    std::printf("report metrics: cross-field invariants on a real run\n");
+    MomoFlip s;
+    std::vector<Bar> bars = make_feed(300);
+    s.run(bars.data(), (int)bars.size());
+    ReportC rep{};
+    s.fill_report(&rep);
+    const pf_metrics_t& m = rep.metrics;
+    CHECK(m.all.num_trades == rep.trades_len);
+    CHECK(std::fabs(m.all.net_profit - rep.net_profit) < 1e-9);
+    CHECK(m.all.num_trades == m.longs.num_trades + m.shorts.num_trades);
+    CHECK(m.all.num_trades == m.all.num_wins + m.all.num_losses + m.all.num_even);
+    CHECK(rep.equity_curve_len == (int64_t)s.curve().size());
+    CHECK(rep.equity_curve != nullptr);
+    const pf_equity_point_t& last = rep.equity_curve[rep.equity_curve_len - 1];
+    CHECK(std::fabs(last.equity - (1'000'000.0 + rep.net_profit + m.equity.open_pl)) < 1e-9);
+    // curve dd walk must reproduce the engine's internal scalar extreme
+    CHECK(std::fabs(m.equity.max_equity_drawdown - s.max_dd()) < 1e-9);
+    // report curve must be a faithful copy of the internal one
+    for (int64_t i = 0; i < rep.equity_curve_len; ++i) {
+        CHECK(rep.equity_curve[i].time_ms == s.curve()[(size_t)i].time_ms);
+        CHECK(rep.equity_curve[i].equity  == s.curve()[(size_t)i].equity);
+    }
+    BacktestEngine::free_report(&rep);
+}
+
 int main() {
     test_trade_commission_and_bar_indexes();
     test_trade_commission_cash_per_contract();
@@ -513,6 +544,7 @@ int main() {
     test_engine_vs_walk_dd_invariant();
     test_equity_stats_per_bar_oracle();
     test_equity_stats_non_utc_bucketing();
+    test_report_metrics_integration();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
