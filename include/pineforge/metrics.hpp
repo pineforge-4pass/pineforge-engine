@@ -3,6 +3,7 @@
 // No BacktestEngine dependency: unit-testable standalone, called by
 // fill_report. Conventions (NaN rules, positive-magnitude losses, even-
 // trade handling) are documented per-field in <pineforge/pineforge.h>.
+// pineforge.h MUST precede engine.hpp (PINEFORGE_NO_STRATEGY_DECLS; see engine.hpp).
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>   // TradeC
 #include <string>

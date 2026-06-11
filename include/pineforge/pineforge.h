@@ -170,8 +170,10 @@ typedef struct pf_trade_stats_s {
                                         *   NaN when num_wins == 0. */
     double  avg_loss;                  /**< gross_loss / num_losses (positive magnitude).
                                         *   NaN when num_losses == 0. */
-    double  avg_loss_pct;              /**< Mean of per-trade |pnl_pct| over losing trades (positive
-                                        *   magnitude). Exact TV percent base is an arbitration item
+    double  avg_loss_pct;              /**< Mean of the NEGATED pnl_pct of the losing trades (not an
+                                        *   absolute value); may be <= 0 for commission-driven losses
+                                        *   where the gross price move was favorable (pnl < 0 but
+                                        *   pnl_pct >= 0). Exact TV percent base is an arbitration item
                                         *   pinned against corpus exports; current basis = pf_trade_t::pnl_pct.
                                         *   NaN when num_losses == 0. */
     double  ratio_avg_win_avg_loss;    /**< avg_win / avg_loss. NaN unless both sides non-empty. */
@@ -181,7 +183,9 @@ typedef struct pf_trade_stats_s {
                                         *   NaN when num_wins == 0. */
     double  largest_loss;              /**< Single largest |pnl| among losing trades (positive magnitude).
                                         *   NaN when num_losses == 0. */
-    double  largest_loss_pct;          /**< |pnl_pct| of the largest losing trade (positive magnitude).
+    double  largest_loss_pct;          /**< Negated pnl_pct of the largest losing trade (not an absolute
+                                        *   value); may be <= 0 for commission-driven losses where the
+                                        *   gross price move was favorable.
                                         *   NaN when num_losses == 0. */
     double  commission_paid;           /**< Sum of pf_trade_t::commission in the block. */
     double  expectancy;                /**< (num_wins/num_trades)*avg_win - (num_losses/num_trades)*avg_loss,

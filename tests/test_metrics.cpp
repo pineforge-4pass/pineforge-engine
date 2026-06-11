@@ -231,6 +231,92 @@ static void test_trade_stats_filters_and_nan() {
     CHECK(Q.max_consecutive_losses == 3);
 }
 
+// ---------- Equity-stats synthetic fixtures (Task 5) ------------------------
+
+static double kNaN_test() { return std::numeric_limits<double>::quiet_NaN(); }
+
+static pf_equity_point_t pt(int64_t ms, double eq) {
+    pf_equity_point_t p{}; p.time_ms = ms; p.equity = eq; p.open_profit = 0.0; return p;
+}
+// Month-end UTC timestamps (ms): 2024-01-31, 02-29, 03-31, 04-30 — all 12:00Z.
+static const int64_t kJan = 1706702400000LL, kFeb = 1709208000000LL,
+                     kMar = 1711886400000LL, kApr = 1714478400000LL;
+
+static void test_equity_stats_sharpe_sortino_tv() {
+    std::printf("equity stats: TV monthly sharpe/sortino\n");
+    // equities 1000 -> 1100 -> 990 -> 1089 : monthly returns +10%, -10%, +10%
+    pf_equity_point_t c[4] = { pt(kJan,1000), pt(kFeb,1100), pt(kMar,990), pt(kApr,1089) };
+    pf_equity_stats_t e = pineforge::metrics::compute_equity_stats(
+        c, 4, 1000.0, "", /*first_open=*/100.0, /*last_close=*/110.0,
+        /*bars_in_market=*/2, /*net_profit=*/89.0);
+    // Python oracle (statistics.stdev sample N-1 for Sharpe; population
+    // downside vs rf for Sortino), rf = 0.02/12, annualized sqrt(12):
+    CHECK(std::fabs(e.sharpe_tv  - 0.95) < 1e-9);
+    CHECK(std::fabs(e.sortino_tv - 1.8688524590163935) < 1e-9);
+    CHECK(std::fabs(e.buy_hold_return - 100.0) < 1e-12);       // 1000*(110/100-1)
+    CHECK(std::fabs(e.buy_hold_return_pct - 10.0) < 1e-12);
+    CHECK(std::fabs(e.time_in_market_pct - 50.0) < 1e-12);     // 2/4
+    CHECK(e.open_pl == 0.0);
+}
+
+static void test_equity_stats_drawdown_walk() {
+    std::printf("equity stats: dd/runup walk mirrors update_equity_extremes\n");
+    // 1000 -> 1200 -> 900 -> 1100 (same month is fine; dd walk is tz-free)
+    pf_equity_point_t c[4] = { pt(1,1000), pt(2,1200), pt(3,900), pt(4,1100) };
+    pf_equity_stats_t e = pineforge::metrics::compute_equity_stats(
+        c, 4, 1000.0, "", 100.0, 110.0, 0, 100.0);
+    // peak 1200 -> trough 900: dd 300, pct vs peak 25%.
+    CHECK(std::fabs(e.max_equity_drawdown - 300.0) < 1e-12);
+    CHECK(std::fabs(e.max_equity_drawdown_pct - 25.0) < 1e-12);
+    // trough resets to eq on each new peak (update_equity_extremes semantics):
+    // runup = 1100 - 900 = 200; pct vs trough.
+    CHECK(std::fabs(e.max_equity_runup - 200.0) < 1e-12);
+    CHECK(std::fabs(e.recovery_factor - 100.0 / 300.0) < 1e-12);
+    CHECK(!std::isnan(e.cagr));
+    CHECK(std::isnan(e.sharpe_tv));   // single month bucket -> <2 returns
+}
+
+static void test_equity_stats_edges() {
+    std::printf("equity stats: edges (flat, empty, zero-dd)\n");
+    pf_equity_point_t flat[3] = { pt(kJan,1000), pt(kFeb,1000), pt(kMar,1000) };
+    pf_equity_stats_t f = pineforge::metrics::compute_equity_stats(
+        flat, 3, 1000.0, "", 100.0, 100.0, 0, 0.0);
+    CHECK(std::isnan(f.sharpe_tv));            // zero deviation
+    CHECK(std::isnan(f.calmar));               // zero drawdown
+    CHECK(std::isnan(f.recovery_factor));
+    CHECK(f.max_equity_drawdown == 0.0);
+    pf_equity_stats_t z = pineforge::metrics::compute_equity_stats(
+        nullptr, 0, 1000.0, "", kNaN_test(), kNaN_test(), 0, 0.0);
+    CHECK(std::isnan(z.sharpe_tv));
+    CHECK(std::isnan(z.cagr));
+    CHECK(std::isnan(z.buy_hold_return));
+    CHECK(z.max_equity_drawdown == 0.0);
+}
+
+// ---------- Flat-strategy bars-in-market pin (carried review item) -----------
+
+namespace {
+
+class NeverTrades : public BacktestEngine {
+public:
+    NeverTrades() { initial_capital_ = 1'000'000; }
+    void on_bar(const Bar&) override {}     // never trades
+    const std::vector<pf_equity_point_t>& curve() const { return equity_curve_; }
+    int64_t bim() const { return bars_in_market_; }
+};
+
+}  // namespace
+
+static void test_flat_strategy_bars_in_market() {
+    std::printf("flat strategy: bars_in_market == 0, curve pinned to capital\n");
+    NeverTrades s;
+    std::vector<Bar> bars = make_feed(50);
+    s.run(bars.data(), (int)bars.size());
+    CHECK(s.bim() == 0);
+    CHECK(!s.curve().empty());
+    CHECK(s.curve().front().equity == 1'000'000.0);
+}
+
 // ---------- CASH_PER_CONTRACT commission test (deferred from Task 2) ---------
 // Two-trade full-close test: simpler than partial-close choreography (which
 // requires multi-bar qty management + close sequence that proved fragile with
@@ -291,6 +377,10 @@ int main() {
     test_equity_curve_magnifier_invariant();
     test_trade_stats_all();
     test_trade_stats_filters_and_nan();
+    test_equity_stats_sharpe_sortino_tv();
+    test_equity_stats_drawdown_walk();
+    test_equity_stats_edges();
+    test_flat_strategy_bars_in_market();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
