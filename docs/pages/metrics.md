@@ -77,7 +77,7 @@ truncated curve and metrics over the truncated prefix.
 | Surface | Validated against | Result |
 | --- | --- | --- |
 | Trade statistics (counts, PF, percent bases, averages, largest-%, bars) | Real TradingView Strategy Tester export (`composite-4emarsi-integration-01`, 336 trades, All/Long/Short panels) | Match within TV 2-dp rounding; three TV conventions arbitrated and adopted (net return-on-cost `pnl_pct`, independent largest-%, inclusive bar counts) |
-| Equity statistics (max DD ±%, Sharpe/Sortino both variants, CAGR, Calmar, recovery) | quantstats 0.0.81 + empyrical-reloaded 0.5.12 (`scripts/crossvalidate_metrics.py`) | ≤ 1e-11 relative on two corpus strategies; residual deltas proven to be library conventions |
+| Equity statistics (max DD ±%, Sharpe/Sortino both variants, CAGR, Calmar, recovery) | quantstats 0.0.81 + empyrical-reloaded 0.5.12 (`scripts/crossvalidate_metrics.py --all`) | All 246 corpus strategies ran, 0 skipped, 0 mismatches; worst engine-convention \|rel Δ\| = 1.886e-11 (`pyramid-cash-fractional-commission-01`, sharpe/sortino_bar vs empyrical); 3 degenerate NaN fields (sharpe_tv, zero monthly variance) agree on degeneracy across engine/numpy/empyrical/quantstats; known library-convention deltas labelled in single-strategy mode |
 | Closed-form unit oracles | `tests/test_metrics.cpp` (e.g. monthly Sharpe 19/20, Sortino 114/61 exact rationals) | Bit-level |
 
 Known open deltas: TradingView's "Max run-up (close-to-close)" uses a

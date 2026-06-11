@@ -73,17 +73,37 @@ so a flagged delta there is expected, not an engine bug. Exit code is 1
 if any unexplained MISMATCH row (an engine-convention row, not a
 known-different-convention row) fails.
 
+Corpus-wide mode (``--all``)
+----------------------------
+``--all`` sweeps every directory under corpus/validation/ that contains a
+compiled strategy library, honouring each probe's ``inputs.json`` exactly
+the way scripts/run_strategy.py main() does (ohlcv_csv / input_tf /
+script_tf / ohlcv_start_ms / chart_timezone / runtime_overrides / input
+params), runs the FULL feed (the TV comparison window is irrelevant here —
+the comparison is engine curve vs libraries), and applies only the
+ENGINE-CONVENTION adapters per strategy (numpy reimplementation,
+empyrical with engine-equivalent arguments, quantstats with pre-excess
+returns). Degenerate values are handled as explicit NaN-AGREEMENT checks,
+not errors: a field where the engine reports NaN (flat curve, < 2 monthly
+returns, zero drawdown) passes iff the reference is also non-finite, and
+MISMATCHes if exactly one side is finite. Strategies whose engine run
+fails are recorded as SKIP with the error string. Exit code 1 on any
+MISMATCH.
+
 Usage
 -----
     crossvalidate_metrics.py STRATEGY_DIR [--trim-end-ms MS] [--ohlcv CSV]
+    crossvalidate_metrics.py --all [--corpus-root DIR] [--ohlcv CSV]
 """
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import math
+import re
 import sys
+import time
+import warnings
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -101,72 +121,48 @@ MS_PER_YEAR = 365.25 * 86400.0 * 1000.0
 
 
 # --------------------------------------------------------------------------
-# Engine run: replicate the minimal flow of run_strategy.Strategy.run but
-# keep the report alive so metrics.equity + equity_curve can be read
-# before report_free.
+# Engine run: drive run_strategy.Strategy.run (which honours every
+# inputs.json knob exactly like the corpus harness) and capture
+# metrics.equity + the raw equity_curve through the on_report hook,
+# which fires before report_free.
 # --------------------------------------------------------------------------
 
+_CAP_RE = re.compile(r"initial_capital_\s*=\s*([0-9][0-9eE+.\-]*)\s*;")
+
+
+def declared_initial_capital(strategy_dir: Path, default: float = 1_000_000.0) -> float:
+    """strategy() initial_capital from the codegen output (pf_report_t does
+    not expose it). Falls back to the corpus convention of 1e6."""
+    gen = strategy_dir / "generated.cpp"
+    if gen.exists():
+        m = _CAP_RE.search(gen.read_text(encoding="utf-8", errors="replace"))
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+    return default
+
+
 def run_engine(strategy_dir: Path, ohlcv: Path, trim_end_ms: int | None) -> dict:
-    so_path = strategy_dir / "strategy.so"
-    if not so_path.exists():
-        for alt in ("strategy.dylib", "strategy.so", "strategy.dll"):
-            cand = strategy_dir / alt
-            if cand.exists():
-                so_path = cand
-                break
+    so_path = rs.find_strategy_lib(strategy_dir)
     strat = rs.Strategy(so_path)   # loads lib, asserts pf_abi_version
-    lib = strat.lib
 
     params: dict = {}
     inputs_path = strategy_dir / "inputs.json"
     if inputs_path.exists():
         with inputs_path.open(encoding="utf-8") as f:
             params = json.load(f)
+    if not isinstance(params, dict):
+        params = {}
 
-    ohlcv_path = ohlcv
-    if isinstance(params, dict) and "ohlcv_csv" in params:
-        v = str(params["ohlcv_csv"])
-        ohlcv_path = (Path(v) if v.startswith("/") else strategy_dir / v).resolve()
-    start_ms = None
-    if isinstance(params, dict) and "ohlcv_start_ms" in params:
-        try:
-            start_ms = int(params["ohlcv_start_ms"])
-        except (TypeError, ValueError):
-            start_ms = None
+    ohlcv_path, run_kwargs = rs.inputs_run_kwargs(params, strategy_dir, ohlcv)
 
-    bars, n = rs._load_bars(ohlcv_path, ohlcv_start_ms=start_ms)
-    if trim_end_ms is not None:
-        kept = [i for i in range(n) if bars[i].timestamp <= trim_end_ms]
-        trimmed = (rs.BarC * len(kept))()
-        for j, i in enumerate(kept):
-            trimmed[j] = bars[i]
-        bars, n = trimmed, len(kept)
-    if n < 3:
-        raise SystemExit(f"too few bars after trim: {n}")
+    captured: dict = {}
 
-    chart_tz = str(params.get("chart_timezone") or "") if isinstance(params, dict) else ""
-
-    state = lib.strategy_create(json.dumps(params).encode())
-    report = rs.ReportC()
-    try:
-        if chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
-            lib.strategy_set_chart_timezone(state, chart_tz.encode())
-        if hasattr(lib, "strategy_set_input") and isinstance(params, dict):
-            for key, value in params.items():
-                if key.startswith("tv_") or key in rs._VALIDATION_META_KEYS:
-                    continue
-                lib.strategy_set_input(state, str(key).encode(), str(value).encode())
-        lib.run_backtest_full(state, bars, n, b"", b"", 0, 4, 3,
-                              ctypes.byref(report))
-        if hasattr(lib, "strategy_get_last_error"):
-            err = lib.strategy_get_last_error(state)
-            if err:
-                msg = err.decode("utf-8", "replace")
-                if msg:
-                    raise RuntimeError("pineforge engine rejected run: " + msg)
-
+    def _grab(report) -> None:
         eq = report.metrics.equity
-        engine = {f: float(getattr(eq, f)) for f, _ in eq._fields_}
+        captured["engine"] = {f: float(getattr(eq, f)) for f, _ in eq._fields_}
         m = int(report.equity_curve_len)
         t_ms = np.empty(m, dtype=np.int64)
         equity = np.empty(m, dtype=np.float64)
@@ -176,18 +172,14 @@ def run_engine(strategy_dir: Path, ohlcv: Path, trim_end_ms: int | None) -> dict
             t_ms[i] = p.time_ms
             equity[i] = p.equity
             open_pl[i] = p.open_profit
-        return {
-            "engine": engine,
-            "net_profit": float(report.net_profit),
-            "total_trades": int(report.total_trades),
-            "t_ms": t_ms,
-            "equity": equity,
-            "open_pl": open_pl,
-            "chart_tz": chart_tz,
-        }
-    finally:
-        lib.report_free(ctypes.byref(report))
-        lib.strategy_free(state)
+        captured["t_ms"], captured["equity"], captured["open_pl"] = t_ms, equity, open_pl
+        captured["net_profit"] = float(report.net_profit)
+        captured["total_trades"] = int(report.total_trades)
+
+    strat.run(ohlcv_path, params=params, ohlcv_end_ms=trim_end_ms,
+              on_report=_grab, **run_kwargs)
+    captured["chart_tz"] = run_kwargs["chart_timezone"]
+    return captured
 
 
 # --------------------------------------------------------------------------
@@ -226,10 +218,14 @@ def np_sharpe_sortino(r: np.ndarray, rf_period: float, ann: float) -> tuple[floa
     return float(sharpe), float(sortino)
 
 
-def month_end_equities_utc(t_ms: np.ndarray, equity: np.ndarray) -> pd.Series:
-    """Last equity of each UTC calendar month, bucketed by bar OPEN time.
-    Mirrors the engine's month_key_utc walk (empty chart tz => UTC)."""
+def month_end_equities(t_ms: np.ndarray, equity: np.ndarray,
+                       chart_tz: str = "") -> pd.Series:
+    """Last equity of each calendar month, bucketed by bar OPEN time.
+    Mirrors the engine's month-key walk: empty chart tz => UTC, else the
+    chart's IANA wall clock decides the month boundaries."""
     idx = pd.to_datetime(t_ms, unit="ms", utc=True)
+    if chart_tz:
+        idx = idx.tz_convert(chart_tz)
     s = pd.Series(equity, index=idx)
     return s.resample("ME").last().dropna()
 
@@ -281,11 +277,14 @@ def crossvalidate(strategy_dir: Path, ohlcv: Path, trim_end_ms: int | None,
     eng = run["engine"]
     t_ms, equity = run["t_ms"], run["equity"]
     n = len(equity)
+    if n < 3:
+        raise SystemExit(f"curve too short for comparison: {n} points")
     net_profit = run["net_profit"]
 
-    # initial_capital is not in pf_report_t; default 1e6 matches the corpus
-    # strategies' strategy() declarations (override with --initial-capital).
-    cap = initial_capital if initial_capital is not None else 1_000_000.0
+    # initial_capital is not in pf_report_t; parsed from generated.cpp
+    # (corpus default 1e6; override with --initial-capital).
+    cap = (initial_capital if initial_capital is not None
+           else declared_initial_capital(strategy_dir))
 
     span_years = float(t_ms[-1] - t_ms[0]) / MS_PER_YEAR
     bpy = (n - 1) / span_years
@@ -297,7 +296,7 @@ def crossvalidate(strategy_dir: Path, ohlcv: Path, trim_end_ms: int | None,
     idx = pd.to_datetime(t_ms[1:], unit="ms", utc=True)
     r_s = pd.Series(r, index=idx)
 
-    me = month_end_equities_utc(t_ms, equity)
+    me = month_end_equities(t_ms, equity, run["chart_tz"])
     mr = me.to_numpy()
     m_ret = mr[1:] / mr[:-1] - 1.0
     m_ret_s = pd.Series(m_ret, index=me.index[1:])
@@ -461,20 +460,252 @@ def crossvalidate(strategy_dir: Path, ohlcv: Path, trim_end_ms: int | None,
     return 0
 
 
+# --------------------------------------------------------------------------
+# Corpus-wide mode (--all): engine-convention adapters only, with explicit
+# NaN-agreement semantics for degenerate strategies.
+# --------------------------------------------------------------------------
+
+def _lib_value(fn, *args, **kwargs):
+    """Call a library statistic, silencing degenerate-data warnings.
+    Returns float, or the Exception when the library refuses the input
+    (treated as 'library says degenerate' by classify())."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with np.errstate(all="ignore"):
+                return float(fn(*args, **kwargs))
+    except Exception as exc:  # noqa: BLE001 — library-internal failure modes vary
+        return exc
+
+
+def classify(engine_val: float, other) -> tuple[str, float | None]:
+    """NaN-aware verdict for one engine-convention comparison.
+
+    - engine non-finite AND reference non-finite/refused -> 'nan-agree'
+      (degenerate case: flat curve, < 2 monthly returns, zero drawdown);
+    - exactly one side finite -> 'MISMATCH' (rel=None);
+    - both finite -> rel-delta thresholds (1e-6 match / 1e-3 convention).
+    """
+    eng_degen = not math.isfinite(engine_val)
+    oth_degen = isinstance(other, Exception) or other is None \
+        or not math.isfinite(other)
+    if eng_degen and oth_degen:
+        return "nan-agree", None
+    if eng_degen or oth_degen:
+        return "MISMATCH", None
+    rel = (other - engine_val) / max(1e-12, abs(engine_val))
+    if abs(rel) <= 1e-6:
+        return "match", rel
+    if abs(rel) <= 1e-3:
+        return "CONVENTION-DELTA", rel
+    return "MISMATCH", rel
+
+
+def engine_convention_checks(run: dict, cap: float) -> tuple[list, dict]:
+    """Compute the engine-convention reference values for one strategy.
+
+    Returns (checks, ctx) where checks is a list of
+    (field, source, engine_value, reference_value_or_Exception). Only
+    adapters that are engine-EQUIVALENT by construction are included
+    (numpy reimplementation; empyrical with rf-per-period + ann=bpy;
+    quantstats fed pre-excess returns with rf=0). Known-different library
+    conventions (max fractional dd, base-E0 cagr, geometric rf, ...) are
+    deliberately excluded here — they are covered, labelled, by the
+    verbose single-strategy mode."""
+    eng = run["engine"]
+    t_ms, equity = run["t_ms"], run["equity"]
+    n = len(equity)
+    net_profit = run["net_profit"]
+
+    span_years = float(t_ms[-1] - t_ms[0]) / MS_PER_YEAR
+    bpy = (n - 1) / span_years
+    rf_bar = RF_ANNUAL / bpy
+    rf_month = RF_ANNUAL / 12.0
+
+    r = equity[1:] / equity[:-1] - 1.0
+    r_s = pd.Series(r, index=pd.to_datetime(t_ms[1:], unit="ms", utc=True))
+
+    me = month_end_equities(t_ms, equity, run["chart_tz"])
+    mr = me.to_numpy()
+    if len(mr) >= 2:
+        m_ret = mr[1:] / mr[:-1] - 1.0
+        m_ret_s = pd.Series(m_ret, index=me.index[1:])
+    else:
+        m_ret = np.empty(0, dtype=np.float64)
+        m_ret_s = pd.Series(m_ret, index=pd.DatetimeIndex([], tz="UTC"))
+
+    dd = np_drawdown(equity)
+    np_sh, np_so = np_sharpe_sortino(r, rf_bar, math.sqrt(bpy))
+    np_sh_tv, np_so_tv = np_sharpe_sortino(m_ret, rf_month, math.sqrt(12.0))
+    np_cagr = (100.0 * ((equity[-1] / cap) ** (1.0 / span_years) - 1.0)
+               if span_years > 0 and equity[-1] > 0 and cap > 0 else float("nan"))
+    np_calmar = (np_cagr / dd["pct_at_max_usd"]
+                 if dd["pct_at_max_usd"] > 0 else float("nan"))
+    np_recovery = net_profit / dd["usd"] if dd["usd"] > 0 else float("nan")
+
+    checks = [
+        ("max_dd_usd", "numpy", eng["max_equity_drawdown"], dd["usd"]),
+        ("max_dd_pct", "numpy", eng["max_equity_drawdown_pct"], dd["pct_at_max_usd"]),
+        ("sharpe_bar", "numpy", eng["sharpe_bar"], np_sh),
+        ("sharpe_bar", "empyrical", eng["sharpe_bar"],
+         _lib_value(ep.sharpe_ratio, r_s, risk_free=rf_bar, annualization=bpy)),
+        ("sharpe_bar", "quantstats", eng["sharpe_bar"],
+         _lib_value(qs.stats.sharpe, r_s - rf_bar, rf=0.0, periods=bpy)),
+        ("sortino_bar", "numpy", eng["sortino_bar"], np_so),
+        ("sortino_bar", "empyrical", eng["sortino_bar"],
+         _lib_value(ep.sortino_ratio, r_s, required_return=rf_bar, annualization=bpy)),
+        ("sortino_bar", "quantstats", eng["sortino_bar"],
+         _lib_value(qs.stats.sortino, r_s - rf_bar, rf=0.0, periods=bpy)),
+        ("sharpe_tv", "numpy", eng["sharpe_tv"], np_sh_tv),
+        ("sharpe_tv", "empyrical", eng["sharpe_tv"],
+         _lib_value(ep.sharpe_ratio, m_ret_s, risk_free=rf_month, annualization=12)),
+        ("sharpe_tv", "quantstats", eng["sharpe_tv"],
+         _lib_value(qs.stats.sharpe, m_ret_s - rf_month, rf=0.0, periods=12)),
+        ("sortino_tv", "numpy", eng["sortino_tv"], np_so_tv),
+        ("sortino_tv", "empyrical", eng["sortino_tv"],
+         _lib_value(ep.sortino_ratio, m_ret_s, required_return=rf_month, annualization=12)),
+        ("sortino_tv", "quantstats", eng["sortino_tv"],
+         _lib_value(qs.stats.sortino, m_ret_s - rf_month, rf=0.0, periods=12)),
+        ("cagr", "numpy", eng["cagr"], np_cagr),
+        ("calmar", "numpy", eng["calmar"], np_calmar),
+        ("recovery_factor", "numpy", eng["recovery_factor"], np_recovery),
+    ]
+    ctx = {"bars": n, "trades": run["total_trades"], "months": len(mr),
+           "span_years": span_years, "cap": cap}
+    return checks, ctx
+
+
+def discover_strategies(corpus_root: Path) -> list[Path]:
+    dirs = {p.parent for p in corpus_root.rglob("strategy.so")}
+    dirs |= {p.parent for p in corpus_root.rglob("strategy.dylib")}
+    dirs |= {p.parent for p in corpus_root.rglob("strategy.dll")}
+    return sorted(dirs)
+
+
+def crossvalidate_all(corpus_root: Path, ohlcv: Path) -> int:
+    dirs = discover_strategies(corpus_root)
+    if not dirs:
+        print(f"no strategy libraries found under {corpus_root}", file=sys.stderr)
+        return 2
+
+    ran: list[str] = []
+    skips: list[tuple[str, str]] = []
+    mismatches: list[tuple[str, str, str, float, object]] = []
+    conv_deltas: list[tuple[str, str, str, float]] = []
+    nan_total = 0
+    nan_by_field: dict[str, int] = {}
+    # (field, source) -> (|rel|, rel, strategy)
+    worst: dict[tuple[str, str], tuple[float, float, str]] = {}
+
+    t_start = time.time()
+    for d in dirs:
+        name = d.relative_to(corpus_root).as_posix()
+        try:
+            run = run_engine(d, ohlcv, None)
+        except Exception as exc:  # noqa: BLE001 — engine/config errors recorded as SKIP
+            skips.append((name, f"{type(exc).__name__}: {exc}"))
+            print(f"  SKIP  {name}: {exc}")
+            continue
+        equity = run["equity"]
+        if len(equity) < 3:
+            skips.append((name, f"curve too short ({len(equity)} points)"))
+            print(f"  SKIP  {name}: curve too short ({len(equity)} points)")
+            continue
+        if not (equity > 0).all():
+            skips.append((name, "non-positive equity in curve; "
+                                "return-based adapters undefined"))
+            print(f"  SKIP  {name}: non-positive equity in curve")
+            continue
+
+        checks, ctx = engine_convention_checks(run, declared_initial_capital(d))
+        strat_worst = 0.0
+        strat_nan = 0
+        for field, source, ev, ov in checks:
+            verdict, rel = classify(ev, ov)
+            if verdict == "nan-agree":
+                nan_total += 1
+                nan_by_field[field] = nan_by_field.get(field, 0) + 1
+                strat_nan += 1
+                continue
+            if verdict == "MISMATCH":
+                mismatches.append((name, field, source, ev, ov))
+                continue
+            key = (field, source)
+            if abs(rel) > worst.get(key, (-1.0,))[0]:
+                worst[key] = (abs(rel), rel, name)
+            strat_worst = max(strat_worst, abs(rel))
+            if verdict == "CONVENTION-DELTA":
+                conv_deltas.append((name, field, source, rel))
+        ran.append(name)
+        nan_note = f"  nan-agree={strat_nan}" if strat_nan else ""
+        print(f"  ok    {name}: bars={ctx['bars']} trades={ctx['trades']} "
+              f"months={ctx['months']} worst|rel|={strat_worst:.3e}{nan_note}")
+
+    elapsed = time.time() - t_start
+    print(f"\n{'=' * 78}")
+    print(f"CORPUS CROSS-VALIDATION SUMMARY  ({elapsed:.1f}s)")
+    print(f"{'=' * 78}")
+    print(f"  strategies discovered : {len(dirs)}")
+    print(f"  ran                   : {len(ran)}")
+    print(f"  skipped               : {len(skips)}")
+    for name, reason in skips:
+        print(f"      SKIP {name}: {reason}")
+
+    print(f"\n  per-field worst |relative delta| across the corpus "
+          f"(engine-convention adapters):")
+    print(f"  {'field':18s} {'source':12s} {'worst rel.delta':>16s}  strategy")
+    for (field, source), (arel, rel, name) in sorted(worst.items()):
+        print(f"  {field:18s} {source:12s} {rel:16.3e}  {name}")
+
+    print(f"\n  NaN-agreement checks passed: {nan_total}"
+          + (f"  ({', '.join(f'{k}={v}' for k, v in sorted(nan_by_field.items()))})"
+             if nan_by_field else ""))
+
+    if conv_deltas:
+        print(f"\n  CONVENTION-DELTA rows (1e-6 < |rel| <= 1e-3) on "
+              f"engine-convention adapters: {len(conv_deltas)}")
+        for name, field, source, rel in conv_deltas:
+            print(f"      {name}: {field}|{source} rel={rel:.3e}")
+
+    if mismatches:
+        print(f"\n  MISMATCHES ({len(mismatches)}):")
+        for name, field, source, ev, ov in mismatches:
+            ov_txt = repr(ov) if isinstance(ov, Exception) else f"{ov:.10g}"
+            print(f"      {name}: {field}|{source} engine={ev:.10g} ref={ov_txt}")
+        return 1
+
+    print("\n  RESULT: no mismatch — every engine-convention value is "
+          "reproduced by numpy/empyrical/quantstats (NaN fields agree on "
+          "degeneracy).")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("strategy_dir", type=Path,
-                    help="corpus/<cat>/<name>/ containing strategy.so|.dylib")
+    ap.add_argument("strategy_dir", type=Path, nargs="?", default=None,
+                    help="corpus/<cat>/<name>/ containing strategy.so|.dylib "
+                         "(omit with --all)")
+    ap.add_argument("--all", action="store_true",
+                    help="Sweep every strategy under --corpus-root instead of "
+                         "a single directory (engine-convention adapters only).")
+    ap.add_argument("--corpus-root", type=Path,
+                    default=REPO_ROOT / "corpus" / "validation",
+                    help="Root scanned by --all (default: corpus/validation)")
     ap.add_argument("--trim-end-ms", type=int, default=None,
                     help="Drop input bars with timestamp > this (Unix ms) "
                          "before the run, to test alternate spans.")
     ap.add_argument("--ohlcv", type=Path, default=rs.DEFAULT_OHLCV,
                     help="OHLCV CSV (default: the corpus default feed)")
     ap.add_argument("--initial-capital", type=float, default=None,
-                    help="strategy() initial_capital (default 1e6, the corpus "
-                         "convention; pf_report_t does not expose it)")
+                    help="strategy() initial_capital (default: parsed from "
+                         "generated.cpp, corpus convention 1e6; pf_report_t "
+                         "does not expose it)")
     args = ap.parse_args()
+    if args.all:
+        return crossvalidate_all(args.corpus_root.resolve(), args.ohlcv.resolve())
+    if args.strategy_dir is None:
+        ap.error("strategy_dir is required unless --all is given")
     return crossvalidate(args.strategy_dir.resolve(), args.ohlcv.resolve(),
                          args.trim_end_ms, args.initial_capital)
 

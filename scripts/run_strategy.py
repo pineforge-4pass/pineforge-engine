@@ -226,6 +226,91 @@ def _check_abi(lib: ctypes.CDLL) -> None:
 
 # --- Strategy harness --------------------------------------------------
 
+def find_strategy_lib(strategy_dir: Path, so_name: str = "strategy.so") -> Path:
+    """Resolve the compiled strategy library inside ``strategy_dir``.
+
+    Prefers ``so_name`` when present, otherwise falls back to the
+    platform-specific alternatives (.dylib / .so / .dll)."""
+    so_path = strategy_dir / so_name
+    if not so_path.exists():
+        for alt in ("strategy.dylib", "strategy.so", "strategy.dll"):
+            cand = strategy_dir / alt
+            if cand.exists():
+                return cand
+    return so_path
+
+
+def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
+                      default_chart_tz: str = "") -> tuple[Path, dict]:
+    """Resolve per-probe ``inputs.json`` metadata into the OHLCV path and the
+    keyword arguments for :meth:`Strategy.run`.
+
+    This is the single source of truth for how harnesses honour
+    ``ohlcv_csv`` / ``input_tf`` / ``script_tf`` / ``ohlcv_start_ms`` /
+    ``chart_timezone`` / ``runtime_overrides`` — ``main()`` below and
+    ``scripts/crossvalidate_metrics.py`` both consume it, so a probe that
+    runs under one harness runs identically under the other. ``params``
+    itself must still be passed to ``Strategy.run(params=...)`` so Pine
+    ``input()`` values reach ``strategy_set_input``.
+    """
+    if not isinstance(params, dict):
+        params = {}
+    # Per-probe inputs.json::ohlcv_csv override wins over the caller default.
+    if "ohlcv_csv" in params:
+        _csv_val = str(params["ohlcv_csv"])
+        ohlcv_path = (Path(_csv_val) if _csv_val.startswith("/")
+                      else (strategy_dir / _csv_val)).resolve()
+    else:
+        ohlcv_path = Path(default_ohlcv).resolve()
+    # Per-probe chart tz override wins over the caller default. Empty
+    # string is honoured (engine UTC fast path).
+    if "chart_timezone" in params:
+        chart_tz = str(params.get("chart_timezone") or "")
+    else:
+        chart_tz = default_chart_tz or ""
+    ohlcv_start_ms: int | None = None
+    if "ohlcv_start_ms" in params:
+        try:
+            ohlcv_start_ms = int(params["ohlcv_start_ms"])
+        except (TypeError, ValueError):
+            ohlcv_start_ms = None
+    runtime_overrides = params.get("runtime_overrides") or {}
+    if not isinstance(runtime_overrides, dict):
+        runtime_overrides = {}
+    try:
+        magnifier_samples = int(runtime_overrides.get("magnifier_samples", 4) or 4)
+    except (TypeError, ValueError):
+        magnifier_samples = 4
+    syminfo_metadata = runtime_overrides.get("syminfo_metadata")
+    if not isinstance(syminfo_metadata, dict):
+        syminfo_metadata = None
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    kwargs = dict(
+        chart_timezone=chart_tz,
+        syminfo_timezone=str(runtime_overrides.get("timezone") or "") or None,
+        syminfo_session=str(runtime_overrides.get("session") or "") or None,
+        syminfo_metadata=syminfo_metadata,
+        syminfo_mintick=_num(runtime_overrides.get("mintick")),
+        syminfo_pointvalue=_num(runtime_overrides.get("pointvalue")),
+        input_tf=str(params.get("input_tf") or "") or None,
+        script_tf=str(params.get("script_tf") or "") or None,
+        ohlcv_start_ms=ohlcv_start_ms,
+        bar_magnifier=bool(runtime_overrides.get("bar_magnifier", False)),
+        magnifier_samples=magnifier_samples,
+        magnifier_distribution=str(runtime_overrides.get(
+            "magnifier_distribution", "ENDPOINTS") or "ENDPOINTS"),
+        magnifier_volume_weighted=bool(
+            runtime_overrides.get("magnifier_volume_weighted", False)),
+    )
+    return ohlcv_path, kwargs
+
+
 class Strategy:
     """Thin ctypes wrapper around one strategy.so."""
 
@@ -312,10 +397,12 @@ class Strategy:
             syminfo_pointvalue: float | None = None,
             input_tf: str | None = None, script_tf: str | None = None,
             ohlcv_start_ms: int | None = None,
+            ohlcv_end_ms: int | None = None,
             bar_magnifier: bool = False,
             magnifier_samples: int = 4,
             magnifier_distribution: str = "ENDPOINTS",
-            magnifier_volume_weighted: bool = False) -> dict:
+            magnifier_volume_weighted: bool = False,
+            on_report=None) -> dict:
         """Read OHLCV from CSV, drive the engine, return a report dict.
 
         ``ohlcv_start_ms`` (when provided) trims the loaded OHLCV so the
@@ -326,8 +413,18 @@ class Strategy:
         comparison window begins and the entry gate becomes a no-op).
         Mirrors the per-probe ``inputs.json::ohlcv_start_ms`` metadata
         the validator already honours.
+
+        ``ohlcv_end_ms`` symmetrically drops bars after that timestamp
+        (inclusive bound), letting validation tooling test alternate
+        spans without a trimmed CSV copy.
+
+        ``on_report`` (when given) is invoked with the live ``ReportC``
+        after the engine-error check and BEFORE ``report_free``, so
+        callers can read report fields the summary dict does not carry
+        (``metrics.equity``, the raw ``equity_curve``, ...).
         """
-        bars, n = _load_bars(bars_csv, ohlcv_start_ms=ohlcv_start_ms)
+        bars, n = _load_bars(bars_csv, ohlcv_start_ms=ohlcv_start_ms,
+                             ohlcv_end_ms=ohlcv_end_ms)
         params = params or {}
         params_json = json.dumps(params).encode()
 
@@ -417,18 +514,23 @@ class Strategy:
                         raise RuntimeError(
                             "pineforge engine rejected run: " + err_msg
                         )
+            if on_report is not None:
+                on_report(report)
             return _report_to_dict(report)
         finally:
             self.lib.report_free(ctypes.byref(report))
             self.lib.strategy_free(state)
 
 
-def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None) -> tuple[ctypes.Array, int]:
+def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
+               ohlcv_end_ms: int | None = None) -> tuple[ctypes.Array, int]:
     """Read OHLCV CSV (timestamp, open, high, low, close, volume) into BarC[].
 
     When ``ohlcv_start_ms`` is given, drop bars whose timestamp is below
     that bound. Used by probes that pin warmup depth to the user's TV
     chart history (per-probe ``inputs.json::ohlcv_start_ms`` metadata).
+    ``ohlcv_end_ms`` symmetrically drops bars whose timestamp is above
+    that bound (inclusive keep).
     """
     rows: list[tuple[float, float, float, float, float, int]] = []
     with csv_path.open(newline="", encoding="utf-8") as f:
@@ -436,6 +538,8 @@ def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None) -> tuple[ct
         for row in reader:
             ts = int(row["timestamp"])
             if ohlcv_start_ms is not None and ts < ohlcv_start_ms:
+                continue
+            if ohlcv_end_ms is not None and ts > ohlcv_end_ms:
                 continue
             rows.append((
                 float(row["open"]),
@@ -690,13 +794,7 @@ def main() -> int:
         return 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    so_path = strategy_dir / args.so_name
-    if not so_path.exists():
-        for alt in ("strategy.dylib", "strategy.so", "strategy.dll"):
-            cand = strategy_dir / alt
-            if cand.exists():
-                so_path = cand
-                break
+    so_path = find_strategy_lib(strategy_dir, args.so_name)
 
     started = time.time()
     strat = Strategy(so_path)
@@ -705,18 +803,13 @@ def main() -> int:
     if inputs_path.exists():
         with inputs_path.open(encoding="utf-8") as f:
             params = json.load(f)
-    # Per-probe inputs.json::ohlcv_csv override wins over --ohlcv. Used by
-    # probes that need a different OHLCV than the global default — e.g.
-    # ``request.security_lower_tf`` probes that need a real 1m feed
-    # routed through the engine's input-passthrough LTF path instead of
-    # the synthesis path's waypoint walk. Mirrors the canonical
-    # validator's per-probe override (validate.py docstring lines 63-71).
-    if isinstance(params, dict) and "ohlcv_csv" in params:
-        _csv_val = params["ohlcv_csv"]
-        ohlcv_path = (Path(_csv_val) if str(_csv_val).startswith("/")
-                      else (strategy_dir / _csv_val)).resolve()
-    else:
-        ohlcv_path = args.ohlcv.resolve()
+    # Per-probe inputs.json metadata (ohlcv_csv / chart_timezone /
+    # input_tf / script_tf / ohlcv_start_ms / runtime_overrides) is
+    # resolved by the shared helper — see inputs_run_kwargs docstring.
+    # Per-probe overrides win over --ohlcv / --chart-tz CLI defaults.
+    ohlcv_path, run_kwargs = inputs_run_kwargs(
+        params, strategy_dir, args.ohlcv.resolve(),
+        default_chart_tz=args.chart_tz or "")
     tv_window_used = False
     if args.no_trim_output:
         emit_window = None
@@ -728,78 +821,10 @@ def main() -> int:
         if emit_window is None:
             emit_window = _load_window_ms(REFERENCE_OHLCV)
     trade_start_ms = emit_window[0] if (emit_window is not None and (tv_window_used or args.disable_trading_before_window)) else None
-    # Per-probe inputs.json override wins over the CLI default. Empty
-    # string is honoured (treated as "use engine UTC fast path").
-    if isinstance(params, dict) and "chart_timezone" in params:
-        chart_tz = str(params.get("chart_timezone") or "")
-    else:
-        chart_tz = args.chart_tz or ""
-    # Optional per-probe input_tf / script_tf overrides. Used together
-    # with ``ohlcv_csv`` when the override OHLCV is a finer feed than
-    # the strategy's native chart TF — e.g. feeding 1m bars to a 15m
-    # strategy so request.security_lower_tf("1", ...) takes the
-    # input-passthrough LTF path. Empty string => engine uses its
-    # auto-detect (input_tf) / input_tf default (script_tf).
-    input_tf_override = (str(params.get("input_tf") or "")
-                        if isinstance(params, dict) else "")
-    script_tf_override = (str(params.get("script_tf") or "")
-                          if isinstance(params, dict) else "")
-    # Per-probe ``ohlcv_start_ms`` trims the loaded OHLCV so the engine's
-    # first bar matches the user's TV chart history start. Required for
-    # probes whose state accumulators (var matrix<bool>, var array<>, etc.)
-    # would behave differently when fed extra warmup bars not present on
-    # the original TV chart at export time.
-    ohlcv_start_ms_val: int | None = None
-    if isinstance(params, dict) and "ohlcv_start_ms" in params:
-        try:
-            ohlcv_start_ms_val = int(params["ohlcv_start_ms"])
-        except (TypeError, ValueError):
-            ohlcv_start_ms_val = None
-    # Per-probe ``runtime_overrides`` block forwards engine-level knobs
-    # (bar magnifier toggle, magnifier sample distribution, etc.) that
-    # don't have Pine ``input.*()`` counterparts. Mirrors the canonical
-    # validator's ``runtime_overrides`` schema. Unknown keys are silently
-    # ignored so future runtime knobs don't break older harness builds.
-    runtime_overrides = (params.get("runtime_overrides") or {}) \
-        if isinstance(params, dict) else {}
-    if not isinstance(runtime_overrides, dict):
-        runtime_overrides = {}
-    bar_magnifier_flag = bool(runtime_overrides.get("bar_magnifier", False))
-    magnifier_dist_str = str(runtime_overrides.get("magnifier_distribution",
-                                                  "ENDPOINTS") or "ENDPOINTS")
-    try:
-        magnifier_samples_int = int(runtime_overrides.get("magnifier_samples", 4) or 4)
-    except (TypeError, ValueError):
-        magnifier_samples_int = 4
-    magnifier_vw_flag = bool(runtime_overrides.get("magnifier_volume_weighted", False))
-    # Symbol metadata overrides (#19): exchange tz / session feed
-    # session.ismarket; ``syminfo_metadata`` injects fundamental fields.
-    syminfo_tz = str(runtime_overrides.get("timezone") or "") or None
-    syminfo_session = str(runtime_overrides.get("session") or "") or None
-    syminfo_metadata = runtime_overrides.get("syminfo_metadata")
-    if not isinstance(syminfo_metadata, dict):
-        syminfo_metadata = None
-    def _num(v):
-        try: return float(v)
-        except (TypeError, ValueError): return None
-    syminfo_mintick = _num(runtime_overrides.get("mintick"))
-    syminfo_pointvalue = _num(runtime_overrides.get("pointvalue"))
     report = strat.run(ohlcv_path, params=params,
                        trace_enabled=args.trace_json is not None,
                        trade_start_time_ms=trade_start_ms,
-                       chart_timezone=chart_tz,
-                       syminfo_timezone=syminfo_tz,
-                       syminfo_session=syminfo_session,
-                       syminfo_metadata=syminfo_metadata,
-                       syminfo_mintick=syminfo_mintick,
-                       syminfo_pointvalue=syminfo_pointvalue,
-                       input_tf=input_tf_override or None,
-                       script_tf=script_tf_override or None,
-                       ohlcv_start_ms=ohlcv_start_ms_val,
-                       bar_magnifier=bar_magnifier_flag,
-                       magnifier_samples=magnifier_samples_int,
-                       magnifier_distribution=magnifier_dist_str,
-                       magnifier_volume_weighted=magnifier_vw_flag)
+                       **run_kwargs)
     raw_trade_count = len(report["trades"])
     trades_to_write = _filter_trades_to_window(report["trades"], emit_window)
     write_engine_trades_csv(trades_to_write, out_path)
