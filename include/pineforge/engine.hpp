@@ -17,7 +17,11 @@
 // Suppress per-strategy function declarations (strategy_create, run_backtest,
 // etc.) whose pf_*_t parameter types conflict with the internal C++ types
 // used in codegen-emitted extern "C" blocks that include this header.
+// NOTE: this macro leaks into every TU that includes engine.hpp; include
+// pineforge.h FIRST in any TU that needs the per-strategy declarations
+// (see src/c_abi.cpp).
 #define PINEFORGE_NO_STRATEGY_DECLS
+// Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
 
 namespace pineforge {
@@ -85,7 +89,7 @@ struct TradeC {
     double max_runup;
     double max_drawdown;
     double qty;
-    double commission;
+    double commission;           // mirrors pf_trade_t tail; semantics documented in pineforge.h
     int32_t entry_bar_index;
     int32_t exit_bar_index;
 };

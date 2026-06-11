@@ -66,12 +66,15 @@
 #endif
 
 /** Monotonic ABI version of pf_report_t / pf_trade_t layout. Bumped
- *  whenever a caller-allocated struct grows. Consumers MUST verify
- *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest —
- *  pf_report_t is caller-allocated, so a layout mismatch is silent
- *  stack corruption, not an error. Value 2 = first versioned layout
- *  (metrics + equity curve); .so files predating this macro have no
- *  pf_abi_version symbol — treat dlsym failure as version 1. */
+ *  whenever a caller-visible struct grows. Consumers MUST verify
+ *  pf_abi_version() == PF_ABI_VERSION before calling run_backtest.
+ *  pf_report_t is caller-allocated: growth causes silent stack corruption
+ *  in old callers that under-size the struct. pf_trade_t is runtime-
+ *  allocated: growth causes array-stride misindexing in old readers that
+ *  iterate the trades array with the stale sizeof. Value 2 = first
+ *  versioned layout (metrics + equity curve); .so files predating this
+ *  macro have no pf_abi_version symbol — treat dlsym failure as
+ *  version 1. */
 #define PF_ABI_VERSION 2
 
 #ifdef __cplusplus
@@ -139,52 +142,93 @@ typedef struct pf_trade_s {
 /** Trade-level statistics block — computed once each for all / long / short.
  *
  *  Loss-side fields (`gross_loss`, `avg_loss`, `largest_loss`) are
- *  **positive magnitudes** (absolute values of the underlying negative PnL).
- *
- *  NaN conventions (doxygen per-field):
- *  - `profit_factor`: NaN when `gross_loss` is zero.
- *  - `ratio_avg_win_avg_loss`: NaN when either side has zero trades.
- *  - Per-trade averages (`avg_win`, `avg_loss`, etc.): NaN when the
- *    denominator count is zero.
- *  - `expectancy`: NaN when `num_trades` is zero. */
+ *  **positive magnitudes** (absolute values of the underlying negative PnL). */
 typedef struct pf_trade_stats_s {
-    int32_t num_trades, num_wins, num_losses;
-    int32_t num_even;                  /**< Zero-PnL trades; fills padding hole.
+    int32_t num_trades;                /**< Closed trades in this block (all / long-only / short-only). */
+    int32_t num_wins;                  /**< Trades with pnl > 0. */
+    int32_t num_losses;                /**< Trades with pnl < 0. */
+    int32_t num_even;                  /**< Trades with pnl == 0.0 exactly; breaks both win and loss
+                                        *   streaks; excluded from win/loss averages.
                                         *   Invariant: num_trades == num_wins + num_losses + num_even. */
-    double  percent_profitable;
-    double  net_profit,   net_profit_pct;
-    double  gross_profit, gross_profit_pct;
-    double  gross_loss,   gross_loss_pct;
-    double  profit_factor;
-    double  avg_trade, avg_trade_pct;
-    double  avg_win,   avg_win_pct;
-    double  avg_loss,  avg_loss_pct;
-    double  ratio_avg_win_avg_loss;
-    double  largest_win,  largest_win_pct;
-    double  largest_loss, largest_loss_pct;
-    double  commission_paid;
-    double  expectancy;
-    int32_t max_consecutive_wins, max_consecutive_losses;
-    double  avg_bars_in_trade, avg_bars_in_wins, avg_bars_in_losses;
+    double  percent_profitable;        /**< 100 * num_wins / num_trades, in PERCENT (0-100).
+                                        *   NaN when num_trades == 0. */
+    double  net_profit;                /**< Sum of pnl (account currency, net of commission). */
+    double  net_profit_pct;            /**< net_profit as a percent of initial capital (0-100 scale).
+                                        *   NaN when initial capital <= 0. */
+    double  gross_profit;              /**< Sum of winning pnl. */
+    double  gross_profit_pct;          /**< gross_profit as a percent of initial capital (0-100 scale).
+                                        *   NaN when initial capital <= 0. */
+    double  gross_loss;                /**< Sum of |losing pnl| — POSITIVE magnitude (TV display convention). */
+    double  gross_loss_pct;            /**< gross_loss as a percent of initial capital (0-100 scale).
+                                        *   NaN when initial capital <= 0. */
+    double  profit_factor;             /**< gross_profit / gross_loss. NaN when gross_loss == 0. */
+    double  avg_trade;                 /**< net_profit / num_trades. NaN when num_trades == 0. */
+    double  avg_trade_pct;             /**< Mean of per-trade pnl_pct over all trades.
+                                        *   NaN when num_trades == 0. */
+    double  avg_win;                   /**< gross_profit / num_wins. NaN when num_wins == 0. */
+    double  avg_win_pct;               /**< Mean of per-trade pnl_pct over winning trades.
+                                        *   NaN when num_wins == 0. */
+    double  avg_loss;                  /**< gross_loss / num_losses (positive magnitude).
+                                        *   NaN when num_losses == 0. */
+    double  avg_loss_pct;              /**< Mean of per-trade |pnl_pct| over losing trades (positive
+                                        *   magnitude). Exact TV percent base is an arbitration item
+                                        *   pinned against corpus exports; current basis = pf_trade_t::pnl_pct.
+                                        *   NaN when num_losses == 0. */
+    double  ratio_avg_win_avg_loss;    /**< avg_win / avg_loss. NaN unless both sides non-empty. */
+    double  largest_win;               /**< Single largest pnl among winning trades.
+                                        *   NaN when num_wins == 0. */
+    double  largest_win_pct;           /**< pnl_pct of the largest winning trade.
+                                        *   NaN when num_wins == 0. */
+    double  largest_loss;              /**< Single largest |pnl| among losing trades (positive magnitude).
+                                        *   NaN when num_losses == 0. */
+    double  largest_loss_pct;          /**< |pnl_pct| of the largest losing trade (positive magnitude).
+                                        *   NaN when num_losses == 0. */
+    double  commission_paid;           /**< Sum of pf_trade_t::commission in the block. */
+    double  expectancy;                /**< (num_wins/num_trades)*avg_win - (num_losses/num_trades)*avg_loss,
+                                        *   account currency per trade. NaN when num_trades == 0. */
+    int32_t max_consecutive_wins;      /**< Longest winning run; even trades reset both streaks. */
+    int32_t max_consecutive_losses;    /**< Longest losing run; even trades reset both streaks. */
+    double  avg_bars_in_trade;         /**< Mean of (exit_bar_index - entry_bar_index) in SCRIPT bars,
+                                        *   over all trades. NaN when num_trades == 0. */
+    double  avg_bars_in_wins;          /**< Mean bar duration of winning trades. NaN when num_wins == 0. */
+    double  avg_bars_in_losses;        /**< Mean bar duration of losing trades. NaN when num_losses == 0. */
 } pf_trade_stats_t;
 
-/** Equity-curve-derived statistics (all-trades only, like TV).
- *
- *  NaN conventions:
- *  - `sharpe_tv` / `sortino_tv`: NaN when < 2 monthly returns or zero
- *    standard / downside deviation.
- *  - `sharpe_bar` / `sortino_bar`: NaN when < 2 bar returns or zero
- *    deviation.
- *  - `calmar`: NaN when `max_equity_drawdown_pct` is zero.
- *  - `recovery_factor`: NaN when `max_equity_drawdown` is zero. */
+/** Equity-curve-derived statistics (all-trades only, like TV). */
 typedef struct pf_equity_stats_s {
-    double max_equity_drawdown, max_equity_drawdown_pct;
-    double max_equity_runup,    max_equity_runup_pct;
-    double buy_hold_return,     buy_hold_return_pct;
-    double sharpe_tv,  sortino_tv;     /**< Monthly resample, RF = 2%/yr. */
-    double sharpe_bar, sortino_bar;    /**< Per-bar, density-annualized. */
-    double cagr, calmar, recovery_factor, time_in_market_pct;
-    double open_pl;                    /**< Open profit at final bar. */
+    double max_equity_drawdown;        /**< Peak-to-trough equity drop, positive currency magnitude. */
+    double max_equity_drawdown_pct;    /**< max_equity_drawdown relative to the peak in effect
+                                        *   (PERCENT 0-100). */
+    double max_equity_runup;           /**< Trough-to-peak rise where the trough resets on each new
+                                        *   equity peak (mirrors the engine's intra-run extremes). */
+    double max_equity_runup_pct;       /**< max_equity_runup relative to that trough (PERCENT 0-100). */
+    double buy_hold_return;            /**< initial_capital * (last_close/first_open - 1), currency.
+                                        *   NaN when first chart open is non-finite or <= 0. */
+    double buy_hold_return_pct;        /**< buy_hold_return as PERCENT.
+                                        *   NaN when first chart open is non-finite or <= 0. */
+    double sharpe_tv;                  /**< Month-end-resampled equity simple returns (chart timezone,
+                                        *   open-time bucketing), risk-free 2%/yr (2/12 per month),
+                                        *   annualized by sqrt(12). Uses sample (N-1) stddev.
+                                        *   NaN with <2 monthly returns or zero deviation. */
+    double sortino_tv;                 /**< Same resampling as sharpe_tv; uses population downside
+                                        *   deviation vs the monthly risk-free.
+                                        *   NaN with <2 monthly returns or zero deviation. */
+    double sharpe_bar;                 /**< Per-script-bar returns, annualized by observed bar density
+                                        *   (bars per year = (len-1)/calendar span), NOT a fixed
+                                        *   calendar formula. Uses sample (N-1) stddev.
+                                        *   NaN with <2 returns or zero deviation. */
+    double sortino_bar;                /**< Same construction as sharpe_bar over per-bar returns;
+                                        *   uses population downside deviation.
+                                        *   NaN with <2 returns or zero deviation. */
+    double cagr;                       /**< PERCENT per year: 100*((final_equity/initial_capital)^(1/years)-1).
+                                        *   NaN when span <= 0 or either side <= 0. */
+    double calmar;                     /**< cagr / max_equity_drawdown_pct — BOTH IN PERCENT, so the
+                                        *   ratio is dimensionless. NaN when drawdown is 0. */
+    double recovery_factor;            /**< net_profit / max_equity_drawdown (currency / currency).
+                                        *   NaN when drawdown is 0. */
+    double time_in_market_pct;         /**< PERCENT (0-100) of script bars with an open position
+                                        *   at bar close. */
+    double open_pl;                    /**< Mark-to-market open profit at the final bar. */
 } pf_equity_stats_t;
 
 /** Composite metrics container: trade stats (all / long / short) +

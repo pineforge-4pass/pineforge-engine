@@ -14,6 +14,9 @@
  *     codegen, not here.
  */
 
+// Include order is load-bearing: pineforge.h BEFORE engine.hpp keeps the
+// per-strategy declarations visible so definitions here are prototype-checked.
+// engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
 #include <pineforge/bar.hpp>

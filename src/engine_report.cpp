@@ -179,6 +179,8 @@ void BacktestEngine::free_report(ReportC* report) {
         report->trace_names_len = 0;
     }
     if (report && report->equity_curve) {
+        // Allocation site (fill_metrics_section, plan Task 6) must use
+        // `new pf_equity_point_t[n]` to match this delete[].
         delete[] report->equity_curve;
         report->equity_curve = nullptr;
         report->equity_curve_len = 0;
