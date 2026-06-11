@@ -171,7 +171,9 @@ static void test_trade_stats_all() {
     // largest_win=100 (pct 10); largest_loss=50 (pct 5); commission=2.75
     // expectancy = 0.5*60 - 0.25*50 = 17.5
     // streaks: W,L,W,E -> max_wins=1, max_losses=1 (even breaks streaks)
-    // bars: (5-0)+(8-6)+(9-9)+(12-10) = 5,2,0,2 -> avg 2.25; wins (5+0)/2=2.5; losses 2/1=2
+    // bars (inclusive of entry bar, TV convention 2026-06-12):
+    // (5-0+1),(8-6+1),(9-9+1),(12-10+1) = 6,3,1,3 -> avg 3.25;
+    // wins (6+1)/2=3.5; losses 3/1=3
     TradeC ts[4] = { mk(100, 10, true, 1.0, 0, 5),  mk(-50, -5, false, 1.0, 6, 8),
                      mk(20, 2, true, 0.5, 9, 9),    mk(0, 0, true, 0.25, 10, 12) };
     pf_trade_stats_t s = pineforge::metrics::compute_trade_stats(
@@ -201,9 +203,28 @@ static void test_trade_stats_all() {
     CHECK(std::fabs(s.expectancy - 17.5) < 1e-12);
     CHECK(s.max_consecutive_wins == 1);
     CHECK(s.max_consecutive_losses == 1);
-    CHECK(std::fabs(s.avg_bars_in_trade - 2.25) < 1e-12);
-    CHECK(std::fabs(s.avg_bars_in_wins - 2.5) < 1e-12);
-    CHECK(std::fabs(s.avg_bars_in_losses - 2.0) < 1e-12);
+    CHECK(std::fabs(s.avg_bars_in_trade - 3.25) < 1e-12);
+    CHECK(std::fabs(s.avg_bars_in_wins - 3.5) < 1e-12);
+    CHECK(std::fabs(s.avg_bars_in_losses - 3.0) < 1e-12);
+}
+
+// TV "Largest profit/loss %" is the independent max of per-trade pnl_pct,
+// NOT the % of the largest-USD trade (arbitrated 2026-06-12 vs TV export:
+// All largest loss = 126.64 USD short @3.19% but "Largest loss %" = 4.06%
+// from a different, long trade). Discriminating fixture: the larger-USD
+// trade carries the smaller |pct| on both sides.
+static void test_trade_stats_largest_pct_independent() {
+    std::printf("trade stats: largest win/loss pct independent of USD maxima\n");
+    TradeC ts[4] = { mk(-100, -2, true,  0, 0, 1),   // largest USD loss, small pct
+                     mk(-50,  -5, false, 0, 2, 3),   // largest pct loss
+                     mk(200,   3, true,  0, 4, 5),   // largest USD win, small pct
+                     mk(80,    7, false, 0, 6, 7) }; // largest pct win
+    pf_trade_stats_t s = pineforge::metrics::compute_trade_stats(
+        ts, 4, pineforge::metrics::TradeFilter::ALL, 1000.0);
+    CHECK(std::fabs(s.largest_loss - 100.0) < 1e-12);     // USD max: trade 0
+    CHECK(std::fabs(s.largest_loss_pct - 5.0) < 1e-12);   // pct max: trade 1
+    CHECK(std::fabs(s.largest_win - 200.0) < 1e-12);      // USD max: trade 2
+    CHECK(std::fabs(s.largest_win_pct - 7.0) < 1e-12);    // pct max: trade 3
 }
 
 static void test_trade_stats_filters_and_nan() {
@@ -559,6 +580,7 @@ int main() {
     test_equity_curve_magnifier_invariant();
     test_trade_stats_all();
     test_trade_stats_filters_and_nan();
+    test_trade_stats_largest_pct_independent();
     test_equity_stats_sharpe_sortino_tv();
     test_equity_stats_drawdown_walk();
     test_equity_stats_edges();

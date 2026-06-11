@@ -79,7 +79,8 @@ typedef struct pf_trade_s {
     double  entry_price;    /* incl. slippage */
     double  exit_price;
     double  pnl;            /* net of commission, in account ccy */
-    double  pnl_pct;        /* relative to entry capital */
+    double  pnl_pct;        /* net return-on-cost: pnl / (entry_price*qty*pointvalue) * 100
+                               (TV "Net P&L %" convention) */
     int     is_long;        /* 1 = long, 0 = short */
     double  max_runup;      /* peak favorable price travel ($/unit qty) */
     double  max_drawdown;   /* peak adverse price travel ($/unit qty) */
@@ -186,7 +187,12 @@ typedef struct pf_metrics_s {
 twins), `commission_paid`, win/loss streaks, and bar-duration averages.
 Loss-side fields (`gross_loss`, `avg_loss`, `largest_loss`) are
 **positive magnitudes**, matching the TV display convention. `_pct`
-fields are on a 0–100 percent scale.
+fields are on a 0–100 percent scale. `largest_win_pct` /
+`largest_loss_pct` are the **independent** maxima of per-trade
+`pnl_pct` — not the percent of the largest-USD trade (TV convention,
+validated 2026-06-12). Bar-duration averages (`avg_bars_in_*`) count
+**inclusively** of the entry bar: `exit_bar_index - entry_bar_index + 1`
+(TV convention, validated 2026-06-12).
 
 **Equity stats** (`pf_equity_stats_t`) cover the equity drawdown /
 run-up extremes (currency + percent), `buy_hold_return`, Sharpe and

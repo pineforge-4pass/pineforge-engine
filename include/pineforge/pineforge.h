@@ -122,13 +122,14 @@ typedef struct pf_trade_s {
     double  entry_price;    /**< Entry fill price (incl. slippage). */
     double  exit_price;     /**< Exit  fill price (incl. slippage). */
     double  pnl;            /**< Net realized PnL in account currency (commission-inclusive). */
-    double  pnl_pct;        /**< Per-unit price return in percent: (exit/entry-1)*100 for
-                             *   longs, (entry/exit-1)*100 for shorts. This is a GROSS
-                             *   price-return %, computed before commission and independent
-                             *   of qty (it equals pnl/entry_capital only at qty=1, zero
-                             *   commission). TradingView's "Net P&L %" uses a net-of-
-                             *   commission return-on-cost convention; aligning the engine
-                             *   to it is a tracked correction. */
+    double  pnl_pct;        /**< Net return-on-cost in percent: pnl (NET of commission) /
+                             *   entry cost (entry_price * qty * pointvalue) * 100. This is
+                             *   TradingView's "Net P&L %" convention, arbitrated 2026-06-12
+                             *   against a real TV export (trade #258 short: 102.44 USD on a
+                             *   2276.66 entry => 4.50%). Degenerates to the old gross
+                             *   (exit/entry-1)*100 form for longs with zero commission;
+                             *   the previous short form (entry/exit-1)*100 was wrong on
+                             *   large moves. Sign always matches pnl. */
     int     is_long;        /**< 1 if long, 0 if short. */
     double  max_runup;      /**< Peak favorable price travel during the trade ($/unit qty). */
     double  max_drawdown;   /**< Peak adverse  price travel during the trade ($/unit qty). */
@@ -170,32 +171,39 @@ typedef struct pf_trade_stats_s {
                                         *   NaN when num_wins == 0. */
     double  avg_loss;                  /**< gross_loss / num_losses (positive magnitude).
                                         *   NaN when num_losses == 0. */
-    double  avg_loss_pct;              /**< Mean of the NEGATED pnl_pct of the losing trades (not an
-                                        *   absolute value); may be <= 0 for commission-driven losses
-                                        *   where the gross price move was favorable (pnl < 0 but
-                                        *   pnl_pct >= 0). Exact TV percent base is an arbitration item
-                                        *   pinned against corpus exports; current basis = pf_trade_t::pnl_pct.
+    double  avg_loss_pct;              /**< Mean of the NEGATED pnl_pct of the losing trades. Since
+                                        *   pnl_pct is net return-on-cost (sign matches pnl), this is
+                                        *   a genuinely POSITIVE magnitude. Basis = pf_trade_t::pnl_pct.
                                         *   NaN when num_losses == 0. */
     double  ratio_avg_win_avg_loss;    /**< avg_win / avg_loss. NaN unless both sides non-empty. */
     double  largest_win;               /**< Single largest pnl among winning trades.
                                         *   NaN when num_wins == 0. */
-    double  largest_win_pct;           /**< pnl_pct of the largest winning trade.
+    double  largest_win_pct;           /**< Maximum pnl_pct over winning trades — an INDEPENDENT
+                                        *   maximum, not the pct of the largest-USD win (TV convention,
+                                        *   validated 2026-06-12 vs TV export).
                                         *   NaN when num_wins == 0. */
     double  largest_loss;              /**< Single largest |pnl| among losing trades (positive magnitude).
                                         *   NaN when num_losses == 0. */
-    double  largest_loss_pct;          /**< Negated pnl_pct of the largest losing trade (not an absolute
-                                        *   value); may be <= 0 for commission-driven losses where the
-                                        *   gross price move was favorable.
-                                        *   NaN when num_losses == 0. */
+    double  largest_loss_pct;          /**< Maximum of -pnl_pct over losing trades (positive magnitude) —
+                                        *   an INDEPENDENT maximum, not the pct of the largest-USD loss
+                                        *   (TV convention, validated 2026-06-12 vs TV export: All
+                                        *   "Largest loss %" came from a different trade than the
+                                        *   largest USD loss). NaN when num_losses == 0. */
     double  commission_paid;           /**< Sum of pf_trade_t::commission in the block. */
     double  expectancy;                /**< (num_wins/num_trades)*avg_win - (num_losses/num_trades)*avg_loss,
                                         *   account currency per trade. NaN when num_trades == 0. */
     int32_t max_consecutive_wins;      /**< Longest winning run; even trades reset both streaks. */
     int32_t max_consecutive_losses;    /**< Longest losing run; even trades reset both streaks. */
-    double  avg_bars_in_trade;         /**< Mean of (exit_bar_index - entry_bar_index) in SCRIPT bars,
-                                        *   over all trades. NaN when num_trades == 0. */
-    double  avg_bars_in_wins;          /**< Mean bar duration of winning trades. NaN when num_wins == 0. */
-    double  avg_bars_in_losses;        /**< Mean bar duration of losing trades. NaN when num_losses == 0. */
+    double  avg_bars_in_trade;         /**< Mean of (exit_bar_index - entry_bar_index + 1) in SCRIPT
+                                        *   bars, over all trades — inclusive of the entry bar (TV
+                                        *   convention, validated 2026-06-12).
+                                        *   NaN when num_trades == 0. */
+    double  avg_bars_in_wins;          /**< Mean bar duration of winning trades, inclusive of the entry
+                                        *   bar (TV convention, validated 2026-06-12).
+                                        *   NaN when num_wins == 0. */
+    double  avg_bars_in_losses;        /**< Mean bar duration of losing trades, inclusive of the entry
+                                        *   bar (TV convention, validated 2026-06-12).
+                                        *   NaN when num_losses == 0. */
 } pf_trade_stats_t;
 
 /** Equity-curve-derived statistics (all-trades only, like TV). */

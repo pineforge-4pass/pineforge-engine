@@ -142,8 +142,11 @@ static void test_fixed_qty_pnl_scales_by_pointvalue() {
         CHECK(near(b.pnl, a.pnl * 50.0));
         CHECK(near(b.max_runup, a.max_runup * 50.0));
         CHECK(near(b.max_drawdown, a.max_drawdown * 50.0));
-        // pnl_pct is a price-return % — point-value invariant.
-        CHECK(b.pnl_pct == a.pnl_pct);
+        // pnl_pct is net return-on-cost (pnl / (entry*qty*pointvalue)):
+        // pnl and entry cost both scale by pointvalue (percent commission
+        // scales the notional too), so the ratio stays pointvalue-invariant
+        // — but only mathematically, not bit-for-bit, hence near().
+        CHECK(near(b.pnl_pct, a.pnl_pct));
     }
     CHECK(near(fut.net_sum(), base.net_sum() * 50.0));
     // Equity-curve extremes are in account currency too.

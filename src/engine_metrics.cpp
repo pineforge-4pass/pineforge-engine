@@ -85,7 +85,9 @@ pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
         s.net_profit += t.pnl;
         s.commission_paid += t.commission;
         pct_sum += t.pnl_pct;
-        const double bars = (double)(t.exit_bar_index - t.entry_bar_index);
+        // TV counts bars-in-trade inclusively of the entry bar (TV=9 vs the
+        // exclusive diff 8, all blocks; validated 2026-06-12 vs TV export).
+        const double bars = (double)(t.exit_bar_index - t.entry_bar_index) + 1.0;
         bars_sum += bars;
         if (t.pnl > 0.0) {
             ++s.num_wins;
@@ -94,7 +96,11 @@ pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
             win_bars_sum += bars;
             streak_l = 0;
             if (++streak_w > s.max_consecutive_wins) s.max_consecutive_wins = streak_w;
-            if (t.pnl > largest_win) { largest_win = t.pnl; largest_win_pct = t.pnl_pct; }
+            // TV "Largest profit %" is the independent max of per-trade %,
+            // NOT the % of the largest-USD win (validated 2026-06-12 vs TV
+            // export). Track the two maxima separately.
+            if (t.pnl > largest_win) largest_win = t.pnl;
+            if (t.pnl_pct > largest_win_pct) largest_win_pct = t.pnl_pct;
         } else if (t.pnl < 0.0) {
             ++s.num_losses;
             s.gross_loss += -t.pnl;            // positive magnitude
@@ -102,7 +108,11 @@ pf_trade_stats_t compute_trade_stats(const TradeC* trades, int n,
             loss_bars_sum += bars;
             streak_w = 0;
             if (++streak_l > s.max_consecutive_losses) s.max_consecutive_losses = streak_l;
-            if (-t.pnl > largest_loss) { largest_loss = -t.pnl; largest_loss_pct = -t.pnl_pct; }
+            // Independent maxima, mirroring the win side. pnl_pct is net
+            // return-on-cost (sign == pnl sign), so -pnl_pct is a true
+            // positive magnitude for losses.
+            if (-t.pnl > largest_loss) largest_loss = -t.pnl;
+            if (-t.pnl_pct > largest_loss_pct) largest_loss_pct = -t.pnl_pct;
         } else {
             ++s.num_even;                      // even trades break both streaks
             streak_w = 0;

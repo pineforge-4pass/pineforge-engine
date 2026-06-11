@@ -295,19 +295,23 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
                                       double fill_price, bool was_long) {
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
-    // multiply the price-difference PnL. pnl_pct is a price-return % and is
-    // point-value-invariant. Commission is in account currency: cash-per-* is
-    // already absolute, and percent commission scales the notional by
-    // pointvalue inside calc_commission.
+    // multiply the price-difference PnL. Commission is in account currency:
+    // cash-per-* is already absolute, and percent commission scales the
+    // notional by pointvalue inside calc_commission.
     const double pv = syminfo_.pointvalue;
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
                  * close_qty * pv;
-    double pnl_pct = was_long
-        ? (fill_price / pe.price - 1.0) * 100.0
-        : (pe.price / fill_price - 1.0) * 100.0;
     const double entry_commission = calc_commission(pe.price, close_qty);
     const double exit_commission  = calc_commission(fill_price, close_qty);
     pnl -= entry_commission + exit_commission;
+    // TV "Net P&L %" convention (arbitrated 2026-06-12 vs TV export,
+    // trade #258 short: 102.44 USD on 2276.66 entry => 4.50%): NET pnl
+    // as a percent of entry cost (entry_price * qty * pointvalue).
+    // Long/no-commission degenerates to the old (exit/entry-1) form;
+    // shorts diverge on large moves ((entry/exit-1) was wrong). Computed
+    // AFTER the commission subtraction above — order matters.
+    const double entry_cost = pe.price * close_qty * pv;
+    double pnl_pct = (entry_cost > 0.0) ? (pnl / entry_cost) * 100.0 : 0.0;
 
     Trade trade;
     trade.entry_time = pe.time;
