@@ -993,8 +993,7 @@ protected:
     }
     double closed_trade_commission(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
-        const Trade& t = trades_[idx];
-        return calc_commission(t.entry_price, t.qty) + calc_commission(t.exit_price, t.qty);
+        return trades_[idx].commission;
     }
     int closed_trade_entry_bar_index(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return na<int>();

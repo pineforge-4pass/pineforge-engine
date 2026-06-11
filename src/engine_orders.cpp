@@ -305,7 +305,9 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     double pnl_pct = was_long
         ? (fill_price / pe.price - 1.0) * 100.0
         : (pe.price / fill_price - 1.0) * 100.0;
-    pnl -= calc_commission(pe.price, close_qty) + calc_commission(fill_price, close_qty);
+    const double entry_commission = calc_commission(pe.price, close_qty);
+    const double exit_commission  = calc_commission(fill_price, close_qty);
+    pnl -= entry_commission + exit_commission;
 
     Trade trade;
     trade.entry_time = pe.time;
@@ -320,6 +322,7 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     trade.exit_bar_index = bar_index_;
     trade.entry_id = pe.entry_id;
     trade.entry_comment = pe.entry_comment;
+    trade.commission = entry_commission + exit_commission;
     // Excursions: TV's per-trade excursion includes the exit fill itself —
     // a stop-out's adverse excursion is at least the loss at the SL fill and
     // a take-profit's favorable excursion includes the move to the TP fill.
@@ -381,7 +384,6 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // confirmed across all 757k corpus rows); adverse grows by the entry
     // commission (open profit at the entry tick is already -commission).
     // Both fields remain >= 0 here (Pine positive-drawdown convention).
-    const double entry_commission = calc_commission(pe.price, close_qty);
     trade.max_runup = std::max(0.0, runup * pv - entry_commission);
     trade.max_drawdown = drawdown * pv + entry_commission;
     const double trade_pnl = trade.pnl;
