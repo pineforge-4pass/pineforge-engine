@@ -1,7 +1,8 @@
 /*
  * engine_metrics.cpp — pure metric computations (trade stats + equity
- * stats) consumed by fill_report. Conventions: see field docs in
- * <pineforge/pineforge.h> and docs/superpowers/specs/2026-06-11-*.md.
+ * stats) consumed by fill_report. Conventions (NaN rules, sign/percent
+ * bases, annualization) are pinned in the per-field doxygen of
+ * <pineforge/pineforge.h>; docs/pages/report-schema.md summarizes them.
  */
 #include <pineforge/metrics.hpp>
 

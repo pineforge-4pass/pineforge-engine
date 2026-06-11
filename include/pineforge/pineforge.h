@@ -331,7 +331,10 @@ typedef struct pf_report_s {
     /* Per-script-bar equity curve. time_ms is the script-bar OPEN
      * timestamp; equity = initial_capital + net_profit + open_profit at
      * bar close. Heap-allocated; freed by report_free. len ==
-     * script_bars_processed. NOTE int64_t length (ctypes: c_int64). */
+     * script_bars_processed, EXCEPT after a mid-run error (check
+     * strategy_get_last_error): an exception can truncate the curve, and
+     * metrics then describe the truncated prefix. NOTE int64_t length
+     * (ctypes: c_int64). */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;
 } pf_report_t;
