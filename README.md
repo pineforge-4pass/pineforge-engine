@@ -162,6 +162,7 @@ bash tutorial/run.sh                          # MACD backtest end-to-end
 | 📖 **[cdocs.pineforge.dev](https://cdocs.pineforge.dev)** | Full C ABI reference, lifecycle, report schema, configuration knobs, magnifier, FFI bindings, ABI stability contract |
 | 🚀 **[Getting Started](https://cdocs.pineforge.dev/getting_started.html)** | 60-second build + install + smoke test |
 | 🧪 **[Tutorial: MACD on BTC/USDT](https://cdocs.pineforge.dev/tutorial_macd.html)** | End-to-end annotated walkthrough |
+| 📊 **[Trading metrics reference](https://cdocs.pineforge.dev/metrics.html)** | Every report metric (ABI v2): definitions, units, NaN rules, TV / quant-library validation status |
 | 🔌 **[FFI from Python](https://cdocs.pineforge.dev/ffi_python.html)** | Complete `ctypes` mirror — paste-ready |
 | 🦀 **[Calling from Rust](https://cdocs.pineforge.dev/examples_rust.html)** | Idiomatic `libloading` wrapper |
 | 🧰 **[CMake integration](https://cdocs.pineforge.dev/integration_cmake.html)** | `find_package(PineForge)` recipe |
