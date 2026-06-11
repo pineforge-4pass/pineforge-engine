@@ -1,8 +1,15 @@
 /*
- * test_metrics.cpp -- per-trade commission capture and bar-index round-trip.
+ * test_metrics.cpp -- pins the C-ABI-exposed metrics surface.
  *
- * Verifies that emit_close_trade stores the entry+exit commission into
- * Trade::commission and that fill_report copies it faithfully into TradeC.
+ * Coverage:
+ *   - pf_trade_t commission ABI v2: verifies that emit_close_trade stores
+ *     the entry+exit commission into Trade::commission and that fill_report
+ *     copies it faithfully into TradeC. Commission tests recompute from the
+ *     formula independently so stored-vs-charged drift fails.
+ *   - pf_trade_stats_t blocks (ALL / LONG / SHORT): every field hand-
+ *     computed inline (sign, NaN, positive-magnitude loss, streak, bar-
+ *     duration conventions) against compute_trade_stats.
+ *   - Equity-curve length / timestamp monotonicity / magnifier invariance.
  */
 
 #include <cmath>
@@ -12,7 +19,7 @@
 
 #include <pineforge/engine.hpp>
 #include <pineforge/bar.hpp>
-#include <pineforge/na.hpp>
+#include <pineforge/metrics.hpp>
 
 using namespace pineforge;
 
@@ -139,10 +146,151 @@ static void test_equity_curve_magnifier_invariant() {
     CHECK(a.bim() == b.bim());
 }
 
+// ---------- Trade-stats synthetic fixtures (Task 4) -------------------------
+
+static TradeC mk(double pnl, double pnl_pct, bool is_long, double comm,
+                 int ebar, int xbar) {
+    TradeC t{};
+    t.pnl = pnl; t.pnl_pct = pnl_pct; t.is_long = is_long ? 1 : 0;
+    t.commission = comm; t.entry_bar_index = ebar; t.exit_bar_index = xbar;
+    t.qty = 1.0; t.entry_price = 100.0; t.exit_price = 100.0 + pnl;
+    return t;
+}
+
+static void test_trade_stats_all() {
+    std::printf("trade stats: ALL block\n");
+    // pnl: +100L, -50S, +20L, 0L  | capital 1000
+    // wins=2 losses=1 even=1; net=70; gp=120; gl=50(magnitude); pf=2.4
+    // avg_trade=17.5; avg_trade_pct=(10-5+2+0)/4=1.75
+    // avg_win=60 (pct 6); avg_loss=50 (pct 5); ratio=1.2
+    // largest_win=100 (pct 10); largest_loss=50 (pct 5); commission=2.75
+    // expectancy = 0.5*60 - 0.25*50 = 17.5
+    // streaks: W,L,W,E -> max_wins=1, max_losses=1 (even breaks streaks)
+    // bars: (5-0)+(8-6)+(9-9)+(12-10) = 5,2,0,2 -> avg 2.25; wins (5+0)/2=2.5; losses 2/1=2
+    TradeC ts[4] = { mk(100, 10, true, 1.0, 0, 5),  mk(-50, -5, false, 1.0, 6, 8),
+                     mk(20, 2, true, 0.5, 9, 9),    mk(0, 0, true, 0.25, 10, 12) };
+    pf_trade_stats_t s = pineforge::metrics::compute_trade_stats(
+        ts, 4, pineforge::metrics::TradeFilter::ALL, 1000.0);
+    CHECK(s.num_trades == 4); CHECK(s.num_wins == 2);
+    CHECK(s.num_losses == 1); CHECK(s.num_even == 1);
+    CHECK(std::fabs(s.percent_profitable - 50.0) < 1e-12);
+    CHECK(std::fabs(s.net_profit - 70.0) < 1e-12);
+    CHECK(std::fabs(s.net_profit_pct - 7.0) < 1e-12);
+    CHECK(std::fabs(s.gross_profit - 120.0) < 1e-12);
+    CHECK(std::fabs(s.gross_profit_pct - 12.0) < 1e-12);
+    CHECK(std::fabs(s.gross_loss - 50.0) < 1e-12);          // positive magnitude
+    CHECK(std::fabs(s.gross_loss_pct - 5.0) < 1e-12);
+    CHECK(std::fabs(s.profit_factor - 2.4) < 1e-12);
+    CHECK(std::fabs(s.avg_trade - 17.5) < 1e-12);
+    CHECK(std::fabs(s.avg_trade_pct - 1.75) < 1e-12);
+    CHECK(std::fabs(s.avg_win - 60.0) < 1e-12);
+    CHECK(std::fabs(s.avg_win_pct - 6.0) < 1e-12);
+    CHECK(std::fabs(s.avg_loss - 50.0) < 1e-12);            // positive magnitude
+    CHECK(std::fabs(s.avg_loss_pct - 5.0) < 1e-12);
+    CHECK(std::fabs(s.ratio_avg_win_avg_loss - 1.2) < 1e-12);
+    CHECK(std::fabs(s.largest_win - 100.0) < 1e-12);
+    CHECK(std::fabs(s.largest_win_pct - 10.0) < 1e-12);
+    CHECK(std::fabs(s.largest_loss - 50.0) < 1e-12);
+    CHECK(std::fabs(s.largest_loss_pct - 5.0) < 1e-12);
+    CHECK(std::fabs(s.commission_paid - 2.75) < 1e-12);
+    CHECK(std::fabs(s.expectancy - 17.5) < 1e-12);
+    CHECK(s.max_consecutive_wins == 1);
+    CHECK(s.max_consecutive_losses == 1);
+    CHECK(std::fabs(s.avg_bars_in_trade - 2.25) < 1e-12);
+    CHECK(std::fabs(s.avg_bars_in_wins - 2.5) < 1e-12);
+    CHECK(std::fabs(s.avg_bars_in_losses - 2.0) < 1e-12);
+}
+
+static void test_trade_stats_filters_and_nan() {
+    std::printf("trade stats: LONG/SHORT filters + NaN conventions\n");
+    TradeC ts[4] = { mk(100, 10, true, 1.0, 0, 5),  mk(-50, -5, false, 1.0, 6, 8),
+                     mk(20, 2, true, 0.5, 9, 9),    mk(0, 0, true, 0.25, 10, 12) };
+    pf_trade_stats_t L = pineforge::metrics::compute_trade_stats(
+        ts, 4, pineforge::metrics::TradeFilter::LONG, 1000.0);
+    CHECK(L.num_trades == 3); CHECK(L.num_losses == 0); CHECK(L.num_even == 1);
+    CHECK(std::isnan(L.profit_factor));   // zero gross loss
+    CHECK(std::isnan(L.avg_loss));
+    CHECK(std::isnan(L.ratio_avg_win_avg_loss));
+    CHECK(std::isnan(L.avg_bars_in_losses));
+    pf_trade_stats_t S = pineforge::metrics::compute_trade_stats(
+        ts, 4, pineforge::metrics::TradeFilter::SHORT, 1000.0);
+    CHECK(S.num_trades == 1); CHECK(S.num_wins == 0);
+    CHECK(std::isnan(S.avg_win));
+    pf_trade_stats_t E = pineforge::metrics::compute_trade_stats(
+        ts, 0, pineforge::metrics::TradeFilter::ALL, 1000.0);
+    CHECK(E.num_trades == 0);
+    CHECK(E.net_profit == 0.0);
+    CHECK(std::isnan(E.avg_trade));
+    CHECK(std::isnan(E.percent_profitable));
+    // consecutive streaks: W W L L L W -> max_wins=2, max_losses=3
+    TradeC seq[6] = { mk(1,1,true,0,0,1), mk(2,1,true,0,1,2), mk(-1,-1,true,0,2,3),
+                      mk(-2,-1,true,0,3,4), mk(-3,-1,true,0,4,5), mk(4,1,true,0,5,6) };
+    pf_trade_stats_t Q = pineforge::metrics::compute_trade_stats(
+        seq, 6, pineforge::metrics::TradeFilter::ALL, 1000.0);
+    CHECK(Q.max_consecutive_wins == 2);
+    CHECK(Q.max_consecutive_losses == 3);
+}
+
+// ---------- CASH_PER_CONTRACT commission test (deferred from Task 2) ---------
+// Two-trade full-close test: simpler than partial-close choreography (which
+// requires multi-bar qty management + close sequence that proved fragile with
+// the synthetic feed). Two consecutive flip trades under CASH_PER_CONTRACT
+// verify commission = commission_value_ * qty * 2 legs per trade.
+
+namespace {
+
+class CashPerContractFlip : public BacktestEngine {
+public:
+    double prev_close_ = std::numeric_limits<double>::quiet_NaN();
+    CashPerContractFlip() {
+        initial_capital_ = 1'000'000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 3.0;            // qty = 3 contracts
+        slippage_ = 0;
+        commission_type_ = CommissionType::CASH_PER_CONTRACT;
+        commission_value_ = 2.5;             // $2.50 per contract per leg
+        pyramiding_ = 1;
+    }
+    void on_bar(const Bar& bar) override {
+        if (!std::isnan(prev_close_)) {
+            if (bar.close > prev_close_)
+                strategy_entry("L", true, std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(), 3.0, "up");
+            else if (bar.close < prev_close_)
+                strategy_entry("S", false, std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::quiet_NaN(), 3.0, "dn");
+        }
+        prev_close_ = bar.close;
+    }
+};
+
+}  // namespace
+
+static void test_trade_commission_cash_per_contract() {
+    std::printf("trade commission: CASH_PER_CONTRACT full-close\n");
+    CashPerContractFlip s;
+    std::vector<Bar> bars = make_feed(120);
+    s.run(bars.data(), (int)bars.size());
+    ReportC rep{};
+    s.fill_report(&rep);
+    CHECK(rep.trades_len > 0);
+    for (int i = 0; i < rep.trades_len; ++i) {
+        const TradeC& t = rep.trades[i];
+        // CASH_PER_CONTRACT: commission = value * qty per leg, two legs
+        double expect = 2.5 * t.qty * 2.0;
+        CHECK(std::fabs(t.commission - expect) < 1e-9);
+        CHECK(t.commission > 0.0);
+    }
+    BacktestEngine::free_report(&rep);
+}
+
 int main() {
     test_trade_commission_and_bar_indexes();
+    test_trade_commission_cash_per_contract();
     test_equity_curve_basic();
     test_equity_curve_magnifier_invariant();
+    test_trade_stats_all();
+    test_trade_stats_filters_and_nan();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
