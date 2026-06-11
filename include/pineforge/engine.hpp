@@ -509,6 +509,11 @@ protected:
     double max_runup_ = 0.0;     // maximum runup (positive number)
     double min_equity_ = 0.0;    // trough equity for runup
 
+    // --- Per-script-bar equity curve (metrics + pf_report_t exposure) ---
+    std::vector<pf_equity_point_t> equity_curve_;
+    int64_t bars_in_market_ = 0;     // script bars with an open position at close
+    double first_bar_open_ = std::numeric_limits<double>::quiet_NaN();  // buy&hold basis
+
     // --- Position-size extremes (strategy.max_contracts_held_*) ---
     double max_contracts_held_all_ = 0.0;
     double max_contracts_held_long_ = 0.0;
@@ -979,6 +984,20 @@ protected:
             if (position_side_ == PositionSide::SHORT && abs_qty > max_contracts_held_short_)
                 max_contracts_held_short_ = abs_qty;
         }
+    }
+
+    // Record one equity point per SCRIPT bar. ``script_bar_ts`` must be the
+    // script-bar open timestamp captured BEFORE dispatch — current_bar_.timestamp
+    // is overwritten by the magnifier sub-bar walk (engine_run.cpp), which would
+    // make the curve differ between magnifier on/off.
+    void record_equity_point(int64_t script_bar_ts) {
+        if (equity_curve_.empty()) first_bar_open_ = current_bar_.open;
+        pf_equity_point_t p;
+        p.time_ms = script_bar_ts;
+        p.open_profit = open_profit(current_bar_.close);
+        p.equity = initial_capital_ + net_profit_sum_ + p.open_profit;
+        equity_curve_.push_back(p);
+        if (position_side_ != PositionSide::FLAT) ++bars_in_market_;
     }
 
     // --- Trade history accessors (for strategy.closedtrades.*) ---

@@ -54,6 +54,8 @@ public:
         }
         prev_close_ = bar.close;
     }
+    const std::vector<pf_equity_point_t>& curve() const { return equity_curve_; }
+    int64_t bim() const { return bars_in_market_; }
 };
 
 std::vector<Bar> make_feed(int n) {
@@ -69,6 +71,15 @@ std::vector<Bar> make_feed(int n) {
         bars[i].volume = 1000.0 + (i % 100);
         bars[i].timestamp = (int64_t)(i + 1) * 900'000;
     }
+    return bars;
+}
+
+// Same OHLC shape as make_feed but with realistic 1-minute-spaced timestamps,
+// suitable for "1" -> "15" aggregation runs (magnifier on/off invariance).
+std::vector<Bar> make_feed_1m(int n) {
+    std::vector<Bar> bars = make_feed(n);
+    for (int i = 0; i < n; ++i)
+        bars[i].timestamp = 1700000000000LL + (int64_t)i * 60'000LL;
     return bars;
 }
 
@@ -96,8 +107,42 @@ static void test_trade_commission_and_bar_indexes() {
     BacktestEngine::free_report(&rep);
 }
 
+static void test_equity_curve_basic() {
+    std::printf("equity curve: length, last-point identity, monotonic ts\n");
+    MomoFlip s;
+    std::vector<Bar> bars = make_feed(120);
+    s.run(bars.data(), (int)bars.size());
+    ReportC rep{};
+    s.fill_report(&rep);
+    CHECK((int64_t)s.curve().size() == rep.script_bars_processed);
+    CHECK(!s.curve().empty());
+    const pf_equity_point_t& last = s.curve().back();
+    CHECK(std::fabs(last.equity - (1'000'000.0 + rep.net_profit + last.open_profit)) < 1e-9);
+    for (size_t i = 1; i < s.curve().size(); ++i)
+        CHECK(s.curve()[i].time_ms > s.curve()[i - 1].time_ms);
+    BacktestEngine::free_report(&rep);
+}
+
+static void test_equity_curve_magnifier_invariant() {
+    std::printf("equity curve: magnifier on/off bit-identical\n");
+    std::vector<Bar> bars = make_feed_1m(40 * 15);   // 40 script bars of 15m
+    MomoFlip a, b;
+    a.run(bars.data(), (int)bars.size(), "1", "15", false, 4, MagnifierDistribution::ENDPOINTS);
+    b.run(bars.data(), (int)bars.size(), "1", "15", true,  4, MagnifierDistribution::ENDPOINTS);
+    CHECK(a.curve().size() == b.curve().size());
+    CHECK(!a.curve().empty());
+    for (size_t i = 0; i < a.curve().size() && i < b.curve().size(); ++i) {
+        CHECK(a.curve()[i].time_ms == b.curve()[i].time_ms);       // blocker-1 pin
+        CHECK(a.curve()[i].equity  == b.curve()[i].equity);        // bit-equal: market-on-close fills identical
+        CHECK(a.curve()[i].open_profit == b.curve()[i].open_profit);
+    }
+    CHECK(a.bim() == b.bim());
+}
+
 int main() {
     test_trade_commission_and_bar_indexes();
+    test_equity_curve_basic();
+    test_equity_curve_magnifier_invariant();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
