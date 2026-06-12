@@ -23,7 +23,7 @@
 
 <div align="center">
 
-![PineForge MCP demo — an AI agent transpiling, backtesting, and sweeping a PineScript strategy in the terminal](.github/assets/demo.gif)
+[![Real backtest for pineforge on Claude in 60 seconds](https://img.youtube.com/vi/lflD47Bum4w/0.jpg)](https://www.youtube.com/watch?v=lflD47Bum4w)
 
 </div>
 
