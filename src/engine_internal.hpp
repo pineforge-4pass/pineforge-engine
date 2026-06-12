@@ -96,6 +96,12 @@ struct ExitPathFill {
     // Consumers use it to reconstruct the trail's peak (fill +/- offset)
     // for per-trade excursion reporting.
     bool is_trail = false;
+    // True when the LIMIT leg produced the fill (intra-bar touch of the
+    // limit, or a gap-open beyond the limit). TradingView fills limit
+    // orders at limit-or-better with NO slippage (see apply_limit_fill in
+    // engine.hpp); the fill-application code needs to know which leg fired
+    // because price equality cannot distinguish a gap fill at the open.
+    bool is_limit = false;
 };
 
 

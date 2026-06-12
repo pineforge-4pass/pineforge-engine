@@ -60,6 +60,7 @@ set(TEST_SOURCES
     test_timeframe_aggregator_extra
     test_c_abi_setters
     test_fills_edge
+    test_limit_fill_slippage
     test_strategy_commands_extra
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra
