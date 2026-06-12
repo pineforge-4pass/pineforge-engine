@@ -393,11 +393,20 @@ void BacktestEngine::apply_filled_order_to_state(
         !std::isnan(order.stop_price) || !std::isnan(order.limit_price)
         || !std::isnan(order.trail_points) || !std::isnan(order.trail_offset);
     // Route LIMIT-triggered fills onto the unslipped limit-or-better
-    // price path (apply_fill_slippage). Scoped strictly to the dispatch
-    // below: the intraday-cap synthetic close further down must stay on
-    // the market (slipped) path even when the cap-triggering fill was a
-    // limit fill.
-    current_fill_is_limit_ = fill_is_limit;
+    // price path (apply_fill_slippage). RAII guard scoped strictly to the
+    // dispatch block below: the intraday-cap synthetic close further down
+    // must stay on the market (slipped) path even when the cap-triggering
+    // fill was a limit fill, and any future early return inside the
+    // dispatch cannot leak a stale true into the next fill.
+    struct FillKindGuard {
+        bool& flag_;
+        FillKindGuard(bool& flag, bool value) : flag_(flag) { flag_ = value; }
+        ~FillKindGuard() { flag_ = false; }
+        FillKindGuard(const FillKindGuard&) = delete;
+        FillKindGuard& operator=(const FillKindGuard&) = delete;
+    };
+    {
+    FillKindGuard fill_kind_guard(current_fill_is_limit_, fill_is_limit);
     if (last_exit_fill_was_trail_) {
         // TRAIL fills retrace exactly trail_offset from the armed peak, so
         // peak = fill +/- offset — a pre-fill favorable excursion of the
@@ -421,7 +430,7 @@ void BacktestEngine::apply_filled_order_to_state(
     }
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
-    current_fill_is_limit_ = false;
+    }  // fill_kind_guard dtor clears current_fill_is_limit_
 
     double signed_pos_after = signed_pos();
     double filled_qty = std::abs(signed_pos_after - signed_pos_before);

@@ -287,6 +287,62 @@ static void test_trail_exit_keeps_slippage() {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// 7. Stale-transient-flag regression: a limit TP fill and a stop-entry
+//    fill dispatched in the SAME bar's process_pending_orders sequence.
+//    The stop fill (dispatched AFTER the limit fill) must still be
+//    slipped — would catch a stale current_fill_is_limit_ leaking out
+//    of the limit-fill dispatch into the next fill of the same bar.
+//
+// Long entry at bar1 open 100.00 -> 100.02. TP limit 100.515; also a
+// pending SHORT stop entry @ 99.755 (off-tick). Bar2 (down bar, path
+// O->H->L->C): high 101.00 fills the TP first at ceil(100.515) = 100.52
+// (no slip), then low 99.50 fills the short stop entry:
+//   correct = floor(99.755 - 0.02) = 99.73 (sell stop, slipped + snap)
+//   stale   = ceil(99.755) = 99.76 (limit-or-better path leaked)
+// ─────────────────────────────────────────────────────────────────────
+class LimitThenStopSameBar : public SlipEngine {
+public:
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0)
+            strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
+        if (position_side_ == PositionSide::LONG) {
+            strategy_exit("LX", "L", /*limit=*/100.515, /*stop=*/99.00,
+                          kNaN, kNaN, kNaN, 100.0, "bracket");
+            strategy_entry("S", false, kNaN, /*stop=*/99.755, 1.0, "short stop");
+        }
+        if (bar_index_ == 3 && position_side_ == PositionSide::SHORT)
+            strategy_close("S", "close");
+    }
+};
+
+static void test_market_path_fill_after_limit_fill_same_bar_is_slipped() {
+    std::printf("test_market_path_fill_after_limit_fill_same_bar_is_slipped\n");
+    LimitThenStopSameBar p;
+    Bar bars[5] = {
+        {100.00, 100.10, 99.90, 100.00, 1000, kT0 + 0 * k15m},
+        {100.00, 100.20, 99.90, 100.10, 1000, kT0 + 1 * k15m},  // entry @ open
+        // Down bar: TP touched on the way up, short stop on the way down.
+        {100.10, 101.00, 99.50, 99.60, 1000, kT0 + 2 * k15m},
+        {99.60, 99.70, 99.50, 99.60, 1000, kT0 + 3 * k15m},
+        {99.60, 99.70, 99.50, 99.60, 1000, kT0 + 4 * k15m},  // market close @ open
+    };
+    p.run(bars, 5);
+    CHECK(p.trade_count() == 2);
+    if (p.trade_count() == 2) {
+        // Trade 0: long leg — slipped market entry, unslipped TP limit exit.
+        CHECK(near(p.get_trade(0).entry_price, 100.02));
+        CHECK(near(p.get_trade(0).exit_price, 100.52));
+        // Trade 1: short stop entry dispatched after the limit fill on the
+        // same bar — MUST be slipped (99.755 - 0.02 -> floor = 99.73), not
+        // routed onto the stale limit path (ceil(99.755) = 99.76).
+        CHECK(near(p.get_trade(1).entry_price, 99.73));
+        // Market close on bar4 open 99.60: closing a short = buy, slipped
+        // 2 ticks up.
+        CHECK(near(p.get_trade(1).exit_price, 99.62));
+    }
+}
+
 int main() {
     test_tp_limit_exit_snaps_favorably_no_slip();
     test_sl_stop_exit_keeps_slippage();
@@ -294,6 +350,7 @@ int main() {
     test_tp_limit_gap_fills_at_open_no_slip();
     test_limit_entry_gap_fills_at_open_no_slip();
     test_trail_exit_keeps_slippage();
+    test_market_path_fill_after_limit_fill_same_bar_is_slipped();
 
     std::printf("pass=%d fail=%d\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

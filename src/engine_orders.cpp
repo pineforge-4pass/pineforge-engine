@@ -683,7 +683,13 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
         double slip = slippage_ * syminfo_mintick_;
         raw_price = is_long ? (fill_price - slip) : (fill_price + slip);
     }
-    double exit_fill = apply_slippage(raw_price, position_side_ == PositionSide::SHORT);
+    // Flag-aware close leg: a limit-triggered flip's close leg follows the
+    // entry leg's limit semantics (unslipped, limit-or-better) for internal
+    // consistency with the sibling close_opposite_then_enter path — both
+    // legs land at the identical unslipped snapped price. No direct TV
+    // evidence yet (needs a limit-flip slippage>0 export) — corpus provably
+    // indifferent at slippage=0.
+    double exit_fill = apply_fill_slippage(raw_price, position_side_ == PositionSide::SHORT);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     // Emit one Trade per pyramid entry (matches TradingView reporting)
