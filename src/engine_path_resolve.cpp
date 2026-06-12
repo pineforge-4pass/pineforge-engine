@@ -564,21 +564,22 @@ bool try_exit_open_gap_fill(const Bar& bar, bool is_long,
                             const ExitTrailState& trail,
                             ExitPathFill* out_fill) {
     const double trail_level = active_exit_trail_level(trail, is_long);
-    auto fill_at_open = [&]() {
+    auto fill_at_open = [&](bool is_limit) {
         out_fill->should_fill = true;
         out_fill->fill_price = bar.open;
+        out_fill->is_limit = is_limit;
         return true;
     };
     if (is_long) {
-        if (!std::isnan(trail_level) && bar.open <= trail_level) return fill_at_open();
-        if (trail.exits_at_activation && bar.open >= trail.activation_level) return fill_at_open();
-        if (has_stop && bar.open <= stop_price) return fill_at_open();
-        if (has_limit && bar.open >= limit_price) return fill_at_open();
+        if (!std::isnan(trail_level) && bar.open <= trail_level) return fill_at_open(false);
+        if (trail.exits_at_activation && bar.open >= trail.activation_level) return fill_at_open(false);
+        if (has_stop && bar.open <= stop_price) return fill_at_open(false);
+        if (has_limit && bar.open >= limit_price) return fill_at_open(true);
     } else {
-        if (!std::isnan(trail_level) && bar.open >= trail_level) return fill_at_open();
-        if (trail.exits_at_activation && bar.open <= trail.activation_level) return fill_at_open();
-        if (has_stop && bar.open >= stop_price) return fill_at_open();
-        if (has_limit && bar.open <= limit_price) return fill_at_open();
+        if (!std::isnan(trail_level) && bar.open >= trail_level) return fill_at_open(false);
+        if (trail.exits_at_activation && bar.open <= trail.activation_level) return fill_at_open(false);
+        if (has_stop && bar.open >= stop_price) return fill_at_open(false);
+        if (has_limit && bar.open <= limit_price) return fill_at_open(true);
     }
     return false;
 }
@@ -806,6 +807,7 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
             fill.should_fill = true;
             fill.fill_price = events.ev[0].price;
             fill.is_trail = (events.ev[0].kind == PathCrossKind::TRAIL);
+            fill.is_limit = (events.ev[0].kind == PathCrossKind::LIMIT);
             return fill;
         }
 

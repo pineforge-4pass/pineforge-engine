@@ -428,6 +428,13 @@ protected:
     // TRAIL leg (vs stop/limit/gap). Consumed by apply_filled_order_to_state
     // to reconstruct the trail peak above.
     bool last_exit_fill_was_trail_ = false;
+    // Transient: true only while dispatching a LIMIT-triggered fill
+    // (apply_filled_order_to_state). apply_fill_slippage reads it to route
+    // limit fills onto the unslipped limit-or-better path (apply_limit_fill)
+    // while market/stop/trail fills keep apply_slippage. Always false
+    // outside the dispatch window, so strategy.close / end-of-run /
+    // intraday-cap synthetic closes stay on the market (slipped) path.
+    bool current_fill_is_limit_ = false;
 
     std::vector<Trade> trades_;
     std::vector<PendingOrder> pending_orders_;
@@ -629,6 +636,39 @@ protected:
         double slip = slippage_ * syminfo_mintick_;
         double slipped = is_buy ? price + slip : price - slip;
         return round_to_mintick_directional(slipped, /*is_long_stop=*/is_buy);
+    }
+
+    // TradingView applies slippage to MARKET and STOP fills but NOT to
+    // LIMIT fills: a limit order fills at limit-or-better. An off-tick
+    // limit price snaps one tick in the FAVORABLE direction (sell limit
+    // -> ceil, buy limit -> floor) — the opposite direction of the
+    // adverse market/stop snap in apply_slippage. A limit order that gaps
+    // through at the bar open fills at the raw open (better price), also
+    // unslipped; the open is on-tick in practice so the favorable snap is
+    // an identity there.
+    //
+    // Evidence (2026-06-12): TV export of corpus/validation/
+    // bracket-exit-tp-sl-fixed-01 on BINANCE:ETHUSDT.P, commission 0.1%,
+    // slippage 2, mintick 0.01 — TP (limit) exits: 152/152 intra-bar
+    // fills equal ceil(limit) with no slip (62 of them discriminate ceil
+    // from round-to-nearest), 44/44 gap fills equal the raw bar open.
+    // SL (stop) exits 195/195 and market entries 396/396 match the
+    // slipped path, pinning slippage to market/stop fills only. The
+    // probe's slippage=0 tv_trades.csv shows the same favorable snap
+    // (143/143 TP fills at ceil(limit)), so this rule is slippage-
+    // independent.
+    double apply_limit_fill(double price, bool is_buy) const {
+        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
+        return round_to_mintick_directional(price, /*is_long_stop=*/!is_buy);
+    }
+
+    // Fill-time dispatcher: LIMIT-triggered fills take the unslipped
+    // limit-or-better path, everything else (market/stop/trail) takes
+    // apply_slippage. current_fill_is_limit_ is the transient set around
+    // the per-order fill dispatch in apply_filled_order_to_state.
+    double apply_fill_slippage(double price, bool is_buy) const {
+        return current_fill_is_limit_ ? apply_limit_fill(price, is_buy)
+                                      : apply_slippage(price, is_buy);
     }
 
     // --- Commission helper ---
@@ -1165,6 +1205,7 @@ private:
     void apply_filled_order_to_state(PendingOrder& order,
                                      size_t order_index,
                                      double fill_price,
+                                     bool fill_is_limit,
                                      const Bar& bar,
                                      double& trail_best_path_state,
                                      int& exit_closed_from_bar,
@@ -1203,6 +1244,10 @@ private:
         enum class Kind { Fill, NoFill, DeferredToOpposingPass };
         Kind kind;
         double fill_price;
+        // True when the LIMIT leg produced the fill (exit limit, entry
+        // limit, or the limit leg of an entry stop-limit) — routes the
+        // fill onto the unslipped limit-or-better price path.
+        bool is_limit_fill = false;
     };
     FillEvaluation evaluate_fill_price(
         PendingOrder& order, size_t order_index, const Bar& bar,

@@ -78,8 +78,10 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     // Check risk rules before allowing entry
     if (!check_risk_allow_entry(is_long)) return;
 
-    // Apply slippage: buy fills higher, sell fills lower
-    fill_price = apply_slippage(fill_price, is_long);
+    // Apply slippage: buy fills higher, sell fills lower. LIMIT-triggered
+    // fills (current_fill_is_limit_) take the unslipped limit-or-better
+    // path instead — TV does not slip limit fills.
+    fill_price = apply_fill_slippage(fill_price, is_long);
 
     if (position_side_ == PositionSide::FLAT) {
         enter_market_from_flat(id, is_long, fill_price, explicit_qty, explicit_qty_type,
@@ -109,9 +111,11 @@ void BacktestEngine::execute_market_exit(double fill_price) {
         return;
     }
 
-    // Apply slippage: closing long = sell (lower), closing short = buy (higher)
+    // Apply slippage: closing long = sell (lower), closing short = buy
+    // (higher). LIMIT-triggered exits (TP brackets) take the unslipped
+    // limit-or-better path via apply_fill_slippage.
     bool is_buy = (position_side_ == PositionSide::SHORT);
-    fill_price = apply_slippage(fill_price, is_buy);
+    fill_price = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     // Emit one Trade per pyramid entry (matches TradingView reporting)
@@ -171,7 +175,7 @@ void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_c
     if (qty_to_close <= kQtyEpsilon) return;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
-    fill_price = apply_slippage(fill_price, is_buy);
+    fill_price = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     // Close FIFO across all pyramid entries, creating trade records.
@@ -193,7 +197,7 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std:
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
-    fill_price = apply_slippage(fill_price, is_buy);
+    fill_price = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     std::vector<PyramidEntry> remaining;
@@ -218,7 +222,7 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
-    fill_price = apply_slippage(fill_price, is_buy);
+    fill_price = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     double matched_qty = 0.0;
@@ -639,7 +643,7 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
     if (remainder <= kQtyEpsilon) {
         return;
     }
-    fill_price = apply_slippage(fill_price, is_long);
+    fill_price = apply_fill_slippage(fill_price, is_long);
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     open_fresh_position(requested, fill_price, remainder, id);
 }
@@ -673,11 +677,19 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
     // fill_price already has entry slippage applied; un-slip it before
     // re-applying with the exit direction.
     double raw_price = fill_price;
-    if (slippage_ != 0) {
+    if (slippage_ != 0 && !current_fill_is_limit_) {
+        // LIMIT-triggered entry fills were never slipped (limit-or-better
+        // path), so there is no entry slip to back out for the close leg.
         double slip = slippage_ * syminfo_mintick_;
         raw_price = is_long ? (fill_price - slip) : (fill_price + slip);
     }
-    double exit_fill = apply_slippage(raw_price, position_side_ == PositionSide::SHORT);
+    // Flag-aware close leg: a limit-triggered flip's close leg follows the
+    // entry leg's limit semantics (unslipped, limit-or-better) for internal
+    // consistency with the sibling close_opposite_then_enter path — both
+    // legs land at the identical unslipped snapped price. No direct TV
+    // evidence yet (needs a limit-flip slippage>0 export) — corpus provably
+    // indifferent at slippage=0.
+    double exit_fill = apply_fill_slippage(raw_price, position_side_ == PositionSide::SHORT);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     // Emit one Trade per pyramid entry (matches TradingView reporting)
