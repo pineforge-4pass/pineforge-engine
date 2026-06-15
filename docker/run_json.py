@@ -38,11 +38,28 @@ Schema:
           "pnl":          float,
           "pnl_pct":      float,
           "max_runup":    float,
-          "max_drawdown": float
+          "max_drawdown": float,
+          "commission":      float,   # ABI v2
+          "entry_bar_index": int,     # ABI v2: script-bar index of entry fill
+          "exit_bar_index":  int      # ABI v2: script-bar index of exit fill
         },
+        ...
+      ],
+      "metrics": {                     # ABI v2 computed trading metrics
+        "all":    { ...pf_trade_stats_t... },   # all closed trades
+        "longs":  { ...pf_trade_stats_t... },   # long trades only
+        "shorts": { ...pf_trade_stats_t... },   # short trades only
+        "equity": { ...pf_equity_stats_t... }   # sharpe/sortino/cagr/calmar/...
+      },                               # any NaN statistic -> null (see _num)
+      "equity_curve": [                # ABI v2: one point per script bar
+        { "time_ms": int, "equity": float, "open_profit": float },
         ...
       ]
     }
+
+NaN convention: any metric with an empty/zero denominator is null (JSON has no
+NaN); a real computed 0 stays 0. See the report-schema + metrics reference docs
+for the per-field meaning of every metrics.* key.
 """
 from __future__ import annotations
 
@@ -50,6 +67,7 @@ import argparse
 import csv
 import ctypes
 import json
+import math
 import sys
 import time
 from datetime import datetime, timezone
@@ -264,6 +282,26 @@ def fmt_utc(ms: int) -> str:
         ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _num(x):
+    """JSON-safe float. The engine's metric NaN convention (empty / zero
+    denominator -> NaN, never 0) cannot survive JSON: json.dump emits a bare
+    `NaN` token that a strict downstream JSON.parse (the MCP layer) rejects.
+    Collapse every non-finite double to null so the report stays valid JSON."""
+    f = float(x)
+    return f if math.isfinite(f) else None
+
+
+def _stats_dict(s) -> dict:
+    """Serialize a pf_trade_stats_t / pf_equity_stats_t ctypes struct to a dict,
+    keying off each field's ctype: integer counters stay ints, every double is
+    sanitized through _num. Driven by _fields_ so it tracks the struct verbatim."""
+    out = {}
+    for name, ctype in s._fields_:
+        v = getattr(s, name)
+        out[name] = _num(v) if ctype is ctypes.c_double else int(v)
+    return out
+
+
 def build_report_dict(report: ReportC, ohlcv_path: Path,
                       n_bars: int, first_ts: int, last_ts: int,
                       elapsed: float,
@@ -287,6 +325,9 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "pnl_pct":      float(t.pnl_pct),
             "max_runup":    float(t.max_runup),
             "max_drawdown": float(t.max_drawdown),
+            "commission":      float(t.commission),
+            "entry_bar_index": int(t.entry_bar_index),
+            "exit_bar_index":  int(t.exit_bar_index),
         })
 
     n = len(pnls)
@@ -298,6 +339,29 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
         cum += p
         peak = max(peak, cum)
         max_dd = min(max_dd, cum - peak)
+
+    # Computed trading metrics (ABI v2): all/longs/shorts trade stats + the
+    # equity-curve-derived block (sharpe/sortino/cagr/calmar/...). See the
+    # report-schema + metrics reference pages for per-field definitions.
+    m = report.metrics
+    metrics = {
+        "all":    _stats_dict(m.all),
+        "longs":  _stats_dict(m.longs),
+        "shorts": _stats_dict(m.shorts),
+        "equity": _stats_dict(m.equity),
+    }
+
+    # Per-script-bar equity curve (ABI v2). equity_curve may be NULL if a
+    # mid-run exception truncated it (len then 0); guard the pointer deref.
+    equity_curve = []
+    if report.equity_curve:
+        for i in range(int(report.equity_curve_len)):
+            p = report.equity_curve[i]
+            equity_curve.append({
+                "time_ms":     int(p.time_ms),
+                "equity":      _num(p.equity),
+                "open_profit": _num(p.open_profit),
+            })
 
     return {
         "engine": "pineforge",
@@ -326,6 +390,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "bars_processed": int(report.input_bars_processed),
         },
         "trades": trades,
+        "metrics": metrics,
+        "equity_curve": equity_curve,
     }
 
 
