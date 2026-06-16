@@ -165,7 +165,8 @@ def _coerce_scalar(rhs: str):
     if re.fullmatch(r"[+-]?\d+", rhs):
         return int(rhs)
     try:
-        return float(rhs)
+        f = float(rhs)
+        return f if (f == f and f not in (float("inf"), float("-inf"))) else rhs
     except ValueError:
         return rhs
 
@@ -765,14 +766,17 @@ def main() -> int:
         }
         out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts,
                                 elapsed, inputs, overrides, applied_runtime)
-        out["fingerprint"] = build_fingerprint(build_provenance(
-            engine_version(lib),
-            args.generated_cpp,
-            parse_bool(args.transpiled),
-            inputs,
-            overrides,
-            applied_runtime,
-        ))
+        try:
+            out["fingerprint"] = build_fingerprint(build_provenance(
+                engine_version(lib),
+                args.generated_cpp,
+                parse_bool(args.transpiled),
+                inputs,
+                overrides,
+                applied_runtime,
+            ))
+        except Exception:
+            out["fingerprint"] = None
         json.dump(out, sys.stdout, separators=(",", ":"))
         sys.stdout.write("\n")
     finally:
