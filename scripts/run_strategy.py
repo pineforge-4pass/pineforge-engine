@@ -39,9 +39,12 @@ Usage examples
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import ctypes
+import hashlib
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -68,6 +71,210 @@ _VALIDATION_META_KEYS = frozenset({
     "input_tf",
     "chart_timezone",
 })
+
+# >>> fingerprint helpers (DUPLICATED verbatim in scripts/run_strategy.py;
+#     scripts/ is .dockerignore'd so this cannot be a shared module.
+#     scripts/fingerprint_self_test.py asserts both copies stay identical.)
+try:
+    from importlib import metadata as _ilmd
+except ImportError:  # pragma: no cover
+    _ilmd = None
+
+# Canonical strategy() defaults. Mirrors the engine base-class defaults in
+# include/pineforge/engine.hpp (initial_capital_, process_orders_on_close_,
+# default_qty_type_, default_qty_value_, pyramiding_, commission_type_,
+# commission_value_, slippage_, close_entries_rule_any_). The codegen ctor
+# emits only a subset (it omits process_orders_on_close + close_entries_rule),
+# so this seed supplies the rest. KEEP IN SYNC with engine.hpp.
+STRATEGY_SEED = {
+    "initial_capital": 1000000.0,
+    "process_orders_on_close": False,
+    "default_qty_type": "fixed",
+    "default_qty_value": 1.0,
+    "pyramiding": 1,
+    "commission_type": "percent",
+    "commission_value": 0.0,
+    "slippage": 0,
+    "close_entries_rule": "FIFO",
+}
+
+_QTY_TYPE = {"FIXED": "fixed", "PERCENT_OF_EQUITY": "percent_of_equity", "CASH": "cash"}
+_COMM_TYPE = {"PERCENT": "percent", "CASH_PER_ORDER": "cash_per_order",
+              "CASH_PER_CONTRACT": "cash_per_contract"}
+
+# generated.cpp ctor field name -> provenance key.
+_STRAT_FIELD_KEY = {
+    "initial_capital_": "initial_capital",
+    "process_orders_on_close_": "process_orders_on_close",
+    "default_qty_type_": "default_qty_type",
+    "default_qty_value_": "default_qty_value",
+    "pyramiding_": "pyramiding",
+    "commission_type_": "commission_type",
+    "commission_value_": "commission_value",
+    "slippage_": "slippage",
+    "close_entries_rule_any_": "close_entries_rule",
+}
+
+_INPUT_RE = re.compile(r'get_input_(\w+)\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*([^;]*?)\)')
+
+
+def _ctor_body(cpp_text: str) -> str:
+    """Return the GeneratedStrategy constructor body, or '' if not found.
+
+    Scoping to the ctor is load-bearing: set_strategy_override() also contains
+    `initial_capital_ = std::stod(value);` lines that must NOT be parsed as
+    defaults. The member-init list (`_ta_ema_1(5)`) has no `=` so it cannot
+    false-match the field regex."""
+    m = re.search(r"GeneratedStrategy\s*\([^)]*\)\s*(?::[^{]*)?\{", cpp_text)
+    if not m:
+        return ""
+    i = m.end() - 1  # index of the opening '{'
+    depth = 0
+    for j in range(i, len(cpp_text)):
+        c = cpp_text[j]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return cpp_text[i + 1:j]
+    return ""
+
+
+def _coerce_scalar(rhs: str):
+    rhs = rhs.strip()
+    if rhs in ("true", "false"):
+        return rhs == "true"
+    if re.fullmatch(r"[+-]?\d+", rhs):
+        return int(rhs)
+    try:
+        f = float(rhs)
+        return f if (f == f and f not in (float("inf"), float("-inf"))) else rhs
+    except ValueError:
+        return rhs
+
+
+def parse_strategy_params(cpp_text: str) -> dict:
+    """Parse strategy() header defaults from the constructor body only."""
+    out: dict = {}
+    body = _ctor_body(cpp_text)
+    for fld, rhs in re.findall(r"(\w+_)\s*=\s*([^;]+);", body):
+        key = _STRAT_FIELD_KEY.get(fld)
+        if not key:
+            continue
+        rhs = rhs.strip()
+        if fld == "default_qty_type_":
+            out[key] = _QTY_TYPE.get(rhs.split("::")[-1], rhs)
+        elif fld == "commission_type_":
+            out[key] = _COMM_TYPE.get(rhs.split("::")[-1], rhs)
+        elif fld == "close_entries_rule_any_":
+            out[key] = "ANY" if _coerce_scalar(rhs) is True else "FIFO"
+        else:
+            out[key] = _coerce_scalar(rhs)
+    return out
+
+
+def effective_strategy(cpp_text: str, overrides: dict | None) -> dict:
+    """Canonical seed -> ctor-parsed defaults -> user overrides (string wins)."""
+    s = dict(STRATEGY_SEED)
+    s.update(parse_strategy_params(cpp_text))
+    for k, v in (overrides or {}).items():
+        s[k] = v
+    return s
+
+
+def parse_inputs(cpp_text: str) -> dict:
+    """Parse every get_input_*("title", default) call; dedup by title (first wins)."""
+    out: dict = {}
+    for typ, title, dflt in _INPUT_RE.findall(cpp_text):
+        if title in out:
+            continue
+        d = dflt.strip()
+        if d.startswith('"') and d.endswith('"') and len(d) >= 2:
+            val = d[1:-1]
+        elif typ == "source":
+            val = d
+        else:
+            val = _coerce_scalar(d)
+        out[title] = {"type": typ, "default": val}
+    return out
+
+
+def effective_inputs(cpp_text: str, inputs_applied: dict | None) -> dict:
+    """All declared inputs with {type, default, value}; value = override or default.
+    Applied inputs with no matching declaration are appended best-effort."""
+    applied = inputs_applied or {}
+    out: dict = {}
+    for title, meta in parse_inputs(cpp_text).items():
+        out[title] = {
+            "type": meta["type"],
+            "default": meta["default"],
+            "value": applied.get(title, meta["default"]),
+        }
+    for title, v in applied.items():
+        if title not in out:
+            out[title] = {"type": "unknown", "default": None, "value": v}
+    return out
+
+
+def _sha256_file(path) -> str | None:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _codegen_version() -> str:
+    if _ilmd is None:
+        return "unknown"
+    try:
+        return _ilmd.version("pineforge-codegen")
+    except Exception:
+        return "unknown"
+
+
+def build_provenance(engine: dict, cpp_path, transpiled: bool,
+                     inputs_applied: dict, overrides_applied: dict,
+                     runtime: dict | None) -> dict:
+    cpp_text = ""
+    cpp_sha = None
+    if cpp_path:
+        cpp_sha = _sha256_file(cpp_path)
+        try:
+            with open(cpp_path, "r", encoding="utf-8", errors="replace") as f:
+                cpp_text = f.read()
+        except OSError:
+            cpp_text = ""
+    return {
+        "engine": engine,
+        "codegen": {
+            "version": _codegen_version(),
+            "generated_cpp_sha256": cpp_sha,
+            "transpiled_from_pine": bool(transpiled),
+        },
+        "strategy": effective_strategy(cpp_text, overrides_applied),
+        "inputs": effective_inputs(cpp_text, inputs_applied),
+        "applied": {
+            "inputs": dict(inputs_applied or {}),
+            "overrides": dict(overrides_applied or {}),
+        },
+        "runtime": runtime or {},
+    }
+
+
+def build_fingerprint(provenance: dict) -> dict:
+    canonical = json.dumps(provenance, sort_keys=True, separators=(",", ":"))
+    raw = canonical.encode("utf-8")
+    return {
+        "token": base64.b64encode(raw).decode("ascii"),
+        "digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "provenance": provenance,
+    }
+# <<< fingerprint helpers
 
 
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
@@ -223,6 +430,29 @@ def _check_abi(lib: ctypes.CDLL) -> None:
         raise RuntimeError(
             f"pineforge ABI mismatch: .so reports {abi}, harness expects "
             f"{EXPECTED_PF_ABI}; rebuild.")
+
+
+class PfVersionC(ctypes.Structure):
+    """Mirror of pf_version_t (returned by value from pf_version_get)."""
+    _fields_ = [("major", ctypes.c_int), ("minor", ctypes.c_int),
+                ("patch", ctypes.c_int), ("commit_sha", ctypes.c_char_p)]
+
+
+def engine_version(lib: ctypes.CDLL) -> dict:
+    """Read engine version+sha from the .so (whole-archive exports). The
+    fields are hasattr-guarded so an older .so degrades to blanks."""
+    eng = {"version_string": "", "major": None, "minor": None,
+           "patch": None, "commit_sha": ""}
+    if hasattr(lib, "pf_version_string"):
+        lib.pf_version_string.restype = ctypes.c_char_p
+        s = lib.pf_version_string()
+        eng["version_string"] = s.decode("utf-8", "replace") if s else ""
+    if hasattr(lib, "pf_version_get"):
+        lib.pf_version_get.restype = PfVersionC
+        v = lib.pf_version_get()
+        eng["major"], eng["minor"], eng["patch"] = int(v.major), int(v.minor), int(v.patch)
+        eng["commit_sha"] = v.commit_sha.decode("utf-8", "replace") if v.commit_sha else ""
+    return eng
 
 
 # --- Strategy harness --------------------------------------------------
@@ -393,6 +623,10 @@ class Strategy:
         if hasattr(L, "strategy_set_syminfo_pointvalue"):
             L.strategy_set_syminfo_pointvalue.argtypes = [ctypes.c_void_p, ctypes.c_double]
             L.strategy_set_syminfo_pointvalue.restype = None
+        if hasattr(L, "pf_version_get"):
+            L.pf_version_get.restype = PfVersionC
+        if hasattr(L, "pf_version_string"):
+            L.pf_version_string.restype = ctypes.c_char_p
 
     def run(self, bars_csv: Path, params: dict | None = None,
             *, trace_enabled: bool = False, trade_start_time_ms: int | None = None,
@@ -806,6 +1040,10 @@ def main() -> int:
                          "were recorded. Pass an IANA name (e.g. 'Asia/Taipei') only "
                          "for probes that genuinely need a non-UTC chart-tz. "
                          "Per-probe override: set 'chart_timezone' in inputs.json.")
+    ap.add_argument("--fingerprint-json", type=Path, default=None,
+                    help="Write a {token,digest,provenance} fingerprint of this "
+                         "run to PATH. Off by default (keeps corpus output and "
+                         "run_corpus.sh parity untouched).")
     args = ap.parse_args()
 
     strategy_dir = args.strategy_dir.resolve()
@@ -862,6 +1100,39 @@ def main() -> int:
                 "trace_names": report["trace_names"],
                 "trace": trace_to_write,
             }, f)
+    if args.fingerprint_json is not None:
+        try:
+            cpp_path = strategy_dir / "generated.cpp"
+            # Inputs actually forwarded to the engine (drop tv_*/validator meta keys).
+            inputs_applied = {
+                str(k): str(v) for k, v in params.items()
+                if not str(k).startswith("tv_") and k not in _VALIDATION_META_KEYS
+            }
+            overrides_applied = {
+                str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
+            }
+            runtime = {
+                "input_tf": run_kwargs.get("input_tf") or "",
+                "script_tf": run_kwargs.get("script_tf") or "",
+                "bar_magnifier": bool(run_kwargs.get("bar_magnifier")),
+                "magnifier_samples": int(run_kwargs.get("magnifier_samples") or 4),
+                "magnifier_distribution": run_kwargs.get("magnifier_distribution") or "ENDPOINTS",
+                "chart_timezone": run_kwargs.get("chart_timezone") or "",
+            }
+            fp = build_fingerprint(build_provenance(
+                engine_version(strat.lib),
+                cpp_path if cpp_path.exists() else None,
+                False,  # run_strategy.py drives a prebuilt .so; no transpile this run
+                inputs_applied,
+                overrides_applied,
+                runtime,
+            ))
+            args.fingerprint_json.parent.mkdir(parents=True, exist_ok=True)
+            with args.fingerprint_json.open("w", encoding="utf-8") as f:
+                json.dump(fp, f, indent=2)
+            print(f"  fingerprint -> {args.fingerprint_json} ({fp['digest']})")
+        except Exception as e:
+            print(f"  fingerprint: skipped ({e})", file=sys.stderr)
     elapsed = time.time() - started
 
     try:
