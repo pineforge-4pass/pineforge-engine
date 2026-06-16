@@ -200,6 +200,41 @@ read-only mounts; the image performs no network I/O at run time.
 }
 ```
 
+## Backtest fingerprint
+
+Every JSON report carries a `fingerprint` recording exactly what produced it —
+reversible, no key required:
+
+```json
+"fingerprint": {
+  "token":  "<base64 of the canonical provenance JSON>",
+  "digest": "sha256:<hex>",
+  "provenance": {
+    "engine":   { "version_string": "...", "major": 0, "minor": 10, "patch": 2, "commit_sha": "..." },
+    "codegen":  { "version": "0.6.4", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
+    "strategy": { "initial_capital": 1000000.0, "pyramiding": 1, "commission_type": "percent", "...": "all strategy() params, effective" },
+    "inputs":   { "Fast Length": { "type": "int", "default": 9, "value": "8" }, "...": "all input()s, effective" },
+    "applied":  { "inputs": { "Fast Length": "8" }, "overrides": {} },
+    "runtime":  { "input_tf": "", "bar_magnifier": false, "...": "..." }
+  }
+}
+```
+
+`strategy` and `inputs` list the **full effective** parameter set — every
+`strategy()` field and every `input()` value, with declared defaults, even
+when no override was passed. `value` is the applied override if one was given,
+otherwise the default. `digest` is a stable id for the run (same target ⇒ same
+digest).
+
+Decode the token to recover the provenance:
+
+```bash
+jq -r '.fingerprint.token' report.json | base64 -d | jq .
+```
+
+The provenance is also inlined under `fingerprint.provenance`, so decoding is
+only needed to verify the token round-trips.
+
 ## Exit codes
 
 | Code | Meaning |
