@@ -46,7 +46,7 @@ struct GeneratedStrategy : Strategy {
             i_fast = get_input_int("Fast EMA", 5);
             i_slow = get_input_int("Slow EMA", 13);
             thr = get_input_double("ADX trend threshold", 25);
-            mode = get_input_string("Mode", "fast");
+            mode = get_input_string("Mode", std::string("fast"));
             src = get_input_source("Source", close);
             _inputs_initialized_ = true;
         }

@@ -132,7 +132,8 @@ _STRAT_FIELD_KEY = {
     "close_entries_rule_any_": "close_entries_rule",
 }
 
-_INPUT_RE = re.compile(r'get_input_(\w+)\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*([^;]*?)\)')
+_INPUT_RE = re.compile(
+    r'get_input_(\w+)\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*((?:[^();]|\([^()]*\))*?)\s*\)')
 
 
 def _ctor_body(cpp_text: str) -> str:
@@ -171,6 +172,13 @@ def _coerce_scalar(rhs: str):
         return rhs
 
 
+def _unwrap_std_string(expr: str) -> str:
+    """Codegen wraps string input defaults as std::string("..."); unwrap to the
+    inner literal so the recorded default is the value, not the C++ expression."""
+    m = re.fullmatch(r'std::string\((.*)\)', expr.strip(), re.DOTALL)
+    return m.group(1).strip() if m else expr
+
+
 def parse_strategy_params(cpp_text: str) -> dict:
     """Parse strategy() header defaults from the constructor body only."""
     out: dict = {}
@@ -206,7 +214,7 @@ def parse_inputs(cpp_text: str) -> dict:
     for typ, title, dflt in _INPUT_RE.findall(cpp_text):
         if title in out:
             continue
-        d = dflt.strip()
+        d = _unwrap_std_string(dflt.strip())
         if d.startswith('"') and d.endswith('"') and len(d) >= 2:
             val = d[1:-1]
         elif typ == "source":

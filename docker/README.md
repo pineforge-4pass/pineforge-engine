@@ -223,8 +223,7 @@ reversible, no key required:
 `strategy` and `inputs` list the **full effective** parameter set — every
 `strategy()` field and every `input()` value, with declared defaults, even
 when no override was passed. `value` is the applied override if one was given,
-otherwise the default. `digest` is a stable id for the run (same target ⇒ same
-digest).
+otherwise the default. `digest` is a stable id for a run under a given harness and its runtime settings (same inputs + same settings ⇒ same digest).
 
 Decode the token to recover the provenance:
 
