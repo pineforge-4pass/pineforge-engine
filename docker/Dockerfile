@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Stage the pure-Python transpiler here so the runtime never needs pip or
 # network: target-install gives a plain directory tree to COPY across.
-RUN pip3 install --break-system-packages --no-cache-dir --target /opt/codegen pineforge-codegen
+RUN pip3 install --break-system-packages --no-cache-dir -U --target /opt/codegen pineforge-codegen
 
 WORKDIR /src
 # VERSION file is the version source-of-truth inside the build context;
