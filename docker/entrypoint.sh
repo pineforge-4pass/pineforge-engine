@@ -93,8 +93,10 @@ if [[ -f "${PINE}" ]]; then
     echo "[pineforge] transpiling strategy.pine ..." >&2
     run_transpile "${PINE}" "${GEN}"   # set -e aborts (exit 5) on failure
     SRC="${GEN}"
+    TRANSPILED=true
 elif [[ -f "${SRC_CPP}" ]]; then
     SRC="${SRC_CPP}"
+    TRANSPILED=false
 else
     echo "error: missing input — mount /in/strategy.pine (preferred) or /in/strategy.cpp" >&2
     exit 2
@@ -131,4 +133,6 @@ python3 "${PREFIX}/bin/run_json.py" \
     --bar-magnifier     "${PINEFORGE_BAR_MAGNIFIER:-}" \
     --magnifier-samples "${PINEFORGE_MAGNIFIER_SAMPLES:-4}" \
     --magnifier-dist    "${PINEFORGE_MAGNIFIER_DIST:-endpoints}" \
+    --generated-cpp     "${SRC}" \
+    --transpiled        "${TRANSPILED}" \
     || { echo "[pineforge] backtest failed" >&2; exit 4; }
