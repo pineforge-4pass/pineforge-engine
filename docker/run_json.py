@@ -523,9 +523,31 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
 
+    # syminfo setters — declare argtypes so ctypes does not default the float
+    # args to c_int (which would truncate mintick=0.5 to 0). Guarded with
+    # hasattr in case an older strategy.so predates these symbols.
+    for _n in ("strategy_set_syminfo_mintick", "strategy_set_syminfo_pointvalue"):
+        if hasattr(lib, _n):
+            getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_double]
+    for _n in ("strategy_set_syminfo_timezone", "strategy_set_syminfo_session"):
+        if hasattr(lib, _n):
+            getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
+
+
+def apply_syminfo(lib, strat, syminfo_path):
+    """Apply syminfo.json (data-worker schema) via strategy_set_syminfo_*.
+    Tolerant: missing keys skipped. Accepts {"syminfo": {...}} or a flat dict."""
+    import json
+    doc = json.loads(open(syminfo_path).read())
+    si = doc.get("syminfo", doc)
+    if "mintick" in si:    lib.strategy_set_syminfo_mintick(strat, float(si["mintick"]))
+    if "pointvalue" in si: lib.strategy_set_syminfo_pointvalue(strat, float(si["pointvalue"]))
+    if si.get("timezone"): lib.strategy_set_syminfo_timezone(strat, str(si["timezone"]).encode())
+    if si.get("session"):  lib.strategy_set_syminfo_session(strat, str(si["session"]).encode())
 
 
 def fmt_utc(ms: int) -> str:
@@ -721,6 +743,8 @@ def main() -> int:
                     help="'true' if generated.cpp came from a .pine transpile this "
                          "run, 'false' if a user-supplied .cpp. Recorded in the "
                          "fingerprint as codegen.transpiled_from_pine.")
+    ap.add_argument("--syminfo", type=Path, default=None,
+                    help="syminfo.json to apply via strategy_set_syminfo_*")
     args = ap.parse_args()
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
@@ -741,6 +765,8 @@ def main() -> int:
         lib.strategy_set_input(state, k.encode(), v.encode())
     for k, v in overrides.items():
         lib.strategy_set_override(state, k.encode(), v.encode())
+    if args.syminfo:
+        apply_syminfo(lib, state, args.syminfo)
 
     report = ReportC()
     started = time.time()
