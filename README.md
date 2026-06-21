@@ -210,7 +210,7 @@ If you encounter day-boundary alignment issues or want to force the engine to pr
 
 ## What this is, and what it isn't
 
-**This is the runtime, not the compiler.** PineForge's PineScript-to-C++ transpiler ships separately as [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (source-available, `pip install pineforge-codegen`) and is bundled inside the engine Docker image. This library is what every compiled strategy `.so` links against: it provides the implementations of `ta.ema`, `strategy.entry`, `request.security`, the bar magnifier, and so on, behind a stable C ABI.
+**This is the runtime, not the compiler.** PineForge's PineScript-to-C++ transpiler ships separately as [`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss) (source-available, `pip install pineforge-codegen`) and is bundled inside the [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image — the full local PineScript→backtest image (engine runtime + bundled codegen) that the Docker MCP server builds on. This library is what every compiled strategy `.so` links against: it provides the implementations of `ta.ema`, `strategy.entry`, `request.security`, the bar magnifier, and so on, behind a stable C ABI.
 
 **This is a backtest engine, not a charting library.** PineScript drawing primitives (`plot`, `bgcolor`, `label`, …) compile cleanly but do nothing at runtime. The runtime computes trade execution and reports — it does not render.
 
