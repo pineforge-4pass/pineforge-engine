@@ -209,20 +209,36 @@ jobs:
             --notes-file "${NOTES}" \
             --verify-tag
 
-      # Every engine release rebuilds + redeploys the public MCP (its container
-      # bakes this engine image). See pineforge-mcp-public/docs/DESIGN.md §9.
-      # Needs a PAT with repo scope on pineforge-4pass/pineforge-mcp-public;
-      # falls back to RELEASE_TOKEN. Non-fatal: a notify failure must not fail
-      # the release itself (redeploy can be fired manually via `gh api .../dispatches`).
-      - name: Notify pineforge-mcp-public to rebuild + redeploy
-        continue-on-error: true
+      # Every engine release notifies the pineforge-release hub, which bumps its
+      # ENGINE_VERSION pin, rebuilds the combined image (FROM this engine image +
+      # the bundled codegen), and fans out to the MCPs. The hub is the sole
+      # downstream entry point now — we no longer dispatch to mcp-public directly.
+      #
+      # FAIL LOUD (no continue-on-error): a dropped notify means downstream never
+      # rebuilds, and that silent failure is exactly the bug this replaces. The
+      # credential is the org GitHub App (no PAT — minted at runtime, never
+      # expires); `gh api` exits non-zero on HTTP >=4xx so `set -e` fails the job.
+      - name: Mint org App token (hub dispatch)
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: pineforge-4pass
+          repositories: pineforge-release
+
+      - name: Dispatch engine-release -> pineforge-release
         env:
-          GH_TOKEN: ${{ secrets.MCP_PUBLIC_DISPATCH_PAT || secrets.RELEASE_TOKEN }}
+          GH_TOKEN:   ${{ steps.app.outputs.token }}
           ENGINE_TAG: ${{ steps.bump.outputs.tag }}
+          RUN_ID:     ${{ github.run_id }}
         run: |
-          gh api repos/pineforge-4pass/pineforge-mcp-public/dispatches \
+          set -euo pipefail
+          gh api repos/pineforge-4pass/pineforge-release/dispatches \
             -f event_type=engine-release \
-            -F client_payload[engine_version]="$ENGINE_TAG"
+            -F "client_payload[version]=${ENGINE_TAG}" \
+            -F "client_payload[run_id]=${RUN_ID}"
+          echo "dispatched engine-release -> pineforge-release (${ENGINE_TAG})"
 
   # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
   # to the GitHub Release created above. Tarball layout:
