@@ -533,6 +533,20 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
         if hasattr(lib, _n):
             getattr(lib, _n).argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 
+    # Validation-parity setters mirrored from scripts/run_strategy.py. All
+    # hasattr-guarded: trade_start_time + chart_timezone are runtime PF exports;
+    # magnifier_volume_weighted is a PER-STRATEGY codegen symbol (may be absent
+    # on a .so that didn't emit it) — never call it unconditionally.
+    if hasattr(lib, "strategy_set_trade_start_time"):
+        lib.strategy_set_trade_start_time.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+        lib.strategy_set_trade_start_time.restype = None
+    if hasattr(lib, "strategy_set_chart_timezone"):
+        lib.strategy_set_chart_timezone.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        lib.strategy_set_chart_timezone.restype = None
+    if hasattr(lib, "strategy_set_magnifier_volume_weighted"):
+        lib.strategy_set_magnifier_volume_weighted.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        lib.strategy_set_magnifier_volume_weighted.restype = None
+
     lib.strategy_free.argtypes = [ctypes.c_void_p]
     lib.report_free.argtypes   = [ctypes.POINTER(ReportC)]
     return lib
@@ -719,6 +733,36 @@ def parse_bool(s: str) -> bool:
     return s.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _timing_block(samples_ns, *, warmup, repeats, bar_magnifier,
+                  magnifier_samples, magnifier_dist, volume_weighted) -> dict:
+    """diagnostics.timing payload from raw per-repeat run_backtest_full samples.
+    Pure (no engine handle) so the --bench contract is unit-testable; consumed
+    by benchmarks/speed/time_pineforge_docker.py."""
+    return {
+        "mode": "run_backtest_full",
+        "warmup": int(warmup),
+        "repeats": int(repeats),
+        "samples_ns": list(samples_ns),
+        "magnifier": {
+            "enabled": bool(bar_magnifier),
+            "samples": magnifier_samples,
+            "dist": magnifier_dist,
+            "volume_weighted": volume_weighted,
+        },
+    }
+
+
+def _throughput_block(items_processed, samples_ns, *, bar_magnifier) -> dict:
+    """diagnostics.throughput payload. magnifier_mode mirrors the GBench
+    benchmark split (with_magnifier vs no_magnifier); consumed by
+    benchmarks/throughput/time_throughput_docker.py."""
+    return {
+        "items_processed": int(items_processed),
+        "samples_ns": list(samples_ns),
+        "magnifier_mode": "with_magnifier" if bar_magnifier else "no_magnifier",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -752,6 +796,23 @@ def main() -> int:
                          "fingerprint as codegen.transpiled_from_pine.")
     ap.add_argument("--syminfo", type=Path, default=None,
                     help="syminfo.json to apply via strategy_set_syminfo_*")
+    ap.add_argument("--trade-start-ms", type=int, default=None,
+                    help="Suppress order execution before this unix-ms timestamp "
+                         "(strategy_set_trade_start_time). Mirrors the validation "
+                         "harness tv-window gate. Unset = no gate.")
+    ap.add_argument("--chart-tz", default="",
+                    help="IANA timezone for Pine date builtins (hour/minute/dayofweek) "
+                         "+ intraday-cap rollover (strategy_set_chart_timezone). "
+                         "Empty = engine UTC fast path.")
+    ap.add_argument("--magnifier-volume-weighted", action="store_true",
+                    help="Volume-weighted bar-magnifier sub-bar sampling; only effective "
+                         "with --bar-magnifier (strategy_set_magnifier_volume_weighted).")
+    ap.add_argument("--bench", action="store_true",
+                    help="Timing mode: warm up, then time ONLY run_backtest_full over N "
+                         "repeats; emit diagnostics.timing.samples_ns + diagnostics.throughput. "
+                         "Raw samples only — no median/ratio is computed in the image.")
+    ap.add_argument("--warmup", type=int, default=3, help="Bench warmup runs (default 3).")
+    ap.add_argument("--repeats", type=int, default=20, help="Bench timed repeats (default 20).")
     args = ap.parse_args()
 
     inputs    = parse_kv_json(args.inputs,    "--inputs")
@@ -767,23 +828,70 @@ def main() -> int:
 
     lib = load_strategy(args.so)
 
-    state = lib.strategy_create(b"{}")
-    for k, v in inputs.items():
-        lib.strategy_set_input(state, k.encode(), v.encode())
-    for k, v in overrides.items():
-        lib.strategy_set_override(state, k.encode(), v.encode())
-    if args.syminfo:
-        apply_syminfo(lib, state, args.syminfo)
+    # Volume-weighted magnifier only meaningful when the magnifier is on.
+    vw_on = bool(args.magnifier_volume_weighted) and bar_magnifier == 1
 
+    def _make_state():
+        """Create + fully configure a fresh strategy state — everything EXCEPT the
+        timed run_backtest_full call. Mirrors scripts/run_strategy.py's setup so the
+        engine behaves identically to the ctypes validation harness."""
+        st = lib.strategy_create(b"{}")
+        for k, v in inputs.items():
+            lib.strategy_set_input(st, k.encode(), v.encode())
+        for k, v in overrides.items():
+            lib.strategy_set_override(st, k.encode(), v.encode())
+        if args.syminfo:
+            apply_syminfo(lib, st, args.syminfo)
+        if args.trade_start_ms is not None and hasattr(lib, "strategy_set_trade_start_time"):
+            lib.strategy_set_trade_start_time(st, int(args.trade_start_ms))
+        if args.chart_tz and hasattr(lib, "strategy_set_chart_timezone"):
+            lib.strategy_set_chart_timezone(st, args.chart_tz.encode())
+        if vw_on and hasattr(lib, "strategy_set_magnifier_volume_weighted"):
+            lib.strategy_set_magnifier_volume_weighted(st, 1)
+        return st
+
+    def _run(st, rep):
+        lib.run_backtest_full(
+            st, bars, n,
+            input_tf, script_tf,
+            bar_magnifier, magnifier_samples, magnifier_dist,
+            ctypes.byref(rep),
+        )
+
+    # --- Bench mode: warm up, then time ONLY run_backtest_full over N repeats. ---
+    # Setup (create/set_input/free) is OUTSIDE the timed region so the sample
+    # isolates the engine hot loop (closest to the GBench harness). dlopen
+    # already happened above (load_strategy), outside any loop.
+    timing = None
+    if args.bench:
+        warmup = max(0, int(args.warmup))
+        repeats = max(1, int(args.repeats))
+        for _ in range(warmup):
+            st = _make_state(); rep = ReportC()
+            try:
+                _run(st, rep)
+            finally:
+                lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
+        samples_ns: list[int] = []
+        for _ in range(repeats):
+            st = _make_state(); rep = ReportC()
+            try:
+                t0 = time.perf_counter_ns(); _run(st, rep); t1 = time.perf_counter_ns()
+                samples_ns.append(t1 - t0)
+            finally:
+                lib.report_free(ctypes.byref(rep)); lib.strategy_free(st)
+        timing = _timing_block(
+            samples_ns, warmup=warmup, repeats=repeats,
+            bar_magnifier=bar_magnifier, magnifier_samples=magnifier_samples,
+            magnifier_dist=args.magnifier_dist.strip().lower() or "endpoints",
+            volume_weighted=vw_on)
+
+    # --- Body run: one configured run for trades / metrics / diagnostics. ---
+    state = _make_state()
     report = ReportC()
     started = time.time()
     try:
-        lib.run_backtest_full(
-            state, bars, n,
-            input_tf, script_tf,
-            bar_magnifier, magnifier_samples, magnifier_dist,
-            ctypes.byref(report),
-        )
+        _run(state, report)
         elapsed = time.time() - started
         err_msg = ""
         if hasattr(lib, "strategy_get_last_error"):
@@ -804,9 +912,17 @@ def main() -> int:
             "bar_magnifier":      bool(bar_magnifier),
             "magnifier_samples":  magnifier_samples,
             "magnifier_dist":     args.magnifier_dist.strip().lower() or "endpoints",
+            "magnifier_volume_weighted": vw_on,
+            "trade_start_ms":     args.trade_start_ms,
+            "chart_tz":           args.chart_tz or "",
         }
         out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts,
                                 elapsed, inputs, overrides, applied_runtime)
+        if timing is not None:
+            out["diagnostics"]["timing"] = timing
+            out["diagnostics"]["throughput"] = _throughput_block(
+                report.input_bars_processed, timing["samples_ns"],
+                bar_magnifier=bar_magnifier)
         try:
             out["fingerprint"] = build_fingerprint(build_provenance(
                 engine_version(lib),

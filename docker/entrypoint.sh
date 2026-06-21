@@ -113,7 +113,10 @@ echo "[pineforge] compiling strategy.cpp ..." >&2
 # whole-archive forces the c_abi.cpp symbols (pf_version_get,
 # strategy_set_trace_enabled, etc.) into the .so even though the
 # strategy body never references them.
-g++ -std=c++17 -O2 -fPIC -shared \
+# -ffp-contract=off is parity-critical: the static lib is built with it
+# (CMakeLists.txt) so FMA contraction can't reassociate float ops. The strategy
+# TU must match or any inlined TA/sizing math drifts at the last ULP.
+g++ -std=c++17 -O2 -ffp-contract=off -fPIC -shared \
     -I"${PREFIX}/include" \
     -I/usr/include/eigen3 \
     "${SRC}" \
@@ -122,6 +125,22 @@ g++ -std=c++17 -O2 -fPIC -shared \
     || { echo "[pineforge] compile failed" >&2; exit 3; }
 
 echo "[pineforge] running backtest ..." >&2
+
+# Optional per-run knobs (mirror scripts/run_strategy.py). Built conditionally so
+# unset env never passes an empty/invalid flag.
+#   PINEFORGE_TRADE_START_MS            unix-ms; suppress orders before it
+#   PINEFORGE_CHART_TZ                  IANA tz for date builtins
+#   PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED 1/true → vw magnifier (needs BAR_MAGNIFIER)
+#   PINEFORGE_SYMINFO                   path to a syminfo.json
+#   PINEFORGE_BENCH (+_WARMUP/_REPEATS) 1/true → timing mode
+extra=()
+[[ -n "${PINEFORGE_TRADE_START_MS:-}" ]] && extra+=(--trade-start-ms "${PINEFORGE_TRADE_START_MS}")
+[[ -n "${PINEFORGE_CHART_TZ:-}" ]]       && extra+=(--chart-tz "${PINEFORGE_CHART_TZ}")
+[[ "${PINEFORGE_MAGNIFIER_VOLUME_WEIGHTED:-}" =~ ^(1|true|yes|on)$ ]] && extra+=(--magnifier-volume-weighted)
+[[ -n "${PINEFORGE_SYMINFO:-}" ]]        && extra+=(--syminfo "${PINEFORGE_SYMINFO}")
+if [[ "${PINEFORGE_BENCH:-}" =~ ^(1|true|yes|on)$ ]]; then
+    extra+=(--bench --warmup "${PINEFORGE_WARMUP:-3}" --repeats "${PINEFORGE_REPEATS:-20}")
+fi
 
 python3 "${PREFIX}/bin/run_json.py" \
     --so "${SO}" \
@@ -135,4 +154,5 @@ python3 "${PREFIX}/bin/run_json.py" \
     --magnifier-dist    "${PINEFORGE_MAGNIFIER_DIST:-endpoints}" \
     --generated-cpp     "${SRC}" \
     --transpiled        "${TRANSPILED}" \
+    ${extra[@]+"${extra[@]}"} \
     || { echo "[pineforge] backtest failed" >&2; exit 4; }

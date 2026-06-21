@@ -67,3 +67,38 @@ def test_summary_bars_processed_unchanged():
     """summary.bars_processed stays = input_bars_processed (display = data scanned)."""
     rep = _call()
     assert rep["summary"]["bars_processed"] == 525_600
+
+
+# --- --bench diagnostics contract (timing + throughput) ---------------------
+# These pure blocks back the raw-data benchmark drivers
+# (benchmarks/speed/time_pineforge_docker.py,
+#  benchmarks/throughput/time_throughput_docker.py).
+
+def test_timing_block_shape():
+    t = run_json._timing_block(
+        [10, 20, 30], warmup=2, repeats=3, bar_magnifier=True,
+        magnifier_samples=4, magnifier_dist="endpoints", volume_weighted=False)
+    assert t["mode"] == "run_backtest_full"
+    assert t["warmup"] == 2 and t["repeats"] == 3
+    assert t["samples_ns"] == [10, 20, 30]
+    assert t["magnifier"] == {
+        "enabled": True, "samples": 4, "dist": "endpoints", "volume_weighted": False}
+
+
+def test_throughput_magnifier_mode_mapping():
+    on = run_json._throughput_block(525_600, [10, 20], bar_magnifier=True)
+    off = run_json._throughput_block(525_600, [10, 20], bar_magnifier=False)
+    assert on["magnifier_mode"] == "with_magnifier"
+    assert off["magnifier_mode"] == "no_magnifier"
+    assert on["items_processed"] == 525_600 and isinstance(on["items_processed"], int)
+    assert on["samples_ns"] == [10, 20]
+
+
+def test_timing_throughput_share_samples():
+    """run_json wires throughput.samples_ns = timing.samples_ns (drivers rely on
+    timing for speed and throughput for bars/s — they must be the same run)."""
+    t = run_json._timing_block(
+        [5, 6, 7], warmup=0, repeats=3, bar_magnifier=False,
+        magnifier_samples=1, magnifier_dist="endpoints", volume_weighted=False)
+    tp = run_json._throughput_block(100, t["samples_ns"], bar_magnifier=False)
+    assert tp["samples_ns"] == t["samples_ns"]
