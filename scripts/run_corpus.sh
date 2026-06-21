@@ -29,6 +29,11 @@ else
 fi
 
 PY="${PYTHON:-python3}"
+# RUNNER=docker runs each probe's committed generated.cpp through the
+# pineforge-release image (no host C++ toolchain) instead of an in-process
+# strategy.so. IMAGE overrides the image tag. engine_trades.csv is identical
+# either way; verify_corpus.py judges parity. docker mode skips the CMake build.
+RUNNER="${RUNNER:-ctypes}"
 
 log()  { printf '\033[1;34m[run_corpus]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[run_corpus]\033[0m %s\n' "$*" >&2; }
@@ -53,7 +58,7 @@ fi
 
 # --- 1) build ---------------------------------------------------------
 
-if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
+if [[ "${SKIP_BUILD:-0}" != "1" && "$RUNNER" != "docker" ]]; then
     log "configuring CMake (build_type=$BUILD_TYPE, dir=$BUILD_DIR)"
     cmake -B "$BUILD_DIR" -S . \
         -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
@@ -68,7 +73,11 @@ fi
 # --- 2) run -----------------------------------------------------------
 
 if [[ "${SKIP_RUN:-0}" != "1" ]]; then
-    log "running every strategy.so against the reference OHLCV feed"
+    if [[ "$RUNNER" == "docker" ]]; then
+        log "running every committed generated.cpp via the pineforge-release image${IMAGE:+ ($IMAGE)}"
+    else
+        log "running every strategy.so against the reference OHLCV feed"
+    fi
     n_ok=0
     n_fail=0
     failed=()
@@ -76,21 +85,28 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
 
     for strat_dir in corpus/*/*/; do
         strat_dir="${strat_dir%/}"
-        [[ -f "$strat_dir/strategy.so" || -f "$strat_dir/strategy.dylib" || -f "$strat_dir/strategy.dll" ]] || continue
         if [[ -n "${ONLY:-}" && "$strat_dir" != *"$ONLY"* ]]; then
             continue
         fi
 
-        # Pick whichever shared lib extension actually exists for this platform.
-        if [[ -f "$strat_dir/strategy.dylib" ]]; then
-            so_name="strategy.dylib"
-        elif [[ -f "$strat_dir/strategy.dll" ]]; then
-            so_name="strategy.dll"
+        if [[ "$RUNNER" == "docker" ]]; then
+            [[ -f "$strat_dir/generated.cpp" ]] || continue
+            run_cmd=("$PY" scripts/run_strategy.py "$strat_dir" --runner docker)
+            [[ -n "${IMAGE:-}" ]] && run_cmd+=(--image "${IMAGE}")
         else
-            so_name="strategy.so"
+            [[ -f "$strat_dir/strategy.so" || -f "$strat_dir/strategy.dylib" || -f "$strat_dir/strategy.dll" ]] || continue
+            # Pick whichever shared lib extension actually exists for this platform.
+            if [[ -f "$strat_dir/strategy.dylib" ]]; then
+                so_name="strategy.dylib"
+            elif [[ -f "$strat_dir/strategy.dll" ]]; then
+                so_name="strategy.dll"
+            else
+                so_name="strategy.so"
+            fi
+            run_cmd=("$PY" scripts/run_strategy.py "$strat_dir" --so-name "$so_name")
         fi
 
-        if "$PY" scripts/run_strategy.py "$strat_dir" --so-name "$so_name" >/dev/null 2>&1; then
+        if "${run_cmd[@]}" >/dev/null 2>&1; then
             n_ok=$((n_ok + 1))
         else
             n_fail=$((n_fail + 1))

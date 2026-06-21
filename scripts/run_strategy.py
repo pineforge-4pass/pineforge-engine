@@ -44,6 +44,7 @@ import csv
 import ctypes
 import hashlib
 import json
+import os
 import re
 import sys
 import time
@@ -1009,6 +1010,97 @@ def _infer_bar_interval_ms(csv_path: Path) -> int:
             prev = ts
     return 15 * 60 * 1000
 
+# --- docker runner (pineforge-release image) ---------------------------
+
+def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
+                    run_kwargs: dict, trade_start_ms, image) -> dict:
+    """Run the COMMITTED generated.cpp through the pineforge-release container and
+    return a report dict shaped like Strategy.run / _report_to_dict, so the
+    host-side emit-window filter + write_engine_trades_csv work UNCHANGED.
+
+    Mirrors Strategy.run's engine setup exactly: inputs filter, strategy_overrides,
+    input_tf/script_tf, magnifier (incl. the VOLUME_WEIGHTED->ENDPOINTS+vw mapping),
+    trade_start_time, chart_timezone, syminfo. ohlcv_start_ms is applied by
+    pre-trimming the CSV fed to the container (the ctypes path trims in _load_bars).
+    NEVER re-transpiles .pine (uses the committed cpp, no codegen variance)."""
+    import pf_release_run as _rel
+    generated_cpp = strategy_dir / "generated.cpp"
+    if not generated_cpp.exists():
+        raise FileNotFoundError(f"generated.cpp not found for --runner docker: {generated_cpp}")
+
+    # ohlcv_start_ms: ctypes trims bars in _load_bars; the container needs an
+    # already-trimmed CSV (M8 — feed the same trimmed feed downstream).
+    ohlcv_for_image = ohlcv_path
+    tmp_ohlcv = None
+    start_ms = run_kwargs.get("ohlcv_start_ms")
+    if start_ms is not None:
+        import tempfile
+        fd, p = tempfile.mkstemp(suffix=".csv", prefix="pf_ohlcv_")
+        tmp_ohlcv = Path(p)
+        with ohlcv_path.open(newline="", encoding="utf-8") as fin, \
+                os.fdopen(fd, "w", newline="") as fout:
+            r = csv.DictReader(fin)
+            w = csv.DictWriter(fout, fieldnames=r.fieldnames)
+            w.writeheader()
+            for row in r:
+                if int(row["timestamp"]) >= int(start_ms):
+                    w.writerow(row)
+        ohlcv_for_image = tmp_ohlcv
+
+    # Magnifier dist/vw: mirror Strategy.run. 'VOLUME_WEIGHTED' is not a geometric
+    # distribution — fall back to ENDPOINTS for the t-grid AND toggle vw.
+    dist = str(run_kwargs.get("magnifier_distribution") or "ENDPOINTS")
+    vw = bool(run_kwargs.get("magnifier_volume_weighted")) or dist.upper() == "VOLUME_WEIGHTED"
+    if dist.upper() == "VOLUME_WEIGHTED":
+        dist = "ENDPOINTS"
+
+    # Inputs forwarded to the engine: same filter as Strategy.run (drop tv_*/meta).
+    inputs_for_image = {
+        str(k): str(v) for k, v in params.items()
+        if not str(k).startswith("tv_") and k not in _VALIDATION_META_KEYS
+    }
+    # syminfo from runtime_overrides. apply_syminfo covers mintick/pointvalue/
+    # timezone/session; syminfo_metadata (fundamentals) is NOT covered — 0 corpus
+    # probes use it (documented gap).
+    syminfo: dict = {}
+    if run_kwargs.get("syminfo_timezone"):
+        syminfo["timezone"] = run_kwargs["syminfo_timezone"]
+    if run_kwargs.get("syminfo_session"):
+        syminfo["session"] = run_kwargs["syminfo_session"]
+    if run_kwargs.get("syminfo_mintick") is not None:
+        syminfo["mintick"] = run_kwargs["syminfo_mintick"]
+    if run_kwargs.get("syminfo_pointvalue") is not None:
+        syminfo["pointvalue"] = run_kwargs["syminfo_pointvalue"]
+
+    kw = dict(
+        inputs=inputs_for_image,
+        overrides=run_kwargs.get("strategy_overrides") or {},
+        input_tf=run_kwargs.get("input_tf") or "",
+        script_tf=run_kwargs.get("script_tf") or "",
+        bar_magnifier=bool(run_kwargs.get("bar_magnifier")),
+        magnifier_samples=int(run_kwargs.get("magnifier_samples") or 4),
+        magnifier_dist=dist,
+        magnifier_volume_weighted=vw,
+        trade_start_ms=trade_start_ms,
+        chart_tz=run_kwargs.get("chart_timezone") or "",
+        syminfo=syminfo or None,
+    )
+    if image:
+        kw["image"] = image
+    try:
+        raw = _rel.run_release(generated_cpp, ohlcv_for_image, **kw)
+    finally:
+        if tmp_ohlcv is not None:
+            tmp_ohlcv.unlink(missing_ok=True)
+    return {
+        "trades": _rel.report_trades_to_runstrategy_shape(raw),
+        "net_profit": float(raw.get("summary", {}).get("net_pnl", 0.0)),
+        "input_bars_processed": int(raw.get("diagnostics", {}).get("input_bars_processed", 0)),
+        "trace": [],
+        "trace_names": [],
+    }
+
+
 # --- CLI ---------------------------------------------------------------
 
 def main() -> int:
@@ -1052,6 +1144,15 @@ def main() -> int:
                     help="Write a {token,digest,provenance} fingerprint of this "
                          "run to PATH. Off by default (keeps corpus output and "
                          "run_corpus.sh parity untouched).")
+    ap.add_argument("--runner", choices=["ctypes", "docker"], default="ctypes",
+                    help="Engine backend. 'ctypes' (default) loads the prebuilt "
+                         "strategy.so in-process. 'docker' runs the committed "
+                         "generated.cpp through the pineforge-release image (no host "
+                         "C++ toolchain) — same engine_trades.csv, verified by "
+                         "verify_corpus.py tolerance tiers.")
+    ap.add_argument("--image", default=None,
+                    help="pineforge-release image for --runner docker (default: "
+                         "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
     args = ap.parse_args()
 
     strategy_dir = args.strategy_dir.resolve()
@@ -1062,10 +1163,7 @@ def main() -> int:
         return 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    so_path = find_strategy_lib(strategy_dir, args.so_name)
-
     started = time.time()
-    strat = Strategy(so_path)
     inputs_path = (args.inputs_json.resolve() if args.inputs_json
                    else strategy_dir / "inputs.json")
     params = {}
@@ -1090,10 +1188,22 @@ def main() -> int:
         if emit_window is None:
             emit_window = _load_window_ms(REFERENCE_OHLCV)
     trade_start_ms = emit_window[0] if (emit_window is not None and (tv_window_used or args.disable_trading_before_window)) else None
-    report = strat.run(ohlcv_path, params=params,
-                       trace_enabled=args.trace_json is not None,
-                       trade_start_time_ms=trade_start_ms,
-                       **run_kwargs)
+
+    if args.runner == "docker":
+        if args.trace_json is not None:
+            sys.exit("error: --trace-json needs --emit-plots (deferred); not supported with --runner docker.")
+        if args.fingerprint_json is not None:
+            sys.exit("error: --fingerprint-json is not supported with --runner docker.")
+        strat = None
+        report = _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
+                                 trade_start_ms, args.image)
+    else:
+        so_path = find_strategy_lib(strategy_dir, args.so_name)
+        strat = Strategy(so_path)
+        report = strat.run(ohlcv_path, params=params,
+                           trace_enabled=args.trace_json is not None,
+                           trade_start_time_ms=trade_start_ms,
+                           **run_kwargs)
     raw_trade_count = len(report["trades"])
     trades_to_write = _filter_trades_to_window(report["trades"], emit_window)
     write_engine_trades_csv(trades_to_write, out_path)

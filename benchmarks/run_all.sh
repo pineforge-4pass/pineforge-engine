@@ -179,19 +179,33 @@ log "running canonical indicators through PineForge"
 
 if [[ "${SKIP_SPEED:-0}" != "1" ]]; then
     log "running per-strategy speed sweep"
-    if [[ ! -f "${ROOT_DIR}/build/CMakeCache.txt" ]] \
-       || ! grep -q "PINEFORGE_BUILD_SPEED_BENCH:BOOL=ON" "${ROOT_DIR}/build/CMakeCache.txt"; then
-        log "configuring with -DPINEFORGE_BUILD_SPEED_BENCH=ON"
-        cmake -B "${ROOT_DIR}/build" -DPINEFORGE_BUILD_SPEED_BENCH=ON -DPINEFORGE_BUILD_TESTS=ON >/dev/null
+    if [[ "${RUNNER:-native}" == "docker" ]]; then
+        # SECONDARY path: time PineForge inside the pineforge-release image
+        # (run_json.py --bench → raw samples_ns). GBench (native) stays the
+        # authoritative source; this is the no-toolchain / ecosystem-parity path.
+        log "PineForge speed via pineforge-release image (--bench); GBench stays authoritative"
+        (cd "${BENCH_DIR}" && uv run python speed/time_pineforge_docker.py \
+            --strategies "${STRATEGIES_DIR}" \
+            --ohlcv "${BENCH_DIR}/assets/data/ETHUSDT_15.csv" \
+            ${IMAGE:+--image "${IMAGE}"}) > "${WORKDIR}/pf_speed.json" 2>"${WORKDIR}/pf_speed.err"
+        PF_FMT=subproc
+    else
+        if [[ ! -f "${ROOT_DIR}/build/CMakeCache.txt" ]] \
+           || ! grep -q "PINEFORGE_BUILD_SPEED_BENCH:BOOL=ON" "${ROOT_DIR}/build/CMakeCache.txt"; then
+            log "configuring with -DPINEFORGE_BUILD_SPEED_BENCH=ON"
+            cmake -B "${ROOT_DIR}/build" -DPINEFORGE_BUILD_SPEED_BENCH=ON -DPINEFORGE_BUILD_TESTS=ON >/dev/null
+        fi
+        cmake --build "${ROOT_DIR}/build" --target pineforge_bench -j >/dev/null \
+            || fail "speed harness build failed (configure with -DPINEFORGE_BUILD_SPEED_BENCH=ON)"
+        "${ROOT_DIR}/build/bin/pineforge_bench" \
+            --benchmark_format=json > "${WORKDIR}/pf_speed.json"
+        PF_FMT=gbench
     fi
-    cmake --build "${ROOT_DIR}/build" --target pineforge_bench -j >/dev/null \
-        || fail "speed harness build failed (configure with -DPINEFORGE_BUILD_SPEED_BENCH=ON)"
-    "${ROOT_DIR}/build/bin/pineforge_bench" \
-        --benchmark_format=json > "${WORKDIR}/pf_speed.json"
     (cd "${BENCH_DIR}" && uv run python speed/time_pynecore.py) > "${WORKDIR}/pc_speed.json" 2>"${WORKDIR}/pc_speed.err"
     (cd "${BENCH_DIR}" && node speed/time_pinets.mjs) > "${WORKDIR}/pt_speed.json" 2>"${WORKDIR}/pt_speed.err"
     (cd "${BENCH_DIR}" && uv run python speed/aggregate.py \
         --pineforge "${WORKDIR}/pf_speed.json" \
+        --pineforge-format "${PF_FMT}" \
         --pynecore  "${WORKDIR}/pc_speed.json" \
         --pinets    "${WORKDIR}/pt_speed.json")
 fi
