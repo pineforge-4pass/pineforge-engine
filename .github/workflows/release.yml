@@ -44,13 +44,25 @@ jobs:
       version: ${{ steps.bump.outputs.next }}
 
     steps:
+      # Org GitHub App token (no PAT — never expires). Authorizes the version
+      # bump commit/tag push to protected main (the App is a bypass actor on the
+      # org ruleset) AND the downstream hub dispatch. Scoped to this repo + the
+      # hub. Minted first so checkout can push with it.
+      - name: Mint org App token
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: pineforge-4pass
+          repositories: pineforge-engine,pineforge-release
+
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # PAT (contents:write) — bypasses branch-protection rule that
-          # requires PRs into main. GITHUB_TOKEN does not bypass.
-          token: ${{ secrets.RELEASE_TOKEN }}
+          # App token bypasses the org ruleset (PR-required) for the bump push.
+          token: ${{ steps.app.outputs.token }}
 
       - name: Configure git identity
         run: |
@@ -218,15 +230,6 @@ jobs:
       # rebuilds, and that silent failure is exactly the bug this replaces. The
       # credential is the org GitHub App (no PAT — minted at runtime, never
       # expires); `gh api` exits non-zero on HTTP >=4xx so `set -e` fails the job.
-      - name: Mint org App token (hub dispatch)
-        id: app
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.PINEFORGE_APP_ID }}
-          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
-          owner: pineforge-4pass
-          repositories: pineforge-release
-
       - name: Dispatch engine-release -> pineforge-release
         env:
           GH_TOKEN:   ${{ steps.app.outputs.token }}
