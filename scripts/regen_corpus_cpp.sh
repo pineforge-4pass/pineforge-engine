@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # scripts/regen_corpus_cpp.sh — regenerate (or verify) every corpus
 # generated.cpp straight from strategy.pine, using the bundled transpiler
-# in the pineforge-engine Docker image. Docker is the only dependency —
+# in the pineforge-release Docker image. Docker is the only dependency —
 # no host Python, pip, or C++ toolchain needed for this step.
 #
 # This closes the reproducibility loop: the shipped corpus/*/*/generated.cpp
-# can be re-derived from corpus/*/*/strategy.pine through the public engine
-# image (which bundles pineforge-codegen in transpile-only mode).
+# can be re-derived from corpus/*/*/strategy.pine through the public
+# pineforge-release image (engine runtime + bundled pineforge-codegen),
+# in transpile-only mode. NOTE: the bare pineforge-engine image no longer
+# bundles the transpiler — REGEN must use pineforge-release.
 #
 # Env vars:
-#   IMAGE    Engine image to transpile with
-#            (default: ghcr.io/pineforge-4pass/pineforge-engine:latest)
+#   IMAGE    Image to transpile with
+#            (default: ghcr.io/pineforge-4pass/pineforge-release:latest)
 #   ONLY     Substring filter; only process strategies whose path matches
 #   VERIFY   1 = do NOT overwrite; transpile to a temp file and diff against
 #            the committed generated.cpp. Exit non-zero if any file drifts.
@@ -29,7 +31,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-IMAGE="${IMAGE:-ghcr.io/pineforge-4pass/pineforge-engine:latest}"
+IMAGE="${IMAGE:-ghcr.io/pineforge-4pass/pineforge-release:latest}"
 VERIFY="${VERIFY:-0}"
 
 log()  { printf '\033[1;34m[regen_corpus]\033[0m %s\n' "$*"; }

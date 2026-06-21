@@ -42,12 +42,12 @@ fi
 
 # --- 0) (optional) regenerate generated.cpp from strategy.pine --------
 # REGEN=1 re-derives every corpus/*/*/generated.cpp from its strategy.pine
-# through the engine Docker image (which bundles the transpiler), so the
-# build below compiles freshly-transpiled C++ instead of the committed copy.
+# through the pineforge-release Docker image (engine + bundled transpiler), so
+# the build below compiles freshly-transpiled C++ instead of the committed copy.
 # Requires Docker. Honours ONLY. Off by default → committed C++ is used.
 
 if [[ "${REGEN:-0}" == "1" ]]; then
-    log "regenerating generated.cpp from strategy.pine via the engine image"
+    log "regenerating generated.cpp from strategy.pine via the pineforge-release image"
     "$ROOT_DIR/scripts/regen_corpus_cpp.sh"
 fi
 

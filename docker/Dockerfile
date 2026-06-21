@@ -1,22 +1,22 @@
-# PineForge runtime container.
+# PineForge runtime base image — PURE RUNTIME, no transpiler.
 #
 # Stage 1 builds libpineforge.a and stages the public headers.
-# Stage 2 is a thin runtime: g++, python3, the prebuilt static
-# library, and the JSON harness. Each `docker run` compiles the
-# user-supplied generated.cpp against libpineforge.a and runs it
-# against the user-supplied OHLCV, emitting a JSON report on stdout.
+# Stage 2 is a thin runtime base: g++, Eigen, python3, the prebuilt static
+# library, and the public headers. It compiles + runs a *pre-transpiled*
+# generated.cpp against libpineforge.a (the C ABI).
+#
+# This image deliberately does NOT bundle the PineScript->C++ transpiler
+# (pineforge-codegen) and has NO Pine entrypoint. The full `.pine -> trades`
+# pipeline (transpiler + entrypoint + JSON harness) lives in the combined
+# image **ghcr.io/pineforge-4pass/pineforge-release**, which builds FROM this
+# base. Run a `.pine` there, not here.
 #
 # Build args (release.yml passes these; sane defaults for local builds):
 #   PINEFORGE_VERSION  semver "MAJOR.MINOR.PATCH" (defaults to VERSION file)
 #   PINEFORGE_GIT_SHA  full commit sha
 #
 # Build:
-#   docker build -t pineforge -f docker/Dockerfile .
-# Run:
-#   docker run --rm \
-#     -v $(pwd)/strategy.cpp:/in/strategy.cpp:ro \
-#     -v $(pwd)/ohlcv.csv:/in/ohlcv.csv:ro \
-#     pineforge > report.json
+#   docker build -t pineforge-engine -f docker/Dockerfile .
 
 # === Stage 1: build libpineforge.a =====================================
 FROM debian:bookworm-slim AS builder
@@ -27,15 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
         libeigen3-dev \
-        python3-pip \
     && rm -rf /var/lib/apt/lists/*
-
-# Stage the pure-Python transpiler here so the runtime never needs pip or
-# network: target-install gives a plain directory tree to COPY across.
-# PINNED: the codegen version is explicit so image builds are reproducible AND
-# the buildx (gha) layer cache busts when we need a newer codegen. Bump this in
-# lockstep with a pineforge-codegen release.
-RUN pip3 install --break-system-packages --no-cache-dir -U --target /opt/codegen pineforge-codegen==0.7.5
 
 WORKDIR /src
 # VERSION file is the version source-of-truth inside the build context;
@@ -57,52 +49,46 @@ RUN cmake -B build \
 # stage 2 can copy a single tree.
 RUN cp build/include/pineforge/version.h include/pineforge/version.h
 
-# === Stage 2: runtime =================================================
+# === Stage 2: runtime base ============================================
 FROM debian:bookworm-slim
 
 ARG PINEFORGE_VERSION=unknown
 ARG PINEFORGE_GIT_SHA=unknown
 ARG PINEFORGE_BUILD_DATE=unknown
 
-LABEL org.opencontainers.image.title="pineforge" \
-      org.opencontainers.image.description="Deterministic PineScript v6 backtest runtime" \
+LABEL org.opencontainers.image.title="pineforge-engine" \
+      org.opencontainers.image.description="Deterministic PineScript v6 backtest runtime (pure base; transpiler ships in pineforge-release)" \
       org.opencontainers.image.version="${PINEFORGE_VERSION}" \
       org.opencontainers.image.revision="${PINEFORGE_GIT_SHA}" \
       org.opencontainers.image.created="${PINEFORGE_BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/pineforge-4pass/pineforge-engine" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-# g++ + Eigen to compile the generated TU; python3 for the JSON harness and
-# the bundled PineScript->C++ transpiler (pineforge-codegen, target-installed
-# in the builder stage and COPY'd in — the runtime carries no pip, no
-# ca-certificates, and never touches the network). With codegen baked in, the
-# container accepts strategy.pine directly and transpiles locally — no hosted
-# API, no API key, source never leaves the box.
+# g++ + Eigen to compile a pre-transpiled generated.cpp against the static lib.
+# python3 stays: the pineforge-release image builds FROM this base and its
+# JSON harness (run_json.py) needs it — keeping it here avoids re-installing it
+# in the release layer. The bare engine image carries NO transpiler and NO Pine
+# entrypoint (see header); those live in pineforge-release.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ \
         libeigen3-dev \
         python3 \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/locale /usr/share/info
 
-# Bundle the prebuilt static library, the public headers (curated +
-# generated version.h), and the JSON harness. Users only mount their
-# own code.
-RUN mkdir -p /opt/pineforge/lib /opt/pineforge/include /opt/pineforge/bin
-COPY --from=builder /opt/codegen /opt/pineforge/pycodegen
+# Bundle the prebuilt static library and the public headers (curated +
+# generated version.h). Consumers link their own compiled strategy against this.
+RUN mkdir -p /opt/pineforge/lib /opt/pineforge/include
 COPY --from=builder /src/build/lib/libpineforge.a /opt/pineforge/lib/
 COPY --from=builder /src/include/pineforge        /opt/pineforge/include/pineforge
 
-COPY docker/run_json.py    /opt/pineforge/bin/run_json.py
-COPY docker/entrypoint.sh  /opt/pineforge/bin/entrypoint.sh
-RUN chmod +x /opt/pineforge/bin/entrypoint.sh /opt/pineforge/bin/run_json.py
-
 ENV PINEFORGE_PREFIX=/opt/pineforge \
     PINEFORGE_VERSION=${PINEFORGE_VERSION} \
-    PINEFORGE_GIT_SHA=${PINEFORGE_GIT_SHA} \
-    PYTHONPATH=/opt/pineforge/pycodegen
+    PINEFORGE_GIT_SHA=${PINEFORGE_GIT_SHA}
 
-# Drop root: the entrypoint compiles and runs everything under mktemp dirs.
+# Drop root.
 RUN useradd -r -u 10001 -s /usr/sbin/nologin pineforge
 USER pineforge
 
-ENTRYPOINT ["/opt/pineforge/bin/entrypoint.sh"]
+# No ENTRYPOINT: this is a base/runtime image, not a standalone Pine tool.
+# Make a bare `docker run` self-documenting instead of silently doing nothing.
+CMD ["sh", "-c", "echo 'pineforge-engine is a pure runtime base (compile + run a pre-transpiled generated.cpp against /opt/pineforge/lib/libpineforge.a). For PineScript .pine -> backtest, use ghcr.io/pineforge-4pass/pineforge-release.' >&2; exit 64"]
