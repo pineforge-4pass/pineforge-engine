@@ -40,8 +40,8 @@ fail() { printf '\033[1;31m[regen_corpus]\033[0m %s\n' "$*" >&2; exit 1; }
 
 if [[ ! -f "$ROOT_DIR/corpus/CMakeLists.txt" ]]; then
     fail "validation corpus is not checked out (missing corpus/CMakeLists.txt).
-Maintainers:   git submodule update --init corpus
-Public clones: the TV validation corpus lives in a private submodule only; see CONTRIBUTING.md."
+Run:  git submodule update --init corpus
+(the TV validation corpus is a PUBLIC submodule: https://github.com/pineforge-4pass/pineforge-corpus)"
 fi
 
 command -v docker >/dev/null 2>&1 || fail "docker not found on PATH."
