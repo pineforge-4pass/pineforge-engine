@@ -27,13 +27,8 @@ on:
           - minor
           - major
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-
 permissions:
   contents: write
-  packages: write
 
 jobs:
   release:
@@ -55,7 +50,7 @@ jobs:
           app-id: ${{ secrets.PINEFORGE_APP_ID }}
           private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
           owner: pineforge-4pass
-          repositories: pineforge-engine,pineforge-release
+          repositories: pineforge-engine
 
       - name: Checkout (full history)
         uses: actions/checkout@v4
@@ -137,8 +132,6 @@ jobs:
         env:
           TAG:      ${{ steps.bump.outputs.tag }}
           PREV:     ${{ steps.prev.outputs.prev }}
-          REGISTRY: ${{ env.REGISTRY }}
-          IMAGE:    ${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
           {
@@ -155,60 +148,12 @@ jobs:
             fi
             echo
             echo
-            echo "### Container image"
+            echo "### Prebuilt libraries"
             echo
-            echo '```'
-            echo "docker pull ${REGISTRY}/${IMAGE}:${TAG#v}"
-            echo '```'
+            echo "Per-arch static-lib + headers tarballs are attached below (C ABI)."
+            echo "For the full PineScript -> backtest image, use \`ghcr.io/pineforge-4pass/pineforge-release\`."
           } > RELEASE_NOTES.md
           echo "path=RELEASE_NOTES.md" >> "$GITHUB_OUTPUT"
-
-      - name: Build context metadata
-        id: ctx
-        run: |
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute image tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ steps.bump.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.bump.outputs.tag }}
-            type=semver,pattern={{major}},value=${{ steps.bump.outputs.tag }}
-            type=raw,value=latest
-            type=sha,format=short,prefix=,value=${{ steps.ctx.outputs.sha }}
-
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            PINEFORGE_VERSION=${{ steps.bump.outputs.next }}
-            PINEFORGE_GIT_SHA=${{ steps.ctx.outputs.sha }}
-            PINEFORGE_BUILD_DATE=${{ steps.ctx.outputs.date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Create GitHub Release
         env:
@@ -220,28 +165,6 @@ jobs:
             --title "${TAG}" \
             --notes-file "${NOTES}" \
             --verify-tag
-
-      # Every engine release notifies the pineforge-release hub, which bumps its
-      # ENGINE_VERSION pin, rebuilds the combined image (FROM this engine image +
-      # the bundled codegen), and fans out to the MCPs. The hub is the sole
-      # downstream entry point now — we no longer dispatch to mcp-public directly.
-      #
-      # FAIL LOUD (no continue-on-error): a dropped notify means downstream never
-      # rebuilds, and that silent failure is exactly the bug this replaces. The
-      # credential is the org GitHub App (no PAT — minted at runtime, never
-      # expires); `gh api` exits non-zero on HTTP >=4xx so `set -e` fails the job.
-      - name: Dispatch engine-release -> pineforge-release
-        env:
-          GH_TOKEN:   ${{ steps.app.outputs.token }}
-          ENGINE_TAG: ${{ steps.bump.outputs.tag }}
-          RUN_ID:     ${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          gh api repos/pineforge-4pass/pineforge-release/dispatches \
-            -f event_type=engine-release \
-            -F "client_payload[version]=${ENGINE_TAG}" \
-            -F "client_payload[run_id]=${RUN_ID}"
-          echo "dispatched engine-release -> pineforge-release (${ENGINE_TAG})"
 
   # Prebuilt static-lib + headers tarballs, one per (os, arch). Attached
   # to the GitHub Release created above. Tarball layout:
@@ -349,3 +272,34 @@ jobs:
           SHASUM:  ${{ steps.pack.outputs.sha256 }}
         run: |
           gh release upload "${TAG}" "${TARBALL}" "${SHASUM}" --clobber
+
+  # Notify the pineforge-release hub AFTER the tarballs are uploaded — the hub
+  # builds FROM the engine static-lib tarball, so it must exist first. The hub
+  # bumps its ENGINE_VERSION pin, rebuilds the combined image, and fans out to
+  # the MCPs. FAIL LOUD (no continue-on-error): a dropped notify means downstream
+  # never rebuilds. Credential is the org GitHub App (no PAT).
+  notify-hub:
+    needs: [release, prebuilt]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint org App token (hub dispatch)
+        id: app
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: pineforge-4pass
+          repositories: pineforge-release
+
+      - name: Dispatch engine-release -> pineforge-release
+        env:
+          GH_TOKEN:   ${{ steps.app.outputs.token }}
+          ENGINE_TAG: ${{ needs.release.outputs.tag }}
+          RUN_ID:     ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api repos/pineforge-4pass/pineforge-release/dispatches \
+            -f event_type=engine-release \
+            -F "client_payload[version]=${ENGINE_TAG}" \
+            -F "client_payload[run_id]=${RUN_ID}"
+          echo "dispatched engine-release -> pineforge-release (${ENGINE_TAG})"
