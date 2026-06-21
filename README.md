@@ -407,10 +407,10 @@ git clone https://github.com/pineforge-4pass/pineforge-engine.git
 cd pineforge-engine
 git submodule update --init corpus
 
-# (Optional) Reproduce the C++ from strategy.pine via the engine image.
+# (Optional) Reproduce the C++ from strategy.pine via the pineforge-release image.
 # VERIFY=1 proves the shipped generated.cpp is byte-identical to the
 # transpiler output (drift guard, no overwrite); drop it to regenerate.
-docker pull ghcr.io/pineforge-4pass/pineforge-engine:latest
+docker pull ghcr.io/pineforge-4pass/pineforge-release:latest
 VERIFY=1 scripts/regen_corpus_cpp.sh
 
 # Build + run + verify TV parity. (Add REGEN=1 to regenerate the C++
