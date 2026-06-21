@@ -32,9 +32,11 @@ Click on below for 60 seconds tutorial
 
 The fastest way to use PineForge: let your AI agent write, run, and optimize
 strategies for you via the **[`pineforge-codegen-mcp`](https://github.com/pineforge-4pass/pineforge-codegen-mcp)**
-container — a single self-contained image with the transpiler **and** the engine
-bundled in-process. Pull it, mount a working dir, done. **No host build step, no
-docker-in-docker, no API key — nothing leaves the box.**
+container — a single self-contained image (built on the
+[`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image, which bundles the
+engine runtime **and** the transpiler) that runs the whole transpile→backtest loop in-process. Pull
+it, mount a working dir, done. **No host build step, no docker-in-docker, no API key — nothing leaves
+the box.**
 
 A language model can't accurately backtest a PineScript v6 strategy by reasoning
 about it — Pine's series semantics, intrabar fills, look-ahead rules, and
@@ -396,7 +398,7 @@ A pre-compiled strategy `.so` against runtime `0.X.Y` will keep working against 
 The validation corpus lets anyone rebuild and rerun every compiled
 PineForge strategy from a fresh clone — now genuinely **from source**:
 the transpiler ([`pineforge-codegen`](https://github.com/pineforge-4pass/pineforge-codegen-oss))
-is bundled in the engine Docker image, so each `generated.cpp` can be
+is bundled in the [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image, so each `generated.cpp` can be
 re-derived from its `strategy.pine`. The committed `generated.cpp` still
 ships, so the build also works with just a C++17 compiler and no Docker.
 
