@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -74,9 +75,47 @@ def load_dynamic_data(json_path: Path) -> dict[str, float]:
         print(f"Error parsing JSON: {e}. Using fallback data.")
         return FALLBACK_DATA
 
+def load_subproc_data(json_path: Path) -> dict[str, float]:
+    """Load throughput results from the docker --bench driver
+    (time_throughput_docker.py): {slug: {m_per_s, ...}} → {slug: M/s}.
+
+    This is the SECONDARY, no-toolchain path. The from-source GBench JSON
+    (load_dynamic_data) stays authoritative for the published chart.
+    """
+    if not json_path.exists():
+        print(f"Warning: subproc results file '{json_path}' not found. Using fallback data.")
+        return FALLBACK_DATA
+    try:
+        with open(json_path, "r") as f:
+            raw = json.load(f)
+        results = {}
+        for slug, rec in raw.items():
+            m = rec.get("m_per_s") if isinstance(rec, dict) else rec
+            if m is not None:
+                results[slug] = float(m)
+        if not results:
+            print("Warning: No m_per_s entries in subproc JSON. Using fallback data.")
+            return FALLBACK_DATA
+        return results
+    except Exception as e:
+        print(f"Error parsing subproc JSON: {e}. Using fallback data.")
+        return FALLBACK_DATA
+
+
 def main():
-    json_path = Path(__file__).parent / "benchmark_results.json"
-    results = load_dynamic_data(json_path)
+    ap = argparse.ArgumentParser(description="PineForge throughput quartile plot")
+    ap.add_argument("--results", type=Path, default=None,
+                    help="results JSON (default: benchmark_results.json next to this script)")
+    ap.add_argument("--format", choices=["gbench", "subproc"], default="gbench",
+                    help="gbench=from-source GBench JSON (default/authoritative); "
+                         "subproc=docker --bench driver output (time_throughput_docker.py)")
+    args = ap.parse_args()
+
+    json_path = args.results or (Path(__file__).parent / "benchmark_results.json")
+    if args.format == "subproc":
+        results = load_subproc_data(json_path)
+    else:
+        results = load_dynamic_data(json_path)
 
     data = list(results.values())
     data.sort()

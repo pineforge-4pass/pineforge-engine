@@ -104,7 +104,12 @@ def load_subproc(p: Path) -> dict[str, dict]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--pineforge", type=Path, required=True,
-                    help="GBench JSON (pineforge_bench --benchmark_format=json)")
+                    help="PineForge timing JSON. gbench format = pineforge_bench "
+                         "--benchmark_format=json (default, AUTHORITATIVE); subproc "
+                         "format = speed/time_pineforge_docker.py {slug:{median_ms,...}}.")
+    ap.add_argument("--pineforge-format", choices=["gbench", "subproc"], default="gbench",
+                    help="How to parse --pineforge (default gbench). 'subproc' for the "
+                         "secondary docker --bench path (image-emitted samples_ns).")
     ap.add_argument("--pynecore", type=Path, required=True,
                     help="PyneCore JSON (speed/time_pynecore.py)")
     ap.add_argument("--pinets", type=Path, required=True,
@@ -115,7 +120,7 @@ def main() -> None:
                     help="Output path (default: benchmarks/results/speed.md)")
     args = ap.parse_args()
 
-    pf = load_gbench(args.pineforge)
+    pf = load_gbench(args.pineforge) if args.pineforge_format == "gbench" else load_subproc(args.pineforge)
     pc = load_subproc(args.pynecore)
     pt = load_subproc(args.pinets)
     vbt = load_subproc(args.vectorbt) if args.vectorbt and args.vectorbt.exists() else {}
