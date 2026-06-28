@@ -276,7 +276,29 @@ void BacktestEngine::reduce_oca_group(const std::string& oca_name,
 }
 
 
-void BacktestEngine::purge_exit_orders() {
+void BacktestEngine::purge_exit_orders(bool retain_for_pending_entries) {
+    if (retain_for_pending_entries) {
+        // End-of-bar flat-purge: the position is flat, but a from_entry-bound
+        // EXIT bracket whose parent ENTRY is still a PENDING order (e.g. a limit
+        // entry that could not fill on its creation bar) must be RETAINED — once
+        // the entry fills on a later bar the bracket fires, matching TV. Only
+        // brackets with no live/pending parent entry are stale and dropped.
+        std::unordered_set<std::string> pending_entry_ids;
+        for (const auto& o : pending_orders_) {
+            if (o.type == OrderType::ENTRY || o.type == OrderType::MARKET) {
+                pending_entry_ids.insert(o.id);
+            }
+        }
+        pending_orders_.erase(
+            std::remove_if(pending_orders_.begin(), pending_orders_.end(),
+                [&](const PendingOrder& o) {
+                    return o.type == OrderType::EXIT
+                        && !(!o.from_entry.empty()
+                             && pending_entry_ids.count(o.from_entry));
+                }),
+            pending_orders_.end());
+        return;
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [](const PendingOrder& o) { return o.type == OrderType::EXIT; }),

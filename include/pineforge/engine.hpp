@@ -1187,7 +1187,7 @@ private:
     // siblings' qty by Q. Siblings whose qty becomes <= 0 are cancelled.
     void reduce_oca_group(const std::string& oca_name, const std::string& exclude_id,
                           double filled_qty);
-    void purge_exit_orders();
+    void purge_exit_orders(bool retain_for_pending_entries = false);
 
     // process_pending_orders helpers (defined in engine_fills.cpp).
     // Decomposed during the function-decomposition refactor so the

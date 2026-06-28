@@ -84,9 +84,11 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     compact_filled_pending_orders(filled_indices, exit_closed_from_bar, exit_closed_was_long);
     }  // opposing_pass
 
-    // If position is flat after processing, purge any remaining exit orders
+    // If position is flat after processing, purge remaining exit orders — but
+    // RETAIN from_entry brackets whose parent entry is still pending (a limit
+    // entry that has not yet filled), so they fire once the entry fills.
     if (position_side_ == PositionSide::FLAT) {
-        purge_exit_orders();
+        purge_exit_orders(/*retain_for_pending_entries=*/true);
     }
 }
 
