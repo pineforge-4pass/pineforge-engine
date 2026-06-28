@@ -187,7 +187,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
 
 
 // --- run_magnified_bar ---
-void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
+void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t script_bar_ts) {
     if (sub_bars.empty()) return;
 
     double bar_open = sub_bars.front().open;
@@ -274,6 +274,14 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
                 if (is_last_tick_) {
                     // Force is_first_tick_ true so that on_bar advances the series history.
                     is_first_tick_ = true;
+                    // The strategy body and its time-of-day builtins
+                    // (hour/minute/dayofmonth, intraday session gates) must see
+                    // the SCRIPT bar's canonical open timestamp, not the final
+                    // sub-bar's ts — else exact-time gates ("lock IB at 10:30")
+                    // never fire. Intrabar fills above already used the real
+                    // sub-bar timestamps. No-op when total_sub==1 (synthesized
+                    // magnifier: the single sub-bar IS the script bar).
+                    current_bar_.timestamp = script_bar_ts;
                     _push_source_series();
                     on_bar(current_bar_);
                     process_pending_orders(current_bar_);
@@ -284,6 +292,9 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars) {
                 if (is_last_tick_) {
                     // Force is_first_tick_ true so that on_bar advances the series history.
                     is_first_tick_ = true;
+                    // See note above: strategy body sees the script-bar open ts,
+                    // not the final sub-bar ts.
+                    current_bar_.timestamp = script_bar_ts;
                     _push_source_series();
                     on_bar(current_bar_);
                 }
@@ -547,7 +558,7 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                                                             group_sub_bars.front().timestamp);
                 session_isfirstbar_ = session_ismarket_ && !prev_in_session_;
                 session_islastbar_  = false;  // not deterministic in magnifier mode without lookahead
-                run_magnified_bar(group_sub_bars);
+                run_magnified_bar(group_sub_bars, script_bar_ts);
                 prev_in_session_ = session_ismarket_;
                 group_sub_bars.clear();
             } else {

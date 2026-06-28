@@ -997,7 +997,7 @@ protected:
     virtual void clear_security(int sec_id) {}
 
     // Magnifier helpers
-    void run_magnified_bar(const std::vector<Bar>& sub_bars);
+    void run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t script_bar_ts);
     virtual void finalize_bar() {}
 
     // --- Equity extremes update (called after each on_bar) ---
