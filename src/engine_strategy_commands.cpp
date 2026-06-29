@@ -681,7 +681,16 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
     }
 
     double available_qty = std::max(0.0, position_qty_ - already_reserved);
-    if (!std::isnan(preserved_reserved_qty)) {
+    // Only carry the preserved (frozen) reserved qty for genuine PARTIAL
+    // re-issues (qp < 100%). A full-position exit (qp == 100%) re-issued
+    // every bar while the position keeps GROWING via pyramiding/DCA must
+    // re-expand to 100% of the now-larger position rather than stay frozen
+    // at the size captured when it was first placed; otherwise the TP touch
+    // closes only the first FIFO lot at the true limit and the residual lots
+    // exit one bar late at a re-priced limit/next-bar-open (one logical exit
+    // fragmenting across two bars). For partial re-issues the carry is kept
+    // to avoid double-reserving against the same from_entry.
+    if (!std::isnan(preserved_reserved_qty) && qp_io < 100.0 - kFullPercentEps) {
         reserved_qty_out = std::min(preserved_reserved_qty, position_qty_);
     } else {
         double requested_qty = position_qty_ * (qp_io / 100.0);
