@@ -87,7 +87,7 @@ class DrawingArena {
     std::deque<int32_t>  order_;  // live ids, oldest -> newest == the *.all order; drives FIFO eviction
     int                  cap_;
 public:
-    explicit DrawingArena(int cap = 50) : cap_(cap) {}
+    explicit DrawingArena(int cap = 50) : cap_(std::max(1, cap)) {}
 
     int32_t alloc(Rec r) {
         while ((int)order_.size() >= cap_) {        // exact-cap FIFO eviction (oldest first)

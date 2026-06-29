@@ -217,6 +217,21 @@ static void test_fifo_eviction() {
 }
 
 // ---------------------------------------------------------------------------
+// Defensive cap floor: Pine strategy caps are validated as >=1 by codegen, but
+// a malformed direct runtime use must not hit empty-deque front() UB.
+static void test_cap_zero_floors_to_one() {
+    std::printf("test_cap_zero_floors_to_one\n");
+    DrawingArena<LineRec> a(0);
+    Line h0 = pf_line_new(a, 0, 0.0, 1, 1.0);
+    Line h1 = pf_line_new(a, 1, 1.0, 2, 2.0);
+
+    CHECK_THROWS(pf_line_get_x1(a, h0));
+    CHECK(pf_line_get_x1(a, h1) == 1);
+    CHECK(a.order().size() == 1u);
+    CHECK(a.order().front() == h1.id);
+}
+
+// ---------------------------------------------------------------------------
 // get_price: linear interp + degenerate x1==x2 -> na + bar_time -> throw (spec §3.6)
 static void test_get_price() {
     std::printf("test_get_price\n");
@@ -370,6 +385,7 @@ int main() {
     test_copy_is_deep();
     test_delete_then_getter_throws();
     test_fifo_eviction();
+    test_cap_zero_floors_to_one();
     test_get_price();
     test_box();
     test_label();
