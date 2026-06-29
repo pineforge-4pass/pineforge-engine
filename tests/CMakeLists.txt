@@ -70,6 +70,7 @@ set(TEST_SOURCES
     test_timezone_concurrency
     test_pointvalue
     test_metrics
+    test_drawing
 )
 
 find_package(Threads REQUIRED)
