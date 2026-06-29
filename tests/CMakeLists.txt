@@ -62,6 +62,7 @@ set(TEST_SOURCES
     test_fills_edge
     test_limit_fill_slippage
     test_strategy_commands_extra
+    test_multi_tier_exit_precedence
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra
     test_ta_osc_edge
