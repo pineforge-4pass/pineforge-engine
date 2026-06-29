@@ -69,14 +69,18 @@ struct LinefillRec { int32_t line1, line2; bool alive; };
 // ---- error type (spec §3.7) ------------------------------------------------
 // Derives from std::runtime_error so BacktestEngine::run()'s existing
 // `catch (const std::exception& e)` (src/engine_run.cpp) halts the backtest
-// exactly like TradingView when a drawing op touches a dead/na handle.
+// exactly like TradingView when a drawing op touches a na handle.
 // Drawing is ALWAYS-ON and ALWAYS TV-faithful: no compile flag, no lenient mode.
 struct pine_drawing_error : std::runtime_error {
     explicit pine_drawing_error(const std::string& msg) : std::runtime_error(msg) {}
 };
 
-// dead/na handle access is ALWAYS an error — no flag, no lenient mode (spec §3.7)
-#define PF_DRAW_DEAD(arena, handle) throw pine_drawing_error("drawing access on na/deleted handle")
+// A na handle (id < 0) or an out-of-range id is ALWAYS an error — there is no
+// record to read. NOTE: a DEAD record (alive == false, after an explicit
+// line.delete() or FIFO eviction) is NOT an error — TV keeps the object's data
+// read/writable after delete (the object only leaves the chart + the *.all
+// list), so the engine must too. See corpus/validation/drawing-delete-halt,
+// where TV keeps producing trades (2504) after the strategy's line.delete().
 
 // ---- arena template (spec §3.4) --------------------------------------------
 // ids are monotonic and never reused (dead slots are tombstoned, not recycled)
@@ -110,6 +114,11 @@ public:
 
     bool alive(int32_t id) const { return id >= 0 && id < (int)recs_.size() && recs_[id].alive; }
 
+    // Number of slots ever allocated (dead slots retained). ids in [0, size())
+    // reference a real record (live OR dead); ids outside that range or < 0 are
+    // na/invalid.
+    int32_t size() const { return (int32_t)recs_.size(); }
+
     Rec&       at(int32_t id)       { return recs_[id]; }
     const Rec& at(int32_t id) const { return recs_[id]; }
 
@@ -117,11 +126,14 @@ public:
 };
 
 // ---- shared helpers --------------------------------------------------------
-// Returns a reference to the live record for a handle, or THROWS pine_drawing_error
-// (spec §3.7: any getter/setter on a dead/na handle halts, unconditionally).
+// Returns a reference to the record for a handle. Only a na handle (id < 0) or
+// an out-of-range id throws; a DEAD record (alive == false, e.g. after an
+// explicit line.delete() or FIFO eviction) is returned as-is — its geometry
+// remains read/writable, matching TV (delete leaves the chart + *.all, not the
+// data). See corpus/validation/drawing-delete-halt (2504 post-delete trades).
 template <class Rec, class Handle>
 inline Rec& pf_require_live(DrawingArena<Rec>& a, Handle h) {
-    if (!a.alive(h.id)) throw pine_drawing_error("drawing access on na/deleted handle");
+    if (h.id < 0 || h.id >= a.size()) throw pine_drawing_error("drawing access on na handle");
     return a.at(h.id);
 }
 
@@ -170,8 +182,9 @@ inline void pf_line_set_xloc(DrawingArena<LineRec>& a, Line h, int64_t x1, int64
 
 // real computation: infinite line, ignores extend; valid for xloc.bar_index (spec §3.6).
 inline double pf_line_get_price(DrawingArena<LineRec>& a, Line h, int64_t x) {
-    if (!a.alive(h.id)) PF_DRAW_DEAD(a, h);             // dead/na line -> throw -> halt (like TV)
-    const LineRec& r = a.at(h.id);
+    if (h.id < 0 || h.id >= a.size())            // na/out-of-range line -> throw -> halt (like TV)
+        throw pine_drawing_error("drawing access on na handle");
+    const LineRec& r = a.at(h.id);               // dead record's geometry is still readable (TV-faithful)
     if (r.xloc == XLoc::bar_time)
         throw pine_drawing_error("line.get_price requires xloc.bar_index"); // TV errors on bar_time lines
     if (r.x1 == r.x2) return na<double>();              // degenerate vertical -> na (matches TV)

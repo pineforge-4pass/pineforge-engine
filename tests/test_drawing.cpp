@@ -169,25 +169,39 @@ static void test_copy_is_deep() {
 }
 
 // ---------------------------------------------------------------------------
-// delete() then a getter THROWS; double-delete / na-delete are silent (spec §3.7)
-static void test_delete_then_getter_throws() {
-    std::printf("test_delete_then_getter_throws\n");
+// delete() keeps the record's data accessible (TV-faithful): an explicit
+// line.delete() removes the object from the chart + *.all, but its geometry
+// stays read/writable — corpus/validation/drawing-delete-halt shows TV keeps
+// producing trades (2504) after the strategy's line.delete(). Only a na handle
+// (never created) or an out-of-range id throws. double-delete / na-delete silent.
+static void test_delete_keeps_data_accessible() {
+    std::printf("test_delete_keeps_data_accessible\n");
     DrawingArena<LineRec> a;
     Line h = pf_line_new(a, 1, 10.0, 2, 20.0);
     pf_line_delete(a, h);
+    CHECK(!a.alive(h.id));                            // tombstoned (out of *.all)
 
-    CHECK_THROWS(pf_line_get_x1(a, h));
-    CHECK_THROWS(pf_line_get_y2(a, h));
-    CHECK_THROWS(pf_line_set_x1(a, h, 5));        // setter on dead also throws
-    CHECK_THROWS(pf_line_get_price(a, h, 3));     // get_price on dead throws
+    // getters on the dead record return the stored geometry (do NOT throw).
+    CHECK(pf_line_get_x1(a, h) == 1);
+    CHECK(near(pf_line_get_y2(a, h), 20.0));
+    // get_price on the dead record interpolates the stored geometry (infinite line).
+    CHECK(near(pf_line_get_price(a, h, 3), 30.0));    // line (1,10)-(2,20) at x=3 -> 30
+    // setters on the dead record mutate the stored geometry (do NOT throw).
+    CHECK_NOTHROW(pf_line_set_x1(a, h, 5));
+    CHECK(pf_line_get_x1(a, h) == 5);
+    // still tombstoned (delete is idempotent; setters don't resurrect into *.all).
+    CHECK(!a.alive(h.id));
 
-    // getter on a never-allocated na handle throws too.
+    // a never-allocated na handle has NO record -> throws.
     CHECK_THROWS(pf_line_get_x1(a, Line{}));
+    CHECK_THROWS(pf_line_set_y2(a, Line{}, 1.0));
+    // an out-of-range id (corrupt) -> throws.
+    CHECK_THROWS(pf_line_get_x1(a, Line{ 9999 }));
 
     // double-delete + na-delete are silent no-ops.
-    CHECK_NOTHROW(pf_line_delete(a, h));          // already deleted
-    CHECK_NOTHROW(pf_line_delete(a, Line{}));     // na handle
-    CHECK_NOTHROW(pf_line_delete(a, Line{ 9999 })); // out-of-range id
+    CHECK_NOTHROW(pf_line_delete(a, h));              // already deleted
+    CHECK_NOTHROW(pf_line_delete(a, Line{}));         // na handle
+    CHECK_NOTHROW(pf_line_delete(a, Line{ 9999 }));   // out-of-range id
 }
 
 // ---------------------------------------------------------------------------
@@ -200,11 +214,14 @@ static void test_fifo_eviction() {
     for (int i = 0; i < 5; ++i)               // create cap+2 = 5
         h[i] = pf_line_new(a, i, (double)i, i + 1, (double)(i + 1));
 
-    // Oldest two (creation order) are tombstoned; getters on them throw.
-    CHECK_THROWS(pf_line_get_x1(a, h[0]));
-    CHECK_THROWS(pf_line_get_x1(a, h[1]));
+    // Oldest two (creation order) are evicted from *.all (tombstoned), but their
+    // geometry stays readable (TV-faithful: eviction leaves the chart, not data).
+    CHECK(!a.alive(h[0].id));
+    CHECK(!a.alive(h[1].id));
+    CHECK(pf_line_get_x1(a, h[0]) == 0);
+    CHECK(pf_line_get_x1(a, h[1]) == 1);
 
-    // The newest `cap` survive and read back correctly.
+    // The newest `cap` are live and read back correctly.
     CHECK(pf_line_get_x1(a, h[2]) == 2);
     CHECK(pf_line_get_x1(a, h[3]) == 3);
     CHECK(pf_line_get_x1(a, h[4]) == 4);
@@ -225,7 +242,9 @@ static void test_cap_zero_floors_to_one() {
     Line h0 = pf_line_new(a, 0, 0.0, 1, 1.0);
     Line h1 = pf_line_new(a, 1, 1.0, 2, 2.0);
 
-    CHECK_THROWS(pf_line_get_x1(a, h0));
+    // h0 is evicted from *.all (tombstoned) but its data is still readable.
+    CHECK(!a.alive(h0.id));
+    CHECK(pf_line_get_x1(a, h0) == 0);
     CHECK(pf_line_get_x1(a, h1) == 1);
     CHECK(a.order().size() == 1u);
     CHECK(a.order().front() == h1.id);
@@ -285,9 +304,10 @@ static void test_box() {
     pf_box_set_top(a, cp, 777.0);
     CHECK(near(pf_box_get_top(a, b), 110.0));
 
-    // delete -> getter throws; na-delete silent
+    // delete -> tombstoned but data still readable; na-delete silent
     pf_box_delete(a, b);
-    CHECK_THROWS(pf_box_get_top(a, b));
+    CHECK(!a.alive(b.id));
+    CHECK(near(pf_box_get_top(a, b), 110.0));
     CHECK_NOTHROW(pf_box_delete(a, Box{}));
 }
 
@@ -324,8 +344,9 @@ static void test_label() {
     CHECK(pf_label_get_x(a, lt) == 1700000000000LL);
 
     pf_label_delete(a, l);
-    CHECK_THROWS(pf_label_get_text(a, l));
-    CHECK_NOTHROW(pf_label_delete(a, l));   // double-delete silent
+    CHECK(!a.alive(l.id));
+    CHECK(pf_label_get_text(a, l) == "world");   // dead record's text still readable
+    CHECK_NOTHROW(pf_label_delete(a, l));        // double-delete silent
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +369,8 @@ static void test_linefill() {
     CHECK(is_na(pf_linefill_get_line1(fa, fna)));
 
     pf_linefill_delete(fa, f);
-    CHECK_THROWS(pf_linefill_get_line1(fa, f));
+    CHECK(!fa.alive(f.id));                        // linefill tombstoned in its own arena
+    CHECK(pf_linefill_get_line1(fa, f).id == l1.id);  // dead linefill's line1 still readable
     CHECK_NOTHROW(pf_linefill_delete(fa, f));     // double-delete silent
     CHECK_NOTHROW(pf_linefill_delete(fa, Linefill{}));
 }
@@ -376,6 +398,30 @@ static void test_pf_noop() {
     static_assert(std::is_same<decltype(pf_noop(1)), void>::value, "pf_noop returns void");
 }
 
+// ---------------------------------------------------------------------------
+// Regression for corpus/validation/drawing-delete-halt: after line.delete(lv),
+// the strategy keeps calling line.set_y2(lv, ...) + line.get_y2(lv) every bar
+// and must NOT throw — TV produced 2504 trades post-delete. The level must keep
+// tracking the new y2 values written through the dead handle.
+static void test_delete_halt_probe_pattern() {
+    std::printf("test_delete_halt_probe_pattern\n");
+    DrawingArena<LineRec> a;
+    Line lv = pf_line_new(a, 0, 100.0, 0, 100.0);   // bar 0: degenerate level line
+    // ... strategy runs, updates the level each bar ...
+    pf_line_set_y2(a, lv, 150.0);
+    CHECK(near(pf_line_get_y2(a, lv), 150.0));
+    // entries == 5 -> explicit delete. After this the handle is dead but the
+    // strategy keeps using it; none of the following may throw.
+    CHECK_NOTHROW(pf_line_delete(a, lv));
+    CHECK(!a.alive(lv.id));
+    // subsequent bars keep mutating + reading the dead handle (the 2504-trade path):
+    for (int bar = 1; bar <= 5; ++bar) {
+        double level = 100.0 + bar;                 // a moving "sma" level
+        pf_line_set_y2(a, lv, level);
+        CHECK(near(pf_line_get_y2(a, lv), level));  // dead record tracks the new value
+    }
+}
+
 int main() {
     test_is_na_defaults();
     test_monotonic_ids();
@@ -383,7 +429,7 @@ int main() {
     test_mutate_through_handle();
     test_set_xloc_reinterpret();
     test_copy_is_deep();
-    test_delete_then_getter_throws();
+    test_delete_keeps_data_accessible();
     test_fifo_eviction();
     test_cap_zero_floors_to_one();
     test_get_price();
@@ -392,6 +438,7 @@ int main() {
     test_linefill();
     test_chart_point_value_copy();
     test_pf_noop();
+    test_delete_halt_probe_pattern();
 
     if (g_fail > 0) {
         std::printf("drawing tests: %d FAILED\n", g_fail);
