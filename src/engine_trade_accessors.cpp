@@ -23,10 +23,11 @@ double BacktestEngine::open_trade_profit(int idx) const {
     const PyramidEntry& pe = pyramid_entries_[(size_t)idx];
     bool is_long = (position_side_ == PositionSide::LONG);
     double px = current_bar_.close;
-    // Currency PnL: price-points × qty × pointvalue, consistent with the
-    // realized-trade path in emit_close_trade (pointvalue=1 is unchanged).
+    // Currency PnL: price-points × qty × pointvalue × account_currency_fx_,
+    // consistent with the realized-trade path in emit_close_trade
+    // (pointvalue=1, fx=1.0 leaves the corpus unchanged).
     double pnl = (is_long ? (px - pe.price) * pe.qty : (pe.price - px) * pe.qty)
-                 * syminfo_.pointvalue;
+                 * syminfo_.pointvalue * account_currency_fx_;
     pnl -= calc_commission(pe.price, pe.qty);
     return pnl;
 }
@@ -39,10 +40,11 @@ double BacktestEngine::open_trade_profit_percent(int idx) const {
     // TV net return-on-cost convention (same shape as the closed-trade
     // pnl_pct fixed 2026-06-12 in emit_close_trade): the profit value this
     // accessor pairs with — open_trade_profit, which is net of the
-    // entry-leg commission — as a percent of entry cost
-    // (entry_price * qty * pointvalue). No new commission handling is
-    // invented here; the percent just mirrors open_trade_profit.
-    const double entry_cost = pe.price * pe.qty * syminfo_.pointvalue;
+    // entry-leg commission — as a percent of entry cost (entry_price * qty
+    // * pointvalue * account_currency_fx_, matching open_trade_profit's
+    // fx-scaled pnl so the ratio is currency-invariant). No new commission
+    // handling is invented here; the percent just mirrors open_trade_profit.
+    const double entry_cost = pe.price * pe.qty * syminfo_.pointvalue * account_currency_fx_;
     if (!(entry_cost > 0.0)) return na<double>();
     return open_trade_profit(idx) / entry_cost * 100.0;
 }
@@ -92,13 +94,14 @@ double BacktestEngine::open_trade_size(int idx) const {
 
 // pe.max_drawdown / pe.max_runup are tracked in price-points × qty
 // (update_per_trade_extremes); the currency accessors scale by pointvalue
-// so they match the closed-trade fields emitted by emit_close_trade. The
-// percent accessors below intentionally use the UNSCALED excursion over the
-// unscaled entry cost — pointvalue cancels in the ratio.
+// and account_currency_fx_ (default 1.0, no-op) so they match the
+// closed-trade fields emitted by emit_close_trade. The percent accessors
+// below intentionally use the UNSCALED excursion over the unscaled entry
+// cost — pointvalue and fx both cancel in the ratio.
 double BacktestEngine::open_trade_max_drawdown(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return 0.0;
-    return pyramid_entries_[(size_t)idx].max_drawdown * syminfo_.pointvalue;
+    return pyramid_entries_[(size_t)idx].max_drawdown * syminfo_.pointvalue * account_currency_fx_;
 }
 
 double BacktestEngine::open_trade_max_drawdown_percent(int idx) const {
@@ -112,7 +115,7 @@ double BacktestEngine::open_trade_max_drawdown_percent(int idx) const {
 double BacktestEngine::open_trade_max_runup(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return 0.0;
-    return pyramid_entries_[(size_t)idx].max_runup * syminfo_.pointvalue;
+    return pyramid_entries_[(size_t)idx].max_runup * syminfo_.pointvalue * account_currency_fx_;
 }
 
 double BacktestEngine::open_trade_max_runup_percent(int idx) const {

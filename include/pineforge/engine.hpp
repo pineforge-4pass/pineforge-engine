@@ -733,15 +733,19 @@ protected:
     }
 
     // --- Commission helper ---
-    // PERCENT commission is a % of the order's notional value in account
-    // currency, which for futures includes the instrument point value
-    // (price points × $/point × contracts). pointvalue=1 (crypto/equity
-    // default) leaves the legacy formula bit-identical. Cash-per-order /
-    // cash-per-contract are already absolute currency amounts.
+    // PERCENT commission is a % of the order's notional value. The notional
+    // (fill_price × qty × pointvalue) is in the symbol's QUOTE currency; the
+    // commission a strategy() reports is in ACCOUNT currency, so it needs the
+    // same instrument->account conversion as the margin gate below
+    // (account_currency_fx_, default 1.0 — no-op for the corpus). Cash-per-
+    // order / cash-per-contract are already account-currency-native (a
+    // trader configures "$20 per contract" in their own currency), so they
+    // are untouched.
     double calc_commission(double fill_price, double qty) const {
         switch (commission_type_) {
             case CommissionType::PERCENT:
-                return fill_price * qty * syminfo_.pointvalue * (commission_value_ / 100.0);
+                return fill_price * qty * syminfo_.pointvalue * account_currency_fx_
+                       * (commission_value_ / 100.0);
             case CommissionType::CASH_PER_ORDER:
                 return commission_value_;
             case CommissionType::CASH_PER_CONTRACT:
@@ -751,17 +755,21 @@ protected:
     }
 
     // --- Position sizing helper ---
-    // PERCENT_OF_EQUITY / CASH convert a currency budget into contracts, so
-    // one contract's currency exposure is fill_price × pointvalue (futures
-    // $-per-point multiplier; 1.0 for crypto/equity keeps the legacy math
-    // bit-identical).
+    // PERCENT_OF_EQUITY / CASH size a budget that is denominated in ACCOUNT
+    // currency (equity, and a strategy.cash default_qty_value are both
+    // account-currency-native — see emit_close_trade / current_equity()),
+    // then convert it into a quantity of the instrument, whose price is in
+    // QUOTE currency. Divide the account-currency cash by account_currency_fx_
+    // first (the inverse of the instrument->account multiply used for
+    // commission/PnL/margin) so the division by fill_price stays dimensionally
+    // consistent; default 1.0 leaves the corpus untouched.
     double calc_qty(double fill_price) const {
         switch (default_qty_type_) {
             case QtyType::FIXED:
                 return default_qty_value_;
             case QtyType::PERCENT_OF_EQUITY: {
                 double equity = current_equity();
-                double cash = equity * (default_qty_value_ / 100.0);
+                double cash = equity * (default_qty_value_ / 100.0) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
                 return (std::isfinite(fill_price) && fill_price > 0)
@@ -769,7 +777,7 @@ protected:
             }
             case QtyType::CASH:
                 return (std::isfinite(fill_price) && fill_price > 0)
-                    ? (default_qty_value_ / (fill_price * syminfo_.pointvalue)) : 0.0;
+                    ? ((default_qty_value_ / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
         }
         return default_qty_value_;
     }
@@ -858,7 +866,13 @@ protected:
         const double denom = (margin_pct / 100.0) - direction;
         // A long at 100% margin (denom == 0) cannot be liquidated.
         if (std::abs(denom) < 1e-12) return na<double>();
-        const double equity_basis = initial_capital_ + net_profit_sum_;
+        // equity_basis is account-currency (initial_capital_ is account-
+        // currency-native; net_profit_sum_ is account-currency post-FX —
+        // see emit_close_trade). liq must come out in QUOTE currency (it's
+        // compared against bar.high/low), so convert back via the same
+        // account_currency_fx_ inverse used in calc_qty; default 1.0 is a
+        // no-op for the corpus.
+        const double equity_basis = (initial_capital_ + net_profit_sum_) / account_currency_fx_;
         double liq = (equity_basis / (qty * pv) - direction * position_entry_price_)
                      / denom;
         if (syminfo_mintick_ > 0.0) {
@@ -881,7 +895,10 @@ protected:
         double diff = (position_side_ == PositionSide::LONG)
             ? (current_price - position_entry_price_)
             : (position_entry_price_ - current_price);
-        return diff * position_qty_ * syminfo_.pointvalue;
+        // Account-currency, matching emit_close_trade / open_trade_profit —
+        // callers combine this with initial_capital_ + net_profit_sum_ (both
+        // account-currency) to get total equity. fx=1.0 is a no-op.
+        return diff * position_qty_ * syminfo_.pointvalue * account_currency_fx_;
     }
 
     int count_wintrades() const { return win_trades_count_; }
