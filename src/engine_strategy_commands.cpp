@@ -205,15 +205,6 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     bool has_stop = !std::isnan(stop_price);
 
     if (!has_limit && !has_stop) {
-        if (process_orders_on_close_) {
-            // With process_orders_on_close, market entries fill immediately at bar close
-            // so that strategy.position_avg_price is correct for subsequent strategy.exit() calls
-            double fill = current_bar_.close;
-            execute_market_entry(id, is_long, fill, qty, qty_type, position_side_);
-            // Set entry comment on the just-created pyramid entry
-            if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = comment;
-            return;
-        }
         order.type = OrderType::MARKET;
         order.limit_price = std::numeric_limits<double>::quiet_NaN();
         order.stop_price = std::numeric_limits<double>::quiet_NaN();
