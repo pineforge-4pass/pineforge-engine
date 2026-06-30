@@ -156,6 +156,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.from_entry = "";
     order.is_long = is_long;
     order.trail_points = std::numeric_limits<double>::quiet_NaN();
+    order.trail_price = std::numeric_limits<double>::quiet_NaN();
     order.trail_offset = std::numeric_limits<double>::quiet_NaN();
     order.qty = qty;
     order.qty_type = qty_type;
@@ -295,7 +296,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         qp = (clamped_qty / position_qty_) * 100.0;
     }
     bool is_partial = qp < 100.0 - kFullPercentEps;
-    bool has_trail_request = !std::isnan(trail_points);
+    bool has_trail_request = !std::isnan(trail_points) || !std::isnan(trail_price);
 
     // Re-issued explicitly partial exits with the same id are one-shot for a live position.
     if (is_partial && position_side_ != PositionSide::FLAT
@@ -352,6 +353,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.limit_price = limit_price;
     order.stop_price = stop_price;
     order.trail_points = trail_points;
+    order.trail_price = trail_price;
     order.trail_offset = trail_offset;
     order.qty = reserved_qty;
     order.qty_type = -1;
@@ -410,6 +412,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     order.from_entry = "";
     order.is_long = is_long;
     order.trail_points = std::numeric_limits<double>::quiet_NaN();
+    order.trail_price = std::numeric_limits<double>::quiet_NaN();
     order.trail_offset = std::numeric_limits<double>::quiet_NaN();
     order.qty = qty;
     order.qty_type = -1;
@@ -633,6 +636,7 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     order.limit_price = std::numeric_limits<double>::quiet_NaN();
     order.stop_price = std::numeric_limits<double>::quiet_NaN();
     order.trail_points = std::numeric_limits<double>::quiet_NaN();
+    order.trail_price = std::numeric_limits<double>::quiet_NaN();
     order.trail_offset = std::numeric_limits<double>::quiet_NaN();
     if (closes_any_qty) {
         order.qty = std::numeric_limits<double>::quiet_NaN();

@@ -254,8 +254,8 @@ void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
             };
             bool a_full = qp(a) >= 100.0 - kFullPercentEps;
             bool b_full = qp(b) >= 100.0 - kFullPercentEps;
-            const bool a_trail = !std::isnan(a.trail_points);
-            const bool b_trail = !std::isnan(b.trail_points);
+            const bool a_trail = !std::isnan(a.trail_points) || !std::isnan(a.trail_price);
+            const bool b_trail = !std::isnan(b.trail_points) || !std::isnan(b.trail_price);
             if (a_trail || b_trail) {
                 if (a_full != b_full) {
                     return a_full;
@@ -301,7 +301,7 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             auto fill_phase = [&](const PendingOrder& o) {
                 bool has_stop = !std::isnan(o.stop_price);
                 bool has_limit = !std::isnan(o.limit_price);
-                bool has_trail = !std::isnan(o.trail_points);
+                bool has_trail = !std::isnan(o.trail_points) || !std::isnan(o.trail_price);
                 bool exit_style = order_is_exit_style(o, position_side_);
 
                 if (o.type == OrderType::MARKET
@@ -357,7 +357,7 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 if (o.type != OrderType::EXIT) return false;
                 bool has_stop = !std::isnan(o.stop_price);
                 bool has_limit = !std::isnan(o.limit_price);
-                bool has_trail = !std::isnan(o.trail_points);
+                bool has_trail = !std::isnan(o.trail_points) || !std::isnan(o.trail_price);
                 if (has_stop || has_limit || has_trail) return false;
                 double qp = std::isnan(o.qty_percent) ? 100.0 : o.qty_percent;
                 return qp >= 100.0 - kFullPercentEps;
@@ -509,7 +509,8 @@ void BacktestEngine::apply_filled_order_to_state(
     // the trade's bars, so the flag stays false for them.
     fold_exit_path_extremes_ =
         !std::isnan(order.stop_price) || !std::isnan(order.limit_price)
-        || !std::isnan(order.trail_points) || !std::isnan(order.trail_offset);
+        || !std::isnan(order.trail_points) || !std::isnan(order.trail_price)
+        || !std::isnan(order.trail_offset);
     // Route LIMIT-triggered fills onto the unslipped limit-or-better
     // price path (apply_fill_slippage). RAII guard scoped strictly to the
     // dispatch block below: the intraday-cap synthetic close further down
@@ -972,7 +973,8 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     if (process_orders_on_close_ && order.created_bar == bar_index_) {
         bool has_price_condition = !std::isnan(order.stop_price)
                                    || !std::isnan(order.limit_price)
-                                   || !std::isnan(order.trail_points);
+                                   || !std::isnan(order.trail_points)
+                                   || !std::isnan(order.trail_price);
         if (has_price_condition) {
             return OrderEligibility::Skip;
         }
@@ -1020,7 +1022,7 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     bool is_entry_bar = (exit_style && position_open_bar_ == bar_index_);
     if (is_entry_bar) {
         bool has_price = !std::isnan(order.stop_price) || !std::isnan(order.limit_price)
-                         || !std::isnan(order.trail_points);
+                         || !std::isnan(order.trail_points) || !std::isnan(order.trail_price);
         if (!has_price) {
             return OrderEligibility::Skip;  // skip market exits on entry bar
         }
@@ -1050,7 +1052,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool exit_style = order_is_exit_style(order, position_side_);
     bool has_stop = !std::isnan(order.stop_price);
     bool has_limit = !std::isnan(order.limit_price);
-    bool has_trail = !std::isnan(order.trail_points);
+    bool has_trail = !std::isnan(order.trail_points) || !std::isnan(order.trail_price);
 
     last_exit_fill_was_trail_ = false;
 
@@ -1071,6 +1073,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             order.stop_price,
             order.limit_price,
             order.trail_points,
+            order.trail_price,
             order.trail_offset,
             position_entry_price_,
             trail_best_path_state,
