@@ -649,7 +649,14 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     if all_ok:
         label = "excellent"
     elif (
-        len(gating_matched) / max(len(tv_gate), 1) >= 0.99
+        # Near-complete match: >=99% by rate, OR at most one unmatched in-window
+        # trade. The absolute-count clause keeps the tier fair for SMALL trade
+        # counts, where a single missed/extra trade (e.g. 41/42) is ~2.4% — well
+        # within the 5% strong count gate below, yet under the 99% rate floor that
+        # large-N strategies clear trivially. The count_delta gate still bounds it
+        # (one unmatched trade only clears 5% for N>=21), and every *matched* trade
+        # must still meet the strong price/pnl/MAE thresholds.
+        (len(gating_matched) / max(len(tv_gate), 1) >= 0.99 or unmatched_in_window <= 1)
         and count_delta < STRONG_COUNT_DELTA
         and entry_p90 < STRONG_ENTRY_DELTA
         and exit_p90 < STRONG_EXIT_DELTA
