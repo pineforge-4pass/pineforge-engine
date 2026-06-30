@@ -3771,6 +3771,60 @@ static void test_strategy_close_pooc_fifo_only_closes_requested_leg_size() {
     CHECK(strat.get_open_entry_id() == "Buy2");
 }
 
+// Grid-bot pattern: the SAME entry id is re-used across sequential
+// buy/close cycles. Under the default FIFO close-entries rule, the trade
+// record drains the OLDEST physical lot (a different id), so the id-tagged
+// lot stays physically open after its close. A later re-entry of that id then
+// leaves TWO physical lots carrying it, while only ONE is logically unclosed.
+// strategy.close(id) must close ONE slot (the logical/unclosed quantity), not
+// the physical sum of both lots — otherwise it over-closes 2x (the bug this
+// guards). Mirrors the 3Commas grid-bot corpus strategies.
+static void test_strategy_close_reused_id_closes_one_logical_slot() {
+    std::printf("test_strategy_close_reused_id_closes_one_logical_slot\n");
+
+    class Strat : public BacktestEngine {
+    public:
+        Strat() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            process_orders_on_close_ = true;
+            pyramiding_ = 10;
+        }
+        void on_bar(const Bar&) override {
+            switch (bar_index_) {
+                case 0: strategy_entry("A", true); break;  // older, different id
+                case 1: strategy_entry("L", true); break;  // L lot #1
+                case 2: strategy_close("L");        break;  // drains A (FIFO), L#1 stays
+                case 3: strategy_entry("L", true); break;  // L lot #2 (re-use id)
+                case 4: strategy_close("L");        break;  // must close ONE slot, not two
+                default: break;
+            }
+        }
+        double pos() const { return signed_position_size(); }
+        int open_lots() const { return static_cast<int>(pyramid_entries_.size()); }
+    };
+
+    Strat strat;
+    Bar bars[] = {
+        {100.0, 101.0,  99.0, 100.0, 50,   900'000},
+        { 90.0,  91.0,  89.0,  90.0, 50, 1'800'000},
+        {110.0, 111.0, 109.0, 110.0, 50, 2'700'000},
+        { 80.0,  81.0,  79.0,  80.0, 50, 3'600'000},
+        {120.0, 121.0, 119.0, 120.0, 50, 4'500'000},
+    };
+    strat.run(bars, 5);
+
+    // Two close("L") calls each close exactly one unit: 2 closed trades, and
+    // one L lot (qty 1) remains open. The pre-fix sum-of-id behaviour closed
+    // both physical L lots on bar 4 (3 trades, flat) — that is the regression.
+    CHECK(strat.trade_count() == 2);
+    CHECK(near(strat.pos(), 1.0, 1e-9));
+    CHECK(strat.open_lots() == 1);
+}
+
 static void test_strategy_close_pooc_sets_exit_comment() {
     std::printf("test_strategy_close_pooc_sets_exit_comment\n");
 
@@ -4081,6 +4135,7 @@ int main() {
     test_strategy_close_pooc_partial_close_keeps_other_exit_bracket();
     test_strategy_close_fifo_only_closes_requested_leg_size();
     test_strategy_close_pooc_fifo_only_closes_requested_leg_size();
+    test_strategy_close_reused_id_closes_one_logical_slot();
     test_strategy_close_pooc_sets_exit_comment();
     test_strategy_close_qty_percent_reduces_position();
     test_strategy_close_qty_reduces_position();
