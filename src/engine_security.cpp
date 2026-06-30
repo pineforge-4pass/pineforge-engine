@@ -17,12 +17,14 @@ using namespace internal;
 // --- register_security_eval ---
 void BacktestEngine::register_security_eval(int sec_id, const std::string& requested_tf,
                                              const std::string& input_tf,
-                                             bool lookahead_on, bool gaps_on) {
+                                             bool lookahead_on, bool gaps_on,
+                                             bool heikinashi) {
     SecurityEvalState state;
     state.sec_id = sec_id;
     state.tf = requested_tf;
     state.gaps_on = gaps_on;
     state.lookahead_on = lookahead_on;
+    state.heikinashi = heikinashi;
 
     if (!input_tf.empty()) {
         int lower_ratio = 0;
@@ -371,16 +373,49 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
 
     AggregatedBar ab = state.aggregator.feed(input_bar);
     state.feed_count++;
-    state.current_bar = ab.bar;
     state.current_sub_bar_count = ab.sub_bar_count;
+    // Heikin-Ashi same-symbol read: replace the completed (aggregated) bar's
+    // OHLC with its HA candle before evaluating the security expression, so
+    // close/open/high/low inside request.security see HA values (TradingView
+    // ticker.heikinashi semantics):
+    //   haClose = (O+H+L+C)/4
+    //   haOpen  = seeded ? (prevHaOpen+prevHaClose)/2 : (O+C)/2
+    //   haHigh  = max(H, haOpen, haClose);  haLow = min(L, haOpen, haClose)
+    // HA is stateful; the running open/close advance once per COMPLETED bar
+    // (committed below). A partial lookahead peek derives from prior state
+    // without advancing it. The lambda mutates ab.bar in place.
+    auto apply_ha = [&state](Bar& b, bool commit) {
+        double ha_close = (b.open + b.high + b.low + b.close) / 4.0;
+        double ha_open = state.ha_seeded
+                             ? (state.ha_prev_open + state.ha_prev_close) / 2.0
+                             : (b.open + b.close) / 2.0;
+        double ha_high = std::max(b.high, std::max(ha_open, ha_close));
+        double ha_low = std::min(b.low, std::min(ha_open, ha_close));
+        b.open = ha_open;
+        b.high = ha_high;
+        b.low = ha_low;
+        b.close = ha_close;
+        if (commit) {
+            state.ha_prev_open = ha_open;
+            state.ha_prev_close = ha_close;
+            state.ha_seeded = true;
+        }
+    };
     if (ab.is_complete) {
+        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
+        state.current_bar = ab.bar;
         state.eval_complete_count++;
         evaluate_security(state.sec_id, ab.bar, true);
     } else if (state.lookahead_on) {
+        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
+        state.current_bar = ab.bar;
         state.eval_partial_count++;
         evaluate_security(state.sec_id, ab.bar, false);
-    } else if (state.gaps_on) {
-        clear_security(state.sec_id);
+    } else {
+        state.current_bar = ab.bar;
+        if (state.gaps_on) {
+            clear_security(state.sec_id);
+        }
     }
 }
 

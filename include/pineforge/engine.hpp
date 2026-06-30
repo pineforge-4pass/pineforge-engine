@@ -997,6 +997,16 @@ protected:
         Bar current_bar{};
         bool gaps_on = false;
         bool lookahead_on = false;
+        // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
+        // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
+        // OHLC is replaced by its Heikin-Ashi candle before the security
+        // expression is evaluated, so close/open/high/low inside the call see
+        // HA values. HA is stateful (ha_open depends on the prior HA bar), so
+        // the running state lives here per sec_id.
+        bool heikinashi = false;
+        double ha_prev_open = 0.0;
+        double ha_prev_close = 0.0;
+        bool ha_seeded = false;
         bool lower_tf_requested = false;
         bool lower_tf_emulation = false;
         int lower_tf_ratio = 0;
@@ -1071,7 +1081,7 @@ protected:
 
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
-                                bool gaps_on = false);
+                                bool gaps_on = false, bool heikinashi = false);
     // ``request.security_lower_tf`` registers the same per-sec_id eval
     // state but with the additional contract that the requested TF must
     // resolve to a finer-than-input TF emulation. This wrapper sets the
