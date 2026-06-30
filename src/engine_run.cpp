@@ -43,6 +43,9 @@ void BacktestEngine::dispatch_bar() {
         update_per_trade_extremes();
         on_bar(current_bar_);
     }
+    // TradingView forced-liquidation check, once per script bar after all order
+    // processing, using this bar's full adverse extreme (high/low).
+    process_margin_call(current_bar_);
 }
 
 
@@ -301,6 +304,10 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
             }
         }
     }
+    // TradingView forced-liquidation check, once per script bar. By the final
+    // sub-bar current_bar_.high/.low hold the full script-bar adverse extreme,
+    // and current_bar_.timestamp was restored to the script-bar open ts above.
+    process_margin_call(current_bar_);
     finalize_bar();
 }
 

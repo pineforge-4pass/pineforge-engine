@@ -287,6 +287,15 @@ protected:
     double margin_long_ = 100.0;
     double margin_short_ = 100.0;
 
+    // TradingView force-liquidation (margin call) toggle. TV runs the broker
+    // margin-call emulator by default, so this defaults ON to match TV. It is
+    // a no-op for the validation corpus (long-only positions at the default
+    // 100% margin can never be liquidated — the formula denominator
+    // ``margin/100 - direction`` is 0 — and no corpus short is sized at full
+    // equity), and can be switched off via ``set_margin_call_enabled`` for
+    // callers that want the legacy hold-to-infinity behaviour.
+    bool margin_call_enabled_ = true;
+
     // True iff the user's strategy.pine contains at least one
     // ``strategy.close`` or ``strategy.close_all`` call (compile-time
     // determined by the codegen, set in the generated class's
@@ -591,6 +600,12 @@ protected:
 
     void process_pending_orders(const Bar& bar);
 
+    // TradingView forced-liquidation (margin call). Run once per script bar
+    // after order processing: if the bar's adverse extreme (high for shorts,
+    // low for longs) breaches the open position's required margin, force-close
+    // 4x the minimum qty needed to restore margin at the liquidation price.
+    void process_margin_call(const Bar& bar);
+
     // --- Slippage helper ---
     double round_to_mintick(double price) const {
         if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
@@ -769,7 +784,44 @@ protected:
         }
         return (c > 0) ? (s / (double)c) : 0.0;
     }
-    double margin_liquidation_price() const { return na<double>(); }
+    // strategy.margin_liquidation_price — the price at which TradingView's
+    // broker emulator force-liquidates the current open position. Returns na
+    // when flat, when the instrument has no valid size/point-value, or when
+    // ``margin/100 - direction == 0`` (a long at 100% margin can never be
+    // liquidated). See compute_liquidation_price for the derivation.
+    double margin_liquidation_price() const { return compute_liquidation_price(); }
+
+    // Shared liquidation-price formula (TradingView docs, validated against the
+    // p2 margin-call probe and the leverage-margin-call-perp-5x corpus probe):
+    //
+    //   liqPrice = ((initial_capital + net_profit) / (pointvalue * |size|)
+    //               - direction * entry) / (margin_pct/100 - direction)
+    //
+    //   direction = +1 long / -1 short; net_profit = realized closed-trade PnL;
+    //   entry = current average entry price; size = open position size.
+    //
+    // Rounded UP to mintick for shorts, DOWN for longs (TV convention).
+    double compute_liquidation_price() const {
+        if (position_side_ == PositionSide::FLAT) return na<double>();
+        const double pv = syminfo_.pointvalue;
+        const double qty = position_qty_;
+        if (!(qty > 0.0) || !(pv > 0.0)) return na<double>();
+        const double direction = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
+        const double margin_pct = (position_side_ == PositionSide::LONG)
+                                      ? margin_long_ : margin_short_;
+        const double denom = (margin_pct / 100.0) - direction;
+        // A long at 100% margin (denom == 0) cannot be liquidated.
+        if (std::abs(denom) < 1e-12) return na<double>();
+        const double equity_basis = initial_capital_ + net_profit_sum_;
+        double liq = (equity_basis / (qty * pv) - direction * position_entry_price_)
+                     / denom;
+        if (syminfo_mintick_ > 0.0) {
+            liq = (position_side_ == PositionSide::SHORT)
+                      ? std::ceil(liq / syminfo_mintick_) * syminfo_mintick_
+                      : std::floor(liq / syminfo_mintick_) * syminfo_mintick_;
+        }
+        return liq;
+    }
     double open_trades_capital_held() const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
         return std::abs(position_qty_ * position_entry_price_) * syminfo_.pointvalue;
@@ -1468,6 +1520,11 @@ public:
     // harness sets a non-default instrument.
     void set_syminfo_mintick(double m) { if (m > 0.0) { syminfo_.mintick = m; syminfo_mintick_ = m; } }
     void set_syminfo_pointvalue(double pv) { if (pv > 0.0) { syminfo_.pointvalue = pv; } }
+
+    // Toggle TradingView's forced-liquidation (margin call) emulation. Defaults
+    // ON to match TV; set false for the legacy hold-the-position behaviour.
+    void set_margin_call_enabled(bool enabled) { margin_call_enabled_ = enabled; }
+    bool margin_call_enabled() const { return margin_call_enabled_; }
     void set_syminfo_metadata(const std::string& key, double value) {
         syminfo_metadata_[key] = value;
     }
