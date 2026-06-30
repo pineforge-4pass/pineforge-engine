@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/pineforge-banner.jpg" alt="PineScript backtests, deterministic, on your data — v0.8.0 · 93.06% line coverage · 251/252 strict TV parity · 0 engine bugs" width="900">
+<img src=".github/assets/pineforge-banner.jpg" alt="PineScript backtests, deterministic, on your data — v0.8.0 · 93.26% line coverage · 251/252 strict TV parity · 0 engine bugs" width="900">
 
 # PineForge
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
@@ -189,7 +189,7 @@ This repository ships:
 - `libpineforge.a` — the static runtime library
 - `<pineforge/pineforge.h>` — the public C ABI (the canonical, stability-pinned consumer surface)
 - `<pineforge/*.hpp>` — the internal C++ headers (the PineForge transpiler emits against these; not part of the stability guarantee)
-- A 39-binary ctest suite (38 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (~81% line coverage of `src/` measured via `bash scripts/coverage.sh`)
+- A 77-binary ctest suite (76 C++ + 1 pure-C ABI sanity test) that runs in CI on every commit (93.26% line coverage / 81.07% branch coverage of `src/` measured via `bash scripts/coverage.sh`)
 - `**corpus/`** (**public git submodule**) — **252 reference strategies** under a single `corpus/validation/` tree. Each folder ships `strategy.pine`, `generated.cpp`, `tv_trades.csv`, and `engine_trades.csv`. Run `bash scripts/run_corpus.sh` after `git submodule update --init corpus`.
 - `[benchmarks/](benchmarks/)` — **three-way engine comparison** (PineForge ↔ [PyneCore](https://github.com/PyneSys/pynecore) ↔ [PineTS](https://github.com/LuxAlgo/PineTS)) on 100 strategies (50 public + 50 promoted corpus probes) and 10 canonical indicators. The harness code and reports live here; **fixtures** (pinned OHLCV, every `strategies/`* folder with TV exports and trade CSVs) ship via the optional **`benchmarks/assets` submodule** — a separate optional **public** submodule (Apache-2.0). With that init’d, `bash benchmarks/run_all.sh` reproduces the headline numbers with zero external API calls. PyneCore Python is official cloud-compiler output (no hand-ports). Headline: PineForge hits canonical *excellent* tier on **50/50** strategies (first 50) vs PyneCore’s 47/50; on the expanded **100-strategy suite (~167,000 TV trades verified)**, PineForge holds **100/100 excellent** vs PyneCore’s 85/100. Median speedup: 162× vs PyneCore across 99 commonly-timed strategies.
 
@@ -354,7 +354,7 @@ src/                    - implementation (~25 .cpp files split by concern)
   │   ├── ta_extremes_volume.cpp      Highest/Lowest, OBV, AccDist, NVI/PVI/PVT, VWAP, ...
   │   └── ta_misc.cpp                 Linreg, PercentRank, BarsSince, ValueWhen, ...
   └── magnifier.cpp / matrix.cpp / session_time.cpp / str_utils.cpp / timeframe.cpp / timezone.cpp / math.cpp
-tests/                  - 39 ctest binaries (38 C++ + 1 pure-C ABI sanity)
+tests/                  - 77 ctest binaries (76 C++ + 1 pure-C ABI sanity)
 corpus/                 - public submodule: 252 strategies; see CONTRIBUTING.md
   ├── data/             - reference 36k-bar OHLCV feed (Binance ETH/USDT:USDT 15m)
   └── CMakeLists.txt    - opt-in subproject that compiles every generated.cpp into strategy.so
