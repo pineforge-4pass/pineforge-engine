@@ -226,6 +226,13 @@ struct SymInfo {
     std::string description = "";
     double mintick = 0.01;
     double pointvalue = 1.0;
+    // Per-instrument quantity step (syminfo.* "qty_step" — the smallest
+    // tradable lot increment, e.g. 0.0004 for BINANCE:ETHUSDT.P). 0 = disabled
+    // (the engine default), so no quantity quantization is applied — corpus
+    // instruments leave this 0 and are byte-identical. Only the forced-
+    // liquidation (margin call) path floors its computed lot to this step to
+    // mirror TradingView, which nibbles the position in exact lot multiples.
+    double qty_step = 0.0;
 };
 
 struct StrategyOverrides {
@@ -271,6 +278,12 @@ protected:
     double commission_value_ = 0.0;
     int slippage_ = 0;              // slippage in ticks
     double syminfo_mintick_ = 0.01; // tick size for slippage calculation
+    // Per-instrument lot-size step for forced-liquidation quantization.
+    // 0 = disabled (default; corpus no-op). Fed via the syminfo_metadata
+    // channel ("qty_step") or the SymInfo struct on the explicit run() path.
+    // process_margin_call floors each liquidation lot DOWN to a multiple of
+    // this, matching TradingView's per-instrument margin-call lot sizing.
+    double qty_step_ = 0.0;
     int max_intraday_filled_orders_ = 0; // 0 = unlimited
     bool close_entries_rule_any_ = false; // true = "ANY", false = "FIFO" (default)
     // Percentage of margin required to open a long/short position. Default
@@ -1527,6 +1540,14 @@ public:
     bool margin_call_enabled() const { return margin_call_enabled_; }
     void set_syminfo_metadata(const std::string& key, double value) {
         syminfo_metadata_[key] = value;
+        // "qty_step" is the per-instrument lot increment used by the forced-
+        // liquidation quantizer. Route it onto the dedicated member so the
+        // codegen run(const Bar*, int) path (which never overwrites it) keeps
+        // the value the data feed injected. A non-positive value disables it.
+        if (key == "qty_step") {
+            qty_step_ = (std::isfinite(value) && value > 0.0) ? value : 0.0;
+            syminfo_.qty_step = qty_step_;
+        }
     }
 
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,

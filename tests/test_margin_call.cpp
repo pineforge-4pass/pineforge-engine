@@ -80,7 +80,7 @@ public:
 class ShortLiqProbe : public MCEngine {
 public:
     bool disable_mc_ = false;
-    explicit ShortLiqProbe(bool disable_mc = false) {
+    explicit ShortLiqProbe(bool disable_mc = false, double qty_step = 0.0) {
         initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;          // size the short at 100% of equity
@@ -89,6 +89,7 @@ public:
         margin_short_ = 100.0;               // 1x, default TV margin
         process_orders_on_close_ = true;     // market entry fills at bar close
         disable_mc_ = disable_mc;
+        qty_step_ = qty_step;                // 0 = no lot quantization
         if (disable_mc_) set_margin_call_enabled(false);
     }
     void on_bar(const Bar& /*bar*/) override {
@@ -165,6 +166,60 @@ static void test_short_margin_call_disabled() {
     CHECK(eng.trade_count() == 0);
 }
 
+// ---- A': lot quantization floors each forced-liquidation lot to qty_step ----
+
+// Returns true when |x| is an integer multiple of step (within tol).
+static bool is_multiple_of(double x, double step, double tol = 1e-9) {
+    if (step <= 0.0) return false;
+    double n = std::round(x / step);
+    return std::fabs(x - n * step) <= tol;
+}
+
+static void test_short_margin_call_qty_step() {
+    std::printf("test_short_margin_call_qty_step\n");
+
+    // Same scenario as test_short_margin_call. Unquantized, the first forced
+    // lot is 4x the shortfall = 3.80952381 contracts. With a 0.5 lot step it
+    // must floor DOWN to floor(3.80952381 / 0.5) * 0.5 = 3.5 (an exact step
+    // multiple), and the exit price is unchanged (bar1 high = 105).
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: short fills @100
+        mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),  // 1: high 105 -> margin call
+        mk_bar(3000, 104.0, 130.0, 103.0, 128.0, 1.0),  // 2: high 130 -> further call
+        mk_bar(4000, 128.0, 140.0, 127.0, 139.0, 1.0),  // 3: keep rising
+    };
+
+    const double step = 0.5;
+    ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() >= 1);
+    // First quantized lot: floored to 3.5, an exact multiple of the 0.5 step.
+    CHECK(near(eng.trade_size(0), 3.5));
+    CHECK(is_multiple_of(eng.trade_size(0), step));
+    // Quantization never enlarges the lot: floored <= unquantized 3.80952381.
+    CHECK(eng.trade_size(0) <= 3.80952381 + 1e-9);
+    CHECK(near(eng.exit_price(0), 105.0));
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+
+    // Every partial (non-final) forced lot must be a step multiple. The final
+    // exit closes whatever residual remains (the position size itself is not a
+    // step multiple, so only the intermediate nibbles are checked).
+    int partial_checked = 0;
+    for (int i = 0; i + 1 < eng.trade_count(); ++i) {
+        CHECK(is_multiple_of(eng.trade_size(i), step));
+        ++partial_checked;
+    }
+    CHECK(partial_checked >= 1);
+
+    // Teeth: with qty_step = 0 the same first lot is the UNQUANTIZED 3.80952381,
+    // which is NOT a multiple of 0.5 — proving the assertion above can fail.
+    ShortLiqProbe raw(/*disable_mc=*/false, /*qty_step=*/0.0);
+    raw.run(bars.data(), (int)bars.size());
+    CHECK(near(raw.trade_size(0), 3.80952381, 1e-4));
+    CHECK(!is_multiple_of(raw.trade_size(0), step));
+}
+
 // ---- B: long at 100% margin is never liquidated ----------------------------
 
 class LongNoLiqProbe : public MCEngine {
@@ -237,6 +292,7 @@ static void test_long_leveraged_margin_call() {
 
 int main() {
     test_short_margin_call();
+    test_short_margin_call_qty_step();
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();
     test_long_100pct_margin_no_call();

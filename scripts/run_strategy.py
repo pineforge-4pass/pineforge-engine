@@ -534,6 +534,19 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         except (TypeError, ValueError):
             return None
 
+    # Per-instrument forced-liquidation lot step. Accept it either as a
+    # top-level runtime_overrides.qty_step or inside syminfo_metadata, and
+    # route it through the existing syminfo_metadata channel (key "qty_step")
+    # so the engine quantizes margin-call lots without a new C-ABI export.
+    qty_step = _num(runtime_overrides.get("qty_step"))
+    if qty_step is None and isinstance(syminfo_metadata, dict):
+        qty_step = _num(syminfo_metadata.get("qty_step"))
+    if qty_step is not None and qty_step > 0.0:
+        if not isinstance(syminfo_metadata, dict):
+            syminfo_metadata = {}
+        syminfo_metadata = dict(syminfo_metadata)
+        syminfo_metadata["qty_step"] = qty_step
+
     kwargs = dict(
         strategy_overrides=strategy_overrides or None,
         chart_timezone=chart_tz,

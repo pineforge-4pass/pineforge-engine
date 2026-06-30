@@ -687,6 +687,11 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     // Store syminfo and inputs
     syminfo_ = syminfo;
     syminfo_mintick_ = syminfo.mintick;
+    // Forced-liquidation lot step (0 = disabled). On the codegen run(Bar*,n)
+    // path this member is fed via set_syminfo_metadata("qty_step", …) and is
+    // never reset; on this explicit-SymInfo path the struct is authoritative.
+    if (std::isfinite(syminfo.qty_step) && syminfo.qty_step > 0.0)
+        qty_step_ = syminfo.qty_step;
     inputs_ = inputs;
 
     // Apply overrides

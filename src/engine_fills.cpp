@@ -164,6 +164,23 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     const double q_min = qty - equity_adv / (adverse * pv * m);
     if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return;
     double qty_liq = 4.0 * q_min;
+    // Per-instrument lot quantization. TradingView floors each forced-
+    // liquidation lot to the instrument's quantity step (verified row-for-row
+    // against the p2 ETHUSDT.P export: every margin-call qty is an exact
+    // multiple of 0.0004). Without this the engine's nibbles are slightly
+    // larger and drain the position in fewer calls, drifting the per-call exit
+    // prices. qty_step_ == 0 (corpus default) leaves qty_liq untouched.
+    if (qty_step_ > 0.0) {
+        double floored = std::floor(qty_liq / qty_step_) * qty_step_;
+        if (floored <= kQtyEpsilon) {
+            // A liquidation IS required (we passed the margin-shortfall gate)
+            // but the floored lot rounds to zero. Take the smallest step that
+            // still makes progress — one qty_step_, or the full residual if it
+            // is smaller — so the per-bar call loop cannot stall forever.
+            floored = std::min(qty_step_, qty);
+        }
+        qty_liq = floored;
+    }
     if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;  // cap at the whole position
     if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return;
 
