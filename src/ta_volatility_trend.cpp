@@ -53,7 +53,10 @@ MACDResult MACD::compute(double src) {
 // --- ATR ---
 
 ATR::ATR(int length)
-    : rma(length), prev_close(na<double>()), bar_count(0) {}
+    : rma(length), prev_close(na<double>()), bar_count(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_close_(na<double>()), saved_bar_count_(0) {}
 
 double ATR::compute(double high, double low, double close) {
     saved_prev_close_ = prev_close;
@@ -119,7 +122,12 @@ Supertrend::Supertrend(double factor, int atr_period)
     : factor_(factor), atr_(atr_period),
       prev_upper_(na<double>()), prev_lower_(na<double>()),
       prev_st_(na<double>()), prev_direction_(1.0),
-      prev_close_(na<double>()), initialized_(false) {}
+      prev_close_(na<double>()), initialized_(false),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_upper_(na<double>()), saved_prev_lower_(na<double>()),
+      saved_prev_st_(na<double>()), saved_prev_direction_(1.0),
+      saved_prev_close_(na<double>()), saved_initialized_(false) {}
 
 SupertrendResult Supertrend::compute(double high, double low, double close) {
     saved_prev_upper_ = prev_upper_;
@@ -216,7 +224,11 @@ DMI::DMI(int di_length, int adx_smoothing)
     : rma_plus_(di_length), rma_minus_(di_length), rma_tr_(di_length),
       rma_adx_(adx_smoothing),
       prev_high_(na<double>()), prev_low_(na<double>()),
-      prev_close_(na<double>()), first_bar_(true) {}
+      prev_close_(na<double>()), first_bar_(true),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_high_(na<double>()), saved_prev_low_(na<double>()),
+      saved_prev_close_(na<double>()), saved_first_bar_(true) {}
 
 DMIResult DMI::compute(double high, double low, double close) {
     saved_prev_high_ = prev_high_;
@@ -287,7 +299,14 @@ SAR::SAR(double start, double increment, double maximum)
       af_(0.0), ep_(0.0), sar_(0.0),
       is_long_(true), initialized_(false),
       prev_high_(na<double>()), prev_low_(na<double>()), prev_close_(na<double>()),
-      prev_prev_high_(na<double>()), prev_prev_low_(na<double>()) {}
+      prev_prev_high_(na<double>()), prev_prev_low_(na<double>()),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_af_(0.0), saved_ep_(0.0), saved_sar_(0.0),
+      saved_is_long_(true), saved_initialized_(false),
+      saved_prev_high_(na<double>()), saved_prev_low_(na<double>()),
+      saved_prev_close_(na<double>()),
+      saved_prev_prev_high_(na<double>()), saved_prev_prev_low_(na<double>()) {}
 
 namespace {
 
@@ -514,7 +533,11 @@ double KCW::compute(double src, double high, double low, double close) {
 // TR (True Range as function)
 // ============================================================================
 
-TR::TR(bool handle_na) : prev_close_(na<double>()), bar_count_(0), handle_na_(handle_na) {}
+TR::TR(bool handle_na)
+    : prev_close_(na<double>()), bar_count_(0), handle_na_(handle_na),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_close_(na<double>()), saved_bar_count_(0) {}
 
 double TR::compute(double high, double low, double close) {
     saved_prev_close_ = prev_close_;

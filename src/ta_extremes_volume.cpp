@@ -170,7 +170,10 @@ double PivotLow::compute(double src) {
 
 // --- Cum (Cumulative Sum) ---
 
-Cum::Cum() : sum_(0.0) {}
+// saved_sum_ mirrors the initial committed sum_ (see RMA::RMA) so a
+// recompute() before the first compute() restores a well-defined pristine
+// state instead of reading uninitialized save-state.
+Cum::Cum() : sum_(0.0), saved_sum_(0.0) {}
 
 double Cum::compute(double src) {
     saved_sum_ = sum_;
@@ -183,7 +186,11 @@ double Cum::compute(double src) {
 
 // --- All-time max/min (chart series) ---
 
-AllTimeMax::AllTimeMax() : max_(na<double>()), has_(false) {}
+// saved_* mirror the initial committed state (see RMA::RMA) so a recompute()
+// before the first compute() restores a well-defined pristine state.
+AllTimeMax::AllTimeMax()
+    : max_(na<double>()), has_(false),
+      saved_max_(na<double>()), saved_has_(false) {}
 
 double AllTimeMax::compute(double src) {
     saved_max_ = max_;
@@ -200,7 +207,11 @@ double AllTimeMax::compute(double src) {
     return max_;
 }
 
-AllTimeMin::AllTimeMin() : min_(na<double>()), has_(false) {}
+// saved_* mirror the initial committed state (see RMA::RMA) so a recompute()
+// before the first compute() restores a well-defined pristine state.
+AllTimeMin::AllTimeMin()
+    : min_(na<double>()), has_(false),
+      saved_min_(na<double>()), saved_has_(false) {}
 
 double AllTimeMin::compute(double src) {
     saved_min_ = min_;
