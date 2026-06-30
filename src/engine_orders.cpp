@@ -31,13 +31,16 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
         // $0/NaN print must NOT size as the raw % number (silent wrong-qty bug).
         // One contract's currency exposure is fill_price × pointvalue (1.0 for
         // crypto/equity — legacy math unchanged; futures divide the budget by
-        // the full per-contract notional).
+        // the full per-contract notional). cash is account-currency (equity is);
+        // convert to quote currency via account_currency_fx_ before dividing by
+        // the quote-currency fill_price — same convention as calc_qty() in
+        // engine.hpp. fx=1.0 is a no-op.
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? (cash / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? ((cash / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     if (qty_type == static_cast<int>(QtyType::CASH)) {
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? (qty_value / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? ((qty_value / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     return qty_value;
 }
@@ -321,22 +324,28 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
                                       double fill_price, bool was_long) {
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
-    // multiply the price-difference PnL. Commission is in account currency:
-    // cash-per-* is already absolute, and percent commission scales the
-    // notional by pointvalue inside calc_commission.
+    // multiply the price-difference PnL. The price-difference component is in
+    // the symbol's QUOTE currency; multiply by account_currency_fx_ (default
+    // 1.0, no-op for the corpus) to report in the strategy's ACCOUNT currency
+    // — same conversion the margin gate (engine_strategy_commands.cpp) already
+    // applies. Commission is already account-currency-native (calc_commission
+    // applies the same fx factor internally for its PERCENT case; cash-per-*
+    // is account-currency by construction), so it is NOT scaled again here.
     const double pv = syminfo_.pointvalue;
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
-                 * close_qty * pv;
+                 * close_qty * pv * account_currency_fx_;
     const double entry_commission = calc_commission(pe.price, close_qty);
     const double exit_commission  = calc_commission(fill_price, close_qty);
     pnl -= entry_commission + exit_commission;
     // TV "Net P&L %" convention (arbitrated 2026-06-12 vs TV export,
     // trade #258 short: 102.44 USD on 2276.66 entry => 4.50%): NET pnl
-    // as a percent of entry cost (entry_price * qty * pointvalue).
-    // Long/no-commission degenerates to the old (exit/entry-1) form;
-    // shorts diverge on large moves ((entry/exit-1) was wrong). Computed
-    // AFTER the commission subtraction above — order matters.
-    const double entry_cost = pe.price * close_qty * pv;
+    // as a percent of entry cost (entry_price * qty * pointvalue, same
+    // account_currency_fx_ conversion as pnl above so the ratio is
+    // currency-invariant). Long/no-commission degenerates to the old
+    // (exit/entry-1) form; shorts diverge on large moves ((entry/exit-1)
+    // was wrong). Computed AFTER the commission subtraction above — order
+    // matters.
+    const double entry_cost = pe.price * close_qty * pv * account_currency_fx_;
     double pnl_pct = (entry_cost > 0.0) ? (pnl / entry_cost) * 100.0 : 0.0;
 
     Trade trade;
@@ -414,8 +423,12 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // confirmed across all 757k corpus rows); adverse grows by the entry
     // commission (open profit at the entry tick is already -commission).
     // Both fields remain >= 0 here (Pine positive-drawdown convention).
-    trade.max_runup = std::max(0.0, runup * pv - entry_commission);
-    trade.max_drawdown = drawdown * pv + entry_commission;
+    // runup/drawdown are quote-currency (price-diff × qty); convert to
+    // account currency via account_currency_fx_ (default 1.0, no-op) before
+    // combining with entry_commission, which is already account-currency
+    // (see calc_commission) — same convention as pnl above.
+    trade.max_runup = std::max(0.0, runup * pv * account_currency_fx_ - entry_commission);
+    trade.max_drawdown = drawdown * pv * account_currency_fx_ + entry_commission;
     const double trade_pnl = trade.pnl;
     trades_.push_back(std::move(trade));
     net_profit_sum_ += trade_pnl;
