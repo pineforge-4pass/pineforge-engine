@@ -2537,20 +2537,82 @@ static void test_position_reversal_state() {
     };
     strat.run(bars, 6);
 
-    // Bar 0: long entered at 100
-    CHECK(near(strat.pos_size[0], 1.0));
-    CHECK(near(strat.pos_avg[0], 100.0));
+    // TradingView semantics: with process_orders_on_close=true a market
+    // strategy.entry fills at THIS bar's close, but the resulting position is
+    // NOT visible to strategy.position_size / strategy.position_avg_price until
+    // the NEXT bar's evaluation (the broker state updates between bars). So on
+    // the bar that places the entry the script still sees the pre-entry state.
+    //
+    // Bar 0: long entry placed; position not yet visible this bar (still flat).
+    CHECK(near(strat.pos_size[0], 0.0));
+    CHECK(near(strat.pos_avg[0], 0.0));
 
-    // Bar 2: reversed — long closed at 110 (pnl=+10), short opened at 110
-    CHECK(near(strat.pos_size[2], -1.0));
-    CHECK(near(strat.pos_avg[2], 110.0));
-    CHECK(near(strat.net_pnl[2], 10.0));  // from closed long
+    // Bar 2: reversal entry placed; the long opened on bar 0 (visible since
+    // bar 1) is still the live position during this bar's script — the flip to
+    // short fills at bar-2 close and only becomes visible on bar 3.
+    CHECK(near(strat.pos_size[2], 1.0));
+    CHECK(near(strat.pos_avg[2], 100.0));
+    CHECK(near(strat.net_pnl[2], 0.0));    // long not closed yet from script POV
 
-    // Bar 4: short closed at 105 (pnl=+5)
+    // Bar 3: short now visible at avg 110, closed long realized +10.
+    CHECK(near(strat.pos_size[3], -1.0));
+    CHECK(near(strat.pos_avg[3], 110.0));
+    CHECK(near(strat.net_pnl[3], 10.0));
+
+    // Bar 4: short closed at 105 (pnl=+5). strategy.close executes immediately
+    // on close, so the flat state and realized +15 are visible this bar.
     CHECK(near(strat.pos_size[4], 0.0));
     CHECK(near(strat.net_pnl[4], 15.0));  // 10 + 5
 
     CHECK(strat.trade_count() == 2);
+}
+
+// ---- 38b. process_orders_on_close: an exit gated on position visibility must
+// NOT fire on the entry bar. TradingView does not expose a just-placed market
+// entry through strategy.position_size until the next bar, so a regime/bias
+// style `if strategy.position_size != 0 => strategy.close()` cannot close the
+// position on the bar it was opened. Regression guard for the Quant-Synthesis
+// [JOAT] same-bar-close family (engine previously immediate-filled POOC market
+// entries and produced spurious zero-duration trades).
+
+class EntryBarCloseGuardStrategy : public BacktestEngine {
+public:
+    int close_calls_on_entry_bar = 0;
+    EntryBarCloseGuardStrategy() {
+        initial_capital_ = 10000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        process_orders_on_close_ = true;
+    }
+    void on_bar(const Bar& bar) override {
+        (void)bar;
+        if (bar_index_ == 0) strategy_entry("L", true);
+        if (signed_position_size() != 0.0) {
+            if (bar_index_ == 0) ++close_calls_on_entry_bar;
+            strategy_close("L");
+        }
+    }
+};
+
+static void test_pooc_exit_not_triggered_on_entry_bar() {
+    std::printf("test_pooc_exit_not_triggered_on_entry_bar\n");
+    EntryBarCloseGuardStrategy strat;
+    Bar bars[] = {
+        {100, 105, 95, 100, 50, 60000},     // long entry placed; fills at close
+        {100, 110, 98, 108, 50, 120000},    // position now visible -> close here
+        {108, 112, 105, 110, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    // The gated close must never fire on the entry bar.
+    CHECK(strat.close_calls_on_entry_bar == 0);
+    // Exactly one closed trade, not a zero-duration same-bar trade: entered at
+    // bar-0 close (100), closed at bar-1 close (108) once the position became
+    // visible.
+    CHECK(strat.trade_count() == 1);
+    CHECK(near(strat.get_trade(0).pnl, 8.0));  // long 100 -> 108
 }
 
 // ---- 39. Commission impact on P&L
@@ -4103,6 +4165,7 @@ int main() {
     test_pyramid_avg_price();
     test_win_loss_tracking();
     test_position_reversal_state();
+    test_pooc_exit_not_triggered_on_entry_bar();
     test_commission_deducted();
     test_slippage_applied();
     test_qty_percent_of_equity();
