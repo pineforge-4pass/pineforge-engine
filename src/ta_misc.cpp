@@ -101,7 +101,11 @@ double PercentRank::compute(double src) {
 // BarsSince
 // ============================================================================
 
-BarsSince::BarsSince() : count_(0), ever_true_(false) {}
+// saved_* mirror the initial committed state (see RMA::RMA) so a recompute()
+// before the first compute() restores a well-defined pristine state.
+BarsSince::BarsSince()
+    : count_(0), ever_true_(false),
+      saved_count_(0), saved_ever_true_(false) {}
 
 double BarsSince::compute(bool condition) {
     saved_count_ = count_;

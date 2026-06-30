@@ -800,8 +800,10 @@ class OBV {
     double prev_close_ = na<double>();
     int bar_count_ = 0;
 
-    double saved_sum_, saved_prev_close_;
-    int saved_bar_count_;
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_sum_ = 0.0, saved_prev_close_ = na<double>();
+    int saved_bar_count_ = 0;
 
 public:
     OBV() = default;
@@ -812,7 +814,9 @@ public:
 class AccDist {
     double sum_ = 0.0;
 
-    double saved_sum_;
+    // Mirror the initial committed sum_ (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_sum_ = 0.0;
 
 public:
     AccDist() = default;
@@ -826,8 +830,11 @@ class NVI {
     double prev_volume_ = na<double>();
     int bar_count_ = 0;
 
-    double saved_nvi_, saved_prev_close_, saved_prev_volume_;
-    int saved_bar_count_;
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_nvi_ = 1.0, saved_prev_close_ = na<double>(),
+           saved_prev_volume_ = na<double>();
+    int saved_bar_count_ = 0;
 
 public:
     NVI() = default;
@@ -841,8 +848,11 @@ class PVI {
     double prev_volume_ = na<double>();
     int bar_count_ = 0;
 
-    double saved_pvi_, saved_prev_close_, saved_prev_volume_;
-    int saved_bar_count_;
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_pvi_ = 1.0, saved_prev_close_ = na<double>(),
+           saved_prev_volume_ = na<double>();
+    int saved_bar_count_ = 0;
 
 public:
     PVI() = default;
@@ -854,7 +864,9 @@ class PVT {
     double pvt_ = 0.0;
     double prev_close_ = na<double>();
 
-    double saved_pvt_, saved_prev_close_;
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_pvt_ = 0.0, saved_prev_close_ = na<double>();
 
 public:
     PVT() = default;
@@ -866,7 +878,9 @@ class WAD {
     double wad_ = 0.0;
     double prev_close_ = na<double>();
 
-    double saved_wad_, saved_prev_close_;
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_wad_ = 0.0, saved_prev_close_ = na<double>();
 
 public:
     WAD() = default;
@@ -908,7 +922,9 @@ class VWAP {
     // anchor (`anchor = timeframe.change("1D")`); engine matches that.
     int64_t anchor_day_ = std::numeric_limits<int64_t>::min();
 
-    double saved_cum_pv_, saved_cum_vol_, saved_cum_pv_sq_;
+    // Mirror the initial committed state (see RMA::RMA) so a recompute()
+    // before the first compute() restores a well-defined pristine state.
+    double saved_cum_pv_ = 0.0, saved_cum_vol_ = 0.0, saved_cum_pv_sq_ = 0.0;
     int64_t saved_anchor_day_ = std::numeric_limits<int64_t>::min();
 
 public:

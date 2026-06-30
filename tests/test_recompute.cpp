@@ -2,6 +2,9 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <new>
+#include <utility>
 #include <vector>
 
 using namespace pineforge;
@@ -41,6 +44,85 @@ static const std::vector<double> prices = {
     100.0, 101.5, 99.8, 102.3, 98.5, 103.0, 101.2, 104.5, 99.0, 105.0,
     102.0, 106.5, 97.5, 103.8, 100.5, 107.0, 98.0, 104.2, 101.8, 108.0
 };
+
+// ============================================================================
+// Poison harness for the recompute-before-first-compute invariant.
+//
+// Construct an indicator into a heap buffer pre-filled with a fixed non-zero
+// byte pattern. Any save-state (`saved_*`) member the constructor leaves
+// UNINITIALIZED then reads as that deterministic garbage, so a recompute()
+// issued before the first compute() (which calls restore() on indeterminate
+// memory) misbehaves REPRODUCIBLY rather than flakily — giving the invariant
+// test reliable teeth. Class-type members (deques, sub-indicators) are still
+// default-constructed normally by the constructor; only uninitialized scalar
+// save-state retains the poison. Once a class's ctor initializes every
+// saved_* member (the fix), the poison is fully overwritten and the test
+// passes under every pattern.
+template <typename T, typename... Args>
+static T* poison_new(unsigned char pattern, Args&&... args) {
+    void* buf = ::operator new(sizeof(T));
+    std::memset(buf, pattern, sizeof(T));
+    if constexpr (sizeof...(Args) == 0) {
+        // DEFAULT-initialization (note: no parentheses). `new (buf) T()` would
+        // VALUE-initialize, which for a class with a defaulted (= default)
+        // default constructor zero-initializes the whole object FIRST — wiping
+        // the poison and hiding an uninitialized saved_* behind a lucky zero.
+        // `new (buf) T` runs only the constructor, so members the ctor does not
+        // initialize keep the poison.
+        return new (buf) T;
+    } else {
+        return new (buf) T(std::forward<Args>(args)...);
+    }
+}
+template <typename T>
+static void poison_delete(T* p) {
+    p->~T();
+    ::operator delete(static_cast<void*>(p));
+}
+
+// Drive a recompute-FIRST series (bar 0 via recompute(), bars 1..K-1 via
+// compute()) on a poisoned instance and compare bar-for-bar against a pure
+// compute-first reference. rec(o,i)/com(o,i) call the class's recompute/compute
+// with the per-bar args for bar i; both return values are coerced to double
+// (bool auto-converts) for the na-aware eq() comparison.
+template <typename Factory, typename Rec, typename Com>
+static bool series_matches(unsigned char pat, Factory make, int K, Rec rec, Com com) {
+    auto* a = make(pat);   // recompute-first (poisoned save-state on bar 0)
+    auto* b = make(pat);   // reference: pure compute-first (never restores)
+    bool ok = eq((double)rec(a, 0), (double)com(b, 0));
+    for (int i = 1; i < K; ++i) {
+        if (!eq((double)com(a, i), (double)com(b, i))) ok = false;
+    }
+    poison_delete(a);
+    poison_delete(b);
+    return ok;
+}
+
+// Run the invariant under several poison patterns. A class whose ctor leaves
+// any saved_* uninitialized diverges under at least one pattern; requiring ALL
+// to hold maximizes the teeth. The patterns are complementary:
+//   0xFF -> every saved_* double reads as NaN, reproducing the original
+//           NaN-poisoning failure mode and diverging for additive/accumulator
+//           state (a tiny-magnitude garbage double would be absorbed by FP
+//           addition and hide the bug);
+//   0xAA -> a small finite garbage double, exercising threshold/sign paths;
+//   0x00 -> zeros, which surface bugs that only appear when a garbage
+//           `first_bar_`/`initialized_` byte reads FALSE (so the indicator
+//           skips its first-bar branch). After the fix all patterns pass.
+template <typename Factory, typename Rec, typename Com>
+static bool all_patterns_match(Factory make, int K, Rec rec, Com com) {
+    bool ff = series_matches(0xFF, make, K, rec, com);
+    bool aa = series_matches(0xAA, make, K, rec, com);
+    bool zz = series_matches(0x00, make, K, rec, com);
+    return ff && aa && zz;
+}
+
+static bool eq_st(const ta::SupertrendResult& x, const ta::SupertrendResult& y) {
+    return eq(x.value, y.value) && eq(x.direction, y.direction);
+}
+static bool eq_dmi(const ta::DMIResult& x, const ta::DMIResult& y) {
+    return eq(x.diplus, y.diplus) && eq(x.diminus, y.diminus) && eq(x.adx, y.adx);
+}
 
 // ============================================================================
 // Test 1: SMA recompute
@@ -134,6 +216,288 @@ void test_rsi_recompute() {
 
     CHECK_EQ(result1, result2, "RSI recompute should equal fresh compute");
     printf("OK\n");
+}
+
+// ============================================================================
+// Regression: recompute() BEFORE the first compute().
+//
+// In the bar-magnifier + lookahead request.security aggregation path, the
+// security's first feed is a PARTIAL aggregated bar, which dispatches
+// recompute() before any complete-bar compute() has run. recompute() calls
+// restore(), which reads the save-state members (saved_*). If those are not
+// initialized by the constructor they hold indeterminate memory, and the
+// restore poisons the RMA/RSI with NaN non-deterministically — observed as a
+// 0-vs-N trade-count flip across identical runs of the same binary.
+//
+// The fix (src/ta_moving_averages.cpp RMA::RMA, src/ta_oscillators.cpp
+// RSI::RSI) initializes saved_* to mirror the initial committed state, so a
+// recompute-first restores a well-defined pristine state and behaves exactly
+// like compute-first. These tests lock that invariant: a recompute-first
+// warmup must (a) equal the pure compute-first series bar-for-bar and (b)
+// warm up to a finite (non-NaN) value rather than staying poisoned.
+// ============================================================================
+void test_rma_recompute_before_first_compute() {
+    printf("Test RMA recompute before first compute... ");
+    const int len = 5;
+    ta::RMA a(len);   // first bar arrives via recompute (partial sub-bar)
+    ta::RMA b(len);   // reference: pure compute path
+    CHECK_EQ(a.recompute(prices[0]), b.compute(prices[0]),
+             "RMA recompute-first first bar == compute-first first bar");
+    double ra = na<double>(), rb = na<double>();
+    for (int i = 1; i < len + 3; i++) {
+        ra = a.compute(prices[i]);
+        rb = b.compute(prices[i]);
+        CHECK_EQ(ra, rb, "RMA committed series equal after recompute-first start");
+    }
+    CHECK(!is_na(ra), "RMA warms up to a finite value (no NaN poisoning)");
+    printf("OK\n");
+}
+
+void test_rsi_recompute_before_first_compute() {
+    printf("Test RSI recompute before first compute... ");
+    const int len = 5;
+    ta::RSI a(len);   // first bar arrives via recompute (partial sub-bar)
+    ta::RSI b(len);   // reference: pure compute path
+    CHECK_EQ(a.recompute(prices[0]), b.compute(prices[0]),
+             "RSI recompute-first first bar == compute-first first bar");
+    double ra = na<double>(), rb = na<double>();
+    for (int i = 1; i < len + 5; i++) {
+        ra = a.compute(prices[i]);
+        rb = b.compute(prices[i]);
+        CHECK_EQ(ra, rb, "RSI committed series equal after recompute-first start");
+    }
+    CHECK(!is_na(ra), "RSI warms up to a finite value (no NaN poisoning)");
+    printf("OK\n");
+}
+
+// ============================================================================
+// Class-wide invariant: recompute() BEFORE the first compute() must equal
+// compute() on a fresh instance, for EVERY indicator with a save/restore
+// (saved_*) mechanism. recompute() means "compute this bar as if the previous
+// save-state were the committed state"; on a pristine object the previous
+// committed state IS the constructor's initial state, so recompute-first must
+// equal compute-first bar 0, and the committed series must stay identical
+// thereafter. Each subtest poisons the save-state (see poison_new) so an
+// uninitialized saved_* member fails DETERMINISTICALLY on the pre-fix tree.
+//
+// Classes whose save-state is entirely buffer/deque-based (Highest, SMA, WMA,
+// StdDev, …) guard recompute() with `if (buffer.empty()) return compute(src)`,
+// so they route to compute() automatically before the first bar and carry no
+// scalar save-state to leak — they are covered by the existing recompute
+// tests and need no poison check here. KC and ValueWhen already initialize
+// their save-state (in-class initializer / empty-deque), and are safe.
+// ============================================================================
+void test_all_classes_recompute_before_first_compute() {
+    printf("Test class-wide recompute-before-first-compute invariant...\n");
+
+    // Shared OHLCV-like fixtures (8 bars).
+    static const double H[] = {101.0, 103.0, 102.0, 105.0, 104.0, 107.0, 106.0, 109.0};
+    static const double L[] = { 99.0, 100.0,  98.0, 101.0, 100.0, 103.0, 102.0, 105.0};
+    static const double C[] = {100.0, 102.0,  99.0, 104.0, 101.0, 106.0, 103.0, 108.0};
+    static const double Vl[] = {1000.0, 1500.0, 800.0, 2000.0, 1200.0, 1700.0, 900.0, 1300.0};
+    static const int64_t TS[] = {
+        1700000000000LL, 1700000060000LL, 1700000120000LL, 1700000180000LL,
+        1700000240000LL, 1700000300000LL, 1700000360000LL, 1700000420000LL};
+
+    // --- EMA ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::EMA>(p, 5); }, 8,
+              [](ta::EMA* o, int i){ return o->recompute(prices[i]); },
+              [](ta::EMA* o, int i){ return o->compute(prices[i]); }),
+          "EMA recompute-before-first-compute == compute-first");
+
+    // --- Crossover (bar 0: a>b so the prev-tie guard decides the result) ---
+    {
+        static const double A[] = {2.0, 1.0, 3.0, 1.5, 4.0, 0.5, 5.0, 2.0};
+        static const double B[] = {1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0};
+        CHECK(all_patterns_match(
+                  [](unsigned char p){ return poison_new<ta::Crossover>(p); }, 8,
+                  [&](ta::Crossover* o, int i){ return o->recompute(A[i], B[i]); },
+                  [&](ta::Crossover* o, int i){ return o->compute(A[i], B[i]); }),
+              "Crossover recompute-before-first-compute == compute-first");
+    }
+
+    // --- Crossunder (bar 0: a<b) ---
+    {
+        static const double A[] = {1.0, 3.0, 1.0, 3.0, 1.0, 3.0, 1.0, 3.0};
+        static const double B[] = {2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0};
+        CHECK(all_patterns_match(
+                  [](unsigned char p){ return poison_new<ta::Crossunder>(p); }, 8,
+                  [&](ta::Crossunder* o, int i){ return o->recompute(A[i], B[i]); },
+                  [&](ta::Crossunder* o, int i){ return o->compute(A[i], B[i]); }),
+              "Crossunder recompute-before-first-compute == compute-first");
+    }
+
+    // --- Cross (bar 0: a!=b so the remembered-sign guard decides) ---
+    {
+        static const double A[] = {2.0, 1.0, 3.0, 1.0, 3.0, 1.0, 3.0, 1.0};
+        static const double B[] = {1.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0};
+        CHECK(all_patterns_match(
+                  [](unsigned char p){ return poison_new<ta::Cross>(p); }, 8,
+                  [&](ta::Cross* o, int i){ return o->recompute(A[i], B[i]); },
+                  [&](ta::Cross* o, int i){ return o->compute(A[i], B[i]); }),
+              "Cross recompute-before-first-compute == compute-first");
+    }
+
+    // --- ATR ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::ATR>(p, 3); }, 8,
+              [&](ta::ATR* o, int i){ return o->recompute(H[i], L[i], C[i]); },
+              [&](ta::ATR* o, int i){ return o->compute(H[i], L[i], C[i]); }),
+          "ATR recompute-before-first-compute == compute-first");
+
+    // --- TR ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::TR>(p, false); }, 8,
+              [&](ta::TR* o, int i){ return o->recompute(H[i], L[i], C[i]); },
+              [&](ta::TR* o, int i){ return o->compute(H[i], L[i], C[i]); }),
+          "TR recompute-before-first-compute == compute-first");
+
+    // --- MFI ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::MFI>(p, 3); }, 8,
+              [&](ta::MFI* o, int i){ return o->recompute(C[i], Vl[i]); },
+              [&](ta::MFI* o, int i){ return o->compute(C[i], Vl[i]); }),
+          "MFI recompute-before-first-compute == compute-first");
+
+    // --- CMO ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::CMO>(p, 3); }, 8,
+              [](ta::CMO* o, int i){ return o->recompute(prices[i]); },
+              [](ta::CMO* o, int i){ return o->compute(prices[i]); }),
+          "CMO recompute-before-first-compute == compute-first");
+
+    // --- TSI ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::TSI>(p, 3, 5); }, 8,
+              [](ta::TSI* o, int i){ return o->recompute(prices[i]); },
+              [](ta::TSI* o, int i){ return o->compute(prices[i]); }),
+          "TSI recompute-before-first-compute == compute-first");
+
+    // --- Cum ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::Cum>(p); }, 8,
+              [](ta::Cum* o, int i){ return o->recompute(prices[i]); },
+              [](ta::Cum* o, int i){ return o->compute(prices[i]); }),
+          "Cum recompute-before-first-compute == compute-first");
+
+    // --- AllTimeMax (bar 0 very negative so a poisoned has_=true/max_~0 leaks) ---
+    {
+        static const double X[] = {-1.0e6, 101.5, 99.8, 102.3, 98.5, 103.0, 101.2, 104.5};
+        CHECK(all_patterns_match(
+                  [](unsigned char p){ return poison_new<ta::AllTimeMax>(p); }, 8,
+                  [&](ta::AllTimeMax* o, int i){ return o->recompute(X[i]); },
+                  [&](ta::AllTimeMax* o, int i){ return o->compute(X[i]); }),
+              "AllTimeMax recompute-before-first-compute == compute-first");
+    }
+
+    // --- AllTimeMin (bar 0 very positive) ---
+    {
+        static const double X[] = {1.0e6, 101.5, 99.8, 102.3, 98.5, 103.0, 101.2, 104.5};
+        CHECK(all_patterns_match(
+                  [](unsigned char p){ return poison_new<ta::AllTimeMin>(p); }, 8,
+                  [&](ta::AllTimeMin* o, int i){ return o->recompute(X[i]); },
+                  [&](ta::AllTimeMin* o, int i){ return o->compute(X[i]); }),
+              "AllTimeMin recompute-before-first-compute == compute-first");
+    }
+
+    // --- BarsSince (bar 0 condition=false so a poisoned ever_true_ leaks) ---
+    {
+        static const bool COND[] = {false, false, true, false, false, true, false, false};
+        CHECK(all_patterns_match(
+                  [](unsigned char p){ return poison_new<ta::BarsSince>(p); }, 8,
+                  [&](ta::BarsSince* o, int i){ return o->recompute(COND[i]); },
+                  [&](ta::BarsSince* o, int i){ return o->compute(COND[i]); }),
+              "BarsSince recompute-before-first-compute == compute-first");
+    }
+
+    // --- SAR ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::SAR>(p, 0.02, 0.02, 0.2); }, 8,
+              [&](ta::SAR* o, int i){ return o->recompute(H[i], L[i], C[i]); },
+              [&](ta::SAR* o, int i){ return o->compute(H[i], L[i], C[i]); }),
+          "SAR recompute-before-first-compute == compute-first");
+
+    // --- OBV ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::OBV>(p); }, 8,
+              [&](ta::OBV* o, int i){ return o->recompute(C[i], Vl[i]); },
+              [&](ta::OBV* o, int i){ return o->compute(C[i], Vl[i]); }),
+          "OBV recompute-before-first-compute == compute-first");
+
+    // --- AccDist ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::AccDist>(p); }, 8,
+              [&](ta::AccDist* o, int i){ return o->recompute(H[i], L[i], C[i], Vl[i]); },
+              [&](ta::AccDist* o, int i){ return o->compute(H[i], L[i], C[i], Vl[i]); }),
+          "AccDist recompute-before-first-compute == compute-first");
+
+    // --- NVI ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::NVI>(p); }, 8,
+              [&](ta::NVI* o, int i){ return o->recompute(C[i], Vl[i]); },
+              [&](ta::NVI* o, int i){ return o->compute(C[i], Vl[i]); }),
+          "NVI recompute-before-first-compute == compute-first");
+
+    // --- PVI ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::PVI>(p); }, 8,
+              [&](ta::PVI* o, int i){ return o->recompute(C[i], Vl[i]); },
+              [&](ta::PVI* o, int i){ return o->compute(C[i], Vl[i]); }),
+          "PVI recompute-before-first-compute == compute-first");
+
+    // --- PVT ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::PVT>(p); }, 8,
+              [&](ta::PVT* o, int i){ return o->recompute(C[i], Vl[i]); },
+              [&](ta::PVT* o, int i){ return o->compute(C[i], Vl[i]); }),
+          "PVT recompute-before-first-compute == compute-first");
+
+    // --- WAD ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::WAD>(p); }, 8,
+              [&](ta::WAD* o, int i){ return o->recompute(H[i], L[i], C[i]); },
+              [&](ta::WAD* o, int i){ return o->compute(H[i], L[i], C[i]); }),
+          "WAD recompute-before-first-compute == compute-first");
+
+    // --- VWAP ---
+    CHECK(all_patterns_match(
+              [](unsigned char p){ return poison_new<ta::VWAP>(p); }, 8,
+              [&](ta::VWAP* o, int i){ return o->recompute(C[i], Vl[i], TS[i]); },
+              [&](ta::VWAP* o, int i){ return o->compute(C[i], Vl[i], TS[i]); }),
+          "VWAP recompute-before-first-compute == compute-first");
+
+    // --- Supertrend (struct result: compare value + direction) ---
+    {
+        auto run = [&](unsigned char pat) {
+            auto* a = poison_new<ta::Supertrend>(pat, 3.0, 2);
+            auto* b = poison_new<ta::Supertrend>(pat, 3.0, 2);
+            bool ok = eq_st(a->recompute(H[0], L[0], C[0]), b->compute(H[0], L[0], C[0]));
+            for (int i = 1; i < 8; ++i)
+                if (!eq_st(a->compute(H[i], L[i], C[i]), b->compute(H[i], L[i], C[i]))) ok = false;
+            poison_delete(a); poison_delete(b);
+            return ok;
+        };
+        CHECK(run(0xFF) && run(0xAA) && run(0x00),
+              "Supertrend recompute-before-first-compute == compute-first");
+    }
+
+    // --- DMI (struct result: compare diplus/diminus/adx) ---
+    {
+        auto run = [&](unsigned char pat) {
+            auto* a = poison_new<ta::DMI>(pat, 2, 2);
+            auto* b = poison_new<ta::DMI>(pat, 2, 2);
+            bool ok = eq_dmi(a->recompute(H[0], L[0], C[0]), b->compute(H[0], L[0], C[0]));
+            for (int i = 1; i < 8; ++i)
+                if (!eq_dmi(a->compute(H[i], L[i], C[i]), b->compute(H[i], L[i], C[i]))) ok = false;
+            poison_delete(a); poison_delete(b);
+            return ok;
+        };
+        CHECK(run(0xFF) && run(0xAA) && run(0x00),
+              "DMI recompute-before-first-compute == compute-first");
+    }
+
+    printf("  ... done\n");
 }
 
 // ============================================================================
@@ -538,6 +902,9 @@ int main() {
     test_ema_recompute();
     test_rma_recompute();
     test_rsi_recompute();
+    test_rma_recompute_before_first_compute();
+    test_rsi_recompute_before_first_compute();
+    test_all_classes_recompute_before_first_compute();
     test_highest_lowest_recompute();
     test_stddev_recompute();
     test_macd_recompute();

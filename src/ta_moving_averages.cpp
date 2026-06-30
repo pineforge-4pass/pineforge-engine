@@ -20,7 +20,14 @@ namespace pineforge {
 namespace ta {
 
 RMA::RMA(int length)
-    : output_val(na<double>()), sum(0.0), length(length), bar_count(0) {}
+    : output_val(na<double>()), sum(0.0), length(length), bar_count(0),
+      // Mirror the initial committed state so a recompute() issued before
+      // the first compute() (e.g. the first partial sub-bar of a
+      // lookahead request.security aggregation) restores a well-defined
+      // pristine state instead of reading uninitialized save-state. Without
+      // this, restore() reads indeterminate memory and can poison the RMA
+      // with NaN non-deterministically.
+      saved_output_val_(na<double>()), saved_sum_(0.0), saved_bar_count_(0) {}
 
 double RMA::compute(double src) {
     save();
@@ -111,7 +118,11 @@ double SMA::compute(double src) {
 
 EMA::EMA(int length)
     : output_val(na<double>()), alpha(2.0 / (length + 1)), sum(0.0),
-      bar_count(0) {}
+      bar_count(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // issued before the first compute() restores a well-defined pristine
+      // state instead of reading uninitialized save-state members.
+      saved_output_val_(na<double>()), saved_sum_(0.0), saved_bar_count_(0) {}
 
 double EMA::compute(double src) {
     save();

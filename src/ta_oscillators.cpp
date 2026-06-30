@@ -23,7 +23,11 @@ namespace ta {
 // --- RSI ---
 
 RSI::RSI(int length)
-    : rma_up(length), rma_down(length), prev_src(na<double>()), bar_count(0) {}
+    : rma_up(length), rma_down(length), prev_src(na<double>()), bar_count(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state
+      // rather than reading uninitialized save-state members.
+      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
 
 double RSI::compute(double src) {
     saved_prev_src_ = prev_src;
@@ -69,7 +73,10 @@ double RSI::compute(double src) {
 // Ref: pinets/src/namespaces/ta/methods/crossover.ts
 
 Crossover::Crossover()
-    : prev_a(na<double>()), prev_b(na<double>()) {}
+    : prev_a(na<double>()), prev_b(na<double>()),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_a_(na<double>()), saved_prev_b_(na<double>()) {}
 
 bool Crossover::compute(double a, double b) {
     saved_prev_a_ = prev_a;
@@ -91,7 +98,10 @@ bool Crossover::compute(double a, double b) {
 // Ref: pinets/src/namespaces/ta/methods/crossunder.ts
 
 Crossunder::Crossunder()
-    : prev_a(na<double>()), prev_b(na<double>()) {}
+    : prev_a(na<double>()), prev_b(na<double>()),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_a_(na<double>()), saved_prev_b_(na<double>()) {}
 
 bool Crossunder::compute(double a, double b) {
     saved_prev_a_ = prev_a;
@@ -159,7 +169,11 @@ double Change::compute(double src, int length) {
 
 Cross::Cross()
     : prev_a(na<double>()), prev_b(na<double>()),
-      last_nonzero_sign_(0) {}
+      last_nonzero_sign_(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_a_(na<double>()), saved_prev_b_(na<double>()),
+      saved_last_nonzero_sign_(0) {}
 
 bool Cross::compute(double a, double b) {
     saved_prev_a_ = prev_a;
@@ -391,7 +405,13 @@ double RCI::compute(double src) {
 // MFI (Money Flow Index)
 // ============================================================================
 
-MFI::MFI(int length) : length_(length), prev_src_(na<double>()), bar_count_(0) {}
+MFI::MFI(int length)
+    : length_(length), prev_src_(na<double>()), bar_count_(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      // The saved_*_buffer_ deques default-construct empty, matching the
+      // live pos_/neg_buffer_ initial empty state.
+      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
 
 double MFI::compute(double src, double vol) {
     saved_prev_src_ = prev_src_;
@@ -421,7 +441,13 @@ double MFI::compute(double src, double vol) {
 // CMO (Chande Momentum Oscillator)
 // ============================================================================
 
-CMO::CMO(int length) : length_(length), prev_src_(na<double>()), bar_count_(0) {}
+CMO::CMO(int length)
+    : length_(length), prev_src_(na<double>()), bar_count_(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      // The saved_*_buffer_ deques default-construct empty, matching the
+      // live up_/down_buffer_ initial empty state.
+      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
 
 double CMO::compute(double src) {
     saved_prev_src_ = prev_src_;
@@ -455,7 +481,10 @@ double CMO::compute(double src) {
 TSI::TSI(int short_length, int long_length)
     : ema_long_(long_length), ema_short_(short_length),
       ema_abs_long_(long_length), ema_abs_short_(short_length),
-      prev_src_(na<double>()), bar_count_(0) {}
+      prev_src_(na<double>()), bar_count_(0),
+      // Mirror the initial committed state (see RMA::RMA) so a recompute()
+      // before the first compute() restores a well-defined pristine state.
+      saved_prev_src_(na<double>()), saved_bar_count_(0) {}
 
 double TSI::compute(double src) {
     saved_prev_src_ = prev_src_;
