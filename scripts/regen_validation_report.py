@@ -86,6 +86,10 @@ def _verify_probe(strategy_dir: Path) -> dict:
 
     tv = vc.parse_trades(tv_path, tz=vc.tv_tzinfo(meta))
     eng = vc.parse_trades(eng_path, tz=vc.timezone.utc)
+    # Keep the report in lock-step with verify_one: consolidate fragment rows
+    # (qty_step rounding / FIFO partial-close lots) symmetrically before pairing.
+    tv = vc.consolidate_fragments(tv)
+    eng = vc.consolidate_fragments(eng)
     matched = vc.align_by_time(tv, eng)
     tv_cmp, eng_cmp = vc.trim_to_common_match_window(tv, eng, matched)
     matched = vc.align_by_time(tv_cmp, eng_cmp)

@@ -363,6 +363,103 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
     return pairs
 
 
+def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
+    """Reunite the fragment rows that split a single logical fill into one trade.
+
+    TradingView's "List of Trades" (and the engine, mirroring it) splits one
+    entry FILL across several ``Trade #`` rows whenever that position is closed
+    in lots — either a tiny ``qty_step`` rounding remainder that shares the
+    SAME entry time AND price, or FIFO partial-close fragments of a grid bot
+    where one entry is drained by several exit orders. Every such fragment is a
+    *different exit lot of the same entry*, so the entry side is identical
+    across the group: same bar timestamp, same fill price, same direction.
+
+    Left raw, these fragments break the entry-time pairing in
+    :func:`align_by_time`: two fragments share one entry instant, so the greedy
+    matcher cross-pairs a TV lot with the wrong engine lot and reports spurious
+    count + exit-price deltas (the tell-tale ~90% qty-p90 is the fingerprint).
+    This helper merges each fill back into one trade and is applied
+    SYMMETRICALLY to the TV and engine lists, so a genuinely fragmented
+    strategy still pairs 1:1.
+
+    Merge key = ``(entry_time, entry_price, direction)`` compared EXACTLY: two
+    rows merge iff they share the same bar, the same fill price (read from the
+    identical CSV cell, hence bit-identical within one file) and the same side
+    — i.e. they are the same fill event. Two *distinct* trades can never
+    collide, because a second independent entry must occur on a different bar
+    or at a different fill price (a different grid level), either of which
+    changes the key. For an un-fragmented strategy every group has size 1, so
+    this is a strict no-op and the reference corpus is left byte-identical.
+
+    The merged trade keeps the shared entry (time + price) and direction, sums
+    the per-lot qty / pnl / excursions, and represents the exit by the lots'
+    qty-weighted-average price at the final close time — the way TradingView
+    aggregates a multi-lot deal. When every fragment shares one exit (pure
+    qty_step rounding) that average IS the shared exit price, kept exactly so
+    the comparison stays bit-for-bit unchanged.
+
+    >>> mk = lambda n, et, ep, xt, xp, q, p: TradePair("long", et, ep, xt, xp, q, p, n)
+    >>> # two qty_step rounding fragments of one fill: same entry AND same exit
+    >>> a = mk(1, 100, 10.0, 200, 12.0, 0.01, 0.02)
+    >>> b = mk(2, 100, 10.0, 200, 12.0, 0.99, 1.98)
+    >>> # a distinct later trade (different entry bar + price) must NOT merge
+    >>> c = mk(3, 300, 11.0, 400, 13.0, 1.00, 2.00)
+    >>> out = consolidate_fragments([a, b, c])
+    >>> [(round(t.qty, 4), round(t.pnl, 4), t.exit_price) for t in out]
+    [(1.0, 2.0, 12.0), (1.0, 2.0, 13.0)]
+    >>> # FIFO grid: ONE entry drained by two DIFFERENT exit lots -> one deal,
+    >>> # exit = qty-weighted average price at the final close time
+    >>> d = mk(4, 100, 10.0, 150, 12.0, 0.5, 1.0)
+    >>> e = mk(5, 100, 10.0, 250, 14.0, 0.5, 2.0)
+    >>> g = consolidate_fragments([d, e])
+    >>> len(g), g[0].qty, g[0].exit_price, g[0].exit_time
+    (1, 1.0, 13.0, 250)
+    """
+    groups: dict[tuple[int, float, str], list[TradePair]] = {}
+    order: list[tuple[int, float, str]] = []
+    for t in pairs:
+        key = (t.entry_time, t.entry_price, t.direction)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(t)
+
+    out: list[TradePair] = []
+    for key in order:
+        members = groups[key]
+        if len(members) == 1:
+            out.append(members[0])
+            continue
+        qty = sum(m.qty for m in members)
+        denom = qty if qty else 1.0
+        rep = members[0]
+        if len({m.exit_price for m in members}) == 1:
+            # Shared-exit fragments (pure qty_step rounding): keep the exact
+            # shared exit so the merge is bit-for-bit identical to a single fill.
+            exit_price = rep.exit_price
+            exit_time = rep.exit_time
+        else:
+            # FIFO partial-close lots: blend like a TV deal — qty-weighted
+            # average exit price, settled at the final close time.
+            exit_price = sum(m.exit_price * m.qty for m in members) / denom
+            exit_time = max(m.exit_time for m in members)
+        out.append(TradePair(
+            direction=rep.direction,
+            entry_time=rep.entry_time,
+            entry_price=rep.entry_price,
+            exit_time=exit_time,
+            exit_price=exit_price,
+            qty=qty,
+            pnl=sum(m.pnl for m in members),
+            trade_num=min(m.trade_num for m in members),
+            pnl_pct=sum(m.pnl_pct * m.qty for m in members) / denom,
+            mfe=sum(m.mfe for m in members),
+            mae=sum(m.mae for m in members),
+        ))
+    out.sort(key=lambda t: t.entry_time)
+    return out
+
+
 def load_strategy_metadata(strategy_dir: Path) -> dict:
     inputs_path = strategy_dir / "inputs.json"
     if not inputs_path.exists():
@@ -458,6 +555,12 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
 
     tv = parse_trades(tv_path, tz=tv_tzinfo(meta))
     eng = parse_trades(eng_path, tz=timezone.utc)
+    # Reunite TradingView/engine fragment rows (qty_step rounding remainders or
+    # FIFO partial-close lots of one fill) into a single logical trade BEFORE
+    # pairing, symmetrically on both sides, so the entry-time matcher does not
+    # cross-pair same-entry lots. No-op for un-fragmented strategies.
+    tv = consolidate_fragments(tv)
+    eng = consolidate_fragments(eng)
     matched = align_by_time(tv, eng)
     tv_cmp, eng_cmp = trim_to_common_match_window(tv, eng, matched)
     matched = align_by_time(tv_cmp, eng_cmp)
