@@ -160,7 +160,12 @@ struct PendingOrder {
     bool is_long;
     double limit_price;        // NaN = not set
     double stop_price;         // NaN = not set
-    double trail_points;       // NaN = not set
+    double trail_points;       // NaN = not set (entry-relative activation, in ticks)
+    // NaN = not set (absolute activation price level). Default-initialized so
+    // direct PendingOrder constructions that never assign it (entry/order
+    // orders, test fixtures) cannot read an indeterminate value through the
+    // trail predicates.
+    double trail_price = std::numeric_limits<double>::quiet_NaN();
     double trail_offset;       // NaN = not set
     double qty;                // NaN = use default sizing, else explicit qty
     int qty_type;              // -1 = qty is fixed contracts, else QtyType override

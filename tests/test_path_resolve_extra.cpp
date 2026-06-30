@@ -230,7 +230,7 @@ static void test_resolve_exit_trail_fills() {
     Bar flat_bar = mk(100, 102, 98, 100);
     ExitPathFill flat = resolve_exit_path_fill(
         flat_bar, PositionSide::FLAT, /*stop=*/98, /*limit=*/102,
-        /*trail_points=*/kNaN, /*trail_offset=*/kNaN, /*entry=*/100,
+        /*trail_points=*/kNaN, /*trail_price=*/kNaN, /*trail_offset=*/kNaN, /*entry=*/100,
         /*best_start=*/kNaN, /*is_entry_bar=*/false, /*magnifier=*/false,
         kMintick);
     CHECK(flat.should_fill == false);
@@ -246,7 +246,7 @@ static void test_resolve_exit_trail_fills() {
     Bar trail_long = mk(100.5, 102, 100, 100.2);
     ExitPathFill fl = resolve_exit_path_fill(
         trail_long, PositionSide::LONG, /*stop=*/kNaN, /*limit=*/kNaN,
-        /*trail_points=*/100, /*trail_offset=*/50, /*entry=*/100,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50, /*entry=*/100,
         /*best_start=*/kNaN, /*is_entry_bar=*/false, /*magnifier=*/false,
         kMintick);
     CHECK(fl.should_fill == true);
@@ -258,7 +258,7 @@ static void test_resolve_exit_trail_fills() {
     //   activation = 101 is crossed on the rising L->H leg -> fill@101.
     ExitPathFill fl_nooff = resolve_exit_path_fill(
         trail_long, PositionSide::LONG, kNaN, kNaN,
-        /*trail_points=*/100, /*trail_offset=*/kNaN, /*entry=*/100,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/kNaN, /*entry=*/100,
         /*best_start=*/kNaN, false, false, kMintick);
     CHECK(fl_nooff.should_fill == true);
     CHECK(near(fl_nooff.fill_price, 101.0));
@@ -273,7 +273,7 @@ static void test_resolve_exit_trail_fills() {
     Bar trail_short = mk(99.5, 101.5, 98, 99.8);
     ExitPathFill fs = resolve_exit_path_fill(
         trail_short, PositionSide::SHORT, kNaN, kNaN,
-        /*trail_points=*/100, /*trail_offset=*/50, /*entry=*/100,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50, /*entry=*/100,
         /*best_start=*/kNaN, false, false, kMintick);
     CHECK(fs.should_fill == true);
     CHECK(near(fs.fill_price, 98.5));
@@ -284,7 +284,7 @@ static void test_resolve_exit_trail_fills() {
     Bar gap_nooff = mk(102, 103, 101, 102);
     ExitPathFill g_nooff = resolve_exit_path_fill(
         gap_nooff, PositionSide::LONG, kNaN, kNaN,
-        /*trail_points=*/100, /*trail_offset=*/kNaN, /*entry=*/100,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/kNaN, /*entry=*/100,
         /*best_start=*/101.5, false, false, kMintick);
     CHECK(g_nooff.should_fill == true);
     CHECK(near(g_nooff.fill_price, 102.0));
@@ -295,10 +295,34 @@ static void test_resolve_exit_trail_fills() {
     Bar gap_off = mk(101, 101.5, 100, 100.5);
     ExitPathFill g_off = resolve_exit_path_fill(
         gap_off, PositionSide::LONG, kNaN, kNaN,
-        /*trail_points=*/100, /*trail_offset=*/50, /*entry=*/100,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50, /*entry=*/100,
         /*best_start=*/102, false, false, kMintick);
     CHECK(g_off.should_fill == true);
     CHECK(near(g_off.fill_price, 101.0));
+
+    // SHORT trail armed by ABSOLUTE trail_price (not trail_points). Pine's
+    // strategy.exit(trail_price=..., trail_offset=...) arms the trail at the
+    // given absolute price level rather than an entry-relative tick offset.
+    //   activation = trail_price = 99 (absolute); offset 50t = 0.5.
+    //   Bar (99.5, 101.5, 98, 99.8): low-first path 99.5 -> 98 -> 101.5 -> 99.8.
+    //     leg O->L falls to 98 <= 99 -> trail arms, best=98.
+    //     leg L->H rises 98->101.5; trail level = best + offset = 98.5 -> fill@98.5.
+    ExitPathFill fs_tp = resolve_exit_path_fill(
+        trail_short, PositionSide::SHORT, kNaN, kNaN,
+        /*trail_points=*/kNaN, /*trail_price=*/99, /*trail_offset=*/50, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(fs_tp.should_fill == true);
+    CHECK(near(fs_tp.fill_price, 98.5));
+
+    // LONG trail armed by absolute trail_price with no offset -> exits AT the
+    // activation price itself when the path crosses up through it.
+    //   activation = trail_price = 101; rising L->H leg crosses 101 -> fill@101.
+    ExitPathFill fl_tp = resolve_exit_path_fill(
+        trail_long, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/kNaN, /*trail_price=*/101, /*trail_offset=*/kNaN, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(fl_tp.should_fill == true);
+    CHECK(near(fl_tp.fill_price, 101.0));
 }
 
 // ── exit_order_earliest_path_metric_no_trail: entry-bar wrong-side block ──

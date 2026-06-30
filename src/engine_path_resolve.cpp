@@ -518,19 +518,29 @@ struct ExitTrailState {
 // level to nearest mintick at fill time, which produced a 1-tick-toward-entry
 // bias on roughly 40% of community/scalping-strategy trades.
 ExitTrailState compute_exit_trail_state(bool is_long, double trail_points,
+                                        double trail_price,
                                         double trail_offset, double entry_price,
                                         double trail_best_start,
                                         double syminfo_mintick) {
     ExitTrailState s;
-    s.has_trail = !std::isnan(trail_points);
+    // A trail is armed either by trail_points (activation offset in ticks from
+    // the entry price) OR by trail_price (an absolute activation price level).
+    // Pine's strategy.exit accepts both; they describe the same activation
+    // level two different ways. trail_points takes precedence if both are set.
+    s.has_trail = !std::isnan(trail_points) || !std::isnan(trail_price);
     s.best_price = trail_best_start;
     if (!s.has_trail) {
         return s;
     }
-    const double trail_ticks = std::ceil(trail_points);
-    s.activation_level = is_long
-        ? (entry_price + trail_ticks * syminfo_mintick)
-        : (entry_price - trail_ticks * syminfo_mintick);
+    if (!std::isnan(trail_points)) {
+        const double trail_ticks = std::ceil(trail_points);
+        s.activation_level = is_long
+            ? (entry_price + trail_ticks * syminfo_mintick)
+            : (entry_price - trail_ticks * syminfo_mintick);
+    } else {
+        // Absolute activation price level (no entry-relative tick rounding).
+        s.activation_level = trail_price;
+    }
     if (!std::isnan(trail_offset)) {
         s.trail_offset_price = std::ceil(trail_offset) * syminfo_mintick;
     }
@@ -698,7 +708,7 @@ double exit_order_earliest_path_metric_no_trail(
     if (order.type != OrderType::EXIT) {
         return std::numeric_limits<double>::infinity();
     }
-    if (!std::isnan(order.trail_points)) {
+    if (!std::isnan(order.trail_points) || !std::isnan(order.trail_price)) {
         return std::numeric_limits<double>::infinity();
     }
 
@@ -751,6 +761,7 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            double stop_price,
                                            double limit_price,
                                            double trail_points,
+                                           double trail_price,
                                            double trail_offset,
                                            double position_entry_price,
                                            double trail_best_start,
@@ -765,7 +776,7 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
     const bool has_limit = !std::isnan(limit_price);
 
     ExitTrailState trail = compute_exit_trail_state(
-        is_long, trail_points, trail_offset, position_entry_price,
+        is_long, trail_points, trail_price, trail_offset, position_entry_price,
         trail_best_start, syminfo_mintick);
 
     // Open-gap shortcut. The legacy code only ran this on non-entry bars,
