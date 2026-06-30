@@ -92,6 +92,105 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     }
 }
 
+// TradingView force-liquidation (margin call).
+//
+// Run once per script bar (end of dispatch_bar / magnifier bar) after all
+// order processing. While a position is open, TV's broker emulator checks
+// whether strategy equity still covers the position's required margin using
+// the bar's ADVERSE extreme (bar HIGH for shorts, bar LOW for longs). When the
+// adverse extreme reaches/passes the liquidation price the emulator force-
+// closes part of the position:
+//
+//   - fill price = the bar's ADVERSE extreme (high for shorts, low for longs),
+//     which is what TV's exported margin-call rows report — not the bare
+//     liquidation level (the liq price only gates whether a call happens).
+//   - quantity = 4x the minimum amount needed to restore margin at the adverse
+//     extreme, capped at the full position. The documented 4x over-liquidation
+//     prevents a margin call recurring on every subsequent bar and produces
+//     TV's iterative "nibble" pattern (a deep-underwater position closes in
+//     several 4x chunks across bars).
+//   - the resulting trade rows are tagged with the "Margin call" exit comment.
+//
+// Validated against the p2 margin-call short probe (TV: 68 margin calls, first
+// at ~1798.26) and the leverage-margin-call-perp-5x long probe.
+void BacktestEngine::process_margin_call(const Bar& bar) {
+    if (!margin_call_enabled_) return;
+    if (position_side_ == PositionSide::FLAT) return;
+
+    // No post-entry adverse path exists on a bar where the position opened at
+    // the bar CLOSE: with process_orders_on_close, market entries fill at the
+    // close, so there is no remaining intrabar movement for price to breach
+    // margin on the entry bar itself (TV emits the first margin call on the
+    // NEXT bar — p2 probe: entry 15:30, first call 15:45). When entries fill at
+    // the bar OPEN (process_orders_on_close=false) the full bar path IS
+    // post-entry, so a same-bar liquidation is allowed (leverage probe: entry
+    // and first margin call land on the same bar).
+    if (process_orders_on_close_ && position_open_bar_ == bar_index_) return;
+
+    const double liq = compute_liquidation_price();
+    if (std::isnan(liq)) return;  // flat / denom==0 / invalid size already filtered
+
+    const double pv = syminfo_.pointvalue;
+    const double qty = position_qty_;
+    const double direction = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
+    const double margin_pct = (position_side_ == PositionSide::LONG)
+                                  ? margin_long_ : margin_short_;
+    const double m = margin_pct / 100.0;
+    if (!(m > 0.0)) return;
+    // Adversarial / degenerate feeds (NaN/Inf prices, non-finite state) must
+    // never let a non-finite value escape into a trade record.
+    if (!std::isfinite(qty) || !(qty > 0.0) || !std::isfinite(position_entry_price_)
+        || !std::isfinite(pv) || !std::isfinite(initial_capital_)
+        || !std::isfinite(net_profit_sum_)) {
+        return;
+    }
+
+    // Adverse extreme: shorts lose as price rises (bar high); longs lose as
+    // price falls (bar low).
+    const double adverse = (position_side_ == PositionSide::LONG) ? bar.low : bar.high;
+    if (!std::isfinite(adverse) || !(adverse > 0.0)) return;
+
+    // Equity at the adverse extreme = capital + realized PnL + open P/L on the
+    // FULL position. Required margin = position value at the adverse price.
+    const double equity_adv = initial_capital_ + net_profit_sum_
+                              + direction * (adverse - position_entry_price_) * qty * pv;
+    const double req_margin_adv = qty * adverse * pv * m;
+    if (equity_adv >= req_margin_adv) return;  // margin still covered — no call
+
+    // Minimum qty whose removal restores margin at the adverse extreme. Closing
+    // q units leaves the bar-equity unchanged (realized + open P/L just
+    // reclassify) while the required margin shrinks: need
+    // (qty - q) * adverse * pv * m <= equity_adv  =>  q >= qty - equity_adv/(adverse*pv*m).
+    const double q_min = qty - equity_adv / (adverse * pv * m);
+    if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return;
+    double qty_liq = 4.0 * q_min;
+    if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;  // cap at the whole position
+    if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return;
+
+    // Fill at the bar's adverse extreme. TradingView's exported margin-call
+    // rows fill at the bar HIGH (shorts) / LOW (longs) — the worst price the
+    // bar reached after the liquidation level was crossed — NOT at the bare
+    // liquidation price. Verified row-for-row against the p2 probe TV export
+    // (first short call fills at 1798.26 = that bar's high, with
+    // liq=1793.12). ``liq`` above is used only to gate na/denominator cases.
+    // ``adverse`` already lies within [low, high]. current_fill_is_limit_
+    // stays false so execute_market_exit / execute_partial_exit_qty apply
+    // market (slipped) economics.
+    const double fill = adverse;
+
+    const size_t trades_before = trades_.size();
+    if (qty_liq >= qty - kQtyEpsilon) {
+        execute_market_exit(fill);
+    } else {
+        execute_partial_exit_qty(fill, qty_liq);
+    }
+    // Tag every trade row this liquidation produced with TV's "Margin call".
+    for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = "Margin call";
+        trades_[ti].exit_id = "__margin_call__";
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────
 // process_pending_orders helpers
 // ────────────────────────────────────────────────────────────────────

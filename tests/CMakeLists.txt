@@ -73,6 +73,7 @@ set(TEST_SOURCES
     test_pointvalue
     test_metrics
     test_drawing
+    test_margin_call
 )
 
 find_package(Threads REQUIRED)
