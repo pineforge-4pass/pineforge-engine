@@ -452,6 +452,44 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
                                               double& matching_qty_out,
                                               double& qty_to_close_out,
                                               bool& all_entries_match_out) {
+    const double eps0 = kQtyEpsilon;
+    // Default FIFO close-entries rule: strategy.close(id) with no explicit
+    // qty/qty_percent closes the UNCLOSED quantity tagged `id`
+    // (id_unclosed_qty_) and FIFO-attributes the resulting trade records to
+    // the OLDEST open entries (handled downstream by the plain FIFO drain).
+    //
+    // This is what TradingView does: close(id) closes the quantity entered
+    // under `id` and not yet targeted by a prior close(id) — it does NOT
+    // re-sum the physical open lots carrying that id. The two agree when each
+    // id maps to a single open lot. They diverge for grid bots that re-use
+    // one entry id across sequential buy/sell cycles: the FIFO trade-record
+    // drain removes the oldest lot (often a DIFFERENT id), so the id-tagged
+    // lot stays physically open even though a prior close(id) already
+    // accounted for it. Summing physical lots then double-closes it (engine
+    // over-closes 2x), while a TP whose id-lot was drained away by an earlier
+    // close would find no physical match and be skipped (engine under-closes)
+    // — both fixed here by consulting the logical ledger instead.
+    //
+    // The ANY rule keeps the physical id-matched path (closes_any_qty).
+    if (!close_entries_rule_any_ && !id.empty()
+        && std::isnan(qty) && std::isnan(qty_percent)) {
+        auto it = id_unclosed_qty_.find(id);
+        double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+        double target = std::min(unclosed, position_qty_);
+        all_entries_match_out = false;  // FIFO drain may span lots of other ids
+        if (target <= eps0) {
+            return false;
+        }
+        matching_qty_out = target;
+        qty_to_close_out = target;
+        // Consume the id's unclosed ledger now that the close commits.
+        it->second -= target;
+        if (it->second <= eps0) {
+            id_unclosed_qty_.erase(it);
+        }
+        return true;
+    }
+
     bool has_matching_entry = id.empty();
     all_entries_match_out = id.empty() ? true : !pyramid_entries_.empty();
     matching_qty_out = id.empty() ? position_qty_ : 0.0;

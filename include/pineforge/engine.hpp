@@ -267,6 +267,23 @@ protected:
     int position_entry_count_ = 0;  // number of entries in current direction (for pyramiding)
     int position_open_bar_ = -1;    // bar_index_ when position was opened (for exit delay)
     std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting
+    // Per-entry-id UNCLOSED quantity ledger, used ONLY by strategy.close(id)
+    // under the default FIFO close-entries rule to decide how much to close.
+    //
+    // TradingView's strategy.close(id) closes the quantity of the entries
+    // tagged `id` that have NOT already been targeted by a prior close(id) —
+    // it does NOT re-sum the physical open lots. That distinction is
+    // invisible when each id maps to one lot (the common case), but it is
+    // load-bearing for strategies that re-use one entry id across sequential
+    // buy/sell cycles (grid bots): there, the FIFO trade-record drain removes
+    // the OLDEST physical lot — which may carry a different id — leaving the
+    // id-tagged lot physically present. Summing physical lots would then
+    // double-count it on the next close(id) and over-close. This ledger
+    // tracks "entered qty for id minus already-closed-by-close(id) qty for
+    // id", so close(id) closes exactly the right amount (the whole position
+    // for a same-id DCA pyramid; one slot for a grid cycle). It is never read
+    // under the ANY rule (which closes id-matched physical lots directly).
+    std::unordered_map<std::string, double> id_unclosed_qty_;
 
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;

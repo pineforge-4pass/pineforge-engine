@@ -811,7 +811,9 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         position_open_bar_ = bar_index_;
         trail_best_price_ = fill_price;
         pyramid_entries_.clear();
+        id_unclosed_qty_.clear();
         pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
+        id_unclosed_qty_[order.id] += qty;
         if (!std::isnan(order.stop_price) || !std::isnan(order.limit_price)) {
             set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
         }
@@ -860,6 +862,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             position_entry_count_++;
             trail_best_price_ = fill_price;
             pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+            id_unclosed_qty_[order.id] += new_qty;
             if (is_priced_entry) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
             }

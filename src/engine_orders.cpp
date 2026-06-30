@@ -450,6 +450,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_open_bar_ = -1;
     trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
     pyramid_entries_.clear();
+    id_unclosed_qty_.clear();
     consumed_partial_exit_ids_.clear();
 }
 
@@ -488,8 +489,10 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     position_open_bar_ = bar_index_;
     trail_best_price_ = fill_price;
     pyramid_entries_.clear();
+    id_unclosed_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
+    id_unclosed_qty_[id] += qty;
 }
 
 
@@ -644,6 +647,7 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
     position_entry_count_++;
     trail_best_price_ = fill_price;
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id, bar_index_});
+    id_unclosed_qty_[id] += new_qty;
 }
 
 
