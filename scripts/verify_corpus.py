@@ -703,6 +703,7 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             f"  PnL         p90 delta: {pnl_p90    * 100:8.4f}%  ({check(pnl_ok)})\n"
             f"  MAE         p90 delta: {mae_p90    * 100:8.4f}%  ({check(mae_ok)})\n"
             f"  -- report-only (not gated) --\n"
+            f"  Entry/Exit  p99 delta:  {percentile(entry_deltas,0.99)*100:.4f}% / {percentile(exit_deltas,0.99)*100:.4f}%\n"
             f"  Entry/Exit/PnL p100:   {entry_p100*100:.4f}% / {exit_p100*100:.4f}% / {pnl_p100*100:.4f}%\n"
             f"  Qty   p90/p100 delta:  {percentile(qty_deltas,0.90)*100:.4f}% / {qty_p100*100:.4f}%\n"
             f"  PnL%  p90/p100 (pts):  {percentile(pnlpct_deltas,0.90):.4f} / {pnlpct_p100:.4f}\n"
