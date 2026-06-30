@@ -322,6 +322,17 @@ protected:
     double margin_long_ = 100.0;
     double margin_short_ = 100.0;
 
+    // Account-currency FX multiplier for the broker affordability gate. When a
+    // strategy declares ``currency=currency.XXX`` differing from the symbol's
+    // quote currency (e.g. currency.INR on a USDT-quoted perp), TradingView
+    // denominates equity in the account currency but the position notional in
+    // the quote currency, converting the latter via the account-currency FX
+    // rate before the ``required_margin <= equity`` check. The engine otherwise
+    // assumes account == quote (FX 1.0). Injected via the syminfo metadata
+    // channel (key "account_currency_fx"); defaults to 1.0 so every corpus
+    // strategy (which never sets it) is byte-identical.
+    double account_currency_fx_ = 1.0;
+
     // TradingView force-liquidation (margin call) toggle. TV runs the broker
     // margin-call emulator by default, so this defaults ON to match TV. It is
     // a no-op for the validation corpus (long-only positions at the default
@@ -1569,6 +1580,14 @@ public:
         if (key == "qty_step") {
             qty_step_ = (std::isfinite(value) && value > 0.0) ? value : 0.0;
             syminfo_.qty_step = qty_step_;
+        }
+        // Account-currency FX rate (account-currency units per quote-currency
+        // unit). Scales the broker affordability gate's required_margin when
+        // the script's currency differs from the symbol quote currency. A
+        // non-positive / non-finite value resets to the 1.0 (no-op) default.
+        if (key == "account_currency_fx") {
+            account_currency_fx_ =
+                (std::isfinite(value) && value > 0.0) ? value : 1.0;
         }
     }
 

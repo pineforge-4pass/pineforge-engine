@@ -43,6 +43,7 @@ set(TEST_SOURCES
     test_get_input_int64
     test_get_input_source
     test_syminfo_metadata
+    test_affordability_fx
     test_determinism_reproducibility
     test_exit_path_segment_tiebreak
     test_accounting_reconciliation

@@ -127,8 +127,13 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         if (margin_pct > 0.0 && !std::isnan(current_bar_.close)) {
             // Position value in account currency includes the futures
             // point-value multiplier (1.0 for crypto/equity — unchanged).
+            // The notional is in the symbol's quote currency; convert it to the
+            // account currency (FX 1.0 unless the script declared a differing
+            // currency=) so it is comparable to equity, which is denominated in
+            // the account currency. Default 1.0 leaves the corpus untouched.
             double required_margin = std::abs(qty) * current_bar_.close
                                      * syminfo_.pointvalue
+                                     * account_currency_fx_
                                      * (margin_pct / 100.0);
             double available_equity = current_equity();
             double epsilon = std::max(1e-9, std::abs(available_equity) * 1e-12);
