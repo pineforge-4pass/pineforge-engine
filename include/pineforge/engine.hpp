@@ -763,23 +763,38 @@ protected:
     // first (the inverse of the instrument->account multiply used for
     // commission/PnL/margin) so the division by fill_price stays dimensionally
     // consistent; default 1.0 leaves the corpus untouched.
+    // Floor an order quantity to the instrument's tradable lot increment
+    // (qty_step_). TradingView applies this to EVERY order it sends to the
+    // exchange, not just forced liquidations — verified row-for-row: a
+    // computed DCA/safety-order quantity (e.g. baseOrderSize/close) is
+    // floored, not rounded, before it ever contributes to cost basis or a
+    // fill (see src/engine_fills.cpp's margin-call path, which already does
+    // this for liquidation lots). qty_step_ == 0 (corpus default) leaves qty
+    // untouched. Unlike the liquidation path, a regular entry legitimately
+    // CAN floor to zero (an under-funded order is simply not placed), so
+    // there is no "never stall" floor-to-one-step fallback here.
+    double apply_qty_step(double qty) const {
+        if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
+        return std::floor(qty / qty_step_) * qty_step_;
+    }
+
     double calc_qty(double fill_price) const {
         switch (default_qty_type_) {
             case QtyType::FIXED:
-                return default_qty_value_;
+                return apply_qty_step(default_qty_value_);
             case QtyType::PERCENT_OF_EQUITY: {
                 double equity = current_equity();
                 double cash = equity * (default_qty_value_ / 100.0) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
                 return (std::isfinite(fill_price) && fill_price > 0)
-                    ? (cash / (fill_price * syminfo_.pointvalue)) : 0.0;
+                    ? apply_qty_step(cash / (fill_price * syminfo_.pointvalue)) : 0.0;
             }
             case QtyType::CASH:
                 return (std::isfinite(fill_price) && fill_price > 0)
-                    ? ((default_qty_value_ / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
+                    ? apply_qty_step((default_qty_value_ / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
         }
-        return default_qty_value_;
+        return apply_qty_step(default_qty_value_);
     }
 
     // --- Strategy variable accessors ---

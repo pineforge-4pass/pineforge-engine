@@ -21,8 +21,13 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
     if (std::isnan(qty_value)) {
         return calc_qty(fill_price);
     }
+    // qty_step_ lot-size flooring applies uniformly regardless of how the
+    // caller's qty was derived — including this FIXED branch, which is the
+    // common ``strategy.entry(qty=someComputedExpr)`` shape (e.g. a DCA base/
+    // safety-order qty = orderSizeUsd/close). See apply_qty_step's doc
+    // comment (engine.hpp) for the verified TV behavior this mirrors.
     if (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED)) {
-        return qty_value;
+        return apply_qty_step(qty_value);
     }
     if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
         double equity = current_equity() + open_profit(current_bar_.close);
@@ -36,13 +41,13 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
         // the quote-currency fill_price — same convention as calc_qty() in
         // engine.hpp. fx=1.0 is a no-op.
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? ((cash / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? apply_qty_step((cash / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     if (qty_type == static_cast<int>(QtyType::CASH)) {
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? ((qty_value / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? apply_qty_step((qty_value / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
-    return qty_value;
+    return apply_qty_step(qty_value);
 }
 
 
