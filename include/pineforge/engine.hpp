@@ -1076,6 +1076,39 @@ protected:
         bool lower_tf_use_input = false;
         int lower_tf_input_aggregation_ratio = 1;
         std::vector<Bar> lower_tf_input_buffer;
+        // Plain ``request.security`` (not ``_lower_tf``) with a requested TF
+        // STRICTLY FINER than script_tf (e.g. so2TF="5" read from a 15m
+        // chart): the security's own aggregator completes multiple times
+        // (script_seconds / requested_seconds) per calling/script bar. A
+        // history-offset read (``expr[1]`` inside the security call, see
+        // the ``*_hist`` push/read machinery in codegen) is meant to expose
+        // "the value already confirmed as of the close of the PREVIOUS
+        // calling bar" — i.e. the publish granularity is the CALLING bar,
+        // not the security's own (finer) period. Without this, the
+        // read-before-push ``hist[0]`` gets refreshed on every one of the
+        // R completions inside the current calling bar, so by the time
+        // on_bar() reads it the value has silently drifted to "one
+        // security-period behind the LAST completion of THIS SAME calling
+        // bar" (e.g. the middle of 3 sub-periods) instead of "the last
+        // completion of the PREVIOUS calling bar" — an aliasing bug
+        // confirmed against TradingView-exported trades on a triple-RSI
+        // DCA strategy using so2Rsi = request.security(sym, "5",
+        // ta.rsi(close,7)[1], lookahead=barmerge.lookahead_on) on a 15m
+        // chart (finer target under lookahead + offset).
+        //
+        // When nonzero, this holds the requested TF's duration in seconds
+        // (script_seconds % this == 0 verified at validate time) and gates
+        // ``feed_security_eval_state``'s aggregator branch: only the
+        // completion whose bucket END aligns to a script_tf boundary is
+        // passed through to ``evaluate_security`` as ``is_complete = true``
+        // (letting codegen's ``hist.push()`` fire); all other completions
+        // within the same calling bar are still evaluated (so the
+        // underlying TA state keeps advancing at native/security
+        // resolution) but are passed ``is_complete = false`` so they do not
+        // advance the exposed history buffer. Zero (the default) means "not
+        // applicable" (target TF is coarser than or equal to script_tf, the
+        // already-correct case) and leaves behavior unchanged.
+        int publish_gate_tf_seconds = 0;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;

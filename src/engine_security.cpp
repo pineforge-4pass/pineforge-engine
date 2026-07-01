@@ -116,6 +116,7 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
         state.lower_tf_use_input = false;
         state.lower_tf_input_aggregation_ratio = 1;
         state.lower_tf_input_buffer.clear();
+        state.publish_gate_tf_seconds = 0;
         if (state.tf.empty()) continue;
 
         int lower_ratio = 0;
@@ -222,6 +223,19 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
                 requested_seconds / input_seconds;
             state.lower_tf_ratio = script_seconds / requested_seconds;
             state.lower_tf_seconds = requested_seconds;
+        } else if (!is_calendar_month && script_seconds > 0
+                   && requested_seconds < script_seconds
+                   && script_seconds % requested_seconds == 0) {
+            // Plain request.security with a target TF finer than the
+            // script/chart TF (e.g. so2TF="5" on a 15m chart): the
+            // security's own aggregator completes multiple times per
+            // calling bar. A history-offset read (``expr[1]``) must expose
+            // the value confirmed as of the PREVIOUS calling bar, not
+            // whatever native sub-period last completed inside the
+            // CURRENT calling bar. Gate publication (see
+            // feed_security_eval_state) to only the completion whose
+            // bucket end aligns with a script_tf boundary.
+            state.publish_gate_tf_seconds = requested_seconds;
         }
     }
 }
@@ -405,7 +419,27 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
         state.current_bar = ab.bar;
         state.eval_complete_count++;
-        evaluate_security(state.sec_id, ab.bar, true);
+        // For a plain request.security whose target TF is strictly finer
+        // than script_tf (publish_gate_tf_seconds > 0), the security's own
+        // aggregator completes multiple times per calling/script bar.
+        // Only the completion whose bucket END lands on a script_tf
+        // boundary is "the last completion of THIS calling bar" — that's
+        // the one a history-offset read (``expr[1]``) should latch as
+        // "confirmed as of the previous calling bar" the NEXT time the
+        // calling script reads it. Suppress ``is_complete`` (so codegen's
+        // gated hist.push() does not fire) for every other, intermediate
+        // completion; the underlying TA state keeps advancing regardless
+        // (compute()/recompute() dispatch is driven by
+        // current_sub_bar_count, not by this flag) — only the exposed
+        // history buffer's advance is gated. eval_complete_count/current_bar
+        // bookkeeping above stays driven by the real completion.
+        bool publish = true;
+        if (state.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
+            int64_t bucket_end_sec =
+                ab.bar.timestamp / 1000 + state.publish_gate_tf_seconds;
+            publish = (bucket_end_sec % script_tf_seconds_) == 0;
+        }
+        evaluate_security(state.sec_id, ab.bar, publish);
     } else if (state.lookahead_on) {
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
         state.current_bar = ab.bar;
