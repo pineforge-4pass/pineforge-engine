@@ -524,57 +524,35 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
 
 // Wipe pending orders that should not survive a full strategy.close:
 //
-//   (1) Pending strategy.exit orders bound to the same entry id are
-//       wiped (community/IES regression: a partial TP1 limit and the
-//       queued market close were both firing on the next bar's open,
-//       producing two trade rows for the same logical close).
+//   Pending strategy.exit orders bound to the same entry id are wiped
+//   (community/IES regression: a partial TP1 limit and the queued
+//   market close were both firing on the next bar's open, producing
+//   two trade rows for the same logical close).
 //
-//   (2) Pending strategy.entry / market orders that were ADDED TO
-//       THE NOW-CLOSING POSITION are wiped (probe in
-//       tests/test_integration.cpp: a stale long-add stop placed
-//       while already long must not re-open the position after the
-//       long is closed).
-//
-// Crucially, pending entries placed FOR THE OPPOSITE DIRECTION
-// (flip preparation — e.g., a short-stop entry placed while still
-// long, intended to fire after the long closes) must NOT be
-// cancelled here. The previous predicate `o.is_long == closing_long`
-// wiped same-direction entries regardless of the position they were
-// placed in, which broke validation/93-flip-stop-pyramiding-2: the
-// 0:45 short-stop placed while in the morning long was cancelled
-// by 12:15 close_all on the still-pending leg even though the
-// engine had since flipped to a short position via the OTHER stop,
-// dropping a short the strategy intended to keep alive overnight.
-void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool closing_long) {
+// Pending strategy.entry / market orders are LEFT ALONE. Per
+// TradingView's documented broker semantics, only cancel()/cancel_all()
+// cancel pending orders; close()/close_all() only closes the open
+// position — a pending same-direction entry (e.g. a stale add-on stop
+// placed while the position was open) survives and can still fire on a
+// later bar, "ghost-refilling" into a new position. This mirrors DCA/
+// grid-bot bots (3commas-style: N independent price-level orders,
+// closing one level must not silently cancel another level's still-
+// pending order) — verified against 3commas-3commas-pullback-sniper-
+// strategy, where the previous same-direction wipe was itself the bug
+// (closed-form count-delta 2.88% -> <0.5%).
+void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*closing_long*/) {
     pending_orders_.erase(
         std::remove_if(
             pending_orders_.begin(),
             pending_orders_.end(),
             [&](const PendingOrder& o) {
-                if (o.type == OrderType::EXIT) {
-                    if (id.empty()) {
-                        return o.from_entry.empty();
-                    }
-                    return o.from_entry == id;
-                }
-                if (o.type != OrderType::ENTRY && o.type != OrderType::MARKET) {
+                if (o.type != OrderType::EXIT) {
                     return false;
                 }
-                if (o.created_bar >= bar_index_) {
-                    // Same-on_bar reversal entry: keep it (handles
-                    // strategy.close + strategy.entry(opposite) in the
-                    // same Pine block).
-                    return false;
+                if (id.empty()) {
+                    return o.from_entry.empty();
                 }
-                // Only wipe entries that were a same-direction ADD to
-                // the position being closed.
-                bool added_to_long = closing_long
-                    && o.created_position_side == PositionSide::LONG
-                    && o.is_long;
-                bool added_to_short = !closing_long
-                    && o.created_position_side == PositionSide::SHORT
-                    && !o.is_long;
-                return added_to_long || added_to_short;
+                return o.from_entry == id;
             }),
         pending_orders_.end());
 }
