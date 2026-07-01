@@ -289,6 +289,17 @@ void BacktestEngine::strategy_close_all() {
     strategy_close("");
 }
 
+// Qty the pending same-bar close batch will fill at flush time (0 when no
+// batch is pending). Lets same-bar order sizing (strategy.exit) see the
+// post-close position before the flush actually executes.
+double BacktestEngine::pending_same_bar_close_target() const {
+    if (!sb_close_active_) return 0.0;
+    auto it = id_unclosed_qty_.find(sb_close_id_);
+    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(sb_close_id_));
+    return std::min(unclosed, avail);
+}
+
 // Sum of same-bar-close reservations held by OTHER ids. A surviving
 // multi-close fill leaves its unconsumed ledger amount reserved against
 // the position; other ids' close targets are capped by what remains.
@@ -424,20 +435,35 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
+    // A default-FIFO strategy.close batched earlier on this SAME bar has not
+    // filled yet (it fills at the end-of-bar flush) but its qty is already
+    // committed. An exit armed after that close call must size against the
+    // post-close position — exactly what it saw when the immediate path
+    // executed the close mid-bar. Without this, a close + reversal-entry +
+    // exit sequence freezes the OLD side's size into the bracket's reserved
+    // qty (wayward-bison: the Long SL stop filled only the stale short-sized
+    // 3.9629 of an 8.0672 long, fragmenting one TV exit into two rows).
+    double sb_pending_close = (sb_close_active_ && sb_close_bar_ == bar_index_)
+                                  ? pending_same_bar_close_target()
+                                  : 0.0;
+    double live_pos_qty = (position_side_ == PositionSide::FLAT)
+                              ? 0.0
+                              : std::max(0.0, position_qty_ - sb_pending_close);
+    bool effectively_flat = live_pos_qty <= kQtyEpsilon;
     // If an explicit qty is given, derive an effective qp from the current
     // position size so downstream FIFO accounting (compute_exit_reserved_qty,
     // already-reserved tally, etc.) sees a consistent fraction. The order
     // itself stores the absolute qty so the per-fill execution path
     // honours the literal request.
-    if (has_explicit_qty && position_qty_ > kQtyEpsilon) {
-        double clamped_qty = std::min(qty, position_qty_);
-        qp = (clamped_qty / position_qty_) * 100.0;
+    if (has_explicit_qty && live_pos_qty > kQtyEpsilon) {
+        double clamped_qty = std::min(qty, live_pos_qty);
+        qp = (clamped_qty / live_pos_qty) * 100.0;
     }
     bool is_partial = qp < 100.0 - kFullPercentEps;
     bool has_trail_request = !std::isnan(trail_points) || !std::isnan(trail_price);
 
     // Re-issued explicitly partial exits with the same id are one-shot for a live position.
-    if (is_partial && position_side_ != PositionSide::FLAT
+    if (is_partial && !effectively_flat
         && consumed_partial_exit_ids_.find(id) != consumed_partial_exit_ids_.end()) {
         return;
     }
@@ -455,7 +481,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         // strictly smaller than the open position size — required for
         // multi-bracket per-position exits (validation_oca/oca-three-way-
         // probe-02 has two qty=1 brackets attached to a qty=2 entry).
-        if (position_side_ == PositionSide::FLAT) {
+        if (effectively_flat) {
             // Defer placement; FIFO accounting will recompute when a
             // position eventually exists.
             reserved_qty = std::min(qty, std::numeric_limits<double>::infinity());
@@ -468,17 +494,17 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                 } else {
                     double oqp = std::isnan(o.qty_percent) ? 100.0
                         : std::clamp(o.qty_percent, 0.0, 100.0);
-                    already_reserved += position_qty_ * (oqp / 100.0);
+                    already_reserved += live_pos_qty * (oqp / 100.0);
                 }
             }
-            double available = std::max(0.0, position_qty_ - already_reserved);
+            double available = std::max(0.0, live_pos_qty - already_reserved);
             reserved_qty = std::min(qty, available);
             if (reserved_qty <= kQtyEpsilon) return;
         }
-        is_partial = reserved_qty < position_qty_ - kFullQtyEps;
+        is_partial = reserved_qty < live_pos_qty - kFullQtyEps;
     } else {
         if (!compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
-                                       qp, is_partial, reserved_qty)) {
+                                       live_pos_qty, qp, is_partial, reserved_qty)) {
             return;
         }
     }
@@ -508,10 +534,13 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.oca_type = oca_name.empty() ? 0 : 1;  // strategy.exit semantics: cancel
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
-    order.created_position_side = position_side_;
-    order.tv_carry_qty = position_qty_;
+    // Position-derived captures use the post-batched-close view (see
+    // live_pos_qty above) so an exit armed after a same-bar strategy.close
+    // records the same state it did when the close executed mid-bar.
+    order.created_position_side = effectively_flat ? PositionSide::FLAT : position_side_;
+    order.tv_carry_qty = live_pos_qty;
     order.comment = comment;
-    order.created_while_in_position = (position_side_ != PositionSide::FLAT);
+    order.created_while_in_position = !effectively_flat;
 
     pending_orders_.push_back(std::move(order));
 }
@@ -819,11 +848,16 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
 // full exit is queued.
 bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
                                                double preserved_reserved_qty,
+                                               double live_pos_qty,
                                                double& qp_io,
                                                bool& is_partial_io,
                                                double& reserved_qty_out) {
+    // live_pos_qty: the position size this exit may size against — the raw
+    // position_qty_ minus any same-bar batched strategy.close target that is
+    // committed but not yet flushed (see strategy_exit). <= eps behaves like
+    // FLAT: defer, recompute when a position exists.
     reserved_qty_out = std::numeric_limits<double>::quiet_NaN();
-    if (position_side_ == PositionSide::FLAT) {
+    if (position_side_ == PositionSide::FLAT || live_pos_qty <= kQtyEpsilon) {
         return true;
     }
 
@@ -834,11 +868,11 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
             already_reserved += o.qty;
         } else {
             double oqp = std::isnan(o.qty_percent) ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
-            already_reserved += position_qty_ * (oqp / 100.0);
+            already_reserved += live_pos_qty * (oqp / 100.0);
         }
     }
 
-    double available_qty = std::max(0.0, position_qty_ - already_reserved);
+    double available_qty = std::max(0.0, live_pos_qty - already_reserved);
     // Only carry the preserved (frozen) reserved qty for genuine PARTIAL
     // re-issues (qp < 100%). A full-position exit (qp == 100%) re-issued
     // every bar while the position keeps GROWING via pyramiding/DCA must
@@ -849,16 +883,16 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
     // fragmenting across two bars). For partial re-issues the carry is kept
     // to avoid double-reserving against the same from_entry.
     if (!std::isnan(preserved_reserved_qty) && qp_io < 100.0 - kFullPercentEps) {
-        reserved_qty_out = std::min(preserved_reserved_qty, position_qty_);
+        reserved_qty_out = std::min(preserved_reserved_qty, live_pos_qty);
     } else {
-        double requested_qty = position_qty_ * (qp_io / 100.0);
+        double requested_qty = live_pos_qty * (qp_io / 100.0);
         reserved_qty_out = std::min(requested_qty, available_qty);
     }
     if (reserved_qty_out <= kQtyEpsilon) {
         return false;
     }
-    qp_io = (position_qty_ > kQtyEpsilon) ? (reserved_qty_out / position_qty_) * 100.0 : qp_io;
-    is_partial_io = reserved_qty_out < position_qty_ - kFullQtyEps;
+    qp_io = (live_pos_qty > kQtyEpsilon) ? (reserved_qty_out / live_pos_qty) * 100.0 : qp_io;
+    is_partial_io = reserved_qty_out < live_pos_qty - kFullQtyEps;
 
     // If there is already a full exit pending for this from_entry, ignore
     // additional partial exits until that full exit is consumed/cancelled.

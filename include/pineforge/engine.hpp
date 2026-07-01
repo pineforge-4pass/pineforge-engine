@@ -1471,6 +1471,7 @@ private:
     void enqueue_same_bar_close(const std::string& id, const std::string& comment);
     void flush_same_bar_close();
     double close_reserved_other_qty(const std::string& id) const;
+    double pending_same_bar_close_target() const;
     void execute_immediate_close(const std::string& id,
                                  const std::string& comment,
                                  double qty_to_close,
@@ -1491,6 +1492,7 @@ private:
                                    double& preserved_reserved_qty_out);
     bool compute_exit_reserved_qty(const std::string& from_entry,
                                    double preserved_reserved_qty,
+                                   double live_pos_qty,
                                    double& qp_io,
                                    bool& is_partial_io,
                                    double& reserved_qty_out);
