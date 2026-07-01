@@ -1631,6 +1631,32 @@ public:
             account_currency_fx_ =
                 (std::isfinite(value) && value > 0.0) ? value : 1.0;
         }
+        // Per-instrument margin/leverage DEFAULT (percent of position value
+        // required as collateral; 100 = fully collateralized / no leverage,
+        // matching Pine's own margin_long/margin_short default). This is a
+        // data-feed-level fallback for a script whose header OMITS
+        // margin_long/margin_short — without it, a leveraged futures/
+        // perpetual instrument has no way to reflect its real (non-100%)
+        // exchange margin requirement (see the tv-margin-call-gap project
+        // history). It must NOT override an EXPLICIT strategy(...,
+        // margin_long=X) header arg. Unlike qty_step/account_currency_fx,
+        // this can't rely on "whichever assignment runs last wins": the
+        // codegen-generated constructor assigns margin_long_/margin_short_
+        // from an explicit header arg in strategy_create(), which the C ABI
+        // / run_strategy.py call BEFORE strategy_set_syminfo_metadata — so a
+        // later injected default would silently clobber an explicit script
+        // value. Guard on "still at the class's own 100.0 default", i.e.
+        // apply only when the header did NOT already set it (the one
+        // imprecise edge case — a header that explicitly writes
+        // margin_long=100, matching the default value — is indistinguishable
+        // from "unset" here, but 100 is also the semantic no-override value,
+        // so this is a no-op in that case either way).
+        if (key == "margin_long" && margin_long_ == 100.0) {
+            margin_long_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
+        }
+        if (key == "margin_short" && margin_short_ == 100.0) {
+            margin_short_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
+        }
     }
 
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,
