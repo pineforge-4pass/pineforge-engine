@@ -704,6 +704,14 @@ static void test_blocked_entry_does_not_consume_intraday_fill_quota() {
 
 // Dual pending stop entries placed while flat: same bar, path touches both stops.
 // Second touch must flatten (bracket-style), not reverse into a new position.
+// This is the exact-zero-remainder case (both legs FIXED qty=1): confirmed by
+// real corpus probe 80 (order-dual-stop-both-touch-priority-01, Trade 1 —
+// entry long + exit long at the identical timestamp). When the opposite leg's
+// qty is NOT equal (equity/price-based sizing, e.g. equity/priceA vs
+// equity/priceB), TV instead defers the whole order to a later bar rather
+// than flattening-with-remainder — see
+// waranyutrkm-inside-day-breakout-strategy and classify_order_eligibility's
+// flat_armed_opposite_close remainder check.
 static void test_flat_bracket_dual_stop_closes_on_opposite_touch() {
     std::printf("test_flat_bracket_dual_stop_closes_on_opposite_touch\n");
 

@@ -974,9 +974,32 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         PositionSide requested = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
         bool flat_armed = order.created_position_side == PositionSide::FLAT
                           && position_side_ != PositionSide::FLAT;
-        bool flat_armed_opposite_close = flat_armed
+        bool flat_armed_opposite_same_bar = flat_armed
             && position_side_ != requested
             && position_open_bar_ == bar_index_;
+        // TV only lets this same-bar opposite leg fire as a bracket exit
+        // when it nets the just-opened position to exactly flat (or a
+        // partial close with no remainder) — probe 80's near-stop pair
+        // (both FIXED qty=1) closes to flat on the very bar the position
+        // opened. When the opposite leg's tx_qty EXCEEDS the just-opened
+        // position's qty (equity/price-based sizing, where the two legs'
+        // divisors differ, guarantees a nonzero remainder), TV does NOT
+        // let the loser fire same-bar at all — it defers the whole order
+        // to a later bar instead of flash-reversing into a small leftover
+        // opposite position (waranyutrkm-inside-day-breakout-strategy).
+        // Approximate the fill price with the order's own trigger level:
+        // exact for FIXED qty (price-independent) and precise enough for
+        // equity/cash sizing, whose legs differ by construction, not by
+        // slippage-scale noise.
+        bool flat_armed_opposite_close = flat_armed_opposite_same_bar;
+        if (flat_armed_opposite_same_bar) {
+            double approx_price = !std::isnan(order.stop_price) ? order.stop_price
+                : (!std::isnan(order.limit_price) ? order.limit_price : bar.close);
+            double approx_tx_qty = calc_qty_for_type(approx_price, order.qty, order.qty_type);
+            if (approx_tx_qty > position_qty_ + kQtyEpsilon) {
+                flat_armed_opposite_close = false;
+            }
+        }
         bool flat_armed_same_dir_pyramid = flat_armed
             && position_side_ == requested;
         bool pre_armed_opposite_sibling =
