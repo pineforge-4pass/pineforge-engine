@@ -969,13 +969,24 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     }
 
     // With process_orders_on_close, ALL priced orders (stop/limit/trail)
-    // placed this bar should only be evaluated from the next bar.
+    // placed this bar should only be evaluated from the next bar --
+    // EXCEPT a pure LIMIT entry (no stop, no trail), which TradingView
+    // fills immediately if marketable against this same bar's close. TV's
+    // "process orders on close" cadence evaluates a limit ENTRY at the
+    // moment it is placed (bar close), not against the bar's full
+    // intrabar range like a resting order carried from a prior bar --
+    // e.g. strategy.entry(limit=close) is by construction always
+    // marketable the instant it is placed. See evaluate_fill_price's
+    // has_limit branch for the matching same-bar fill-price rule.
     if (process_orders_on_close_ && order.created_bar == bar_index_) {
-        bool has_price_condition = !std::isnan(order.stop_price)
-                                   || !std::isnan(order.limit_price)
-                                   || !std::isnan(order.trail_points)
-                                   || !std::isnan(order.trail_price);
-        if (has_price_condition) {
+        bool has_stop_or_trail = !std::isnan(order.stop_price)
+                                 || !std::isnan(order.trail_points)
+                                 || !std::isnan(order.trail_price);
+        bool pure_limit_entry = order.type == OrderType::ENTRY
+                                && !exit_style
+                                && !has_stop_or_trail
+                                && !std::isnan(order.limit_price);
+        if (has_stop_or_trail || (!std::isnan(order.limit_price) && !pure_limit_entry)) {
             return OrderEligibility::Skip;
         }
     }
@@ -1130,7 +1141,27 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         }
     } else if (has_limit) {
         // Entry limit order
-        if (order.is_long) {
+        if (process_orders_on_close_ && order.created_bar == bar_index_) {
+            // Same-bar pure-limit entry (see classify_order_eligibility's
+            // matching carve-out): TV evaluates it against THIS bar's
+            // close (the moment it was placed), not the bar's full
+            // intrabar range like a resting order carried from a prior
+            // bar. Fill limit-or-better relative to that close (mirrors
+            // the resting-order fills below being limit-or-better
+            // relative to their bar's open) -- for the common
+            // limit==close case (e.g. strategy.entry(limit=close)) this
+            // is identical to filling at the limit price; it only
+            // differs when the close has gapped past the limit, where TV
+            // prices the fill at the better close rather than the bare
+            // limit.
+            if (order.is_long ? (bar.close <= order.limit_price)
+                               : (bar.close >= order.limit_price)) {
+                fill_price = order.is_long ? std::min(bar.close, order.limit_price)
+                                            : std::max(bar.close, order.limit_price);
+                should_fill = true;
+                is_limit_fill = true;
+            }
+        } else if (order.is_long) {
             if (bar.low <= order.limit_price) {
                 fill_price = std::min(bar.open, order.limit_price);
                 should_fill = true;
