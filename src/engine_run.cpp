@@ -37,6 +37,7 @@ void BacktestEngine::dispatch_bar() {
         process_pending_orders(current_bar_);   // step 1: old stop/limit
         update_per_trade_extremes();             // step 2: update before strategy reads
         on_bar(current_bar_);                    // step 3: strategy logic
+        flush_same_bar_close();                  // step 3b: surviving strategy.close fill
         process_pending_orders(current_bar_);    // step 4: new market orders
     } else {
         process_pending_orders(current_bar_);
@@ -70,6 +71,13 @@ void BacktestEngine::reset_run_state() {
                                       // pyramid_entries_, trail, partial ids
     pending_orders_.clear();
     pending_close_qty_in_bar_ = 0.0;
+    sb_close_active_ = false;
+    sb_close_bar_ = -1;
+    sb_close_calls_ = 0;
+    sb_close_first_id_.clear();
+    sb_close_id_.clear();
+    sb_close_comment_.clear();
+    close_reserved_qty_.clear();
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
     last_exit_fill_was_trail_ = false;
@@ -287,6 +295,7 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
                     current_bar_.timestamp = script_bar_ts;
                     _push_source_series();
                     on_bar(current_bar_);
+                    flush_same_bar_close();  // surviving strategy.close fill
                     process_pending_orders(current_bar_);
                 }
             } else {

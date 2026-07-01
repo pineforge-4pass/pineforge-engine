@@ -469,6 +469,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
+    close_reserved_qty_.clear();
     consumed_partial_exit_ids_.clear();
 }
 
@@ -508,6 +509,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     trail_best_price_ = fill_price;
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
+    close_reserved_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
     id_unclosed_qty_[id] += qty;

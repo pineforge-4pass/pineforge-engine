@@ -229,6 +229,22 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         return;
     }
 
+    // TradingView one-close-fill-per-bar rule: under process_orders_on_close,
+    // default-FIFO ``strategy.close(id)`` calls (no explicit qty/qty_percent,
+    // FIFO close-entries rule) issued on the SAME bar collapse into a single
+    // surviving market close order that fills at the bar close. Route those
+    // calls through the same-bar batch; the fill executes at the end-of-bar
+    // order-processing point (dispatch_bar step 4 / magnifier last tick) via
+    // flush_same_bar_close(). Everything else (ANY rule, explicit qty,
+    // close_all, immediately=true, non-POC deferred closes) keeps the
+    // existing paths.
+    if (process_orders_on_close_ && !immediately
+        && !close_entries_rule_any_ && !id.empty()
+        && std::isnan(qty) && std::isnan(qty_percent)) {
+        enqueue_same_bar_close(id, comment);
+        return;
+    }
+
     double matching_qty = 0.0;
     double qty_to_close = 0.0;
     bool all_entries_match = false;
@@ -271,6 +287,132 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
 
 void BacktestEngine::strategy_close_all() {
     strategy_close("");
+}
+
+// Sum of same-bar-close reservations held by OTHER ids. A surviving
+// multi-close fill leaves its unconsumed ledger amount reserved against
+// the position; other ids' close targets are capped by what remains.
+double BacktestEngine::close_reserved_other_qty(const std::string& id) const {
+    double sum = 0.0;
+    for (const auto& kv : close_reserved_qty_) {
+        if (kv.first != id) sum += kv.second;
+    }
+    return sum;
+}
+
+// Admit a default-FIFO strategy.close(id) call into the same-bar batch
+// (TV one-fill-per-bar rule — see the close_reserved_qty_ field block in
+// engine.hpp). Order cancels tied to a full-position close keep their
+// CALL-time timing (identical to the previous immediate path); only the
+// FILL is deferred to flush_same_bar_close().
+void BacktestEngine::enqueue_same_bar_close(const std::string& id,
+                                            const std::string& comment) {
+    const double eps = kQtyEpsilon;
+    auto it = id_unclosed_qty_.find(id);
+    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+    double target = std::min(unclosed, avail);
+    if (target <= eps) {
+        return;  // zero-target call: no-op, cannot become the survivor
+    }
+
+    // Same-bar source-order carry (see strategy_entry's tv_carry_qty): a
+    // subsequent strategy.entry on this on_bar sees the post-close size.
+    pending_close_qty_in_bar_ += target;
+
+    bool closes_full_position = target >= position_qty_ - eps;
+    if (closes_full_position) {
+        bool closing_long = (position_side_ == PositionSide::LONG);
+        cancel_orders_for_full_close(id, closing_long);
+        purge_exit_orders();
+    }
+
+    if (!sb_close_active_ || sb_close_bar_ != bar_index_) {
+        sb_close_active_ = true;
+        sb_close_bar_ = bar_index_;
+        sb_close_calls_ = 1;
+        sb_close_first_id_ = id;
+        sb_close_id_ = id;
+        sb_close_comment_ = comment;
+        return;
+    }
+    if (id == sb_close_id_) {
+        // Re-issued close for the id already pending: replaces the same
+        // order in place (comment refresh; not a new call).
+        sb_close_comment_ = comment;
+        return;
+    }
+    sb_close_calls_ += 1;
+    if (sb_close_calls_ == 2) {
+        // The FIRST replaced call's ledger is consumed silently: no fill,
+        // no trade rows, reservation released. Intermediate replaced
+        // calls (3rd+) keep their ledgers intact.
+        id_unclosed_qty_.erase(sb_close_first_id_);
+        close_reserved_qty_.erase(sb_close_first_id_);
+    }
+    sb_close_id_ = id;
+    sb_close_comment_ = comment;
+}
+
+// Execute the surviving same-bar close at the bar's close price. Called
+// from the end-of-bar order-processing points (dispatch_bar step 4 and
+// the magnifier's last tick), i.e. the same bar and price the immediate
+// path used, after the strategy's on_bar has fully run.
+void BacktestEngine::flush_same_bar_close() {
+    if (!sb_close_active_) return;
+    const std::string id = sb_close_id_;
+    const std::string comment = sb_close_comment_;
+    const bool sole_call = (sb_close_calls_ == 1);
+    sb_close_active_ = false;
+    sb_close_bar_ = -1;
+    sb_close_calls_ = 0;
+    sb_close_first_id_.clear();
+    sb_close_id_.clear();
+    sb_close_comment_.clear();
+    if (position_side_ == PositionSide::FLAT) return;
+
+    const double eps = kQtyEpsilon;
+    auto it = id_unclosed_qty_.find(id);
+    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+    double target = std::min(unclosed, avail);
+    if (target <= eps) return;
+
+    if (sole_call) {
+        // Single close call this bar: classic semantics — consume the
+        // ledger and release any prior reservation for this id.
+        it->second -= target;
+        if (it->second <= eps) {
+            id_unclosed_qty_.erase(it);
+        }
+        close_reserved_qty_.erase(id);
+    }
+
+    bool closes_full_position = target >= position_qty_ - eps;
+    size_t trades_before = trades_.size();
+    if (closes_full_position) {
+        // Exit-order cancel/purge already ran at CALL time in
+        // enqueue_same_bar_close — orders armed after the close call
+        // must survive exactly as they did under the immediate path.
+        execute_market_exit(current_bar_.close);
+    } else {
+        execute_partial_exit_qty(current_bar_.close, target);
+        if (position_side_ == PositionSide::FLAT) {
+            // Retain from_entry brackets whose parent entry is still a
+            // pending order (it fills right after this flush).
+            purge_exit_orders(/*retain_for_pending_entries=*/true);
+        }
+    }
+    for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = comment;
+        trades_[ti].exit_id = "__close__" + id;
+    }
+    if (!sole_call && position_side_ != PositionSide::FLAT) {
+        // Surviving multi-call close: ledger NOT consumed (TV leaves the
+        // id closable again later); the filled amount stays reserved
+        // against the position for other ids' close targets.
+        close_reserved_qty_[id] = target;
+    }
 }
 
 void BacktestEngine::strategy_exit(const std::string& id, const std::string& from_entry,
