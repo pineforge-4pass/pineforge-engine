@@ -1379,7 +1379,7 @@ private:
         PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
-        int exit_closed_from_bar, bool exit_closed_was_long);
+        int exit_closed_from_bar, bool exit_closed_was_long, const Bar& bar);
     struct FillEvaluation {
         enum class Kind { Fill, NoFill, DeferredToOpposingPass };
         Kind kind;
