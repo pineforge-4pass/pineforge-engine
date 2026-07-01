@@ -128,7 +128,26 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     if (process_orders_on_close_ && position_open_bar_ == bar_index_) return;
 
     const double liq = compute_liquidation_price();
-    if (std::isnan(liq)) return;  // flat / denom==0 / invalid size already filtered
+    // A LONG at exactly 100% margin yields denom == (m/100 - dir) == 0, so
+    // compute_liquidation_price() returns na (there is no leverage-derived
+    // liquidation price — a 1x long can only be wiped at price 0). But such a
+    // position CAN still be force-liquidated when its NOTIONAL exceeds equity:
+    // TradingView over-allocates percent_of_equity entries whose fill price
+    // exceeds the sizing price (stop/gap fills, slippage, reversals, or the
+    // entry commission), leaving the fresh position momentarily under-margined
+    // and triggering a same-bar "Margin call" trim on longs. The equity /
+    // required-margin gate below is the only check that can decide this case
+    // (it reduces to notional > equity for a 1x long), so do NOT hard-bail on
+    // na here for that one situation. Every OTHER na cause (flat, qty<=0,
+    // pv<=0, non-finite) is still rejected by the explicit guards that follow,
+    // and shorts never hit denom==0 (denom = m/100 + 1 > 0), so their behavior
+    // is byte-identical. margin_liquidation_price() itself keeps returning na
+    // for a 1x long, matching TradingView's strategy.margin_liquidation_price.
+    const bool long_full_margin =
+        (position_side_ == PositionSide::LONG)
+        && std::isfinite(margin_long_)
+        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+    if (std::isnan(liq) && !long_full_margin) return;  // flat / denom==0 / invalid size already filtered
 
     const double pv = syminfo_.pointvalue;
     const double qty = position_qty_;
