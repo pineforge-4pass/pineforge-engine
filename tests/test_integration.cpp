@@ -2567,12 +2567,92 @@ static void test_position_reversal_state() {
     CHECK(near(strat.pos_avg[3], 110.0));
     CHECK(near(strat.net_pnl[3], 10.0));
 
-    // Bar 4: short closed at 105 (pnl=+5). strategy.close executes immediately
-    // on close, so the flat state and realized +15 are visible this bar.
-    CHECK(near(strat.pos_size[4], 0.0));
-    CHECK(near(strat.net_pnl[4], 15.0));  // 10 + 5
+    // Bar 4: short closed at 105 (pnl=+5). Like the market ENTRY on bar 0
+    // (comment above), a process_orders_on_close strategy.close fills at
+    // THIS bar's close but only AFTER the script's calc — TV's broker
+    // state updates between bars, so the script still sees the live short
+    // during bar 4; the flat state and realized +15 become visible on
+    // bar 5. (Close fills moved to the end-of-bar order-processing point
+    // by the same-bar multi-close single-fill batch — validated against
+    // the 3commas grid-bot TV exports, xau 10.8%->81.2% / xlm
+    // 22.4%->99.0% matched with pol/xrp held at 100%.)
+    CHECK(near(strat.pos_size[4], -1.0));
+    CHECK(near(strat.pos_avg[4], 110.0));
+    CHECK(near(strat.net_pnl[4], 10.0));
+
+    // Bar 5: flat + realized 15 now visible.
+    CHECK(near(strat.pos_size[5], 0.0));
+    CHECK(near(strat.net_pnl[5], 15.0));  // 10 + 5
 
     CHECK(strat.trade_count() == 2);
+}
+
+// ---- 38a2. TV one-close-fill-per-bar: multiple default-FIFO strategy.close
+// calls on the SAME bar (the grid-bot pattern) collapse into a single
+// surviving fill — the LAST nonzero-target call wins, its id-ledger is NOT
+// consumed by the fill (the remainder stays closable by a later close of the
+// same id), and the FIRST replaced call's ledger is consumed silently with
+// no fill. Empirically derived from the 3commas grid-bot TradingView exports
+// (xau/xlm/pol/xrp) — see fix/same-bar-multi-close-single-fill.
+
+class SameBarMultiCloseStrategy : public BacktestEngine {
+public:
+    double final_pos = -1.0;  // signed position size seen on the last bar
+    SameBarMultiCloseStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+    void on_bar(const Bar&) override {
+        double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 2.0);
+        if (bar_index_ == 2) {
+            strategy_close("A", "tpA");   // replaced: ledger consumed, no fill
+            strategy_close("B", "tpB");   // survivor: fills qty 2 (FIFO drain)
+        }
+        if (bar_index_ == 3) strategy_entry("B", true, na, na, 2.0);
+        if (bar_index_ == 4) strategy_close("B", "tpB2");  // old 2 + new 2, pos-clamped
+        if (bar_index_ == 5) final_pos = signed_position_size();
+    }
+};
+
+static void test_same_bar_multi_close_single_fill() {
+    std::printf("test_same_bar_multi_close_single_fill\n");
+    SameBarMultiCloseStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50, 60000},   // bar 0: A qty1 fills @100
+        {100, 101, 99, 100, 50, 120000},  // bar 1: B qty2 fills @100 (pos 3)
+        {100, 106, 99, 105, 50, 180000},  // bar 2: both closes -> ONE fill qty2 @105
+        {105, 106, 99, 100, 50, 240000},  // bar 3: B qty2 refills @100 (pos 3)
+        {100, 111, 99, 110, 50, 300000},  // bar 4: close(B) fills min(ledger 4, pos 3) @110
+        {110, 111, 99, 110, 50, 360000},
+    };
+    strat.run(bars, 6);
+
+    // Bar 2 fills only the surviving close's qty (2): FIFO drains lot A (1)
+    // fully + half of lot B -> two trade rows @105. The old immediate path
+    // filled BOTH closes (qty 3, flat) — the one-fill rule leaves 1 open.
+    // Bar 4's close(B) then targets B's UNCONSUMED ledger (2 stale + 2 new),
+    // clamped to the live position (3): two rows @110, flat afterwards.
+    CHECK(strat.trade_count() == 4);
+    if (strat.trade_count() == 4) {
+        CHECK(near(strat.get_trade(0).qty, 1.0));       // lot A drained @105
+        CHECK(near(strat.get_trade(0).exit_price, 105.0));
+        CHECK(strat.get_trade(0).exit_comment == "tpB");  // survivor's comment
+        CHECK(near(strat.get_trade(1).qty, 1.0));       // half of lot B @105
+        CHECK(near(strat.get_trade(1).exit_price, 105.0));
+        CHECK(near(strat.get_trade(2).qty, 1.0));       // lot B remainder @110
+        CHECK(near(strat.get_trade(2).exit_price, 110.0));
+        CHECK(strat.get_trade(2).exit_comment == "tpB2");
+        CHECK(near(strat.get_trade(3).qty, 2.0));       // bar-3 refill @110
+        CHECK(near(strat.get_trade(3).exit_price, 110.0));
+    }
+    CHECK(near(strat.final_pos, 0.0));
 }
 
 // ---- 38b. process_orders_on_close: an exit gated on position visibility must
@@ -4173,6 +4253,7 @@ int main() {
     test_pyramid_avg_price();
     test_win_loss_tracking();
     test_position_reversal_state();
+    test_same_bar_multi_close_single_fill();
     test_pooc_exit_not_triggered_on_entry_bar();
     test_commission_deducted();
     test_slippage_applied();

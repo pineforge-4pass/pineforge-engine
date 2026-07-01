@@ -290,6 +290,35 @@ protected:
     // under the ANY rule (which closes id-matched physical lots directly).
     std::unordered_map<std::string, double> id_unclosed_qty_;
 
+    // ── Same-bar strategy.close batching (TV one-fill-per-bar rule) ──
+    // TradingView's broker emulator admits at most ONE default-FIFO
+    // ``strategy.close(id)`` market fill per bar under
+    // process_orders_on_close: every later close() call on the same bar
+    // REPLACES the pending close order. Empirically (3commas grid-bot TV
+    // exports, xau/xlm/pol/xrp — see fix/same-bar-multi-close-single-fill):
+    //   - the FIRST replaced call's id-ledger is consumed silently (no
+    //     fill, no trade rows);
+    //   - intermediate replaced calls keep their ledgers intact;
+    //   - the SURVIVING (last nonzero-target) call fills min(ledger,
+    //     avail) at the bar close WITHOUT consuming its id-ledger; the
+    //     unconsumed amount stays reserved against the position
+    //     (close_reserved_qty_) and caps other ids' later close targets
+    //     via avail = position_qty_ - sum(reservations of other ids);
+    //   - a bar with exactly one close call behaves as before: fill =
+    //     min(ledger, avail), ledger consumed, reservation released.
+    // Calls whose target resolves to zero are no-ops (cannot survive).
+    // The batched fill executes at the end-of-bar order-processing point
+    // (dispatch_bar step 4 / magnifier last tick) at the same bar-close
+    // price the immediate path used. Order cancels/purges tied to a
+    // full-position close still run at CALL time (unchanged timing).
+    bool sb_close_active_ = false;
+    int sb_close_bar_ = -1;
+    int sb_close_calls_ = 0;          // nonzero-target close calls this bar
+    std::string sb_close_first_id_;   // consumed when a 2nd call arrives
+    std::string sb_close_id_;         // surviving order's id
+    std::string sb_close_comment_;    // surviving order's comment
+    std::unordered_map<std::string, double> close_reserved_qty_;
+
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
     bool process_orders_on_close_ = false;
@@ -1436,6 +1465,13 @@ private:
                                   double& qty_to_close_out,
                                   bool& all_entries_match_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
+    // Same-bar close batching (TV one-fill-per-bar; see the field-block
+    // comment at close_reserved_qty_). enqueue replaces the pending
+    // same-bar close; flush executes the surviving one at bar close.
+    void enqueue_same_bar_close(const std::string& id, const std::string& comment);
+    void flush_same_bar_close();
+    double close_reserved_other_qty(const std::string& id) const;
+    double pending_same_bar_close_target() const;
     void execute_immediate_close(const std::string& id,
                                  const std::string& comment,
                                  double qty_to_close,
@@ -1456,6 +1492,7 @@ private:
                                    double& preserved_reserved_qty_out);
     bool compute_exit_reserved_qty(const std::string& from_entry,
                                    double preserved_reserved_qty,
+                                   double live_pos_qty,
                                    double& qp_io,
                                    bool& is_partial_io,
                                    double& reserved_qty_out);
