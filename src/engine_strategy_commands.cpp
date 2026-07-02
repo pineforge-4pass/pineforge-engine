@@ -229,6 +229,22 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         return;
     }
 
+    // TradingView one-close-fill-per-bar rule: under process_orders_on_close,
+    // default-FIFO ``strategy.close(id)`` calls (no explicit qty/qty_percent,
+    // FIFO close-entries rule) issued on the SAME bar collapse into a single
+    // surviving market close order that fills at the bar close. Route those
+    // calls through the same-bar batch; the fill executes at the end-of-bar
+    // order-processing point (dispatch_bar step 4 / magnifier last tick) via
+    // flush_same_bar_close(). Everything else (ANY rule, explicit qty,
+    // close_all, immediately=true, non-POC deferred closes) keeps the
+    // existing paths.
+    if (process_orders_on_close_ && !immediately
+        && !close_entries_rule_any_ && !id.empty()
+        && std::isnan(qty) && std::isnan(qty_percent)) {
+        enqueue_same_bar_close(id, comment);
+        return;
+    }
+
     double matching_qty = 0.0;
     double qty_to_close = 0.0;
     bool all_entries_match = false;
@@ -273,6 +289,143 @@ void BacktestEngine::strategy_close_all() {
     strategy_close("");
 }
 
+// Qty the pending same-bar close batch will fill at flush time (0 when no
+// batch is pending). Lets same-bar order sizing (strategy.exit) see the
+// post-close position before the flush actually executes.
+double BacktestEngine::pending_same_bar_close_target() const {
+    if (!sb_close_active_) return 0.0;
+    auto it = id_unclosed_qty_.find(sb_close_id_);
+    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(sb_close_id_));
+    return std::min(unclosed, avail);
+}
+
+// Sum of same-bar-close reservations held by OTHER ids. A surviving
+// multi-close fill leaves its unconsumed ledger amount reserved against
+// the position; other ids' close targets are capped by what remains.
+double BacktestEngine::close_reserved_other_qty(const std::string& id) const {
+    double sum = 0.0;
+    for (const auto& kv : close_reserved_qty_) {
+        if (kv.first != id) sum += kv.second;
+    }
+    return sum;
+}
+
+// Admit a default-FIFO strategy.close(id) call into the same-bar batch
+// (TV one-fill-per-bar rule — see the close_reserved_qty_ field block in
+// engine.hpp). Order cancels tied to a full-position close keep their
+// CALL-time timing (identical to the previous immediate path); only the
+// FILL is deferred to flush_same_bar_close().
+void BacktestEngine::enqueue_same_bar_close(const std::string& id,
+                                            const std::string& comment) {
+    const double eps = kQtyEpsilon;
+    auto it = id_unclosed_qty_.find(id);
+    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+    double target = std::min(unclosed, avail);
+    if (target <= eps) {
+        return;  // zero-target call: no-op, cannot become the survivor
+    }
+
+    // Same-bar source-order carry (see strategy_entry's tv_carry_qty): a
+    // subsequent strategy.entry on this on_bar sees the post-close size.
+    pending_close_qty_in_bar_ += target;
+
+    bool closes_full_position = target >= position_qty_ - eps;
+    if (closes_full_position) {
+        bool closing_long = (position_side_ == PositionSide::LONG);
+        cancel_orders_for_full_close(id, closing_long);
+        purge_exit_orders();
+    }
+
+    if (!sb_close_active_ || sb_close_bar_ != bar_index_) {
+        sb_close_active_ = true;
+        sb_close_bar_ = bar_index_;
+        sb_close_calls_ = 1;
+        sb_close_first_id_ = id;
+        sb_close_id_ = id;
+        sb_close_comment_ = comment;
+        return;
+    }
+    if (id == sb_close_id_) {
+        // Re-issued close for the id already pending: replaces the same
+        // order in place (comment refresh; not a new call).
+        sb_close_comment_ = comment;
+        return;
+    }
+    sb_close_calls_ += 1;
+    if (sb_close_calls_ == 2) {
+        // The FIRST replaced call's ledger is consumed silently: no fill,
+        // no trade rows, reservation released. Intermediate replaced
+        // calls (3rd+) keep their ledgers intact.
+        id_unclosed_qty_.erase(sb_close_first_id_);
+        close_reserved_qty_.erase(sb_close_first_id_);
+    }
+    sb_close_id_ = id;
+    sb_close_comment_ = comment;
+}
+
+// Execute the surviving same-bar close at the bar's close price. Called
+// from the end-of-bar order-processing points (dispatch_bar step 4 and
+// the magnifier's last tick), i.e. the same bar and price the immediate
+// path used, after the strategy's on_bar has fully run.
+void BacktestEngine::flush_same_bar_close() {
+    if (!sb_close_active_) return;
+    const std::string id = sb_close_id_;
+    const std::string comment = sb_close_comment_;
+    const bool sole_call = (sb_close_calls_ == 1);
+    sb_close_active_ = false;
+    sb_close_bar_ = -1;
+    sb_close_calls_ = 0;
+    sb_close_first_id_.clear();
+    sb_close_id_.clear();
+    sb_close_comment_.clear();
+    if (position_side_ == PositionSide::FLAT) return;
+
+    const double eps = kQtyEpsilon;
+    auto it = id_unclosed_qty_.find(id);
+    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+    double target = std::min(unclosed, avail);
+    if (target <= eps) return;
+
+    if (sole_call) {
+        // Single close call this bar: classic semantics — consume the
+        // ledger and release any prior reservation for this id.
+        it->second -= target;
+        if (it->second <= eps) {
+            id_unclosed_qty_.erase(it);
+        }
+        close_reserved_qty_.erase(id);
+    }
+
+    bool closes_full_position = target >= position_qty_ - eps;
+    size_t trades_before = trades_.size();
+    if (closes_full_position) {
+        // Exit-order cancel/purge already ran at CALL time in
+        // enqueue_same_bar_close — orders armed after the close call
+        // must survive exactly as they did under the immediate path.
+        execute_market_exit(current_bar_.close);
+    } else {
+        execute_partial_exit_qty(current_bar_.close, target);
+        if (position_side_ == PositionSide::FLAT) {
+            // Retain from_entry brackets whose parent entry is still a
+            // pending order (it fills right after this flush).
+            purge_exit_orders(/*retain_for_pending_entries=*/true);
+        }
+    }
+    for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = comment;
+        trades_[ti].exit_id = "__close__" + id;
+    }
+    if (!sole_call && position_side_ != PositionSide::FLAT) {
+        // Surviving multi-call close: ledger NOT consumed (TV leaves the
+        // id closable again later); the filled amount stays reserved
+        // against the position for other ids' close targets.
+        close_reserved_qty_[id] = target;
+    }
+}
+
 void BacktestEngine::strategy_exit(const std::string& id, const std::string& from_entry,
                                     double limit_price, double stop_price,
                                     double trail_points, double trail_offset,
@@ -282,20 +435,35 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
+    // A default-FIFO strategy.close batched earlier on this SAME bar has not
+    // filled yet (it fills at the end-of-bar flush) but its qty is already
+    // committed. An exit armed after that close call must size against the
+    // post-close position — exactly what it saw when the immediate path
+    // executed the close mid-bar. Without this, a close + reversal-entry +
+    // exit sequence freezes the OLD side's size into the bracket's reserved
+    // qty (wayward-bison: the Long SL stop filled only the stale short-sized
+    // 3.9629 of an 8.0672 long, fragmenting one TV exit into two rows).
+    double sb_pending_close = (sb_close_active_ && sb_close_bar_ == bar_index_)
+                                  ? pending_same_bar_close_target()
+                                  : 0.0;
+    double live_pos_qty = (position_side_ == PositionSide::FLAT)
+                              ? 0.0
+                              : std::max(0.0, position_qty_ - sb_pending_close);
+    bool effectively_flat = live_pos_qty <= kQtyEpsilon;
     // If an explicit qty is given, derive an effective qp from the current
     // position size so downstream FIFO accounting (compute_exit_reserved_qty,
     // already-reserved tally, etc.) sees a consistent fraction. The order
     // itself stores the absolute qty so the per-fill execution path
     // honours the literal request.
-    if (has_explicit_qty && position_qty_ > kQtyEpsilon) {
-        double clamped_qty = std::min(qty, position_qty_);
-        qp = (clamped_qty / position_qty_) * 100.0;
+    if (has_explicit_qty && live_pos_qty > kQtyEpsilon) {
+        double clamped_qty = std::min(qty, live_pos_qty);
+        qp = (clamped_qty / live_pos_qty) * 100.0;
     }
     bool is_partial = qp < 100.0 - kFullPercentEps;
     bool has_trail_request = !std::isnan(trail_points) || !std::isnan(trail_price);
 
     // Re-issued explicitly partial exits with the same id are one-shot for a live position.
-    if (is_partial && position_side_ != PositionSide::FLAT
+    if (is_partial && !effectively_flat
         && consumed_partial_exit_ids_.find(id) != consumed_partial_exit_ids_.end()) {
         return;
     }
@@ -313,7 +481,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         // strictly smaller than the open position size — required for
         // multi-bracket per-position exits (validation_oca/oca-three-way-
         // probe-02 has two qty=1 brackets attached to a qty=2 entry).
-        if (position_side_ == PositionSide::FLAT) {
+        if (effectively_flat) {
             // Defer placement; FIFO accounting will recompute when a
             // position eventually exists.
             reserved_qty = std::min(qty, std::numeric_limits<double>::infinity());
@@ -326,17 +494,87 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                 } else {
                     double oqp = std::isnan(o.qty_percent) ? 100.0
                         : std::clamp(o.qty_percent, 0.0, 100.0);
-                    already_reserved += position_qty_ * (oqp / 100.0);
+                    already_reserved += live_pos_qty * (oqp / 100.0);
                 }
             }
-            double available = std::max(0.0, position_qty_ - already_reserved);
+            // Reservation capacity: by default the live position net of any
+            // same-bar batched close (legacy behaviour, post-close sizing).
+            // But when a PENDING entry order with
+            // id == from_entry exists, TV binds the bracket to THAT entry's
+            // eventual fills, not to the unrelated live position: a reversal
+            // bar places qty=1 brackets for the about-to-fill opposite qty=2
+            // entry while the old position (1 lot the other way) is still
+            // open. Clamping to the live position dropped every bracket
+            // after the first (thulashimohanr-prev-day-week-levels probe:
+            // RevShortT2's stop order never existed, so the engine sailed
+            // through TV's overnight stop-out and desynced for days).
+            // Capacity then = open fills already tagged from_entry (same-id
+            // pyramiding remainder) + the pending entry's qty (unbounded
+            // when the entry's qty only resolves at fill time).
+            double capacity = live_pos_qty;
+            bool entry_pending = false;
+            double pending_entry_qty = 0.0;
+            for (const auto& o : pending_orders_) {
+                if (o.id != from_entry) continue;
+                if (o.type != OrderType::MARKET && o.type != OrderType::ENTRY
+                    && o.type != OrderType::RAW_ORDER) continue;
+                entry_pending = true;
+                if (std::isnan(o.qty)) {
+                    pending_entry_qty = std::numeric_limits<double>::infinity();
+                } else {
+                    pending_entry_qty += o.qty;
+                }
+            }
+            if (entry_pending) {
+                double open_from_entry = 0.0;
+                for (const auto& pe : pyramid_entries_) {
+                    if (pe.entry_id == from_entry) open_from_entry += pe.qty;
+                }
+                capacity = open_from_entry + pending_entry_qty;
+            }
+            double available = std::max(0.0, capacity - already_reserved);
             reserved_qty = std::min(qty, available);
             if (reserved_qty <= kQtyEpsilon) return;
         }
-        is_partial = reserved_qty < position_qty_ - kFullQtyEps;
+        is_partial = reserved_qty < live_pos_qty - kFullQtyEps;
     } else {
-        if (!compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
-                                       qp, is_partial, reserved_qty)) {
+        // Default-sized (percent) bracket armed while its from_entry ENTRY is
+        // still a PENDING order in the OPPOSITE direction of the live
+        // position (the reversal-bar shape: strategy.entry(X) +
+        // strategy.exit(from_entry=X) issued together while the old opposite
+        // position is still open). TV binds the bracket to X's eventual
+        // fill — the bracket closes 100% of the lot the entry actually
+        // opens. Freezing reserved_qty at the CURRENT position size (the
+        // old, about-to-be-replaced side) under-sizes the bracket whenever
+        // the fresh percent-of-equity lot exceeds the old position, leaving
+        // a dust remainder (q_plain - |old|) open when the bracket fires —
+        // the seed of jevondijefferson's multi-day tiny-qty desync chains
+        // (2025-05-23 12:00, 2025-10-04 15:30, 2026-02-13 15:15,
+        // 2026-02-22 13:45 UTC: e.g. 10-04 bracket froze at 4.3847 against
+        // the new 4.5089 short, stranding 0.1242). Defer the reservation
+        // (qty = NaN): the fill-side path then executes a FULL exit against
+        // the live position, exactly like a bracket placed while flat.
+        // Mirrors the explicit-qty path's pending-entry capacity rule above
+        // (thulashimohanr fix); entries with an explicit qty keep the
+        // legacy reservation math.
+        bool bind_to_pending_reversal_entry = false;
+        if (!from_entry.empty() && !effectively_flat
+            && qp >= 100.0 - kFullPercentEps) {
+            for (const auto& o : pending_orders_) {
+                if (o.id != from_entry) continue;
+                if (o.type != OrderType::MARKET && o.type != OrderType::ENTRY
+                    && o.type != OrderType::RAW_ORDER) continue;
+                PositionSide entry_dir = o.is_long ? PositionSide::LONG
+                                                   : PositionSide::SHORT;
+                if (entry_dir != position_side_ && std::isnan(o.qty)) {
+                    bind_to_pending_reversal_entry = true;
+                }
+                break;  // entry ids are unique in pending_orders_
+            }
+        }
+        if (!bind_to_pending_reversal_entry
+            && !compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
+                                          live_pos_qty, qp, is_partial, reserved_qty)) {
             return;
         }
     }
@@ -366,10 +604,13 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.oca_type = oca_name.empty() ? 0 : 1;  // strategy.exit semantics: cancel
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
-    order.created_position_side = position_side_;
-    order.tv_carry_qty = position_qty_;
+    // Position-derived captures use the post-batched-close view (see
+    // live_pos_qty above) so an exit armed after a same-bar strategy.close
+    // records the same state it did when the close executed mid-bar.
+    order.created_position_side = effectively_flat ? PositionSide::FLAT : position_side_;
+    order.tv_carry_qty = live_pos_qty;
     order.comment = comment;
-    order.created_while_in_position = (position_side_ != PositionSide::FLAT);
+    order.created_while_in_position = !effectively_flat;
 
     pending_orders_.push_back(std::move(order));
 }
@@ -524,57 +765,35 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
 
 // Wipe pending orders that should not survive a full strategy.close:
 //
-//   (1) Pending strategy.exit orders bound to the same entry id are
-//       wiped (community/IES regression: a partial TP1 limit and the
-//       queued market close were both firing on the next bar's open,
-//       producing two trade rows for the same logical close).
+//   Pending strategy.exit orders bound to the same entry id are wiped
+//   (community/IES regression: a partial TP1 limit and the queued
+//   market close were both firing on the next bar's open, producing
+//   two trade rows for the same logical close).
 //
-//   (2) Pending strategy.entry / market orders that were ADDED TO
-//       THE NOW-CLOSING POSITION are wiped (probe in
-//       tests/test_integration.cpp: a stale long-add stop placed
-//       while already long must not re-open the position after the
-//       long is closed).
-//
-// Crucially, pending entries placed FOR THE OPPOSITE DIRECTION
-// (flip preparation — e.g., a short-stop entry placed while still
-// long, intended to fire after the long closes) must NOT be
-// cancelled here. The previous predicate `o.is_long == closing_long`
-// wiped same-direction entries regardless of the position they were
-// placed in, which broke validation/93-flip-stop-pyramiding-2: the
-// 0:45 short-stop placed while in the morning long was cancelled
-// by 12:15 close_all on the still-pending leg even though the
-// engine had since flipped to a short position via the OTHER stop,
-// dropping a short the strategy intended to keep alive overnight.
-void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool closing_long) {
+// Pending strategy.entry / market orders are LEFT ALONE. Per
+// TradingView's documented broker semantics, only cancel()/cancel_all()
+// cancel pending orders; close()/close_all() only closes the open
+// position — a pending same-direction entry (e.g. a stale add-on stop
+// placed while the position was open) survives and can still fire on a
+// later bar, "ghost-refilling" into a new position. This mirrors DCA/
+// grid-bot bots (3commas-style: N independent price-level orders,
+// closing one level must not silently cancel another level's still-
+// pending order) — verified against 3commas-3commas-pullback-sniper-
+// strategy, where the previous same-direction wipe was itself the bug
+// (closed-form count-delta 2.88% -> <0.5%).
+void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*closing_long*/) {
     pending_orders_.erase(
         std::remove_if(
             pending_orders_.begin(),
             pending_orders_.end(),
             [&](const PendingOrder& o) {
-                if (o.type == OrderType::EXIT) {
-                    if (id.empty()) {
-                        return o.from_entry.empty();
-                    }
-                    return o.from_entry == id;
-                }
-                if (o.type != OrderType::ENTRY && o.type != OrderType::MARKET) {
+                if (o.type != OrderType::EXIT) {
                     return false;
                 }
-                if (o.created_bar >= bar_index_) {
-                    // Same-on_bar reversal entry: keep it (handles
-                    // strategy.close + strategy.entry(opposite) in the
-                    // same Pine block).
-                    return false;
+                if (id.empty()) {
+                    return o.from_entry.empty();
                 }
-                // Only wipe entries that were a same-direction ADD to
-                // the position being closed.
-                bool added_to_long = closing_long
-                    && o.created_position_side == PositionSide::LONG
-                    && o.is_long;
-                bool added_to_short = !closing_long
-                    && o.created_position_side == PositionSide::SHORT
-                    && !o.is_long;
-                return added_to_long || added_to_short;
+                return o.from_entry == id;
             }),
         pending_orders_.end());
 }
@@ -699,11 +918,16 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
 // full exit is queued.
 bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
                                                double preserved_reserved_qty,
+                                               double live_pos_qty,
                                                double& qp_io,
                                                bool& is_partial_io,
                                                double& reserved_qty_out) {
+    // live_pos_qty: the position size this exit may size against — the raw
+    // position_qty_ minus any same-bar batched strategy.close target that is
+    // committed but not yet flushed (see strategy_exit). <= eps behaves like
+    // FLAT: defer, recompute when a position exists.
     reserved_qty_out = std::numeric_limits<double>::quiet_NaN();
-    if (position_side_ == PositionSide::FLAT) {
+    if (position_side_ == PositionSide::FLAT || live_pos_qty <= kQtyEpsilon) {
         return true;
     }
 
@@ -714,11 +938,11 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
             already_reserved += o.qty;
         } else {
             double oqp = std::isnan(o.qty_percent) ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
-            already_reserved += position_qty_ * (oqp / 100.0);
+            already_reserved += live_pos_qty * (oqp / 100.0);
         }
     }
 
-    double available_qty = std::max(0.0, position_qty_ - already_reserved);
+    double available_qty = std::max(0.0, live_pos_qty - already_reserved);
     // Only carry the preserved (frozen) reserved qty for genuine PARTIAL
     // re-issues (qp < 100%). A full-position exit (qp == 100%) re-issued
     // every bar while the position keeps GROWING via pyramiding/DCA must
@@ -729,16 +953,28 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
     // fragmenting across two bars). For partial re-issues the carry is kept
     // to avoid double-reserving against the same from_entry.
     if (!std::isnan(preserved_reserved_qty) && qp_io < 100.0 - kFullPercentEps) {
-        reserved_qty_out = std::min(preserved_reserved_qty, position_qty_);
+        reserved_qty_out = std::min(preserved_reserved_qty, live_pos_qty);
     } else {
-        double requested_qty = position_qty_ * (qp_io / 100.0);
+        double requested_qty = live_pos_qty * (qp_io / 100.0);
+        // TV floors each percent-derived PARTIAL exit lot to the
+        // instrument lot step at placement (apply_exit_qty_step doc has
+        // the row-level evidence); the sub-step remainder stays open as
+        // a dust position instead of being closed by the final bracket
+        // leg. A dust-sized request that floors to zero is simply not
+        // placed (the kQtyEpsilon check below aborts), which is also
+        // TV's behaviour: dust positions carry no TP bracket and only
+        // ever close via reversal/close_all/margin call. Full-position
+        // exits (qp == 100%) are left exact so they always flatten.
+        if (qp_io < 100.0 - kFullPercentEps) {
+            requested_qty = apply_exit_qty_step(requested_qty);
+        }
         reserved_qty_out = std::min(requested_qty, available_qty);
     }
     if (reserved_qty_out <= kQtyEpsilon) {
         return false;
     }
-    qp_io = (position_qty_ > kQtyEpsilon) ? (reserved_qty_out / position_qty_) * 100.0 : qp_io;
-    is_partial_io = reserved_qty_out < position_qty_ - kFullQtyEps;
+    qp_io = (live_pos_qty > kQtyEpsilon) ? (reserved_qty_out / live_pos_qty) * 100.0 : qp_io;
+    is_partial_io = reserved_qty_out < live_pos_qty - kFullQtyEps;
 
     // If there is already a full exit pending for this from_entry, ignore
     // additional partial exits until that full exit is consumed/cancelled.

@@ -252,6 +252,43 @@ static void test_long_100pct_margin_no_call() {
     CHECK(std::isnan(eng.liq_price()));
 }
 
+// ---- B': OVER-ALLOCATED long at 100% margin IS force-liquidated -------------
+
+class LongOverAllocProbe : public MCEngine {
+public:
+    LongOverAllocProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 10.0;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;             // 1x -> denominator (1 - 1) = 0 -> na
+        process_orders_on_close_ = false;  // market entry fills at NEXT bar open
+    }
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, 10.0);
+    }
+};
+
+static void test_long_100pct_margin_overalloc_call() {
+    std::printf("test_long_100pct_margin_overalloc_call\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: signal @ close 100
+        mk_bar(2000, 110.0, 112.0, 108.0, 109.0, 1.0),  // 1: fills @ open 110
+        mk_bar(3000, 109.0, 111.0, 107.0, 110.0, 1.0),  // 2: filler
+    };
+    LongOverAllocProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+    // Signal-time affordability admits the fixed qty=10 against bar0's close
+    // (10*100 == equity 1000), but the non-POOC market entry actually fills
+    // at bar1's OPEN (110) -- notional 1100 > equity 1000, an over-allocated
+    // 1x long. TradingView force-liquidates this on the SAME bar it fired.
+    CHECK(eng.trade_count() >= 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 110.0));       // notional 1100 > equity 1000
+    CHECK(near(eng.exit_price(0), 108.0));        // long adverse extreme = bar low
+    CHECK(std::isnan(eng.liq_price()));           // still na for 1x long (matches TV)
+}
+
 // ---- C: leveraged long (5x) is liquidated by a falling market --------------
 
 class LongLevLiqProbe : public MCEngine {
@@ -296,6 +333,7 @@ int main() {
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();
     test_long_100pct_margin_no_call();
+    test_long_100pct_margin_overalloc_call();
     test_long_leveraged_margin_call();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

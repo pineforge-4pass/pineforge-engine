@@ -64,6 +64,7 @@ set(TEST_SOURCES
     test_limit_fill_slippage
     test_strategy_commands_extra
     test_multi_tier_exit_precedence
+    test_same_tick_multi_entry_race
     test_full_close_while_pyramiding
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra

@@ -290,6 +290,35 @@ protected:
     // under the ANY rule (which closes id-matched physical lots directly).
     std::unordered_map<std::string, double> id_unclosed_qty_;
 
+    // ── Same-bar strategy.close batching (TV one-fill-per-bar rule) ──
+    // TradingView's broker emulator admits at most ONE default-FIFO
+    // ``strategy.close(id)`` market fill per bar under
+    // process_orders_on_close: every later close() call on the same bar
+    // REPLACES the pending close order. Empirically (3commas grid-bot TV
+    // exports, xau/xlm/pol/xrp — see fix/same-bar-multi-close-single-fill):
+    //   - the FIRST replaced call's id-ledger is consumed silently (no
+    //     fill, no trade rows);
+    //   - intermediate replaced calls keep their ledgers intact;
+    //   - the SURVIVING (last nonzero-target) call fills min(ledger,
+    //     avail) at the bar close WITHOUT consuming its id-ledger; the
+    //     unconsumed amount stays reserved against the position
+    //     (close_reserved_qty_) and caps other ids' later close targets
+    //     via avail = position_qty_ - sum(reservations of other ids);
+    //   - a bar with exactly one close call behaves as before: fill =
+    //     min(ledger, avail), ledger consumed, reservation released.
+    // Calls whose target resolves to zero are no-ops (cannot survive).
+    // The batched fill executes at the end-of-bar order-processing point
+    // (dispatch_bar step 4 / magnifier last tick) at the same bar-close
+    // price the immediate path used. Order cancels/purges tied to a
+    // full-position close still run at CALL time (unchanged timing).
+    bool sb_close_active_ = false;
+    int sb_close_bar_ = -1;
+    int sb_close_calls_ = 0;          // nonzero-target close calls this bar
+    std::string sb_close_first_id_;   // consumed when a 2nd call arrives
+    std::string sb_close_id_;         // surviving order's id
+    std::string sb_close_comment_;    // surviving order's comment
+    std::unordered_map<std::string, double> close_reserved_qty_;
+
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
     bool process_orders_on_close_ = false;
@@ -733,15 +762,19 @@ protected:
     }
 
     // --- Commission helper ---
-    // PERCENT commission is a % of the order's notional value in account
-    // currency, which for futures includes the instrument point value
-    // (price points × $/point × contracts). pointvalue=1 (crypto/equity
-    // default) leaves the legacy formula bit-identical. Cash-per-order /
-    // cash-per-contract are already absolute currency amounts.
+    // PERCENT commission is a % of the order's notional value. The notional
+    // (fill_price × qty × pointvalue) is in the symbol's QUOTE currency; the
+    // commission a strategy() reports is in ACCOUNT currency, so it needs the
+    // same instrument->account conversion as the margin gate below
+    // (account_currency_fx_, default 1.0 — no-op for the corpus). Cash-per-
+    // order / cash-per-contract are already account-currency-native (a
+    // trader configures "$20 per contract" in their own currency), so they
+    // are untouched.
     double calc_commission(double fill_price, double qty) const {
         switch (commission_type_) {
             case CommissionType::PERCENT:
-                return fill_price * qty * syminfo_.pointvalue * (commission_value_ / 100.0);
+                return fill_price * qty * syminfo_.pointvalue * account_currency_fx_
+                       * (commission_value_ / 100.0);
             case CommissionType::CASH_PER_ORDER:
                 return commission_value_;
             case CommissionType::CASH_PER_CONTRACT:
@@ -751,27 +784,71 @@ protected:
     }
 
     // --- Position sizing helper ---
-    // PERCENT_OF_EQUITY / CASH convert a currency budget into contracts, so
-    // one contract's currency exposure is fill_price × pointvalue (futures
-    // $-per-point multiplier; 1.0 for crypto/equity keeps the legacy math
-    // bit-identical).
+    // PERCENT_OF_EQUITY / CASH size a budget that is denominated in ACCOUNT
+    // currency (equity, and a strategy.cash default_qty_value are both
+    // account-currency-native — see emit_close_trade / current_equity()),
+    // then convert it into a quantity of the instrument, whose price is in
+    // QUOTE currency. Divide the account-currency cash by account_currency_fx_
+    // first (the inverse of the instrument->account multiply used for
+    // commission/PnL/margin) so the division by fill_price stays dimensionally
+    // consistent; default 1.0 leaves the corpus untouched.
+    // Floor an order quantity to the instrument's tradable lot increment
+    // (qty_step_). TradingView applies this to EVERY order it sends to the
+    // exchange, not just forced liquidations — verified row-for-row: a
+    // computed DCA/safety-order quantity (e.g. baseOrderSize/close) is
+    // floored, not rounded, before it ever contributes to cost basis or a
+    // fill (see src/engine_fills.cpp's margin-call path, which already does
+    // this for liquidation lots). qty_step_ == 0 (corpus default) leaves qty
+    // untouched. Unlike the liquidation path, a regular entry legitimately
+    // CAN floor to zero (an under-funded order is simply not placed), so
+    // there is no "never stall" floor-to-one-step fallback here.
+    double apply_qty_step(double qty) const {
+        if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
+        return std::floor(qty / qty_step_) * qty_step_;
+    }
+
+    // Percent-derived strategy.exit lots are floored to the same lot
+    // increment (TV evidence, BINANCE:ETHUSDT.P qty_step 0.0001: a
+    // qty_percent=50/50 short bracket over a 5.4103 position fills
+    // 2.7051 + 2.7051, leaving a 0.0001 dust short OPEN until the next
+    // reversal/close/margin-call — 39 of stockhunter2025-btcusd-4h-ema-
+    // swing-strategy's 56 unmatched TV trades were exactly such dust
+    // rows). Unlike apply_qty_step this floor is epsilon-tolerant: 50%
+    // of an on-grid position is often exactly on-grid in real numbers
+    // but lands one ulp below the grid ratio in doubles (2.7051/0.0001
+    // = 27050.999999…), and a plain floor would knock such a leg a FULL
+    // step down, inventing dust TV does not have. The tolerance (1e-6 of
+    // a step) sits far above double representation error at realistic
+    // qty/step magnitudes yet far below any genuine sub-step remainder.
+    // When the floor is a no-op (qty already on-grid) the ORIGINAL double
+    // is returned unchanged: reconstructing it as floor(...)*step lands
+    // one ulp away (0.3 -> 0.30000000000000004) and that representation
+    // jitter leaks into printed PnL at the 1e-6 digit for strategies whose
+    // percent legs were already exact (officialjackofalltrades' 30%-of-1
+    // legs) — a pure artifact this fix must not introduce.
+    double apply_exit_qty_step(double qty) const {
+        if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
+        double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
+        return floored < qty ? floored : qty;
+    }
+
     double calc_qty(double fill_price) const {
         switch (default_qty_type_) {
             case QtyType::FIXED:
-                return default_qty_value_;
+                return apply_qty_step(default_qty_value_);
             case QtyType::PERCENT_OF_EQUITY: {
                 double equity = current_equity();
-                double cash = equity * (default_qty_value_ / 100.0);
+                double cash = equity * (default_qty_value_ / 100.0) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
                 return (std::isfinite(fill_price) && fill_price > 0)
-                    ? (cash / (fill_price * syminfo_.pointvalue)) : 0.0;
+                    ? apply_qty_step(cash / (fill_price * syminfo_.pointvalue)) : 0.0;
             }
             case QtyType::CASH:
                 return (std::isfinite(fill_price) && fill_price > 0)
-                    ? (default_qty_value_ / (fill_price * syminfo_.pointvalue)) : 0.0;
+                    ? apply_qty_step((default_qty_value_ / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
         }
-        return default_qty_value_;
+        return apply_qty_step(default_qty_value_);
     }
 
     // --- Strategy variable accessors ---
@@ -858,7 +935,13 @@ protected:
         const double denom = (margin_pct / 100.0) - direction;
         // A long at 100% margin (denom == 0) cannot be liquidated.
         if (std::abs(denom) < 1e-12) return na<double>();
-        const double equity_basis = initial_capital_ + net_profit_sum_;
+        // equity_basis is account-currency (initial_capital_ is account-
+        // currency-native; net_profit_sum_ is account-currency post-FX —
+        // see emit_close_trade). liq must come out in QUOTE currency (it's
+        // compared against bar.high/low), so convert back via the same
+        // account_currency_fx_ inverse used in calc_qty; default 1.0 is a
+        // no-op for the corpus.
+        const double equity_basis = (initial_capital_ + net_profit_sum_) / account_currency_fx_;
         double liq = (equity_basis / (qty * pv) - direction * position_entry_price_)
                      / denom;
         if (syminfo_mintick_ > 0.0) {
@@ -881,7 +964,10 @@ protected:
         double diff = (position_side_ == PositionSide::LONG)
             ? (current_price - position_entry_price_)
             : (position_entry_price_ - current_price);
-        return diff * position_qty_ * syminfo_.pointvalue;
+        // Account-currency, matching emit_close_trade / open_trade_profit —
+        // callers combine this with initial_capital_ + net_profit_sum_ (both
+        // account-currency) to get total equity. fx=1.0 is a no-op.
+        return diff * position_qty_ * syminfo_.pointvalue * account_currency_fx_;
     }
 
     int count_wintrades() const { return win_trades_count_; }
@@ -997,6 +1083,16 @@ protected:
         Bar current_bar{};
         bool gaps_on = false;
         bool lookahead_on = false;
+        // Heikin-Ashi same-symbol read: request.security(ticker.heikinashi(
+        // syminfo.tickerid), ...). When set, the completed (aggregated) bar's
+        // OHLC is replaced by its Heikin-Ashi candle before the security
+        // expression is evaluated, so close/open/high/low inside the call see
+        // HA values. HA is stateful (ha_open depends on the prior HA bar), so
+        // the running state lives here per sec_id.
+        bool heikinashi = false;
+        double ha_prev_open = 0.0;
+        double ha_prev_close = 0.0;
+        bool ha_seeded = false;
         bool lower_tf_requested = false;
         bool lower_tf_emulation = false;
         int lower_tf_ratio = 0;
@@ -1034,6 +1130,53 @@ protected:
         bool lower_tf_use_input = false;
         int lower_tf_input_aggregation_ratio = 1;
         std::vector<Bar> lower_tf_input_buffer;
+        // Plain ``request.security`` (not ``_lower_tf``) with a requested TF
+        // STRICTLY FINER than script_tf (e.g. so2TF="5" read from a 15m
+        // chart) under ``lookahead=barmerge.lookahead_ON``: the security's
+        // own aggregator completes multiple times
+        // (script_seconds / requested_seconds) per calling/script bar. A
+        // history-offset read (``expr[1]`` inside the security call, see
+        // the ``*_hist`` push/read machinery in codegen) is meant to expose
+        // "the value already confirmed as of the close of the PREVIOUS
+        // calling bar" — TV's lookahead_on merge takes the FIRST intrabar
+        // of each calling bar, so the publish granularity is the CALLING
+        // bar, not the security's own (finer) period. Without this, the
+        // read-before-push ``hist[0]`` gets refreshed on every one of the
+        // R completions inside the current calling bar, so by the time
+        // on_bar() reads it the value has silently drifted to "one
+        // security-period behind the LAST completion of THIS SAME calling
+        // bar" (e.g. the middle of 3 sub-periods) instead of "the last
+        // completion of the PREVIOUS calling bar" — an aliasing bug
+        // confirmed against TradingView-exported trades on a triple-RSI
+        // DCA strategy using so2Rsi = request.security(sym, "5",
+        // ta.rsi(close,7)[1], lookahead=barmerge.lookahead_on) on a 15m
+        // chart (finer target under lookahead + offset).
+        //
+        // ``lookahead_OFF`` is deliberately NOT gated (field stays 0): TV's
+        // lookahead_off merge takes the LAST intrabar of the calling bar,
+        // so the exposed value — and any ``[k]`` history offset off it —
+        // advances at the security's own finer cadence (one hist.push per
+        // completed security period), which is exactly the ungated
+        // behavior. Gating lookahead_off regressed
+        // masayanfx-multi-time-score-strategy
+        // (request.security(sym, "5", ta.highest(high, 20)[1],
+        // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart) from
+        // 100.0% to 93.7% trade parity vs TradingView.
+        //
+        // When nonzero, this holds the requested TF's duration in seconds
+        // (script_seconds % this == 0 verified at validate time) and gates
+        // ``feed_security_eval_state``'s aggregator branch: only the
+        // completion whose bucket END aligns to a script_tf boundary is
+        // passed through to ``evaluate_security`` as ``is_complete = true``
+        // (letting codegen's ``hist.push()`` fire); all other completions
+        // within the same calling bar are still evaluated (so the
+        // underlying TA state keeps advancing at native/security
+        // resolution) but are passed ``is_complete = false`` so they do not
+        // advance the exposed history buffer. Zero (the default) means "not
+        // applicable" (target TF coarser than or equal to script_tf, or
+        // lookahead_off — the already-correct cases) and leaves behavior
+        // unchanged.
+        int publish_gate_tf_seconds = 0;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
@@ -1071,7 +1214,7 @@ protected:
 
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
-                                bool gaps_on = false);
+                                bool gaps_on = false, bool heikinashi = false);
     // ``request.security_lower_tf`` registers the same per-sec_id eval
     // state but with the additional contract that the requested TF must
     // resolve to a finer-than-input TF emulation. This wrapper sets the
@@ -1274,7 +1417,8 @@ private:
                               bool close_only_opposite = false,
                               bool is_priced_entry = false,
                               double tv_carry_qty = 0.0,
-                              int created_bar = -1);
+                              int created_bar = -1,
+                              bool later_same_tick_entry = false);
     void execute_market_exit(double fill_price);
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
@@ -1314,7 +1458,8 @@ private:
     // any per-type out-parameters the post-fill bookkeeping needs.
     void apply_market_order_fill(PendingOrder& order, double fill_price,
                                  const Bar& bar,
-                                 double& trail_best_path_state);
+                                 double& trail_best_path_state,
+                                 bool later_same_tick_entry);
     void apply_entry_order_fill(PendingOrder& order, double fill_price,
                                 const Bar& bar,
                                 double& trail_best_path_state);
@@ -1337,7 +1482,7 @@ private:
         PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
-        int exit_closed_from_bar, bool exit_closed_was_long);
+        int exit_closed_from_bar, bool exit_closed_was_long, const Bar& bar);
     struct FillEvaluation {
         enum class Kind { Fill, NoFill, DeferredToOpposingPass };
         Kind kind;
@@ -1361,6 +1506,13 @@ private:
                                   double& qty_to_close_out,
                                   bool& all_entries_match_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
+    // Same-bar close batching (TV one-fill-per-bar; see the field-block
+    // comment at close_reserved_qty_). enqueue replaces the pending
+    // same-bar close; flush executes the surviving one at bar close.
+    void enqueue_same_bar_close(const std::string& id, const std::string& comment);
+    void flush_same_bar_close();
+    double close_reserved_other_qty(const std::string& id) const;
+    double pending_same_bar_close_target() const;
     void execute_immediate_close(const std::string& id,
                                  const std::string& comment,
                                  double qty_to_close,
@@ -1381,6 +1533,7 @@ private:
                                    double& preserved_reserved_qty_out);
     bool compute_exit_reserved_qty(const std::string& from_entry,
                                    double preserved_reserved_qty,
+                                   double live_pos_qty,
                                    double& qp_io,
                                    bool& is_partial_io,
                                    double& reserved_qty_out);
@@ -1426,6 +1579,9 @@ private:
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
                                  int explicit_qty_type);
+    void sequential_same_tick_reversal_fill(const std::string& id, bool is_long,
+                                            double fill_price, double explicit_qty,
+                                            int explicit_qty_type);
     void open_fresh_position(PositionSide requested, double fill_price,
                              double qty, const std::string& id);
     void consume_tv_carry_from_siblings(const std::string& id,
@@ -1588,6 +1744,32 @@ public:
         if (key == "account_currency_fx") {
             account_currency_fx_ =
                 (std::isfinite(value) && value > 0.0) ? value : 1.0;
+        }
+        // Per-instrument margin/leverage DEFAULT (percent of position value
+        // required as collateral; 100 = fully collateralized / no leverage,
+        // matching Pine's own margin_long/margin_short default). This is a
+        // data-feed-level fallback for a script whose header OMITS
+        // margin_long/margin_short — without it, a leveraged futures/
+        // perpetual instrument has no way to reflect its real (non-100%)
+        // exchange margin requirement (see the tv-margin-call-gap project
+        // history). It must NOT override an EXPLICIT strategy(...,
+        // margin_long=X) header arg. Unlike qty_step/account_currency_fx,
+        // this can't rely on "whichever assignment runs last wins": the
+        // codegen-generated constructor assigns margin_long_/margin_short_
+        // from an explicit header arg in strategy_create(), which the C ABI
+        // / run_strategy.py call BEFORE strategy_set_syminfo_metadata — so a
+        // later injected default would silently clobber an explicit script
+        // value. Guard on "still at the class's own 100.0 default", i.e.
+        // apply only when the header did NOT already set it (the one
+        // imprecise edge case — a header that explicitly writes
+        // margin_long=100, matching the default value — is indistinguishable
+        // from "unset" here, but 100 is also the semantic no-override value,
+        // so this is a no-op in that case either way).
+        if (key == "margin_long" && margin_long_ == 100.0) {
+            margin_long_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
+        }
+        if (key == "margin_short" && margin_short_ == 100.0) {
+            margin_short_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
         }
     }
 

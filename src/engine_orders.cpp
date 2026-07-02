@@ -21,8 +21,13 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
     if (std::isnan(qty_value)) {
         return calc_qty(fill_price);
     }
+    // qty_step_ lot-size flooring applies uniformly regardless of how the
+    // caller's qty was derived — including this FIXED branch, which is the
+    // common ``strategy.entry(qty=someComputedExpr)`` shape (e.g. a DCA base/
+    // safety-order qty = orderSizeUsd/close). See apply_qty_step's doc
+    // comment (engine.hpp) for the verified TV behavior this mirrors.
     if (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED)) {
-        return qty_value;
+        return apply_qty_step(qty_value);
     }
     if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
         double equity = current_equity() + open_profit(current_bar_.close);
@@ -31,33 +36,39 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
         // $0/NaN print must NOT size as the raw % number (silent wrong-qty bug).
         // One contract's currency exposure is fill_price × pointvalue (1.0 for
         // crypto/equity — legacy math unchanged; futures divide the budget by
-        // the full per-contract notional).
+        // the full per-contract notional). cash is account-currency (equity is);
+        // convert to quote currency via account_currency_fx_ before dividing by
+        // the quote-currency fill_price — same convention as calc_qty() in
+        // engine.hpp. fx=1.0 is a no-op.
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? (cash / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? apply_qty_step((cash / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     if (qty_type == static_cast<int>(QtyType::CASH)) {
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? (qty_value / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? apply_qty_step((qty_value / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
-    return qty_value;
+    return apply_qty_step(qty_value);
 }
 
 
 // Internal helper: execute a market entry (handles reverse-and-open).
 //
-// Dispatches to one of four case-helpers based on the current position
-// state and the entry's close_only_opposite flag:
+// Dispatches to one of five case-helpers based on the current position
+// state and the entry's close_only_opposite / later_same_tick_entry flags:
 //   1. enter_market_from_flat       — position FLAT
 //   2. add_to_pyramid_market        — position is same direction as requested
 //   3. close_opposite_then_enter    — close-only-opposite branch
-//   4. flip_market_position_to      — opposite direction (close-and-flip)
+//   4. sequential_same_tick_reversal_fill — opposite direction, another
+//      same-direction market entry fills later this same tick (TV rule R*)
+//   5. flip_market_position_to      — opposite direction (close-and-flip)
 void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, double fill_price,
                                           double explicit_qty, int explicit_qty_type,
                                           PositionSide created_position_side,
                                           bool close_only_opposite,
                                           bool is_priced_entry,
                                           double tv_carry_qty,
-                                          int created_bar) {
+                                          int created_bar,
+                                          bool later_same_tick_entry) {
     // Degenerate-bar guard: never open a position at a non-finite fill price
     // (e.g. a NaN/Inf print). Dropping the fill keeps trade output finite and
     // a single bad tick from poisoning the backtest. Clean feeds never hit this.
@@ -98,6 +109,12 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
 
     if (created_position_side == PositionSide::FLAT && close_only_opposite) {
         close_opposite_then_enter(id, is_long, fill_price, explicit_qty, explicit_qty_type);
+        return;
+    }
+
+    if (later_same_tick_entry) {
+        sequential_same_tick_reversal_fill(id, is_long, fill_price, explicit_qty,
+                                           explicit_qty_type);
         return;
     }
 
@@ -188,7 +205,16 @@ void BacktestEngine::execute_partial_exit(double fill_price, double qty_percent)
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     double pct = std::clamp(qty_percent, 0.0, 100.0);
-    execute_partial_exit_qty(fill_price, position_qty_ * (pct / 100.0));
+    double qty_to_close = position_qty_ * (pct / 100.0);
+    // Percent-derived partial exit resolved at FILL time (an exit placed
+    // while still FLAT carries no reserved qty): floor the lot to the
+    // instrument qty step exactly like the placement-time path in
+    // compute_exit_reserved_qty — see apply_exit_qty_step for the TV
+    // dust-remainder evidence. Full exits (pct == 100%) stay exact.
+    if (pct < 100.0 - kFullPercentEps) {
+        qty_to_close = apply_exit_qty_step(qty_to_close);
+    }
+    execute_partial_exit_qty(fill_price, qty_to_close);
 }
 
 
@@ -321,22 +347,28 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
                                       double fill_price, bool was_long) {
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
-    // multiply the price-difference PnL. Commission is in account currency:
-    // cash-per-* is already absolute, and percent commission scales the
-    // notional by pointvalue inside calc_commission.
+    // multiply the price-difference PnL. The price-difference component is in
+    // the symbol's QUOTE currency; multiply by account_currency_fx_ (default
+    // 1.0, no-op for the corpus) to report in the strategy's ACCOUNT currency
+    // — same conversion the margin gate (engine_strategy_commands.cpp) already
+    // applies. Commission is already account-currency-native (calc_commission
+    // applies the same fx factor internally for its PERCENT case; cash-per-*
+    // is account-currency by construction), so it is NOT scaled again here.
     const double pv = syminfo_.pointvalue;
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
-                 * close_qty * pv;
+                 * close_qty * pv * account_currency_fx_;
     const double entry_commission = calc_commission(pe.price, close_qty);
     const double exit_commission  = calc_commission(fill_price, close_qty);
     pnl -= entry_commission + exit_commission;
     // TV "Net P&L %" convention (arbitrated 2026-06-12 vs TV export,
     // trade #258 short: 102.44 USD on 2276.66 entry => 4.50%): NET pnl
-    // as a percent of entry cost (entry_price * qty * pointvalue).
-    // Long/no-commission degenerates to the old (exit/entry-1) form;
-    // shorts diverge on large moves ((entry/exit-1) was wrong). Computed
-    // AFTER the commission subtraction above — order matters.
-    const double entry_cost = pe.price * close_qty * pv;
+    // as a percent of entry cost (entry_price * qty * pointvalue, same
+    // account_currency_fx_ conversion as pnl above so the ratio is
+    // currency-invariant). Long/no-commission degenerates to the old
+    // (exit/entry-1) form; shorts diverge on large moves ((entry/exit-1)
+    // was wrong). Computed AFTER the commission subtraction above — order
+    // matters.
+    const double entry_cost = pe.price * close_qty * pv * account_currency_fx_;
     double pnl_pct = (entry_cost > 0.0) ? (pnl / entry_cost) * 100.0 : 0.0;
 
     Trade trade;
@@ -414,8 +446,12 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // confirmed across all 757k corpus rows); adverse grows by the entry
     // commission (open profit at the entry tick is already -commission).
     // Both fields remain >= 0 here (Pine positive-drawdown convention).
-    trade.max_runup = std::max(0.0, runup * pv - entry_commission);
-    trade.max_drawdown = drawdown * pv + entry_commission;
+    // runup/drawdown are quote-currency (price-diff × qty); convert to
+    // account currency via account_currency_fx_ (default 1.0, no-op) before
+    // combining with entry_commission, which is already account-currency
+    // (see calc_commission) — same convention as pnl above.
+    trade.max_runup = std::max(0.0, runup * pv * account_currency_fx_ - entry_commission);
+    trade.max_drawdown = drawdown * pv * account_currency_fx_ + entry_commission;
     const double trade_pnl = trade.pnl;
     trades_.push_back(std::move(trade));
     net_profit_sum_ += trade_pnl;
@@ -451,6 +487,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
+    close_reserved_qty_.clear();
     consumed_partial_exit_ids_.clear();
 }
 
@@ -490,6 +527,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     trail_best_price_ = fill_price;
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
+    close_reserved_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
     id_unclosed_qty_[id] += qty;
@@ -726,6 +764,88 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
     double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     open_fresh_position(requested, fill_price, new_qty, id);
+}
+
+
+// TradingView same-tick multi-entry sequential-fill semantics (audit rule
+// R*, jevondijefferson-big-breakout-strategy, 2026-07-02 tv-ceiling audit —
+// validated 26/26 against every in-window race in the TV export):
+//
+//   Same-tick entries fill SEQUENTIALLY in script-call order, each at
+//   plain (non-augmented) qty; the reversal augmentation — close the
+//   opposite position, then enter — attaches ONLY to the LAST
+//   same-direction entry of the tick; the fill that crosses zero / opens
+//   from flat owns the entry ID.
+//
+// This helper handles a market entry filling against an OPPOSITE position
+// when ANOTHER same-direction market entry (distinct id, placed on the
+// same on_bar) fills later at this same processing point:
+//
+//   - tx_qty > |pos|  ("class C"): the plain fill itself crosses zero —
+//     the whole opposite position closes (exit rows tagged with THIS
+//     order's id by the caller) and the REMAINDER (tx_qty - |pos|) opens
+//     under THIS id. The later sibling then executes against the
+//     sequentially-updated same-direction position and is rejected by
+//     the pyramiding gate. TV example (2025-06-17 15:15 UTC race): old
+//     long 7.6834 closes with exit signal "Short", the new short is the
+//     0.2262 remainder — NOT a full q_plain lot.
+//
+//   - tx_qty <= |pos| ("class B"): the plain fill only reduces the
+//     opposite position, so the position is still opposite when the LAST
+//     entry executes — the augmentation attaches there: the remaining
+//     position closes and a full plain lot opens under the LAST id.
+//     TV's trade list reports the old lot's close as ONE row at the
+//     shared fill price attributed to THIS (first) order's signal
+//     (TV#29: short 7.8542 exits with signal "Long"; TV#30: the new long
+//     7.6441 enters as "Wyckoff Swing Long"). To reproduce those rows —
+//     both fills land at the same price, so the PnL split is invisible —
+//     the whole position closes HERE tagged with this order's id, and
+//     the sibling then opens its own plain lot from flat, owning the
+//     entry ID exactly as R* requires.
+//
+// Without this rule the first fill took flip_market_position_to: the new
+// lot opened at full plain qty under the FIRST id, binding the WRONG
+// from_entry bracket (class B) or over-opening q_plain instead of the
+// remainder (class C) — seeding the engine's multi-day tiny-qty
+// stale-remainder desync chains (~10 race chains in the jevondijefferson
+// diff). See tests/test_same_tick_multi_entry_race.cpp.
+void BacktestEngine::sequential_same_tick_reversal_fill(const std::string& id,
+                                                        bool is_long,
+                                                        double fill_price,
+                                                        double explicit_qty,
+                                                        int explicit_qty_type) {
+    // fill_price arrives entry-slipped (execute_market_entry applied entry
+    // slippage). The close leg needs EXIT slippage for the closing
+    // direction — un-slip, then re-apply, mirroring flip_market_position_to.
+    double raw_price = fill_price;
+    if (slippage_ != 0 && !current_fill_is_limit_) {
+        double slip = slippage_ * syminfo_mintick_;
+        raw_price = is_long ? (fill_price - slip) : (fill_price + slip);
+    }
+    double exit_fill = apply_fill_slippage(raw_price, position_side_ == PositionSide::SHORT);
+    bool was_long = (position_side_ == PositionSide::LONG);
+    double old_qty = position_qty_;
+
+    // Close the ENTIRE opposite position — one row per pyramid lot, all
+    // tagged with THIS order's id by apply_filled_order_to_state (matches
+    // TV's single-row exit attribution to the first closing signal).
+    for (auto& pe : pyramid_entries_) {
+        emit_close_trade(pe, pe.qty, exit_fill, was_long);
+    }
+    reset_position_state_to_flat();
+
+    // Plain (non-augmented) sizing, computed after the close so
+    // percent-of-equity sees the realized PnL — the same equity basis
+    // flip_market_position_to uses. Only the portion that crosses zero
+    // opens a position; if the plain qty doesn't reach past the old
+    // position, the LAST same-tick entry (filling next from flat) owns
+    // the new position instead.
+    double tx_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    double remainder = tx_qty - old_qty;
+    if (remainder > kQtyEpsilon) {
+        PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
+        open_fresh_position(requested, fill_price, remainder, id);
+    }
 }
 
 

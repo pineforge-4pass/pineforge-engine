@@ -59,7 +59,7 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
         PendingOrder& order = pending_orders_[i];
         auto eligibility = classify_order_eligibility(
             order, opposing_pass, dual_entry_path_, pass0_opposing_skip_ids,
-            exit_closed_from_bar, exit_closed_was_long);
+            exit_closed_from_bar, exit_closed_was_long, bar);
         if (eligibility == OrderEligibility::Remove) {
             filled_indices.push_back(i);
             continue;
@@ -128,7 +128,26 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     if (process_orders_on_close_ && position_open_bar_ == bar_index_) return;
 
     const double liq = compute_liquidation_price();
-    if (std::isnan(liq)) return;  // flat / denom==0 / invalid size already filtered
+    // A LONG at exactly 100% margin yields denom == (m/100 - dir) == 0, so
+    // compute_liquidation_price() returns na (there is no leverage-derived
+    // liquidation price — a 1x long can only be wiped at price 0). But such a
+    // position CAN still be force-liquidated when its NOTIONAL exceeds equity:
+    // TradingView over-allocates percent_of_equity entries whose fill price
+    // exceeds the sizing price (stop/gap fills, slippage, reversals, or the
+    // entry commission), leaving the fresh position momentarily under-margined
+    // and triggering a same-bar "Margin call" trim on longs. The equity /
+    // required-margin gate below is the only check that can decide this case
+    // (it reduces to notional > equity for a 1x long), so do NOT hard-bail on
+    // na here for that one situation. Every OTHER na cause (flat, qty<=0,
+    // pv<=0, non-finite) is still rejected by the explicit guards that follow,
+    // and shorts never hit denom==0 (denom = m/100 + 1 > 0), so their behavior
+    // is byte-identical. margin_liquidation_price() itself keeps returning na
+    // for a 1x long, matching TradingView's strategy.margin_liquidation_price.
+    const bool long_full_margin =
+        (position_side_ == PositionSide::LONG)
+        && std::isfinite(margin_long_)
+        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+    if (std::isnan(liq) && !long_full_margin) return;  // flat / denom==0 / invalid size already filtered
 
     const double pv = syminfo_.pointvalue;
     const double qty = position_qty_;
@@ -538,7 +557,27 @@ void BacktestEngine::apply_filled_order_to_state(
                                     : fill_price - off;
     }
     if (order.type == OrderType::MARKET) {
-        apply_market_order_fill(order, fill_price, bar, trail_best_path_state);
+        // TV same-tick multi-entry rule R* (see
+        // sequential_same_tick_reversal_fill): detect whether ANOTHER
+        // same-direction market entry with a DIFFERENT id, placed on the
+        // same on_bar, fills later at this same processing point. Orders
+        // after order_index in the sorted array are exactly the ones this
+        // pass has not yet evaluated (market orders always fill at the
+        // first processing point after placement, so a pending sibling
+        // here IS a same-tick fill).
+        bool later_same_tick_entry = false;
+        for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
+            const PendingOrder& sib = pending_orders_[j];
+            if (sib.type == OrderType::MARKET
+                && sib.is_long == order.is_long
+                && sib.id != order.id
+                && sib.created_bar == order.created_bar) {
+                later_same_tick_entry = true;
+                break;
+            }
+        }
+        apply_market_order_fill(order, fill_price, bar, trail_best_path_state,
+                                later_same_tick_entry);
     } else if (order.type == OrderType::ENTRY) {
         apply_entry_order_fill(order, fill_price, bar, trail_best_path_state);
     } else if (order.type == OrderType::EXIT) {
@@ -682,19 +721,29 @@ static void set_entry_fill_excursion_masks(PyramidEntry& pe, const Bar& bar,
 
 void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_price,
                                              const Bar& bar,
-                                             double& trail_best_path_state) {
+                                             double& trail_best_path_state,
+                                             bool later_same_tick_entry) {
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, /*close_only_opposite=*/false,
                          /*is_priced_entry=*/false, /*tv_carry_qty=*/0.0,
-                         order.created_bar);
+                         order.created_bar, later_same_tick_entry);
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
     if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
     // Update trail_best_price_ with intra-bar extremes for same-bar exit eval
-    if (position_side_ == PositionSide::LONG)
-        trail_best_price_ = std::max(trail_best_price_, bar.high);
-    else if (position_side_ == PositionSide::SHORT)
-        trail_best_price_ = std::min(trail_best_price_, bar.low);
+    // -- EXCEPT when this fill happened AT the bar's close (a POOC market
+    // order created and filled on this same bar): the whole bar's high/low
+    // precedes that fill point, so folding them in pre-arms the trail
+    // above/below a level the position never actually saw, which then
+    // gap-fills the next bar's exit at its open instead of TV's real
+    // intrabar retrace price. See apply_entry_order_fill's matching guard.
+    bool same_bar_close_fill = process_orders_on_close_ && order.created_bar == bar_index_;
+    if (!same_bar_close_fill) {
+        if (position_side_ == PositionSide::LONG)
+            trail_best_price_ = std::max(trail_best_price_, bar.high);
+        else if (position_side_ == PositionSide::SHORT)
+            trail_best_price_ = std::min(trail_best_price_, bar.low);
+    }
     trail_best_path_state = trail_best_after_fill;
 }
 
@@ -735,10 +784,16 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     if (did_execute) {
         double trail_best_after_fill = trail_best_price_;
         if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
-        if (position_side_ == PositionSide::LONG)
-            trail_best_price_ = std::max(trail_best_price_, bar.high);
-        else if (position_side_ == PositionSide::SHORT)
-            trail_best_price_ = std::min(trail_best_price_, bar.low);
+        // See apply_market_order_fill's matching guard: skip folding this
+        // bar's pre-fill high/low into the trail when the fill happened AT
+        // the bar's close (a POOC entry created and filled this same bar).
+        bool same_bar_close_fill = process_orders_on_close_ && order.created_bar == bar_index_;
+        if (!same_bar_close_fill) {
+            if (position_side_ == PositionSide::LONG)
+                trail_best_price_ = std::max(trail_best_price_, bar.high);
+            else if (position_side_ == PositionSide::SHORT)
+                trail_best_price_ = std::min(trail_best_price_, bar.low);
+        }
         if (was_priced_entry) {
             priced_entry_filled_this_bar_ = true;
             // Mask pre-fill bar extremes for the entry this fill created
@@ -886,7 +941,7 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
-        int exit_closed_from_bar, bool exit_closed_was_long) {
+        int exit_closed_from_bar, bool exit_closed_was_long, const Bar& bar) {
     using internal::DualEntryStopPathWinner;
     if (opposing_pass == 1) {
         if (!pass0_opposing_skip_ids.count(order.id)) {
@@ -940,9 +995,32 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         PositionSide requested = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
         bool flat_armed = order.created_position_side == PositionSide::FLAT
                           && position_side_ != PositionSide::FLAT;
-        bool flat_armed_opposite_close = flat_armed
+        bool flat_armed_opposite_same_bar = flat_armed
             && position_side_ != requested
             && position_open_bar_ == bar_index_;
+        // TV only lets this same-bar opposite leg fire as a bracket exit
+        // when it nets the just-opened position to exactly flat (or a
+        // partial close with no remainder) — probe 80's near-stop pair
+        // (both FIXED qty=1) closes to flat on the very bar the position
+        // opened. When the opposite leg's tx_qty EXCEEDS the just-opened
+        // position's qty (equity/price-based sizing, where the two legs'
+        // divisors differ, guarantees a nonzero remainder), TV does NOT
+        // let the loser fire same-bar at all — it defers the whole order
+        // to a later bar instead of flash-reversing into a small leftover
+        // opposite position (waranyutrkm-inside-day-breakout-strategy).
+        // Approximate the fill price with the order's own trigger level:
+        // exact for FIXED qty (price-independent) and precise enough for
+        // equity/cash sizing, whose legs differ by construction, not by
+        // slippage-scale noise.
+        bool flat_armed_opposite_close = flat_armed_opposite_same_bar;
+        if (flat_armed_opposite_same_bar) {
+            double approx_price = !std::isnan(order.stop_price) ? order.stop_price
+                : (!std::isnan(order.limit_price) ? order.limit_price : bar.close);
+            double approx_tx_qty = calc_qty_for_type(approx_price, order.qty, order.qty_type);
+            if (approx_tx_qty > position_qty_ + kQtyEpsilon) {
+                flat_armed_opposite_close = false;
+            }
+        }
         bool flat_armed_same_dir_pyramid = flat_armed
             && position_side_ == requested;
         bool pre_armed_opposite_sibling =
@@ -969,13 +1047,45 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     }
 
     // With process_orders_on_close, ALL priced orders (stop/limit/trail)
-    // placed this bar should only be evaluated from the next bar.
+    // placed this bar should only be evaluated from the next bar -- EXCEPT
+    // an order that is ALREADY marketable against this same bar's close at
+    // the moment it is placed:
+    //  - a pure LIMIT entry (no stop, no trail), e.g.
+    //    strategy.entry(limit=close), which by construction is always
+    //    marketable the instant it is placed; or
+    //  - an EXIT stop/limit (no trail) that a mid-trade re-issue (e.g. a
+    //    break-even stop move on a time gate) placed on the wrong side of
+    //    the current close -- TV evaluates a freshly (re-)placed priced
+    //    order against the bar's close at the moment it's placed, not only
+    //    against future bars' full intrabar range like a resting order
+    //    carried from a prior bar.
+    // A resting order not yet marketable at close is unaffected -- still
+    // deferred, still gets its normal intrabar stop/limit-touch evaluation
+    // from the next bar on. See evaluate_fill_price's has_limit/has_stop
+    // branches for the matching same-bar fill-price rules.
     if (process_orders_on_close_ && order.created_bar == bar_index_) {
-        bool has_price_condition = !std::isnan(order.stop_price)
-                                   || !std::isnan(order.limit_price)
-                                   || !std::isnan(order.trail_points)
-                                   || !std::isnan(order.trail_price);
-        if (has_price_condition) {
+        bool has_stop_or_trail = !std::isnan(order.stop_price)
+                                 || !std::isnan(order.trail_points)
+                                 || !std::isnan(order.trail_price);
+        bool pure_limit_entry = order.type == OrderType::ENTRY
+                                && !exit_style
+                                && !has_stop_or_trail
+                                && !std::isnan(order.limit_price);
+        bool exit_marketable_at_close = false;
+        if (exit_style && std::isnan(order.trail_points) && std::isnan(order.trail_price)) {
+            if (!std::isnan(order.stop_price)) {
+                exit_marketable_at_close = order.is_long
+                    ? (bar.close <= order.stop_price)
+                    : (bar.close >= order.stop_price);
+            }
+            if (!exit_marketable_at_close && !std::isnan(order.limit_price)) {
+                exit_marketable_at_close = order.is_long
+                    ? (bar.close >= order.limit_price)
+                    : (bar.close <= order.limit_price);
+            }
+        }
+        if (!pure_limit_entry && !exit_marketable_at_close
+            && (has_stop_or_trail || !std::isnan(order.limit_price))) {
             return OrderEligibility::Skip;
         }
     }
@@ -1066,7 +1176,37 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool should_fill = false;
     bool is_limit_fill = false;
 
-    if (exit_style && (has_stop || has_limit || has_trail)) {
+    bool exit_same_bar_reissue = exit_style && !has_trail
+        && process_orders_on_close_ && order.created_bar == bar_index_;
+    if (exit_same_bar_reissue && (has_stop || has_limit)) {
+        // A mid-trade exit re-issue (e.g. a break-even stop moved by a
+        // time-gated block) that's already marketable against THIS bar's
+        // close at the moment it's placed (see classify_order_eligibility's
+        // matching carve-out) -- fill limit-or-better relative to that
+        // close, not by walking this bar's FULL intrabar OHLC path via
+        // resolve_exit_path_fill below. The order didn't exist yet at this
+        // bar's earlier open/high/low, so those price points can't be used
+        // against it; the close is the earliest (and only) point in this
+        // bar it could have interacted with the market.
+        bool is_long = position_side_ == PositionSide::LONG;
+        bool stop_marketable = has_stop
+            && (is_long ? (bar.close <= order.stop_price) : (bar.close >= order.stop_price));
+        bool limit_marketable = has_limit
+            && (is_long ? (bar.close >= order.limit_price) : (bar.close <= order.limit_price));
+        if (stop_marketable) {
+            // Exit stop for a LONG is a SELL (worse execution = lower
+            // price); for a SHORT it's a BUY (worse = higher price) --
+            // opposite direction from an ENTRY stop on the same side.
+            fill_price = is_long ? std::min(bar.close, order.stop_price)
+                                  : std::max(bar.close, order.stop_price);
+            should_fill = true;
+        } else if (limit_marketable) {
+            fill_price = is_long ? std::max(bar.close, order.limit_price)
+                                  : std::min(bar.close, order.limit_price);
+            should_fill = true;
+            is_limit_fill = true;
+        }
+    } else if (exit_style && (has_stop || has_limit || has_trail)) {
         ExitPathFill exit_fill = resolve_exit_path_fill(
             bar,
             position_side_,
@@ -1130,7 +1270,27 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         }
     } else if (has_limit) {
         // Entry limit order
-        if (order.is_long) {
+        if (process_orders_on_close_ && order.created_bar == bar_index_) {
+            // Same-bar pure-limit entry (see classify_order_eligibility's
+            // matching carve-out): TV evaluates it against THIS bar's
+            // close (the moment it was placed), not the bar's full
+            // intrabar range like a resting order carried from a prior
+            // bar. Fill limit-or-better relative to that close (mirrors
+            // the resting-order fills below being limit-or-better
+            // relative to their bar's open) -- for the common
+            // limit==close case (e.g. strategy.entry(limit=close)) this
+            // is identical to filling at the limit price; it only
+            // differs when the close has gapped past the limit, where TV
+            // prices the fill at the better close rather than the bare
+            // limit.
+            if (order.is_long ? (bar.close <= order.limit_price)
+                               : (bar.close >= order.limit_price)) {
+                fill_price = order.is_long ? std::min(bar.close, order.limit_price)
+                                            : std::max(bar.close, order.limit_price);
+                should_fill = true;
+                is_limit_fill = true;
+            }
+        } else if (order.is_long) {
             if (bar.low <= order.limit_price) {
                 fill_price = std::min(bar.open, order.limit_price);
                 should_fill = true;

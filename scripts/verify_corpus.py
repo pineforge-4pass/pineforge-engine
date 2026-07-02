@@ -308,23 +308,35 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
                 or row.get("Qty")
                 or 0.0
             )
-            pnl = float(
-                row.get("Net P&L USD") or row.get("Net PnL USD")
-                or row.get("Net P&L") or row.get("Net PnL") or 0.0
-            )
+            # Quote-currency-suffixed columns ("... USD" / "... USDT" / ...),
+            # mirroring the price_field prefix match above. A perp export's
+            # "Net PnL USDT" / "Favorable excursion USDT" previously matched
+            # NONE of the exact "...USD" spellings below and silently fell
+            # back to 0.0, making pnl_p90/mfe/mae trivially "0.0% OK"
+            # regardless of real drift.
+            def _ccy_col(row: dict, *prefixes: str):
+                for c in row:
+                    # Exclude the "... %" variant (e.g. "Net P&L %") — that's
+                    # a separate, currency-less percent field, not a quote-
+                    # currency-suffixed amount, and must not be matched here.
+                    if c.endswith(" %"):
+                        continue
+                    if any(c == p or c.startswith(p + " ") for p in prefixes):
+                        return row[c]
+                return None
+            pnl = float(_ccy_col(row, "Net P&L", "Net PnL") or 0.0)
             # Report-only fields (TV vs engine column spellings differ).
             pnl_pct = float(
                 row.get("Net P&L %") or row.get("Net PnL %") or 0.0
             )
-            mfe = float(
-                row.get("Favorable excursion USD") or row.get("MFE") or 0.0
-            )
+            mfe = float(_ccy_col(row, "Favorable excursion") or row.get("MFE") or 0.0)
             # TV exports adverse excursion as a NEGATIVE USD value; current
             # engine CSVs use the same name + convention. Legacy engine CSVs
             # ("MAE" column) emitted the positive magnitude — normalize those
             # to TV's sign so old artifacts still compare correctly.
-            if row.get("Adverse excursion USD"):
-                mae = float(row["Adverse excursion USD"])
+            adverse = _ccy_col(row, "Adverse excursion")
+            if adverse:
+                mae = float(adverse)
             else:
                 mae = -abs(float(row.get("MAE") or 0.0)) or 0.0
             direction = "long" if "long" in kind.lower() else "short"
@@ -637,7 +649,14 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     if all_ok:
         label = "excellent"
     elif (
-        len(gating_matched) / max(len(tv_gate), 1) >= 0.99
+        # Near-complete match: >=99% by rate, OR at most one unmatched in-window
+        # trade. The absolute-count clause keeps the tier fair for SMALL trade
+        # counts, where a single missed/extra trade (e.g. 41/42) is ~2.4% — well
+        # within the 5% strong count gate below, yet under the 99% rate floor that
+        # large-N strategies clear trivially. The count_delta gate still bounds it
+        # (one unmatched trade only clears 5% for N>=21), and every *matched* trade
+        # must still meet the strong price/pnl/MAE thresholds.
+        (len(gating_matched) / max(len(tv_gate), 1) >= 0.99 or unmatched_in_window <= 1)
         and count_delta < STRONG_COUNT_DELTA
         and entry_p90 < STRONG_ENTRY_DELTA
         and exit_p90 < STRONG_EXIT_DELTA

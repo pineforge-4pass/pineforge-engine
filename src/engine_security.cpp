@@ -17,12 +17,14 @@ using namespace internal;
 // --- register_security_eval ---
 void BacktestEngine::register_security_eval(int sec_id, const std::string& requested_tf,
                                              const std::string& input_tf,
-                                             bool lookahead_on, bool gaps_on) {
+                                             bool lookahead_on, bool gaps_on,
+                                             bool heikinashi) {
     SecurityEvalState state;
     state.sec_id = sec_id;
     state.tf = requested_tf;
     state.gaps_on = gaps_on;
     state.lookahead_on = lookahead_on;
+    state.heikinashi = heikinashi;
 
     if (!input_tf.empty()) {
         int lower_ratio = 0;
@@ -114,6 +116,7 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
         state.lower_tf_use_input = false;
         state.lower_tf_input_aggregation_ratio = 1;
         state.lower_tf_input_buffer.clear();
+        state.publish_gate_tf_seconds = 0;
         if (state.tf.empty()) continue;
 
         int lower_ratio = 0;
@@ -220,6 +223,35 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
                 requested_seconds / input_seconds;
             state.lower_tf_ratio = script_seconds / requested_seconds;
             state.lower_tf_seconds = requested_seconds;
+        } else if (!is_calendar_month && state.lookahead_on
+                   && script_seconds > 0
+                   && requested_seconds < script_seconds
+                   && script_seconds % requested_seconds == 0) {
+            // Plain request.security with a target TF finer than the
+            // script/chart TF (e.g. so2TF="5" on a 15m chart) and
+            // lookahead=barmerge.lookahead_ON: TradingView merges the
+            // FIRST intrabar of each calling bar, so a history-offset
+            // read (``expr[1]``) must expose the value confirmed as of
+            // the PREVIOUS calling bar's boundary, not whatever native
+            // sub-period last completed inside the CURRENT calling bar.
+            // Gate publication (see feed_security_eval_state) to only
+            // the completion whose bucket end aligns with a script_tf
+            // boundary.
+            //
+            // lookahead_OFF is deliberately EXCLUDED: TV's lookahead_off
+            // merge takes the LAST intrabar of the calling bar, so the
+            // exposed value (and any ``[k]`` offset off it) advances at
+            // the security's own finer cadence — one push per completed
+            // security period, exactly the ungated behavior. Gating it
+            // regressed masayanfx-multi-time-score-strategy
+            // (request.security(sym, "5", ta.highest(high, 20)[1],
+            // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart)
+            // from 100.0% to 93.7% trade parity vs TradingView, while
+            // the gated lookahead_on case (3commas triple-RSI DCA,
+            // so2Rsi = request.security(sym, "5", ta.rsi(close,7)[1],
+            // lookahead=barmerge.lookahead_on)) needs the latch to hold
+            // 100.0%.
+            state.publish_gate_tf_seconds = requested_seconds;
         }
     }
 }
@@ -371,16 +403,69 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
 
     AggregatedBar ab = state.aggregator.feed(input_bar);
     state.feed_count++;
-    state.current_bar = ab.bar;
     state.current_sub_bar_count = ab.sub_bar_count;
+    // Heikin-Ashi same-symbol read: replace the completed (aggregated) bar's
+    // OHLC with its HA candle before evaluating the security expression, so
+    // close/open/high/low inside request.security see HA values (TradingView
+    // ticker.heikinashi semantics):
+    //   haClose = (O+H+L+C)/4
+    //   haOpen  = seeded ? (prevHaOpen+prevHaClose)/2 : (O+C)/2
+    //   haHigh  = max(H, haOpen, haClose);  haLow = min(L, haOpen, haClose)
+    // HA is stateful; the running open/close advance once per COMPLETED bar
+    // (committed below). A partial lookahead peek derives from prior state
+    // without advancing it. The lambda mutates ab.bar in place.
+    auto apply_ha = [&state](Bar& b, bool commit) {
+        double ha_close = (b.open + b.high + b.low + b.close) / 4.0;
+        double ha_open = state.ha_seeded
+                             ? (state.ha_prev_open + state.ha_prev_close) / 2.0
+                             : (b.open + b.close) / 2.0;
+        double ha_high = std::max(b.high, std::max(ha_open, ha_close));
+        double ha_low = std::min(b.low, std::min(ha_open, ha_close));
+        b.open = ha_open;
+        b.high = ha_high;
+        b.low = ha_low;
+        b.close = ha_close;
+        if (commit) {
+            state.ha_prev_open = ha_open;
+            state.ha_prev_close = ha_close;
+            state.ha_seeded = true;
+        }
+    };
     if (ab.is_complete) {
+        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
+        state.current_bar = ab.bar;
         state.eval_complete_count++;
-        evaluate_security(state.sec_id, ab.bar, true);
+        // For a plain request.security whose target TF is strictly finer
+        // than script_tf (publish_gate_tf_seconds > 0), the security's own
+        // aggregator completes multiple times per calling/script bar.
+        // Only the completion whose bucket END lands on a script_tf
+        // boundary is "the last completion of THIS calling bar" — that's
+        // the one a history-offset read (``expr[1]``) should latch as
+        // "confirmed as of the previous calling bar" the NEXT time the
+        // calling script reads it. Suppress ``is_complete`` (so codegen's
+        // gated hist.push() does not fire) for every other, intermediate
+        // completion; the underlying TA state keeps advancing regardless
+        // (compute()/recompute() dispatch is driven by
+        // current_sub_bar_count, not by this flag) — only the exposed
+        // history buffer's advance is gated. eval_complete_count/current_bar
+        // bookkeeping above stays driven by the real completion.
+        bool publish = true;
+        if (state.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
+            int64_t bucket_end_sec =
+                ab.bar.timestamp / 1000 + state.publish_gate_tf_seconds;
+            publish = (bucket_end_sec % script_tf_seconds_) == 0;
+        }
+        evaluate_security(state.sec_id, ab.bar, publish);
     } else if (state.lookahead_on) {
+        if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
+        state.current_bar = ab.bar;
         state.eval_partial_count++;
         evaluate_security(state.sec_id, ab.bar, false);
-    } else if (state.gaps_on) {
-        clear_security(state.sec_id);
+    } else {
+        state.current_bar = ab.bar;
+        if (state.gaps_on) {
+            clear_security(state.sec_id);
+        }
     }
 }
 

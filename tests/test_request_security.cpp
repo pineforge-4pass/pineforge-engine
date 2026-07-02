@@ -555,8 +555,80 @@ void test_request_security_helper_ta_uses_security_local_state() {
     std::cout << "test_request_security_helper_ta_uses_security_local_state passed.\n";
 }
 
+// Plain request.security with a target TF strictly finer than script_tf
+// (e.g. "5" on a 15m chart, fed from 1m input bars) completes its own
+// aggregation R = script/requested times per calling bar. The publish gate
+// (SecurityEvalState::publish_gate_tf_seconds) must latch the is_complete
+// flag to calling-bar boundaries ONLY under lookahead_on (TV merges the
+// FIRST intrabar of each calling bar there); under lookahead_off TV merges
+// the LAST intrabar, so every finer-period completion must publish
+// unchanged. Regression coverage for both sides:
+//   - gated lookahead_off broke masayanfx-multi-time-score-strategy
+//     (ta.highest(high,20)[1], lookahead_off, "5" on 15m): 100.0% -> 93.7%
+//   - ungated lookahead_on broke 3commas triple-RSI DCA
+//     (ta.rsi(close,7)[1], lookahead_on, "5" on 15m): 100.0% -> 50.5%
+class FinerTfPublishGateHarness : public BacktestEngine {
+public:
+    std::vector<int64_t> published_ts;  // bucket-start ts of is_complete evals
+
+    explicit FinerTfPublishGateHarness(bool lookahead_on) {
+        register_security_eval(0, "5", "1", lookahead_on, false);
+    }
+
+    void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
+        if (sec_id != 0 || !is_complete) {
+            return;
+        }
+        published_ts.push_back(bar.timestamp);
+    }
+
+    void on_bar(const Bar& bar) override {
+        (void)bar;
+    }
+};
+
+void test_request_security_finer_tf_publish_gate_is_lookahead_only() {
+    // 30 one-minute bars = two 15m calling bars = six 5m security buckets
+    // starting at 0, 300k, 600k, 900k, 1.2M, 1.5M ms. Bucket ends aligned
+    // to the 15m (900s) script boundary: 600k (ends 900s) and 1.5M
+    // (ends 1800s).
+    std::vector<Bar> input_bars;
+    for (int i = 0; i < 30; ++i) {
+        double px = 100.0 + i;
+        input_bars.push_back(
+            {px, px + 1.0, px - 1.0, px + 0.5, 10.0,
+             static_cast<int64_t>(i) * 60000});
+    }
+
+    FinerTfPublishGateHarness off(false);
+    off.run(input_bars.data(), static_cast<int>(input_bars.size()),
+            "1", "15", false, 4, MagnifierDistribution::ENDPOINTS);
+    require(off.last_error().empty(),
+            "lookahead_off finer-TF security run should succeed: " + off.last_error());
+    std::vector<int64_t> expected_off = {0, 300000, 600000, 900000, 1200000, 1500000};
+    require(off.published_ts == expected_off,
+            "lookahead_off finer-TF security must publish EVERY completed security "
+            "period (TV merges the LAST intrabar of the calling bar): expected one "
+            "publish per 5m bucket, got " + std::to_string(off.published_ts.size()));
+
+    FinerTfPublishGateHarness on(true);
+    on.run(input_bars.data(), static_cast<int>(input_bars.size()),
+           "1", "15", false, 4, MagnifierDistribution::ENDPOINTS);
+    require(on.last_error().empty(),
+            "lookahead_on finer-TF security run should succeed: " + on.last_error());
+    std::vector<int64_t> expected_on = {600000, 1500000};
+    require(on.published_ts == expected_on,
+            "lookahead_on finer-TF security must latch publishes to calling-bar "
+            "boundaries (TV merges the FIRST intrabar of the calling bar): expected "
+            "only script-TF-aligned bucket completions, got "
+            + std::to_string(on.published_ts.size()));
+
+    std::cout << "test_request_security_finer_tf_publish_gate_is_lookahead_only passed.\n";
+}
+
 int main() {
     test_request_security_hook_dispatches_completed_values();
+    test_request_security_finer_tf_publish_gate_is_lookahead_only();
     test_request_security_lower_tf_requires_finer_input_bars();
     test_request_security_emulates_ratio_divisible_lower_tf();
     test_request_security_lower_tf_emulation_rejects_unsupported_flags();
