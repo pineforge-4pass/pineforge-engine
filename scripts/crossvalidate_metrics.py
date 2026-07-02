@@ -702,6 +702,7 @@ def main() -> int:
                          "generated.cpp, corpus convention 1e6; pf_report_t "
                          "does not expose it)")
     args = ap.parse_args()
+    rs.ensure_derived()
     if args.all:
         return crossvalidate_all(args.corpus_root.resolve(), args.ohlcv.resolve())
     if args.strategy_dir is None:

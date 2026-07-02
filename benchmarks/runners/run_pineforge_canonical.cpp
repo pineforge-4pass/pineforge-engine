@@ -68,7 +68,7 @@ static std::string fmt(double v) {
 
 int main(int argc, char** argv) {
     const char* in_path  = argc > 1 ? argv[1]
-        : "../corpus/data/ohlcv_ETH-USDT-USDT_15m.csv";
+        : "../corpus/data/derived/ohlcv_ETH-USDT-USDT_15m_window.csv";
     const char* out_path = argc > 2 ? argv[2]
         : "strategies/_indicators/canonical_pineforge.csv";
 

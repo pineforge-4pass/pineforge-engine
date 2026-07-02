@@ -25,7 +25,7 @@ const candidates = [
     resolve(REPO, 'benchmarks/assets/data/ETHUSDT_15.csv'),
     resolve(REPO, 'benchmarks/data/ETHUSDT_15.csv'),
     resolve(REPO, 'benchmarks/_workdir/data/ETHUSDT_15.csv'),
-    resolve(REPO, 'corpus/data/ohlcv_ETH-USDT-USDT_15m.csv'),
+    resolve(REPO, 'corpus/data/derived/ohlcv_ETH-USDT-USDT_15m_window.csv'),
 ];
 const csvPath = candidates.find(existsSync) ?? candidates.at(-1);
 console.log(`pinets: using OHLCV ${csvPath.replace(REPO + '/', '')}`);

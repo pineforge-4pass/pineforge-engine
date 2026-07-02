@@ -45,7 +45,14 @@ Run:  git submodule update --init corpus
 (the TV validation corpus is a PUBLIC submodule: https://github.com/pineforge-4pass/pineforge-corpus)"
 fi
 
-# --- 0) (optional) regenerate generated.cpp from strategy.pine --------
+# --- 0) derive chart feeds from the single committed 1m feed ----------
+# The corpus ships one Git-LFS feed (full-history 1m); the 15m chart
+# feeds live in corpus/data/derived/ and are rebuilt here when stale.
+
+log "materializing derived corpus feeds"
+"$PY" scripts/derive_corpus_feeds.py
+
+# --- 0b) (optional) regenerate generated.cpp from strategy.pine -------
 # REGEN=1 re-derives every corpus/*/*/generated.cpp from its strategy.pine
 # through the pineforge-release Docker image (engine + bundled transpiler), so
 # the build below compiles freshly-transpiled C++ instead of the committed copy.
