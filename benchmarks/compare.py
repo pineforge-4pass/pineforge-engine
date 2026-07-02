@@ -67,11 +67,13 @@ BENCH_DIR = BENCH
 # OHLCV resolution order (first existing wins):
 #   1. DATA/ETHUSDT_15.csv — snapshot (paths: benchmarks/assets/data or benchmarks/data)
 #   2. benchmarks/_workdir/data/ETHUSDT_15.csv — working copy from run_all.sh
-#   3. corpus/data/ohlcv_ETH-USDT-USDT_15m.csv — fallback
+#   3. corpus/data/derived/ohlcv_ETH-USDT-USDT_15m_window.csv — fallback
+#      (derived from the single committed 1m feed by
+#      scripts/derive_corpus_feeds.py)
 _CANDIDATE_OHLCV = [
     DATA / "ETHUSDT_15.csv",
     BENCH_DIR / "_workdir" / "data" / "ETHUSDT_15.csv",
-    REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv",
+    REPO_ROOT / "corpus" / "data" / "derived" / "ohlcv_ETH-USDT-USDT_15m_window.csv",
 ]
 OHLCV_PATH = next((p for p in _CANDIDATE_OHLCV if p.exists()), _CANDIDATE_OHLCV[-1])
 

@@ -22,7 +22,7 @@ Usage examples
 
     # Custom OHLCV input
     python scripts/run_strategy.py corpus/basic/greedy \\
-        --ohlcv corpus/data/ohlcv_ETH-USDT-USDT_15m.csv
+        --ohlcv corpus/data/derived/ohlcv_ETH-USDT-USDT_15m_window.csv
 
     # Don't overwrite engine_trades.csv if it already exists
     python scripts/run_strategy.py corpus/basic/greedy --no-overwrite
@@ -52,9 +52,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REFERENCE_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m.csv"
-WARMUP_OHLCV = REPO_ROOT / "corpus" / "data" / "ohlcv_ETH-USDT-USDT_15m_warmup6m.csv"
-DEFAULT_OHLCV = WARMUP_OHLCV if WARMUP_OHLCV.exists() else REFERENCE_OHLCV
+# The corpus ships a single committed feed (full-history 1m, Git LFS);
+# the 15m chart feeds are derived from it locally. ensure_derived() is
+# called from main() — importing this module stays side-effect free for
+# consumers that only want the ABI mirrors.
+from derive_corpus_feeds import (  # noqa: E402
+    DERIVED_15M, DERIVED_15M_WINDOW, ensure_derived)
+REFERENCE_OHLCV = DERIVED_15M_WINDOW
+WARMUP_OHLCV = DERIVED_15M
+DEFAULT_OHLCV = WARMUP_OHLCV
 
 # Keys in inputs.json that are validator/harness metadata, not Pine input()
 # values. Mirrors the canonical validator's VALIDATION_INPUT_META_KEYS so
@@ -1167,6 +1173,8 @@ def main() -> int:
                     help="pineforge-release image for --runner docker (default: "
                          "$PINEFORGE_RELEASE_IMAGE or ghcr .../pineforge-release:latest).")
     args = ap.parse_args()
+
+    ensure_derived()
 
     strategy_dir = args.strategy_dir.resolve()
     out_path = (args.output.resolve() if args.output

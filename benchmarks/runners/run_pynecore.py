@@ -15,7 +15,8 @@ Output:
     {strategy_dir}/pynecore_stats.csv   — strategy stats (verbatim from pyne)
 
 The CLI invokes the locally-installed `pyne run` against the corpus
-OHLCV (`corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`, pre-converted to
+OHLCV (`corpus/data/derived/ohlcv_ETH-USDT-USDT_15m_window.csv`,
+derived from the committed 1m feed, pre-converted to
 PyneCore's `.ohlcv` format under `benchmarks/_workdir/data/`). It then
 re-emits the resulting trade list in PineForge's TV-mirror schema —
 same column names, same exit-then-entry row order, same reverse-

@@ -158,9 +158,11 @@ bash scripts/run_corpus.sh
 ```
 
 It builds every `corpus/validation/<probe>/generated.cpp` into a
-`strategy.dylib` / `strategy.so`, runs each against
-`corpus/data/ohlcv_ETH-USDT-USDT_15m_warmup6m.csv` when present
-(falling back to `corpus/data/ohlcv_ETH-USDT-USDT_15m.csv`), and
+`strategy.dylib` / `strategy.so`, runs each against the 15m chart feed
+derived from the corpus's single committed 1m feed
+(`corpus/data/ohlcv_ETH-USDT-USDT_1m.csv`, Git LFS; the harness
+materializes `corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv` via
+`scripts/derive_corpus_feeds.py`), and
 rewrites the regenerated `engine_trades.csv` files. It also prints a
 canonical `scripts/verify_corpus.py --all --quiet` summary with the five
 parity labels (`excellent`, `strong`, `moderate`, `weak`, `minimal`).
