@@ -196,7 +196,16 @@ void BacktestEngine::execute_partial_exit(double fill_price, double qty_percent)
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     double pct = std::clamp(qty_percent, 0.0, 100.0);
-    execute_partial_exit_qty(fill_price, position_qty_ * (pct / 100.0));
+    double qty_to_close = position_qty_ * (pct / 100.0);
+    // Percent-derived partial exit resolved at FILL time (an exit placed
+    // while still FLAT carries no reserved qty): floor the lot to the
+    // instrument qty step exactly like the placement-time path in
+    // compute_exit_reserved_qty — see apply_exit_qty_step for the TV
+    // dust-remainder evidence. Full exits (pct == 100%) stay exact.
+    if (pct < 100.0 - kFullPercentEps) {
+        qty_to_close = apply_exit_qty_step(qty_to_close);
+    }
+    execute_partial_exit_qty(fill_price, qty_to_close);
 }
 
 
