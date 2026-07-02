@@ -557,7 +557,27 @@ void BacktestEngine::apply_filled_order_to_state(
                                     : fill_price - off;
     }
     if (order.type == OrderType::MARKET) {
-        apply_market_order_fill(order, fill_price, bar, trail_best_path_state);
+        // TV same-tick multi-entry rule R* (see
+        // sequential_same_tick_reversal_fill): detect whether ANOTHER
+        // same-direction market entry with a DIFFERENT id, placed on the
+        // same on_bar, fills later at this same processing point. Orders
+        // after order_index in the sorted array are exactly the ones this
+        // pass has not yet evaluated (market orders always fill at the
+        // first processing point after placement, so a pending sibling
+        // here IS a same-tick fill).
+        bool later_same_tick_entry = false;
+        for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
+            const PendingOrder& sib = pending_orders_[j];
+            if (sib.type == OrderType::MARKET
+                && sib.is_long == order.is_long
+                && sib.id != order.id
+                && sib.created_bar == order.created_bar) {
+                later_same_tick_entry = true;
+                break;
+            }
+        }
+        apply_market_order_fill(order, fill_price, bar, trail_best_path_state,
+                                later_same_tick_entry);
     } else if (order.type == OrderType::ENTRY) {
         apply_entry_order_fill(order, fill_price, bar, trail_best_path_state);
     } else if (order.type == OrderType::EXIT) {
@@ -701,11 +721,12 @@ static void set_entry_fill_excursion_masks(PyramidEntry& pe, const Bar& bar,
 
 void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_price,
                                              const Bar& bar,
-                                             double& trail_best_path_state) {
+                                             double& trail_best_path_state,
+                                             bool later_same_tick_entry) {
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, /*close_only_opposite=*/false,
                          /*is_priced_entry=*/false, /*tv_carry_qty=*/0.0,
-                         order.created_bar);
+                         order.created_bar, later_same_tick_entry);
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
     if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;

@@ -53,19 +53,22 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
 
 // Internal helper: execute a market entry (handles reverse-and-open).
 //
-// Dispatches to one of four case-helpers based on the current position
-// state and the entry's close_only_opposite flag:
+// Dispatches to one of five case-helpers based on the current position
+// state and the entry's close_only_opposite / later_same_tick_entry flags:
 //   1. enter_market_from_flat       — position FLAT
 //   2. add_to_pyramid_market        — position is same direction as requested
 //   3. close_opposite_then_enter    — close-only-opposite branch
-//   4. flip_market_position_to      — opposite direction (close-and-flip)
+//   4. sequential_same_tick_reversal_fill — opposite direction, another
+//      same-direction market entry fills later this same tick (TV rule R*)
+//   5. flip_market_position_to      — opposite direction (close-and-flip)
 void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, double fill_price,
                                           double explicit_qty, int explicit_qty_type,
                                           PositionSide created_position_side,
                                           bool close_only_opposite,
                                           bool is_priced_entry,
                                           double tv_carry_qty,
-                                          int created_bar) {
+                                          int created_bar,
+                                          bool later_same_tick_entry) {
     // Degenerate-bar guard: never open a position at a non-finite fill price
     // (e.g. a NaN/Inf print). Dropping the fill keeps trade output finite and
     // a single bad tick from poisoning the backtest. Clean feeds never hit this.
@@ -106,6 +109,12 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
 
     if (created_position_side == PositionSide::FLAT && close_only_opposite) {
         close_opposite_then_enter(id, is_long, fill_price, explicit_qty, explicit_qty_type);
+        return;
+    }
+
+    if (later_same_tick_entry) {
+        sequential_same_tick_reversal_fill(id, is_long, fill_price, explicit_qty,
+                                           explicit_qty_type);
         return;
     }
 
@@ -755,6 +764,88 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
     double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     open_fresh_position(requested, fill_price, new_qty, id);
+}
+
+
+// TradingView same-tick multi-entry sequential-fill semantics (audit rule
+// R*, jevondijefferson-big-breakout-strategy, 2026-07-02 tv-ceiling audit —
+// validated 26/26 against every in-window race in the TV export):
+//
+//   Same-tick entries fill SEQUENTIALLY in script-call order, each at
+//   plain (non-augmented) qty; the reversal augmentation — close the
+//   opposite position, then enter — attaches ONLY to the LAST
+//   same-direction entry of the tick; the fill that crosses zero / opens
+//   from flat owns the entry ID.
+//
+// This helper handles a market entry filling against an OPPOSITE position
+// when ANOTHER same-direction market entry (distinct id, placed on the
+// same on_bar) fills later at this same processing point:
+//
+//   - tx_qty > |pos|  ("class C"): the plain fill itself crosses zero —
+//     the whole opposite position closes (exit rows tagged with THIS
+//     order's id by the caller) and the REMAINDER (tx_qty - |pos|) opens
+//     under THIS id. The later sibling then executes against the
+//     sequentially-updated same-direction position and is rejected by
+//     the pyramiding gate. TV example (2025-06-17 15:15 UTC race): old
+//     long 7.6834 closes with exit signal "Short", the new short is the
+//     0.2262 remainder — NOT a full q_plain lot.
+//
+//   - tx_qty <= |pos| ("class B"): the plain fill only reduces the
+//     opposite position, so the position is still opposite when the LAST
+//     entry executes — the augmentation attaches there: the remaining
+//     position closes and a full plain lot opens under the LAST id.
+//     TV's trade list reports the old lot's close as ONE row at the
+//     shared fill price attributed to THIS (first) order's signal
+//     (TV#29: short 7.8542 exits with signal "Long"; TV#30: the new long
+//     7.6441 enters as "Wyckoff Swing Long"). To reproduce those rows —
+//     both fills land at the same price, so the PnL split is invisible —
+//     the whole position closes HERE tagged with this order's id, and
+//     the sibling then opens its own plain lot from flat, owning the
+//     entry ID exactly as R* requires.
+//
+// Without this rule the first fill took flip_market_position_to: the new
+// lot opened at full plain qty under the FIRST id, binding the WRONG
+// from_entry bracket (class B) or over-opening q_plain instead of the
+// remainder (class C) — seeding the engine's multi-day tiny-qty
+// stale-remainder desync chains (~10 race chains in the jevondijefferson
+// diff). See tests/test_same_tick_multi_entry_race.cpp.
+void BacktestEngine::sequential_same_tick_reversal_fill(const std::string& id,
+                                                        bool is_long,
+                                                        double fill_price,
+                                                        double explicit_qty,
+                                                        int explicit_qty_type) {
+    // fill_price arrives entry-slipped (execute_market_entry applied entry
+    // slippage). The close leg needs EXIT slippage for the closing
+    // direction — un-slip, then re-apply, mirroring flip_market_position_to.
+    double raw_price = fill_price;
+    if (slippage_ != 0 && !current_fill_is_limit_) {
+        double slip = slippage_ * syminfo_mintick_;
+        raw_price = is_long ? (fill_price - slip) : (fill_price + slip);
+    }
+    double exit_fill = apply_fill_slippage(raw_price, position_side_ == PositionSide::SHORT);
+    bool was_long = (position_side_ == PositionSide::LONG);
+    double old_qty = position_qty_;
+
+    // Close the ENTIRE opposite position — one row per pyramid lot, all
+    // tagged with THIS order's id by apply_filled_order_to_state (matches
+    // TV's single-row exit attribution to the first closing signal).
+    for (auto& pe : pyramid_entries_) {
+        emit_close_trade(pe, pe.qty, exit_fill, was_long);
+    }
+    reset_position_state_to_flat();
+
+    // Plain (non-augmented) sizing, computed after the close so
+    // percent-of-equity sees the realized PnL — the same equity basis
+    // flip_market_position_to uses. Only the portion that crosses zero
+    // opens a position; if the plain qty doesn't reach past the old
+    // position, the LAST same-tick entry (filling next from flat) owns
+    // the new position instead.
+    double tx_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    double remainder = tx_qty - old_qty;
+    if (remainder > kQtyEpsilon) {
+        PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
+        open_fresh_position(requested, fill_price, remainder, id);
+    }
 }
 
 
