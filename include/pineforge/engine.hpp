@@ -1417,7 +1417,8 @@ private:
                               bool close_only_opposite = false,
                               bool is_priced_entry = false,
                               double tv_carry_qty = 0.0,
-                              int created_bar = -1);
+                              int created_bar = -1,
+                              bool later_same_tick_entry = false);
     void execute_market_exit(double fill_price);
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
@@ -1457,7 +1458,8 @@ private:
     // any per-type out-parameters the post-fill bookkeeping needs.
     void apply_market_order_fill(PendingOrder& order, double fill_price,
                                  const Bar& bar,
-                                 double& trail_best_path_state);
+                                 double& trail_best_path_state,
+                                 bool later_same_tick_entry);
     void apply_entry_order_fill(PendingOrder& order, double fill_price,
                                 const Bar& bar,
                                 double& trail_best_path_state);
@@ -1577,6 +1579,9 @@ private:
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
                                  int explicit_qty_type);
+    void sequential_same_tick_reversal_fill(const std::string& id, bool is_long,
+                                            double fill_price, double explicit_qty,
+                                            int explicit_qty_type);
     void open_fresh_position(PositionSide requested, double fill_price,
                              double qty, const std::string& id);
     void consume_tv_carry_from_siblings(const std::string& id,
