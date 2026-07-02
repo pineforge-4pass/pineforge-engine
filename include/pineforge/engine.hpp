@@ -807,6 +807,31 @@ protected:
         return std::floor(qty / qty_step_) * qty_step_;
     }
 
+    // Percent-derived strategy.exit lots are floored to the same lot
+    // increment (TV evidence, BINANCE:ETHUSDT.P qty_step 0.0001: a
+    // qty_percent=50/50 short bracket over a 5.4103 position fills
+    // 2.7051 + 2.7051, leaving a 0.0001 dust short OPEN until the next
+    // reversal/close/margin-call — 39 of stockhunter2025-btcusd-4h-ema-
+    // swing-strategy's 56 unmatched TV trades were exactly such dust
+    // rows). Unlike apply_qty_step this floor is epsilon-tolerant: 50%
+    // of an on-grid position is often exactly on-grid in real numbers
+    // but lands one ulp below the grid ratio in doubles (2.7051/0.0001
+    // = 27050.999999…), and a plain floor would knock such a leg a FULL
+    // step down, inventing dust TV does not have. The tolerance (1e-6 of
+    // a step) sits far above double representation error at realistic
+    // qty/step magnitudes yet far below any genuine sub-step remainder.
+    // When the floor is a no-op (qty already on-grid) the ORIGINAL double
+    // is returned unchanged: reconstructing it as floor(...)*step lands
+    // one ulp away (0.3 -> 0.30000000000000004) and that representation
+    // jitter leaks into printed PnL at the 1e-6 digit for strategies whose
+    // percent legs were already exact (officialjackofalltrades' 30%-of-1
+    // legs) — a pure artifact this fix must not introduce.
+    double apply_exit_qty_step(double qty) const {
+        if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
+        double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
+        return floored < qty ? floored : qty;
+    }
+
     double calc_qty(double fill_price) const {
         switch (default_qty_type_) {
             case QtyType::FIXED:
