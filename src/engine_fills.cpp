@@ -419,12 +419,21 @@ void BacktestEngine::compact_filled_pending_orders(
         exit_closed_was_long ? PositionSide::LONG : PositionSide::SHORT;
     size_t write = 0;
     for (size_t read = 0; read < pending_orders_.size(); ++read) {
+        // Mirror classify_order_eligibility's carve-out: a resting pure-limit
+        // entry (a GTC limit order from a prior bar, no stop/trail) survives a
+        // full close — see the rationale there (3commas DCA safety orders).
+        bool resting_limit_entry_carry =
+            pending_orders_[read].type == OrderType::ENTRY
+            && pending_orders_[read].created_bar < bar_index_
+            && !std::isnan(pending_orders_[read].limit_price)
+            && std::isnan(pending_orders_[read].stop_price);
         bool stale_same_direction_entry_after_exit =
             exit_closed_from_bar >= 0
             && (pending_orders_[read].type == OrderType::ENTRY
                 || pending_orders_[read].type == OrderType::MARKET)
             && pending_orders_[read].is_long == exit_closed_was_long
-            && pending_orders_[read].created_position_side == closed_side;
+            && pending_orders_[read].created_position_side == closed_side
+            && !resting_limit_entry_carry;
         if (!is_filled(read)
             && !stale_same_direction_entry_after_exit) {
             if (write != read) pending_orders_[write] = std::move(pending_orders_[read]);
@@ -1026,8 +1035,24 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         bool pre_armed_opposite_sibling =
             order.created_position_side != PositionSide::FLAT
             && order.created_position_side != requested;
+        // A RESTING pure-limit entry carried from a PRIOR bar (a GTC limit
+        // sitting in the book, not one freshly (re-)armed this bar) fills on
+        // its own touch even when another priced entry already filled this
+        // bar: TradingView sweeps the whole bar path against every resting
+        // limit order, filling each at its own limit price. The per-bar
+        // throttle models TV's treatment of freshly (re-)placed priced orders,
+        // not resting book orders — a 3commas DCA bot fills a deal's own SO1
+        // and a prior deal's carried-over deep SO limit on the SAME bar when
+        // the drop sweeps through both (pullback-sniper deal #15: SO1 @2495.21
+        // and the carried SO4 @2471.04 both fill on one bar). Restricted to
+        // pure limits (no stop/trail) created on an earlier bar so the
+        // same-bar stop-entry throttle (probes 80/92) is untouched.
+        bool resting_limit_entry =
+            order.created_bar < bar_index_
+            && !std::isnan(order.limit_price)
+            && std::isnan(order.stop_price);
         if (!flat_armed_opposite_close && !flat_armed_same_dir_pyramid
-            && !pre_armed_opposite_sibling) {
+            && !pre_armed_opposite_sibling && !resting_limit_entry) {
             return OrderEligibility::Skip;
         }
     }
@@ -1039,10 +1064,26 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     // position (created_position_side matches the closed direction).
     PositionSide closed_side =
         exit_closed_was_long ? PositionSide::LONG : PositionSide::SHORT;
+    // Carve-out: a RESTING pure-limit entry (a GTC limit order sitting in the
+    // book since a PRIOR bar, no stop/trail leg) is NOT cancelled by a full
+    // close. TradingView leaves pending strategy.entry() orders in the book
+    // across strategy.close_all() until they fill or are explicitly cancelled
+    // (strategy.cancel); such an order fills in a later deal when its limit is
+    // next touched. The same-direction cancel below targets MARKET adds and
+    // freshly (re-)armed priced entries tied to the just-closed position
+    // (deferred-flip carries — probes 72/80/93), NOT resting limit book
+    // orders such as a 3commas DCA bot's unfilled deep safety orders
+    // (pullback-sniper: an SO limit placed one deal fills the next).
+    bool resting_limit_entry_carry =
+        order.type == OrderType::ENTRY
+        && order.created_bar < bar_index_
+        && !std::isnan(order.limit_price)
+        && std::isnan(order.stop_price);
     if (exit_closed_from_bar >= 0
         && (order.type == OrderType::MARKET || order.type == OrderType::ENTRY)
         && order.is_long == exit_closed_was_long
-        && order.created_position_side == closed_side) {
+        && order.created_position_side == closed_side
+        && !resting_limit_entry_carry) {
         return OrderEligibility::Remove;
     }
 
