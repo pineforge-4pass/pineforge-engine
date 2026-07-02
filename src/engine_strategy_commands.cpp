@@ -497,7 +497,42 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                     already_reserved += live_pos_qty * (oqp / 100.0);
                 }
             }
-            double available = std::max(0.0, live_pos_qty - already_reserved);
+            // Reservation capacity: by default the live position net of any
+            // same-bar batched close (legacy behaviour, post-close sizing).
+            // But when a PENDING entry order with
+            // id == from_entry exists, TV binds the bracket to THAT entry's
+            // eventual fills, not to the unrelated live position: a reversal
+            // bar places qty=1 brackets for the about-to-fill opposite qty=2
+            // entry while the old position (1 lot the other way) is still
+            // open. Clamping to the live position dropped every bracket
+            // after the first (thulashimohanr-prev-day-week-levels probe:
+            // RevShortT2's stop order never existed, so the engine sailed
+            // through TV's overnight stop-out and desynced for days).
+            // Capacity then = open fills already tagged from_entry (same-id
+            // pyramiding remainder) + the pending entry's qty (unbounded
+            // when the entry's qty only resolves at fill time).
+            double capacity = live_pos_qty;
+            bool entry_pending = false;
+            double pending_entry_qty = 0.0;
+            for (const auto& o : pending_orders_) {
+                if (o.id != from_entry) continue;
+                if (o.type != OrderType::MARKET && o.type != OrderType::ENTRY
+                    && o.type != OrderType::RAW_ORDER) continue;
+                entry_pending = true;
+                if (std::isnan(o.qty)) {
+                    pending_entry_qty = std::numeric_limits<double>::infinity();
+                } else {
+                    pending_entry_qty += o.qty;
+                }
+            }
+            if (entry_pending) {
+                double open_from_entry = 0.0;
+                for (const auto& pe : pyramid_entries_) {
+                    if (pe.entry_id == from_entry) open_from_entry += pe.qty;
+                }
+                capacity = open_from_entry + pending_entry_qty;
+            }
+            double available = std::max(0.0, capacity - already_reserved);
             reserved_qty = std::min(qty, available);
             if (reserved_qty <= kQtyEpsilon) return;
         }
