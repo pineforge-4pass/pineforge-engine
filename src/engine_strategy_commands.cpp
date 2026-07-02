@@ -538,8 +538,43 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         }
         is_partial = reserved_qty < live_pos_qty - kFullQtyEps;
     } else {
-        if (!compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
-                                       live_pos_qty, qp, is_partial, reserved_qty)) {
+        // Default-sized (percent) bracket armed while its from_entry ENTRY is
+        // still a PENDING order in the OPPOSITE direction of the live
+        // position (the reversal-bar shape: strategy.entry(X) +
+        // strategy.exit(from_entry=X) issued together while the old opposite
+        // position is still open). TV binds the bracket to X's eventual
+        // fill — the bracket closes 100% of the lot the entry actually
+        // opens. Freezing reserved_qty at the CURRENT position size (the
+        // old, about-to-be-replaced side) under-sizes the bracket whenever
+        // the fresh percent-of-equity lot exceeds the old position, leaving
+        // a dust remainder (q_plain - |old|) open when the bracket fires —
+        // the seed of jevondijefferson's multi-day tiny-qty desync chains
+        // (2025-05-23 12:00, 2025-10-04 15:30, 2026-02-13 15:15,
+        // 2026-02-22 13:45 UTC: e.g. 10-04 bracket froze at 4.3847 against
+        // the new 4.5089 short, stranding 0.1242). Defer the reservation
+        // (qty = NaN): the fill-side path then executes a FULL exit against
+        // the live position, exactly like a bracket placed while flat.
+        // Mirrors the explicit-qty path's pending-entry capacity rule above
+        // (thulashimohanr fix); entries with an explicit qty keep the
+        // legacy reservation math.
+        bool bind_to_pending_reversal_entry = false;
+        if (!from_entry.empty() && !effectively_flat
+            && qp >= 100.0 - kFullPercentEps) {
+            for (const auto& o : pending_orders_) {
+                if (o.id != from_entry) continue;
+                if (o.type != OrderType::MARKET && o.type != OrderType::ENTRY
+                    && o.type != OrderType::RAW_ORDER) continue;
+                PositionSide entry_dir = o.is_long ? PositionSide::LONG
+                                                   : PositionSide::SHORT;
+                if (entry_dir != position_side_ && std::isnan(o.qty)) {
+                    bind_to_pending_reversal_entry = true;
+                }
+                break;  // entry ids are unique in pending_orders_
+            }
+        }
+        if (!bind_to_pending_reversal_entry
+            && !compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
+                                          live_pos_qty, qp, is_partial, reserved_qty)) {
             return;
         }
     }
