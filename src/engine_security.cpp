@@ -223,18 +223,34 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
                 requested_seconds / input_seconds;
             state.lower_tf_ratio = script_seconds / requested_seconds;
             state.lower_tf_seconds = requested_seconds;
-        } else if (!is_calendar_month && script_seconds > 0
+        } else if (!is_calendar_month && state.lookahead_on
+                   && script_seconds > 0
                    && requested_seconds < script_seconds
                    && script_seconds % requested_seconds == 0) {
             // Plain request.security with a target TF finer than the
-            // script/chart TF (e.g. so2TF="5" on a 15m chart): the
-            // security's own aggregator completes multiple times per
-            // calling bar. A history-offset read (``expr[1]``) must expose
-            // the value confirmed as of the PREVIOUS calling bar, not
-            // whatever native sub-period last completed inside the
-            // CURRENT calling bar. Gate publication (see
-            // feed_security_eval_state) to only the completion whose
-            // bucket end aligns with a script_tf boundary.
+            // script/chart TF (e.g. so2TF="5" on a 15m chart) and
+            // lookahead=barmerge.lookahead_ON: TradingView merges the
+            // FIRST intrabar of each calling bar, so a history-offset
+            // read (``expr[1]``) must expose the value confirmed as of
+            // the PREVIOUS calling bar's boundary, not whatever native
+            // sub-period last completed inside the CURRENT calling bar.
+            // Gate publication (see feed_security_eval_state) to only
+            // the completion whose bucket end aligns with a script_tf
+            // boundary.
+            //
+            // lookahead_OFF is deliberately EXCLUDED: TV's lookahead_off
+            // merge takes the LAST intrabar of the calling bar, so the
+            // exposed value (and any ``[k]`` offset off it) advances at
+            // the security's own finer cadence — one push per completed
+            // security period, exactly the ungated behavior. Gating it
+            // regressed masayanfx-multi-time-score-strategy
+            // (request.security(sym, "5", ta.highest(high, 20)[1],
+            // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart)
+            // from 100.0% to 93.7% trade parity vs TradingView, while
+            // the gated lookahead_on case (3commas triple-RSI DCA,
+            // so2Rsi = request.security(sym, "5", ta.rsi(close,7)[1],
+            // lookahead=barmerge.lookahead_on)) needs the latch to hold
+            // 100.0%.
             state.publish_gate_tf_seconds = requested_seconds;
         }
     }

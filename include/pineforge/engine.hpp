@@ -1107,13 +1107,15 @@ protected:
         std::vector<Bar> lower_tf_input_buffer;
         // Plain ``request.security`` (not ``_lower_tf``) with a requested TF
         // STRICTLY FINER than script_tf (e.g. so2TF="5" read from a 15m
-        // chart): the security's own aggregator completes multiple times
+        // chart) under ``lookahead=barmerge.lookahead_ON``: the security's
+        // own aggregator completes multiple times
         // (script_seconds / requested_seconds) per calling/script bar. A
         // history-offset read (``expr[1]`` inside the security call, see
         // the ``*_hist`` push/read machinery in codegen) is meant to expose
         // "the value already confirmed as of the close of the PREVIOUS
-        // calling bar" — i.e. the publish granularity is the CALLING bar,
-        // not the security's own (finer) period. Without this, the
+        // calling bar" — TV's lookahead_on merge takes the FIRST intrabar
+        // of each calling bar, so the publish granularity is the CALLING
+        // bar, not the security's own (finer) period. Without this, the
         // read-before-push ``hist[0]`` gets refreshed on every one of the
         // R completions inside the current calling bar, so by the time
         // on_bar() reads it the value has silently drifted to "one
@@ -1125,6 +1127,17 @@ protected:
         // ta.rsi(close,7)[1], lookahead=barmerge.lookahead_on) on a 15m
         // chart (finer target under lookahead + offset).
         //
+        // ``lookahead_OFF`` is deliberately NOT gated (field stays 0): TV's
+        // lookahead_off merge takes the LAST intrabar of the calling bar,
+        // so the exposed value — and any ``[k]`` history offset off it —
+        // advances at the security's own finer cadence (one hist.push per
+        // completed security period), which is exactly the ungated
+        // behavior. Gating lookahead_off regressed
+        // masayanfx-multi-time-score-strategy
+        // (request.security(sym, "5", ta.highest(high, 20)[1],
+        // barmerge.gaps_off, barmerge.lookahead_off) on a 15m chart) from
+        // 100.0% to 93.7% trade parity vs TradingView.
+        //
         // When nonzero, this holds the requested TF's duration in seconds
         // (script_seconds % this == 0 verified at validate time) and gates
         // ``feed_security_eval_state``'s aggregator branch: only the
@@ -1135,8 +1148,9 @@ protected:
         // underlying TA state keeps advancing at native/security
         // resolution) but are passed ``is_complete = false`` so they do not
         // advance the exposed history buffer. Zero (the default) means "not
-        // applicable" (target TF is coarser than or equal to script_tf, the
-        // already-correct case) and leaves behavior unchanged.
+        // applicable" (target TF coarser than or equal to script_tf, or
+        // lookahead_off — the already-correct cases) and leaves behavior
+        // unchanged.
         int publish_gate_tf_seconds = 0;
     };
 
