@@ -248,6 +248,33 @@ static void test_tradingday_unparseable_fallback() {
     CHECK(pine_time_tradingday(bar, "garbage", "UTC") == expected);
 }
 
+// ---------------------------------------------------------------------------
+// TradingView fixed-offset labels use the intuitive sign convention:
+// "GMT+1" means local time is UTC+1. POSIX TZ strings use the reverse sign,
+// so the engine must normalize before calling setenv("TZ", ...).
+// ---------------------------------------------------------------------------
+static void test_tradingview_gmt_offset_signs() {
+    std::printf("test_tradingview_gmt_offset_signs\n");
+
+    CHECK(normalize_timezone_for_posix("GMT+1") == "UTC-1");
+    CHECK(normalize_timezone_for_posix("UTC-5") == "UTC+5");
+    CHECK(normalize_timezone_for_posix("GMT+05:30") == "UTC-5:30");
+
+    const std::string sess = "0800-1000";
+
+    // GMT+1: 07:15 UTC == 08:15 local (inside); 09:15 UTC == 10:15 local (out).
+    CHECK(pine_session_ismarket(sess, "GMT+1", utc_ms(2025, 4, 4, 7, 15, 0)) == true);
+    CHECK(pine_session_ismarket(sess, "GMT+1", utc_ms(2025, 4, 4, 9, 15, 0)) == false);
+
+    // GMT-3: 11:15 UTC == 08:15 local (inside); 13:15 UTC == 10:15 local (out).
+    CHECK(pine_session_ismarket(sess, "GMT-3", utc_ms(2025, 4, 4, 11, 15, 0)) == true);
+    CHECK(pine_session_ismarket(sess, "GMT-3", utc_ms(2025, 4, 4, 13, 15, 0)) == false);
+
+    // Calendar buckets use the same normalization.
+    CHECK(pine_time(utc_ms(2025, 4, 4, 7, 15, 0), "D", "", "GMT+1", "D") ==
+          utc_ms(2025, 4, 3, 23, 0, 0));
+}
+
 int main() {
     test_overnight_window_wrap();
     test_utc_bucket_negative_quantization();
@@ -259,6 +286,7 @@ int main() {
     test_weekday_filter_digits();
     test_malformed_window_skips();
     test_tradingday_unparseable_fallback();
+    test_tradingview_gmt_offset_signs();
 
     std::printf("session_calendar_extra: %d passed, %d failed\n",
                 tests_passed, tests_failed);
