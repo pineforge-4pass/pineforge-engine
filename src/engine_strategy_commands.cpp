@@ -431,7 +431,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double trail_points, double trail_offset,
                                     double trail_price, double qty_percent,
                                     const std::string& comment,
-                                    double qty, const std::string& oca_name) {
+                                    double qty, const std::string& oca_name,
+                                    double profit_ticks, double loss_ticks) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
@@ -589,6 +590,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.trail_points = trail_points;
     order.trail_price = trail_price;
     order.trail_offset = trail_offset;
+    order.profit_ticks = profit_ticks;
+    order.loss_ticks = loss_ticks;
     order.qty = reserved_qty;
     order.qty_type = -1;
     order.qty_percent = qp;

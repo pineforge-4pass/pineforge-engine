@@ -22,6 +22,7 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
 
     double trail_best_path_state = trail_best_price_;
     update_trail_best_for_bar_open(bar);
+    materialize_relative_exit_prices_for_live_position();
     sort_exit_siblings_by_path_fill(bar);
 
     sort_orders_by_fill_phase(bar);
@@ -80,6 +81,7 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
             trail_best_path_state,
             exit_closed_from_bar, exit_closed_was_long,
             filled_indices);
+        materialize_relative_exit_prices_for_live_position();
     }
     compact_filled_pending_orders(filled_indices, exit_closed_from_bar, exit_closed_was_long);
     }  // opposing_pass
@@ -937,6 +939,31 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
                 exit_closed_from_bar = order.created_bar;
                 exit_closed_was_long = (side_before_raw == PositionSide::LONG);
             }
+        }
+    }
+}
+
+void BacktestEngine::materialize_relative_exit_prices_for_live_position() {
+    if (position_side_ == PositionSide::FLAT) return;
+    if (!std::isfinite(position_entry_price_)) return;
+    const double dir = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
+    for (auto& order : pending_orders_) {
+        if (order.type != OrderType::EXIT) continue;
+        if (!order.from_entry.empty()) {
+            bool has_parent_entry = false;
+            for (const auto& pe : pyramid_entries_) {
+                if (pe.entry_id == order.from_entry) {
+                    has_parent_entry = true;
+                    break;
+                }
+            }
+            if (!has_parent_entry) continue;
+        }
+        if (std::isnan(order.limit_price) && !std::isnan(order.profit_ticks)) {
+            order.limit_price = position_entry_price_ + dir * order.profit_ticks * syminfo_mintick_;
+        }
+        if (std::isnan(order.stop_price) && !std::isnan(order.loss_ticks)) {
+            order.stop_price = position_entry_price_ - dir * order.loss_ticks * syminfo_mintick_;
         }
     }
 }

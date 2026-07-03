@@ -167,6 +167,8 @@ struct PendingOrder {
     // trail predicates.
     double trail_price = std::numeric_limits<double>::quiet_NaN();
     double trail_offset;       // NaN = not set
+    double profit_ticks = std::numeric_limits<double>::quiet_NaN();  // strategy.exit profit offset
+    double loss_ticks = std::numeric_limits<double>::quiet_NaN();    // strategy.exit loss offset
     double qty;                // NaN = use default sizing, else explicit qty
     int qty_type;              // -1 = qty is fixed contracts, else QtyType override
     double qty_percent;        // 100 = full position
@@ -664,7 +666,9 @@ protected:
                        double qty_percent = 100.0,
                        const std::string& comment = "",
                        double qty = std::numeric_limits<double>::quiet_NaN(),
-                       const std::string& oca_name = "");
+                       const std::string& oca_name = "",
+                       double profit_ticks = std::numeric_limits<double>::quiet_NaN(),
+                       double loss_ticks = std::numeric_limits<double>::quiet_NaN());
     void strategy_cancel(const std::string& id);
     void strategy_cancel_all();
     void strategy_order(const std::string& id, bool is_long, double qty,
@@ -1470,6 +1474,7 @@ private:
                               double& trail_best_path_state,
                               int& exit_closed_from_bar,
                               bool& exit_closed_was_long);
+    void materialize_relative_exit_prices_for_live_position();
 
     // Inner-loop phase split for process_pending_orders.
     // The inner loop iterates `pending_orders_` and processes each via

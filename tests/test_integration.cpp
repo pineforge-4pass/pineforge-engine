@@ -1142,6 +1142,56 @@ static void test_trail_points_activation_ceils_to_mintick() {
     }
 }
 
+static void test_exit_profit_loss_materializes_after_pending_entry_fill() {
+    std::printf("test_exit_profit_loss_materializes_after_pending_entry_fill\n");
+
+    class Strat : public BacktestEngine {
+    public:
+        Strat() {
+            initial_capital_ = 100000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            syminfo_mintick_ = 0.01;
+            process_orders_on_close_ = false;
+            pyramiding_ = 1;
+        }
+
+        void on_bar(const Bar& bar) override {
+            (void)bar;
+            if (bar_index_ == 0) {
+                strategy_entry("L", true);
+                strategy_exit("X", "L",
+                              na<double>(), na<double>(),
+                              na<double>(), na<double>(), na<double>(),
+                              100.0, "", na<double>(), "",
+                              40.0, 20.0);
+            }
+        }
+        double get_signed_position_size() const { return signed_position_size(); }
+    };
+
+    Strat strat;
+    Bar bars[] = {
+        {101.00, 101.00, 101.00, 101.00, 50, 900'000},
+        // Entry fills at 100.00. The retained profit/loss exit must price
+        // from that actual fill before this bar's path is evaluated.
+        {100.00, 100.10, 99.70, 99.90, 50, 1'800'000},
+    };
+    strat.run(bars, 2);
+
+    CHECK(strat.trade_count() == 1);
+    CHECK(near(strat.get_signed_position_size(), 0.0, 1e-9));
+    if (strat.trade_count() == 1) {
+        CHECK(strat.get_trade(0).is_long == true);
+        CHECK(near(strat.get_trade(0).entry_price, 100.00, 1e-9));
+        CHECK(near(strat.get_trade(0).exit_price, 99.80, 1e-9));
+        CHECK(strat.get_trade(0).entry_bar_index == 1);
+        CHECK(strat.get_trade(0).exit_bar_index == 1);
+    }
+}
+
 static void test_strategy_pnl_roundtrip() {
     std::printf("test_strategy_pnl_roundtrip\n");
     PnlTestStrategy strat;
@@ -4212,6 +4262,7 @@ int main() {
     test_flat_bracket_dual_stop_open_equals_stop_prefers_long();
     test_flat_armed_priced_entries_pyramid_within_one_bar();
     test_trail_points_activation_ceils_to_mintick();
+    test_exit_profit_loss_materializes_after_pending_entry_fill();
     test_strategy_pnl_roundtrip();
     test_per_trade_extremes();
     test_process_orders_on_close();
