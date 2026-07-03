@@ -85,7 +85,7 @@ double ATR::compute(double high, double low, double close) {
 
 // --- StdDev (Standard Deviation) ---
 
-StdDev::StdDev(int length) : length_(length) {}
+StdDev::StdDev(int length, bool biased) : length_(length), biased_(biased) {}
 
 double StdDev::compute(double src) {
     if (is_na(src)) {
@@ -113,7 +113,8 @@ double StdDev::compute(double src) {
         double diff = v - mean;
         sq_sum += diff * diff;
     }
-    return std::sqrt(sq_sum / length_);
+    const int denom = biased_ ? length_ : (length_ - 1);
+    return denom > 0 ? std::sqrt(sq_sum / denom) : na<double>();
 }
 
 // --- Supertrend ---
@@ -470,7 +471,7 @@ KCResult KC::compute(double src, double high, double low, double close) {
 
 // --- Variance ---
 
-Variance::Variance(int length) : length_(length) {}
+Variance::Variance(int length, bool biased) : length_(length), biased_(biased) {}
 
 double Variance::compute(double src) {
     if (is_na(src)) {
@@ -497,7 +498,8 @@ double Variance::compute(double src) {
         double diff = v - mean;
         sq_sum += diff * diff;
     }
-    return sq_sum / length_;
+    const int denom = biased_ ? length_ : (length_ - 1);
+    return denom > 0 ? (sq_sum / denom) : na<double>();
 }
 
 // ============================================================================
@@ -647,7 +649,8 @@ double StdDev::recompute(double src) {
         double diff = v - mean;
         sq_sum += diff * diff;
     }
-    return std::sqrt(sq_sum / length_);
+    const int denom = biased_ ? length_ : (length_ - 1);
+    return denom > 0 ? std::sqrt(sq_sum / denom) : na<double>();
 }
 
 // --- Supertrend ---
@@ -755,7 +758,8 @@ double Variance::recompute(double src) {
         double diff = v - mean;
         sq_sum += diff * diff;
     }
-    return sq_sum / length_;
+    const int denom = biased_ ? length_ : (length_ - 1);
+    return denom > 0 ? (sq_sum / denom) : na<double>();
 }
 
 // --- BBW ---
