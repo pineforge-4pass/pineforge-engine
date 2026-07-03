@@ -19,6 +19,12 @@ struct MetaHarness : public BacktestEngine {
     void on_bar(const Bar& /*bar*/) override {}
     double meta(const std::string& key) const { return get_syminfo_metadata(key); }
     const SymInfo& sym() const { return syminfo_; }
+    void set_internal_indices(int bar_idx, int last_idx) {
+        bar_index_ = bar_idx;
+        last_bar_index_ = last_idx;
+    }
+    int public_bar_index() const { return pine_bar_index(); }
+    int public_last_bar_index() const { return pine_last_bar_index(); }
 };
 
 int tests_run = 0;
@@ -64,6 +70,18 @@ void test_tz_session_setters() {
     CHECK(h.sym().session == "0930-1600:23456", "session setter lands on syminfo_");
 }
 
+void test_bar_index_offset_metadata() {
+    MetaHarness h;
+    h.set_internal_indices(5, 99);
+    CHECK(h.public_bar_index() == 5, "default public bar_index is internal index");
+    CHECK(h.public_last_bar_index() == 99, "default public last_bar_index is internal last index");
+    h.set_syminfo_metadata("bar_index_offset", 70.0);
+    CHECK(h.public_bar_index() == 75, "bar_index_offset shifts public bar_index");
+    CHECK(h.public_last_bar_index() == 169, "bar_index_offset shifts public last_bar_index");
+    h.set_syminfo_metadata("bar_index_offset", std::nan(""));
+    CHECK(h.public_bar_index() == 5, "non-finite bar_index_offset resets to zero");
+}
+
 }  // namespace
 
 int main() {
@@ -72,6 +90,7 @@ int main() {
     test_injected_value();
     test_overwrite();
     test_tz_session_setters();
+    test_bar_index_offset_metadata();
     printf("\n=== Results: %d / %d passed ===\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
 }

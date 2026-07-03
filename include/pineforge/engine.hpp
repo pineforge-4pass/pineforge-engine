@@ -490,6 +490,7 @@ protected:
     // --- Runtime state ---
     Bar current_bar_;
     int bar_index_ = 0;
+    int bar_index_offset_ = 0;
     int64_t next_order_seq_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
@@ -1734,6 +1735,16 @@ public:
     bool margin_call_enabled() const { return margin_call_enabled_; }
     void set_syminfo_metadata(const std::string& key, double value) {
         syminfo_metadata_[key] = value;
+        // Pine's public bar_index is chart-history relative. Validation feeds
+        // can start after TradingView's hidden first chart bar, while engine
+        // internals still need zero-based array indices for TA precalc and
+        // broker bookkeeping. This metadata key shifts only codegen-emitted
+        // Pine bar_index reads via pine_bar_index()/pine_last_bar_index().
+        if (key == "bar_index_offset") {
+            bar_index_offset_ = std::isfinite(value)
+                ? static_cast<int>(std::llround(value))
+                : 0;
+        }
         // "qty_step" is the per-instrument lot increment used by the forced-
         // liquidation quantizer. Route it onto the dedicated member so the
         // codegen run(const Bar*, int) path (which never overwrites it) keeps
@@ -1781,6 +1792,8 @@ public:
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,
     // "D" for daily). Backs timeframe.main_period in generated Pine v6 code.
     const std::string& main_period() const { return script_tf_; }
+    int pine_bar_index() const { return bar_index_ + bar_index_offset_; }
+    int pine_last_bar_index() const { return last_bar_index_ + bar_index_offset_; }
 
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.
