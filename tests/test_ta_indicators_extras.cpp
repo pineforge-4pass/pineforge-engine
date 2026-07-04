@@ -213,10 +213,18 @@ static void test_change_cross_family() {
     CHECK(crossover.compute(3.0, 2.0));   // previous <=, current >
     CHECK(!crossover.recompute(2.0, 3.0));
 
+    ta::Crossover crossover_after_na;
+    CHECK(!crossover_after_na.compute(na<double>(), 2.0));
+    CHECK(crossover_after_na.compute(3.0, 2.0));
+
     ta::Crossunder crossunder;
     CHECK(!crossunder.compute(3.0, 2.0));
     CHECK(crossunder.compute(1.0, 2.0));  // previous >=, current <
     CHECK(!crossunder.recompute(3.0, 2.0));
+
+    ta::Crossunder crossunder_after_na;
+    CHECK(!crossunder_after_na.compute(na<double>(), -2.0));
+    CHECK(crossunder_after_na.compute(-3.0, -2.0));
 
     ta::Cross cross;
     CHECK(!cross.compute(1.0, 2.0));

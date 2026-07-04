@@ -1147,6 +1147,9 @@ def main() -> int:
                     help="Emit all trades from the full OHLCV input, including warmup trades.")
     ap.add_argument("--disable-trading-before-window", action="store_true",
                     help="Warm indicators on pre-window bars but ignore strategy order commands until the emit window starts.")
+    ap.add_argument("--allow-trading-before-window", action="store_true",
+                    help="When tv_trades_csv defines an emit window, keep broker order execution active before that window. "
+                         "This matches TV exports that carry positions opened before the displayed date range.")
     ap.add_argument("--inputs-json", type=Path, default=None,
                     help="Use this inputs.json instead of strategy_dir/inputs.json. "
                          "Lets ad-hoc validation runs override strategy properties "
@@ -1208,7 +1211,10 @@ def main() -> int:
         tv_window_used = emit_window is not None
         if emit_window is None:
             emit_window = _load_window_ms(REFERENCE_OHLCV)
-    trade_start_ms = emit_window[0] if (emit_window is not None and (tv_window_used or args.disable_trading_before_window)) else None
+    trade_start_ms = None
+    if emit_window is not None and not args.allow_trading_before_window:
+        if tv_window_used or args.disable_trading_before_window:
+            trade_start_ms = emit_window[0]
 
     if args.runner == "docker":
         if args.trace_json is not None:
