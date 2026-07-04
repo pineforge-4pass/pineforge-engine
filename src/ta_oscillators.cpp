@@ -81,13 +81,18 @@ Crossover::Crossover()
 bool Crossover::compute(double a, double b) {
     saved_prev_a_ = prev_a;
     saved_prev_b_ = prev_b;
-    if (is_na(a) || is_na(b) || is_na(prev_a) || is_na(prev_b)) {
+    if (is_na(a) || is_na(b)) {
         prev_a = a;
         prev_b = b;
         return false;
     }
 
-    bool result = (a > b) && (prev_a <= prev_b);
+    bool result = false;
+    if (!is_na(prev_a) && !is_na(prev_b)) {
+        result = (a > b) && (prev_a <= prev_b);
+    } else if (is_na(prev_a) && !is_na(prev_b)) {
+        result = a > b;
+    }
     prev_a = a;
     prev_b = b;
     return result;
@@ -106,13 +111,18 @@ Crossunder::Crossunder()
 bool Crossunder::compute(double a, double b) {
     saved_prev_a_ = prev_a;
     saved_prev_b_ = prev_b;
-    if (is_na(a) || is_na(b) || is_na(prev_a) || is_na(prev_b)) {
+    if (is_na(a) || is_na(b)) {
         prev_a = a;
         prev_b = b;
         return false;
     }
 
-    bool result = (a < b) && (prev_a >= prev_b);
+    bool result = false;
+    if (!is_na(prev_a) && !is_na(prev_b)) {
+        result = (a < b) && (prev_a >= prev_b);
+    } else if (is_na(prev_a) && !is_na(prev_b)) {
+        result = a < b;
+    }
     prev_a = a;
     prev_b = b;
     return result;

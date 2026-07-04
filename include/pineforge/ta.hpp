@@ -243,10 +243,11 @@ public:
 
 class StdDev {
     int length_;
+    bool biased_;
     std::deque<double> buffer_;
 
 public:
-    explicit StdDev(int length);
+    explicit StdDev(int length, bool biased = true);
     double compute(double src);
     double recompute(double src);
 };
@@ -542,10 +543,11 @@ public:
 
 class Variance {
     int length_;
+    bool biased_;
     std::deque<double> buffer_;
 
 public:
-    explicit Variance(int length);
+    explicit Variance(int length, bool biased = true);
     double compute(double src);
     double recompute(double src);
 };

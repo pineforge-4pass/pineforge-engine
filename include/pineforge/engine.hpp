@@ -167,6 +167,8 @@ struct PendingOrder {
     // trail predicates.
     double trail_price = std::numeric_limits<double>::quiet_NaN();
     double trail_offset;       // NaN = not set
+    double profit_ticks = std::numeric_limits<double>::quiet_NaN();  // strategy.exit profit offset
+    double loss_ticks = std::numeric_limits<double>::quiet_NaN();    // strategy.exit loss offset
     double qty;                // NaN = use default sizing, else explicit qty
     int qty_type;              // -1 = qty is fixed contracts, else QtyType override
     double qty_percent;        // 100 = full position
@@ -488,6 +490,7 @@ protected:
     // --- Runtime state ---
     Bar current_bar_;
     int bar_index_ = 0;
+    int bar_index_offset_ = 0;
     int64_t next_order_seq_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
@@ -664,7 +667,9 @@ protected:
                        double qty_percent = 100.0,
                        const std::string& comment = "",
                        double qty = std::numeric_limits<double>::quiet_NaN(),
-                       const std::string& oca_name = "");
+                       const std::string& oca_name = "",
+                       double profit_ticks = std::numeric_limits<double>::quiet_NaN(),
+                       double loss_ticks = std::numeric_limits<double>::quiet_NaN());
     void strategy_cancel(const std::string& id);
     void strategy_cancel_all();
     void strategy_order(const std::string& id, bool is_long, double qty,
@@ -837,7 +842,13 @@ protected:
             case QtyType::FIXED:
                 return apply_qty_step(default_qty_value_);
             case QtyType::PERCENT_OF_EQUITY: {
-                double equity = current_equity();
+                // TradingView's percent-of-equity default sizing uses
+                // strategy.equity, i.e. initial capital + closed PnL +
+                // mark-to-market open PnL.  Keep current_equity() as the
+                // closed-equity accessor used elsewhere, but size new default
+                // percent orders from the live equity snapshot so pyramid adds
+                // and same-bar/re-entry sizing see unrealized PnL.
+                double equity = current_equity() + open_profit(current_bar_.close);
                 double cash = equity * (default_qty_value_ / 100.0) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
@@ -1470,6 +1481,7 @@ private:
                               double& trail_best_path_state,
                               int& exit_closed_from_bar,
                               bool& exit_closed_was_long);
+    void materialize_relative_exit_prices_for_live_position();
 
     // Inner-loop phase split for process_pending_orders.
     // The inner loop iterates `pending_orders_` and processes each via
@@ -1506,6 +1518,7 @@ private:
                                   double& qty_to_close_out,
                                   bool& all_entries_match_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
+    void cancel_same_bar_market_reentries_after_full_close(bool closed_long);
     // Same-bar close batching (TV one-fill-per-bar; see the field-block
     // comment at close_reserved_qty_). enqueue replaces the pending
     // same-bar close; flush executes the surviving one at bar close.
@@ -1729,6 +1742,16 @@ public:
     bool margin_call_enabled() const { return margin_call_enabled_; }
     void set_syminfo_metadata(const std::string& key, double value) {
         syminfo_metadata_[key] = value;
+        // Pine's public bar_index is chart-history relative. Validation feeds
+        // can start after TradingView's hidden first chart bar, while engine
+        // internals still need zero-based array indices for TA precalc and
+        // broker bookkeeping. This metadata key shifts only codegen-emitted
+        // Pine bar_index reads via pine_bar_index()/pine_last_bar_index().
+        if (key == "bar_index_offset") {
+            bar_index_offset_ = std::isfinite(value)
+                ? static_cast<int>(std::llround(value))
+                : 0;
+        }
         // "qty_step" is the per-instrument lot increment used by the forced-
         // liquidation quantizer. Route it onto the dedicated member so the
         // codegen run(const Bar*, int) path (which never overwrites it) keeps
@@ -1776,6 +1799,8 @@ public:
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,
     // "D" for daily). Backs timeframe.main_period in generated Pine v6 code.
     const std::string& main_period() const { return script_tf_; }
+    int pine_bar_index() const { return bar_index_ + bar_index_offset_; }
+    int pine_last_bar_index() const { return last_bar_index_ + bar_index_offset_; }
 
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.

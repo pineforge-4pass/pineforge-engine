@@ -5,6 +5,11 @@
 
 namespace pineforge {
 
+// TradingView accepts fixed-offset names like "GMT+1" / "UTC-5" with the
+// human-readable sign convention. POSIX TZ strings use the opposite sign, so
+// engine code that calls setenv("TZ", ...) must normalize through this helper.
+std::string normalize_timezone_for_posix(const std::string& tz);
+
 // ---------------------------------------------------------------------------
 // Pine time(timeframe, session?, timezone?) and time_close(...).
 // Returns Unix milliseconds, or na<int64_t>() when the bar is outside the

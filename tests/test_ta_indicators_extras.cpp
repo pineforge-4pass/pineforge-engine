@@ -213,10 +213,18 @@ static void test_change_cross_family() {
     CHECK(crossover.compute(3.0, 2.0));   // previous <=, current >
     CHECK(!crossover.recompute(2.0, 3.0));
 
+    ta::Crossover crossover_after_na;
+    CHECK(!crossover_after_na.compute(na<double>(), 2.0));
+    CHECK(crossover_after_na.compute(3.0, 2.0));
+
     ta::Crossunder crossunder;
     CHECK(!crossunder.compute(3.0, 2.0));
     CHECK(crossunder.compute(1.0, 2.0));  // previous >=, current <
     CHECK(!crossunder.recompute(3.0, 2.0));
+
+    ta::Crossunder crossunder_after_na;
+    CHECK(!crossunder_after_na.compute(na<double>(), -2.0));
+    CHECK(crossunder_after_na.compute(-3.0, -2.0));
 
     ta::Cross cross;
     CHECK(!cross.compute(1.0, 2.0));
@@ -619,6 +627,18 @@ static void test_variance_median() {
     // Pine ta.variance uses biased (population) variance: mean=4, ((2-4)^2+(4-4)^2+(6-4)^2)/3 = 8/3
     CHECK(near(v, 8.0 / 3.0, 1e-9));
     CHECK(near(var.recompute(6.0), 8.0 / 3.0, 1e-9));
+
+    ta::Variance var_unbiased(3, false);
+    var_unbiased.compute(2); var_unbiased.compute(4);
+    CHECK(near(var_unbiased.compute(6), 4.0, 1e-9));
+    CHECK(near(var_unbiased.recompute(6.0), 4.0, 1e-9));
+
+    ta::StdDev stdev_biased(3);
+    stdev_biased.compute(2); stdev_biased.compute(4);
+    CHECK(near(stdev_biased.compute(6), std::sqrt(8.0 / 3.0), 1e-9));
+    ta::StdDev stdev_unbiased(3, false);
+    stdev_unbiased.compute(2); stdev_unbiased.compute(4);
+    CHECK(near(stdev_unbiased.compute(6), 2.0, 1e-9));
 
     ta::Median med(4);
     med.compute(1); med.compute(2); med.compute(3);

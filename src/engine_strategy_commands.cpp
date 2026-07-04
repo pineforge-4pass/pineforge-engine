@@ -402,10 +402,14 @@ void BacktestEngine::flush_same_bar_close() {
     bool closes_full_position = target >= position_qty_ - eps;
     size_t trades_before = trades_.size();
     if (closes_full_position) {
+        const bool closed_long = (position_side_ == PositionSide::LONG);
         // Exit-order cancel/purge already ran at CALL time in
         // enqueue_same_bar_close — orders armed after the close call
         // must survive exactly as they did under the immediate path.
         execute_market_exit(current_bar_.close);
+        if (position_side_ == PositionSide::FLAT) {
+            cancel_same_bar_market_reentries_after_full_close(closed_long);
+        }
     } else {
         execute_partial_exit_qty(current_bar_.close, target);
         if (position_side_ == PositionSide::FLAT) {
@@ -431,7 +435,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double trail_points, double trail_offset,
                                     double trail_price, double qty_percent,
                                     const std::string& comment,
-                                    double qty, const std::string& oca_name) {
+                                    double qty, const std::string& oca_name,
+                                    double profit_ticks, double loss_ticks) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
@@ -589,6 +594,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.trail_points = trail_points;
     order.trail_price = trail_price;
     order.trail_offset = trail_offset;
+    order.profit_ticks = profit_ticks;
+    order.loss_ticks = loss_ticks;
     order.qty = reserved_qty;
     order.qty_type = -1;
     order.qty_percent = qp;
@@ -798,6 +805,28 @@ void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*
         pending_orders_.end());
 }
 
+void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(bool closed_long) {
+    const PositionSide closed_side = closed_long ? PositionSide::LONG : PositionSide::SHORT;
+    pending_orders_.erase(
+        std::remove_if(
+            pending_orders_.begin(),
+            pending_orders_.end(),
+            [&](const PendingOrder& o) {
+                // Deferred full exits already remove same-direction market
+                // entries through process_pending_orders' exit_closed_from_bar
+                // machinery. POOC/immediate closes execute outside that loop,
+                // so mirror only the market-reentry cleanup here. Priced
+                // entries intentionally survive (covered by
+                // test_strategy_close_pooc_keeps_same_bar_pending_entry), and
+                // opposite-direction market entries remain valid reversals.
+                return o.type == OrderType::MARKET
+                    && o.created_bar == bar_index_
+                    && o.created_position_side == closed_side
+                    && o.is_long == closed_long;
+            }),
+        pending_orders_.end());
+}
+
 // Run the close at the current bar's close price (the
 // process_orders_on_close / strategy.close(immediately=true) path).
 // Dispatches between full, FIFO-partial, and by-entry-percent partial
@@ -812,8 +841,12 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
     const double eps = kQtyEpsilon;
     size_t trades_before = trades_.size();
     if (closes_full_position) {
+        const bool closed_long = (position_side_ == PositionSide::LONG);
         execute_market_exit(current_bar_.close);
         purge_exit_orders();
+        if (position_side_ == PositionSide::FLAT) {
+            cancel_same_bar_market_reentries_after_full_close(closed_long);
+        }
     } else if (closes_fifo_qty) {
         execute_partial_exit_qty(current_bar_.close, qty_to_close);
         if (position_side_ == PositionSide::FLAT) {

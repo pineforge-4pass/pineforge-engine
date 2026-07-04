@@ -7,6 +7,8 @@ namespace pineforge {
 
 namespace pine_tz {
 
+std::string normalize_timezone_for_posix(const std::string& tz);
+
 // RAII guard: swaps the process ``TZ`` environment to ``tz`` (lazily — a
 // same-zone request skips the setenv/tzset pair) and holds a process-global
 // mutex for the guard's ENTIRE lifetime, so the caller's localtime_r /
