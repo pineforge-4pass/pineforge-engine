@@ -122,11 +122,13 @@ def _verify_probe(strategy_dir: Path) -> dict:
             "tier": tier,
             "tv": len(tv_cmp), "eng": len(eng_cmp), "matched": 0,
             "count_delta": vc.relative_max(len(tv_gate), len(eng_gate)),
+            "count_abs_delta": abs(len(tv_gate) - len(eng_gate)),
             "entry_p90": 0.0, "exit_p90": 0.0, "pnl_p90": 0.0,
             "profile": profile,
             "notes": meta.get("notes", "no aligned trades"),
         }
 
+    count_abs_delta = abs(len(tv_gate) - len(eng_gate))
     count_delta = vc.relative_max(len(tv_gate), len(eng_gate))
     entry_deltas = [vc.relative_max(t.entry_price, e.entry_price) for t, e in gating_matched]
     exit_deltas  = [vc.relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
@@ -140,7 +142,7 @@ def _verify_probe(strategy_dir: Path) -> dict:
     exit_p90  = vc.percentile(exit_deltas,  0.90)
     pnl_p90   = vc.percentile(pnl_deltas,   0.90) if pnl_deltas else 0.0
 
-    count_ok = count_delta < thresh["count"]
+    count_ok = count_abs_delta == 0
     entry_ok = entry_p90  < thresh["entry"]
     exit_ok  = exit_p90   < thresh["exit"]
     pnl_ok   = pnl_p90    < thresh["pnl"]
@@ -149,6 +151,7 @@ def _verify_probe(strategy_dir: Path) -> dict:
         tier = "excellent"
     elif (
         len(gating_matched) / max(len(tv_gate), 1) >= 0.99
+        and count_abs_delta <= 1
         and count_delta < vc.STRONG_COUNT_DELTA
         and entry_p90 < vc.STRONG_ENTRY_DELTA
         and exit_p90 < vc.STRONG_EXIT_DELTA
@@ -190,6 +193,7 @@ def _verify_probe(strategy_dir: Path) -> dict:
         "eng": len(eng_cmp),
         "matched": len(matched),
         "count_delta": count_delta,
+        "count_abs_delta": count_abs_delta,
         "entry_p90": entry_p90,
         "exit_p90": exit_p90,
         "pnl_p90": pnl_p90,
