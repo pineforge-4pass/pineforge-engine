@@ -842,7 +842,13 @@ protected:
             case QtyType::FIXED:
                 return apply_qty_step(default_qty_value_);
             case QtyType::PERCENT_OF_EQUITY: {
-                double equity = current_equity();
+                // TradingView's percent-of-equity default sizing uses
+                // strategy.equity, i.e. initial capital + closed PnL +
+                // mark-to-market open PnL.  Keep current_equity() as the
+                // closed-equity accessor used elsewhere, but size new default
+                // percent orders from the live equity snapshot so pyramid adds
+                // and same-bar/re-entry sizing see unrealized PnL.
+                double equity = current_equity() + open_profit(current_bar_.close);
                 double cash = equity * (default_qty_value_ / 100.0) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
@@ -1512,6 +1518,7 @@ private:
                                   double& qty_to_close_out,
                                   bool& all_entries_match_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
+    void cancel_same_bar_market_reentries_after_full_close(bool closed_long);
     // Same-bar close batching (TV one-fill-per-bar; see the field-block
     // comment at close_reserved_qty_). enqueue replaces the pending
     // same-bar close; flush executes the surviving one at bar close.

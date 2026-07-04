@@ -2863,6 +2863,35 @@ static void test_qty_percent_of_equity() {
     CHECK(near(strat.get_trade(0).pnl, 500.0, 0.01));
 }
 
+static void test_qty_percent_of_equity_includes_open_profit_for_pyramid_add() {
+    std::printf("test_qty_percent_of_equity_includes_open_profit_for_pyramid_add\n");
+    class Strat : public BacktestEngine {
+    public:
+        Strat() {
+            initial_capital_ = 10000;
+            default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+            default_qty_value_ = 50.0;
+            commission_value_ = 0;
+            slippage_ = 0;
+            pyramiding_ = 2;
+            process_orders_on_close_ = true;
+        }
+        double calc_add_qty() {
+            current_bar_ = {110, 110, 110, 110, 50, 120000};
+            position_side_ = PositionSide::LONG;
+            position_qty_ = 50.0;
+            position_entry_price_ = 100.0;
+            return calc_qty(110.0);
+        }
+        void on_bar(const Bar&) override {}
+    } strat;
+
+    // The second default percent-of-equity entry sizes from live
+    // strategy.equity: 10000 closed equity + 500 unrealized open profit,
+    // then 50% of that at a 110 close fill.
+    CHECK(near(strat.calc_add_qty(), 5250.0 / 110.0, 0.01));
+}
+
 // ---- main -------------------------------------------------------------------
 
 // ---- Price path fill priority tests ----------------------------------------
@@ -3791,6 +3820,116 @@ static void test_strategy_close_pooc_missing_id_noops() {
     CHECK(near(strat.get_signed_position_size(), 1.0, 1e-9));
 }
 
+static void test_strategy_close_pooc_cancels_same_bar_market_reentry() {
+    std::printf("test_strategy_close_pooc_cancels_same_bar_market_reentry\n");
+
+    class Strat : public BacktestEngine {
+    public:
+        Strat() {
+            initial_capital_ = 100000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            pyramiding_ = 2;
+            process_orders_on_close_ = true;
+        }
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0) {
+                strategy_entry("L", true);
+            } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
+                strategy_close("L");
+                strategy_entry("L_add", true);
+            }
+        }
+        double get_signed_position_size() const { return signed_position_size(); }
+    };
+
+    Strat strat;
+    Bar bars[] = {
+        {100.0, 101.0, 99.0, 100.0, 50, 900'000},
+        {100.0, 105.0, 99.0, 104.0, 50, 1'800'000},
+        {104.0, 106.0, 101.0, 105.0, 50, 2'700'000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(strat.trade_count() == 1);
+    CHECK(near(strat.get_signed_position_size(), 0.0, 1e-9));
+}
+
+static void test_strategy_close_pooc_keeps_same_bar_market_reversal() {
+    std::printf("test_strategy_close_pooc_keeps_same_bar_market_reversal\n");
+
+    class Strat : public BacktestEngine {
+    public:
+        Strat() {
+            initial_capital_ = 100000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            process_orders_on_close_ = true;
+        }
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0) {
+                strategy_entry("L", true);
+            } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
+                strategy_close("L");
+                strategy_entry("S", false);
+            }
+        }
+        double get_signed_position_size() const { return signed_position_size(); }
+    };
+
+    Strat strat;
+    Bar bars[] = {
+        {100.0, 101.0, 99.0, 100.0, 50, 900'000},
+        {100.0, 105.0, 99.0, 104.0, 50, 1'800'000},
+        {104.0, 106.0, 101.0, 105.0, 50, 2'700'000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(strat.trade_count() == 1);
+    CHECK(strat.get_signed_position_size() < 0.0);
+}
+
+static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry() {
+    std::printf("test_strategy_close_immediate_cancels_prior_same_bar_market_reentry\n");
+
+    class Strat : public BacktestEngine {
+    public:
+        Strat() {
+            initial_capital_ = 100000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            pyramiding_ = 2;
+            process_orders_on_close_ = true;
+        }
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0) {
+                strategy_entry("L", true);
+            } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
+                strategy_entry("L_add", true);
+                strategy_close("L", "", na<double>(), na<double>(), true);
+            }
+        }
+        double get_signed_position_size() const { return signed_position_size(); }
+    };
+
+    Strat strat;
+    Bar bars[] = {
+        {100.0, 101.0, 99.0, 100.0, 50, 900'000},
+        {100.0, 105.0, 99.0, 104.0, 50, 1'800'000},
+        {104.0, 106.0, 101.0, 105.0, 50, 2'700'000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(strat.trade_count() == 1);
+    CHECK(near(strat.get_signed_position_size(), 0.0, 1e-9));
+}
+
 static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
     std::printf("test_strategy_close_pooc_keeps_same_bar_pending_entry\n");
 
@@ -4309,6 +4448,7 @@ int main() {
     test_commission_deducted();
     test_slippage_applied();
     test_qty_percent_of_equity();
+    test_qty_percent_of_equity_includes_open_profit_for_pyramid_add();
 
     // Price path fill priority
     test_price_path_bullish_stop_first();
@@ -4334,6 +4474,9 @@ int main() {
     test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pass_reversal();
     test_strategy_close_any_non_matching_keeps_pending_entry_live();
     test_strategy_close_pooc_missing_id_noops();
+    test_strategy_close_pooc_cancels_same_bar_market_reentry();
+    test_strategy_close_pooc_keeps_same_bar_market_reversal();
+    test_strategy_close_immediate_cancels_prior_same_bar_market_reentry();
     test_strategy_close_pooc_keeps_same_bar_pending_entry();
     test_strategy_close_pooc_partial_close_keeps_other_exit_bracket();
     test_strategy_close_fifo_only_closes_requested_leg_size();
