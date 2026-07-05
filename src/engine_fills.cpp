@@ -604,6 +604,19 @@ void BacktestEngine::apply_filled_order_to_state(
     double signed_pos_after = signed_pos();
     double filled_qty = std::abs(signed_pos_after - signed_pos_before);
 
+    // This fill just opened a position from FLAT via an entry order. Freeze
+    // any LAYERED strategy.exit legs bound to that entry that were armed while
+    // flat (qty=NaN, reservation deferred): bind each to a fixed slice of the
+    // opened lot so a percent partial + its sibling 100% leg no longer
+    // over-close the whole position depending on which leg fills first.
+    if (std::abs(signed_pos_before) < kQtyEpsilon
+        && position_side_ != PositionSide::FLAT
+        && (order.type == OrderType::MARKET
+            || order.type == OrderType::ENTRY
+            || order.type == OrderType::RAW_ORDER)) {
+        reconcile_deferred_layered_exits(order.id);
+    }
+
     if (position_side_ == PositionSide::FLAT) {
         trail_best_path_state = trail_best_price_;
     }
@@ -860,6 +873,55 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     if (!is_partial && position_side_ == PositionSide::FLAT) {
         exit_closed_from_bar = order.created_bar;
         exit_closed_was_long = (side_before_exit == PositionSide::LONG);
+    }
+}
+
+void BacktestEngine::reconcile_deferred_layered_exits(const std::string& entry_id) {
+    if (entry_id.empty()) return;
+    const double live_pos = position_qty_;
+    if (live_pos <= kQtyEpsilon) return;
+
+    // Only act on a LAYERED construct: a from_entry group with >=2 pending
+    // exit legs where at least one is a partial (qty_percent < 100). A lone
+    // bracket or a pure 100% OCA TP/SL pair carries no partial-vs-100% fill-
+    // order ambiguity and is left deferred (qty=NaN → full remaining close).
+    int leg_count = 0;
+    bool has_partial = false;
+    for (const auto& o : pending_orders_) {
+        if (o.type != OrderType::EXIT) continue;
+        if (o.from_entry != entry_id) continue;
+        ++leg_count;
+        double oqp = std::isnan(o.qty_percent)
+                         ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
+        if (oqp < 100.0 - kFullPercentEps) has_partial = true;
+    }
+    if (leg_count < 2 || !has_partial) return;
+
+    // Walk the group in arm (pending) order, reserving each leg's share of the
+    // opened lot exactly like compute_exit_reserved_qty would have if the
+    // position had been live at arm time: a partial reserves its floored
+    // percent slice; the 100% sibling reserves whatever remains. Freezing an
+    // explicit qty makes each leg close a fixed amount regardless of which
+    // fires first. Legs that already carry an explicit qty (reconciled at arm
+    // time) are left as-is but still consume reservation capacity.
+    double reserved = 0.0;
+    for (auto& o : pending_orders_) {
+        if (o.type != OrderType::EXIT) continue;
+        if (o.from_entry != entry_id) continue;
+        double oqp = std::isnan(o.qty_percent)
+                         ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
+        if (!std::isnan(o.qty)) {  // already reconciled at arm time
+            reserved += o.qty;
+            continue;
+        }
+        double avail = std::max(0.0, live_pos - reserved);
+        double requested = live_pos * (oqp / 100.0);
+        if (oqp < 100.0 - kFullPercentEps) requested = apply_exit_qty_step(requested);
+        double res = std::min(requested, avail);
+        if (res <= kQtyEpsilon) continue;  // nothing left to reserve; leave deferred
+        o.qty = res;
+        o.requested_partial = res < live_pos - kFullQtyEps;
+        reserved += res;
     }
 }
 
