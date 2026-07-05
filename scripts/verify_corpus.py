@@ -10,9 +10,8 @@ This mirrors the canonical corpus summary used by the runtime docs:
 it applies common-window edge trimming, honours per-strategy metadata,
 and reports the five parity labels used in the corpus README.
 
-`--all` covers the three reference-tier categories — `basic/`, `community/`,
-`validation/` — i.e. 167 strategies after the equity-mirror anomaly probe
-moved to `parity-anomalies/`. The `parity-anomalies/` category is a home
+`--all` covers the reference-tier categories (`basic/`, `community/`,
+`validation/` — whichever exist in this checkout). The `parity-anomalies/` category is a home
 for probes that *deliberately* surface TV-side non-determinism (engine is
 correct, divergence is documented in `pineforge-utils/parity-anomalies/`);
 it is excluded from `--all` by default so it doesn't mask as a regression.
@@ -21,7 +20,7 @@ explicitly with `--category parity-anomalies`.
 
 Usage:
   scripts/verify_corpus.py corpus/basic/greedy           # one strategy
-  scripts/verify_corpus.py --all                         # 167 reference strategies
+  scripts/verify_corpus.py --all                         # all reference strategies
   scripts/verify_corpus.py --all --include-anomalies     # + parity-anomalies/
   scripts/verify_corpus.py --category validation         # one category
   scripts/verify_corpus.py --category parity-anomalies   # anomaly probes only
@@ -37,9 +36,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Strict-profile thresholds — must match
-# pineforge-utils/validator/validate.py::DEFAULT_PARITY_STRICT exactly.
-# Two profiles available, mirroring canonical:
+# THIS FILE IS THE CANONICAL PARITY RUBRIC (single source of truth).
+# pineforge-utils/validator/validate.py and any other comparator must track
+# THESE thresholds/semantics, not the other way around.
+# Two profiles available:
 #  - STRICT: tight on all four dims (indicator-style strategies whose exits
 #    land on deterministic OHLC levels).
 #  - PRODUCTION: relaxes exit (5x) and per-trade pnl (~100x) to absorb TV's
@@ -60,6 +60,25 @@ STRONG_ENTRY_DELTA = 0.001
 STRONG_EXIT_DELTA  = 0.005
 STRONG_PNL_DELTA   = 1.0
 
+# Coverage gate — matched trades as a fraction of ALL closed TV trades (the
+# interior-trimmed full export, NOT the self-selected common match window).
+# Every other gated metric is computed inside a window derived from the
+# matches themselves, so without this gate a run that reproduces almost
+# nothing can grade top-tier on the sliver it happened to reproduce
+# (observed in production: 'excellent' at 0.9% real coverage). The
+# small-N alternative (<=1 unmatched TV trade) keeps single boundary-trade
+# cases fair for short exports.
+COVERAGE_EXCELLENT = 0.99
+COVERAGE_STRONG    = 0.95
+COVERAGE_MODERATE  = 0.75
+
+# The qty-normalized PnL comparison exists to absorb tiny equity-compounding
+# sizing drift between two independently compounded simulations. Unbounded,
+# it would also absorb arbitrarily large position-sizing bugs (any wrong qty
+# with correct prices rescales into a perfect PnL match), so the rescue only
+# applies when the sizing drift itself is small.
+QTY_NORM_BAND = 0.02  # |tv_qty/eng_qty - 1| <= 2%
+
 # Pine-source comment-strippers + trail_* matcher for profile auto-detect.
 # Matches canonical pineforge-utils/validator/validate.py::detect_parity_profile.
 _LINE_COMMENT_PATTERN = re.compile(r"//.*?$", re.MULTILINE)
@@ -75,17 +94,13 @@ PNL_NEAR_ZERO_USD = 0.01
 # relative PnL miss even when entry, exit, qty and commission are all exact.
 TV_PNL_ROUNDING_EPSILON_USD = 0.005
 
-# MAE (adverse excursion) p90 gate — added after the O7 sign-convention
-# reconciliation (engine now exports TV's "Adverse excursion USD" semantics:
-# negative total-USD drawdown, exit-fill folded in). Post-fix the corpus-wide
-# worst MAE p90 delta is 2.35% (the documented anomaly probe; worst normal
-# probe 1.39%, median 0.08%), so 5% gives >3x margin while still catching
-# the regression classes this gate exists for: a sign flip reads ~200%, a
-# per-unit-vs-total qty error reads 50%+. MFE stays REPORT-ONLY: same-bar
-# stop/limit round-trips have a TV-side favorable excursion sourced from
-# intrabar (1m) data that 15m OHLC cannot reproduce (engine emits 0), which
-# pins MFE p90 at 100% on the magnifier tick-dist probes by construction.
-MAE_P90_DELTA_GATE = 0.05
+# MAE and MFE are REPORT-ONLY (not gated). Both excursions depend on the
+# intrabar price path, which TV sources from finer (1m/tick) data than the
+# local OHLC feed can resolve — gating on them punishes data resolution,
+# not engine correctness. Regression classes a MAE gate would have caught
+# (sign flip ~200%, per-unit-vs-total qty ~50%) remain visible in the
+# report-only section; treat large report-only MAE/MFE drift as a
+# diagnostic lead, not a tier verdict.
 
 
 def detect_parity_profile(pine_source: str) -> str:
@@ -675,14 +690,31 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
         if abs(t.pnl) < PNL_NEAR_ZERO_USD:
             continue
         abs_diff = abs(t.pnl - e.pnl)
-        if t.qty > 1e-9 and e.qty > 1e-9:
+        if (t.qty > 1e-9 and e.qty > 1e-9
+                and abs(t.qty / e.qty - 1.0) <= QTY_NORM_BAND):
             # Qty-normalized comparison isolates per-unit price/commission
             # parity from tiny equity-derived sizing drift between two
-            # independently compounded simulations. Genuine price/commission
-            # errors survive this rescaling; take min so the raw comparison
-            # remains the upper-bound guard.
+            # independently compounded simulations — but ONLY inside
+            # QTY_NORM_BAND: a large sizing divergence is a bug the PnL gate
+            # must surface, not rescale away.
             abs_diff = min(abs_diff, abs(t.pnl - e.pnl * (t.qty / e.qty)))
-        pnl_deltas.append(0.0 if abs_diff < TV_PNL_ROUNDING_EPSILON_USD else abs_diff / abs(t.pnl))
+        if abs_diff < TV_PNL_ROUNDING_EPSILON_USD:
+            pnl_deltas.append(0.0)
+            continue
+        # Mechanistic exit-coupled forgiveness (replaces the former heuristic
+        # escape hatches): a per-trade PnL miss is forgiven ONLY when it is
+        # arithmetically explained by this same trade's exit-price drift AND
+        # that drift is itself inside the profile's exit tolerance. The exit
+        # gate owns exit-price correctness; the PnL gate then fails only on
+        # UNEXPLAINED money differences (commission, funding, sizing,
+        # rounding) — each gate points at a distinct bug class.
+        exit_rel = relative_max(t.exit_price, e.exit_price)
+        explained_bound = (max(t.qty, e.qty) * abs(t.exit_price - e.exit_price)
+                           + TV_PNL_ROUNDING_EPSILON_USD)
+        if exit_rel < thresh["exit"] and abs_diff <= explained_bound:
+            pnl_deltas.append(0.0)
+            continue
+        pnl_deltas.append(abs_diff / abs(t.pnl))
 
     entry_p90 = percentile(entry_deltas, 0.90)
     exit_p90  = percentile(exit_deltas,  0.90)
@@ -693,7 +725,6 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     # prices across different FIFO lot boundaries. Under a strict guard, score
     # exit/PnL on the raw exit schedule instead of the consolidated deal blend.
     fragmented_fifo = has_fragmented_fifo_groups(tv_raw_all) or has_fragmented_fifo_groups(eng_raw_all)
-    mae_fifo_artifact = False
     if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
         if tv_gate:
             lo = min(t.entry_time for t in tv_gate)
@@ -713,11 +744,6 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             if sched_pnl_p90 <= pnl_p90:
                 pnl_deltas = sched_pnl_deltas
                 pnl_p90 = sched_pnl_p90
-        # Consolidation sums per-lot MAEs, but position-level MAE is the worst
-        # adverse excursion while the full position is open, not additive across
-        # FIFO lots. Under the same strict fragmented-FIFO guard used for
-        # exit/PnL schedule scoring, do not let consolidated MAE block excellent.
-        mae_fifo_artifact = True
 
     # --- Report-only field-coverage deltas (NOT gated) ---
     # Extends the historical 4-dimension gate (count/entry/exit/pnl) to qty,
@@ -744,74 +770,51 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     # mismatch is an engine/codegen gap unless separately proven as a TV/export
     # anomaly.
     count_ok = count_abs_delta == 0
-    # Tiny exit drift inside the production tolerance can mechanically amplify
-    # per-trade PnL on tight-profit strategies. With exact entries and bounded
-    # PnL under the strong gate, treat this as sub-bar fill noise rather than an
-    # independent PnL failure. Larger exit bugs (e.g. shiroi QQE) stay blocked.
-    tiny_exit_pnl_noise = (
-        exit_p90 < PRODUCTION_EXIT_DELTA
-        and entry_p90 < thresh["entry"]
-        and pnl_p90 < STRONG_PNL_DELTA
-    )
-    # Strong-bounded exit noise can still amplify PnL on tight-profit trades.
-    # With high TV coverage, count OK, and exact entries, treat PnL scatter as
-    # exit-coupled rather than an independent PnL failure.
-    strong_exit_pnl_coupling = (
-        len(gating_matched) / max(len(tv_gate), 1) >= 0.90
-        and count_ok
-        and entry_ok
-        and exit_p90 < STRONG_EXIT_DELTA
-        and pnl_p90 < STRONG_PNL_DELTA
-    )
-    pnl_ok   = pnl_p90 < thresh["pnl"] or tiny_exit_pnl_noise or strong_exit_pnl_coupling
-    # If exit drift remains inside the strong gate and strict per-trade PnL is
-    # already OK, the exit-price delta has no material financial impact. This
-    # catches FIFO-fragmentation average-price artifacts and tiny sub-bar fill
-    # noise without masking genuine exit bugs, which also fail strict PnL.
-    pnl_validated_exit_noise = exit_p90 < STRONG_EXIT_DELTA and pnl_ok
-    exit_ok  = exit_p90   < thresh["exit"] or pnl_validated_exit_noise
-    # MAE is path-resolution-sensitive: TV can use finer intrabar detail than
-    # the local OHLC path. If all primary pricing/count/PnL dimensions already
-    # pass, residual MAE drift is path-measurement noise rather than a trade
-    # reproduction failure. Fragmented FIFO MAE is handled separately.
-    mae_intrabar_noise = (
-        count_ok and entry_ok and exit_ok and pnl_ok
-    )
-    # Production-profile trail_* strategies can diverge in MAE purely because TV
-    # tracks trailing stops at finer path resolution than the OHLC engine. If all
-    # four primary gates already pass, do not let this path-only MAE artifact
-    # block excellent; strict-profile and price/PnL-broken strategies remain gated.
-    mae_trail_artifact = (
-        profile == "production"
-        and count_ok and entry_ok and exit_ok and pnl_ok
-    )
-    mae_ok   = (
-        mae_p90 < MAE_P90_DELTA_GATE
-        or mae_fifo_artifact
-        or mae_intrabar_noise
-        or mae_trail_artifact
-    )
-    all_ok   = count_ok and entry_ok and exit_ok and pnl_ok and mae_ok
+    # HARD GATES ONLY. The former heuristic escape hatches (tiny_exit_pnl_noise,
+    # strong_exit_pnl_coupling, pnl_validated_exit_noise, and the mae_* waivers)
+    # are gone. Every remaining tolerance is principled and visible:
+    #   - the declared per-class profile (strict/production, printed in the
+    #     report) absorbs TV's sub-bar broker-emulator drift for trail_* exits;
+    #   - the mechanistic exit-coupled PnL forgiveness (pnl_deltas loop above)
+    #     stops double-counting a tolerated exit drift as a PnL failure;
+    #   - TV-side impossibilities go through the documented anomaly pipeline
+    #     (inputs.json expected_tier + ANOMALY.md proof), never hidden gates.
+    # A failing gate therefore names a distinct bug class:
+    #   count    -> missing/extra trades (signal logic, order lifecycle)
+    #   entry    -> entry fill semantics
+    #   exit     -> exit fill semantics
+    #   pnl      -> UNEXPLAINED money drift (commission, funding, sizing, rounding)
+    #   coverage -> engine reproduces only a slice of TV's trading history
+    exit_ok  = exit_p90 < thresh["exit"]
+    pnl_ok   = pnl_p90 < thresh["pnl"]
+
+    # Coverage: matched fraction of ALL closed TV trades (interior-trimmed when
+    # declared), NOT of the self-selected common match window — the
+    # anti-window-collapse gate.
+    if bounds is not None:
+        tv_cov_denom = [t for t in tv if is_interior(t.entry_time * 1000, bounds)]
+        cov_matched = len(gating_matched)
+    else:
+        tv_cov_denom = tv
+        cov_matched = len(matched)
+    unmatched_total = max(len(tv_cov_denom) - cov_matched, 0)
+    coverage = (cov_matched / len(tv_cov_denom)) if tv_cov_denom else 1.0
+    cov_excellent = coverage >= COVERAGE_EXCELLENT or unmatched_total <= 1
+    cov_strong    = coverage >= COVERAGE_STRONG or unmatched_total <= 1
+    cov_moderate  = coverage >= COVERAGE_MODERATE
+
+    all_ok   = count_ok and entry_ok and exit_ok and pnl_ok and cov_excellent
     if all_ok:
         label = "excellent"
     elif (
-        # Near-complete match: >=99% by rate, OR at most one unmatched in-window
-        # trade. The absolute-count clause keeps the tier fair for SMALL trade
-        # counts, where a single missed/extra trade (e.g. 41/42) is ~2.4% — well
-        # within the 5% strong count gate below, yet under the 99% rate floor that
-        # large-N strategies clear trivially. The count_delta gate still bounds it
-        # (one unmatched trade only clears 5% for N>=21), and every *matched* trade
-        # must still meet the strong price/pnl/MAE thresholds.
-        (len(gating_matched) / max(len(tv_gate), 1) >= 0.99 or unmatched_in_window <= 1)
+        cov_strong
         and count_delta < STRONG_COUNT_DELTA
         and entry_p90 < STRONG_ENTRY_DELTA
         and exit_p90 < STRONG_EXIT_DELTA
         and pnl_p90 < STRONG_PNL_DELTA
-        and mae_ok  # MAE gate applies to strong too, else a MAE-only
-                    # regression would still pass the sweep as "strong"
     ):
         label = "strong"
-    elif len(gating_matched) / max(len(tv_gate), 1) >= 0.90:
+    elif cov_moderate and len(gating_matched) / max(len(tv_gate), 1) >= 0.90:
         label = "moderate"
     elif gating_matched:
         label = "weak"
@@ -866,8 +869,8 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
             f"  Entry-price p90 delta: {entry_p90  * 100:8.4f}%  ({check(entry_ok)})\n"
             f"  Exit-price  p90 delta: {exit_p90   * 100:8.4f}%  ({check(exit_ok)})\n"
             f"  PnL         p90 delta: {pnl_p90    * 100:8.4f}%  ({check(pnl_ok)})\n"
-            f"  MAE         p90 delta: {mae_p90    * 100:8.4f}%  ({check(mae_ok)})\n"
-            f"  -- report-only (not gated) --\n"
+            f"  Coverage:              {coverage * 100:8.1f}%  ({check(cov_excellent)}; unmatched={unmatched_total} of {len(tv_cov_denom)} TV)\n"
+            f"  -- report-only (not gated; MAE/MFE are intrabar-path-limited) --\n"
             f"  Entry/Exit  p99 delta:  {percentile(entry_deltas,0.99)*100:.4f}% / {percentile(exit_deltas,0.99)*100:.4f}%\n"
             f"  Entry/Exit/PnL p100:   {entry_p100*100:.4f}% / {exit_p100*100:.4f}% / {pnl_p100*100:.4f}%\n"
             f"  Qty   p90/p100 delta:  {percentile(qty_deltas,0.90)*100:.4f}% / {qty_p100*100:.4f}%\n"
