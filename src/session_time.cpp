@@ -418,6 +418,40 @@ bool pine_session_ispostmarket(const std::string& session,
 // Public functions
 // =========================================================================
 
+// A 2-argument time()/time_close() call binds its second string to the
+// `session` parameter, but scripts commonly pass a TIMEZONE there — e.g.
+// `time("D", "America/New_York")` to detect a day-change in that zone.
+// TradingView honors this idiom. When no explicit timezone was supplied and
+// the session slot instead holds an unambiguous timezone (IANA "Area/Location"
+// or a GMT/UTC specifier), reinterpret it as the timezone with no session
+// filter. A real session window ("0930-1600") never contains '/' nor starts
+// with GMT/UTC, and a 3-arg call supplies tz_in, so neither is affected.
+static bool session_arg_is_timezone(const std::string& s) {
+    if (s.empty())
+        return false;
+    if (s.find('/') != std::string::npos)                 // IANA e.g. America/New_York
+        return true;
+    if (s.rfind("GMT", 0) == 0 || s.rfind("UTC", 0) == 0)  // GMT / UTC / ±offset
+        return true;
+    return false;
+}
+
+// Resolve the (session, tz) pair for a time()/time_close() call, applying the
+// 2-arg timezone-in-session-slot reinterpretation above.
+static void resolve_session_tz(const std::string& session,
+                               const std::string& tz_in,
+                               std::string& sess_out,
+                               std::string& tz_out) {
+    sess_out = session;
+    tz_out = tz_in;
+    if (tz_out.empty() && session_arg_is_timezone(sess_out)) {
+        tz_out = sess_out;
+        sess_out.clear();
+    }
+    if (tz_out.empty())
+        tz_out = "UTC";
+}
+
 int64_t pine_time(int64_t bar_ms,
                   const std::string& tf_in,
                   const std::string& session,
@@ -427,9 +461,10 @@ int64_t pine_time(int64_t bar_ms,
     if (tf.empty())
         tf = "1";
 
-    std::string tz = tz_in.empty() ? "UTC" : tz_in;
+    std::string sess, tz;
+    resolve_session_tz(session, tz_in, sess, tz);
 
-    if (!session.empty() && !passes_session_filter(session, tz, bar_ms))
+    if (!sess.empty() && !passes_session_filter(sess, tz, bar_ms))
         return na<int64_t>();
 
     return compute_tf_open_ms(bar_ms, tf, tz);
@@ -444,9 +479,10 @@ int64_t pine_time_close(int64_t bar_ms,
     if (tf.empty())
         tf = "1";
 
-    std::string tz = tz_in.empty() ? "UTC" : tz_in;
+    std::string sess, tz;
+    resolve_session_tz(session, tz_in, sess, tz);
 
-    if (!session.empty() && !passes_session_filter(session, tz, bar_ms))
+    if (!sess.empty() && !passes_session_filter(sess, tz, bar_ms))
         return na<int64_t>();
 
     int64_t t_open = compute_tf_open_ms(bar_ms, tf, tz);

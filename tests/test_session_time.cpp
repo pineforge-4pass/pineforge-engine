@@ -59,12 +59,62 @@ static void test_time_close_hourly() {
     CHECK(tc == to + 3600000 - 1);
 }
 
+// --- 2-arg time(tf, tz): a timezone passed in the session slot ---
+
+static void test_time_tz_in_session_slot_equiv() {
+    std::printf("test_time_tz_in_session_slot_equiv\n");
+    // time("D", "America/New_York") binds the tz into the session slot. The
+    // engine must reinterpret it as the timezone (not a session) — previously
+    // it treated it as a session, matched no HHMM window, and returned na.
+    int64_t bar = 1775572200000LL;  // 2026-04-07 14:30 UTC = 10:30 NY (EDT)
+    int64_t two_arg = pine_time(bar, "D", "America/New_York", "", "15");
+    int64_t three_arg = pine_time(bar, "D", "", "America/New_York", "15");
+    CHECK(!is_na(two_arg));          // was na for every bar (the bug)
+    CHECK(two_arg == three_arg);     // reinterpreted identically to the 3-arg form
+}
+
+static void test_time_tz_in_session_daily_change() {
+    std::printf("test_time_tz_in_session_daily_change\n");
+    // Bars in the same NY-day share the daily time; the next NY-day differs —
+    // this is what makes ta.change(time("D", tz)) fire once per day.
+    int64_t bar_a = 1775572200000LL;               // 2026-04-07 10:30 NY
+    int64_t bar_b = bar_a + 3600000LL;             // +1h, same NY-day
+    int64_t bar_next = bar_a + 24LL * 3600000LL;   // +24h, next NY-day
+    int64_t ta = pine_time(bar_a, "D", "America/New_York", "", "15");
+    int64_t tb = pine_time(bar_b, "D", "America/New_York", "", "15");
+    int64_t tn = pine_time(bar_next, "D", "America/New_York", "", "15");
+    CHECK(ta == tb);   // same day: no change
+    CHECK(ta != tn);   // new day: change fires
+}
+
+static void test_time_real_session_2arg_still_filters() {
+    std::printf("test_time_real_session_2arg_still_filters\n");
+    // A genuine 2-arg session (no tz) must still filter — the reinterpretation
+    // only triggers for tz-looking strings, never "0800-1600".
+    int64_t bar_in  = 1775572200000LL;  // 14:30 UTC — inside 0800-1600 UTC
+    int64_t bar_out = 1775601000000LL;  // 22:30 UTC — outside
+    CHECK(!is_na(pine_time(bar_in,  "60", "0800-1600", "", "60")));
+    CHECK( is_na(pine_time(bar_out, "60", "0800-1600", "", "60")));
+}
+
+static void test_time_gmt_in_session_slot() {
+    std::printf("test_time_gmt_in_session_slot\n");
+    // GMT/UTC specifiers in the session slot are also recognized as timezones.
+    int64_t bar = 1775572200000LL;
+    CHECK(!is_na(pine_time(bar, "D", "GMT+0", "", "15")));
+    CHECK(!is_na(pine_time(bar, "D", "UTC", "", "15")));
+}
+
 int main() {
     test_time_hourly_bucket_utc();
     test_time_session_ny_inside();
     test_time_session_ny_outside();
     test_time_weekday_filter_mon_fri_only();
     test_time_close_hourly();
+    test_time_tz_in_session_slot_equiv();
+    test_time_tz_in_session_daily_change();
+    test_time_real_session_2arg_still_filters();
+    test_time_gmt_in_session_slot();
 
     std::printf("session_time: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
