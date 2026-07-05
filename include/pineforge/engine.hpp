@@ -1477,6 +1477,16 @@ private:
     void apply_exit_order_fill(PendingOrder& order, double fill_price,
                                int& exit_closed_from_bar,
                                bool& exit_closed_was_long);
+    // Freeze the reserved qty of LAYERED strategy.exit legs (a qty_percent<100
+    // partial + a sibling default/100% leg) that were armed while the position
+    // was FLAT (their entry still pending) and therefore stored qty=NaN. Called
+    // when such an entry first opens a position: each leg is bound to a fixed
+    // share of the just-opened lot so it no longer over-closes depending on
+    // sibling fill order. Mirrors TV binding each bracket leg to a fixed slice
+    // of the entry it attaches to. Only acts on multi-leg from_entry groups that
+    // contain at least one partial leg; single brackets and pure 100% OCA pairs
+    // are left untouched (qty=NaN → full remaining close, as before).
+    void reconcile_deferred_layered_exits(const std::string& entry_id);
     void apply_raw_order_fill(PendingOrder& order, double fill_price,
                               double& trail_best_path_state,
                               int& exit_closed_from_bar,
