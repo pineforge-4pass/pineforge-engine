@@ -910,8 +910,8 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
 
 // Capture seq + reserved qty of an existing pending exit with the
 // same (id, from_entry), reset the trail high-water mark when starting
-// a fresh trail (no prior order, in-position), and erase any pending
-// order with this id so the caller can push a freshly built
+// a fresh trail (no prior order, in-position), and erase the matching
+// pending EXIT order so the caller can push a freshly built
 // replacement.
 void BacktestEngine::clear_existing_exit_order(const std::string& id,
                                                const std::string& from_entry,
@@ -936,9 +936,20 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
         trail_best_price_ = current_bar_.close;
     }
 
+    // Erase only the matching prior EXIT order — mirror the gated lookup
+    // above. TradingView keeps entry-order ids and exit-order ids in
+    // independent namespaces: a strategy.exit replacing its prior order
+    // must never clobber a same-bar pending strategy.entry that happens to
+    // reuse the id string, nor a sibling exit attached to a different
+    // from_entry. A bare ``o.id == id`` predicate deleted the still-pending
+    // entry, so the strategy never opened a position (zero trades).
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
-            [&](const PendingOrder& o) { return o.id == id; }),
+            [&](const PendingOrder& o) {
+                return o.type == OrderType::EXIT
+                    && o.id == id
+                    && o.from_entry == from_entry;
+            }),
         pending_orders_.end());
 }
 
