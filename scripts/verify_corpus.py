@@ -301,6 +301,24 @@ def parse_dt(s: str, tz) -> int:
     return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=tz).timestamp())
 
 
+def still_open_trade_nums(csv_path: Path) -> set:
+    """Trade numbers whose EXIT row carries Signal=='Open' (a position still
+    open at TV's export-window end; a mark-to-market snapshot, not a close)."""
+    import csv as _csv
+    nums = set()
+    try:
+        with csv_path.open(encoding="utf-8-sig") as f:
+            for r in _csv.DictReader(f):
+                if (r.get("Type") or "").lower().startswith("exit") \
+                        and (r.get("Signal") or "").strip().lower() == "open":
+                    n = r.get("Trade #") or r.get("Trade number")
+                    if n is not None:
+                        nums.add(int(n))
+    except Exception:
+        pass
+    return nums
+
+
 def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
     by_num: dict[int, dict] = {}
     # TradingView exports include a UTF-8 BOM; utf-8-sig strips it.
@@ -791,11 +809,24 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     # Coverage: matched fraction of ALL closed TV trades (interior-trimmed when
     # declared), NOT of the self-selected common match window — the
     # anti-window-collapse gate.
+    # VARIANT: drop STILL-OPEN TV trades from the coverage denominator ONLY
+    # when they are UNMATCHED (no engine trade opened at that entry). A matched
+    # open row (engine opened AND closed the position for real past window) is
+    # a legitimate matched trade and is kept. This never touches the matcher,
+    # the count gate, or entry/exit/pnl -- only the coverage denominator.
+    _open_nums = still_open_trade_nums(tv_path)
+    _open_keys = {(t.entry_time, t.entry_price, t.direction)
+                  for t in tv_raw_all if t.trade_num in _open_nums}
+    _matched_tv_ids = {id(t) for t, _ in matched}
+    def _is_dropped_open(t):
+        return ((t.entry_time, t.entry_price, t.direction) in _open_keys
+                and id(t) not in _matched_tv_ids)
     if bounds is not None:
-        tv_cov_denom = [t for t in tv if is_interior(t.entry_time * 1000, bounds)]
+        tv_cov_denom = [t for t in tv
+                        if is_interior(t.entry_time * 1000, bounds) and not _is_dropped_open(t)]
         cov_matched = len(gating_matched)
     else:
-        tv_cov_denom = tv
+        tv_cov_denom = [t for t in tv if not _is_dropped_open(t)]
         cov_matched = len(matched)
     unmatched_total = max(len(tv_cov_denom) - cov_matched, 0)
     coverage = (cov_matched / len(tv_cov_denom)) if tv_cov_denom else 1.0
