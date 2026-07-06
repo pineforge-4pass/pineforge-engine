@@ -420,12 +420,15 @@ bool pine_session_ispostmarket(const std::string& session,
 
 // A 2-argument time()/time_close() call binds its second string to the
 // `session` parameter, but scripts commonly pass a TIMEZONE there — e.g.
-// `time("D", "America/New_York")` to detect a day-change in that zone.
-// TradingView honors this idiom. When no explicit timezone was supplied and
-// the session slot instead holds an unambiguous timezone (IANA "Area/Location"
-// or a GMT/UTC specifier), reinterpret it as the timezone with no session
-// filter. A real session window ("0930-1600") never contains '/' nor starts
-// with GMT/UTC, and a 3-arg call supplies tz_in, so neither is affected.
+// `time("D", "America/New_York")`. TradingView does NOT reinterpret that
+// string as the timezone: a value that is not a valid session spec (IANA
+// "Area/Location" or a GMT/UTC specifier) is an invalid session that TV
+// ignores entirely, rolling the daily boundary at the chart/exchange
+// (UTC in the engine's model) timezone — NOT at the string's tz. We detect
+// such a string here only so we can drop it (no session filter, tz left at
+// the chart/UTC default). A real session window ("0930-1600") never contains
+// '/' nor starts with GMT/UTC, and a 3-arg call supplies tz_in, so neither is
+// affected.
 static bool session_arg_is_timezone(const std::string& s) {
     if (s.empty())
         return false;
@@ -436,8 +439,12 @@ static bool session_arg_is_timezone(const std::string& s) {
     return false;
 }
 
-// Resolve the (session, tz) pair for a time()/time_close() call, applying the
-// 2-arg timezone-in-session-slot reinterpretation above.
+// Resolve the (session, tz) pair for a time()/time_close() call. When a 2-arg
+// call passes a timezone-looking string in the session slot (and no explicit
+// tz), TV treats it as an invalid session and ignores it: drop the session
+// (no filter) but leave tz at the chart/UTC default — do NOT adopt the string
+// as the timezone. The daily boundary then rolls at the chart/exchange (UTC)
+// timezone, matching TradingView.
 static void resolve_session_tz(const std::string& session,
                                const std::string& tz_in,
                                std::string& sess_out,
@@ -445,7 +452,6 @@ static void resolve_session_tz(const std::string& session,
     sess_out = session;
     tz_out = tz_in;
     if (tz_out.empty() && session_arg_is_timezone(sess_out)) {
-        tz_out = sess_out;
         sess_out.clear();
     }
     if (tz_out.empty())
