@@ -56,7 +56,10 @@ static void test_time_close_hourly() {
     int64_t tc = pine_time_close(bar, "60", "", "UTC", "60");
     CHECK(!is_na(tc));
     int64_t to = pine_time(bar, "60", "", "UTC", "60");
-    CHECK(tc == to + 3600000 - 1);
+    // Intraday time_close is the EXACT bar-close boundary (open + duration),
+    // == the next bar's open — NOT the last ms of the bar. So minute()/hour()
+    // of a boundary-aligned bar match TV (see session_time.cpp compute_tf_close_ms).
+    CHECK(tc == to + 3600000);
 }
 
 // --- 2-arg time(tf, tz): a timezone passed in the session slot ---

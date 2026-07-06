@@ -174,7 +174,16 @@ static int64_t compute_tf_close_ms(int64_t open_ms,
     int sec = tf_to_seconds(tf);
 
     if (sec > 0 && sec < kSecPerDay) {
-        return open_ms + static_cast<int64_t>(sec) * 1000 - 1;
+        // Intraday time_close is the EXACT bar-close boundary (== next bar's
+        // open = open_ms + duration), NOT the last millisecond of the bar. TV's
+        // time_close for a 15:15 15m bar is 15:30:00.000, so minute(time_close)
+        // == 30 (verified against vasudevshenoy-manoj-betrayed-me, whose
+        // `minute(time_close) >= 30` intraday session-close flatten fires 222
+        // times in TV; the prior `- 1` gave 15:29:59.999 -> minute 29 -> the
+        // flatten never fired). The calendar DAY/WEEK/MONTH branches below keep
+        // their `- 1` (period-END = last ms of the period, per their TV-boundary
+        // tests) because those are distinct semantics from an intraday close.
+        return open_ms + static_cast<int64_t>(sec) * 1000;
     }
 
     pine_tz::ScopedTimezone guard(tz);
