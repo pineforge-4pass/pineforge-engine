@@ -63,23 +63,28 @@ static void test_time_close_hourly() {
 
 static void test_time_tz_in_session_slot_equiv() {
     std::printf("test_time_tz_in_session_slot_equiv\n");
-    // time("D", "America/New_York") binds the tz into the session slot. The
-    // engine must reinterpret it as the timezone (not a session) — previously
-    // it treated it as a session, matched no HHMM window, and returned na.
+    // time("D", "America/New_York") binds the tz into the session slot. That is
+    // an invalid session, which TV ignores entirely — it does NOT adopt the
+    // string as the timezone. The daily boundary rolls at the chart/exchange
+    // (UTC) timezone, exactly as a plain time("D") does. It must not be na, and
+    // must NOT match the 3-arg explicit-tz form (which still rolls at NY).
     int64_t bar = 1775572200000LL;  // 2026-04-07 14:30 UTC = 10:30 NY (EDT)
     int64_t two_arg = pine_time(bar, "D", "America/New_York", "", "15");
-    int64_t three_arg = pine_time(bar, "D", "", "America/New_York", "15");
-    CHECK(!is_na(two_arg));          // was na for every bar (the bug)
-    CHECK(two_arg == three_arg);     // reinterpreted identically to the 3-arg form
+    int64_t plain   = pine_time(bar, "D", "", "", "15");                // time("D") → UTC/chart
+    int64_t three_arg = pine_time(bar, "D", "", "America/New_York", "15");  // explicit tz → NY
+    CHECK(!is_na(two_arg));          // was na before PR#66; still not na
+    CHECK(two_arg == plain);         // invalid session tz-string ignored → rolls at UTC/chart
+    CHECK(two_arg != three_arg);     // explicit-tz 3-arg form still uses the given tz
 }
 
 static void test_time_tz_in_session_daily_change() {
     std::printf("test_time_tz_in_session_daily_change\n");
-    // Bars in the same NY-day share the daily time; the next NY-day differs —
+    // The tz-string session is ignored, so the daily boundary rolls at UTC.
+    // Bars in the same UTC-day share the daily time; the next UTC-day differs —
     // this is what makes ta.change(time("D", tz)) fire once per day.
-    int64_t bar_a = 1775572200000LL;               // 2026-04-07 10:30 NY
-    int64_t bar_b = bar_a + 3600000LL;             // +1h, same NY-day
-    int64_t bar_next = bar_a + 24LL * 3600000LL;   // +24h, next NY-day
+    int64_t bar_a = 1775572200000LL;               // 2026-04-07 14:30 UTC
+    int64_t bar_b = bar_a + 3600000LL;             // +1h → 15:30 UTC, same UTC-day
+    int64_t bar_next = bar_a + 24LL * 3600000LL;   // +24h, next UTC-day
     int64_t ta = pine_time(bar_a, "D", "America/New_York", "", "15");
     int64_t tb = pine_time(bar_b, "D", "America/New_York", "", "15");
     int64_t tn = pine_time(bar_next, "D", "America/New_York", "", "15");
