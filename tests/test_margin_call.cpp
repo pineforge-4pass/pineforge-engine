@@ -178,10 +178,13 @@ static bool is_multiple_of(double x, double step, double tol = 1e-9) {
 static void test_short_margin_call_qty_step() {
     std::printf("test_short_margin_call_qty_step\n");
 
-    // Same scenario as test_short_margin_call. Unquantized, the first forced
-    // lot is 4x the shortfall = 3.80952381 contracts. With a 0.5 lot step it
-    // must floor DOWN to floor(3.80952381 / 0.5) * 0.5 = 3.5 (an exact step
-    // multiple), and the exit price is unchanged (bar1 high = 105).
+    // Same scenario as test_short_margin_call. The shortfall (minimum restore
+    // qty) is 3.80952381/4 = 0.95238095 contracts. TradingView floors the
+    // restore qty to the lot step BEFORE the 4x over-liquidation (KI-31), so:
+    //   floor(0.95238095 / 0.5) * 0.5 = 0.5, then * 4 = 2.0 (an exact step
+    // multiple). Flooring the 4x product instead (the old bug) gave 3.5 and
+    // desynced multi-nibble cascades from TV. The exit price is unchanged
+    // (bar1 high = 105).
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: short fills @100
         mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),  // 1: high 105 -> margin call
@@ -194,8 +197,9 @@ static void test_short_margin_call_qty_step() {
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() >= 1);
-    // First quantized lot: floored to 3.5, an exact multiple of the 0.5 step.
-    CHECK(near(eng.trade_size(0), 3.5));
+    // First quantized lot: 4 * floor(shortfall/step)*step = 4 * 0.5 = 2.0,
+    // an exact multiple of the 0.5 step (floor-before-4x per KI-31).
+    CHECK(near(eng.trade_size(0), 2.0));
     CHECK(is_multiple_of(eng.trade_size(0), step));
     // Quantization never enlarges the lot: floored <= unquantized 3.80952381.
     CHECK(eng.trade_size(0) <= 3.80952381 + 1e-9);
