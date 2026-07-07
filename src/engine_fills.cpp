@@ -182,22 +182,36 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // q units leaves the bar-equity unchanged (realized + open P/L just
     // reclassify) while the required margin shrinks: need
     // (qty - q) * adverse * pv * m <= equity_adv  =>  q >= qty - equity_adv/(adverse*pv*m).
-    const double q_min = qty - equity_adv / (adverse * pv * m);
+    double q_min = qty - equity_adv / (adverse * pv * m);
     if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return;
-    double qty_liq = 4.0 * q_min;
-    // Per-instrument lot quantization. TradingView floors each forced-
-    // liquidation lot to the instrument's quantity step (verified row-for-row
-    // against the p2 ETHUSDT.P export: every margin-call qty is an exact
-    // multiple of 0.0004). Without this the engine's nibbles are slightly
-    // larger and drain the position in fewer calls, drifting the per-call exit
-    // prices. qty_step_ == 0 (corpus default) leaves qty_liq untouched.
+    // Per-instrument lot quantization. TradingView floors the minimum-restore
+    // qty to the instrument's quantity step BEFORE applying the 4x over-
+    // liquidation — not after. Flooring the 4x PRODUCT instead injects a
+    // ~qty_step/4 error into the first nibble that compounds ~3x per step
+    // through the margin-call cascade (row-diff vs the ETHUSDT.P export,
+    // alpha-wizard-channel percent_of_equity=100: floor-BEFORE reproduces the
+    // first 14 cascade nibbles bit-exact — 7.7232 / 30.3796 / 35.716 / 19.1516
+    // / 53.0532 / 59.69 / … ; floor-AFTER matched 0/19 and desynced by step 7).
+    // qty_step_ == 0 (corpus default; the explicit-leverage p2/5x margin probes
+    // never set it) leaves both q_min and qty_liq untouched -> byte-identical.
     if (qty_step_ > 0.0) {
-        double floored = std::floor(qty_liq / qty_step_) * qty_step_;
+        q_min = std::floor(q_min / qty_step_) * qty_step_;
+    }
+    double qty_liq = 4.0 * q_min;
+    if (qty_step_ > 0.0) {
+        // q_min is already a multiple of qty_step_, so 4*q_min is mathematically
+        // a multiple too — but binary float makes e.g. 4*5.7089 = 22.83559999…,
+        // which a bare std::floor drops a whole lot (→ 22.8355 vs TV's 22.8356).
+        // The +1e-6 epsilon (same guard as quantize_qty in engine.hpp) pins it to
+        // the intended lot. Without it the tail nibbles desync from ~step 14 on;
+        // with it alpha-wizard-channel cascade-1 matches TV 19/19 bit-exact.
+        double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
         if (floored <= kQtyEpsilon) {
             // A liquidation IS required (we passed the margin-shortfall gate)
-            // but the floored lot rounds to zero. Take the smallest step that
-            // still makes progress — one qty_step_, or the full residual if it
-            // is smaller — so the per-bar call loop cannot stall forever.
+            // but the floored lot rounds to zero (sub-lot shortfall). Take the
+            // smallest step that still makes progress — one qty_step_, or the
+            // full residual if it is smaller — so the per-bar call loop cannot
+            // stall forever.
             floored = std::min(qty_step_, qty);
         }
         qty_liq = floored;
