@@ -36,6 +36,21 @@ int64_t pine_time_close(int64_t bar_ms,
 // Convert "HHMM" string to minutes-since-midnight.  Returns -1 on parse error.
 int hhmm_to_minutes(const std::string& hhmm);
 
+// Pine time/date extraction from a Unix-ms bar timestamp in timezone `tz`.
+// Value-identical to Pine hour()/minute()/dayofweek()/... (dayofweek 1=Sun..7=Sat,
+// month 1..12, year full). Codegen routes hour()/minute()/... through these
+// instead of an inline setenv+tzset lambda, which stops the per-call macOS
+// tzset()->notifyd IPC storm (KI-35): UTC uses tzset-free gmtime_r, other zones
+// use the cached ScopedTimezone. DST-correct (localtime_r via the tz database).
+int pine_hour(int64_t bar_ms, const std::string& tz);
+int pine_minute(int64_t bar_ms, const std::string& tz);
+int pine_second(int64_t bar_ms, const std::string& tz);
+int pine_dayofmonth(int64_t bar_ms, const std::string& tz);
+int pine_dayofweek(int64_t bar_ms, const std::string& tz);
+int pine_month(int64_t bar_ms, const std::string& tz);
+int pine_year(int64_t bar_ms, const std::string& tz);
+int pine_weekofyear(int64_t bar_ms, const std::string& tz);
+
 // True when local_tm falls within any of the comma-separated HHMM-HHMM
 // windows in windows_body.  "24x7" or empty always returns true.
 bool local_time_in_session_windows(const std::string& windows_body,

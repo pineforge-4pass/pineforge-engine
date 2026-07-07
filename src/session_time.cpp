@@ -25,7 +25,54 @@ int hhmm_to_minutes(const std::string& hhmm) {
     return h * 60 + m;
 }
 
+// Decompose a Unix-ms timestamp into local calendar fields for `tz` WITHOUT the
+// per-call setenv/tzset churn that made hour()/minute()/... pathologically slow
+// on macOS (each changed-TZ tzset() does a notifyd Mach-IPC round-trip ~173us;
+// ~888k/run over the full feed -> minutes of apparent "hang", KI-35). UTC needs
+// no tz -> tzset-free gmtime_r; other zones use the CACHED pine_tz::ScopedTimezone
+// (skips tzset when the active zone is unchanged, and never restores), so a run
+// that stays on one zone pays a single tzset. DST stays exact: localtime_r
+// consults the tz database exactly as the old inline lambda did.
+static void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
+    time_t secs = static_cast<time_t>(bar_ms / 1000);
+    const std::string t = normalize_timezone_for_posix(tz);
+    if (t.empty() || t == "UTC" || t == "Etc/UTC") {
+        gmtime_r(&secs, &out);
+    } else {
+        pine_tz::ScopedTimezone guard(t);
+        localtime_r(&secs, &out);
+    }
+}
+
+// Pine time/date extraction — value-identical to the codegen's former inline
+// setenv+tzset lambda (pineforge-codegen tables.py TIME_FIELD_EXPRS) but
+// churn-free. hour()/minute()/... route through these instead of open-coding it.
+int pine_hour(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_hour; }
+int pine_minute(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_min; }
+int pine_second(int64_t bar_ms, const std::string& tz)     { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_sec; }
+int pine_dayofmonth(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mday; }
+int pine_dayofweek(int64_t bar_ms, const std::string& tz)  { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_wday + 1; }
+int pine_month(int64_t bar_ms, const std::string& tz)      { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_mon + 1; }
+int pine_year(int64_t bar_ms, const std::string& tz)       { struct tm t; decompose_ms_local(bar_ms, tz, t); return t.tm_year + 1900; }
+int pine_weekofyear(int64_t bar_ms, const std::string& tz) { struct tm t; decompose_ms_local(bar_ms, tz, t); return (t.tm_yday + 7 - ((t.tm_wday + 6) % 7)) / 7; }
+
+static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz);
+
 int64_t calendar_day_open_local_ms(int64_t bar_ms, const std::string& tz) {
+    // UTC needs no tzset: local midnight is exact integer floor. Avoiding
+    // ScopedTimezone(UTC) here keeps the process TZ from flipping to UTC every
+    // bar (which would re-slow the strategy's hour()/minute() zone) — see KI-35.
+    {
+        const std::string t = normalize_timezone_for_posix(tz);
+        if (t.empty() || t == "UTC" || t == "Etc/UTC") {
+            time_t secs = static_cast<time_t>(bar_ms / 1000);
+            return static_cast<int64_t>((secs / 86400) * 86400) * 1000;
+        }
+    }
+    return calendar_day_open_local_ms_tz(bar_ms, tz);
+}
+
+static int64_t calendar_day_open_local_ms_tz(int64_t bar_ms, const std::string& tz) {
     pine_tz::ScopedTimezone guard(tz);
     time_t secs = static_cast<time_t>(bar_ms / 1000);
     struct tm local_tm {};
@@ -534,10 +581,8 @@ int64_t pine_time_tradingday(int64_t bar_ms,
     std::string eff_tz = tz.empty() ? "UTC" : tz;
     int bar_local_min;
     {
-        pine_tz::ScopedTimezone guard(eff_tz);
-        time_t secs = static_cast<time_t>(bar_ms / 1000);
         struct tm local_tm {};
-        localtime_r(&secs, &local_tm);
+        decompose_ms_local(bar_ms, eff_tz, local_tm);  // gmtime_r for UTC (no TZ flip)
         bar_local_min = local_tm.tm_hour * 60 + local_tm.tm_min;
     }
 
