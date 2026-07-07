@@ -19,7 +19,31 @@ ctest --test-dir build --output-on-failure
 ./scripts/run_corpus.sh
 ```
 
+> **Stale-test-binary trap:** `cmake --build build --target pineforge` rebuilds
+> ONLY the static lib. Test executables are separate targets that statically
+> link it, and `ctest` does not rebuild anything — after a lib-only build,
+> ctest runs STALE test binaries and can falsely pass. Always run a full
+> `cmake --build build` (all targets) before `ctest` when runtime values
+> changed. Before trusting any result, `build/lib/libpineforge.a` must be
+> newer than every working-tree file in `src/`, `include/`, and
+> `CMakeLists.txt` (uncommitted edits count) — else the conclusion is a
+> stale-build artifact.
+
 If `scripts/run_corpus.sh` reports any parity drift or failures, investigate the underlying cause. No regressions are allowed unless a resolved bug was previously masking a divergence.
+
+## Concurrency
+
+- `scripts/derive_corpus_feeds.py` (`ensure_derived()`) is a cheap no-op when
+  `corpus/data/derived/` is fresh, but a REBUILD is not concurrent-safe: it
+  writes through a fixed `*.csv.new` tmp then renames, so two processes
+  materializing simultaneously race and can corrupt the derived feeds. Run it
+  once to freshness BEFORE fanning out parallel consumers.
+- Never run `scripts/run_corpus.sh` while any external harness that links
+  `build/lib/libpineforge.a` or reads `corpus/data/derived/` is running:
+  run_corpus.sh re-materializes the derived feeds and rebuilds the lib
+  (`--target corpus_strategies` links `pineforge`), clobbering both under the
+  concurrent run. External sweeps may run in parallel with each other over
+  disjoint work sets, but never overlapped with run_corpus.sh.
 
 ## Build Commands
 
