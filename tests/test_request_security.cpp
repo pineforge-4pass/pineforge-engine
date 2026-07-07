@@ -626,8 +626,191 @@ void test_request_security_finer_tf_publish_gate_is_lookahead_only() {
     std::cout << "test_request_security_finer_tf_publish_gate_is_lookahead_only passed.\n";
 }
 
+// KI-33 cadence guard: on the 1m-magnifier path (input_tf="1",
+// script_tf="15", bar_magnifier on) a COARSER fixed-minute
+// request.security — "60" (= 4 x 15m script bars) and "240" (= 16 x
+// 15m script bars) — must latch/publish its aggregated value ONLY on
+// the coarser-TF wall-clock boundary and hold it CONSTANT within the
+// period. The suspected bug (KI-33) was that the security aggregator,
+// being fed once per 1m sub-bar inside run_magnified_bar, would
+// complete at requested_tf/4 (a "60" security updating every 15m
+// instead of every 60m). The correct cadence is pure Pine-timeframe
+// arithmetic — 60m = 4x15m, 240m = 16x15m — so this needs no TV data.
+//
+// The harness registers two coarser HTF securities reading `close`,
+// captures the latched value once per SCRIPT bar (on_bar fires once
+// per script bar on the magnifier path, after the per-sub-bar security
+// feed), and asserts the observed per-script-bar cadence against the
+// arithmetic expectation.
+class MagnifierCoarserSecurityCadenceHarness : public BacktestEngine {
+public:
+    double _req_sec_60 = na<double>();
+    double _req_sec_240 = na<double>();
+    std::vector<double> sec60_per_script_bar;
+    std::vector<double> sec240_per_script_bar;
+    std::vector<double> script_close_per_script_bar;
+
+    MagnifierCoarserSecurityCadenceHarness() {
+        // Coarser fixed-minute HTFs, fed from a 1m input feed. sec 0 =
+        // "60" (4x the 15m script bar), sec 1 = "240" (16x).
+        register_security_eval(0, "60", "1", false, false);
+        register_security_eval(1, "240", "1", false, false);
+    }
+
+    void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
+        if (!is_complete) {
+            return;
+        }
+        if (sec_id == 0) {
+            _req_sec_60 = bar.close;
+        } else if (sec_id == 1) {
+            _req_sec_240 = bar.close;
+        }
+    }
+
+    void on_bar(const Bar& bar) override {
+        // One capture per script bar (magnifier on_bar fires only on the
+        // last tick of the last sub-bar, after that sub-bar's security
+        // feed has already published any boundary completion).
+        sec60_per_script_bar.push_back(_req_sec_60);
+        sec240_per_script_bar.push_back(_req_sec_240);
+        script_close_per_script_bar.push_back(bar.close);
+    }
+};
+
+void test_request_security_magnifier_coarser_tf_cadence() {
+    MagnifierCoarserSecurityCadenceHarness strat;
+
+    // 480 gap-free 1m bars = 32 x 15m script bars = 8 x 60m periods =
+    // 2 x 240m periods. Distinct, monotonic closes (100 + i) make every
+    // bar individually identifiable, so a value that tracked the 15m
+    // close every bar is trivially distinguishable from one latched to
+    // the coarser boundary. Timestamps start at epoch 0 so 60m/240m
+    // UTC-epoch buckets align cleanly.
+    const int kInputBars = 480;
+    const int kScriptTfMin = 15;      // 15m script bars
+    const int kSubPerScript = kScriptTfMin;   // 15 x 1m per script bar
+    std::vector<Bar> input_bars;
+    input_bars.reserve(kInputBars);
+    for (int i = 0; i < kInputBars; ++i) {
+        double px = 100.0 + i;   // distinct monotonic close per 1m bar
+        input_bars.push_back(
+            {px, px + 0.5, px - 0.5, px, 10.0,
+             static_cast<int64_t>(i) * 60000});
+    }
+
+    strat.run(input_bars.data(), static_cast<int>(input_bars.size()),
+              "1", "15", /*bar_magnifier=*/true, 4,
+              MagnifierDistribution::ENDPOINTS);
+    require(strat.last_error().empty(),
+            "magnifier coarser-TF security run should succeed: " + strat.last_error());
+
+    const int expected_script_bars = kInputBars / kSubPerScript;  // 32
+    require(static_cast<int>(strat.sec60_per_script_bar.size())
+                == expected_script_bars,
+            "expected one latched sec value capture per script bar, got "
+                + std::to_string(strat.sec60_per_script_bar.size()));
+
+    // --- Arithmetic expectation (pure Pine TF cadence, no TV data) ---
+    // Script bar k covers 1m bars [15k, 15k+14]; its last 1m bar is
+    // 15k+14. A "60" bucket completes at 1m bar index 59, 119, 179, ...
+    // (every 60 bars); a "240" bucket at 239, 479, ... For close(i) =
+    // 100 + i the completed HTF close is 100 + (last 1m bar of bucket).
+    const int sub60 = 60;    // 60m spans 60 x 1m bars
+    const int sub240 = 240;  // 240m spans 240 x 1m bars
+    std::vector<double> expected_sec60(expected_script_bars, na<double>());
+    std::vector<double> expected_sec240(expected_script_bars, na<double>());
+    double latched60 = na<double>();
+    double latched240 = na<double>();
+    for (int k = 0; k < expected_script_bars; ++k) {
+        int last_1m = k * kSubPerScript + (kSubPerScript - 1);  // 15k+14
+        // Has a 60m / 240m bucket boundary completed at or before this
+        // script bar's final 1m bar? Boundary completes at 1m index
+        // (n*period - 1). i.e. (last_1m + 1) % period == 0 marks a fresh
+        // completion landing exactly on this script bar.
+        if ((last_1m + 1) % sub60 == 0) {
+            latched60 = 100.0 + last_1m;
+        }
+        if ((last_1m + 1) % sub240 == 0) {
+            latched240 = 100.0 + last_1m;
+        }
+        expected_sec60[k] = latched60;
+        expected_sec240[k] = latched240;
+    }
+
+    // --- Emit the observed per-script-bar table (report evidence) ---
+    std::cout << "  [KI-33 cadence] per-script-bar latched security values:\n";
+    std::cout << "  bar | script_close |   sec60(obs/exp)   |  sec240(obs/exp)\n";
+    for (int k = 0; k < expected_script_bars; ++k) {
+        auto fmt = [](double v) {
+            return is_na(v) ? std::string("na") : std::to_string(v);
+        };
+        std::cout << "  " << (k < 10 ? " " : "") << k
+                  << "  | " << strat.script_close_per_script_bar[k]
+                  << "     | " << fmt(strat.sec60_per_script_bar[k])
+                  << " / " << fmt(expected_sec60[k])
+                  << "   | " << fmt(strat.sec240_per_script_bar[k])
+                  << " / " << fmt(expected_sec240[k]) << "\n";
+    }
+
+    // --- Assert cadence: value latches only on the coarser boundary
+    //     and holds constant within the period. ---
+    for (int k = 0; k < expected_script_bars; ++k) {
+        double obs60 = strat.sec60_per_script_bar[k];
+        double exp60 = expected_sec60[k];
+        require(is_na(obs60) == is_na(exp60),
+                "sec60 na-ness mismatch at script bar " + std::to_string(k)
+                    + " (obs na=" + std::to_string(is_na(obs60))
+                    + ", exp na=" + std::to_string(is_na(exp60)) + ")");
+        if (!is_na(exp60)) {
+            require(std::abs(obs60 - exp60) < 1e-9,
+                    "sec60 latched value wrong at script bar "
+                        + std::to_string(k) + ": obs " + std::to_string(obs60)
+                        + " vs exp " + std::to_string(exp60)
+                        + " (a value tracking the 15m close would be "
+                        + std::to_string(strat.script_close_per_script_bar[k])
+                        + ")");
+        }
+
+        double obs240 = strat.sec240_per_script_bar[k];
+        double exp240 = expected_sec240[k];
+        require(is_na(obs240) == is_na(exp240),
+                "sec240 na-ness mismatch at script bar " + std::to_string(k));
+        if (!is_na(exp240)) {
+            require(std::abs(obs240 - exp240) < 1e-9,
+                    "sec240 latched value wrong at script bar "
+                        + std::to_string(k) + ": obs " + std::to_string(obs240)
+                        + " vs exp " + std::to_string(exp240));
+        }
+    }
+
+    // --- Direct anti-bug checks: the value MUST NOT track the 15m close
+    //     every bar, and MUST hold constant strictly within a period. ---
+    // Script bar 4 sits one script bar past the first 60m completion
+    // (bar 3). Under KI-33 the "60" security would re-complete every 15m
+    // and read the script-bar-4 15m close (174); the correct latch holds
+    // the 60m close from bar 3 (159).
+    require(!is_na(strat.sec60_per_script_bar[4]),
+            "sec60 should be latched (non-na) by script bar 4");
+    require(std::abs(strat.sec60_per_script_bar[4] - 159.0) < 1e-9,
+            "sec60 at script bar 4 must hold the prior 60m close (159), not re-latch");
+    require(std::abs(strat.sec60_per_script_bar[4]
+                     - strat.script_close_per_script_bar[4]) > 1e-6,
+            "sec60 must NOT track the 15m script close every bar (KI-33 symptom)");
+    // Constant across the whole 60m period bars 4,5,6 (all latch 159).
+    require(std::abs(strat.sec60_per_script_bar[5] - 159.0) < 1e-9
+                && std::abs(strat.sec60_per_script_bar[6] - 159.0) < 1e-9,
+            "sec60 must hold CONSTANT within the 60m period (bars 4-6 == 159)");
+    // sec60 changes exactly at the boundary (bar 7 -> 219).
+    require(std::abs(strat.sec60_per_script_bar[7] - 219.0) < 1e-9,
+            "sec60 must advance to the next 60m close (219) at the bar-7 boundary");
+
+    std::cout << "test_request_security_magnifier_coarser_tf_cadence passed.\n";
+}
+
 int main() {
     test_request_security_hook_dispatches_completed_values();
+    test_request_security_magnifier_coarser_tf_cadence();
     test_request_security_finer_tf_publish_gate_is_lookahead_only();
     test_request_security_lower_tf_requires_finer_input_bars();
     test_request_security_emulates_ratio_divisible_lower_tf();
