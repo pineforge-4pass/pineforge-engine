@@ -35,11 +35,16 @@ int hhmm_to_minutes(const std::string& hhmm) {
 // consults the tz database exactly as the old inline lambda did.
 static void decompose_ms_local(int64_t bar_ms, const std::string& tz, struct tm& out) {
     time_t secs = static_cast<time_t>(bar_ms / 1000);
+    // Detect UTC on the NORMALIZED string, but hand the RAW tz to
+    // ScopedTimezone — it normalizes internally (timezone.cpp), so passing an
+    // already-normalized string double-normalizes and flips the sign of fixed
+    // offsets ("UTC+2" -> "UTC-2" -> "UTC+2" => wrong hour). IANA/UTC zones are
+    // idempotent under normalize so this only bit offset-string tz inputs.
     const std::string t = normalize_timezone_for_posix(tz);
     if (t.empty() || t == "UTC" || t == "Etc/UTC") {
         gmtime_r(&secs, &out);
     } else {
-        pine_tz::ScopedTimezone guard(t);
+        pine_tz::ScopedTimezone guard(tz);
         localtime_r(&secs, &out);
     }
 }
