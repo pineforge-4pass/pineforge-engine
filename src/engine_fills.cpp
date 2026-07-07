@@ -934,6 +934,14 @@ void BacktestEngine::reconcile_deferred_layered_exits(const std::string& entry_i
         double res = std::min(requested, avail);
         if (res <= kQtyEpsilon) continue;  // nothing left to reserve; leave deferred
         o.qty = res;
+        // Keep qty_percent consistent with the qty we just froze. A deferred
+        // 100% sibling capped here to the remaining slice must not keep
+        // qty_percent=100, or a later same-bar/next-bar re-arm of a partial
+        // sibling reads it as a still-pending FULL exit (compute_exit_reserved_
+        // qty guard), drops the re-issued partial, and the 100% leg re-expands
+        // to flatten the whole position. Mirrors the live-armed normalization
+        // at engine_strategy_commands.cpp (reserved_qty_out / live_pos * 100).
+        if (live_pos > kQtyEpsilon) o.qty_percent = (res / live_pos) * 100.0;
         o.requested_partial = res < live_pos - kFullQtyEps;
         reserved += res;
     }
