@@ -761,7 +761,14 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                                              const Bar& bar,
                                              double& trail_best_path_state,
                                              bool later_same_tick_entry) {
-    execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
+    // A default-sized market order carries a quantity frozen at the signal
+    // bar's close; hand it through as fixed contracts (qty_type < 0) so the
+    // fill does not re-derive it from the fill price. Explicit-qty and
+    // FIXED-default orders keep their own (qty, qty_type) pair unchanged.
+    const bool frozen = !std::isnan(order.frozen_default_qty);
+    execute_market_entry(order.id, order.is_long, fill_price,
+                         frozen ? order.frozen_default_qty : order.qty,
+                         frozen ? -1 : order.qty_type,
                          order.created_position_side, /*close_only_opposite=*/false,
                          /*is_priced_entry=*/false, /*tv_carry_qty=*/0.0,
                          order.created_bar, later_same_tick_entry);
@@ -953,7 +960,9 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
                                           bool& exit_closed_was_long) {
     if (position_side_ == PositionSide::FLAT) {
         fill_price = apply_fill_slippage(fill_price, order.is_long);
-        double qty = std::isnan(order.qty) ? calc_qty(fill_price) : order.qty;
+        // Prefer the signal-time frozen quantity when the order carries one.
+        double qty = !std::isnan(order.frozen_default_qty) ? order.frozen_default_qty
+                   : (std::isnan(order.qty) ? calc_qty(fill_price) : order.qty);
         position_side_ = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
         position_entry_price_ = fill_price;
         position_entry_time_ = current_bar_.timestamp;
@@ -1005,7 +1014,9 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
                 return;
             }
             fill_price = apply_fill_slippage(fill_price, order.is_long);
-            double new_qty = std::isnan(order.qty) ? calc_qty(fill_price) : order.qty;
+            // Prefer the signal-time frozen quantity when the order carries one.
+            double new_qty = !std::isnan(order.frozen_default_qty) ? order.frozen_default_qty
+                           : (std::isnan(order.qty) ? calc_qty(fill_price) : order.qty);
             double total_qty = position_qty_ + new_qty;
             position_entry_price_ =
                 (position_entry_price_ * position_qty_ + fill_price * new_qty) / total_qty;
@@ -1134,6 +1145,9 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         // slippage-scale noise.
         bool flat_armed_opposite_close = flat_armed_opposite_same_bar;
         if (flat_armed_opposite_same_bar) {
+            // No frozen-qty lookup here: this branch is reached only for
+            // OrderType::ENTRY (priced entries), and frozen_default_qty is set
+            // solely on MARKET / RAW_ORDER placements, so it is always NaN.
             double approx_price = !std::isnan(order.stop_price) ? order.stop_price
                 : (!std::isnan(order.limit_price) ? order.limit_price : bar.close);
             double approx_tx_qty = calc_qty_for_type(approx_price, order.qty, order.qty_type);

@@ -199,6 +199,20 @@ struct PendingOrder {
     // probe 52 trade 113). Preserving the largest observed carry
     // across re-placements would over-extend chains.
     double tv_carry_qty = 0.0;
+    // Quantity frozen at PLACEMENT (signal) time for a DEFAULT-sized (qty=na)
+    // market order whose default sizing is price-dependent (percent_of_equity
+    // / cash) — see frozen_default_market_qty. NaN = not frozen.
+    //
+    // Deliberately NOT stored in ``qty``: that field doubles as the "an
+    // explicit qty was provided" flag, and several sites branch on
+    // ``std::isnan(o.qty)`` to recover "was this order default-sized?" —
+    // reduce_oca_group's default-sized cancel (engine_orders.cpp), the
+    // pending-reversal-entry binding (engine_strategy_commands.cpp), the OCA
+    // fully-filled heuristic and the partial-vs-full exit classification
+    // (engine_fills.cpp). Writing a frozen quantity into ``qty`` silently
+    // flips every one of them. Keep ``qty`` NaN; read this field only where a
+    // quantity is actually computed.
+    double frozen_default_qty = std::numeric_limits<double>::quiet_NaN();
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
     bool created_while_in_position = false;  // true if position was open when order was placed
@@ -861,6 +875,16 @@ protected:
                 // closed-equity accessor used elsewhere, but size new default
                 // percent orders from the live equity snapshot so pyramid adds
                 // and same-bar/re-entry sizing see unrealized PnL.
+                //
+                // KNOWN RESIDUAL (unresolved, do not "fix" without a probe):
+                // for an entry sized while a position is open AND commission_
+                // type=percent, TV appears to also deduct the entry fee already
+                // charged on the open lot (it debits at fill; we book both legs
+                // at close).  Three independent reconstructions of TV's equity
+                // chain disagreed on whether that term belongs here — adding it
+                // made one strategy's predicted quantities exact and two others
+                // markedly worse, and it cut end-to-end coverage.  Settle it
+                // with a clean-room TV probe (the KI-52 method), not algebra.
                 double equity = current_equity() + open_profit(current_bar_.close);
                 double cash = reserve_percent_commission(equity * (default_qty_value_ / 100.0)) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
@@ -873,6 +897,45 @@ protected:
                     ? apply_qty_step((default_qty_value_ / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
         }
         return apply_qty_step(default_qty_value_);
+    }
+
+    // TradingView freezes DEFAULT (qty=na) market-order sizing at the SIGNAL
+    // bar — the bar whose on_bar issued the strategy.entry/strategy.order
+    // call — not at the fill:
+    //
+    //   equity_S     = initial_capital + realized net profit
+    //                  + open_profit(close(S))     // position may still be OPEN
+    //   sizing_price = close(S) + slippage*mintick*(+1 buy / -1 sell)
+    //   qty          = floor_step( reserve_percent_commission(budget)
+    //                              / fx / (sizing_price * pointvalue) )
+    //
+    // The market order then fills at the NEXT bar's open carrying this frozen
+    // quantity. calc_qty(price) implements exactly that shape when evaluated
+    // AT SIGNAL TIME (current_bar_ IS the signal bar: open_profit marks at
+    // close(S) and the divisor is the argument), so the freeze is simply
+    // calc_qty(slipped signal close) captured at placement. Evaluating the
+    // same expression at FILL time — the pre-freeze behavior — was wrong in
+    // three separable ways on a reversal/gap: it double-counted the just-
+    // closed position's PnL (current_equity() already realized the exit while
+    // position_* still held the stale lot for open_profit), it marked open
+    // profit at the FILL bar's close (a look-ahead: that close is unknown
+    // when the order fills at the open), and it divided by the fill price
+    // instead of the signal close. Freezing at placement removes all three.
+    //
+    // Only PERCENT_OF_EQUITY / CASH default sizing is price/equity-dependent;
+    // FIXED default sizing stays qty=NaN at placement (identical value at
+    // fill, and keeping NaN preserves the isnan(order.qty)-keyed semantics
+    // elsewhere, e.g. the OCA "fully filled" heuristic).
+    //
+    // Priced (limit/stop) entries are NOT frozen: TV's sizing basis for an
+    // order armed one or more bars before its fill is not empirically
+    // established, so they conservatively keep the legacy fill-time sizing.
+    double frozen_default_market_qty(bool is_buy) const {
+        double sizing_price = current_bar_.close;
+        if (slippage_ != 0 && syminfo_mintick_ > 0.0) {
+            sizing_price += (is_buy ? 1.0 : -1.0) * slippage_ * syminfo_mintick_;
+        }
+        return calc_qty(sizing_price);
     }
 
     // --- Strategy variable accessors ---
