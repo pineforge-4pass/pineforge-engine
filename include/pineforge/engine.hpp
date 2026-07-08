@@ -213,6 +213,36 @@ struct PendingOrder {
     // flips every one of them. Keep ``qty`` NaN; read this field only where a
     // quantity is actually computed.
     double frozen_default_qty = std::numeric_limits<double>::quiet_NaN();
+    // TV margin-admission snapshot for a FROZEN default-sized market order
+    // (KI-54). Captured at the same placement point as frozen_default_qty:
+    //   sizing_equity = current_equity() + open_profit(close(S))   [account ccy]
+    //   sizing_price  = close(S) + slippage*mintick*(+1 buy/-1 sell)
+    // At fill time the broker re-checks (see the gate in
+    // apply_filled_order_to_state for the full evidence trail)
+    //   |qty| * admit_price * pointvalue * fx * margin_pct/100
+    //     <= free_funds = sizing_equity - (same-direction held margin)
+    // where admit_price is the SIZING price for flat opens and adds but the
+    // FILL price for a true reversal (opposite position still open when the
+    // order processes), and silently drops the order when it fails (no
+    // trade row). The floor in apply_qty_step guarantees
+    // qty*sizing_price*pv*fx <= sizing_equity ONLY for percent-of-equity
+    // sizing with pct <= 100, margin <= 100, and sizing_equity > 0 — under
+    // that invariant flat opens are undeclinable no matter how the bar gaps.
+    // It fails for CASH default sizing (no equity term), for pct > 100, for
+    // margin > 100 (required scales past equity), and on a bankrupt account
+    // (apply_qty_step returns qty UNFLOORED for qty <= 0, so |qty|*price ==
+    // |sizing_equity| while free_funds < 0 — every order, flat opens
+    // included, would be declined forever). The re-check is restricted
+    // accordingly; orders outside it carry the snapshot and are admitted.
+    // NaN = no snapshot, no re-check.
+    double sizing_equity = std::numeric_limits<double>::quiet_NaN();
+    double sizing_price = std::numeric_limits<double>::quiet_NaN();
+    // The bar close sizing_equity was marked at. free_funds subtracts the
+    // margin the OPEN position ties up, and that must be marked at the same
+    // price the equity was, or the two sides of the comparison mix a
+    // mark-to-market total against a cost-basis deduction and the admission
+    // threshold drifts with unrealized PnL in the wrong direction.
+    double sizing_mark = std::numeric_limits<double>::quiet_NaN();
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
     bool created_while_in_position = false;  // true if position was open when order was placed
@@ -930,12 +960,48 @@ protected:
     // Priced (limit/stop) entries are NOT frozen: TV's sizing basis for an
     // order armed one or more bars before its fill is not empirically
     // established, so they conservatively keep the legacy fill-time sizing.
-    double frozen_default_market_qty(bool is_buy) const {
+    // The sizing price of the frozen rule above, exposed separately so the
+    // placement sites can persist it on the order (PendingOrder::sizing_price)
+    // for the fill-time margin-admission re-check.
+    double frozen_sizing_price(bool is_buy) const {
         double sizing_price = current_bar_.close;
         if (slippage_ != 0 && syminfo_mintick_ > 0.0) {
             sizing_price += (is_buy ? 1.0 : -1.0) * slippage_ * syminfo_mintick_;
         }
-        return calc_qty(sizing_price);
+        return sizing_price;
+    }
+
+    double frozen_default_market_qty(bool is_buy) const {
+        return calc_qty(frozen_sizing_price(is_buy));
+    }
+
+    // KI-54 defect fix: the frozen sizing snapshot must see POST-liquidation
+    // equity. TradingView liquidates intrabar, BEFORE the bar-close script
+    // body runs; the engine's process_margin_call runs at the END of
+    // dispatch_bar, AFTER on_bar placed (and froze) this bar's default-sized
+    // market orders. When a margin call fires on the placement bar, the
+    // frozen qty was computed on pre-liquidation equity — over-sized, so the
+    // next bar's fill opens a position whose notional exceeds equity and the
+    // long_full_margin branch of process_margin_call then emits a phantom
+    // LONG margin call TV does not have. Rather than moving process_margin_call
+    // (which would change what strategy.equity reads inside on_bar for every
+    // strategy), the dispatch loop calls this refresh right after a margin
+    // call actually liquidated something: every still-pending frozen
+    // default-sized market order placed on THIS bar is re-frozen on the
+    // post-liquidation state. Strict no-op on bars without a margin call
+    // (the caller checks), and bit-identical recompute for untouched state.
+    void refresh_frozen_default_sizing_after_margin_call() {
+        for (auto& o : pending_orders_) {
+            if (std::isnan(o.frozen_default_qty)) continue;
+            if (o.type != OrderType::MARKET && o.type != OrderType::RAW_ORDER)
+                continue;
+            if (o.created_bar != bar_index_) continue;
+            o.frozen_default_qty = calc_qty(o.sizing_price);
+            if (!std::isnan(o.sizing_equity)) {
+                o.sizing_equity =
+                    current_equity() + open_profit(current_bar_.close);
+            }
+        }
     }
 
     // --- Strategy variable accessors ---
@@ -997,8 +1063,12 @@ protected:
     // strategy.margin_liquidation_price — the price at which TradingView's
     // broker emulator force-liquidates the current open position. Returns na
     // when flat, when the instrument has no valid size/point-value, or when
-    // ``margin/100 - direction == 0`` (a long at 100% margin can never be
-    // liquidated). See compute_liquidation_price for the derivation.
+    // ``margin/100 - direction == 0`` (a 1x long has no leverage-derived
+    // liquidation PRICE — but it CAN still be force-liquidated when its
+    // notional exceeds equity: process_margin_call's long_full_margin
+    // branch deliberately bypasses the na bail for exactly that case, and
+    // TV emits such long margin calls too). See compute_liquidation_price
+    // for the derivation.
     double margin_liquidation_price() const { return compute_liquidation_price(); }
 
     // Shared liquidation-price formula (TradingView docs, validated against the

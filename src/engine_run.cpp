@@ -46,7 +46,19 @@ void BacktestEngine::dispatch_bar() {
     }
     // TradingView forced-liquidation check, once per script bar after all order
     // processing, using this bar's full adverse extreme (high/low).
-    process_margin_call(current_bar_);
+    //
+    // TV liquidates INTRABAR — before the close-time script body — so any
+    // default-sized market order frozen by this bar's on_bar was sized on
+    // pre-liquidation equity. When (and only when) the margin call actually
+    // liquidated something, re-freeze those orders on the post-liquidation
+    // state (see refresh_frozen_default_sizing_after_margin_call).
+    {
+        size_t trades_before_mc = trades_.size();
+        process_margin_call(current_bar_);
+        if (trades_.size() != trades_before_mc) {
+            refresh_frozen_default_sizing_after_margin_call();
+        }
+    }
 }
 
 
@@ -316,7 +328,14 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
     // TradingView forced-liquidation check, once per script bar. By the final
     // sub-bar current_bar_.high/.low hold the full script-bar adverse extreme,
     // and current_bar_.timestamp was restored to the script-bar open ts above.
-    process_margin_call(current_bar_);
+    // Same post-liquidation re-freeze as the non-magnifier path (dispatch_bar).
+    {
+        size_t trades_before_mc = trades_.size();
+        process_margin_call(current_bar_);
+        if (trades_.size() != trades_before_mc) {
+            refresh_frozen_default_sizing_after_margin_call();
+        }
+    }
     finalize_bar();
 }
 
