@@ -238,6 +238,13 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                 || default_qty_type_ == QtyType::CASH)
             && !std::isnan(current_bar_.close)) {
             order.frozen_default_qty = frozen_default_market_qty(/*is_buy=*/is_long);
+            // KI-54: persist the sizing basis for the fill-time TV margin
+            // admission re-check (see PendingOrder::sizing_equity in
+            // engine.hpp and the gate in apply_filled_order_to_state).
+            order.sizing_price = frozen_sizing_price(/*is_buy=*/is_long);
+            order.sizing_equity =
+                current_equity() + open_profit(current_bar_.close);
+            order.sizing_mark = current_bar_.close;
         }
     } else {
         order.type = OrderType::ENTRY;
@@ -711,6 +718,14 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
                 || default_qty_type_ == QtyType::CASH)
             && !std::isnan(current_bar_.close)) {
             order.frozen_default_qty = frozen_default_market_qty(/*is_buy=*/is_long);
+            // KI-54: same admission snapshot as strategy_entry's MARKET
+            // branch. The fill-time gate skips opposite-direction RAW fills
+            // (they only close the position) — see
+            // apply_filled_order_to_state.
+            order.sizing_price = frozen_sizing_price(/*is_buy=*/is_long);
+            order.sizing_equity =
+                current_equity() + open_profit(current_bar_.close);
+            order.sizing_mark = current_bar_.close;
         }
     } else {
         order.type = OrderType::RAW_ORDER;

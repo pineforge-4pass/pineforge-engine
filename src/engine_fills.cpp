@@ -485,6 +485,162 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
+    // KI-54: TradingView fill-time margin admission for FROZEN default-sized
+    // market orders (the snapshot fields are captured at placement — see
+    // PendingOrder::sizing_equity/sizing_price, engine.hpp):
+    //
+    //   same_dir    = position open AND order direction matches it
+    //   reversal    = position open AND order direction opposes it
+    //   free_funds  = same_dir ? sizing_equity - held_margin : sizing_equity
+    //   admit_price = reversal ? slipped(fill_price) : sizing_price
+    //   required    = |qty| * admit_price * pointvalue * fx * margin_pct/100
+    //   drop iff required > free_funds + eps       (silently: no trade row)
+    //
+    // eps absorbs double rounding AND one whole lot of notional: the quantity
+    // was floored to the lot step, so a decline whose margin is under one
+    // lot's worth of budget is decided by where the floor landed, not by
+    // affordability.
+    //
+    // Admission price, by position state at the fill:
+    //   - FLAT open (incl. close-then-reenter, where the strategy.close leg
+    //     filled earlier this tick): the SIZING notional. For percent-of-
+    //     equity with pct <= 100, margin <= 100 and sizing_equity > 0 the
+    //     floor in apply_qty_step guarantees
+    //     qty*sizing_price*pv*fx <= sizing_equity, so a flat open is
+    //     undeclinable no matter how the bar gaps. Outside that regime the
+    //     invariant fails and the gate does not run at all. Pricing flat opens at
+    //     the fill was refuted against TV exports: it drops razor-thin
+    //     gap-up entries that exact-count close-then-reenter strategies
+    //     demonstrably take.
+    //   - TRUE REVERSAL (opposite position still open when the order
+    //     processes): the FILL price, slipped the way the fill kernel
+    //     will book it. Established independently by two from-the-feed
+    //     replicas of all-in flip strategies: an all-in flip's sizing
+    //     notional sits within lot-floor slack of equity, so once the
+    //     fill gap pushes the requirement past equity TV silently drops
+    //     the flip. Exports of such strategies contain no gap-up flip
+    //     fill at all, on a feed where roughly half the bars gap; the
+    //     ungated engine took every one.
+    //   - SAME-direction add: the sizing notional, against free funds —
+    //     the held position keeps its capital committed, so an all-in add
+    //     sees free_funds ~= 0 and declines (TV performs no such adds even
+    //     where pyramiding permits them), while a fractional add
+    //     (pct=10, held ~= 0.1*equity) still fills.
+    //
+    // Scope: the re-check runs ONLY for percent_of_equity default sizing
+    // with pct <= 100 — the one regime where the floor invariant above
+    // exists AND TV ground truth pins the behavior. CASH default sizing
+    // has NO equity term (cash/(price*pv)), so required is unbounded by
+    // sizing_equity and the gate would decline perfectly ordinary flat
+    // opens whenever cash_value > equity (a real transpiled cash-20k-on-
+    // 10k-capital probe lost all 73 of its trades to it). The same
+    // applies to pct > 100 (leveraged sizing). Neither regime has TV
+    // ground truth; frozen CASH / pct>100 orders keep their freeze but
+    // are admitted unconditionally here.
+    //
+    // Frozen MARKET entries and frozen RAW market orders are checked; an
+    // opposite-direction RAW fill only CLOSES the position
+    // (apply_raw_order_fill's exit branch) and is never dropped.
+    // Explicit-qty entries keep the signal-time gate in strategy_entry;
+    // priced (limit/stop) entries carry no snapshot. Runs BEFORE the
+    // intraday-cap accounting below: a dropped order was never filled, so
+    // it must not consume a max_intraday_filled_orders slot.
+    // sizing_equity > 0 and frozen_default_qty > 0 are part of the invariant,
+    // not paranoia: apply_qty_step returns qty UNFLOORED for qty <= 0
+    // (engine.hpp), so on a bankrupt account the frozen quantity is negative,
+    // |qty|*sizing_price == |sizing_equity|, and free_funds < 0 — every order,
+    // including a flat open, would be declined forever. There is no TV ground
+    // truth for what a negative-equity account may open; leave it to the
+    // legacy path.
+    if (!std::isnan(order.sizing_equity) && !std::isnan(order.sizing_price)
+        && !std::isnan(order.frozen_default_qty)
+        && order.sizing_equity > 0.0 && order.frozen_default_qty > 0.0
+        && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+        && default_qty_value_ <= 100.0
+        && (order.type == OrderType::MARKET
+            || order.type == OrderType::RAW_ORDER)) {
+        bool same_dir = position_side_ != PositionSide::FLAT
+            && ((position_side_ == PositionSide::LONG) == order.is_long);
+        bool reversal = position_side_ != PositionSide::FLAT && !same_dir;
+        bool raw_opposite_close = order.type == OrderType::RAW_ORDER && reversal;
+        double margin_pct = order.is_long ? margin_long_ : margin_short_;
+        // A same-direction add (fractional OR all-in) IS gated, against
+        // MARK-TO-MARKET free margin. This is pinned by a clean-room TV probe
+        // (data/probes/margin-basis-frac: pct=50, pyramiding=2). At pct=50 the
+        // two candidate rules give OPPOSITE verdicts on the add — mark-to-
+        // market admits it only when the open lot is UNDERWATER, cost basis
+        // only when it is IN PROFIT — and TV admitted 1535/1538 adds while
+        // underwater (2 in profit, float-noise), i.e. mark-to-market. The
+        // held side below uses that basis. (An earlier revision exempted the
+        // fractional add for lack of ground truth; the probe removes the
+        // ambiguity and TV declines the in-profit adds the exemption let
+        // through.)
+        //
+        // margin_pct > 100 breaks the flat-open invariant outright
+        // (required = equity * pct/100 * margin/100 > equity), which would
+        // silently drop every flat open. Leverage below 1x has no TV pin.
+        bool leverage_below_1x = margin_pct > 100.0;
+        if (!raw_opposite_close && !leverage_below_1x && margin_pct > 0.0) {
+            // The margin the OPEN position ties up, marked at the SAME price
+            // sizing_equity was marked at (the signal bar's close). Only the
+            // all-in add reaches this (see unpinned_fractional_add), where
+            // every convention agrees; marking it at cost basis instead —
+            // |qty * entry_price| — would leave
+            // free_funds = cash + open_profit rather than free margin, so the
+            // admission threshold would drift with unrealized PnL in the wrong
+            // direction: an underwater add gets declined while a profitable one
+            // gets admitted and then immediately margin-called. This also keeps
+            // the gate consistent with process_margin_call, which marks the
+            // required margin to the current price. Scaled by the same
+            // margin_pct/100 the required side carries; at margin 100 (every
+            // specimen we have) the scaling is a no-op.
+            double held = same_dir
+                ? std::abs(position_qty_) * order.sizing_mark
+                      * syminfo_.pointvalue * account_currency_fx_
+                      * (margin_pct / 100.0)
+                : 0.0;
+            double free_funds = order.sizing_equity - held;
+            // Price the reversal at the price the fill kernel will actually
+            // book. ``fill_price`` here is still unslipped, while
+            // ``sizing_price`` already carries the slippage adjustment (see
+            // frozen_default_market_qty), so comparing the raw fill price
+            // against a slipped budget mixes two conventions and declines
+            // even a zero-gap reversal whenever slippage_ != 0.
+            double admit_price = reversal
+                ? apply_fill_slippage(fill_price, order.is_long)
+                : order.sizing_price;
+            double required_margin = std::abs(order.frozen_default_qty)
+                                     * admit_price
+                                     * syminfo_.pointvalue
+                                     * account_currency_fx_
+                                     * (margin_pct / 100.0);
+            // The epsilon absorbs double rounding AND one whole lot of
+            // notional.
+            //
+            // The quantity was floored to the lot step, so the budget it left
+            // unspent is an unobservable remainder anywhere in
+            // [0, qty_step * price). A decline whose margin is smaller than
+            // that remainder is not a decision about affordability at all —
+            // it is a coin flip on where the floor happened to land. On a
+            // continuous feed nearly half of all bars gap by exactly one
+            // mintick, so without this term the reversal branch resolves such
+            // bars by lot-floor luck: deterministic at large equity, arbitrary
+            // at small. Widening by one lot keeps every decline that TV's
+            // exports actually confirm (their margins exceed a lot of
+            // notional) and drops the ones no ground truth supports.
+            double epsilon =
+                std::max(1e-9, std::abs(free_funds) * 1e-12);
+            epsilon = std::max(epsilon, qty_step_ * admit_price
+                                            * syminfo_.pointvalue
+                                            * account_currency_fx_
+                                            * (margin_pct / 100.0));
+            if (required_margin > free_funds + epsilon) {
+                filled_indices.push_back(order_index);
+                return;
+            }
+        }
+    }
+
     // Check max_intraday_filled_orders limit.
     //
     // TV's broker emulator (LATCH-TILL-DAY-ROLLOVER semantics):
