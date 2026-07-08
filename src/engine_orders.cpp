@@ -31,7 +31,7 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
     }
     if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
         double equity = current_equity() + open_profit(current_bar_.close);
-        double cash = equity * (qty_value / 100.0);
+        double cash = reserve_percent_commission(equity * (qty_value / 100.0));
         // Reject (qty 0) on a non-finite / non-positive fill price — a degenerate
         // $0/NaN print must NOT size as the raw % number (silent wrong-qty bug).
         // One contract's currency exposure is fill_price × pointvalue (1.0 for
