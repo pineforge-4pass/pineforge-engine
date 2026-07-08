@@ -122,6 +122,15 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     // non-deterministic — see corpus/parity-anomalies/README.md).
     // Only applied to MARKET entries (limit/stop entries have their
     // own price baked into the order itself).
+    //
+    // Scope: this signal-time gate covers EXPLICIT-qty market entries only
+    // (the empirical base above — parity-probe-04..06 — is all explicit
+    // ``qty = <expr>`` sizing). DEFAULT-sized (qty=na) market entries never
+    // reach it (qty is NaN here); their quantity is frozen at this bar's
+    // close further below (see frozen_default_market_qty), AFTER this gate,
+    // precisely so the freeze cannot accidentally activate a gate whose
+    // equity basis (realized-only current_equity()) was never validated
+    // for default sizing.
     if (!std::isnan(qty) && std::isnan(limit_price) && std::isnan(stop_price)) {
         double margin_pct = is_long ? margin_long_ : margin_short_;
         if (margin_pct > 0.0 && !std::isnan(current_bar_.close)) {
@@ -213,6 +222,23 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         order.type = OrderType::MARKET;
         order.limit_price = std::numeric_limits<double>::quiet_NaN();
         order.stop_price = std::numeric_limits<double>::quiet_NaN();
+        // TradingView freezes DEFAULT (qty=na) percent_of_equity / cash
+        // market-order sizing at THIS (signal) bar's close — see
+        // frozen_default_market_qty (engine.hpp) for the rule and the
+        // empirical basis. current_bar_.close is close(S) right here, so
+        // placement is the one point where the frozen computation is
+        // naturally correct (no double count, no fill-bar look-ahead).
+        // FIXED default sizing needs no freeze: its fill-time value is
+        // identical. The frozen quantity goes in frozen_default_qty, NOT in
+        // order.qty — order.qty must stay NaN so every isnan(order.qty)-keyed
+        // "was this default-sized?" branch (OCA cancel, reversal binding,
+        // OCA fully-filled, partial-exit classification) keeps its meaning.
+        if (std::isnan(qty)
+            && (default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+                || default_qty_type_ == QtyType::CASH)
+            && !std::isnan(current_bar_.close)) {
+            order.frozen_default_qty = frozen_default_market_qty(/*is_buy=*/is_long);
+        }
     } else {
         order.type = OrderType::ENTRY;
         order.limit_price = limit_price;
@@ -675,6 +701,17 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
         order.type = OrderType::RAW_ORDER;
         order.limit_price = std::numeric_limits<double>::quiet_NaN();
         order.stop_price = std::numeric_limits<double>::quiet_NaN();
+        // Same signal-time freeze as strategy_entry's MARKET branch: a
+        // default-sized strategy.order market order runs through the same
+        // TV default-sizing engine, so its quantity is frozen at this
+        // (signal) bar's close too. Stored off to the side (order.qty stays
+        // NaN) for the same reason as in strategy_entry.
+        if (std::isnan(qty)
+            && (default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+                || default_qty_type_ == QtyType::CASH)
+            && !std::isnan(current_bar_.close)) {
+            order.frozen_default_qty = frozen_default_market_qty(/*is_buy=*/is_long);
+        }
     } else {
         order.type = OrderType::RAW_ORDER;
         order.limit_price = limit_price;
