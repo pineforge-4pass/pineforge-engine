@@ -837,6 +837,19 @@ protected:
         return floored < qty ? floored : qty;
     }
 
+    // TradingView reserves the entry commission when sizing percent_of_equity:
+    // it sizes the notional so that notional + entry_fee <= equity*pct, i.e.
+    // divides the sizing cash by (1 + commRate). Proven from TV exports for
+    // BOTH fractional (pct=10) and all-in (pct=100) sizing — the reservation is
+    // not gated on headroom (KI-52 probes: ki52-pct-equity-commission-{frac,allin},
+    // first-entry qty = equity/(price*(1+commRate)) to the lot step, 16/16). Only
+    // percent commission reserves; cash-per-order/contract and a zero rate are
+    // exact no-ops, so FIXED/CASH qty types and commission_value_==0 are unchanged.
+    double reserve_percent_commission(double cash) const {
+        return (commission_type_ == CommissionType::PERCENT && commission_value_ > 0.0)
+            ? cash / (1.0 + commission_value_ / 100.0) : cash;
+    }
+
     double calc_qty(double fill_price) const {
         switch (default_qty_type_) {
             case QtyType::FIXED:
@@ -849,7 +862,7 @@ protected:
                 // percent orders from the live equity snapshot so pyramid adds
                 // and same-bar/re-entry sizing see unrealized PnL.
                 double equity = current_equity() + open_profit(current_bar_.close);
-                double cash = equity * (default_qty_value_ / 100.0) / account_currency_fx_;
+                double cash = reserve_percent_commission(equity * (default_qty_value_ / 100.0)) / account_currency_fx_;
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
                 return (std::isfinite(fill_price) && fill_price > 0)
