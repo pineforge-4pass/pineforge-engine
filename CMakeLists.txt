@@ -99,6 +99,7 @@ add_library(pineforge STATIC
     src/ta_volatility_trend.cpp
     src/timeframe.cpp
     src/timezone.cpp
+    src/fxmacrodata.cpp
 )
 
 # Canonical alias for downstream find_package(PineForge) consumers.
