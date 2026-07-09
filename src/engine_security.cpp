@@ -4,6 +4,8 @@
 
 #include "engine_internal.hpp"
 
+#include <pineforge/ta.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -269,6 +271,30 @@ bool BacktestEngine::security_series_slot_is_new(int sec_id) const {
 
 
 void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar) {
+    // Opt-in KI-55 HTF warmup parity (security_range_start_na_warmup run flag):
+    //   (a) start every request.security aggregation at range_start_ms, not the
+    //       feed start — drop pre-range input bars so the aggregator, its TA
+    //       members, and the exposed history all begin at the range start;
+    //   (b) its embedded lookback ta.ema na-warms per TV built-in semantics —
+    //       scoped by raising ta::ema_na_warmup_flag() for the duration of this
+    //       call, which covers every evaluate_security() dispatch below (each of
+    //       which is the only place the security's EMA members compute());
+    //   (c) plain security expressions (e.g. `close`) read na until the first
+    //       COMPLETED HTF bar from the range start — a consequence of (a): under
+    //       lookahead_off no evaluate_security() fires until the first bucket
+    //       completes, and the partial first bucket counts as HTF bar 1.
+    // All three collapse to no-ops when the flag is unset (byte-identical).
+    if (security_range_start_na_warmup_
+            && input_bar.timestamp < security_range_start_ms_) {
+        return;
+    }
+    struct SecurityNaWarmupScope {
+        bool prev_;
+        explicit SecurityNaWarmupScope(bool on)
+            : prev_(ta::ema_na_warmup_flag()) { ta::ema_na_warmup_flag() = on; }
+        ~SecurityNaWarmupScope() { ta::ema_na_warmup_flag() = prev_; }
+    } _na_warmup_scope(security_range_start_na_warmup_);
+
     if (state.lower_tf_use_input) {
         // Buffer raw input bars until we accumulate one full script-TF
         // chunk, then aggregate (if req > input) and dispatch each

@@ -19,6 +19,15 @@
 namespace pineforge {
 namespace ta {
 
+// Thread-local so parallel in-process engines never cross-contaminate. Default
+// false → src-seed EMA (byte-identical to prior behavior); the engine raises it
+// only around request.security evaluation under the security_range_start_na_warmup
+// run flag. See the declaration in <pineforge/ta.hpp> for the full rationale.
+bool& ema_na_warmup_flag() {
+    static thread_local bool flag = false;
+    return flag;
+}
+
 RMA::RMA(int length)
     : output_val(na<double>()), sum(0.0), length(length), bar_count(0),
       // Mirror the initial committed state so a recompute() issued before
@@ -118,7 +127,7 @@ double SMA::compute(double src) {
 
 EMA::EMA(int length)
     : output_val(na<double>()), alpha(2.0 / (length + 1)), sum(0.0),
-      bar_count(0),
+      bar_count(0), length_(length),
       // Mirror the initial committed state (see RMA::RMA) so a recompute()
       // issued before the first compute() restores a well-defined pristine
       // state instead of reading uninitialized save-state members.
@@ -126,8 +135,40 @@ EMA::EMA(int length)
 
 double EMA::compute(double src) {
     save();
+    // Latch the warmup mode once, on the first compute(). A security-embedded
+    // EMA's first compute() always runs inside the engine's request.security
+    // evaluation (where the flag is raised under security_range_start_na_warmup),
+    // and a chart EMA's never does — so the latch is consistent for the
+    // instance's whole life without threading any per-instance wiring through
+    // codegen.
+    if (!warmup_latched_) {
+        na_warmup_ = ema_na_warmup_flag();
+        warmup_latched_ = true;
+    }
     if (is_na(src)) {
         // Pine semantics: ignore na inputs and keep prior EMA value.
+        return output_val;
+    }
+
+    if (na_warmup_) {
+        // TradingView *built-in* ta.ema warmup: return na until `length` values
+        // have accumulated since series start, then seed with the SMA of those
+        // first `length` values, then run the ordinary EMA recursion. Mirrors
+        // ta.rma/ta.sma warmup (RMA::compute above) so a range-start-truncated
+        // request.security(ta.ema(...)) reads na for its whole warmup window,
+        // matching TV (KI-55). Once output_val is non-na the series is seeded.
+        if (is_na(output_val)) {
+            sum += src;
+            bar_count++;
+            if (bar_count < length_) {
+                return na<double>();
+            }
+            // bar_count == length_: seed = SMA of the first `length_` values.
+            output_val = sum / static_cast<double>(length_);
+            return output_val;
+        }
+        output_val = alpha * src + (1.0 - alpha) * output_val;
+        bar_count++;
         return output_val;
     }
 

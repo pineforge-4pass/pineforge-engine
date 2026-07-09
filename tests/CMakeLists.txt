@@ -21,6 +21,7 @@ set(TEST_SOURCES
     test_dmi_parity
     test_integration
     test_request_security
+    test_security_range_start_na_warmup
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
     test_ltf_buffer_no_leak
