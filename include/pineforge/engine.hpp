@@ -535,6 +535,13 @@ protected:
     Bar current_bar_;
     int bar_index_ = 0;
     int bar_index_offset_ = 0;
+    // Opt-in KI-55 HTF warmup parity (see set_syminfo_metadata,
+    // "security_range_start_na_warmup"). When enabled, request.security series
+    // aggregate from security_range_start_ms_ instead of the feed start and
+    // their embedded ta.ema na-warm per TV built-in semantics. Default OFF →
+    // byte-identical behavior; touched only through feed_security_eval_state.
+    bool security_range_start_na_warmup_ = false;
+    int64_t security_range_start_ms_ = 0;
     int64_t next_order_seq_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
@@ -1907,6 +1914,21 @@ public:
             bar_index_offset_ = std::isfinite(value)
                 ? static_cast<int>(std::llround(value))
                 : 0;
+        }
+        // Opt-in KI-55 HTF warmup parity. The value is the TV deep-backtest
+        // range start in epoch-ms (exactly representable as a double for any
+        // realistic date — 2025 is ~1.7e12 << 2^53). A positive, finite value
+        // enables it; anything else (0 / NaN / negative) is the disabled
+        // default, so a run that never sets this key is byte-identical.
+        if (key == "security_range_start_na_warmup") {
+            if (std::isfinite(value) && value > 0.0) {
+                security_range_start_na_warmup_ = true;
+                security_range_start_ms_ =
+                    static_cast<int64_t>(std::llround(value));
+            } else {
+                security_range_start_na_warmup_ = false;
+                security_range_start_ms_ = 0;
+            }
         }
         // "qty_step" is the per-instrument lot increment used by the forced-
         // liquidation quantizer. Route it onto the dedicated member so the
