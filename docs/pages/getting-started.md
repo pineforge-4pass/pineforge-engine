@@ -22,9 +22,8 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect 30 tests to pass. The largest (`test_integration`,
-`test_request_security`) take a few hundred milliseconds; everything
-else completes faster.
+All configured tests should pass. The suite includes integration, ABI,
+timeframe, broker, and continuous-stream lifecycle coverage.
 
 ## Install
 
@@ -70,5 +69,6 @@ cc hello.c -lpineforge -lstdc++ -lm -o hello
 That's it — you have a working install. Next steps:
 
 - **[Lifecycle](@ref lifecycle)** — handle ownership and report freeing
+- **[Historical to realtime streaming](@ref streaming)** — preserve state while switching feeds
 - **[Tutorial: MACD](@ref tutorial_macd)** — full backtest walkthrough
 - **[FFI from Python](@ref ffi_python)** — calling the runtime via ctypes

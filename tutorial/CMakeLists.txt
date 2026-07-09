@@ -67,3 +67,15 @@ pineforge_tutorial_strategy(strategy_tutorial_mtf_ltf
     strategy_ltf)
 message(STATUS "tutorial: configured strategy_tutorial_mtf_htf → tutorial/mtf/strategy_htf.so")
 message(STATUS "tutorial: configured strategy_tutorial_mtf_ltf → tutorial/mtf/strategy_ltf.so")
+
+# Keep the public streaming tutorial executable in the normal CTest lane so
+# its ctypes mirror and lifecycle calls cannot silently drift from the ABI.
+if(PINEFORGE_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME test_tutorial_stream
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_stream.py)
+        set_tests_properties(test_tutorial_stream PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
+endif()

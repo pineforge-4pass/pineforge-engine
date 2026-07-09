@@ -13,7 +13,7 @@ minute. Source: [`tutorial/`](https://github.com/pineforge-4pass/pineforge-engin
 | 2 | Load `strategy.so` from Python via `ctypes`. |
 | 3 | Push an OHLCV feed and call #run_backtest_full. |
 | 4 | Read every interesting field of `pf_report_t`. |
-| 5 | Re-run the same handle with different parameters — no recompile. |
+| 5 | Re-run the same compiled strategy with different parameters — no recompile. |
 | 6 | Sweep a 2-D parameter grid in parallel using one `.so` per worker. |
 
 By the end you'll have the canonical patterns for ad-hoc backtests,
@@ -30,6 +30,7 @@ tutorial/
 │   ├── btcusdt_15m_7d.csv  # 672 frozen bars (Binance)
 │   └── fetch_btcusdt.py    # refresh from Binance public API
 ├── run.py                  # ctypes harness
+├── run_stream.py           # historical OHLCV → realtime trade stream
 ├── run_advanced.py         # parameter sweep using ABI overrides
 ├── run.sh                  # one-shot: cmake build + run.py
 └── CMakeLists.txt
@@ -191,6 +192,7 @@ is a self-contained, runnable example targeting a specific use case.
 | Example | What it shows |
 | --- | --- |
 | [Pure C example](@ref examples_c) | Same MACD run, no Python. End-to-end C code with `gcc` build. |
+| [Historical to realtime streaming](@ref streaming) | Warm the same MACD instance on OHLCV, then continue it on ordered trade ticks. |
 | [Parameter sweep in Python](@ref examples_python_sweep) | Re-run one `.so` with a 2-D MACD grid. No recompile per run. |
 | [Multi-strategy harness](@ref examples_multi) | Load N `.so` files, run them in parallel against the same feed. |
 | [Magnifier on vs off](@ref examples_magnifier) | A/B comparison showing how intra-bar fills change the trade list. |

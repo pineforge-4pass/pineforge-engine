@@ -17,6 +17,7 @@ docs/
 │   ├── install.md
 │   ├── integration-cmake.md
 │   ├── lifecycle.md
+│   ├── streaming.md
 │   ├── report-schema.md
 │   ├── configuration.md
 │   ├── magnifier.md

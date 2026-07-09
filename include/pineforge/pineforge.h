@@ -503,6 +503,14 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
  *  `strategy.entry/order/exit/close` commands are ignored. */
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms);
 
+/** @} */ /* end of pf_config */
+
+/** @defgroup pf_streaming Historical to realtime streaming
+ *  @brief Warm on confirmed OHLCV and continue the same strategy instance on
+ *         ordered exchange trades.
+ *  @{
+ */
+
 /** Warm a strategy with confirmed OHLCV, then switch the same instance to a
  *  realtime trade stream without resetting position, equity, pending orders,
  *  Pine variables, TA state, request.security state, or timeframe aggregation.
@@ -541,6 +549,12 @@ PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar);
 /** Snapshot the cumulative warmup + realtime report. The embedded arrays are
  *  caller-owned after return and must be released with #report_free. */
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out);
+
+/** @} */ /* end of pf_streaming */
+
+/** @addtogroup pf_config
+ *  @{
+ */
 
 /** Set the strategy's chart timezone (IANA / POSIX TZ string).
  *

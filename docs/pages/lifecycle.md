@@ -106,6 +106,10 @@ it closes elapsed bars and creates zero-volume carry-forward bars for quiet
 intervals. Normally end with `finalize_partial_input_bar = 0` to avoid treating
 an open bar as confirmed.
 
+See [Historical to realtime streaming](@ref streaming) for the complete tick
+validation rules, a contiguous-replay example, and the runnable Python
+tutorial.
+
 The runtime fills `r` in place — the `pf_report_t` struct itself is
 caller-owned (typically stack-allocated), but the arrays it points to
 (`trades`, `security_diag`, `trace`, `trace_names`) are heap-allocated

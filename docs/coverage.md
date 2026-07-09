@@ -24,16 +24,16 @@
 > "no runtime module — Pine surface still supported" bucket below calls
 > it out.
 >
-> **Out of scope.** Visual / charting / alert APIs are not implemented
-> by this runtime regardless of consumer (PineForge is an offline
-> backtesting engine, not a renderer).
+> **Out of scope today.** Visual / charting / alert APIs are not implemented
+> by this runtime regardless of consumer. The runtime now accepts continuous
+> ordered-trade streams, but it does not yet emit alert events or render charts.
 
 ## Coverage summary
 
 
 | Category                    | Runtime status                                                             | What `libpineforge.a` owns                                                                                                                                                                                                                                                                                                                                          |
 | --------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Engine / strategy lifecycle | Supported                                                                  | `BacktestEngine`, three `run(...)` overloads, bar loop, `on_bar(...)` hook, `ReportC` / `SecurityDiagC` reporting.                                                                                                                                                                                                                                                  |
+| Engine / strategy lifecycle | Supported                                                                  | `BacktestEngine`, one-shot `run(...)` overloads, continuous historical-to-realtime streams, bar loop, raw-trade broker passes, `on_bar(...)` hook, and cumulative reporting.                                                                                                                                                                                       |
 | Strategy orders             | Supported                                                                  | `strategy_entry / order / exit / close / close_all / cancel / cancel_all` with OHLC-path fill resolution, OCA, pyramiding, slippage, commissions, margin gates, partial / FIFO-vs-ANY closes, trailing stops, and TV deferred-flip carry handling.                                                                                                                  |
 | Strategy state / accessors  | Supported                                                                  | Position state, equity / drawdown / runup tracking, win / loss counts, full closed- and open-trade accessor methods, intraday fill counter.                                                                                                                                                                                                                         |
 | Strategy risk               | Supported                                                                  | All six `strategy.risk.*` gates are wired (`engine_risk.cpp` + the fill/order gates): `allow_entry_in` direction allow-list, `max_position_size`, `max_drawdown` (abs / % of peak equity), `max_intraday_loss` (abs / % of equity), `max_cons_loss_days`, and `max_intraday_filled_orders` (latch-till-day-rollover cap-close).                                      |
@@ -58,7 +58,7 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**.
-Every compiled PineForge strategy `.so` exports exactly the 19 symbols
+Every compiled PineForge strategy `.so` exports exactly the 26 symbols
 declared there:
 
 
@@ -74,6 +74,12 @@ declared there:
 | `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier                                  |
 | `strategy_set_trace_enabled`             | Toggle per-bar trace recording                                    |
 | `strategy_set_trade_start_time`          | Earliest Unix-ms at which order commands may fire                 |
+| `strategy_stream_begin`                  | Warm on confirmed OHLCV and enter realtime mode                   |
+| `strategy_stream_push_tick`              | Push one ordered exchange trade                                  |
+| `strategy_stream_push_ticks`             | Push one contiguous ordered-trade array                           |
+| `strategy_stream_advance_time`            | Confirm elapsed bars and materialize quiet intervals              |
+| `strategy_stream_end`                    | End the realtime lifecycle                                       |
+| `strategy_stream_fill_report`            | Snapshot cumulative warmup + realtime state                       |
 | `strategy_set_chart_timezone`            | Chart display TZ (intraday-day rollover gates)                    |
 | `strategy_set_syminfo_timezone`          | Exchange TZ (`syminfo.timezone`)                                  |
 | `strategy_set_syminfo_session`           | Trading session string (`syminfo.session`)                        |
@@ -82,11 +88,13 @@ declared there:
 | `strategy_set_syminfo_metadata`          | Inject fundamental / exchange metadata by Pine member name        |
 | `strategy_get_last_error`                | Error message from the most recent failed run                     |
 | `pf_version_get`                         | Runtime version (struct)                                          |
+| `pf_abi_version`                         | Caller-allocated POD layout version                               |
 | `pf_version_string`                      | Runtime version (string)                                          |
 
 
-POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`,
-`pf_trace_entry_t`, `pf_version_t`) and the `pf_magnifier_distribution_t`
+POD types (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`,
+the metrics/equity structs, `pf_security_diag_t`, `pf_trace_entry_t`,
+`pf_version_t`) and the `pf_magnifier_distribution_t`
 enum complete the surface. **Stability:** within the same
 `PINEFORGE_VERSION_MAJOR`, struct layouts and `extern "C"` signatures are
 append-only. New fields may be appended; existing fields are never
@@ -109,8 +117,8 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                  | The 19 documented C symbols every compiled strategy `.so` exports.                                                                                            |
-| Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_risk.cpp`, `engine_report.cpp` | Strategy lifecycle, orders, fills, risk gating, reports, inputs / syminfo, magnifier loop, TF aggregation, `request.security` plumbing.                       |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | The 26 documented C symbols every compiled strategy `.so` exports.                                                                                                           |
+| Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_risk.cpp`, `engine_report.cpp` | One-shot and continuous lifecycle, orders, raw-trade/bar fills, risk, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::`* types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.`* functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |
 | Math               | `math.hpp`               | `math.cpp`                                                                                                                                                                                                                               | Inline `pine_random(...)` PRNG and rolling `math::Sum` class.                                                                                                 |
@@ -767,20 +775,20 @@ carries a forward-looking assessment using these buckets:
 `fill`, `hline`, `bgcolor`, `barcolor`, `label.`*, `line.`*, `box.*`,
 `table.*`, `polyline.*`, `linefill.*`, `alert(...)`, `alertcondition(...)`.
 
-- **Feasibility:** *Feasible* for plotting primitives (capture series + style metadata into the `ReportC` extension or a side-channel CSV / JSON for an external renderer); *Out of scope structurally* for live `alert(...)` because PineForge produces no realtime stream.
-- **Future story:** A "report-as-data" path is the obvious target — `plot(...)` and friends would write tagged time-series rows into a new diagnostics array on `ReportC`, and a Python harness would render them with Plotly / matplotlib. `alertcondition(...)` results could be returned as a list of `(bar_time, message)` triples. The graphics primitives (`label.new`, `line.new`, `box.new`) would need a small annotation runtime — straightforward but high surface area. Webhook / push-notification alerts stay out of scope.
+- **Feasibility:** *Feasible* for plotting primitives (capture series + style metadata into the `ReportC` extension or a side-channel CSV / JSON for an external renderer). Realtime `alert(...)` is now also feasible because the engine has an explicit realtime lifecycle, but it still needs alert frequency/dedup state, an event ABI, and delivery plumbing.
+- **Future story:** A "report-as-data" path is the obvious target — `plot(...)` and friends would write tagged time-series rows into a new diagnostics array on `ReportC`, and a Python harness would render them with Plotly / matplotlib. `alertcondition(...)` results could be returned as a list of `(bar_time, message)` triples. Alert delivery should drain deterministic engine events into an external JSON-only webhook adapter so network retries never mutate engine state.
 - **Why not done yet:** Backtests already produce `TradeC[]` and per-bar diagnostics; visual plotting has not been the unblocker for any user-facing strategy validation. It is a UX feature, not a correctness feature.
 
 #### `varip` and realtime tick semantics
 
 `varip` (persists across realtime ticks; resets on bar close in TV);
 `barstate.isrealtime`, `barstate.isnew` in realtime, `calc_on_every_tick`,
-`calc_on_order_fills`, live tick streams.
+`calc_on_order_fills`.
 
 - **Feasibility:**
   - `varip` itself: *Feasible*. With the bar magnifier already simulating intrabar samples, `varip` could map onto sub-bar persistence (do not reset between magnifier ticks; reset only on bar close).
-  - Realtime barstate flags + `calc_on_every_tick` + `calc_on_order_fills`: *Out of scope structurally* — they require a live data feed PineForge does not have.
-- **Future story:** `varip` mapping to magnifier sub-bar state is the right design; currently the support checker rejects `varip` outright but that is conservative rather than fundamental. Realtime semantics would require a streaming runtime that PineForge is not built for and does not aim to be.
+  - Realtime barstate flags + `calc_on_every_tick` + `calc_on_order_fills`: *Feasible*. Ordered trades now reach the broker, but script recalculation still needs TradingView-style rollback, commit, and post-fill scheduling.
+- **Future story:** `varip` mapping to live per-tick persistence is the right design; currently the support checker rejects `varip` outright but that is conservative rather than fundamental. The new streaming lifecycle supplies the missing data/event boundary, while rollback and codegen support remain future work.
 - **Why not done yet:** `varip` use cases overlap heavily with what `var` already covers in batch mode. The realtime distinction TV makes is meaningful only when the data feed is live.
 
 #### Import / export / library system

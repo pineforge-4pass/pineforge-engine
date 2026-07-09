@@ -54,7 +54,7 @@ Three layers:
 
 ## Symbol inventory
 
-A compiled strategy `.so` exports **exactly these 10 C symbols** and
+A compiled strategy `.so` exports **exactly these 26 C symbols** and
 zero internal C++ symbols:
 
 | Symbol | Group |
@@ -68,12 +68,28 @@ zero internal C++ symbols:
 | `strategy_set_override` | @ref pf_config |
 | `strategy_set_magnifier_volume_weighted` | @ref pf_config |
 | `strategy_set_trace_enabled` | @ref pf_config |
+| `strategy_set_trade_start_time` | @ref pf_config |
+| `strategy_stream_begin` | @ref pf_streaming |
+| `strategy_stream_push_tick` | @ref pf_streaming |
+| `strategy_stream_push_ticks` | @ref pf_streaming |
+| `strategy_stream_advance_time` | @ref pf_streaming |
+| `strategy_stream_end` | @ref pf_streaming |
+| `strategy_stream_fill_report` | @ref pf_streaming |
+| `strategy_set_chart_timezone` | @ref pf_config |
+| `strategy_set_syminfo_timezone` | @ref pf_config |
+| `strategy_set_syminfo_session` | @ref pf_config |
+| `strategy_set_syminfo_mintick` | @ref pf_config |
+| `strategy_set_syminfo_pointvalue` | @ref pf_config |
+| `strategy_set_syminfo_metadata` | @ref pf_config |
+| `strategy_get_last_error` | Diagnostics |
 | `pf_version_get` | @ref pf_version |
+| `pf_abi_version` | @ref pf_version |
+| `pf_version_string` | @ref pf_version |
 
-Plus the runtime-only export `pf_version_string` (string descriptor)
-and the configuration knob `strategy_set_trade_start_time`. The 10 above
-are the historical canonical surface; the additional symbols are
-append-only additions covered by the same minor-version guarantee.
+The five strategy-lifecycle functions are emitted by codegen. Runtime exports
+are force-linked into each strategy library, so consumers resolve the same
+complete ABI from the strategy `.so`. All additions remain covered by the
+minor-version append-only guarantee.
 
 You can verify this against any strategy `.so`:
 

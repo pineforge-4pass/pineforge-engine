@@ -151,13 +151,15 @@ int main(void) {
 }
 ```
 
-That's the entire integration. Every PineForge-compiled strategy `.so` exports the same 10 symbols — write your harness once, swap strategies forever.
+That's the entire batch integration. Every PineForge-compiled strategy `.so`
+exports the same stable ABI — write your harness once, swap strategies forever.
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure   # 39 tests, ~1 s
 bash tutorial/run.sh                          # MACD backtest end-to-end
+python3 tutorial/run_stream.py                # OHLCV warmup → realtime trades
 ```
 
 ## Documentation
@@ -167,6 +169,7 @@ bash tutorial/run.sh                          # MACD backtest end-to-end
 | 📖 **[cdocs.pineforge.dev](https://cdocs.pineforge.dev)** | Full C ABI reference, lifecycle, report schema, configuration knobs, magnifier, FFI bindings, ABI stability contract |
 | 🚀 **[Getting Started](https://cdocs.pineforge.dev/getting_started.html)** | 60-second build + install + smoke test |
 | 🧪 **[Tutorial: MACD on BTC/USDT](https://cdocs.pineforge.dev/tutorial_macd.html)** | End-to-end annotated walkthrough |
+| 📡 **[Historical → realtime streaming](https://cdocs.pineforge.dev/streaming.html)** | Preserve strategy and broker state while switching from OHLCV to ordered trades |
 | 📊 **[Trading metrics reference](https://cdocs.pineforge.dev/metrics.html)** | Every report metric (ABI v2): definitions, units, NaN rules, TV / quant-library validation status |
 | 🔌 **[FFI from Python](https://cdocs.pineforge.dev/ffi_python.html)** | Complete `ctypes` mirror — paste-ready |
 | 🦀 **[Calling from Rust](https://cdocs.pineforge.dev/examples_rust.html)** | Idiomatic `libloading` wrapper |
