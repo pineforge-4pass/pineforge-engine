@@ -1,7 +1,8 @@
 /*
  * test_margin_call.cpp — verify TradingView forced-liquidation (margin call).
  *
- * Covers the three behaviours of process_margin_call / margin_liquidation_price:
+ * Covers the principal behaviours of process_margin_call /
+ * margin_liquidation_price:
  *
  *   A. A 100%-equity SHORT held through an adverse (rising) move is force-
  *      liquidated. At least one "Margin call" exit is produced; the first one
@@ -9,18 +10,18 @@
  *      of the margin shortfall (capped at the full position). The reported
  *      margin_liquidation_price equals the closed-form formula while open.
  *
- *   B. A LONG at the default 100% margin can NEVER be liquidated (the formula
- *      denominator margin/100 - direction = 0). Even a catastrophic price
- *      crash produces NO margin call and margin_liquidation_price() == na.
+ *   B. A LONG at the default 100% margin has no adverse-price liquidation
+ *      (the formula denominator margin/100 - direction = 0). A sub-lot
+ *      opening affordability overage is held even through a later crash.
  *
- *   C. A LEVERAGED long (margin_long = 20 => 5x) IS liquidated when price falls
+ *   C. A one-lot-or-larger opening affordability shortfall is trimmed on the
+ *      entry bar using entry affordability and exit-side fill semantics.
+ *
+ *   D. A LEVERAGED long (margin_long = 20 => 5x) IS liquidated when price falls
  *      far enough; the forced exit fills at the bar's adverse extreme (LOW).
  *
- *   D. The margin-call emulator can be switched off (set_margin_call_enabled
+ *   E. The margin-call emulator can be switched off (set_margin_call_enabled
  *      false); the underwater short is then held with no forced exit.
- *
- * Engine fill timing here uses process_orders_on_close = true so the market
- * entry fills at the signal bar's close, mirroring the p2 probe.
  */
 
 #include <cassert>
@@ -72,7 +73,16 @@ public:
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
     double trade_size(int i) const { return closed_trade_size(i); }
+    int entry_bar(int i) const { return closed_trade_entry_bar_index(i); }
+    int exit_bar(int i) const { return closed_trade_exit_bar_index(i); }
+    double position_size() const { return signed_position_size(); }
     double liq_price() const { return margin_liquidation_price(); }
+    bool opening_pending() const { return opening_affordability_pending_; }
+    bool opening_eligible() const { return opening_affordability_eligible_; }
+    double opening_raw_base() const {
+        return opening_affordability_raw_fill_base_;
+    }
+    int live_entry_count() const { return position_entry_count_; }
 };
 
 // ---- A: 100%-equity short force-liquidated by a rising market --------------
@@ -206,6 +216,13 @@ static void test_short_margin_call_qty_step() {
     CHECK(near(eng.exit_price(0), 105.0));
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
 
+    // Negative sentinel for the 1x-long fix: the established short cascade
+    // stays exactly two forced rows, including the residual close at bar2 HIGH.
+    CHECK(eng.trade_count() == 2);
+    CHECK(near(eng.trade_size(1), 8.0));
+    CHECK(near(eng.exit_price(1), 130.0));
+    CHECK(eng.exit_comment(1) == std::string("Margin call"));
+
     // Every partial (non-final) forced lot must be a step multiple. The final
     // exit closes whatever residual remains (the position size itself is not a
     // step multiple, so only the intermediate nibbles are checked).
@@ -256,44 +273,787 @@ static void test_long_100pct_margin_no_call() {
     CHECK(std::isnan(eng.liq_price()));
 }
 
-// ---- B': OVER-ALLOCATED long at 100% margin IS force-liquidated -------------
+// A default 100%-of-equity MARKET order placed and filled from true flat is
+// admitted on its frozen signal-price notional. With no opening commission,
+// a gap above that frozen price is deliberately exempt from the one-shot
+// post-fill affordability trim.
+class FrozenAllInFlatLongProbe : public MCEngine {
+public:
+    explicit FrozenAllInFlatLongProbe(double commission_percent) {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = commission_percent;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, kNaN);
+    }
+};
+
+static void test_zero_cost_frozen_all_in_true_flat_gap_is_exempt() {
+    std::printf("test_zero_cost_frozen_all_in_true_flat_gap_is_exempt\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 120.0, 125.0,  80.0, 110.0, 1.0),
+    };
+    FrozenAllInFlatLongProbe eng(/*commission_percent=*/0.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 0);
+    CHECK(near(eng.position_size(), 10.0));
+    CHECK(std::isnan(eng.liq_price()));
+}
+
+static void test_commissioned_frozen_all_in_true_flat_gap_is_eligible() {
+    std::printf("test_commissioned_frozen_all_in_true_flat_gap_is_eligible\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 120.0, 125.0,  80.0, 110.0, 1.0),
+    };
+    FrozenAllInFlatLongProbe eng(/*commission_percent=*/10.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    // Signal sizing reserves the 10% entry fee: floor(1000/1.1/100)=9.
+    // At the 120 fill, margin plus the 108 fee is unaffordable. Restoring
+    // needs 1.566... lots, floored to one then multiplied by four.
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(eng.entry_bar(0) == 1);
+    CHECK(eng.exit_bar(0) == 1);
+    CHECK(near(eng.entry_price(0), 120.0));
+    CHECK(near(eng.exit_price(0), 120.0));
+    CHECK(near(eng.trade_size(0), 4.0));
+    CHECK(near(eng.position_size(), 5.0));
+}
+
+// The short closes at zero PnL immediately before the long is placed, so both
+// placement and fill observe FLAT. Direct same-on_bar close provenance (not a
+// trade-count/PnL heuristic) must still identify the paired reentry; otherwise
+// its next-open gap would be mistaken for the true-flat exemption.
+class PairedCloseDefaultLongProbe : public MCEngine {
+public:
+    PairedCloseDefaultLongProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, /*qty=*/1.0);
+        } else if (bar_index_ == 1) {
+            // Close immediately first, so the reentry is placed from an
+            // actually FLAT engine state. Its same-on_bar paired-close
+            // provenance must still exclude it from the true-flat exemption.
+            strategy_close("S", "paired close", kNaN, kNaN,
+                           /*immediately=*/true);
+            strategy_entry("L", true, kNaN, kNaN, kNaN);
+        }
+    }
+};
+
+static void test_paired_short_close_default_long_gap_remains_eligible() {
+    std::printf("test_paired_short_close_default_long_gap_remains_eligible\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(3000, 120.0, 125.0,  80.0, 110.0, 1.0),
+    };
+    PairedCloseDefaultLongProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 2);
+    CHECK(eng.exit_comment(1) == std::string("Margin call"));
+    CHECK(eng.entry_bar(1) == 2);
+    CHECK(eng.exit_bar(1) == 2);
+    CHECK(near(eng.entry_price(1), 120.0));
+    CHECK(near(eng.exit_price(1), 120.0));
+    CHECK(near(eng.trade_size(1), 4.0));
+    CHECK(near(eng.position_size(), 6.0));
+}
+
+// ---- B'/C: 1x-long opening affordability is lot-floored and entry-priced ---
 
 class LongOverAllocProbe : public MCEngine {
 public:
-    LongOverAllocProbe() {
+    explicit LongOverAllocProbe(double qty_step,
+                                double commission_percent = 0.0,
+                                bool process_on_close = false,
+                                int slippage_ticks = 0,
+                                double mintick = 0.01,
+                                double account_fx = 1.0,
+                                double pointvalue = 1.0,
+                                double qty = 10.0) : qty_(qty) {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = qty;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = commission_percent;
+        margin_long_ = 100.0;             // 1x -> denominator (1 - 1) = 0 -> na
+        process_orders_on_close_ = process_on_close;
+        qty_step_ = qty_step;
+        slippage_ = slippage_ticks;
+        syminfo_mintick_ = mintick;
+        account_currency_fx_ = account_fx;
+        syminfo_.pointvalue = pointvalue;
+    }
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, qty_);
+    }
+private:
+    double qty_;
+};
+
+static void test_long_100pct_margin_sublot_overage_is_held() {
+    std::printf("test_long_100pct_margin_sublot_overage_is_held\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: signal @ close 100
+        mk_bar(2000, 110.0, 112.0,  50.0,  90.0, 1.0),  // 1: restore=.909 lot
+        mk_bar(3000,  90.0,  91.0,   1.0,   2.0, 1.0),  // 2: later crash
+    };
+    LongOverAllocProbe eng(/*qty_step=*/1.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    // Restoring affordability at the 110 fill needs only 0.909 lot. Flooring
+    // to qty_step=1 produces zero, so TV does not trim. Later lows cannot turn
+    // that dust overage into an adverse-price liquidation.
+    CHECK(eng.trade_count() == 0);
+    CHECK(near(eng.position_size(), 10.0));
+    CHECK(std::isnan(eng.liq_price()));
+}
+
+static void test_long_100pct_margin_lot_trim_uses_entry_affordability() {
+    std::printf("test_long_100pct_margin_lot_trim_uses_entry_affordability\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),
+        mk_bar(2000, 120.0, 122.0, 100.0, 110.0, 1.0),
+        mk_bar(3000, 110.0, 111.0,  10.0,  20.0, 1.0),
+    };
+    LongOverAllocProbe eng(/*qty_step=*/1.0, /*commission_percent=*/4.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    // Entry fee is 48, so q_restore = 10 - (1000-48)/120 = 2.066..., floors
+    // to two lots and the 4x rule trims eight. Omitting the entry commission
+    // would floor q_restore to one lot. The action is entry-bar/entry-priced,
+    // never based on that bar's later low of 100.
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 120.0));
+    CHECK(near(eng.exit_price(0), 120.0));
+    CHECK(near(eng.trade_size(0), 8.0));
+    CHECK(eng.entry_bar(0) == 1);
+    CHECK(eng.exit_bar(0) == 1);
+    CHECK(near(eng.position_size(), 2.0));
+    CHECK(std::isnan(eng.liq_price()));
+}
+
+static void test_long_100pct_margin_trim_without_qty_step() {
+    std::printf("test_long_100pct_margin_trim_without_qty_step\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
+        mk_bar(2000, 110.0, 112.0, 50.0,  90.0, 1.0),
+        mk_bar(3000,  90.0,  91.0,  1.0,   2.0, 1.0),
+    };
+    LongOverAllocProbe eng(/*qty_step=*/0.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    // qty_step==0 is the engine's continuous-quantity mode: there is no lot
+    // floor, so the positive restore quantity remains a fractional trim.
+    const double expected = 4.0 * (10.0 - 1000.0 / 110.0);
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), expected));
+    CHECK(near(eng.entry_price(0), 110.0));
+    CHECK(near(eng.exit_price(0), 110.0));
+    CHECK(near(eng.position_size(), 10.0 - expected));
+}
+
+static void test_long_100pct_margin_combines_fx_pointvalue_and_commission() {
+    std::printf("test_long_100pct_margin_combines_fx_pointvalue_and_commission\n");
+    std::vector<Bar> bars = {
+        // Signal-time admission is exact: 5 * 10 * pv10 * fx2 == 1000.
+        mk_bar(1000, 10.0, 10.0,  9.0, 10.0, 1.0),
+        mk_bar(2000, 12.0, 13.0,  8.0, 11.0, 1.0),
+        mk_bar(3000, 11.0, 12.0,  1.0,  2.0, 1.0),
+    };
+    LongOverAllocProbe eng(/*qty_step=*/1.0, /*commission_percent=*/10.0,
+                           /*process_on_close=*/false, /*slippage_ticks=*/0,
+                           /*mintick=*/0.01, /*account_fx=*/2.0,
+                           /*pointvalue=*/10.0, /*qty=*/5.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    // Fill notional is 5*12*10*2=1200 and entry fee is 120, so
+    // q_restore = 5 - (1000-120)/(12*10*2) = 1.333..., floors to one lot,
+    // then 4x -> four. Omitting commission, FX, or pointvalue misses this
+    // deliberately chosen lot boundary.
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 4.0));
+    CHECK(near(eng.entry_price(0), 12.0));
+    CHECK(near(eng.exit_price(0), 12.0));
+    CHECK(near(eng.position_size(), 1.0));
+}
+
+static void test_long_100pct_margin_trim_process_orders_on_close() {
+    std::printf("test_long_100pct_margin_trim_process_orders_on_close\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 101.0, 99.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 101.0, 10.0,  20.0, 1.0),
+    };
+    LongOverAllocProbe eng(/*qty_step=*/1.0, /*commission_percent=*/12.0,
+                           /*process_on_close=*/true);
+    eng.run(bars.data(), (int)bars.size());
+
+    // Entry commission makes q_restore=1.2, floors to one and trims four on
+    // bar0 itself. The generic "no adverse path after a close fill" rule must
+    // not suppress this non-price affordability action.
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 4.0));
+    CHECK(eng.entry_bar(0) == 0);
+    CHECK(eng.exit_bar(0) == 0);
+    CHECK(near(eng.entry_price(0), 100.0));
+    CHECK(near(eng.exit_price(0), 100.0));
+    CHECK(near(eng.position_size(), 6.0));
+}
+
+class LongPricedOverAllocProbe : public MCEngine {
+public:
+    enum class Kind { Stop, Limit };
+
+    explicit LongPricedOverAllocProbe(Kind kind) : kind_(kind) {
         initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::FIXED;
         default_qty_value_ = 10.0;
         commission_value_ = 0.0;
-        margin_long_ = 100.0;             // 1x -> denominator (1 - 1) = 0 -> na
-        process_orders_on_close_ = false;  // market entry fills at NEXT bar open
+        margin_long_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 1.0;
+        slippage_ = 2;
+        syminfo_mintick_ = 1.0;
     }
+
     void on_bar(const Bar& /*bar*/) override {
-        if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, 10.0);
+        if (bar_index_ != 0) return;
+        if (kind_ == Kind::Stop) {
+            strategy_entry("L", true, kNaN, /*stop=*/120.2, /*qty=*/10.0);
+        } else {
+            strategy_entry("L", true, /*limit=*/120.8, kNaN, /*qty=*/10.0);
+        }
+    }
+
+private:
+    Kind kind_;
+};
+
+static void test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip() {
+    std::printf("test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 101.0, 99.0, 100.0, 1.0),
+        mk_bar(2000, 110.0, 130.0, 90.0, 115.0, 1.0),
+        mk_bar(3000, 115.0, 116.0, 10.0,  20.0, 1.0),
+    };
+    LongPricedOverAllocProbe eng(LongPricedOverAllocProbe::Kind::Stop);
+    eng.run(bars.data(), (int)bars.size());
+
+    // stop 120.2 first snaps upward to raw matched base 121, then buy-side
+    // slippage reports entry 123. The broker trim independently applies
+    // sell-side slippage to raw 121, reporting 119. It must not use bar.low.
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 4.0));
+    CHECK(near(eng.entry_price(0), 123.0));
+    CHECK(near(eng.exit_price(0), 119.0));
+    CHECK(eng.entry_bar(0) == 1);
+    CHECK(eng.exit_bar(0) == 1);
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+}
+
+static void test_long_100pct_margin_limit_trim_uses_raw_base_and_exit_slip() {
+    std::printf("test_long_100pct_margin_limit_trim_uses_raw_base_and_exit_slip\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 130.0, 131.0, 129.0, 130.0, 1.0),
+        mk_bar(2000, 130.0, 134.0, 100.0, 110.0, 1.0),
+        mk_bar(3000, 110.0, 111.0,  10.0,  20.0, 1.0),
+    };
+    LongPricedOverAllocProbe eng(LongPricedOverAllocProbe::Kind::Limit);
+    eng.run(bars.data(), (int)bars.size());
+
+    // buy limit 120.8 snaps favorably to entry 120 and receives no entry
+    // slippage. The affordability trim is a broker market sell: raw matched
+    // base 120.8 minus two ticks snaps down to 118.
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 4.0));
+    CHECK(near(eng.entry_price(0), 120.0));
+    CHECK(near(eng.exit_price(0), 118.0));
+    CHECK(eng.entry_bar(0) == 1);
+    CHECK(eng.exit_bar(0) == 1);
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+}
+
+class RawOpeningProbe : public MCEngine {
+public:
+    RawOpeningProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) strategy_order("RAW", true, /*qty=*/10.0);
     }
 };
 
-static void test_long_100pct_margin_overalloc_call() {
-    std::printf("test_long_100pct_margin_overalloc_call\n");
+static void test_raw_order_fresh_open_captures_affordability() {
+    std::printf("test_raw_order_fresh_open_captures_affordability\n");
     std::vector<Bar> bars = {
-        mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: signal @ close 100
-        mk_bar(2000, 110.0, 112.0, 108.0, 109.0, 1.0),  // 1: fills @ open 110
-        mk_bar(3000, 109.0, 111.0, 107.0, 110.0, 1.0),  // 2: filler
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 120.0, 125.0,  80.0, 110.0, 1.0),
     };
-    LongOverAllocProbe eng;
+    RawOpeningProbe eng;
     eng.run(bars.data(), (int)bars.size());
-    // Signal-time affordability admits the fixed qty=10 against bar0's close
-    // (10*100 == equity 1000), but the non-POOC market entry actually fills
-    // at bar1's OPEN (110) -- notional 1100 > equity 1000, an over-allocated
-    // 1x long. TradingView force-liquidates this on the SAME bar it fired.
-    CHECK(eng.trade_count() >= 1);
+
+    CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.entry_price(0), 110.0));       // notional 1100 > equity 1000
-    CHECK(near(eng.exit_price(0), 108.0));        // long adverse extreme = bar low
-    CHECK(std::isnan(eng.liq_price()));           // still na for 1x long (matches TV)
+    CHECK(near(eng.trade_size(0), 4.0));
+    CHECK(near(eng.entry_price(0), 120.0));
+    CHECK(near(eng.exit_price(0), 120.0));
+    CHECK(near(eng.position_size(), 6.0));
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
 }
 
-// ---- C: leveraged long (5x) is liquidated by a falling market --------------
+// ---- C': explicit opening-affordability lifecycle -------------------------
+
+static int margin_call_rows(const MCEngine& eng) {
+    int count = 0;
+    for (int i = 0; i < eng.trade_count(); ++i) {
+        if (eng.exit_comment(i) == std::string("Margin call")) ++count;
+    }
+    return count;
+}
+
+// A genuine accepted same-direction add is itself a post-fill affordability
+// event. FIFO then drains the original lot and makes the mutable entry count
+// equal one again; the event must survive because it came from the accepted
+// add directly, not from reconstructing provenance from the remaining count.
+class AcceptedAddFifoProbe : public MCEngine {
+public:
+    bool captured_after_open = false;
+    bool eligible_after_add = false;
+    bool eligible_after_fifo = false;
+    int count_after_fifo = -1;
+
+    AcceptedAddFifoProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+
+        strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
+        process_pending_orders(current_bar_);
+        captured_after_open = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0);
+
+        // A priced explicit entry bypasses the market-only signal admission
+        // gate and is a genuine accepted append (10 -> 25), not a rejected
+        // over-allocation attempt. It is immediately marketable at this close.
+        strategy_entry("ADD", true, /*limit=*/100.0, kNaN, /*qty=*/15.0);
+        process_pending_orders(current_bar_);
+        eligible_after_add = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0);
+
+        // FIFO removes the opening lot, leaving only ADD and restoring the
+        // mutable position_entry_count_ to one. The add event must stay live.
+        strategy_close("OPEN", "fifo drain", /*qty=*/10.0,
+                       /*qty_percent=*/kNaN, /*immediately=*/true);
+        count_after_fifo = position_entry_count_;
+        eligible_after_fifo = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0);
+    }
+};
+
+static void test_accepted_add_fifo_keeps_add_affordability_event() {
+    std::printf("test_accepted_add_fifo_keeps_add_affordability_event\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    AcceptedAddFifoProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.captured_after_open);
+    CHECK(eng.eligible_after_add);
+    CHECK(eng.count_after_fifo == 1);  // cannot reconstruct from this count
+    CHECK(eng.eligible_after_fifo);
+    // The one-shot event is consumed at the end-of-bar margin pass.
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.trade_count() == 2);  // explicit FIFO close + margin call
+    CHECK(eng.exit_comment(1) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(1), 15.0));
+    CHECK(near(eng.position_size(), 0.0));
+}
+
+// A rejected same-direction attempt must not erase the fresh opening's state.
+// Commission then makes the opening itself genuinely unaffordable, proving the
+// preserved state remains actionable in the end-of-bar check.
+class RejectedAddProbe : public MCEngine {
+public:
+    bool preserved_after_rejection = false;
+
+    RejectedAddProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 20.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 1;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
+        process_pending_orders(current_bar_);
+        strategy_entry("REJECTED_ADD", true, kNaN, kNaN, /*qty=*/1.0);
+        process_pending_orders(current_bar_);  // rejected by pyramiding=1
+        preserved_after_rejection = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0)
+            && position_entry_count_ == 1
+            && near(position_qty_, 10.0);
+    }
+};
+
+static void test_rejected_add_preserves_opening_eligibility() {
+    std::printf("test_rejected_add_preserves_opening_eligibility\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    RejectedAddProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.preserved_after_rejection);
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 8.0));
+    CHECK(near(eng.position_size(), 2.0));
+}
+
+// A same-bar add whose requested quantity floors to zero has no accepted
+// position effect. Its implementation currently appends a zero-qty roster
+// element, so the opening-affordability lifecycle must key on positive added
+// quantity rather than vector growth alone.
+class ZeroQtyAddProbe : public MCEngine {
+public:
+    bool preserved_after_zero_add = false;
+
+    ZeroQtyAddProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 20.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
+        process_pending_orders(current_bar_);
+
+        // apply_qty_step(0.5) == 0 with qty_step=1: the fill kernel appends a
+        // zero-qty bookkeeping lot but live position quantity stays exactly 10.
+        strategy_entry("ZERO_ADD", true, kNaN, kNaN, /*qty=*/0.5);
+        process_pending_orders(current_bar_);
+        preserved_after_zero_add = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0)
+            && near(position_qty_, 10.0);
+    }
+};
+
+static void test_zero_qty_add_preserves_opening_eligibility() {
+    std::printf("test_zero_qty_add_preserves_opening_eligibility\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    ZeroQtyAddProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.preserved_after_zero_add);
+    // The original opening remains actionable: its 20% entry commission gives
+    // q_restore=2 lots, so the 4x rule still trims eight on the opening bar.
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 8.0));
+    CHECK(near(eng.position_size(), 2.0));
+}
+
+// CASH_PER_ORDER charges once per accepted order, not once per bookkeeping
+// row. A high-level add that floors to zero currently appends a zero-qty
+// pyramid row; counting that row as a second fee crosses this deliberately
+// chosen lot-floor boundary and manufactures a four-lot trim.
+class ZeroQtyCashPerOrderAddProbe : public MCEngine {
+public:
+    bool preserved_after_zero_add = false;
+
+    ZeroQtyCashPerOrderAddProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::CASH_PER_ORDER;
+        commission_value_ = 60.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
+        process_pending_orders(current_bar_);
+        strategy_entry("ZERO_ADD", true, kNaN, kNaN, /*qty=*/0.5);
+        process_pending_orders(current_bar_);
+        preserved_after_zero_add = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(position_qty_, 10.0);
+    }
+};
+
+static void test_zero_qty_add_does_not_duplicate_cash_per_order_fee() {
+    std::printf("test_zero_qty_add_does_not_duplicate_cash_per_order_fee\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    ZeroQtyCashPerOrderAddProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    // One real $60 fee: q_min=(1000-(1000-60))/100=.6, floors to zero.
+    // Charging the zero-qty row adds a phantom second fee: q_min=1.2,
+    // floors to one, then the 4x rule incorrectly trims four contracts.
+    CHECK(eng.preserved_after_zero_add);
+    CHECK(eng.trade_count() == 0);
+    CHECK(near(eng.position_size(), 10.0));
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+}
+
+// A full close clears the state; a later RAW fresh opening in the same bar
+// captures a new raw base and can receive its own affordability trim.
+class FlatThenRawFreshProbe : public MCEngine {
+public:
+    bool first_captured = false;
+    bool add_eligible = false;
+    bool flat_cleared = false;
+    bool raw_fresh_captured = false;
+
+    FlatThenRawFreshProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
+        process_pending_orders(current_bar_);
+        first_captured = opening_affordability_pending_
+            && opening_affordability_eligible_;
+
+        strategy_order("ADD", true, /*qty=*/15.0);
+        process_pending_orders(current_bar_);
+        add_eligible = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0);
+
+        strategy_close_all();
+        flat_cleared = position_side_ == PositionSide::FLAT
+            && !opening_affordability_pending_
+            && !opening_affordability_eligible_
+            && std::isnan(opening_affordability_raw_fill_base_);
+
+        strategy_order("RAW_FRESH", true, /*qty=*/12.0);
+        process_pending_orders(current_bar_);
+        raw_fresh_captured = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0);
+    }
+};
+
+static void test_flat_clears_and_raw_fresh_reuses_state() {
+    std::printf("test_flat_clears_and_raw_fresh_reuses_state\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    FlatThenRawFreshProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.first_captured);
+    CHECK(eng.add_eligible);
+    CHECK(eng.flat_cleared);
+    CHECK(eng.raw_fresh_captured);
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(near(eng.position_size(), 4.0));
+}
+
+// Reversal is a fresh position cycle. The closing short's realized loss must
+// be in the new long's opening-equity basis, and the raw reversal match must be
+// captured for the broker-generated closing leg.
+class ReversalOpeningProbe : public MCEngine {
+public:
+    ReversalOpeningProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        pyramiding_ = 1;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, /*qty=*/1.0);
+        } else if (bar_index_ == 1) {
+            strategy_entry("L", true, kNaN, kNaN, /*qty=*/10.0);
+        }
+    }
+};
+
+static void test_reversal_captures_fresh_opening_state() {
+    std::printf("test_reversal_captures_fresh_opening_state\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(3000, 120.0, 121.0,  80.0, 110.0, 1.0),
+    };
+    ReversalOpeningProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 2);  // short reversal close + long MC nibble
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.exit_comment(1) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(1), 120.0));
+    CHECK(near(eng.exit_price(1), 120.0));
+    CHECK(near(eng.trade_size(1), 4.0));
+    CHECK(near(eng.position_size(), 6.0));
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+}
+
+// A reused engine handle must clear the per-position state before on_bar of
+// the next run. Run 1 deliberately ends with an open position whose one-shot
+// event was consumed; run 2 observes a clean state before opening a new RAW
+// position and must equal a fresh handle executing run 2 directly.
+class ReuseOpeningProbe : public MCEngine {
+public:
+    bool second_mode = false;
+    bool saw_clean_run_start = false;
+
+    ReuseOpeningProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 10.0;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = true;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        saw_clean_run_start = position_side_ == PositionSide::FLAT
+            && !opening_affordability_pending_
+            && !opening_affordability_eligible_
+            && std::isnan(opening_affordability_raw_fill_base_);
+        if (second_mode) {
+            strategy_order("RAW", true, /*qty=*/10.0);
+        } else {
+            // 9*100 + 10% fee = 990 <= 1000: eligible but no trim.
+            strategy_entry("L", true, kNaN, kNaN, /*qty=*/9.0);
+        }
+        process_pending_orders(current_bar_);
+    }
+};
+
+static void test_run_reuse_clears_opening_state() {
+    std::printf("test_run_reuse_clears_opening_state\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+
+    ReuseOpeningProbe reused;
+    reused.run(bars.data(), (int)bars.size());
+    CHECK(!reused.opening_pending());
+    CHECK(!reused.opening_eligible());
+    CHECK(std::isnan(reused.opening_raw_base()));
+    CHECK(near(reused.position_size(), 9.0));
+
+    reused.second_mode = true;
+    reused.run(bars.data(), (int)bars.size());
+    CHECK(reused.saw_clean_run_start);
+    CHECK(margin_call_rows(reused) == 1);
+    CHECK(near(reused.position_size(), 6.0));
+
+    ReuseOpeningProbe fresh;
+    fresh.second_mode = true;
+    fresh.run(bars.data(), (int)bars.size());
+    CHECK(fresh.saw_clean_run_start);
+    CHECK(fresh.trade_count() == reused.trade_count());
+    CHECK(near(fresh.position_size(), reused.position_size()));
+    CHECK(near(fresh.trade_size(0), reused.trade_size(0)));
+    CHECK(near(fresh.entry_price(0), reused.entry_price(0)));
+    CHECK(near(fresh.exit_price(0), reused.exit_price(0)));
+}
+
+// ---- D: leveraged long (2x) is liquidated by a falling market --------------
 
 class LongLevLiqProbe : public MCEngine {
 public:
@@ -327,6 +1087,8 @@ static void test_long_leveraged_margin_call() {
     // First forced exit fills at bar1's adverse extreme (low = 95).
     CHECK(near(eng.exit_price(0), 95.0));
     CHECK(near(eng.entry_price(0), 100.0));
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 4.2105263157894735));
 }
 
 } // namespace
@@ -337,7 +1099,24 @@ int main() {
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();
     test_long_100pct_margin_no_call();
-    test_long_100pct_margin_overalloc_call();
+    test_zero_cost_frozen_all_in_true_flat_gap_is_exempt();
+    test_commissioned_frozen_all_in_true_flat_gap_is_eligible();
+    test_paired_short_close_default_long_gap_remains_eligible();
+    test_long_100pct_margin_sublot_overage_is_held();
+    test_long_100pct_margin_lot_trim_uses_entry_affordability();
+    test_long_100pct_margin_trim_without_qty_step();
+    test_long_100pct_margin_combines_fx_pointvalue_and_commission();
+    test_long_100pct_margin_trim_process_orders_on_close();
+    test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip();
+    test_long_100pct_margin_limit_trim_uses_raw_base_and_exit_slip();
+    test_raw_order_fresh_open_captures_affordability();
+    test_accepted_add_fifo_keeps_add_affordability_event();
+    test_rejected_add_preserves_opening_eligibility();
+    test_zero_qty_add_preserves_opening_eligibility();
+    test_zero_qty_add_does_not_duplicate_cash_per_order_fee();
+    test_flat_clears_and_raw_fresh_reuses_state();
+    test_reversal_captures_fresh_opening_state();
+    test_run_reuse_clears_opening_state();
     test_long_leveraged_margin_call();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

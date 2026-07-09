@@ -180,6 +180,8 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
     order.created_position_side = position_side_;
+    order.created_after_position_close_in_bar =
+        pending_close_qty_in_bar_ > kQtyEpsilon;
     // TradingView empirical rule (probe 52 trade 113): the deferred-flip
     // carry is the position size at THIS placement, not the original.
     // ``strategy.entry`` with the same id replaces the pending order
@@ -245,6 +247,18 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             order.sizing_equity =
                 current_equity() + open_profit(current_bar_.close);
             order.sizing_mark = current_bar_.close;
+            order.opening_affordability_exemption_candidate =
+                is_long
+                && order.created_position_side == PositionSide::FLAT
+                && !order.created_after_position_close_in_bar
+                && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+                && std::abs(default_qty_value_ - 100.0) < 1e-12
+                && std::isfinite(margin_long_)
+                && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12
+                && std::isfinite(order.frozen_default_qty)
+                && std::isfinite(order.sizing_equity)
+                && std::isfinite(order.sizing_price)
+                && std::isfinite(order.sizing_mark);
         }
     } else {
         order.type = OrderType::ENTRY;
@@ -699,6 +713,8 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
     order.created_position_side = position_side_;
+    order.created_after_position_close_in_bar =
+        pending_close_qty_in_bar_ > kQtyEpsilon;
     order.tv_carry_qty = position_qty_;
 
     bool has_limit = !std::isnan(limit_price);
