@@ -118,7 +118,12 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
         return;
     }
 
-    flip_market_position_to(id, is_long, fill_price, explicit_qty, explicit_qty_type);
+    // ``close_only_opposite`` reaches here only for a created_position_side !=
+    // FLAT reduce-only flip (the FLAT bracket case returned above via
+    // close_opposite_then_enter): a deferred-flip carry that flips the opposite
+    // position without opening its own leg.
+    flip_market_position_to(id, is_long, fill_price, explicit_qty, explicit_qty_type,
+                            /*close_only=*/close_only_opposite);
 }
 
 
@@ -735,7 +740,8 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
 // remaining iterations.
 void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long,
                                              double fill_price, double explicit_qty,
-                                             int explicit_qty_type) {
+                                             int explicit_qty_type,
+                                             bool close_only) {
     // For the close we need exit slippage based on closing direction.
     // Closing a long = sell (price - slip); closing a short = buy (price + slip).
     // fill_price already has entry slippage applied; un-slip it before
@@ -759,6 +765,17 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
     // Emit one Trade per pyramid entry (matches TradingView reporting)
     for (auto& pe : pyramid_entries_) {
         emit_close_trade(pe, pe.qty, exit_fill, was_long);
+    }
+
+    if (close_only) {
+        // Deferred-flip carry reduce-only: this priced entry was armed during
+        // a prior position cycle and only flips the (later-opened) opposite
+        // position — its open leg is superseded by the same-id re-issue and
+        // re-arms at the modified level. Close the whole opposite position and
+        // stay flat; do NOT open. (See apply_entry_order_fill's
+        // close_only_opposite gate: created_position_side != position_side_.)
+        reset_position_state_to_flat();
+        return;
     }
 
     double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);

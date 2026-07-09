@@ -956,19 +956,38 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     int count_before = position_entry_count_;
     size_t trades_before_entry = trades_.size();
 
-    // Flat-issued pending ENTRY stops/limits act as a bracket: when one
-    // side opens the position, a touch of the opposite pending ENTRY
-    // (still flat-issued) closes at the touch price (TradingView's
-    // List of trades shows an exit tied to the opposite bracket),
-    // not a full reversal-and-new-position. The bracket persists
-    // across bars: probes 80-87 confirm TV closes the position on a
-    // later bar when only one leg fired earlier and the opposite
-    // leg's stop is touched subsequently.
+    // A pending priced (stop/limit) ENTRY that reaches its trigger while an
+    // OPPOSITE position it did NOT open is live closes that position at the
+    // touch price WITHOUT opening a new position in its own direction — a
+    // deferred flip's reduce leg fires, its open leg is superseded. The open
+    // leg re-arms via the same-bar re-issue (same id) and can fill on a later
+    // bar at the modified level (or never), exactly matching TradingView's
+    // "List of trades": an exit tied to the order, no accompanying entry.
+    //
+    // The discriminator is the order's ``created_position_side`` (snapshotted
+    // at placement, engine_strategy_commands.cpp): it is a reduce-only flip iff
+    // the order was NOT placed during the cycle of the position it now
+    // reverses (created_position_side != the current, opposite position side):
+    //   - created FLAT (the original bracket case, probes 80-87): a flat-issued
+    //     opposite stop closes the position other-side stop opened.
+    //   - created OPPOSITE (deferred-flip carry, pyramid-deferred-flip-close-
+    //     all-01): the stop was armed during a prior position cycle, a same-dir
+    //     position opened after it, and the stop later flips THAT. TV closes it
+    //     and re-arms; the ungated engine wrongly opened the reversed leg at the
+    //     stale level (25 phantom/early shorts on that probe).
+    // A SAME-cycle reverse (created_position_side == the reversed side — the
+    // stop was placed while already holding the position it flips) DOES open
+    // the new leg, so it is excluded by the created!=current test. Deferred-flip
+    // carry entries that fire from FLAT are untouched (position_side_==FLAT).
+    // Approximation (no ground truth): created_position_side == position_side_
+    // stands in for "placed in THIS position instance's cycle". A double flip
+    // (created LONG, position flips SHORT then LONG again with the order still
+    // pending) reads as same-cycle and opens — out of scope.
     PositionSide entry_req = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
     bool close_only_opposite =
-        order.created_position_side == PositionSide::FLAT
-        && position_side_ != PositionSide::FLAT
-        && entry_req != position_side_;
+        position_side_ != PositionSide::FLAT
+        && entry_req != position_side_
+        && order.created_position_side != position_side_;
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, close_only_opposite,
                          /*is_priced_entry=*/true,

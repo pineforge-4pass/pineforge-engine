@@ -1754,7 +1754,8 @@ private:
                                    int explicit_qty_type);
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
-                                 int explicit_qty_type);
+                                 int explicit_qty_type,
+                                 bool close_only = false);
     void sequential_same_tick_reversal_fill(const std::string& id, bool is_long,
                                             double fill_price, double explicit_qty,
                                             int explicit_qty_type);
