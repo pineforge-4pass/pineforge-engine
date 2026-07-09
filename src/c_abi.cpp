@@ -8,8 +8,8 @@
  *     the C ABI has drifted from the internal representation — fix
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the setters,
- *     strategy_get_last_error, pf_version_get/pf_version_string,
- *     pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
+ *     strategy_get_last_error, the strategy_stream_* lifecycle,
+ *     pf_version_get/pf_version_string, pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
  *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -157,6 +157,71 @@ PF_API const char* strategy_get_last_error(pf_strategy_t s) {
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
     if (!s) return;
     static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
+}
+
+PF_API int strategy_stream_begin(pf_strategy_t s,
+                                 const pf_bar_t* warmup_bars,
+                                 int n_warmup,
+                                 const char* input_tf,
+                                 const char* script_tf) {
+    if (!s) return -1;
+    auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+    const auto* bars = reinterpret_cast<const pineforge::Bar*>(warmup_bars);
+    return engine->stream_begin(
+        bars, n_warmup,
+        input_tf ? std::string(input_tf) : std::string(),
+        script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
+}
+
+PF_API int strategy_stream_push_tick(pf_strategy_t s,
+                                     const pf_trade_tick_t* tick) {
+    if (!s || !tick) return -1;
+    const pineforge::TradeTick native{
+        tick->timestamp,
+        tick->trade_id,
+        tick->price,
+        tick->qty,
+        tick->is_buyer_maker != 0,
+    };
+    return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(native)
+        ? 0 : -1;
+}
+
+PF_API int strategy_stream_push_ticks(pf_strategy_t s,
+                                      const pf_trade_tick_t* ticks,
+                                      int n) {
+    if (!s || n < 0 || (n > 0 && !ticks)) return -1;
+    auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+    for (int i = 0; i < n; ++i) {
+        const pineforge::TradeTick native{
+            ticks[i].timestamp,
+            ticks[i].trade_id,
+            ticks[i].price,
+            ticks[i].qty,
+            ticks[i].is_buyer_maker != 0,
+        };
+        if (!engine->stream_push_tick(native)) return -1;
+    }
+    return 0;
+}
+
+PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms) {
+    if (!s) return -1;
+    return static_cast<pineforge::BacktestEngine*>(s)
+        ->stream_advance_time(timestamp_ms) ? 0 : -1;
+}
+
+PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar) {
+    if (!s) return -1;
+    return static_cast<pineforge::BacktestEngine*>(s)
+        ->stream_end(finalize_partial_input_bar != 0) ? 0 : -1;
+}
+
+PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out) {
+    if (!s || !out) return -1;
+    static_cast<pineforge::BacktestEngine*>(s)->fill_report(
+        reinterpret_cast<pineforge::ReportC*>(out));
+    return 0;
 }
 
 /* Override the chart TZ for ``hour``/``minute``/``dayofweek``/etc. See

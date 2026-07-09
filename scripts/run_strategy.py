@@ -310,6 +310,17 @@ class BarC(ctypes.Structure):
     ]
 
 
+class TradeTickC(ctypes.Structure):
+    """Mirror of pf_trade_tick_t for historical -> realtime handoff."""
+    _fields_ = [
+        ("timestamp", ctypes.c_int64),
+        ("trade_id", ctypes.c_uint64),
+        ("price", ctypes.c_double),
+        ("qty", ctypes.c_double),
+        ("is_buyer_maker", ctypes.c_int),
+    ]
+
+
 class TradeC(ctypes.Structure):
     _fields_ = [
         ("entry_time", ctypes.c_int64),
@@ -606,6 +617,25 @@ class Strategy:
         if hasattr(L, "strategy_get_last_error"):
             L.strategy_get_last_error.argtypes = [ctypes.c_void_p]
             L.strategy_get_last_error.restype = ctypes.c_char_p
+        if hasattr(L, "strategy_stream_begin"):
+            L.strategy_stream_begin.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
+                ctypes.c_char_p, ctypes.c_char_p]
+            L.strategy_stream_begin.restype = ctypes.c_int
+            L.strategy_stream_push_tick.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(TradeTickC)]
+            L.strategy_stream_push_tick.restype = ctypes.c_int
+            L.strategy_stream_push_ticks.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(TradeTickC), ctypes.c_int]
+            L.strategy_stream_push_ticks.restype = ctypes.c_int
+            L.strategy_stream_advance_time.argtypes = [
+                ctypes.c_void_p, ctypes.c_int64]
+            L.strategy_stream_advance_time.restype = ctypes.c_int
+            L.strategy_stream_end.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            L.strategy_stream_end.restype = ctypes.c_int
+            L.strategy_stream_fill_report.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ReportC)]
+            L.strategy_stream_fill_report.restype = ctypes.c_int
         if hasattr(L, "strategy_set_input"):
             L.strategy_set_input.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
         if hasattr(L, "strategy_set_override"):

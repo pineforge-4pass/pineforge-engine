@@ -124,6 +124,24 @@ void BacktestEngine::reset_run_state() {
     session_isfirstbar_ = false;
     session_islastbar_ = false;
 
+    // A normal run starts a new lifecycle. stream_warmup_mode_ is deliberately
+    // preserved: stream_begin sets it before delegating to run() so historical
+    // bars are not mislabeled as the rightmost realtime bar.
+    stream_phase_ = StreamPhase::IDLE;
+    stream_input_tf_ms_ = 0;
+    stream_next_input_open_ms_ = 0;
+    stream_clock_ms_ = 0;
+    stream_last_tick_ms_ = 0;
+    stream_last_trade_id_ = 0;
+    stream_seen_trade_id_ = false;
+    stream_has_input_bar_ = false;
+    stream_input_bar_ = Bar{};
+    stream_last_price_ = 0.0;
+    stream_has_last_price_ = false;
+    stream_next_script_bar_index_ = 0;
+    stream_script_bar_had_tick_ = false;
+    stream_script_tick_seen_ = false;
+
     // Native source-series history (input.source(...) ring buffers). Must list
     // EVERY _src_*_ member declared in engine.hpp — a missing one leaks history
     // into a reused handle (see test_handle_reuse_reset all-series coverage).
@@ -190,7 +208,7 @@ void BacktestEngine::run(const Bar* bars, int n) {
         bar_index_ = i;
         is_first_tick_ = true;
         is_last_tick_ = true;
-        barstate_islast_ = (i == n - 1);
+        barstate_islast_ = !stream_warmup_mode_ && (i == n - 1);
         diag_script_bars_processed_++;
         // Reset per-bar pending-close accumulator. Each on_bar call
         // captures fresh ``strategy.close*`` qty for the same-bar
@@ -484,7 +502,7 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
         bar_index_ = i;
         is_first_tick_ = true;
         is_last_tick_ = true;
-        barstate_islast_ = (i == n_input - 1);
+        barstate_islast_ = !stream_warmup_mode_ && (i == n_input - 1);
         diag_script_bars_processed_++;
         // Reset per-bar pending-close accumulator. Each on_bar call captures
         // fresh ``strategy.close*`` qty for the same-bar close-then-entry
@@ -578,7 +596,8 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
             const int64_t script_bar_ts = ab.bar.timestamp;
             bar_index_ = script_bar_index++;
             emitted_script_bars++;
-            barstate_islast_ = (emitted_script_bars == expected_script_bars);
+            barstate_islast_ = !stream_warmup_mode_
+                && (emitted_script_bars == expected_script_bars);
             diag_script_bars_processed_++;
             // Reset per-bar pending-close accumulator. See run_simple_bar_loop
             // for the regression history; the aggregated path was missing the

@@ -97,6 +97,12 @@ int main() {
     strategy_set_syminfo_mintick(nullptr, 0.25);
     strategy_set_syminfo_pointvalue(nullptr, 50.0);
     strategy_set_syminfo_metadata(nullptr, "shares_outstanding_total", 1.0);
+    CHECK(strategy_stream_begin(nullptr, nullptr, 0, "1", "1") == -1);
+    CHECK(strategy_stream_push_tick(nullptr, nullptr) == -1);
+    CHECK(strategy_stream_push_ticks(nullptr, nullptr, 0) == -1);
+    CHECK(strategy_stream_advance_time(nullptr, 0) == -1);
+    CHECK(strategy_stream_end(nullptr, 0) == -1);
+    CHECK(strategy_stream_fill_report(nullptr, nullptr) == -1);
     CHECK(strategy_get_last_error(nullptr) == nullptr);
 
     // Secondary `|| !arg` guard arms (valid handle, NULL arg) — these
@@ -174,6 +180,32 @@ int main() {
     CHECK(eng.meta("shares_outstanding_total") == 12345.0);
     // A key that was never injected still reports na.
     CHECK(pineforge::is_na(eng.meta("never_injected")));
+
+    // ── Historical -> realtime lifecycle wrappers ─────────────────
+    ProbeEngine stream_eng;
+    pf_strategy_t sh = static_cast<pf_strategy_t>(&stream_eng);
+    pf_bar_t warmup{};
+    warmup.open = warmup.high = warmup.low = warmup.close = 100.0;
+    warmup.volume = 2.0;
+    warmup.timestamp = 0;
+    CHECK(strategy_stream_begin(sh, &warmup, 1, "1", "1") == 0);
+
+    pf_trade_tick_t tick{};
+    tick.timestamp = 60010;
+    tick.trade_id = 7;
+    tick.price = 101.0;
+    tick.qty = 0.5;
+    CHECK(strategy_stream_push_tick(sh, &tick) == 0);
+    CHECK(strategy_stream_push_ticks(sh, nullptr, 0) == 0);
+    CHECK(strategy_stream_advance_time(sh, 120000) == 0);
+
+    pf_report_t report{};
+    CHECK(strategy_stream_fill_report(sh, &report) == 0);
+    CHECK(report.input_bars_processed == 2);
+    CHECK(report.script_bars_processed == 2);
+    pineforge::BacktestEngine::free_report(
+        reinterpret_cast<pineforge::ReportC*>(&report));
+    CHECK(strategy_stream_end(sh, 0) == 0);
 
     if (g_fail == 0) {
         std::printf("test_c_abi_setters: OK (pineforge %s)\n", vs);

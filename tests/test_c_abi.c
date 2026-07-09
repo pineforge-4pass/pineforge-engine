@@ -65,6 +65,17 @@ int main(void) {
     CHECK(bar.open      == 100.0,           "bar.open roundtrip");
     CHECK(bar.close     == 103.0,           "bar.close roundtrip");
 
+    /* ── Realtime trade tick field access ───────────────────────── */
+    pf_trade_tick_t tick;
+    memset(&tick, 0, sizeof(tick));
+    tick.timestamp = 1700000000123LL;
+    tick.trade_id = 987654321ULL;
+    tick.price = 103.25;
+    tick.qty = 0.125;
+    tick.is_buyer_maker = 1;
+    CHECK(tick.trade_id == 987654321ULL, "tick.trade_id roundtrip");
+    CHECK(tick.is_buyer_maker == 1,      "tick maker flag roundtrip");
+
     /* ── Trade ───────────────────────────────────────────────────── */
     pf_trade_t trade;
     memset(&trade, 0, sizeof(trade));

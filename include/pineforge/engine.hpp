@@ -1239,6 +1239,27 @@ protected:
     TimeframeAggregator script_tf_agg_;
     int64_t prev_bar_timestamp_ = 0;
 
+    // --- Historical -> realtime stream lifecycle ---
+    // stream_begin() executes the historical warmup through the normal run()
+    // path exactly once, then these fields carry the SAME broker, Pine series,
+    // TA and timeframe-aggregator state forward while raw trades arrive.
+    enum class StreamPhase { IDLE, REALTIME, ENDED };
+    StreamPhase stream_phase_ = StreamPhase::IDLE;
+    bool stream_warmup_mode_ = false;
+    int64_t stream_input_tf_ms_ = 0;
+    int64_t stream_next_input_open_ms_ = 0;
+    int64_t stream_clock_ms_ = 0;
+    int64_t stream_last_tick_ms_ = 0;
+    uint64_t stream_last_trade_id_ = 0;
+    bool stream_seen_trade_id_ = false;
+    bool stream_has_input_bar_ = false;
+    Bar stream_input_bar_{};
+    double stream_last_price_ = 0.0;
+    bool stream_has_last_price_ = false;
+    int stream_next_script_bar_index_ = 0;
+    bool stream_script_bar_had_tick_ = false;
+    bool stream_script_tick_seen_ = false;
+
     // --- request.security state ---
     struct SecurityEvalState {
         int sec_id = 0;
@@ -1780,6 +1801,9 @@ private:
     void run_simple_bar_loop(const Bar* input_bars, int n_input);
     void run_aggregation_bar_loop(const Bar* input_bars, int n_input,
                                   bool bar_magnifier, int expected_script_bars);
+    bool stream_finalize_until(int64_t timestamp_ms);
+    void stream_feed_input_bar(const Bar& bar, bool had_tick);
+    void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;
@@ -1799,6 +1823,20 @@ public:
              bool bar_magnifier = false,
              int magnifier_samples = 4,
              MagnifierDistribution magnifier_dist = MagnifierDistribution::ENDPOINTS);
+
+    // Execute confirmed historical bars, then keep this exact instance alive
+    // for realtime trade updates. The warmup feed must contain at least one
+    // complete input-timeframe bar. Raw ticks begin at or after the next input
+    // bar's open; gaps are materialized as zero-volume carry-forward bars when
+    // a later tick or stream_advance_time() crosses their close boundary.
+    bool stream_begin(const Bar* warmup_bars, int n_warmup,
+                      const std::string& input_tf,
+                      const std::string& script_tf = "");
+    bool stream_push_tick(const TradeTick& tick);
+    bool stream_push_ticks(const TradeTick* ticks, int n);
+    bool stream_advance_time(int64_t timestamp_ms);
+    bool stream_end(bool finalize_partial_input_bar = false);
+    bool stream_is_realtime() const { return stream_phase_ == StreamPhase::REALTIME; }
 
     void run(const Bar* input_bars, int n_input,
              const std::string& input_tf,
