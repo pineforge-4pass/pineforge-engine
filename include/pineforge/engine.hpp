@@ -177,6 +177,12 @@ struct PendingOrder {
     int created_bar;           // bar_index when order was created
     int64_t created_seq = 0;
     PositionSide created_position_side = PositionSide::FLAT;
+    // True when a successful strategy.close/close_all call earlier in this
+    // same on_bar already targeted live quantity. This remains distinct from
+    // created_position_side: an immediate full close makes the engine truly
+    // FLAT before a paired reentry is placed, but that reentry is not an
+    // independent true-flat opening for KI-61 affordability purposes.
+    bool created_after_position_close_in_bar = false;
     // Snapshot of the position's quantity at the moment this order was
     // PLACED (0 if placed from flat). Used by execute_market_entry's
     // flat branch to apply TradingView's deferred-flip growth rule:
@@ -243,6 +249,13 @@ struct PendingOrder {
     // mark-to-market total against a cost-basis deduction and the admission
     // threshold drifts with unrealized PnL in the wrong direction.
     double sizing_mark = std::numeric_limits<double>::quiet_NaN();
+    // Placement-time half of KI-61's sole opening-affordability exemption.
+    // True only for a high-level long MARKET call with omitted qty, a frozen
+    // 100%-of-equity snapshot, 100% long margin, true-flat placement, and no
+    // earlier paired close in this on_bar. Fill-time code must additionally
+    // prove true-flat fill, sizing-price admission, success, and zero actual
+    // opening commission before treating the queued event as exempt.
+    bool opening_affordability_exemption_candidate = false;
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
     bool created_while_in_position = false;  // true if position was open when order was placed
@@ -303,6 +316,19 @@ protected:
     // --- Position state ---
     PositionSide position_side_ = PositionSide::FLAT;
     double position_entry_price_ = 0.0;   // volume-weighted average (for strategy calculations)
+    // One-shot post-fill affordability event for a 100%-margin long. Every
+    // successful fresh opening or accepted positive-qty same-direction add
+    // queues exactly one event carrying the raw matched-price base. The event
+    // is eligible unless the fill proves the narrow frozen-all-in true-flat
+    // MARKET exemption; rejected/no-op attempts leave an existing event
+    // untouched. process_margin_call consumes and clears the event on the
+    // current script bar. Do not reconstruct it from trade rows or
+    // position_entry_count_: a paired close/reentry can create zero-PnL rows,
+    // and FIFO can reduce a real pyramid back to one live lot.
+    bool opening_affordability_pending_ = false;
+    bool opening_affordability_eligible_ = false;
+    double opening_affordability_raw_fill_base_ =
+        std::numeric_limits<double>::quiet_NaN();
     int64_t position_entry_time_ = 0;
     // Position is FLAT until the first entry fires; the canonical
     // accessor ``signed_position_size`` already reads as 0 when FLAT
@@ -731,10 +757,10 @@ protected:
 
     void process_pending_orders(const Bar& bar);
 
-    // TradingView forced-liquidation (margin call). Run once per script bar
-    // after order processing: if the bar's adverse extreme (high for shorts,
-    // low for longs) breaches the open position's required margin, force-close
-    // 4x the minimum qty needed to restore margin at the liquidation price.
+    // TradingView forced-liquidation (margin call). Finite-price liquidation
+    // paths use the bar's adverse extreme. A 100%-margin long has no later
+    // adverse-price liquidation; only an eligible one-shot post-fill
+    // affordability event can trim it.
     void process_margin_call(const Bar& bar);
 
     // --- Slippage helper ---
@@ -1071,10 +1097,8 @@ protected:
     // broker emulator force-liquidates the current open position. Returns na
     // when flat, when the instrument has no valid size/point-value, or when
     // ``margin/100 - direction == 0`` (a 1x long has no leverage-derived
-    // liquidation PRICE — but it CAN still be force-liquidated when its
-    // notional exceeds equity: process_margin_call's long_full_margin
-    // branch deliberately bypasses the na bail for exactly that case, and
-    // TV emits such long margin calls too). See compute_liquidation_price
+    // liquidation price; process_margin_call separately handles an eligible
+    // one-shot post-fill affordability trim). See compute_liquidation_price
     // for the derivation.
     double margin_liquidation_price() const { return compute_liquidation_price(); }
 
@@ -1097,7 +1121,9 @@ protected:
         const double margin_pct = (position_side_ == PositionSide::LONG)
                                       ? margin_long_ : margin_short_;
         const double denom = (margin_pct / 100.0) - direction;
-        // A long at 100% margin (denom == 0) cannot be liquidated.
+        // A long at 100% margin (denom == 0) has no liquidation PRICE.
+        // Its separate post-fill affordability trim is handled by
+        // process_margin_call without fabricating a later adverse threshold.
         if (std::abs(denom) < 1e-12) return na<double>();
         // equity_basis is account-currency (initial_capital_ is account-
         // currency-native; net_profit_sum_ is account-currency post-FX —

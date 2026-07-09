@@ -485,6 +485,10 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
 void BacktestEngine::reset_position_state_to_flat() {
     position_side_ = PositionSide::FLAT;
     position_entry_price_ = 0.0;
+    opening_affordability_pending_ = false;
+    opening_affordability_eligible_ = false;
+    opening_affordability_raw_fill_base_ =
+        std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = 0;
     position_qty_ = 0.0;
     position_entry_count_ = 0;
@@ -525,6 +529,13 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
                                          double qty, const std::string& id) {
     position_side_ = requested;
     position_entry_price_ = fill_price;
+    // The shared post-dispatch lifecycle hook queues the new fill's event.
+    // Clear prior-cycle provenance now so reversals cannot expose it even
+    // transiently.
+    opening_affordability_pending_ = false;
+    opening_affordability_eligible_ = false;
+    opening_affordability_raw_fill_base_ =
+        std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = current_bar_.timestamp;
     position_qty_ = qty;
     position_entry_count_ = 1;
