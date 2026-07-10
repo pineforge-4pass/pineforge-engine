@@ -547,6 +547,66 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
+    // A fixed-default MARKET entry can change role between placement and fill:
+    // it was a same-direction order when the script emitted it, but an earlier
+    // sibling at the shared next tick can flip the live position first, making
+    // this order a reversal. TV rechecks that augmented transaction against
+    // free margin at the fill:
+    //
+    //   free_funds = equity_at_fill - held_position_margin
+    //   transaction_qty = live_qty_to_close + default_qty_to_open
+    //   required = transaction_qty * fill * requested_margin
+    //
+    // This is distinct from an ordinary reversal (created on the opposite
+    // side), whose admission is already pinned by the KI-54 frozen-sizing path
+    // below. It is also deliberately scoped to 1x fixed-default MARKET orders,
+    // the regime established by gb2wgkrtxs: TV kept both same-tick orders in
+    // 992/992 common cases above held+transaction margin and only the first in
+    // 470/471 cases below it. Without this gate the second order always flips
+    // back, doubling one trade per affected bar.
+    if (order.type == OrderType::MARKET
+        && std::isnan(order.qty)
+        && default_qty_type_ == QtyType::FIXED
+        && position_side_ != PositionSide::FLAT) {
+        const PositionSide requested =
+            order.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        const bool same_side_at_creation =
+            order.created_position_side == requested;
+        const bool became_reversal = position_side_ != requested;
+        const double held_margin_pct =
+            position_side_ == PositionSide::LONG ? margin_long_ : margin_short_;
+        const double requested_margin_pct =
+            order.is_long ? margin_long_ : margin_short_;
+        const bool full_margin =
+            std::isfinite(held_margin_pct)
+            && std::isfinite(requested_margin_pct)
+            && std::abs(held_margin_pct - 100.0) < 1e-12
+            && std::abs(requested_margin_pct - 100.0) < 1e-12;
+        if (same_side_at_creation && became_reversal && full_margin) {
+            const double admit_price =
+                apply_fill_slippage(fill_price, order.is_long);
+            const double new_qty =
+                calc_qty_for_type(admit_price, order.qty, order.qty_type);
+            const double equity_at_fill =
+                current_equity() + open_profit(fill_price);
+            const double held_margin =
+                std::abs(position_qty_) * fill_price
+                * syminfo_.pointvalue * account_currency_fx_;
+            const double free_funds = equity_at_fill - held_margin;
+            const double transaction_qty =
+                std::abs(position_qty_) + std::abs(new_qty);
+            const double required_margin =
+                transaction_qty * admit_price
+                * syminfo_.pointvalue * account_currency_fx_;
+            const double epsilon =
+                std::max(1e-9, std::abs(equity_at_fill) * 1e-12);
+            if (required_margin > free_funds + epsilon) {
+                filled_indices.push_back(order_index);
+                return;
+            }
+        }
+    }
+
     // KI-54: TradingView fill-time margin admission for FROZEN default-sized
     // market orders (the snapshot fields are captured at placement — see
     // PendingOrder::sizing_equity/sizing_price, engine.hpp):
