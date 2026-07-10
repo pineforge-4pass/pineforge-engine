@@ -82,6 +82,7 @@ set(TEST_SOURCES
     test_drawing
     test_margin_call
     test_streaming
+    test_calc_on_order_fills
 )
 
 find_package(Threads REQUIRED)

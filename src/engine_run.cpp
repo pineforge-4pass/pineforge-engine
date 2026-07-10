@@ -27,6 +27,11 @@ using namespace internal;
 //   4. New market orders fill at bar.close; new stop/limit wait for next bar
 // When process_orders_on_close_ is false, only steps 1-3 run.
 void BacktestEngine::dispatch_bar() {
+    if (calc_on_order_fills_) {
+        dispatch_bar_calc_on_order_fills();
+        return;
+    }
+
     // Advance native source-series history before strategy logic so
     // get_input_source()'s returned series is current for this bar. Covers
     // the simple run() loop, run_simple_bar_loop, and the no-magnifier
@@ -59,6 +64,284 @@ void BacktestEngine::dispatch_bar() {
             refresh_frozen_default_sizing_after_margin_call();
         }
     }
+}
+
+void BacktestEngine::snapshot_coof_script_state() {
+    if (_src_series_active_) {
+        coof_checkpoint_src_open_ = _src_open_;
+        coof_checkpoint_src_high_ = _src_high_;
+        coof_checkpoint_src_low_ = _src_low_;
+        coof_checkpoint_src_close_ = _src_close_;
+        coof_checkpoint_src_volume_ = _src_volume_;
+        coof_checkpoint_src_hl2_ = _src_hl2_;
+        coof_checkpoint_src_hlc3_ = _src_hlc3_;
+        coof_checkpoint_src_ohlc4_ = _src_ohlc4_;
+        coof_checkpoint_src_hlcc4_ = _src_hlcc4_;
+    }
+    snapshot_script_state();
+    coof_checkpoint_contains_current_bar_ = false;
+}
+
+void BacktestEngine::restore_coof_script_state() {
+    if (_src_series_active_) {
+        _src_open_ = coof_checkpoint_src_open_;
+        _src_high_ = coof_checkpoint_src_high_;
+        _src_low_ = coof_checkpoint_src_low_;
+        _src_close_ = coof_checkpoint_src_close_;
+        _src_volume_ = coof_checkpoint_src_volume_;
+        _src_hl2_ = coof_checkpoint_src_hl2_;
+        _src_hlc3_ = coof_checkpoint_src_hlc3_;
+        _src_ohlc4_ = coof_checkpoint_src_ohlc4_;
+        _src_hlcc4_ = coof_checkpoint_src_hlcc4_;
+    }
+    restore_script_state();
+}
+
+void BacktestEngine::commit_coof_script_state() {
+    if (_src_series_active_) {
+        coof_checkpoint_src_open_ = _src_open_;
+        coof_checkpoint_src_high_ = _src_high_;
+        coof_checkpoint_src_low_ = _src_low_;
+        coof_checkpoint_src_close_ = _src_close_;
+        coof_checkpoint_src_volume_ = _src_volume_;
+        coof_checkpoint_src_hl2_ = _src_hl2_;
+        coof_checkpoint_src_hlc3_ = _src_hlc3_;
+        coof_checkpoint_src_ohlc4_ = _src_ohlc4_;
+        coof_checkpoint_src_hlcc4_ = _src_hlcc4_;
+    }
+    commit_script_state();
+    coof_checkpoint_contains_current_bar_ = true;
+}
+
+uint64_t BacktestEngine::execute_coof_script_body(
+        const Bar& script_bar,
+        double broker_cursor_price,
+        bool is_fill_recalc,
+        bool cursor_is_bar_close,
+        uint64_t direct_fill_event_budget) {
+    restore_coof_script_state();
+    current_bar_ = script_bar;
+    // TradingView historical fill recalculations are both new and confirmed.
+    // History advancement is a separate axis: after the completed ordinary
+    // close execution has been committed, a post-C recalc recomputes that
+    // current-bar slot instead of pushing a duplicate bar.
+    is_first_tick_ = true;
+    is_last_tick_ = true;
+    history_slot_is_new_ = !coof_checkpoint_contains_current_bar_;
+    pending_close_qty_in_bar_ = 0.0;
+    _push_source_series();
+    update_per_trade_extremes();
+
+    coof_scheduler_active_ = true;
+    coof_fill_recalc_active_ = is_fill_recalc;
+    coof_cursor_is_bar_close_ = cursor_is_bar_close;
+    coof_cursor_price_ = broker_cursor_price;
+    coof_direct_fill_events_remaining_ = direct_fill_event_budget;
+    const uint64_t before = broker_fill_event_seq_;
+    on_bar(current_bar_);
+    if (process_orders_on_close_) {
+        // A same-bar close batch is a broker fill at the current monotonic
+        // cursor. At the ordinary close execution that cursor is C; during a
+        // fill recalc it is the fill point that triggered the execution.
+        flush_same_bar_close();
+    }
+    coof_fill_recalc_active_ = false;
+    coof_direct_fill_events_remaining_ = 0;
+    return broker_fill_event_seq_ - before;
+}
+
+uint64_t BacktestEngine::run_coof_recalc_chain(
+        const Bar& script_bar,
+        double broker_cursor_price,
+        bool cursor_is_bar_close,
+        uint64_t triggering_events,
+        uint64_t max_events,
+        uint64_t events_already) {
+    uint64_t total_events = triggering_events;
+    uint64_t pending_recalcs = triggering_events;
+    uint64_t handled = 0;
+    while (pending_recalcs > 0 && events_already + handled < max_events) {
+        --pending_recalcs;
+        ++handled;
+        const uint64_t used = events_already + total_events;
+        const uint64_t direct_budget =
+            used < max_events ? max_events - used : 0;
+        const uint64_t direct = execute_coof_script_body(
+            script_bar, broker_cursor_price, /*is_fill_recalc=*/true,
+            cursor_is_bar_close,
+            direct_budget);
+        total_events += direct;
+        pending_recalcs += direct;
+    }
+    return total_events;
+}
+
+namespace {
+
+Bar coof_point_bar(const Bar& script_bar, double price) {
+    Bar out = script_bar;
+    out.open = price;
+    out.high = price;
+    out.low = price;
+    out.close = price;
+    return out;
+}
+
+Bar coof_segment_bar(const Bar& script_bar, double from, double to) {
+    Bar out = script_bar;
+    out.open = from;
+    out.high = std::max(from, to);
+    out.low = std::min(from, to);
+    out.close = to;
+    return out;
+}
+
+}  // namespace
+
+void BacktestEngine::dispatch_bar_calc_on_order_fills() {
+    const Bar script_bar = current_bar_;
+    constexpr uint64_t kHistoricalPathFillEvents = 4;
+    uint64_t fill_events = 0;
+    int exit_closed_from_bar = -1;
+    bool exit_closed_was_long = false;
+
+    snapshot_coof_script_state();
+    coof_scheduler_active_ = true;
+    coof_cursor_is_bar_close_ = false;
+    coof_evaluating_path_segment_ = false;
+
+    double path[4];
+    fill_bar_path_points(script_bar, path);
+    double cursor = path[0];
+    int next_waypoint = 1;
+    bool evaluate_current_point = true;
+
+    auto consume_fill = [&](const CoofFillResult& fill,
+                            bool cursor_is_close,
+                            bool filled_at_bar_open_point) {
+        const uint64_t before = fill_events;
+        cursor = fill.fill_price;
+        fill_events += run_coof_recalc_chain(
+            script_bar, cursor, cursor_is_close, fill.fill_events,
+            kHistoricalPathFillEvents, fill_events);
+        // The carried order's open fill triggers one execution at O, and the
+        // order born in that first execution may also fill at O. Every later
+        // fill—including the first fill when it occurs inside a path segment—
+        // advances monotonically toward the next historical waypoint.
+        evaluate_current_point =
+            filled_at_bar_open_point && before == 0 && fill_events == 1;
+    };
+
+    while (fill_events < kHistoricalPathFillEvents) {
+        if (evaluate_current_point) {
+            const bool cursor_is_close = next_waypoint >= 4;
+            const Bar point = coof_point_bar(script_bar, cursor);
+            current_bar_ = point;
+            CoofFillResult fill = process_next_pending_order(
+                point, /*allow_market_orders=*/true,
+                exit_closed_from_bar, exit_closed_was_long);
+            if (fill.filled) {
+                consume_fill(
+                    fill, cursor_is_close,
+                    /*filled_at_bar_open_point=*/next_waypoint == 1);
+                continue;
+            }
+            evaluate_current_point = false;
+        }
+
+        if (next_waypoint >= 4) break;
+
+        const double target = path[next_waypoint];
+        const Bar segment = coof_segment_bar(script_bar, cursor, target);
+        current_bar_ = segment;
+        coof_evaluating_path_segment_ = true;
+        CoofFillResult fill = process_next_pending_order(
+            segment, /*allow_market_orders=*/false,
+            exit_closed_from_bar, exit_closed_was_long);
+        coof_evaluating_path_segment_ = false;
+        if (fill.filled) {
+            const bool reached_target =
+                std::abs(fill.fill_price - target) <= kSegmentDenomEps;
+            const bool cursor_is_close = next_waypoint == 3
+                && reached_target;
+            consume_fill(
+                fill, cursor_is_close,
+                /*filled_at_bar_open_point=*/false);
+            // H/L/C itself has been consumed by this priced fill. Only O has
+            // the same-point two-fill exception; a market order born in the
+            // recalc must wait for the next historical waypoint.
+            if (reached_target) ++next_waypoint;
+            continue;
+        }
+
+        cursor = target;
+        ++next_waypoint;
+        evaluate_current_point = true;
+    }
+
+    // The regular historical close execution is still required after all
+    // fill-triggered executions. It starts from the prior committed checkpoint
+    // and becomes this bar's committed Pine state.
+    cursor = path[3];
+    uint64_t direct = execute_coof_script_body(
+        script_bar, cursor, /*is_fill_recalc=*/false,
+        /*cursor_is_bar_close=*/true,
+        fill_events < kHistoricalPathFillEvents
+            ? kHistoricalPathFillEvents - fill_events : 0);
+    // C is the terminal historical tick. Direct fills produced by this
+    // ordinary-close execution count against the broker-event budget, but do
+    // not trigger another script body after the bar has ended.
+    commit_coof_script_state();
+    fill_events += direct;
+
+    // POOC's close-time market/priced orders share C and must never replay the
+    // already-consumed high/low. Process every ordinary-C sibling at that same
+    // broker epoch, without a fill-triggered body between siblings, until the
+    // four historical events are exhausted.
+    if (process_orders_on_close_) {
+        const Bar close_point = coof_point_bar(script_bar, cursor);
+        while (fill_events < kHistoricalPathFillEvents) {
+            current_bar_ = close_point;
+            CoofFillResult fill = process_next_pending_order(
+                close_point, /*allow_market_orders=*/true,
+                exit_closed_from_bar, exit_closed_was_long);
+            if (!fill.filled) break;
+            fill_events += fill.fill_events;
+        }
+    }
+
+    // Preserve the existing once-per-script-bar liquidation placement. A
+    // liquidation is itself a broker fill and therefore triggers a C-point
+    // historical recalc when event budget remains.
+    current_bar_ = script_bar;
+    const size_t trades_before_mc = trades_.size();
+    const uint64_t fill_seq_before_mc = broker_fill_event_seq_;
+    process_margin_call(current_bar_);
+    if (trades_.size() != trades_before_mc) {
+        refresh_frozen_default_sizing_after_margin_call();
+    }
+    const uint64_t margin_events = broker_fill_event_seq_ - fill_seq_before_mc;
+    if (margin_events > 0 && fill_events < kHistoricalPathFillEvents) {
+        fill_events += run_coof_recalc_chain(
+            script_bar, cursor, /*cursor_is_bar_close=*/true, margin_events,
+            kHistoricalPathFillEvents, fill_events);
+    }
+
+    // Broker fills and eligible priced GTC orders persist. A margin-call
+    // recalculation remains speculative and cannot replace the completed
+    // ordinary-close checkpoint.
+    restore_coof_script_state();
+    coof_scheduler_active_ = false;
+    coof_fill_recalc_active_ = false;
+    coof_cursor_is_bar_close_ = false;
+    coof_evaluating_path_segment_ = false;
+    coof_direct_fill_events_remaining_ = 0;
+    coof_checkpoint_contains_current_bar_ = false;
+    history_slot_is_new_ = true;
+    coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
+    current_bar_ = script_bar;
+    is_first_tick_ = true;
+    is_last_tick_ = true;
 }
 
 
@@ -115,6 +398,15 @@ void BacktestEngine::reset_run_state() {
     intraday_day_ = -1;
     intraday_cap_hit_ = false;
     intraday_fill_count_ = 0;
+    broker_fill_event_seq_ = 0;
+    coof_scheduler_active_ = false;
+    coof_fill_recalc_active_ = false;
+    coof_cursor_is_bar_close_ = false;
+    coof_evaluating_path_segment_ = false;
+    coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
+    coof_direct_fill_events_remaining_ = 0;
+    coof_checkpoint_contains_current_bar_ = false;
+    history_slot_is_new_ = true;
 
     // Per-bar cursor + session-predicate state.
     bar_index_ = 0;
@@ -230,6 +522,10 @@ void BacktestEngine::run(const Bar* bars, int n) {
 // --- run_magnified_bar ---
 void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t script_bar_ts) {
     if (sub_bars.empty()) return;
+    if (calc_on_order_fills_) {
+        run_magnified_bar_calc_on_order_fills(sub_bars, script_bar_ts);
+        return;
+    }
 
     double bar_open = sub_bars.front().open;
     double running_high = sub_bars.front().open;
@@ -354,6 +650,219 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
             refresh_frozen_default_sizing_after_margin_call();
         }
     }
+    finalize_bar();
+}
+
+void BacktestEngine::run_magnified_bar_calc_on_order_fills(
+        const std::vector<Bar>& sub_bars,
+        int64_t script_bar_ts) {
+    if (sub_bars.empty()) return;
+
+    struct BrokerTick {
+        double price;
+        int64_t timestamp;
+        // A real lower-timeframe bar starts a fresh broker epoch at its open.
+        // The jump from the prior sub-bar's close to this price is a gap, not
+        // a continuously traversed segment.
+        bool starts_subbar;
+    };
+
+    Bar script_bar{};
+    script_bar.open = sub_bars.front().open;
+    script_bar.high = sub_bars.front().high;
+    script_bar.low = sub_bars.front().low;
+    script_bar.close = sub_bars.back().close;
+    script_bar.volume = 0.0;
+    script_bar.timestamp = script_bar_ts;
+    for (const Bar& sb : sub_bars) {
+        script_bar.high = std::max(script_bar.high, sb.high);
+        script_bar.low = std::min(script_bar.low, sb.low);
+        script_bar.volume += sb.volume;
+    }
+
+    const int total_sub = static_cast<int>(sub_bars.size());
+    const bool real_lower_tf = total_sub > 1;
+    diag_magnifier_sub_bars_processed_ += total_sub;
+
+    double mean_vol = 0.0;
+    if (magnifier_volume_weighted_ && !real_lower_tf) {
+        for (const Bar& sb : sub_bars) mean_vol += sb.volume;
+        mean_vol /= static_cast<double>(total_sub);
+    }
+
+    std::vector<BrokerTick> ticks;
+    std::vector<double> samples;
+    for (const Bar& sb : sub_bars) {
+        // Historical script executions see the completed security state for
+        // the script bar. Feeding all committed lower-TF bars before taking
+        // the script-state checkpoint mirrors the standard path, where
+        // security evaluators are fed before dispatch_bar.
+        for (auto& state : security_eval_states_) {
+            feed_security_eval_state(state, sb);
+        }
+
+        if (real_lower_tf) {
+            sample_price_path(sb, 4, MagnifierDistribution::ENDPOINTS, samples);
+        } else if (magnifier_volume_weighted_) {
+            sample_price_path_volume_weighted(
+                sb, magnifier_samples_, mean_vol,
+                /*min_samples=*/2,
+                /*max_samples=*/std::max(magnifier_samples_ * 4, 8),
+                magnifier_dist_, samples);
+        } else {
+            sample_price_path(sb, magnifier_samples_, magnifier_dist_, samples);
+        }
+        diag_magnifier_sample_ticks_processed_ +=
+            static_cast<int64_t>(samples.size());
+        for (std::size_t sample_idx = 0; sample_idx < samples.size();
+             ++sample_idx) {
+            ticks.push_back({
+                samples[sample_idx], sb.timestamp,
+                real_lower_tf && sample_idx == 0,
+            });
+        }
+    }
+    if (ticks.empty()) return;
+
+    // Unlike a fixed arbitrary loop guard, termination is derived from the
+    // actual lower-timeframe broker ticks supplied by the magnifier.
+    const uint64_t max_fill_events = static_cast<uint64_t>(ticks.size());
+    uint64_t fill_events = 0;
+    int exit_closed_from_bar = -1;
+    bool exit_closed_was_long = false;
+    snapshot_coof_script_state();
+    coof_scheduler_active_ = true;
+    coof_cursor_is_bar_close_ = false;
+    coof_evaluating_path_segment_ = false;
+
+    double cursor = ticks.front().price;
+    int64_t cursor_ts = ticks.front().timestamp;
+    std::size_t next_tick = 1;
+    bool evaluate_current_point = true;
+
+    auto consume_fill = [&](const CoofFillResult& fill,
+                            bool cursor_is_close,
+                            bool filled_at_first_tick) {
+        const uint64_t before = fill_events;
+        cursor = fill.fill_price;
+        fill_events += run_coof_recalc_chain(
+            script_bar, cursor, cursor_is_close, fill.fill_events,
+            max_fill_events, fill_events);
+        evaluate_current_point = filled_at_first_tick
+            && before == 0 && fill_events == 1;
+    };
+
+    while (fill_events < max_fill_events) {
+        if (evaluate_current_point) {
+            const bool cursor_is_close = next_tick >= ticks.size();
+            Bar point = coof_point_bar(script_bar, cursor);
+            point.timestamp = cursor_ts;
+            current_bar_ = point;
+            CoofFillResult fill = process_next_pending_order(
+                point, /*allow_market_orders=*/true,
+                exit_closed_from_bar, exit_closed_was_long);
+            if (fill.filled) {
+                consume_fill(
+                    fill, cursor_is_close,
+                    /*filled_at_first_tick=*/next_tick == 1);
+                continue;
+            }
+            evaluate_current_point = false;
+        }
+
+        if (next_tick >= ticks.size()) break;
+
+        const BrokerTick target = ticks[next_tick];
+        if (target.starts_subbar) {
+            // Every real magnifier sub-bar opens fresh.  Resting priced orders
+            // evaluate the new open as a point (and therefore use gap-fill
+            // pricing); they must never interpolate a touch through the
+            // previous close -> new open discontinuity.
+            cursor = target.price;
+            cursor_ts = target.timestamp;
+            ++next_tick;
+            evaluate_current_point = true;
+            continue;
+        }
+        Bar segment = coof_segment_bar(script_bar, cursor, target.price);
+        segment.timestamp = target.timestamp;
+        current_bar_ = segment;
+        coof_evaluating_path_segment_ = true;
+        CoofFillResult fill = process_next_pending_order(
+            segment, /*allow_market_orders=*/false,
+            exit_closed_from_bar, exit_closed_was_long);
+        coof_evaluating_path_segment_ = false;
+        if (fill.filled) {
+            cursor_ts = target.timestamp;
+            const bool reached_target =
+                std::abs(fill.fill_price - target.price) <= kSegmentDenomEps;
+            const bool cursor_is_close = next_tick + 1 == ticks.size()
+                && reached_target;
+            consume_fill(
+                fill, cursor_is_close,
+                /*filled_at_first_tick=*/false);
+            // The real lower-TF endpoint is already consumed. Do not replay
+            // a market-enabled point at the same H/L/C tick; O remains the
+            // sole intentional same-tick exception.
+            if (reached_target) ++next_tick;
+            continue;
+        }
+
+        cursor = target.price;
+        cursor_ts = target.timestamp;
+        ++next_tick;
+        evaluate_current_point = true;
+    }
+
+    cursor = ticks.back().price;
+    uint64_t direct = execute_coof_script_body(
+        script_bar, cursor, /*is_fill_recalc=*/false,
+        /*cursor_is_bar_close=*/true,
+        fill_events < max_fill_events ? max_fill_events - fill_events : 0);
+    commit_coof_script_state();
+    // The last real lower-TF close is also terminal: count direct fills but do
+    // not execute another script body after that completed broker tick.
+    fill_events += direct;
+
+    if (process_orders_on_close_) {
+        Bar close_point = coof_point_bar(script_bar, cursor);
+        close_point.timestamp = ticks.back().timestamp;
+        while (fill_events < max_fill_events) {
+            current_bar_ = close_point;
+            CoofFillResult fill = process_next_pending_order(
+                close_point, /*allow_market_orders=*/true,
+                exit_closed_from_bar, exit_closed_was_long);
+            if (!fill.filled) break;
+            fill_events += fill.fill_events;
+        }
+    }
+
+    current_bar_ = script_bar;
+    const size_t trades_before_mc = trades_.size();
+    const uint64_t fill_seq_before_mc = broker_fill_event_seq_;
+    process_margin_call(current_bar_);
+    if (trades_.size() != trades_before_mc) {
+        refresh_frozen_default_sizing_after_margin_call();
+    }
+    const uint64_t margin_events = broker_fill_event_seq_ - fill_seq_before_mc;
+    if (margin_events > 0 && fill_events < max_fill_events) {
+        fill_events += run_coof_recalc_chain(
+            script_bar, cursor, /*cursor_is_bar_close=*/true, margin_events,
+            max_fill_events, fill_events);
+    }
+
+    restore_coof_script_state();
+    coof_scheduler_active_ = false;
+    coof_fill_recalc_active_ = false;
+    coof_cursor_is_bar_close_ = false;
+    coof_evaluating_path_segment_ = false;
+    coof_direct_fill_events_remaining_ = 0;
+    coof_checkpoint_contains_current_bar_ = false;
+    history_slot_is_new_ = true;
+    coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
+    current_bar_ = script_bar;
+    is_first_tick_ = true;
+    is_last_tick_ = true;
     finalize_bar();
 }
 
@@ -759,6 +1268,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
             default_qty_type_ = static_cast<QtyType>(overrides->default_qty_type);
         if (overrides->process_orders_on_close >= 0)
             process_orders_on_close_ = (overrides->process_orders_on_close != 0);
+        if (overrides->calc_on_order_fills >= 0)
+            calc_on_order_fills_ = (overrides->calc_on_order_fills != 0);
         if (overrides->close_entries_rule >= 0)
             close_entries_rule_any_ = (overrides->close_entries_rule != 0);
     }

@@ -176,6 +176,29 @@ struct PendingOrder {
     int oca_type;              // 0=none, 1=cancel, 2=reduce
     int created_bar;           // bar_index when order was created
     int64_t created_seq = 0;
+    // Entry stop-limit activation is durable broker state. Once the stop leg
+    // fires, later bars—and later COOF scheduler segments on the same bar—
+    // evaluate only the live limit leg until the order fills or is replaced.
+    bool stop_limit_activated = false;
+    // A stop/limit leg emitted by a COOF recalc on the position's entry bar
+    // cannot consume the fill cursor that caused that recalc when the leg is
+    // already marketable there. Suppression is deliberately per-leg: the
+    // other, correctly-sided bracket leg remains live on the remaining path.
+    // Both bits expire automatically once bar_index_ advances, so an unfilled
+    // suppressed leg carries into the next bar as an ordinary order.
+    bool coof_suppress_stop_on_entry_bar = false;
+    bool coof_suppress_limit_on_entry_bar = false;
+    // True only when this order was emitted by a historical
+    // calc_on_order_fills execution. POOC must not confuse that intrabar
+    // origin with an order emitted by the ordinary close-time execution.
+    bool created_during_coof_recalc = false;
+    // Stronger provenance for orders born specifically in the recalculation
+    // triggered by a close-point (C) fill. C has already been consumed: no
+    // order from that recalculation may refill at C or inspect the elapsed
+    // wick. A POOC market instruction has missed its only eligible close and
+    // expires unless an ordinary execution reissues it; priced GTC orders
+    // become ordinary carried orders on the next bar.
+    bool coof_born_at_close_recalc = false;
     PositionSide created_position_side = PositionSide::FLAT;
     // True when a successful strategy.close/close_all call earlier in this
     // same on_bar already targeted live quantity. This remains distinct from
@@ -308,6 +331,7 @@ struct StrategyOverrides {
     int commission_type = -1;
     int default_qty_type = -1;
     int process_orders_on_close = -1;
+    int calc_on_order_fills = -1;
     int close_entries_rule = -1;
 };
 
@@ -394,6 +418,9 @@ protected:
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
     bool process_orders_on_close_ = false;
+    // Historical fill-triggered recalculation is strictly opt-in. The false
+    // branch in dispatch_bar remains the legacy control path.
+    bool calc_on_order_fills_ = false;
     QtyType default_qty_type_ = QtyType::FIXED;
     double default_qty_value_ = 1.0;
     int pyramiding_ = 1;            // max additional entries in same direction
@@ -533,6 +560,14 @@ protected:
     // Advance every native source series by the current bar. Mirrors the
     // subclass ``_s_<field>`` idiom: push on the first tick, update intrabar
     // (magnifier). Called at each on_bar dispatch point; no-op when inactive.
+    // A historical post-C fill recalculation remains barstate.isnew, but the
+    // completed ordinary close execution already owns this bar's history
+    // slot. Generated history/TA code uses the same predicate so that such an
+    // execution recomputes the slot instead of appending a duplicate bar.
+    bool history_advances_new_bar() const {
+        return is_first_tick_ && history_slot_is_new_;
+    }
+
     void _push_source_series() {
         if (!_src_series_active_) return;
         const double o = current_bar_.open;
@@ -544,7 +579,7 @@ protected:
         const double hlc3  = (h + l + c) / 3.0;
         const double ohlc4 = (o + h + l + c) / 4.0;
         const double hlcc4 = (h + l + c + c) / 4.0;
-        if (is_first_tick_) {
+        if (history_advances_new_bar()) {
             _src_open_.push(o);   _src_high_.push(h);   _src_low_.push(l);
             _src_close_.push(c);  _src_volume_.push(v);
             _src_hl2_.push(hl2);  _src_hlc3_.push(hlc3);
@@ -756,6 +791,15 @@ protected:
                         int oca_type = 0);
 
     void process_pending_orders(const Bar& bar);
+    struct CoofFillResult {
+        bool filled = false;
+        double fill_price = std::numeric_limits<double>::quiet_NaN();
+        uint64_t fill_events = 0;
+    };
+    CoofFillResult process_next_pending_order(const Bar& bar,
+                                              bool allow_market_orders,
+                                              int& exit_closed_from_bar,
+                                              bool& exit_closed_was_long);
 
     // TradingView forced-liquidation (margin call). Finite-price liquidation
     // paths use the bar's adverse extreme. A 100%-margin long has no later
@@ -1237,12 +1281,44 @@ protected:
     bool is_first_tick_ = true;
     bool is_last_tick_ = true;
     bool barstate_islast_ = false;
+    // Independent from barstate.isnew. False only when a COOF execution
+    // restores a completed ordinary-close checkpoint that already contains
+    // the current bar's one committed history slot.
+    bool history_slot_is_new_ = true;
     int magnifier_samples_ = 4;
     MagnifierDistribution magnifier_dist_ = MagnifierDistribution::ENDPOINTS;
     // When true, run_magnified_bar scales per-sub-bar sample count by
     // (sub_bar.volume / mean_sub_bar_volume) within each script bar — dense
     // tick approximation on high-volume sub-bars without real tick data.
     bool magnifier_volume_weighted_ = false;
+
+    // KI-60 scheduler transients. Script executions see the complete
+    // historical bar, while direct POOC/immediate market closes use the
+    // monotonic broker cursor price held here.
+    bool coof_scheduler_active_ = false;
+    bool coof_fill_recalc_active_ = false;
+    bool coof_cursor_is_bar_close_ = false;
+    bool coof_evaluating_path_segment_ = false;
+    bool coof_checkpoint_contains_current_bar_ = false;
+    double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
+    // Direct strategy.close / POOC fills can occur inside on_bar rather than
+    // through process_next_pending_order. The scheduler refreshes this budget
+    // before every speculative execution so those fills consume the same
+    // finite historical/magnifier event budget as every other broker fill.
+    uint64_t coof_direct_fill_events_remaining_ = 0;
+    uint64_t broker_fill_event_seq_ = 0;
+
+    // input.source histories are base-owned script state and must roll back
+    // with generated state between historical fill recalculations.
+    Series<double> coof_checkpoint_src_open_;
+    Series<double> coof_checkpoint_src_high_;
+    Series<double> coof_checkpoint_src_low_;
+    Series<double> coof_checkpoint_src_close_;
+    Series<double> coof_checkpoint_src_volume_;
+    Series<double> coof_checkpoint_src_hl2_;
+    Series<double> coof_checkpoint_src_hlc3_;
+    Series<double> coof_checkpoint_src_ohlc4_;
+    Series<double> coof_checkpoint_src_hlcc4_;
 
     // --- Session predicate bar-state tracking ---
     // Tracks whether the previous bar was inside the regular session.
@@ -1448,8 +1524,20 @@ protected:
     virtual void evaluate_security(int sec_id, const Bar& bar, bool is_complete) {}
     virtual void clear_security(int sec_id) {}
 
+    // Generated-state transaction hooks for calc_on_order_fills. Snapshot is
+    // called once before the broker walks a historical bar; restore precedes
+    // every fill recalc and the ordinary close execution. The completed
+    // ordinary-close execution becomes the committed checkpoint. Historical
+    // post-C fill recalculations start from it, recompute its current-bar
+    // history slot, and are rolled back after their broker effects persist.
+    virtual void snapshot_script_state() {}
+    virtual void restore_script_state() {}
+    virtual void commit_script_state() {}
+
     // Magnifier helpers
     void run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t script_bar_ts);
+    void run_magnified_bar_calc_on_order_fills(const std::vector<Bar>& sub_bars,
+                                               int64_t script_bar_ts);
     virtual void finalize_bar() {}
 
     // --- Equity extremes update (called after each on_bar) ---
@@ -1824,6 +1912,21 @@ private:
     // path. The magnifier tick loop does NOT use this — it gates the sequence
     // on is_last_tick_ and forces is_first_tick_ before on_bar.
     void dispatch_bar();
+    void dispatch_bar_calc_on_order_fills();
+    void snapshot_coof_script_state();
+    void restore_coof_script_state();
+    void commit_coof_script_state();
+    uint64_t execute_coof_script_body(const Bar& script_bar,
+                                      double broker_cursor_price,
+                                      bool is_fill_recalc,
+                                      bool cursor_is_bar_close,
+                                      uint64_t direct_fill_event_budget);
+    uint64_t run_coof_recalc_chain(const Bar& script_bar,
+                                   double broker_cursor_price,
+                                   bool cursor_is_bar_close,
+                                   uint64_t triggering_events,
+                                   uint64_t max_events,
+                                   uint64_t events_already);
     void run_simple_bar_loop(const Bar* input_bars, int n_input);
     void run_aggregation_bar_loop(const Bar* input_bars, int n_input,
                                   bool bar_magnifier, int expected_script_bars);

@@ -136,12 +136,14 @@ bool entry_stop_first_touch(const Bar& bar, double stop_level,
 // For flat-position opposing stop entries (long stop vs short stop), return
 // true if any opposite stop is touched earlier on the bar path than `current`.
 bool opposing_stop_entry_hits_first(const Bar& bar,
-                                           const std::vector<PendingOrder>& orders,
-                                           std::size_t current_idx);
+                                    const std::vector<PendingOrder>& orders,
+                                    std::size_t current_idx,
+                                    int current_bar_index = -1);
 
 
 DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
-                                                          const std::vector<PendingOrder>& orders);
+                                                     const std::vector<PendingOrder>& orders,
+                                                     int current_bar_index = -1);
 
 
 // For OCA exit siblings (e.g., separate TP and SL strategy.order calls),
@@ -188,7 +190,8 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
                                           bool is_long,
                                           double stop_price,
                                           double limit_price,
-                                          double* fill_price);
+                                          double* fill_price,
+                                          bool* activated);
 
 
 // Earliest intra-bar path coordinate [0, 3) where this EXIT's stop/limit would
