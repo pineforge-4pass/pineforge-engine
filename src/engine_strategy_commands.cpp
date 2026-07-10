@@ -76,6 +76,27 @@ inline bool trading_is_active(int64_t current_ms, int64_t start_ms,
                            : 0;
     return current_ms >= start_ms - buffer_ms;
 }
+
+}
+
+void BacktestEngine::assign_pending_order_identity(PendingOrder& order) {
+    order.command_revision_id = next_command_revision_id_++;
+    order.order_leg_id = next_order_leg_id_++;
+    order.priority_sequence = static_cast<uint64_t>(
+        std::max<int64_t>(0, order.created_seq));
+    order.terminal_fill_id = 0;
+    const double pos = signed_position_size();
+    record_order_transition(
+        order, OrderLifecycleState::NONE, lifecycle_state(order),
+        OrderTransition::CREATED, OrderTransitionReason::NONE,
+        0.0, std::numeric_limits<double>::quiet_NaN(), pos,
+        current_equity() + open_profit(current_bar_.close));
+}
+
+void BacktestEngine::assign_entry_lot_identity(PyramidEntry& entry) {
+    if (entry.entry_lot_id == 0) {
+        entry.entry_lot_id = next_entry_lot_id_++;
+    }
 }
 
 void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
@@ -164,7 +185,15 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         }
     }
 
-    // Remove existing pending order with same id
+    // Remove existing pending order with same id.
+    for (const auto& pending : pending_orders_) {
+        if (pending.id == id) {
+            record_order_transition(
+                pending, lifecycle_state(pending), OrderLifecycleState::REPLACED,
+                OrderTransition::REPLACED,
+                OrderTransitionReason::COMMAND_REISSUE);
+        }
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& o) { return o.id == id; }),
@@ -298,6 +327,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         order.stop_price = stop_price;
     }
 
+    assign_pending_order_identity(order);
     pending_orders_.push_back(std::move(order));
 }
 
@@ -529,9 +559,34 @@ void BacktestEngine::flush_same_bar_close() {
     size_t trades_before = trades_.size();
     PositionSide side_before = position_side_;
     double qty_before = position_qty_;
+    const double signed_before = signed_position_size();
+    const double equity_before =
+        current_equity() + open_profit(current_bar_.close);
     const double broker_price =
         coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
             ? coof_cursor_price_ : current_bar_.close;
+    PendingOrder diagnostic_order;
+    diagnostic_order.id = "__close__" + id;
+    diagnostic_order.from_entry = close_entries_rule_any_ ? id : "";
+    diagnostic_order.type = OrderType::EXIT;
+    diagnostic_order.is_long = position_side_ == PositionSide::SHORT;
+    diagnostic_order.limit_price = std::numeric_limits<double>::quiet_NaN();
+    diagnostic_order.stop_price = std::numeric_limits<double>::quiet_NaN();
+    diagnostic_order.trail_points = std::numeric_limits<double>::quiet_NaN();
+    diagnostic_order.trail_price = std::numeric_limits<double>::quiet_NaN();
+    diagnostic_order.trail_offset = std::numeric_limits<double>::quiet_NaN();
+    diagnostic_order.qty = target;
+    diagnostic_order.qty_type = -1;
+    diagnostic_order.qty_percent = qty_before > eps
+        ? target / qty_before * 100.0 : 100.0;
+    diagnostic_order.oca_type = 0;
+    diagnostic_order.created_bar = bar_index_;
+    diagnostic_order.created_position_side = position_side_;
+    diagnostic_order.comment = comment;
+    if (order_event_recording_enabled_) {
+        diagnostic_order.created_seq = next_order_seq_;
+        assign_pending_order_identity(diagnostic_order);
+    }
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
         // Exit-order cancel/purge already ran at CALL time in
@@ -557,6 +612,15 @@ void BacktestEngine::flush_same_bar_close() {
         || std::abs(position_qty_ - qty_before) > eps
         || trades_.size() != trades_before) {
         ++broker_fill_event_seq_;
+        if (order_event_recording_enabled_) {
+            diagnostic_order.terminal_fill_id = broker_fill_event_seq_;
+            record_order_transition(
+                diagnostic_order, OrderLifecycleState::PENDING_MARKET,
+                OrderLifecycleState::FILLED, OrderTransition::FILLED,
+                OrderTransitionReason::STREAM_CLOSE_EVENT,
+                std::abs(signed_position_size() - signed_before), broker_price,
+                signed_before, equity_before);
+        }
         if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
             --coof_direct_fill_events_remaining_;
         }
@@ -775,10 +839,34 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.comment = comment;
     order.created_while_in_position = !effectively_flat;
 
+    if (has_trail_request && !effectively_flat
+        && std::isfinite(current_bar_.close)) {
+        order.realtime_trail_best_price = current_bar_.close;
+        const double activation = !std::isnan(trail_points)
+            ? position_entry_price_
+                + (position_side_ == PositionSide::LONG ? 1.0 : -1.0)
+                    * std::ceil(trail_points) * syminfo_mintick_
+            : trail_price;
+        if (std::isfinite(activation)) {
+            order.realtime_trail_activated =
+                position_side_ == PositionSide::LONG
+                    ? current_bar_.close >= activation
+                    : current_bar_.close <= activation;
+        }
+    }
+
+    assign_pending_order_identity(order);
     pending_orders_.push_back(std::move(order));
 }
 
 void BacktestEngine::strategy_cancel(const std::string& id) {
+    for (const auto& pending : pending_orders_) {
+        if (pending.id == id) {
+            record_order_transition(
+                pending, lifecycle_state(pending), OrderLifecycleState::CANCELLED,
+                OrderTransition::CANCELLED, OrderTransitionReason::USER_CANCEL);
+        }
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& o) { return o.id == id; }),
@@ -786,6 +874,11 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
 }
 
 void BacktestEngine::strategy_cancel_all() {
+    for (const auto& pending : pending_orders_) {
+        record_order_transition(
+            pending, lifecycle_state(pending), OrderLifecycleState::CANCELLED,
+            OrderTransition::CANCELLED, OrderTransitionReason::USER_CANCEL);
+    }
     pending_orders_.clear();
 }
 
@@ -801,6 +894,14 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
         }
     }
 
+    for (const auto& pending : pending_orders_) {
+        if (pending.id == id) {
+            record_order_transition(
+                pending, lifecycle_state(pending), OrderLifecycleState::REPLACED,
+                OrderTransition::REPLACED,
+                OrderTransitionReason::COMMAND_REISSUE);
+        }
+    }
     // Remove existing pending order with same id
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
@@ -872,6 +973,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
         order.stop_price = stop_price;
     }
 
+    assign_pending_order_identity(order);
     pending_orders_.push_back(std::move(order));
 }
 
@@ -1033,9 +1135,34 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
     size_t trades_before = trades_.size();
     PositionSide side_before = position_side_;
     double qty_before = position_qty_;
+    const double signed_before = signed_position_size();
+    const double equity_before =
+        current_equity() + open_profit(current_bar_.close);
     const double broker_price =
         coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
             ? coof_cursor_price_ : current_bar_.close;
+    PendingOrder diagnostic_order;
+    if (order_event_recording_enabled_) {
+        diagnostic_order.id = "__close__" + id;
+        diagnostic_order.from_entry = close_entries_rule_any_ ? id : "";
+        diagnostic_order.type = OrderType::EXIT;
+        diagnostic_order.is_long = position_side_ == PositionSide::SHORT;
+        diagnostic_order.limit_price = std::numeric_limits<double>::quiet_NaN();
+        diagnostic_order.stop_price = std::numeric_limits<double>::quiet_NaN();
+        diagnostic_order.trail_points = std::numeric_limits<double>::quiet_NaN();
+        diagnostic_order.trail_price = std::numeric_limits<double>::quiet_NaN();
+        diagnostic_order.trail_offset = std::numeric_limits<double>::quiet_NaN();
+        diagnostic_order.qty = qty_to_close;
+        diagnostic_order.qty_type = -1;
+        diagnostic_order.qty_percent = matching_qty > eps
+            ? qty_to_close / matching_qty * 100.0 : 100.0;
+        diagnostic_order.oca_type = 0;
+        diagnostic_order.created_bar = bar_index_;
+        diagnostic_order.created_seq = next_order_seq_;
+        diagnostic_order.created_position_side = position_side_;
+        diagnostic_order.comment = comment;
+        assign_pending_order_identity(diagnostic_order);
+    }
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
         execute_market_exit(broker_price);
@@ -1063,6 +1190,15 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
         || std::abs(position_qty_ - qty_before) > eps
         || trades_.size() != trades_before) {
         ++broker_fill_event_seq_;
+        if (order_event_recording_enabled_) {
+            diagnostic_order.terminal_fill_id = broker_fill_event_seq_;
+            record_order_transition(
+                diagnostic_order, OrderLifecycleState::PENDING_MARKET,
+                OrderLifecycleState::FILLED, OrderTransition::FILLED,
+                OrderTransitionReason::STREAM_CLOSE_EVENT,
+                std::abs(signed_position_size() - signed_before), broker_price,
+                signed_before, equity_before);
+        }
         if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
             --coof_direct_fill_events_remaining_;
         }
@@ -1118,6 +1254,7 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     // debited (ANY rule / explicit qty / close_all).
     order.suppressed_close_consumed_ledger_qty = consumed_ledger_qty;
 
+    assign_pending_order_identity(order);
     pending_orders_.push_back(std::move(order));
 }
 
@@ -1142,6 +1279,16 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
                 preserved_reserved_qty_out = o.qty;
             }
             break;
+        }
+    }
+
+    for (const auto& pending : pending_orders_) {
+        if (pending.type == OrderType::EXIT && pending.id == id
+            && pending.from_entry == from_entry) {
+            record_order_transition(
+                pending, lifecycle_state(pending), OrderLifecycleState::REPLACED,
+                OrderTransition::REPLACED,
+                OrderTransitionReason::COMMAND_REISSUE);
         }
     }
 

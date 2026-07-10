@@ -399,6 +399,16 @@ void BacktestEngine::reset_run_state() {
     intraday_cap_hit_ = false;
     intraday_fill_count_ = 0;
     broker_fill_event_seq_ = 0;
+    next_command_revision_id_ = 1;
+    next_order_leg_id_ = 1;
+    next_entry_lot_id_ = 1;
+    next_transition_sequence_ = 1;
+    position_episode_id_ = 0;
+    order_events_.clear();
+    order_event_count_ = 0;
+    order_event_hash_ = 1469598103934665603ULL;
+    order_event_dropped_ = 0;
+    order_event_recording_enabled_ = false;
     coof_scheduler_active_ = false;
     coof_fill_recalc_active_ = false;
     coof_cursor_is_bar_close_ = false;
@@ -428,10 +438,14 @@ void BacktestEngine::reset_run_state() {
     stream_seen_sequence_ = false;
     stream_has_input_bar_ = false;
     stream_input_bar_ = Bar{};
+    stream_input_last_trade_ms_ = 0;
+    stream_input_last_trade_sequence_ = 0;
     stream_last_price_ = 0.0;
     stream_has_last_price_ = false;
     stream_next_script_bar_index_ = 0;
     stream_script_bar_had_tick_ = false;
+    stream_script_last_trade_ms_ = 0;
+    stream_script_last_trade_sequence_ = 0;
     stream_script_tick_seen_ = false;
 
     // Native source-series history (input.source(...) ring buffers). Must list
@@ -1270,6 +1284,11 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
             process_orders_on_close_ = (overrides->process_orders_on_close != 0);
         if (overrides->calc_on_order_fills >= 0)
             calc_on_order_fills_ = (overrides->calc_on_order_fills != 0);
+        if (overrides->calc_on_every_tick >= 0)
+            calc_on_every_tick_ = (overrides->calc_on_every_tick != 0);
+        if (overrides->calc_on_every_history_tick >= 0)
+            calc_on_every_history_tick_ =
+                (overrides->calc_on_every_history_tick != 0);
         if (overrides->close_entries_rule >= 0)
             close_entries_rule_any_ = (overrides->close_entries_rule != 0);
     }

@@ -75,7 +75,7 @@
  *  versioned layout (metrics + equity curve); .so files predating this
  *  macro have no pf_abi_version symbol — treat dlsym failure as
  *  version 1. */
-#define PF_ABI_VERSION 2
+#define PF_ABI_VERSION 3
 
 #ifdef __cplusplus
 extern "C" {
@@ -126,6 +126,11 @@ typedef struct pf_trade_tick_s {
     double   price;      /**< Executed trade price (> 0). */
     double   quantity;   /**< Traded quantity in symbol volume units (>= 0). */
 } pf_trade_tick_t;
+
+typedef enum pf_stream_gap_policy_e {
+    PF_STREAM_GAP_FIXED_GRID = 0,
+    PF_STREAM_GAP_DATA_DRIVEN = 1
+} pf_stream_gap_policy_t;
 
 /** Closed-trade record returned in pf_report_t::trades.
  *
@@ -296,6 +301,48 @@ typedef struct pf_trace_entry_s {
     double  value;      /**< Traced expression value on this bar. */
 } pf_trace_entry_t;
 
+/** Deterministic broker lifecycle transition. String fields are deep-copied
+ *  into the report snapshot and released by #report_free. Processing order is
+ *  authoritative; event timestamp/sequence are provenance and may be older
+ *  than a preceding transition for a retained process-on-close event. */
+typedef struct pf_order_event_s {
+    uint64_t transition_sequence;
+    uint64_t command_revision_id;
+    uint64_t order_leg_id;
+    uint64_t priority_sequence;
+    uint64_t fill_id;
+    uint64_t entry_lot_id;
+    uint64_t position_episode_id;
+    int64_t  event_timestamp;
+    uint64_t event_sequence;
+    int64_t  input_bar_index;
+    int32_t  script_bar_index;
+    int32_t  command_kind;
+    int32_t  leg_kind;
+    int32_t  state_before;
+    int32_t  state_after;
+    int32_t  transition;
+    int32_t  reason;
+    int32_t  side;
+    int32_t  oca_type;
+    double requested_quantity;
+    double remaining_quantity;
+    double filled_quantity;
+    double observed_price;
+    double stop_price;
+    double limit_price;
+    double trail_activation_price;
+    double trail_watermark;
+    double fill_price;
+    double position_size_before;
+    double position_size_after;
+    double equity_before;
+    double equity_after;
+    char* id;
+    char* from_entry;
+    char* oca_name;
+} pf_order_event_t;
+
 /** Backtest report filled by #run_backtest / #run_backtest_full.
  *
  *  Layout-compatible with internal `pineforge::ReportC`.
@@ -303,7 +350,7 @@ typedef struct pf_trace_entry_s {
  *  ### Ownership and lifetime
  *  The struct itself is caller-owned (typically stack). The embedded
  *  arrays (`trades`, `security_diag`, `trace`, `trace_names`,
- *  `equity_curve`) are heap-allocated by the runtime; the caller must
+ *  `equity_curve`, `order_events`) are heap-allocated by the runtime; the caller must
  *  invoke #report_free exactly once on each filled report.
  *  `trace_names` string pointers remain owned by the strategy handle
  *  until #strategy_free. */
@@ -359,6 +406,14 @@ typedef struct pf_report_s {
      * (ctypes: c_int64). */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;
+
+    /* Canonical order lifecycle diagnostics. The rolling count/hash covers
+     * every transition even when retained capacity overflows. */
+    pf_order_event_t*   order_events;
+    int64_t             order_events_len;
+    uint64_t            order_event_count;
+    uint64_t            order_event_hash;
+    uint64_t            order_event_dropped;
 } pf_report_t;
 
 /** @} */ /* end of pf_types */
@@ -527,6 +582,12 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
                                  int n_warmup,
                                  const char* input_tf,
                                  const char* script_tf);
+
+/** Select how quiet in-session intervals are normalized. Must be called before
+ *  strategy_stream_begin. Fixed-grid (default) emits zero-volume carry bars;
+ *  data-driven confirms only intervals that observed at least one trade. */
+PF_API int strategy_stream_set_gap_policy(pf_strategy_t s,
+                                          pf_stream_gap_policy_t policy);
 
 /** Push one normalized realtime trade. Returns 0 on success, -1 on failure. */
 PF_API int strategy_stream_push_tick(pf_strategy_t s,

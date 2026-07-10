@@ -271,6 +271,41 @@ def compare_reports(batch: dict, stream: dict) -> dict:
         autojunk=False,
     )
     ordered_match = sum(block.size for block in matcher.get_matching_blocks())
+    def percentile(values: list[float], q: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        pos = (len(ordered) - 1) * q
+        lo = int(pos)
+        hi = min(lo + 1, len(ordered) - 1)
+        return ordered[lo] + (ordered[hi] - ordered[lo]) * (pos - lo)
+
+    entry_abs = [abs(a["entry_price"] - b["entry_price"])
+                 for a, b in zip(left, right)]
+    exit_abs = [abs(a["exit_price"] - b["exit_price"])
+                for a, b in zip(left, right)]
+    entry_bps = [delta / max(abs(a["entry_price"]), 1e-12) * 10_000.0
+                 for delta, a in zip(entry_abs, left)]
+    exit_bps = [delta / max(abs(a["exit_price"]), 1e-12) * 10_000.0
+                for delta, a in zip(exit_abs, left)]
+    first_divergence = None
+    for index, (a, b) in enumerate(zip(left, right)):
+        if signature(a) != signature(b):
+            cutoff = min(a["entry_time"], b["entry_time"])
+            context = [event for event in stream.get("order_events", [])
+                       if event["event_timestamp"] <= cutoff][-10:]
+            first_divergence = {
+                "index": index, "batch": a, "stream": b,
+                "order_event_context": context,
+            }
+            break
+    if first_divergence is None and len(left) != len(right):
+        first_divergence = {
+            "index": min(len(left), len(right)),
+            "batch": left[min(len(left), len(right))] if len(left) > len(right) else None,
+            "stream": right[min(len(left), len(right))] if len(right) > len(left) else None,
+            "order_event_context": stream.get("order_events", [])[-10:],
+        }
     batch_profit = float(batch["net_profit"])
     stream_profit = float(stream["net_profit"])
     return {
@@ -287,6 +322,21 @@ def compare_reports(batch: dict, stream: dict) -> dict:
         "batch_net_profit": batch_profit,
         "stream_net_profit": stream_profit,
         "net_profit_delta": stream_profit - batch_profit,
+        "net_profit_relative_delta": (
+            None if abs(batch_profit) <= 1e-12
+            else (stream_profit - batch_profit) / abs(batch_profit)),
+        "entry_price_abs_delta": {key: percentile(entry_abs, q) for key, q in
+                                  (("p50", .50), ("p90", .90), ("p99", .99))},
+        "exit_price_abs_delta": {key: percentile(exit_abs, q) for key, q in
+                                 (("p50", .50), ("p90", .90), ("p99", .99))},
+        "entry_price_bps_delta": {key: percentile(entry_bps, q) for key, q in
+                                  (("p50", .50), ("p90", .90), ("p99", .99))},
+        "exit_price_bps_delta": {key: percentile(exit_bps, q) for key, q in
+                                 (("p50", .50), ("p90", .90), ("p99", .99))},
+        "first_divergence": first_divergence,
+        "lifecycle_event_count": stream.get("order_event_count", 0),
+        "lifecycle_event_hash": stream.get("order_event_hash", ""),
+        "lifecycle_event_dropped": stream.get("order_event_dropped", 0),
         "input_bars_equal": batch["input_bars_processed"]
             == stream["input_bars_processed"],
         "script_bars_equal": batch["script_bars_processed"]

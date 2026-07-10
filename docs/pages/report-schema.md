@@ -53,12 +53,19 @@ typedef struct pf_report_s {
     /* Per-script-bar equity curve (ABI v2) */
     pf_equity_point_t*  equity_curve;
     int64_t             equity_curve_len;   /* NOTE: int64, not int */
+
+    /* ABI v3: deterministic broker lifecycle diagnostics */
+    pf_order_event_t*   order_events;
+    int64_t             order_events_len;
+    uint64_t            order_event_count;
+    uint64_t            order_event_hash;
+    uint64_t            order_event_dropped;
 } pf_report_t;
 ```
 
-@note The `metrics` / `equity_curve` fields were appended in **ABI
-version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
-consumers must check `pf_abi_version() == 2` before running — a `.so`
+@note Metrics/equity fields were appended in ABI v2 and lifecycle fields in
+**ABI version 3** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
+consumers must check `pf_abi_version() == 3` before running — a `.so`
 with no `pf_abi_version` symbol is ABI v1 and predates these fields.
 
 ## Trade fields
@@ -226,6 +233,19 @@ typedef struct pf_equity_point_s {
 exception mid-run can truncate the curve — check
 `strategy_get_last_error`). The array is heap-allocated and freed by
 #report_free. Note the length field is `int64_t`, not `int`.
+
+## Order lifecycle (ABI v3)
+
+`order_events` retains structured simulator transitions with command revision,
+order leg, priority, fill, entry-lot and position-episode identities; market
+provenance; state/transition/reason codes; quantities/prices; position/equity
+before and after; and deep-copied Pine/OCA strings. #report_free releases the
+array and embedded strings.
+
+`transition_sequence` is the canonical order. Provenance timestamps may be
+non-monotonic for retained process-on-close events. The rolling count/hash
+include transitions beyond retained capacity; check `order_event_dropped`
+before expecting the retained arrays to be complete.
 
 ## Lifetime and ownership
 

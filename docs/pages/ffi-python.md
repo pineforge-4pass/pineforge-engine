@@ -112,6 +112,28 @@ class pf_trace_entry_t(ctypes.Structure):
         ("value",     ctypes.c_double),
     ]
 
+class pf_order_event_t(ctypes.Structure):
+    _fields_ = [
+        ("transition_sequence", ctypes.c_uint64),
+        ("command_revision_id", ctypes.c_uint64), ("order_leg_id", ctypes.c_uint64),
+        ("priority_sequence", ctypes.c_uint64), ("fill_id", ctypes.c_uint64),
+        ("entry_lot_id", ctypes.c_uint64), ("position_episode_id", ctypes.c_uint64),
+        ("event_timestamp", ctypes.c_int64), ("event_sequence", ctypes.c_uint64),
+        ("input_bar_index", ctypes.c_int64), ("script_bar_index", ctypes.c_int32),
+        ("command_kind", ctypes.c_int32), ("leg_kind", ctypes.c_int32),
+        ("state_before", ctypes.c_int32), ("state_after", ctypes.c_int32),
+        ("transition", ctypes.c_int32), ("reason", ctypes.c_int32),
+        ("side", ctypes.c_int32), ("oca_type", ctypes.c_int32),
+        ("requested_quantity", ctypes.c_double), ("remaining_quantity", ctypes.c_double),
+        ("filled_quantity", ctypes.c_double), ("observed_price", ctypes.c_double),
+        ("stop_price", ctypes.c_double), ("limit_price", ctypes.c_double),
+        ("trail_activation_price", ctypes.c_double), ("trail_watermark", ctypes.c_double),
+        ("fill_price", ctypes.c_double), ("position_size_before", ctypes.c_double),
+        ("position_size_after", ctypes.c_double), ("equity_before", ctypes.c_double),
+        ("equity_after", ctypes.c_double), ("id", ctypes.c_char_p),
+        ("from_entry", ctypes.c_char_p), ("oca_name", ctypes.c_char_p),
+    ]
+
 class pf_report_t(ctypes.Structure):
     _fields_ = [
         ("total_trades",                 ctypes.c_int),
@@ -147,6 +169,12 @@ class pf_report_t(ctypes.Structure):
         ("metrics",                      pf_metrics_t),
         ("equity_curve",                 ctypes.POINTER(pf_equity_point_t)),
         ("equity_curve_len",             ctypes.c_int64),  # int64 in the C header, NOT c_int
+        # ABI v3: deterministic order lifecycle transitions
+        ("order_events",                 ctypes.POINTER(pf_order_event_t)),
+        ("order_events_len",             ctypes.c_int64),
+        ("order_event_count",            ctypes.c_uint64),
+        ("order_event_hash",             ctypes.c_uint64),
+        ("order_event_dropped",          ctypes.c_uint64),
     ]
 
 class pf_version_t(ctypes.Structure):
@@ -175,9 +203,9 @@ itself. Open it with `ctypes.CDLL`:
 lib = ctypes.CDLL("./my_strategy.so")
 
 # ABI guard — pf_report_t is CALLER-allocated, so running an old .so
-# against the v2 mirror above (or vice versa) silently corrupts memory.
+# against the v3 mirror above (or vice versa) silently corrupts memory.
 # Verify the .so's layout version before any run:
-EXPECTED_PF_ABI = 2   # PF_ABI_VERSION in <pineforge/pineforge.h>
+EXPECTED_PF_ABI = 3   # PF_ABI_VERSION in <pineforge/pineforge.h>
 try:
     lib.pf_abi_version.restype = ctypes.c_int
     abi = lib.pf_abi_version()

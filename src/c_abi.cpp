@@ -119,6 +119,9 @@ static_assert(offsetof(pf_report_t, equity_curve) == offsetof(pineforge::ReportC
               "pf_report_t::equity_curve offset mismatch");
 static_assert(offsetof(pf_report_t, equity_curve_len) == offsetof(pineforge::ReportC, equity_curve_len),
               "pf_report_t::equity_curve_len offset mismatch");
+static_assert(offsetof(pf_report_t, order_event_dropped)
+                  == offsetof(pineforge::ReportC, order_event_dropped),
+              "pf_report_t::order_event_dropped tail offset mismatch");
 
 /* ── Magnifier distribution enum parity ─────────────────────────── */
 
@@ -174,6 +177,13 @@ PF_API const char* strategy_get_last_error(pf_strategy_t s) {
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
     if (!s) return;
     static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
+}
+
+PF_API int strategy_stream_set_gap_policy(
+        pf_strategy_t s, pf_stream_gap_policy_t policy) {
+    if (!s) return -1;
+    return static_cast<pineforge::BacktestEngine*>(s)->stream_set_gap_policy(
+        static_cast<int>(policy)) ? 0 : -1;
 }
 
 PF_API int strategy_stream_begin(pf_strategy_t s,

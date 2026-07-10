@@ -1133,6 +1133,8 @@ void BacktestEngine::apply_filled_order_to_state(
     const double position_qty_before_fill = position_qty_;
     const size_t pyramid_lots_before_fill = pyramid_entries_.size();
     double signed_pos_before = signed_pos();
+    const double equity_before_fill =
+        current_equity() + open_profit(bar.close);
 
     // Priced (stop/limit) fills happen mid-bar: any trade they close must
     // fold the pre-fill portion of the bar's path into its excursion
@@ -1214,6 +1216,7 @@ void BacktestEngine::apply_filled_order_to_state(
         || trades_.size() != trades_before;
     if (primary_fill_applied) {
         ++broker_fill_event_seq_;
+        order.terminal_fill_id = broker_fill_event_seq_;
     }
 
     // Queue the one-shot 1x-long post-fill affordability event at the single
@@ -1286,6 +1289,12 @@ void BacktestEngine::apply_filled_order_to_state(
 
     double signed_pos_after = signed_pos();
     double filled_qty = std::abs(signed_pos_after - signed_pos_before);
+    if (primary_fill_applied) {
+        record_order_transition(
+            order, lifecycle_state(order), OrderLifecycleState::FILLED,
+            OrderTransition::FILLED, OrderTransitionReason::PRICE_FILL,
+            filled_qty, fill_price, signed_pos_before, equity_before_fill);
+    }
 
     // This fill just opened a position from FLAT via an entry order. Freeze
     // any LAYERED strategy.exit legs bound to that entry that were armed while
@@ -1330,9 +1339,11 @@ void BacktestEngine::apply_filled_order_to_state(
         bool fully_filled = std::isnan(order.qty)
             || filled_qty + kOcaQtyEpsilon >= order.qty;
         if (order.oca_type == 1 && fully_filled) {
-            cancel_oca_group(order.oca_name, order.id);
+            cancel_oca_group(order.oca_name, order.oca_type, order.id,
+                             order.order_leg_id);
         } else if (order.oca_type == 2) {
-            reduce_oca_group(order.oca_name, order.id, filled_qty);
+            reduce_oca_group(order.oca_name, order.oca_type, order.id,
+                             order.order_leg_id, filled_qty);
         }
     }
     // When an exit fill causes position to go flat, subsequent EXIT
@@ -1678,7 +1689,10 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         trail_best_price_ = fill_price;
         pyramid_entries_.clear();
         id_unclosed_qty_.clear();
-        pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
+        pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty,
+                                    order.id, bar_index_, "", 0.0, 0.0,
+                                    false, false, 0});
+        assign_entry_lot_identity(pyramid_entries_.back());
         id_unclosed_qty_[order.id] += qty;
         if (!std::isnan(order.stop_price) || !std::isnan(order.limit_price)) {
             set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
@@ -1729,7 +1743,10 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             position_qty_ = total_qty;
             position_entry_count_++;
             trail_best_price_ = fill_price;
-            pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+            pyramid_entries_.push_back({fill_price, current_bar_.timestamp,
+                                        new_qty, order.id, bar_index_, "",
+                                        0.0, 0.0, false, false, 0});
+            assign_entry_lot_identity(pyramid_entries_.back());
             id_unclosed_qty_[order.id] += new_qty;
             if (is_priced_entry) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
@@ -2180,6 +2197,83 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         return {FillEvaluation::Kind::NoFill, 0.0};
     }
 
+    // Realtime uses one exact observed price per dispatch. Keep mutable trail
+    // activation/watermark on this executable leg rather than feeding point
+    // bars through the historical position-global OHLC trail path.
+    if (stream_phase_ == StreamPhase::REALTIME && exit_style && has_trail) {
+        const bool closing_long = position_side_ == PositionSide::LONG;
+        const double observed = bar.close;
+        const double activation = !std::isnan(order.trail_points)
+            ? position_entry_price_
+                + (closing_long ? 1.0 : -1.0)
+                    * std::ceil(order.trail_points) * syminfo_mintick_
+            : order.trail_price;
+        if (std::isnan(order.realtime_trail_best_price)) {
+            order.realtime_trail_best_price = observed;
+        }
+
+        const double offset = std::isnan(order.trail_offset)
+            ? std::numeric_limits<double>::quiet_NaN()
+            : std::ceil(order.trail_offset) * syminfo_mintick_;
+        bool stop_hit = has_stop
+            && (closing_long ? observed <= stop_price : observed >= stop_price);
+        bool limit_hit = has_limit
+            && (closing_long ? observed >= limit_price : observed <= limit_price);
+        bool trail_hit = false;
+        if (order.realtime_trail_activated) {
+            const double trail_level = std::isnan(offset)
+                ? activation
+                : (closing_long
+                    ? order.realtime_trail_best_price - offset
+                    : order.realtime_trail_best_price + offset);
+            trail_hit = std::isfinite(trail_level)
+                && (closing_long ? observed <= trail_level
+                                 : observed >= trail_level);
+        }
+
+        if (stop_hit || trail_hit) {
+            last_exit_fill_was_trail_ = trail_hit && !stop_hit;
+            return {FillEvaluation::Kind::Fill, observed, false};
+        }
+        if (limit_hit) {
+            return {FillEvaluation::Kind::Fill, observed, true};
+        }
+
+        if (!order.realtime_trail_activated && std::isfinite(activation)) {
+            order.realtime_trail_activated = closing_long
+                ? observed >= activation : observed <= activation;
+            if (order.realtime_trail_activated) {
+                record_order_transition(
+                    order, OrderLifecycleState::PENDING_TRAIL_ACTIVATION,
+                    OrderLifecycleState::ACTIVE_TRAIL,
+                    OrderTransition::ACTIVATED,
+                    OrderTransitionReason::TRAIL_TRIGGER);
+            }
+            // A trail without an offset exits at its activation event.
+            if (order.realtime_trail_activated && std::isnan(offset)) {
+                last_exit_fill_was_trail_ = true;
+                return {FillEvaluation::Kind::Fill, observed, false};
+            }
+        }
+        const double best_before = order.realtime_trail_best_price;
+        if (closing_long) {
+            order.realtime_trail_best_price = std::max(
+                order.realtime_trail_best_price, observed);
+        } else {
+            order.realtime_trail_best_price = std::min(
+                order.realtime_trail_best_price, observed);
+        }
+        if (order.realtime_trail_activated
+            && order.realtime_trail_best_price != best_before) {
+            record_order_transition(
+                order, OrderLifecycleState::ACTIVE_TRAIL,
+                OrderLifecycleState::ACTIVE_TRAIL,
+                OrderTransition::RATCHETED,
+                OrderTransitionReason::TRAIL_FAVORABLE_PRICE);
+        }
+        return {FillEvaluation::Kind::NoFill, 0.0};
+    }
+
     bool exit_same_bar_reissue = exit_style && !has_trail
         && process_orders_on_close_ && order.created_bar == bar_index_
         && !order.created_during_coof_recalc;
@@ -2240,8 +2334,11 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         // and the limit can only fill after activation along the OHLC path.
         // The actual fill is the LIMIT leg (at the limit price or better),
         // so it takes the unslipped limit-or-better price path.
-        bool activated = calc_on_order_fills_ && coof_scheduler_active_
-            ? order.stop_limit_activated : false;
+        const bool coof_owns_activation =
+            calc_on_order_fills_ && coof_scheduler_active_;
+        const bool was_activated = order.stop_limit_activated;
+        bool activated = coof_owns_activation
+            ? order.stop_limit_activated : was_activated;
         should_fill = resolve_entry_stop_limit_fill(
             bar,
             order.is_long,
@@ -2249,6 +2346,17 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             limit_price,
             &fill_price,
             &activated);
+        if (!coof_owns_activation) {
+            order.stop_limit_activated = activated;
+        }
+        if (!coof_owns_activation && stream_phase_ == StreamPhase::REALTIME
+            && !was_activated && activated) {
+            record_order_transition(
+                order, OrderLifecycleState::PENDING_STOP_LIMIT,
+                OrderLifecycleState::ACTIVE_STOP_LIMIT,
+                OrderTransition::ACTIVATED,
+                OrderTransitionReason::STOP_LIMIT_TRIGGER);
+        }
         is_limit_fill = should_fill;
     } else if (!should_fill && has_stop) {
         // Entry stop order

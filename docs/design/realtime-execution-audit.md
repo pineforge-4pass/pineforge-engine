@@ -1,11 +1,32 @@
 # Realtime execution contract: audit and development plan
 
-Status: design audit; implementation is not approved by this document alone
+Status: implementation in progress on the draft PR; the completion gate below
+remains authoritative
 
 Date: 2026-07-11 (revised same day after a fourth, multi-perspective review
 pass; see the review disposition section)
 
 Worktree branch: `codex/realtime-execution-contract`
+
+Implemented in the first contract slice:
+
+- close-only profile rejection before warmup for every-tick,
+  every-history-tick, and order-fill recalculation modes;
+- fixed-grid and data-driven gap policies, with clock events forbidden from
+  producing price-contingent broker transitions;
+- exact last-trade process-on-close provenance;
+- durable cross-event realtime stop-limit activation and per-order realtime
+  trailing activation/watermarks;
+- immutable command-revision, order-leg, fill, and entry-lot identities;
+- bounded structured lifecycle diagnostics with an overflow-independent
+  canonical count/hash, ABI v3, Python mirrors, docs, and tutorial output;
+- realtime OCA exclusion by exact order-leg identity while retaining the
+  historical public-ID behavior.
+
+This slice does not close the completion gate: P1-P9 exports, full per-lot exit
+fan-out, a canonical whole-engine handoff digest, and the frozen three-session
+pre/post experiment remain explicit follow-up work and must not be represented
+as complete by the draft PR.
 
 ## Decision summary
 

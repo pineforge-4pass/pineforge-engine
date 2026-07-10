@@ -10,7 +10,8 @@ partially formed higher-timeframe candle.
 
 This is the runtime model used by a continuously running strategy:
 
-1. Call #strategy_stream_begin with every confirmed historical input bar.
+1. Optionally select a gap policy with #strategy_stream_set_gap_policy, then
+   call #strategy_stream_begin with every confirmed historical input bar.
 2. Feed normalized trades with #strategy_stream_push_tick, or pass one contiguous
    replay tape to #strategy_stream_push_ticks.
 3. Call #strategy_stream_advance_time at wall-clock boundaries, including
@@ -50,6 +51,9 @@ remain outside the runtime.
 
 ```c
 pf_strategy_t strategy = strategy_create(NULL);
+
+if (strategy_stream_set_gap_policy(strategy, PF_STREAM_GAP_FIXED_GRID) != 0)
+    fail(strategy_get_last_error(strategy));
 
 if (strategy_stream_begin(strategy, history, history_n, "1", "1") != 0)
     fail(strategy_get_last_error(strategy));
@@ -97,9 +101,34 @@ Every stream function returns `0` on success and `-1` on failure. Read
 - A market order created at the preceding close fills at the first subsequent
   trade. Stops and limits see the observed trade path, not an inferred OHLC
   traversal.
-- #strategy_stream_advance_time materializes elapsed quiet in-session intervals
-  as zero-volume carry-forward bars. Intervals outside the configured syminfo
-  session are skipped, so closed markets do not acquire synthetic bars.
+- Fixed-grid policy materializes elapsed quiet in-session intervals as
+  zero-volume carry-forward bars. Strategy code runs, but the clock supplies
+  no executable price: it cannot fill orders, ratchet trails, update
+  excursions, or trigger price-based margin actions.
+- Data-driven policy skips tickless intervals. Both policies skip configured
+  closed-session intervals.
+- Process-on-close can use only the retained last executed trade of a non-empty
+  bar. Its fill timestamp/sequence are that trade's provenance.
+- Stop-limit activation survives across trade events. Realtime trailing
+  activation and watermarks are stored per executable order leg.
+
+## Calculation profile gate
+
+Realtime v1 accepts only Pine's default close-only profile. `stream_begin`
+rejects `calc_on_every_tick`, `calc_on_every_history_tick`, and
+`calc_on_order_fills` before warmup mutates the handle. Exact trade events are
+not reported as historical bar-magnifier execution.
+
+## Order lifecycle diagnostics
+
+Command revisions and executable legs receive immutable numeric identities;
+public Pine IDs can repeat and broker priority is separate. The report's
+`order_events` records structured lifecycle transitions. Processing order
+(`transition_sequence`) is canonical; timestamp/sequence are provenance only.
+
+The rolling `order_event_count` and `order_event_hash` cover every transition
+even if retained capacity overflows (`order_event_dropped`). Webhook transports
+belong above this API and should deduplicate fill delivery by `fill_id`.
 
 ## One tick versus a contiguous replay
 
@@ -123,9 +152,11 @@ warmup plus realtime result. The report follows the normal ownership rules in
 ## Current calculation scope
 
 The first streaming release implements TradingView's default close-only
-strategy cadence and raw-trade broker fills. `calc_on_every_tick`,
-`calc_on_order_fills`, realtime rollback/`varip`, and alert delivery are
-separate surfaces and are not implied by using this lifecycle.
+strategy cadence and raw-trade broker fills. It is a deterministic PineForge
+contract, not a claim to reproduce TradingView's private feed or realtime
+executor. Exchange queues/liquidity, partial tape-quantity fills, latency,
+reconnect/persistence, broker routing, rollback/`varip`, and alert delivery are
+separate surfaces.
 
 See [Lifecycle](@ref lifecycle) for handle ownership and
 [FFI from Python](@ref ffi_python) for the complete POD mirrors.
