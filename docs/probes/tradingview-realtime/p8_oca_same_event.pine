@@ -1,0 +1,82 @@
+//@version=6
+strategy("PF TV P8 OCA same-event collision", overlay=true, pyramiding=1,
+     calc_on_every_tick=false, calc_on_order_fills=false,
+     process_orders_on_close=false)
+
+string PROBE = "P8"
+string runId = input.string("P8-replace-me", "Run ID")
+int scheduledStart = input.time(timestamp("01 Jan 2030 00:00 +0000"),
+     "Scheduled start (UTC; set 5+ min ahead)")
+string mode = input.string("A_then_B", "Source-order mode",
+     options=["A_then_B", "B_then_A"])
+int marketableStopTicks = input.int(10, "Shared sell-stop distance above close (ticks)", minval=1)
+int timeoutBars = input.int(60, "Timeout bars", minval=4)
+bool arm = input.bool(true, "Arm at scheduled time")
+
+trace(string tag) =>
+    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","tag":"' + tag +
+     '","bar_index":' + str.tostring(bar_index) +
+     ',"bar_time_ms":' + str.tostring(time) +
+     ',"time_close_ms":' + str.tostring(time_close) +
+     ',"price":' + str.tostring(close, format.mintick) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+
+fill(string tag) =>
+    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","order_tag":"' + tag +
+     '","command_bar_index":' + str.tostring(bar_index) +
+     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+
+var int liveBars = 0
+var bool entryPlaced = false
+var bool siblingsPlaced = false
+var bool postCollisionObserved = false
+var bool timedOut = false
+var float sharedStop = na
+varip bool armed = false
+var int armedBar = na
+
+bool active = arm and barstate.isrealtime and timenow >= scheduledStart
+if active and not armed
+    armed := true
+    armedBar := bar_index
+    alert(trace("armed"), alert.freq_all)
+
+if active and barstate.isconfirmed and bar_index > armedBar
+    liveBars += 1
+    if not entryPlaced
+        entryPlaced := true
+        strategy.entry("L", strategy.long, qty=2,
+             alert_message=fill("initial_long_qty_2"))
+        alert(trace("initial_long_created"), alert.freq_all)
+    else if strategy.position_size >= 2 and not siblingsPlaced
+        siblingsPlaced := true
+        sharedStop := close + marketableStopTicks * syminfo.mintick
+        if mode == "A_then_B"
+            strategy.order("OCA_A", strategy.short, qty=1, stop=sharedStop,
+                 oca_name="P8_GROUP", oca_type=strategy.oca.cancel,
+                 alert_message=fill("OCA_A"))
+            strategy.order("OCA_B", strategy.short, qty=1, stop=sharedStop,
+                 oca_name="P8_GROUP", oca_type=strategy.oca.cancel,
+                 alert_message=fill("OCA_B"))
+        else
+            strategy.order("OCA_B", strategy.short, qty=1, stop=sharedStop,
+                 oca_name="P8_GROUP", oca_type=strategy.oca.cancel,
+                 alert_message=fill("OCA_B"))
+            strategy.order("OCA_A", strategy.short, qty=1, stop=sharedStop,
+                 oca_name="P8_GROUP", oca_type=strategy.oca.cancel,
+                 alert_message=fill("OCA_A"))
+        alert(trace("same_price_oca_siblings_created"), alert.freq_all)
+    else if siblingsPlaced and not postCollisionObserved
+        postCollisionObserved := true
+        alert(trace("first_confirmed_close_after_oca_collision"), alert.freq_all)
+    else if not timedOut and liveBars >= timeoutBars
+        timedOut := true
+        strategy.cancel_all()
+        if strategy.position_size != 0
+            strategy.close_all(immediately=true,
+                 alert_message=fill("timeout_close_all"))
+        alert(trace("timeout_cleanup"), alert.freq_all)
+
+plot(sharedStop, "shared marketable stop", color=color.red)

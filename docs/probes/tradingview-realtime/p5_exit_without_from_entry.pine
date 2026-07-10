@@ -1,0 +1,93 @@
+//@version=6
+strategy("PF TV P5 exit without from_entry", overlay=true, pyramiding=2,
+     calc_on_every_tick=false, calc_on_order_fills=false,
+     process_orders_on_close=false)
+
+string PROBE = "P5"
+string runId = input.string("P5-replace-me", "Run ID")
+int scheduledStart = input.time(timestamp("01 Jan 2030 00:00 +0000"),
+     "Scheduled start (UTC; set 5+ min ahead)")
+string mode = input.string("persistent_no_reissue", "Control mode",
+     options=["persistent_no_reissue", "positive_control_reissue_after_B"])
+int profitTicks = input.int(10000, "Exit profit distance (ticks)", minval=1)
+int lossTicks = input.int(10000, "Exit loss distance (ticks)", minval=1)
+int timeoutBars = input.int(360, "Timeout bars", minval=5)
+bool arm = input.bool(true, "Arm at scheduled time")
+
+trace(string tag) =>
+    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","tag":"' + tag +
+     '","bar_index":' + str.tostring(bar_index) +
+     ',"bar_time_ms":' + str.tostring(time) +
+     ',"time_close_ms":' + str.tostring(time_close) +
+     ',"price":' + str.tostring(close, format.mintick) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+
+fill(string tag) =>
+    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","order_tag":"' + tag +
+     '","command_bar_index":' + str.tostring(bar_index) +
+     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+
+var int liveBars = 0
+var bool firstEntryPlaced = false
+var bool exitPlaced = false
+var bool secondEntryPlaced = false
+var bool twoLotsObserved = false
+var bool controlReissued = false
+var int exitPlacedBar = na
+var bool timedOut = false
+var bool aborted = false
+varip bool armed = false
+var int armedBar = na
+
+bool active = arm and barstate.isrealtime and timenow >= scheduledStart
+if active and not armed
+    armed := true
+    armedBar := bar_index
+    alert(trace("armed"), alert.freq_all)
+
+if active and barstate.isconfirmed and bar_index > armedBar
+    liveBars += 1
+    if not firstEntryPlaced
+        firstEntryPlaced := true
+        strategy.entry("A", strategy.long, qty=1,
+             alert_message=fill("entry_A"))
+        alert(trace("entry_A_created"), alert.freq_all)
+    else if strategy.position_size >= 1 and not exitPlaced
+        exitPlaced := true
+        exitPlacedBar := bar_index
+        strategy.exit("X", profit=profitTicks, loss=lossTicks,
+             comment_profit="profit", comment_loss="loss",
+             alert_message=fill("exit_without_from_entry"),
+             alert_profit=fill("exit_profit"), alert_loss=fill("exit_loss"))
+        alert(trace("exit_without_from_entry_created_for_A"), alert.freq_all)
+    else if strategy.position_size >= 1 and exitPlaced and not secondEntryPlaced and
+         bar_index > exitPlacedBar
+        secondEntryPlaced := true
+        strategy.entry("B", strategy.long, qty=1,
+             alert_message=fill("entry_B_later"))
+        alert(trace("later_entry_B_created"), alert.freq_all)
+    else if strategy.position_size >= 2 and not twoLotsObserved
+        twoLotsObserved := true
+        if mode == "positive_control_reissue_after_B"
+            controlReissued := true
+            strategy.exit("X", profit=profitTicks, loss=lossTicks,
+                 comment_profit="profit", comment_loss="loss",
+                 alert_message=fill("positive_control_exit_reissued_after_B"),
+                 alert_profit=fill("positive_control_profit"),
+                 alert_loss=fill("positive_control_loss"))
+            alert(trace("positive_control_exit_reissued_after_B"), alert.freq_all)
+        else
+            alert(trace("two_lots_open_exit_not_reissued"), alert.freq_all)
+    else if exitPlaced and not secondEntryPlaced and strategy.position_size == 0 and
+         not aborted
+        aborted := true
+        alert(trace("inconclusive_A_exited_before_B"), alert.freq_all)
+    else if not timedOut and liveBars >= timeoutBars
+        timedOut := true
+        strategy.cancel_all()
+        if strategy.position_size != 0
+            strategy.close_all(immediately=true,
+                 alert_message=fill("timeout_close_all"))
+        alert(trace("timeout_cleanup_inconclusive"), alert.freq_all)

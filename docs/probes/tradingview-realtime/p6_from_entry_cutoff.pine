@@ -1,0 +1,82 @@
+//@version=6
+strategy("PF TV P6 from_entry cutoff", overlay=true, pyramiding=1,
+     calc_on_every_tick=false, calc_on_order_fills=false,
+     process_orders_on_close=false)
+
+string PROBE = "P6"
+string runId = input.string("P6-replace-me", "Run ID")
+int scheduledStart = input.time(timestamp("01 Jan 2030 00:00 +0000"),
+     "Scheduled start (UTC; set 5+ min ahead)")
+string mode = input.string("entry_then_exit", "Call-order mode",
+     options=["entry_then_exit", "exit_then_entry", "exit_then_entry_reissue_after_fill"])
+int profitTicks = input.int(1000, "Exit profit distance (ticks)", minval=1)
+int lossTicks = input.int(1000, "Exit loss distance (ticks)", minval=1)
+int timeoutBars = input.int(300, "Timeout bars", minval=4)
+bool arm = input.bool(true, "Arm at scheduled time")
+
+trace(string tag) =>
+    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","tag":"' + tag +
+     '","bar_index":' + str.tostring(bar_index) +
+     ',"bar_time_ms":' + str.tostring(time) +
+     ',"time_close_ms":' + str.tostring(time_close) +
+     ',"price":' + str.tostring(close, format.mintick) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+
+fill(string tag) =>
+    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","order_tag":"' + tag +
+     '","command_bar_index":' + str.tostring(bar_index) +
+     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+
+var int liveBars = 0
+var bool initialCallsDone = false
+var bool reissued = false
+var bool timedOut = false
+varip bool armed = false
+var int armedBar = na
+
+bool active = arm and barstate.isrealtime and timenow >= scheduledStart
+if active and not armed
+    armed := true
+    armedBar := bar_index
+    alert(trace("armed"), alert.freq_all)
+
+if active and barstate.isconfirmed and bar_index > armedBar
+    liveBars += 1
+    if not initialCallsDone
+        initialCallsDone := true
+        if mode == "entry_then_exit"
+            strategy.entry("E", strategy.long, qty=1,
+                 alert_message=fill("entry_E"))
+            strategy.exit("X", "E", profit=profitTicks, loss=lossTicks,
+                 comment_profit="profit", comment_loss="loss",
+                 alert_message=fill("exit_after_entry_same_calculation"),
+                 alert_profit=fill("profit_after_entry_same_calculation"),
+                 alert_loss=fill("loss_after_entry_same_calculation"))
+            alert(trace("entry_then_exit_calls_complete"), alert.freq_all)
+        else
+            strategy.exit("X", "E", profit=profitTicks, loss=lossTicks,
+                 comment_profit="profit", comment_loss="loss",
+                 alert_message=fill("exit_before_entry_same_calculation"),
+                 alert_profit=fill("profit_before_entry_same_calculation"),
+                 alert_loss=fill("loss_before_entry_same_calculation"))
+            strategy.entry("E", strategy.long, qty=1,
+                 alert_message=fill("entry_E"))
+            alert(trace("exit_then_entry_calls_complete"), alert.freq_all)
+    else if mode == "exit_then_entry_reissue_after_fill" and
+         strategy.position_size > 0 and not reissued
+        reissued := true
+        strategy.exit("X", "E", profit=profitTicks, loss=lossTicks,
+             comment_profit="profit", comment_loss="loss",
+             alert_message=fill("exit_reissued_after_entry_fill"),
+             alert_profit=fill("profit_reissued_after_entry_fill"),
+             alert_loss=fill("loss_reissued_after_entry_fill"))
+        alert(trace("from_entry_exit_reissued_after_fill"), alert.freq_all)
+    else if not timedOut and liveBars >= timeoutBars
+        timedOut := true
+        strategy.cancel_all()
+        if strategy.position_size != 0
+            strategy.close_all(immediately=true,
+                 alert_message=fill("timeout_close_all"))
+        alert(trace("timeout_cleanup_inconclusive"), alert.freq_all)

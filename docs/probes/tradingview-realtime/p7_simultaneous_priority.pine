@@ -1,0 +1,78 @@
+//@version=6
+strategy("PF TV P7 simultaneous priority", overlay=true, pyramiding=1,
+     calc_on_every_tick=false, calc_on_order_fills=false,
+     process_orders_on_close=false)
+
+string PROBE = "P7"
+string runId = input.string("P7-replace-me", "Run ID")
+int scheduledStart = input.time(timestamp("01 Jan 2030 00:00 +0000"),
+     "Scheduled start (UTC; set 5+ min ahead)")
+string mode = input.string("exit_then_reversal", "Source-order mode",
+     options=["exit_then_reversal", "reversal_then_exit"])
+int marketableStopTicks = input.int(10, "Long-exit stop above close (ticks)", minval=1)
+int timeoutBars = input.int(60, "Timeout bars", minval=4)
+bool arm = input.bool(true, "Arm at scheduled time")
+
+trace(string tag) =>
+    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","tag":"' + tag +
+     '","bar_index":' + str.tostring(bar_index) +
+     ',"bar_time_ms":' + str.tostring(time) +
+     ',"time_close_ms":' + str.tostring(time_close) +
+     ',"price":' + str.tostring(close, format.mintick) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+
+fill(string tag) =>
+    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","order_tag":"' + tag +
+     '","command_bar_index":' + str.tostring(bar_index) +
+     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+
+var int liveBars = 0
+var bool entryPlaced = false
+var bool collisionPlaced = false
+var bool postCollisionObserved = false
+var bool timedOut = false
+var float collisionStop = na
+varip bool armed = false
+var int armedBar = na
+
+bool active = arm and barstate.isrealtime and timenow >= scheduledStart
+if active and not armed
+    armed := true
+    armedBar := bar_index
+    alert(trace("armed"), alert.freq_all)
+
+if active and barstate.isconfirmed and bar_index > armedBar
+    liveBars += 1
+    if not entryPlaced
+        entryPlaced := true
+        strategy.entry("L", strategy.long, qty=1,
+             alert_message=fill("initial_long"))
+        alert(trace("initial_long_created"), alert.freq_all)
+    else if strategy.position_size > 0 and not collisionPlaced
+        collisionPlaced := true
+        collisionStop := close + marketableStopTicks * syminfo.mintick
+        if mode == "exit_then_reversal"
+            strategy.exit("X", "L", qty=1, stop=collisionStop,
+                 alert_message=fill("marketable_exit"))
+            strategy.entry("REV", strategy.short, qty=1,
+                 alert_message=fill("market_reversal"))
+        else
+            strategy.entry("REV", strategy.short, qty=1,
+                 alert_message=fill("market_reversal"))
+            strategy.exit("X", "L", qty=1, stop=collisionStop,
+                 alert_message=fill("marketable_exit"))
+        alert(trace("collision_orders_created"), alert.freq_all)
+    else if collisionPlaced and not postCollisionObserved
+        postCollisionObserved := true
+        alert(trace("first_confirmed_close_after_collision"), alert.freq_all)
+    else if not timedOut and liveBars >= timeoutBars
+        timedOut := true
+        strategy.cancel_all()
+        if strategy.position_size != 0
+            strategy.close_all(immediately=true,
+                 alert_message=fill("timeout_close_all"))
+        alert(trace("timeout_cleanup"), alert.freq_all)
+
+plot(collisionStop, "marketable long-exit stop", color=color.red)

@@ -1,0 +1,142 @@
+//@version=6
+strategy("PF TV P4 trailing reissue", overlay=true, pyramiding=1,
+     calc_on_every_tick=true, calc_on_order_fills=false,
+     process_orders_on_close=false)
+
+string PROBE = "P4"
+string runId = input.string("P4-replace-me", "Run ID")
+int scheduledStart = input.time(timestamp("01 Jan 2030 00:00 +0000"),
+     "Scheduled start (UTC; set 5+ min ahead)")
+string mode = input.string("unchanged", "Reissue mode",
+     options=["unchanged", "changed_offset"])
+int activationTicks = input.int(50, "Trail activation distance (ticks)", minval=1)
+int offsetTicks = input.int(300, "Initial trail offset (ticks)", minval=2)
+int changedOffsetTicks = input.int(100, "Changed-offset delta (ticks)", minval=1)
+int timeoutBars = input.int(240, "Timeout bars", minval=4)
+bool arm = input.bool(true, "Arm at scheduled time")
+
+trace(string tag) =>
+    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","tag":"' + tag +
+     '","bar_index":' + str.tostring(bar_index) +
+     ',"bar_time_ms":' + str.tostring(time) +
+     ',"time_close_ms":' + str.tostring(time_close) +
+     ',"price":' + str.tostring(close, format.mintick) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+
+fill(string tag) =>
+    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","order_tag":"' + tag +
+     '","command_bar_index":' + str.tostring(bar_index) +
+     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+
+traceCandidates(string tag, float watermark, float preservedLevel,
+     float resetLevel) =>
+    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
+     '","run_id":"' + runId + '","tag":"' + tag +
+     '","bar_index":' + str.tostring(bar_index) +
+     ',"bar_time_ms":' + str.tostring(time) +
+     ',"time_close_ms":' + str.tostring(time_close) +
+     ',"price":' + str.tostring(close, format.mintick) +
+     ',"pre_reissue_watermark":' + str.tostring(watermark, format.mintick) +
+     ',"preserved_stop_candidate":' + str.tostring(preservedLevel, format.mintick) +
+     ',"reset_stop_candidate":' + str.tostring(resetLevel, format.mintick) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+
+var int liveBars = 0
+var bool entryPlaced = false
+varip bool trailPlaced = false
+varip bool activationObserved = false
+varip bool reissued = false
+varip float observedWatermark = na
+varip float preReissueWatermark = na
+varip float preservedStopCandidate = na
+varip float resetStopCandidate = na
+varip bool crossedPreservedCandidate = false
+varip bool crossedResetCandidate = false
+varip bool postReissueNewHigh = false
+varip bool resetActivationObserved = false
+varip int reissueOffsetTicks = na
+varip bool armed = false
+varip int armedBar = na
+var int trailPlacedBar = na
+var bool timedOut = false
+var bool aborted = false
+
+bool active = arm and barstate.isrealtime and timenow >= scheduledStart
+if active and not armed
+    armed := true
+    armedBar := bar_index
+    alert(trace("armed"), alert.freq_all)
+
+if active
+    if trailPlaced and not reissued and strategy.position_size > 0
+        observedWatermark := na(observedWatermark) ? close : math.max(observedWatermark, close)
+        float activationPrice = strategy.position_avg_price + activationTicks * syminfo.mintick
+        if not activationObserved and close >= activationPrice
+            activationObserved := true
+            alert(trace("trail_activation_price_observed"), alert.freq_all)
+    if reissued and strategy.position_size > 0
+        float postReissueActivation = strategy.position_avg_price +
+             activationTicks * syminfo.mintick
+        if not resetActivationObserved and close >= postReissueActivation
+            resetActivationObserved := true
+            resetStopCandidate := close - reissueOffsetTicks * syminfo.mintick
+            alert(traceCandidates("post_reissue_reset_activation_tick_observed",
+                 preReissueWatermark, preservedStopCandidate, resetStopCandidate),
+                 alert.freq_all)
+        if not postReissueNewHigh and close > preReissueWatermark
+            postReissueNewHigh := true
+            alert(trace("inconclusive_post_reissue_new_high"), alert.freq_all)
+        if not crossedPreservedCandidate and close <= preservedStopCandidate
+            crossedPreservedCandidate := true
+            alert(traceCandidates("preserved_candidate_crossed", preReissueWatermark,
+                 preservedStopCandidate, resetStopCandidate), alert.freq_all)
+        if resetActivationObserved and not crossedResetCandidate and
+             close <= resetStopCandidate
+            crossedResetCandidate := true
+            alert(traceCandidates("reset_candidate_crossed", preReissueWatermark,
+                 preservedStopCandidate, resetStopCandidate), alert.freq_all)
+
+    if barstate.isconfirmed and bar_index > armedBar
+        liveBars += 1
+        if not entryPlaced
+            entryPlaced := true
+            strategy.entry("L", strategy.long, qty=1,
+                 alert_message=fill("entry"))
+            alert(trace("market_entry_created"), alert.freq_all)
+        else if strategy.position_size > 0 and not trailPlaced
+            trailPlaced := true
+            trailPlacedBar := bar_index
+            strategy.exit("TX", "L", trail_points=activationTicks,
+                 trail_offset=offsetTicks,
+                 alert_message=fill("trail_initial"))
+            alert(trace("trail_initial_created"), alert.freq_all)
+        else if strategy.position_size > 0 and activationObserved and not reissued and
+             bar_index > trailPlacedBar and close < observedWatermark and
+             close > observedWatermark - offsetTicks * syminfo.mintick and
+             close >= strategy.position_avg_price + activationTicks * syminfo.mintick
+            reissued := true
+            int nextOffset = mode == "changed_offset" ? offsetTicks + changedOffsetTicks : offsetTicks
+            reissueOffsetTicks := nextOffset
+            preReissueWatermark := observedWatermark
+            preservedStopCandidate := preReissueWatermark - nextOffset * syminfo.mintick
+            resetStopCandidate := close - nextOffset * syminfo.mintick
+            strategy.exit("TX", "L", trail_points=activationTicks,
+                 trail_offset=nextOffset,
+                 alert_message=fill("trail_reissued"))
+            alert(traceCandidates("trail_reissued_on_discriminating_retrace",
+                 preReissueWatermark, preservedStopCandidate, resetStopCandidate),
+                 alert.freq_all)
+        else if trailPlaced and not reissued and strategy.position_size == 0 and not aborted
+            aborted := true
+            alert(trace("inconclusive_trail_filled_before_reissue"), alert.freq_all)
+        else if not timedOut and liveBars >= timeoutBars
+            timedOut := true
+            strategy.cancel("TX")
+            if strategy.position_size != 0
+                strategy.close("L", immediately=true,
+                     alert_message=fill("timeout_close"))
+            alert(trace("timeout_cleanup_inconclusive"), alert.freq_all)
+
+plot(observedWatermark, "observed tick watermark", color=color.aqua)

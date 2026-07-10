@@ -703,25 +703,38 @@ TradingView probes". Those probes are scheduled work with a defined method,
 not a hand-wave; the completion gate requires every one resolved and
 archived.
 
-Method: every probe below concerns deterministic broker-emulator behavior and
-is observable in historical Strategy Tester exports — the corpus method this
-repository already uses — so no live-session observation is required for v1.
-Each probe is one minimal Pine script plus its exported trade list, archived
-as a corpus probe under `corpus/validation/` with the pinned export, and its
-conclusion recorded in this document before the dependent implementation
-lands.
+Method: the runnable manual-capture kit lives in
+`docs/probes/tradingview-realtime/`. Each Pine v6 strategy executes only on
+realtime bars and emits sparse JSON trace milestones plus native TradingView
+order-fill alerts. The observer must archive the webhook JSONL, TradingView
+alert log, Strategy Tester trade export, chart/settings screenshot, and a
+fully pinned manifest. Webhook delivery alone is not authoritative: missing or
+reordered HTTP requests are reconciled against TradingView's own alert log and
+trade export.
 
-| # | Open semantic | Prior / partial evidence |
-|---|---|---|
-| P1 | Public-ID collision across command kinds on placement (entry vs raw order vs exit sharing a text ID) | Exit-vs-entry independence already pinned in-repo by the `clear_existing_exit_order` regression; remaining: entry-vs-raw-order and placement-collision direction |
-| P2 | Whether replacement preserves or resets broker priority (`priority_sequence`) | None |
-| P3 | Stop-limit activation persistence across a same-key reissue (unchanged vs changed parameters) | No counterpart precedent exists; TradingView docs pin durability without reissue only |
-| P4 | Trailing activation/watermark persistence across a reissue | PyneCore's TV-probed parameter-equality rule is the prior |
-| P5 | `strategy.exit()` without `from_entry`: persistence for later entry lots | Docs give the creation-time cutoff for `from_entry`; the no-`from_entry` persistence needs an export |
-| P6 | `strategy.exit(..., from_entry = X)` creation-time cutoff edge cases (same-bar entry, reissue) | Docs pin the base rule |
-| P7 | Simultaneous-event priority and per-fill eligibility recomputation (carried market vs price-based entry vs exit vs trail vs OCA vs reversal vs risk/margin) | Partial coverage by existing corpus probes; needs targeted coincident-level probes |
-| P8 | OCA same-event multi-trigger: does TV cancel before the second same-tick fill? | TV docs say close-priced same-group orders "may be filled"; historical kernel encodes multi-fill; decide divergence or parity |
-| P9 | Per-lot stop-type working-order selection when entry-relative levels differ by lot | Three-way bracket probe pins the single-lot case |
+These captures are sparse semantic evidence, not the general regression
+oracle. PineForge's deterministic state digests, lifecycle invariants,
+tick-to-OHLCV reconciliation, repeat-run hashes, and corpus sweeps remain the
+primary verification system. Once a probe conclusion is repeatable, archive
+the result and promote a minimized historical form into `corpus/validation/`
+when the behavior is also observable in Strategy Tester exports.
+
+| # | Open semantic | Manual probe / required runs | Prior / partial evidence |
+|---|---|---|---|
+| P1 | Public-ID collision across command kinds on placement (entry vs raw order vs exit sharing a text ID) | `p1_cross_command_id.pine`; both placement-order modes | Exit-vs-entry independence already pinned in-repo by the `clear_existing_exit_order` regression; remaining: entry-vs-raw-order and placement-collision direction |
+| P2 | Whether replacement preserves or resets broker priority (`priority_sequence`) | `p2_replacement_priority.pine`; repeat the same-price run | None |
+| P3 | Stop-limit activation persistence across a same-key reissue (unchanged vs changed parameters) | `p3_stop_limit_reissue.pine`; unchanged and changed-limit modes | No counterpart precedent exists; TradingView docs pin durability without reissue only |
+| P4 | Trailing activation/watermark persistence across a reissue | `p4_trailing_reissue.pine`; unchanged and changed-offset modes | PyneCore's TV-probed parameter-equality rule is the prior |
+| P5 | `strategy.exit()` without `from_entry`: persistence for later entry lots | `p5_exit_without_from_entry.pine`; no-reissue run plus explicit post-B reissue control | Current official docs explicitly say the call persists for later entries until the position closes; the probe is version-pinned corroboration, not an undocumented rule |
+| P6 | `strategy.exit(..., from_entry = X)` creation-time cutoff edge cases (same-bar entry, reissue) | `p6_from_entry_cutoff.pine`; all three call-order/reissue modes | Docs pin exclusion of entries created after the call bar; the same-calculation source-order/reissue edge remains useful to capture |
+| P7 | Simultaneous-event priority and per-fill eligibility recomputation | `p7_simultaneous_priority.pine`; both exit/reversal source orders | Partial coverage by existing corpus probes; this first capture pins the market-reversal versus marketable-exit collision before expanding to risk/margin variants |
+| P8 | OCA same-event multi-trigger: does TV cancel before the second same-tick fill? | `p8_oca_same_event.pine`; both sibling source orders | Current Pine v6 reference says same-tick OCA siblings cannot cancel/reduce one another; the probe is version-pinned realtime corroboration of documented multi-fill behavior |
+| P9 | Per-lot stop-type working-order selection when entry-relative levels differ by lot | `p9_per_lot_stop_selection.pine`; two same-ID lots at different prices | Three-way bracket probe pins the single-lot case; webhook plus List of Trades is required to allocate the same-public-ID fills |
+
+Probe source files, the exact alert template, capture instructions, manifest,
+and result template are versioned together. Manual observations are still
+pending; adding the kit does not resolve P1-P9 or close the implementation
+gate.
 
 Section 1's `command_key` schema is provisional until P1 concludes.
 
