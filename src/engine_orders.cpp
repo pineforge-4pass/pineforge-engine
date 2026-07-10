@@ -651,15 +651,19 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
     if (tv_deferred_flip) {
         consume_tv_carry_from_siblings(id, created_position_side, created_bar);
     }
-    // NOTE: margin check is performed at SIGNAL time inside
-    // strategy_entry / queue_deferred_close_order, NOT here at fill
-    // time. This matches TV's broker emulator, which rejects entries
-    // whose qty * SIGNAL_BAR_CLOSE exceeds equity. By the time we
-    // reach this fill-side helper the order has already been admitted
-    // (or rejected) at signal time, and the next-bar slippage between
-    // signal close and fill open should NOT be allowed to flip a TV-
-    // accepted entry into a reject. See parity-probe-{03..06} +
-    // ies-probe-08 for the empirical justification.
+    // NOTE: for EXPLICIT-qty market entries the margin check is performed at
+    // SIGNAL time inside strategy_entry / queue_deferred_close_order, NOT here
+    // at fill time. This matches TV's broker emulator, which rejects entries
+    // whose qty * SIGNAL_BAR_CLOSE exceeds equity. By the time we reach this
+    // fill-side helper such an order has already been admitted (or rejected)
+    // at signal time, and the next-bar slippage between signal close and fill
+    // open should NOT flip a TV-accepted entry into a reject. The empirical
+    // base — parity-probe-{03..06} + ies-probe-08 — is entirely explicit-qty /
+    // pct<100 / headroom sizing, so the claim is scoped to it. The one FROZEN
+    // default-sized carve-out that TV DOES re-check and drop at fill (a
+    // percent==100, zero-commission, true-flat above-lot gap) is handled by
+    // the gap-reject gate in apply_filled_order_to_state, upstream of this
+    // helper — a dropped order never reaches enter_market_from_flat.
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     open_fresh_position(requested, fill_price, qty, id);
 }

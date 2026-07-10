@@ -11,9 +11,12 @@
  *   scope: percent_of_equity default sizing with pct <= 100 ONLY
  *
  * Pins (see the gate comment in engine_fills.cpp for the evidence trail):
- *   A. Flat open on a gap-UP bar is ADMITTED — flat opens price at the
- *      SIZING notional, which the floor guarantees affordable; the gap
- *      never enters the comparison.
+ *   A. Flat all-in (pct=100) zero-commission open on a gap-UP bar is REJECTED
+ *      when the frozen-qty notional at the fill exceeds the sizing equity by
+ *      more than one lot (design-cntvxiao-gap-reject). Flat opens still price
+ *      the KI-54 add/reversal gate at the SIZING notional, but this narrower
+ *      true-flat zero-comm all-in carve-out re-checks the FILL notional and
+ *      silently drops the entry.
  *   B. Same-direction add at pct=100 is DECLINED — the held position keeps
  *      its capital committed, free_funds ~= 0. (pyramiding=2, so the
  *      decline comes from the margin gate, not the pyramiding limit —
@@ -137,19 +140,23 @@ static void run_constant_100_script(Probe& eng, const std::string& script) {
     eng.run(bars.data(), static_cast<int>(bars.size()));
 }
 
-// A. Flat open, gap UP: admitted, qty stays frozen (10000/100 = 100).
-void test_flat_gap_up_admitted() {
-    std::printf("-- A: flat open on gap-up bar admitted --\n");
+// A. Flat all-in (pct=100) zero-comm open, gap UP: REJECTED. Frozen qty
+//    10000/100 = 100; the fill notional 100*102 = 10200 exceeds the 10000
+//    sizing equity by $200, far past the one-lot slack (qty_step 0 -> only the
+//    float guard). The entry is silently dropped and the account stays flat.
+//    (Pre-gap-reject this admitted and opened LONG 100 on the frozen notional.)
+void test_flat_gap_up_rejected() {
+    std::printf("-- A: flat all-in zero-comm gap-up rejected --\n");
     Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
     eng.script = "L..";
     std::vector<Bar> bars = {
         mk_bar(1000, 100, 100, 100, 100),
-        mk_bar(2000, 102, 103, 101, 102),   // gap up: fill 102 > close(S) 100
+        mk_bar(2000, 102, 103, 101, 102),   // gap up: 100*102 = 10200 > 10000
         mk_bar(3000, 102, 102, 102, 102),
     };
     eng.run(bars.data(), (int)bars.size());
-    CHECK(eng.position_side_ == PositionSide::LONG);
-    CHECK_NEAR(eng.position_qty_, 100.0, 1e-9);
+    CHECK(eng.position_side_ == PositionSide::FLAT);   // was LONG 100
+    CHECK(eng.trade_count() == 0);                      // no trade row
 }
 
 // B. Same-direction add at pct=100: DECLINED (free_funds ~= 0).
@@ -572,7 +579,7 @@ void test_same_side_role_change_slippage_basis() {
 
 int main() {
     std::printf("--- margin_admission_gate ---\n");
-    test_flat_gap_up_admitted();
+    test_flat_gap_up_rejected();
     test_all_in_same_dir_add_declined();
     test_fractional_same_dir_add_admitted();
     test_reversal_declined_on_adverse_gap();

@@ -65,6 +65,7 @@ set(TEST_SOURCES
     test_fills_edge
     test_default_qty_signal_freeze
     test_margin_admission_gate
+    test_frozen_flat_gap_reject
     test_limit_fill_slippage
     test_strategy_commands_extra
     test_multi_tier_exit_precedence
