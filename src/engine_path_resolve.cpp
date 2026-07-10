@@ -164,9 +164,16 @@ bool entry_stop_first_touch(const Bar& bar, double stop_level,
 // true if any opposite stop is touched earlier on the bar path than `current`.
 bool opposing_stop_entry_hits_first(const Bar& bar,
                                            const std::vector<PendingOrder>& orders,
-                                           std::size_t current_idx) {
+                                           std::size_t current_idx,
+                                           int current_bar_index) {
     if (current_idx >= orders.size()) return false;
     const PendingOrder& current = orders[current_idx];
+    auto deferred_at_consumed_close = [&](const PendingOrder& order) {
+        return current_bar_index >= 0
+            && order.coof_born_at_close_recalc
+            && order.created_bar == current_bar_index;
+    };
+    if (deferred_at_consumed_close(current)) return false;
     if (current.type != OrderType::ENTRY) return false;
     if (std::isnan(current.stop_price) || !std::isnan(current.limit_price)) return false;
 
@@ -182,6 +189,7 @@ bool opposing_stop_entry_hits_first(const Bar& bar,
     for (std::size_t j = 0; j < orders.size(); ++j) {
         if (j == current_idx) continue;
         const PendingOrder& other = orders[j];
+        if (deferred_at_consumed_close(other)) continue;
         if (other.type != OrderType::ENTRY) continue;
         if (other.is_long == current.is_long) continue;
         if (std::isnan(other.stop_price) || !std::isnan(other.limit_price)) continue;
@@ -204,10 +212,16 @@ bool opposing_stop_entry_hits_first(const Bar& bar,
 
 
 DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
-                                                          const std::vector<PendingOrder>& orders) {
+                                                          const std::vector<PendingOrder>& orders,
+                                                          int current_bar_index) {
     const PendingOrder* long_ord = nullptr;
     const PendingOrder* short_ord = nullptr;
     for (const PendingOrder& o : orders) {
+        if (current_bar_index >= 0
+            && o.coof_born_at_close_recalc
+            && o.created_bar == current_bar_index) {
+            continue;
+        }
         if (o.type != OrderType::ENTRY) continue;
         if (!std::isnan(o.limit_price)) continue;
         if (std::isnan(o.stop_price)) continue;
@@ -430,15 +444,19 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
                                           bool is_long,
                                           double stop_price,
                                           double limit_price,
-                                          double* fill_price) {
-    if (fill_price == nullptr || std::isnan(stop_price) || std::isnan(limit_price)) {
+                                          double* fill_price,
+                                          bool* activated) {
+    if (fill_price == nullptr || activated == nullptr
+        || std::isnan(stop_price) || std::isnan(limit_price)) {
         return false;
     }
 
     double path[4];
     fill_bar_path_points(bar, path);
 
-    bool active = is_long ? (path[0] >= stop_price) : (path[0] <= stop_price);
+    bool active = *activated
+        || (is_long ? (path[0] >= stop_price) : (path[0] <= stop_price));
+    *activated = active;
 
     auto limit_is_marketable = [&](double price) {
         return is_long ? (price <= limit_price) : (price >= limit_price);
@@ -462,6 +480,7 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
             }
 
             active = true;
+            *activated = true;
             from_price = stop_price;
             if (limit_is_marketable(from_price)) {
                 *fill_price = from_price;
@@ -713,8 +732,17 @@ double exit_order_earliest_path_metric_no_trail(
     }
 
     const bool is_long = (position_side == PositionSide::LONG);
-    const double stop_price = order.stop_price;
-    const double limit_price = order.limit_price;
+    // COOF entry-bar suppression is leg-scoped. A wrong-side leg is dormant
+    // only for the creation/entry bar; a correctly-sided sibling must retain
+    // its real path coordinate so sibling ordering cannot hide its fill.
+    const double stop_price =
+        is_entry_bar && order.coof_suppress_stop_on_entry_bar
+            ? std::numeric_limits<double>::quiet_NaN()
+            : order.stop_price;
+    const double limit_price =
+        is_entry_bar && order.coof_suppress_limit_on_entry_bar
+            ? std::numeric_limits<double>::quiet_NaN()
+            : order.limit_price;
     if (std::isnan(stop_price) && std::isnan(limit_price)) {
         return std::numeric_limits<double>::infinity();
     }

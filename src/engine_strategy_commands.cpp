@@ -179,6 +179,9 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.oca_type = oca_type;
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
+    order.created_during_coof_recalc = coof_fill_recalc_active_;
+    order.coof_born_at_close_recalc =
+        coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
     order.created_position_side = position_side_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
@@ -285,7 +288,15 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
     // flush_same_bar_close(). Everything else (ANY rule, explicit qty,
     // close_all, immediately=true, non-POC deferred closes) keeps the
     // existing paths.
-    if (process_orders_on_close_ && !immediately
+    const bool pooc_can_fill_at_this_cursor =
+        process_orders_on_close_
+        && (!coof_scheduler_active_ || coof_cursor_is_bar_close_)
+        // A fill recalculation at C occurs after that broker point has been
+        // consumed. Only an explicit immediately=true close may execute at
+        // the current cursor; ordinary POOC closes are materialized as
+        // pending instructions and expire if no ordinary pass reissues them.
+        && !(coof_scheduler_active_ && coof_fill_recalc_active_);
+    if (pooc_can_fill_at_this_cursor && !immediately
         && !close_entries_rule_any_ && !id.empty()
         && std::isnan(qty) && std::isnan(qty_percent)) {
         enqueue_same_bar_close(id, comment);
@@ -322,7 +333,9 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         cancel_orders_for_full_close(id, closing_long);
     }
 
-    if (process_orders_on_close_ || immediately) {
+    if ((pooc_can_fill_at_this_cursor || immediately)
+        && !(coof_scheduler_active_
+             && coof_direct_fill_events_remaining_ == 0)) {
         execute_immediate_close(id, comment, qty_to_close, matching_qty,
                                 closes_full_position, closes_fifo_qty, closes_any_qty);
         return;
@@ -330,6 +343,17 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
 
     queue_deferred_close_order(id, comment, qty_to_close, matching_qty,
                                closes_full_position, closes_any_qty);
+    // A default-FIFO close consumes id_unclosed_qty_ while resolving its
+    // target above. When the command was born after an already-consumed POOC
+    // close, its market order expires without a broker tick; keep the logical
+    // entry ledger available so a later ordinary-close execution can reissue
+    // and actually fill the close (Delta's next-bar lifecycle).
+    if (coof_scheduler_active_ && coof_fill_recalc_active_
+        && coof_cursor_is_bar_close_ && process_orders_on_close_
+        && !close_entries_rule_any_ && !id.empty()
+        && std::isnan(qty) && std::isnan(qty_percent)) {
+        id_unclosed_qty_[id] += qty_to_close;
+    }
 }
 
 void BacktestEngine::strategy_close_all() {
@@ -436,6 +460,22 @@ void BacktestEngine::flush_same_bar_close() {
     double target = std::min(unclosed, avail);
     if (target <= eps) return;
 
+    bool closes_full_position = target >= position_qty_ - eps;
+    if (coof_scheduler_active_
+        && ((coof_fill_recalc_active_ && coof_cursor_is_bar_close_)
+            || !coof_cursor_is_bar_close_
+            || coof_direct_fill_events_remaining_ == 0)) {
+        // The script execution still occurs after the last allowed fill, but
+        // its close cannot manufacture an extra historical broker event.
+        // Materialize the command so same-bar broker/order side effects remain
+        // explicit; as a post-C POOC market instruction it expires unless a
+        // later ordinary-close execution reissues it.
+        queue_deferred_close_order(
+            id, comment, target, target, closes_full_position,
+            /*closes_any_qty=*/false);
+        return;
+    }
+
     if (sole_call) {
         // Single close call this bar: classic semantics — consume the
         // ledger and release any prior reservation for this id.
@@ -446,19 +486,23 @@ void BacktestEngine::flush_same_bar_close() {
         close_reserved_qty_.erase(id);
     }
 
-    bool closes_full_position = target >= position_qty_ - eps;
     size_t trades_before = trades_.size();
+    PositionSide side_before = position_side_;
+    double qty_before = position_qty_;
+    const double broker_price =
+        coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
+            ? coof_cursor_price_ : current_bar_.close;
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
         // Exit-order cancel/purge already ran at CALL time in
         // enqueue_same_bar_close — orders armed after the close call
         // must survive exactly as they did under the immediate path.
-        execute_market_exit(current_bar_.close);
+        execute_market_exit(broker_price);
         if (position_side_ == PositionSide::FLAT) {
             cancel_same_bar_market_reentries_after_full_close(closed_long);
         }
     } else {
-        execute_partial_exit_qty(current_bar_.close, target);
+        execute_partial_exit_qty(broker_price, target);
         if (position_side_ == PositionSide::FLAT) {
             // Retain from_entry brackets whose parent entry is still a
             // pending order (it fills right after this flush).
@@ -468,6 +512,14 @@ void BacktestEngine::flush_same_bar_close() {
     for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
         trades_[ti].exit_comment = comment;
         trades_[ti].exit_id = "__close__" + id;
+    }
+    if (position_side_ != side_before
+        || std::abs(position_qty_ - qty_before) > eps
+        || trades_.size() != trades_before) {
+        ++broker_fill_event_seq_;
+        if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
+            --coof_direct_fill_events_remaining_;
+        }
     }
     if (!sole_call && position_side_ != PositionSide::FLAT) {
         // Surviving multi-call close: ledger NOT consumed (TV leaves the
@@ -658,6 +710,23 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.oca_type = oca_name.empty() ? 0 : 1;  // strategy.exit semantics: cancel
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
+    order.created_during_coof_recalc = coof_fill_recalc_active_;
+    order.coof_born_at_close_recalc =
+        coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
+    if (coof_fill_recalc_active_ && coof_scheduler_active_
+        && std::isfinite(coof_cursor_price_)
+        && position_side_ != PositionSide::FLAT
+        && position_open_bar_ == bar_index_) {
+        const bool closing_long = position_side_ == PositionSide::LONG;
+        const bool stop_marketable = !std::isnan(stop_price)
+            && (closing_long ? coof_cursor_price_ <= stop_price
+                             : coof_cursor_price_ >= stop_price);
+        const bool limit_marketable = !std::isnan(limit_price)
+            && (closing_long ? coof_cursor_price_ >= limit_price
+                             : coof_cursor_price_ <= limit_price);
+        order.coof_suppress_stop_on_entry_bar = stop_marketable;
+        order.coof_suppress_limit_on_entry_bar = limit_marketable;
+    }
     // Position-derived captures use the post-batched-close view (see
     // live_pos_qty above) so an exit armed after a same-bar strategy.close
     // records the same state it did when the close executed mid-bar.
@@ -712,6 +781,9 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     order.oca_type = oca_type;
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
+    order.created_during_coof_recalc = coof_fill_recalc_active_;
+    order.coof_born_at_close_recalc =
+        coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
     order.created_position_side = position_side_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
@@ -908,21 +980,26 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
                                              bool closes_any_qty) {
     const double eps = kQtyEpsilon;
     size_t trades_before = trades_.size();
+    PositionSide side_before = position_side_;
+    double qty_before = position_qty_;
+    const double broker_price =
+        coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
+            ? coof_cursor_price_ : current_bar_.close;
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
-        execute_market_exit(current_bar_.close);
+        execute_market_exit(broker_price);
         purge_exit_orders();
         if (position_side_ == PositionSide::FLAT) {
             cancel_same_bar_market_reentries_after_full_close(closed_long);
         }
     } else if (closes_fifo_qty) {
-        execute_partial_exit_qty(current_bar_.close, qty_to_close);
+        execute_partial_exit_qty(broker_price, qty_to_close);
         if (position_side_ == PositionSide::FLAT) {
             purge_exit_orders();
         }
     } else if (closes_any_qty) {
         double pct = matching_qty > eps ? (qty_to_close / matching_qty) * 100.0 : 100.0;
-        execute_partial_exit_by_entry_percent(current_bar_.close, id, pct);
+        execute_partial_exit_by_entry_percent(broker_price, id, pct);
         if (position_side_ == PositionSide::FLAT) {
             purge_exit_orders();
         }
@@ -930,6 +1007,14 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
     for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
         trades_[ti].exit_comment = comment;
         trades_[ti].exit_id = "__close__" + id;
+    }
+    if (position_side_ != side_before
+        || std::abs(position_qty_ - qty_before) > eps
+        || trades_.size() != trades_before) {
+        ++broker_fill_event_seq_;
+        if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
+            --coof_direct_fill_events_remaining_;
+        }
     }
 }
 
@@ -968,6 +1053,9 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     order.oca_type = 0;
     order.created_bar = bar_index_;
     order.created_seq = next_order_seq_++;
+    order.created_during_coof_recalc = coof_fill_recalc_active_;
+    order.coof_born_at_close_recalc =
+        coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
     order.created_position_side = position_side_;
     order.tv_carry_qty = position_qty_;
     order.comment = comment;
