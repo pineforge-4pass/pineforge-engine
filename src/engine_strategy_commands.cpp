@@ -370,17 +370,28 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         return;
     }
 
+    // design-declined-reversal-close-leg: compute_close_target_qty's default-
+    // FIFO branch (below condition) debited id_unclosed_qty_[id] by
+    // qty_to_close. Record it on the deferred close so a later reversal-decline
+    // suppression can re-credit exactly that amount — UNLESS the POOC recalc
+    // block below re-credits it immediately (guard against a double-credit).
+    const bool default_fifo_close = !close_entries_rule_any_ && !id.empty()
+        && std::isnan(qty) && std::isnan(qty_percent);
+    const bool immediate_ledger_recredit = coof_scheduler_active_
+        && coof_fill_recalc_active_ && coof_cursor_is_bar_close_
+        && process_orders_on_close_ && default_fifo_close;
+    const double consumed_ledger_qty =
+        (default_fifo_close && !immediate_ledger_recredit)
+            ? qty_to_close : std::numeric_limits<double>::quiet_NaN();
     queue_deferred_close_order(id, comment, qty_to_close, matching_qty,
-                               closes_full_position, closes_any_qty);
+                               closes_full_position, closes_any_qty,
+                               consumed_ledger_qty);
     // A default-FIFO close consumes id_unclosed_qty_ while resolving its
     // target above. When the command was born after an already-consumed POOC
     // close, its market order expires without a broker tick; keep the logical
     // entry ledger available so a later ordinary-close execution can reissue
     // and actually fill the close (Delta's next-bar lifecycle).
-    if (coof_scheduler_active_ && coof_fill_recalc_active_
-        && coof_cursor_is_bar_close_ && process_orders_on_close_
-        && !close_entries_rule_any_ && !id.empty()
-        && std::isnan(qty) && std::isnan(qty_percent)) {
+    if (immediate_ledger_recredit) {
         id_unclosed_qty_[id] += qty_to_close;
     }
 }
@@ -1067,7 +1078,8 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
                                                 double qty_to_close,
                                                 double matching_qty,
                                                 bool closes_full_position,
-                                                bool closes_any_qty) {
+                                                bool closes_any_qty,
+                                                double consumed_ledger_qty) {
     const double eps = kQtyEpsilon;
     PendingOrder order;
     order.id = "__close__" + id;
@@ -1100,6 +1112,11 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     order.tv_carry_qty = position_qty_;
     order.comment = comment;
     order.created_while_in_position = true;
+    // design-declined-reversal-close-leg: the qty this close debited from
+    // id_unclosed_qty_ at CALL time (default-FIFO branch), so a later
+    // suppression can re-credit exactly that amount. NaN when nothing was
+    // debited (ANY rule / explicit qty / close_all).
+    order.suppressed_close_consumed_ledger_qty = consumed_ledger_qty;
 
     pending_orders_.push_back(std::move(order));
 }
