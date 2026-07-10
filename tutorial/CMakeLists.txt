@@ -96,9 +96,12 @@ if(PINEFORGE_BUILD_TESTS)
                 OUTPUT_STRIP_TRAILING_WHITESPACE)
             if(IS_ABSOLUTE "${_pf_asan_runtime}"
                     AND EXISTS "${_pf_asan_runtime}")
+                # Python keeps process-lifetime allocator state that LSan
+                # reports when its runtime is preloaded. Native C++ tests keep
+                # detect_leaks enabled; disable it only for this Python host.
                 set_tests_properties(test_tutorial_stream PROPERTIES
                     ENVIRONMENT
-                        "${_pf_asan_preload_var}=${_pf_asan_runtime}")
+                        "${_pf_asan_preload_var}=${_pf_asan_runtime};ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1")
             else()
                 message(WARNING
                     "ASan runtime not found for test_tutorial_stream: "
