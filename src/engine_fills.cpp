@@ -696,8 +696,20 @@ void BacktestEngine::compact_filled_pending_orders(
             && pending_orders_[read].created_bar < bar_index_
             && !std::isnan(pending_orders_[read].limit_price)
             && std::isnan(pending_orders_[read].stop_price);
+        // Mirror classify_order_eligibility's M1v2 narrowed co-queue exemption
+        // (they MUST stay in lockstep): a same-direction entry co-queued on the
+        // close's own call bar survives ONLY if it was within the pyramiding cap
+        // at placement. A co-queued STOP that does NOT fill on the close bar
+        // reaches compaction without ever entering filled_indices, so without
+        // this term it would be wiped here even though classify spared it (the
+        // reverted M1 hit exactly this — R-KEEP-stop failed under a classify-only
+        // fix). Over-cap co-queues and prior-bar carries are still compacted away.
+        bool coqueued_within_cap =
+            pending_orders_[read].created_bar == exit_closed_from_bar
+            && !pending_orders_[read].over_pyramiding_cap_at_placement;
         bool stale_same_direction_entry_after_exit =
             exit_closed_from_bar >= 0
+            && !coqueued_within_cap
             && (pending_orders_[read].type == OrderType::ENTRY
                 || pending_orders_[read].type == OrderType::MARKET)
             && pending_orders_[read].is_long == exit_closed_was_long
@@ -1904,11 +1916,31 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         && order.created_bar < bar_index_
         && !std::isnan(order.limit_price)
         && std::isnan(order.stop_price);
+    // M1v2 narrowed co-queue exemption (pyramid-deferred-flip-close-all-01):
+    // a same-direction entry co-queued on the close's OWN call bar
+    // (order.created_bar == exit_closed_from_bar, where exit_closed_from_bar is
+    // the close order's created_bar — see apply_exit_order_fill) SURVIVES the
+    // full close, but ONLY if it was within the pyramiding cap at placement. A
+    // DEFERRED close_all created on bar N fills at bar N+1's open, so an entry
+    // co-queued on bar N is a "same on_bar as the fired exit" placement TV keeps
+    // (a market fills at the next open; a stop fires when later touched). But an
+    // add placed OVER the pyramiding cap is one TV rejects at placement, and the
+    // fill-time gate misses it because the co-queued close zeroes
+    // position_entry_count_ first — so over_pyramiding_cap_at_placement keeps it
+    // in the wipe. PRIOR-bar carries (created_bar < the close's call bar) are
+    // always cancelled — the deferred-flip carry this wipe exists for
+    // (test_deferred_flip_carry_close_only.cpp, probes 72/80/93). The reverted
+    // M1 used the created_bar term alone and un-cancelled over-cap co-queues
+    // (probe65 732→1463; the composite bracket fell below strong).
+    bool coqueued_within_cap =
+        order.created_bar == exit_closed_from_bar
+        && !order.over_pyramiding_cap_at_placement;
     if (exit_closed_from_bar >= 0
         && (order.type == OrderType::MARKET || order.type == OrderType::ENTRY)
         && order.is_long == exit_closed_was_long
         && order.created_position_side == closed_side
-        && !resting_limit_entry_carry) {
+        && !resting_limit_entry_carry
+        && !coqueued_within_cap) {
         return OrderEligibility::Remove;
     }
 

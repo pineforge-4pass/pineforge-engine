@@ -72,6 +72,7 @@ set(TEST_SOURCES
     test_same_tick_multi_entry_race
     test_full_close_while_pyramiding
     test_deferred_flip_carry_close_only
+    test_close_all_coqueued_entry
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra
     test_ta_osc_edge

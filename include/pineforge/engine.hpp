@@ -206,6 +206,19 @@ struct PendingOrder {
     // FLAT before a paired reentry is placed, but that reentry is not an
     // independent true-flat opening for KI-61 affordability purposes.
     bool created_after_position_close_in_bar = false;
+    // True when this SAME-direction MARKET/ENTRY order was OVER the pyramiding
+    // cap at PLACEMENT — i.e. the position was already held in this order's
+    // direction with position_entry_count_ >= pyramiding_ at the moment it was
+    // placed. Snapshotted at every entry placement site so it mirrors the
+    // fill-time pyramiding gate (add_to_pyramid_market / the strategy.order add
+    // gate) exactly. The post-full-close same-direction wipe reads this to
+    // distinguish a TV-admissible (within-cap) co-queue — which survives a
+    // deferred full close that flattens on the fill bar — from one TradingView
+    // rejects at placement (over cap), which must still be cancelled even though
+    // the co-queued close zeroed position_entry_count_ before the add's fill-time
+    // gate ran. See classify_order_eligibility / compact_filled_pending_orders
+    // and test_close_all_coqueued_entry.cpp.
+    bool over_pyramiding_cap_at_placement = false;
     // Snapshot of the position's quantity at the moment this order was
     // PLACED (0 if placed from flat). Used by execute_market_entry's
     // flat branch to apply TradingView's deferred-flip growth rule:
