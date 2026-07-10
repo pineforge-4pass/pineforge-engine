@@ -29,20 +29,16 @@ top 3 by net pnl:
 Numbers depend on the OHLCV snapshot — refresh with
 `python3 tutorial/data/fetch_btcusdt.py` for current Binance bars.
 
-## The fresh-handle rule
+## Fresh handles keep sweeps isolated
 
-A `pf_strategy_t` carries trade history, equity curve, and position
-state. Calling #run_backtest twice on the same handle accumulates
-trades from both runs into the second report — the engine never
-rewinds.
+#run_backtest resets broker, trade, equity, series, and report state before
+each one-shot run. Configuration overrides persist on the handle. The example
+still creates a fresh handle per grid point so every configuration is explicit
+and the same pattern works safely with concurrent workers.
 
-**For sweeps and walk-forward windows, always create a fresh handle
-per run.** Configuration overrides set on a handle apply to all runs
-on that handle, but trade state does not reset.
-
-@warning Reusing a handle across runs in a sweep is the most common
-PineForge integration bug. The runtime will not warn you — the second
-report's `trades_len` simply grows.
+Do not use repeated one-shot calls to model a continuous session: use the
+[streaming lifecycle](@ref streaming), which deliberately preserves the
+warmed strategy and broker state across the data-source handoff.
 
 ## Source: sweep.py
 
@@ -174,7 +170,7 @@ the engine.
 ## See also
 
 - [Tutorial: MACD](@ref tutorial_macd) — the single-run baseline
-- [Lifecycle](@ref lifecycle) — why one handle per run
+- [Lifecycle](@ref lifecycle) — one-shot reset and continuous-stream ownership
 - [Configuration](@ref configuration) — every override key
 - [`tutorial/run_advanced.py`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/tutorial/run_advanced.py)
   — the shipping reference implementation this example mirrors

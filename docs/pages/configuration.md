@@ -102,8 +102,9 @@ Configuration values stick to the **handle**, not the run. They apply
 to every #run_backtest on that handle until overwritten or
 #strategy_free is called.
 
-For parameter sweeps, create a fresh handle per run — a handle's
-trade history accumulates across runs (see [Lifecycle](@ref lifecycle)):
+One-shot backtests reset broker and report state before every run, while these
+configuration values persist on the handle. Fresh handles remain a clear
+default for parameter sweeps (see [Lifecycle](@ref lifecycle)):
 
 ```c
 for (int len = 10; len <= 30; len += 2) {

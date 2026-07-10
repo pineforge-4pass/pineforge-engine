@@ -85,6 +85,7 @@ add_library(pineforge STATIC
     src/engine_risk.cpp
     src/engine_run.cpp
     src/engine_security.cpp
+    src/engine_stream.cpp
     src/engine_strategy_commands.cpp
     src/engine_trade_accessors.cpp
     src/magnifier.cpp

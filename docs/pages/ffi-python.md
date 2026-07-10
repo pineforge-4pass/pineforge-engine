@@ -2,7 +2,7 @@
 
 @tableofcontents
 
-The C ABI is FFI-friendly by design: a handful of functions, 10 POD
+The C ABI is FFI-friendly by design: a compact function set, 11 POD
 structs, one enum, no callbacks, no opaque types except `pf_strategy_t`
 (which is `void*`). This page shows the canonical `ctypes` wiring for Python; any
 language with a C-FFI (Rust `libc`, Go `cgo`, Node `ffi-napi`,
@@ -23,6 +23,14 @@ class pf_bar_t(ctypes.Structure):
         ("close",     ctypes.c_double),
         ("volume",    ctypes.c_double),
         ("timestamp", ctypes.c_int64),
+    ]
+
+class pf_trade_tick_t(ctypes.Structure):
+    _fields_ = [
+        ("timestamp", ctypes.c_int64),
+        ("sequence",  ctypes.c_uint64),
+        ("price",     ctypes.c_double),
+        ("quantity",  ctypes.c_double),
     ]
 
 class pf_trade_t(ctypes.Structure):
@@ -198,6 +206,34 @@ lib.run_backtest_full.argtypes = [
 ]
 lib.run_backtest_full.restype = None
 
+lib.strategy_stream_begin.argtypes = [
+    ctypes.c_void_p,
+    ctypes.POINTER(pf_bar_t), ctypes.c_int,
+    ctypes.c_char_p, ctypes.c_char_p,
+]
+lib.strategy_stream_begin.restype = ctypes.c_int
+
+lib.strategy_stream_push_tick.argtypes = [
+    ctypes.c_void_p, ctypes.POINTER(pf_trade_tick_t)]
+lib.strategy_stream_push_tick.restype = ctypes.c_int
+
+lib.strategy_stream_push_ticks.argtypes = [
+    ctypes.c_void_p, ctypes.POINTER(pf_trade_tick_t), ctypes.c_int]
+lib.strategy_stream_push_ticks.restype = ctypes.c_int
+
+lib.strategy_stream_advance_time.argtypes = [ctypes.c_void_p, ctypes.c_int64]
+lib.strategy_stream_advance_time.restype = ctypes.c_int
+
+lib.strategy_stream_end.argtypes = [ctypes.c_void_p, ctypes.c_int]
+lib.strategy_stream_end.restype = ctypes.c_int
+
+lib.strategy_stream_fill_report.argtypes = [
+    ctypes.c_void_p, ctypes.POINTER(pf_report_t)]
+lib.strategy_stream_fill_report.restype = ctypes.c_int
+
+lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
+lib.strategy_get_last_error.restype = ctypes.c_char_p
+
 lib.report_free.argtypes      = [ctypes.POINTER(pf_report_t)]
 lib.report_free.restype       = None
 
@@ -209,6 +245,39 @@ lib.strategy_set_override.argtypes = [ctypes.c_void_p,
                                       ctypes.c_char_p, ctypes.c_char_p]
 lib.strategy_set_override.restype  = None
 ```
+
+## Historical to realtime stream
+
+Warmup and realtime calls operate on the same handle. The plural push accepts
+one contiguous array and is useful for replay; it does not create chunks or
+session boundaries inside the strategy.
+
+```python
+state = lib.strategy_create(None)
+
+if lib.strategy_stream_begin(state, history, history_n, b"1", b"1") != 0:
+    raise RuntimeError(lib.strategy_get_last_error(state).decode())
+
+if lib.strategy_stream_push_ticks(state, ticks, len(ticks)) != 0:
+    raise RuntimeError(lib.strategy_get_last_error(state).decode())
+
+if lib.strategy_stream_advance_time(state, session_end_ms) != 0:
+    raise RuntimeError(lib.strategy_get_last_error(state).decode())
+if lib.strategy_stream_end(state, 0) != 0:
+    raise RuntimeError(lib.strategy_get_last_error(state).decode())
+
+report = pf_report_t()
+if lib.strategy_stream_fill_report(state, ctypes.byref(report)) != 0:
+    raise RuntimeError(lib.strategy_get_last_error(state).decode())
+
+lib.report_free(ctypes.byref(report))
+lib.strategy_free(state)
+```
+
+The complete runnable version is
+[`tutorial/run_stream.py`](https://github.com/pineforge-4pass/pineforge-engine/blob/main/tutorial/run_stream.py).
+See [Historical to realtime streaming](@ref streaming) for validation,
+clock advancement, and partial-bar rules.
 
 ## End-to-end run
 

@@ -41,6 +41,11 @@ consumption.
   **[Pure C](@ref examples_c)** or **[Rust](@ref examples_rust)** worked
   examples.
 
+- <b class="tab-title">I'm connecting a realtime feed</b>
+  Start with **[Historical to realtime streaming](@ref streaming)** for
+  the warmup, ordered-trade, clock, and report lifecycle, then run
+  `tutorial/run_stream.py` against the bundled MACD strategy.
+
 - <b class="tab-title">I'm analysing backtest results</b>
   Read the **[Trading metrics reference](@ref metrics)** — every
   `pf_metrics_t` field with units, NaN rules, and TV / quant-library
@@ -58,7 +63,7 @@ consumption.
 
 ## Worked examples
 
-Five end-to-end, runnable examples that go beyond the MACD tutorial:
+End-to-end, runnable examples that go beyond the MACD tutorial:
 
 | Example | Use case |
 | --- | --- |
@@ -68,22 +73,25 @@ Five end-to-end, runnable examples that go beyond the MACD tutorial:
 | [Multi-strategy harness](@ref examples_multi) | Load N `.so` files; rank by net PnL; thread-pool execution. |
 | [Magnifier on vs off](@ref examples_magnifier) | A/B comparison with all six distribution modes. |
 | [Multi-timeframe (MTF)](@ref mtf) | `script_tf` switching, `request.security`, and lower-TF sub-bar synthesis. |
+| [Historical to realtime streaming](@ref streaming) | Warm on confirmed OHLCV and continue the same strategy on ordered trades. |
 | [Calling from Rust](@ref examples_rust) | Idiomatic `libloading` wrapper with safe Rust types. |
 
 ---
 
 ## API at a glance
 
-The entire public surface fits in **one header** and **10 functions**:
+The entire public surface fits in **one header** and **26 functions**:
 
 | Group | Symbols | Reference |
 | --- | --- | --- |
 | Lifecycle | `strategy_create`, `strategy_free`, `run_backtest`, `run_backtest_full`, `report_free` | @ref pf_lifecycle |
-| Configuration | `strategy_set_input`, `strategy_set_override`, `strategy_set_magnifier_volume_weighted`, `strategy_set_trace_enabled`, `strategy_set_trade_start_time` | @ref pf_config |
-| Version | `pf_version_get`, `pf_version_string` | @ref pf_version |
-| Types | `pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, `pf_magnifier_distribution_t` | @ref pf_types |
+| Streaming | `strategy_stream_begin`, `strategy_stream_push_tick`, `strategy_stream_push_ticks`, `strategy_stream_advance_time`, `strategy_stream_end`, `strategy_stream_fill_report` | @ref pf_streaming |
+| Configuration | Inputs, strategy overrides, tracing, trade start, chart / symbol timezone, session, tick size, point value, and numeric metadata | @ref pf_config |
+| Diagnostics | `strategy_get_last_error` | #strategy_get_last_error |
+| Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
+| Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 
-Every PineForge-generated strategy `.so` exports exactly these symbols
+Every PineForge-generated strategy `.so` exports exactly these 26 symbols
 and zero internal C++ symbols — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 

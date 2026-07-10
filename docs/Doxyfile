@@ -90,6 +90,7 @@ INPUT                  = ../include/pineforge/pineforge.h \
                          pages/install.md \
                          pages/integration-cmake.md \
                          pages/lifecycle.md \
+                         pages/streaming.md \
                          pages/report-schema.md \
                          pages/metrics.md \
                          pages/configuration.md \

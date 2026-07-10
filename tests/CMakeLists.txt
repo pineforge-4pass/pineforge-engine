@@ -81,6 +81,7 @@ set(TEST_SOURCES
     test_metrics
     test_drawing
     test_margin_call
+    test_streaming
 )
 
 find_package(Threads REQUIRED)

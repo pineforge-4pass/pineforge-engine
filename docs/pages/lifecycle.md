@@ -64,6 +64,52 @@ Or for the common case of "auto-detect timeframe, no magnifier":
 run_backtest(s, bars, n, &r);
 ```
 
+### Continue from historical bars into realtime trades
+
+Use the stream lifecycle when the data source changes but the strategy
+instance must not. `strategy_stream_begin()` executes the confirmed OHLCV
+warmup once. Every later operation advances the same broker, equity, pending
+orders, Pine variables, TA objects, `request.security()` evaluators, and any
+partially formed higher-timeframe candle.
+
+```c
+pf_bar_t *history = load_confirmed_ohlcv(&history_n);
+
+if (strategy_stream_begin(s, history, history_n, "1", "1") != 0)
+    fail(strategy_get_last_error(s));
+
+for (;;) {
+    pf_trade_tick_t tick = next_normalized_trade();
+    if (strategy_stream_push_tick(s, &tick) != 0)
+        fail(strategy_get_last_error(s));
+
+    /* Call on wall-clock boundaries too, including quiet markets. */
+    strategy_stream_advance_time(s, current_time_ms());
+    if (should_stop()) break;
+}
+
+strategy_stream_end(s, 0);  /* partial input bar remains unconfirmed */
+
+pf_report_t r = {0};
+strategy_stream_fill_report(s, &r);
+```
+
+The default strategy cadence remains close-only. Resting broker orders are
+checked on every normalized trade, so stop/limit fills use the observed source path
+and a market order from the preceding close fills on the first subsequent
+trade. `strategy_stream_push_ticks()` is the batch equivalent for replay and
+reduces FFI overhead without changing tick semantics.
+
+The warmup's last bar must be confirmed. Begin normalized trades at or after
+the next input-bar open. Call `strategy_stream_advance_time()` at confirmed boundaries;
+it closes elapsed bars, creates zero-volume carry-forward bars for quiet
+in-session intervals, and skips configured out-of-session intervals. Normally
+end with `finalize_partial_input_bar = 0` to avoid treating an open bar as confirmed.
+
+See [Historical to realtime streaming](@ref streaming) for the complete tick
+validation rules, a contiguous-replay example, and the runnable Python
+tutorial.
+
 The runtime fills `r` in place — the `pf_report_t` struct itself is
 caller-owned (typically stack-allocated), but the arrays it points to
 (`trades`, `security_diag`, `trace`, `trace_names`) are heap-allocated
@@ -99,12 +145,11 @@ strategy_free(s);  /* releases the handle */
 leaves dangling pointers — the trace name string table lives on the
 strategy, not the report.
 
-## One handle per run
+## Handle reuse and continuous streams
 
-A `pf_strategy_t` carries closed-trade history, equity curve, and
-position state. Calling #run_backtest twice on the same handle
-**accumulates** trades from both runs into the second report — the
-state machine never rewinds.
+Calling #run_backtest or #run_backtest_full starts a new backtest and resets
+per-run broker/report state. The `strategy_stream_*` lifecycle is the explicit
+way to preserve and continue state across historical and realtime sources.
 
 For parameter sweeps, walk-forward windows, or any A/B comparison,
 **create a fresh handle per run**:
@@ -131,16 +176,13 @@ the annotated walkthrough.
 
 ## Errors and partial state
 
-The C ABI does not return error codes. Instead:
+The one-shot `run_backtest*` calls return through
+#strategy_get_last_error. Stream lifecycle calls additionally return `0` on
+success and `-1` on failure. In both cases, read
+#strategy_get_last_error for the detailed message.
 
 - **Allocation failure** in `strategy_create` returns `NULL`. Always check.
-- **Bad input timeframe** falls back to auto-detection.
 - **Empty bar feed** (`n == 0`) is valid — the report is filled with zero
   counts and an empty trade list.
-- **Internal runtime errors** (e.g. invalid `request.security` symbol)
-  emit a `pine_runtime_error` log line and either skip the offending
-  evaluation or terminate the strategy bar — never the host process.
-
-If you need finer-grained error reporting, attach a logger via the
-runtime's internal log hook (internal API; not part of the
-public ABI).
+- **Invalid timeframes, reordered ticks, and replayed trade ids** are rejected
+  without unwinding a C++ exception across the C boundary.

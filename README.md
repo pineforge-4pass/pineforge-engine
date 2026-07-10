@@ -120,7 +120,7 @@ for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWH
 
 - 🎯 **TradingView-exact.** 251 of 252 reference strategies match TV trade-for-trade. The lone outlier is a stress probe at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct. **100 of 100** PineForge excellent vs PyneCore + PineTS on the public three-way benchmark (~167,000 TV trades; PyneCore: 85 of 100; PineTS indicator-only).
 - ⚡ **Microsecond-class.** Median **162× faster than PyneCore** across 99 commonly-timed strategies (full 41,307-bar OHLCV, magnifier-on hot loop; see [benchmarks/results/speed.md](benchmarks/results/speed.md)). Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
-- 🔒 **Stable C ABI.** 10 functions, 6 POD types, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
+- 🔒 **Stable C ABI.** 26 functions, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
 - 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
 - 🧰 **FFI-friendly.** Call from Python (`ctypes`), Rust (`libloading`), Go (`cgo`), Node, Julia. Worked examples for [pure C](https://cdocs.pineforge.dev/examples_c.html), [Python sweep](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy harness](https://cdocs.pineforge.dev/examples_multi.html), and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) ship in the docs.
 - 🌍 **Cross-platform CI.** Linux + macOS × Release + Debug. Universal mac binary. Static library, no runtime DSO surprises at deploy time.
@@ -129,7 +129,7 @@ for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWH
 
 ## For developers: embed the runtime directly
 
-PineForge ships as a static C library (`libpineforge.a`) with a stable 10-symbol C ABI. Call from C, Python, Rust, Go, Node, Julia — one harness, swap strategies forever.
+PineForge ships as a static C library (`libpineforge.a`) with a stable 26-symbol C ABI. Call from C, Python, Rust, Go, Node, Julia — one harness, swap strategies forever.
 
 ### See it in 30 seconds
 
@@ -151,13 +151,15 @@ int main(void) {
 }
 ```
 
-That's the entire integration. Every PineForge-compiled strategy `.so` exports the same 10 symbols — write your harness once, swap strategies forever.
+That's the entire batch integration. Every PineForge-compiled strategy `.so`
+exports the same stable ABI — write your harness once, swap strategies forever.
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure   # 39 tests, ~1 s
 bash tutorial/run.sh                          # MACD backtest end-to-end
+python3 tutorial/run_stream.py                # OHLCV warmup → realtime trades
 ```
 
 ## Documentation
@@ -167,6 +169,7 @@ bash tutorial/run.sh                          # MACD backtest end-to-end
 | 📖 **[cdocs.pineforge.dev](https://cdocs.pineforge.dev)** | Full C ABI reference, lifecycle, report schema, configuration knobs, magnifier, FFI bindings, ABI stability contract |
 | 🚀 **[Getting Started](https://cdocs.pineforge.dev/getting_started.html)** | 60-second build + install + smoke test |
 | 🧪 **[Tutorial: MACD on BTC/USDT](https://cdocs.pineforge.dev/tutorial_macd.html)** | End-to-end annotated walkthrough |
+| 📡 **[Historical → realtime streaming](https://cdocs.pineforge.dev/streaming.html)** | Preserve strategy and broker state while switching from OHLCV to ordered trades |
 | 📊 **[Trading metrics reference](https://cdocs.pineforge.dev/metrics.html)** | Every report metric (ABI v2): definitions, units, NaN rules, TV / quant-library validation status |
 | 🔌 **[FFI from Python](https://cdocs.pineforge.dev/ffi_python.html)** | Complete `ctypes` mirror — paste-ready |
 | 🦀 **[Calling from Rust](https://cdocs.pineforge.dev/examples_rust.html)** | Idiomatic `libloading` wrapper |
@@ -319,11 +322,26 @@ int main(void) {
 | `strategy_set_override`                  | Override a `strategy(...)` declaration param |
 | `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier             |
 | `strategy_set_trace_enabled`             | Toggle per-bar trace recording               |
+| `strategy_set_trade_start_time`          | Suppress historical order placement          |
+| `strategy_stream_begin`                  | Warm on OHLCV, then enter realtime mode       |
+| `strategy_stream_push_tick`              | Push one normalized ordered trade             |
+| `strategy_stream_push_ticks`             | Push a raw-trade batch                        |
+| `strategy_stream_advance_time`           | Confirm bars / materialize quiet intervals    |
+| `strategy_stream_end`                    | End a realtime stream                         |
+| `strategy_stream_fill_report`            | Snapshot cumulative warmup + realtime state   |
+| `strategy_set_chart_timezone`            | Set Pine chart wall-clock timezone            |
+| `strategy_set_syminfo_timezone`          | Set symbol/exchange timezone                  |
+| `strategy_set_syminfo_session`           | Set symbol trading session                    |
+| `strategy_set_syminfo_mintick`           | Set symbol tick size                          |
+| `strategy_set_syminfo_pointvalue`        | Set symbol point value                        |
+| `strategy_set_syminfo_metadata`          | Inject numeric symbol metadata                |
+| `strategy_get_last_error`                | Read the latest runtime error                 |
 | `pf_version_get`                         | Runtime version                              |
 | `pf_abi_version`                         | Struct-layout version (`PF_ABI_VERSION`)     |
+| `pf_version_string`                      | Full runtime version string                   |
 
 
-POD types (`pf_bar_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, and — since ABI v2 — `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`) and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 (`PF_ABI_VERSION == 2`, exported as `pf_abi_version()`) appends computed trading metrics and a per-script-bar equity curve to `pf_report_t`; callers must verify the version before running since the report struct is caller-allocated.
+POD types (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, and — since ABI v2 — `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`) and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 (`PF_ABI_VERSION == 2`, exported as `pf_abi_version()`) appends computed trading metrics and a per-script-bar equity curve to `pf_report_t`; callers must verify the version before running since the report struct is caller-allocated.
 
 **Stability guarantee:** within the same `PINEFORGE_VERSION_MAJOR`, struct layouts and `extern "C"` signatures are append-only. New fields may be appended; existing fields are never reordered, removed, or retyped. New functions may be added; existing functions are never removed or signature-changed. Compile-time `static_assert`s in `src/c_abi.cpp` pin the layouts against drift.
 
@@ -367,6 +385,7 @@ benchmarks/             - three-way comparison harness vs PyneCore + PineTS
   └── run_all.sh        - one-shot reproducer: cmake build + run all 3 engines + diff (zero API keys)
 scripts/                - reproducibility tooling
   ├── run_strategy.py   - load any strategy.so via ctypes, write engine_trades.csv
+  ├── run_stream_corpus.py - slice OHLCV + raw trades and test live handoffs
   ├── run_corpus.sh     - one-shot: build all 252 .so + run + verify
   └── verify_corpus.py  - diff each engine_trades.csv against its tv_trades.csv
 cmake/                  - PineForgeConfig.cmake.in for downstream find_package()
@@ -376,7 +395,7 @@ cmake/smoke_consumer/   - Minimal find_package(PineForge) CI smoke project
 
 ## Visibility hygiene
 
-Every compiled strategy `.so` that statically links `libpineforge.a` exports **exactly the 10 documented C ABI symbols** and zero internal C++ symbols. This is enforced at the library level:
+Every compiled strategy `.so` that statically links `libpineforge.a` exports **exactly the 26 documented C ABI symbols** and zero internal C++ symbols. This is enforced at the library level:
 
 - `libpineforge.a` is built with `-fvisibility=hidden -fvisibility-inlines-hidden`
 - Public symbols are tagged `PF_API` (visibility=default)
@@ -478,4 +497,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) (includes the **Apache-2.0** contribution
 1. Every contribution must keep the parity test green.
 2. Public-API changes (anything exported from `<pineforge/pineforge.h>`) require a major-version bump.
 3. Internal C++ helpers can change freely as long as the ABI surface stays put.
-

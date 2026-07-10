@@ -409,15 +409,14 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
   are C++-accessor-only. Derive equity/profit-factor/Sharpe from the trades.
 - `pf_version_get()` / `pf_version_string()` for ABI gating.
 
-## 3.10 Multi-run state (reused handle)
+## 3.10 Multi-run state and streams
 
-- **Reset per run:** `max_equity_`/`min_equity_`→`initial_capital_`, security
-  feed counters, aggregator state.
-- **NOT reset:** `trades_`, `net_profit_sum_`, win/loss/even counts,
-  `cons_loss_day_count_`, `risk_halted_`, `intraday_pnl_`, position/pyramid
-  state, `pending_orders_`, `trail_best_price_`, `consumed_partial_exit_ids_`,
-  trace buffer. Walk-forward on one handle **accumulates** — recreate the handle
-  per independent run.
+- **One-shot `run_backtest*`:** resets broker, position, trades, equity,
+  series/TA, risk, trace, security, and aggregator state before each run.
+  Input/strategy/syminfo configuration remains attached to the handle.
+- **`strategy_stream_*`:** performs one historical warmup and deliberately
+  preserves that exact state while ordered trades arrive. Use this lifecycle,
+  not repeated one-shot calls, for continuous sessions.
 
 ## 3.11 Harness foot-gun
 

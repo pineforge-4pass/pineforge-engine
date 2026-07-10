@@ -16,6 +16,7 @@ tutorial/
 │   ├── btcusdt_15m_7d.csv  672 frozen bars (Binance)
 │   └── fetch_btcusdt.py    refresh from Binance public API
 ├── run.py                  ctypes harness + stats
+├── run_stream.py           OHLCV warmup → contiguous trade-stream replay
 ├── run_advanced.py         parameter sweep using ABI overrides
 ├── run_mtf.py              MTF demo — script_tf switch + lower_tf
 ├── run.sh                  one-shot: cmake build + run.py
@@ -43,6 +44,25 @@ MACD(12,26,9) on BTCUSDT 15m — 672 bars, 2026-04-29 18:15 → 2026-05-06 18:00
 ```
 
 Numbers depend on the OHLCV snapshot.
+
+## Historical warmup → realtime trades
+
+After `bash tutorial/run.sh` has built the MACD strategy, run:
+
+```bash
+python3 tutorial/run_stream.py
+```
+
+The script warms the strategy on the first 640 confirmed candles, converts the
+remaining 32 candles into 128 ordered trade ticks, and sends that entire tail
+through one `strategy_stream_push_ticks(...)` call. Positions, equity, pending
+orders, Pine/TA history, and partially aggregated timeframe state remain on the
+same strategy instance across the handoff.
+
+The frozen tutorial dataset contains OHLCV rather than raw trades, so this
+example expands each live candle into a deterministic OHLC trade path. Replace
+that expansion with your exchange feed in production. The public API and state
+lifecycle remain the same.
 
 ## Path B — Docker (no local toolchain)
 
