@@ -77,5 +77,33 @@ if(PINEFORGE_BUILD_TESTS)
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/run_stream.py)
         set_tests_properties(test_tutorial_stream PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        if(PINEFORGE_ENABLE_SANITIZERS AND UNIX)
+            # The strategy DSO is ASan-instrumented, but the host Python
+            # interpreter is not. Preload the compiler's ASan runtime so its
+            # interceptors initialize before ctypes loads the strategy.
+            if(APPLE)
+                set(_pf_asan_runtime_name
+                    "libclang_rt.asan_osx_dynamic.dylib")
+                set(_pf_asan_preload_var "DYLD_INSERT_LIBRARIES")
+            else()
+                set(_pf_asan_runtime_name "libasan.so")
+                set(_pf_asan_preload_var "LD_PRELOAD")
+            endif()
+            execute_process(
+                COMMAND ${CMAKE_CXX_COMPILER}
+                        -print-file-name=${_pf_asan_runtime_name}
+                OUTPUT_VARIABLE _pf_asan_runtime
+                OUTPUT_STRIP_TRAILING_WHITESPACE)
+            if(IS_ABSOLUTE "${_pf_asan_runtime}"
+                    AND EXISTS "${_pf_asan_runtime}")
+                set_tests_properties(test_tutorial_stream PROPERTIES
+                    ENVIRONMENT
+                        "${_pf_asan_preload_var}=${_pf_asan_runtime}")
+            else()
+                message(WARNING
+                    "ASan runtime not found for test_tutorial_stream: "
+                    "${_pf_asan_runtime}")
+            endif()
+        endif()
     endif()
 endif()
