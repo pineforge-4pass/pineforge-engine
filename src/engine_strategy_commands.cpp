@@ -190,6 +190,18 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_position_side = position_side_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
+    // Snapshot the placement-time over-pyramiding-cap status, mirroring the
+    // fill-time gate (add_to_pyramid_market, engine_orders.cpp) EXACTLY: a
+    // SAME-direction add against a position already at/over the pyramiding cap
+    // is one TradingView never admits. Same-id re-placement rebuilds this
+    // PendingOrder wholesale, so the snapshot naturally refreshes each call.
+    // The post-full-close same-direction wipe reads this flag to keep drop-
+    // ping over-cap co-queues even when a co-queued full close zeroes
+    // position_entry_count_ before the add's fill-time gate runs.
+    order.over_pyramiding_cap_at_placement =
+        position_side_ != PositionSide::FLAT
+        && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
+        && position_entry_count_ >= pyramiding_;
     // TradingView empirical rule (probe 52 trade 113): the deferred-flip
     // carry is the position size at THIS placement, not the original.
     // ``strategy.entry`` with the same id replaces the pending order
@@ -804,6 +816,17 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     order.created_position_side = position_side_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
+    // Same placement-time over-cap snapshot as strategy_entry, mirroring the
+    // strategy.order add gate (engine_fills.cpp same-direction RAW add). A
+    // strategy.order market/priced order is a RAW_ORDER and is not currently a
+    // target of the same-direction post-full-close wipe (which keys on
+    // MARKET/ENTRY), so this flag is inert for the RAW path today; it is
+    // captured here for consistency so the provenance stays correct if the
+    // wipe is ever widened to RAW_ORDER adds.
+    order.over_pyramiding_cap_at_placement =
+        position_side_ != PositionSide::FLAT
+        && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
+        && position_entry_count_ >= pyramiding_;
     order.tv_carry_qty = position_qty_;
 
     bool has_limit = !std::isnan(limit_price);
