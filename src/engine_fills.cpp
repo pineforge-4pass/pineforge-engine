@@ -825,12 +825,15 @@ void BacktestEngine::apply_filled_order_to_state(
     //     filled earlier this tick): the SIZING notional. For percent-of-
     //     equity with pct <= 100, margin <= 100 and sizing_equity > 0 the
     //     floor in apply_qty_step guarantees
-    //     qty*sizing_price*pv*fx <= sizing_equity, so a flat open is
-    //     undeclinable no matter how the bar gaps. Outside that regime the
-    //     invariant fails and the gate does not run at all. Pricing flat opens at
-    //     the fill was refuted against TV exports: it drops razor-thin
+    //     qty*sizing_price*pv*fx <= sizing_equity, so THIS gate never declines
+    //     a flat open no matter how the bar gaps. Outside that regime the
+    //     invariant fails and the gate does not run at all. Pricing flat opens
+    //     at the fill HERE was refuted against TV exports: it drops razor-thin
     //     gap-up entries that exact-count close-then-reenter strategies
-    //     demonstrably take.
+    //     demonstrably take. (The one true-flat open TV DOES decline on the
+    //     FILL notional — a percent==100, zero-commission, above-lot gap — is
+    //     handled by the disjoint gap-reject carve-out above, which fires
+    //     before this admit; every OTHER flat open remains undeclinable here.)
     //   - TRUE REVERSAL (opposite position still open when the order
     //     processes): the FILL price, slipped the way the fill kernel
     //     will book it. Established independently by two from-the-feed
@@ -883,6 +886,77 @@ void BacktestEngine::apply_filled_order_to_state(
         bool reversal = position_side_ != PositionSide::FLAT && !same_dir;
         bool raw_opposite_close = order.type == OrderType::RAW_ORDER && reversal;
         double margin_pct = order.is_long ? margin_long_ : margin_short_;
+        // Gap-reject (design-cntvxiao-gap-reject, PANEL-CLEARED): a high-level
+        // strategy.entry with omitted qty, sized percent_of_equity at EXACTLY
+        // 100%, direction-appropriate margin == 100, placed TRUE-FLAT and still
+        // FLAT at THIS fill, carrying zero actual opening commission, is
+        // silently DROPPED (no trade row) when its frozen-qty cost at the
+        // SLIPPED FILL price exceeds the sizing-equity snapshot by more than one
+        // lot of slack:
+        //
+        //   |frozen_default_qty| * slipped_fill * pv * fx * margin/100
+        //     >  sizing_equity
+        //        + qty_step_ * slipped_fill * pv * fx * margin/100
+        //        + max(1e-9, |sizing_equity|*1e-12)
+        //
+        // This is the third, mutually-disjoint branch of the frozen-100%
+        // all-in true-flat family. It runs BEFORE the KI-54 flat admit below —
+        // which prices flat opens at the SIZING notional (undeclinable by the
+        // floor invariant) and would let this fill through:
+        //   - above-lot gap, ZERO opening fee    -> REJECT here       (this rule)
+        //   - above-lot gap, NONZERO opening fee -> fill, KI-61 entry-bar trim
+        //   - within one lot of slack            -> fill, held (KI-61-exempt)
+        // Evidence: cntvxiao TV 0/556 positive-shortfall gap admissions across
+        // BOTH sides (70 short / 62 long); rejected shorts open at a
+        // FAVORABLE price, so the reproducing discriminator is NOTIONAL over-
+        // equity, not adverse gap sign. All provenance rides on the
+        // direction-neutral opening_affordability_exemption_candidate flag (set
+        // at placement, engine_strategy_commands.cpp): it already encodes
+        // created-true-flat, percent_of_equity==100, direction-appropriate
+        // margin==100, and finite frozen snapshot. margin_pct is that same
+        // direction margin (== 100 under the flag, so margin/100 == 1); it is
+        // retained on both sides for parity with the KI-54 formula and the
+        // shurben5 margin!=100 controls. The !same_dir/!reversal/type==MARKET
+        // guards are defensively redundant (FLAT-at-fill implies both
+        // classifications false, and the candidate flag is only ever set on a
+        // default-sized high-level MARKET entry) but pin the intent cheaply.
+        // order.qty is NOT written here (isnan(order.qty) is a live
+        // discriminator for OCA / reversal-binding / partial-exit).
+        //
+        // Scope carve-outs (deliberate, each pending its own TV probe):
+        //   - RAW_ORDER (strategy.order) carries the same frozen snapshot and
+        //     is covered by the KI-54 flat/add/reversal gate, but NOT by this
+        //     reject: its default-sized gap behavior is not yet TV-pinned, so
+        //     the asymmetry is intentional. It never reaches here — the
+        //     candidate flag is only set for high-level strategy.entry, and the
+        //     type==MARKET guard excludes RAW regardless.
+        //   - process_orders_on_close: the signal bar IS the fill bar, so
+        //     slipped_fill == sizing_price and the frozen qty was floored to
+        //     fit sizing_equity — the shortfall is structurally 0 (no-op).
+        if (order.opening_affordability_exemption_candidate
+            && position_side_ == PositionSide::FLAT
+            && !same_dir && !reversal
+            && order.type == OrderType::MARKET) {
+            const double slipped_fill =
+                apply_fill_slippage(fill_price, order.is_long);
+            if (calc_commission(slipped_fill, order.frozen_default_qty) == 0.0) {
+                const double gap_notional = std::abs(order.frozen_default_qty)
+                                            * slipped_fill * syminfo_.pointvalue
+                                            * account_currency_fx_
+                                            * (margin_pct / 100.0);
+                const double one_lot_slack = qty_step_ * slipped_fill
+                                             * syminfo_.pointvalue
+                                             * account_currency_fx_
+                                             * (margin_pct / 100.0);
+                const double float_guard =
+                    std::max(1e-9, std::abs(order.sizing_equity) * 1e-12);
+                if (gap_notional
+                    > order.sizing_equity + one_lot_slack + float_guard) {
+                    filled_indices.push_back(order_index);
+                    return;
+                }
+            }
+        }
         // A same-direction add (fractional OR all-in) IS gated, against
         // MARK-TO-MARKET free margin. This is pinned by a clean-room TV probe
         // (data/probes/margin-basis-frac: pct=50, pyramiding=2). At pct=50 the

@@ -256,7 +256,10 @@ struct PendingOrder {
     // trade row). The floor in apply_qty_step guarantees
     // qty*sizing_price*pv*fx <= sizing_equity ONLY for percent-of-equity
     // sizing with pct <= 100, margin <= 100, and sizing_equity > 0 — under
-    // that invariant flat opens are undeclinable no matter how the bar gaps.
+    // that invariant THIS KI-54 gate never declines a flat open no matter how
+    // the bar gaps. (The narrower percent==100 zero-commission true-flat
+    // above-lot gap that TV DOES decline on the FILL notional is handled by a
+    // separate gap-reject carve-out that runs before this admit; see the gate.)
     // It fails for CASH default sizing (no equity term), for pct > 100, for
     // margin > 100 (required scales past equity), and on a bankrupt account
     // (apply_qty_step returns qty UNFLOORED for qty <= 0, so |qty|*price ==
@@ -272,12 +275,21 @@ struct PendingOrder {
     // mark-to-market total against a cost-basis deduction and the admission
     // threshold drifts with unrealized PnL in the wrong direction.
     double sizing_mark = std::numeric_limits<double>::quiet_NaN();
-    // Placement-time half of KI-61's sole opening-affordability exemption.
-    // True only for a high-level long MARKET call with omitted qty, a frozen
-    // 100%-of-equity snapshot, 100% long margin, true-flat placement, and no
-    // earlier paired close in this on_bar. Fill-time code must additionally
-    // prove true-flat fill, sizing-price admission, success, and zero actual
-    // opening commission before treating the queued event as exempt.
+    // Direction-neutral placement-time provenance for the two fill-time
+    // consumers of a frozen 100%-of-equity true-flat MARKET entry. True only
+    // for a high-level MARKET call (either side) with omitted qty, a frozen
+    // 100%-of-equity snapshot, direction-appropriate margin == 100, true-flat
+    // placement, and no earlier paired close in this on_bar. Consumers:
+    //   1. KI-61 long entry-bar affordability EXEMPTION (engine_fills.cpp):
+    //      long-only — it independently re-checks order.is_long and margin_long
+    //      via long_full_margin_after_fill, so widening this flag to shorts
+    //      leaves the exemption's derivation unchanged. Fill-time code must
+    //      additionally prove true-flat fill, sizing-price admission, success,
+    //      and zero actual opening commission before treating it as exempt.
+    //   2. gap-reject (design-cntvxiao-gap-reject, engine_fills.cpp):
+    //      direction-symmetric — silently drops the entry at fill when the
+    //      frozen-qty notional at the slipped fill price exceeds sizing_equity
+    //      by more than one lot, given zero actual opening commission.
     bool opening_affordability_exemption_candidate = false;
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100

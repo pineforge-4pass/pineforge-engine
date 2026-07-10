@@ -13,11 +13,12 @@
  *      excludes all three.
  *   B. Flat entry with a close→open gap DOWN: qty = equity_S / close(S), not
  *      equity / open(S+1) — pins the divisor with no position in play.
- *   C. Flat entry with a close→open gap UP: still ADMITTED, and the qty stays
- *      the frozen equity_S / close(S) — a gap must neither re-size nor
- *      decline a flat, fully-affordable entry (the FLOOR in apply_qty_step
- *      guarantees qty*close(S) <= equity_S; the fill price plays no role in
- *      sizing).
+ *   C. Flat all-in (pct=100) zero-commission entry with a close→open gap UP
+ *      whose frozen-qty notional exceeds the sizing equity by more than one
+ *      lot is REJECTED at fill (design-cntvxiao-gap-reject): the frozen qty is
+ *      never re-sized, and the whole true-flat entry is silently dropped. The
+ *      freeze itself still never RE-SIZES on a gap — pin B (gap DOWN) and the
+ *      affordable cases keep filling the frozen equity_S / close(S) lot.
  *   D. process_orders_on_close=true: signal bar == fill bar and fill price ==
  *      close(S), so the frozen qty is identical to the legacy fill-time
  *      computation — POC sizing is unchanged.
@@ -177,16 +178,16 @@ void test_flat_gap_down_divisor() {
     }
 }
 
-// C. Flat entry, gap UP: still admitted, qty stays frozen at equity_S /
-//    close(S). TradingView demonstrably takes flat all-in entries on gap-up
-//    bars (the FLOOR guarantees qty*close(S) <= equity_S, and TV's admission
-//    is based on the sizing notional, not the fill price) — a close→open gap
-//    must never decline or re-size a flat entry.
+// C. Flat all-in (pct=100) zero-comm entry, gap UP: REJECTED at fill. The
+//    frozen qty 10000/100 = 100 stays frozen (no re-size), but the fill
+//    notional 100*102 = 10200 exceeds the 10000 sizing equity by more than
+//    one lot (qty_step 0), so TV silently drops the entry
+//    (design-cntvxiao-gap-reject) and the later close_all has nothing to
+//    close. (Pre-gap-reject this filled 100 @ 102.)
 //   bar0  100/100/100/100   on_bar: long entry — frozen qty 10000/100 = 100
-//   bar1  102/103/101/102   fills @102 with qty 100 (legacy fill-time sizing
-//                           would give 10000/102 = 98.04...)
-void test_flat_gap_up_admitted() {
-    std::printf("-- C: flat entry on a gap up stays admitted, qty frozen --\n");
+//   bar1  102/103/101/102   fill 102 -> 100*102 = 10200 > 10000 -> DROP
+void test_flat_gap_up_rejected() {
+    std::printf("-- C: flat all-in zero-comm gap-up rejected --\n");
     Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, /*poc=*/false);
     eng.script = "L.C.";
     std::vector<Bar> bars = {
@@ -196,12 +197,8 @@ void test_flat_gap_up_admitted() {
         mk_bar(4000, 102, 102, 102, 102),
     };
     eng.run(bars.data(), (int)bars.size());
-    CHECK(eng.trade_count() == 1);
-    if (eng.trade_count() == 1) {
-        const Trade& t0 = eng.all_trades()[0];
-        CHECK_NEAR(t0.entry_price, 102.0, 1e-9);
-        CHECK_NEAR(t0.qty, 100.0, 1e-9);
-    }
+    CHECK(eng.trade_count() == 0);   // was 1 (filled 100@102); close_all inert
+    CHECK(eng.position_side_ == PositionSide::FLAT);
 }
 
 // D. process_orders_on_close=true: unchanged. Signal bar == fill bar, fill
@@ -364,7 +361,7 @@ int main() {
     std::printf("--- default_qty_signal_freeze ---\n");
     test_reversal_freeze();
     test_flat_gap_down_divisor();
-    test_flat_gap_up_admitted();
+    test_flat_gap_up_rejected();
     test_poc_unchanged();
     test_cash_freeze();
     test_oca_default_sibling_cancelled();

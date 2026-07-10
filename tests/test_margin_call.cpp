@@ -273,10 +273,12 @@ static void test_long_100pct_margin_no_call() {
     CHECK(std::isnan(eng.liq_price()));
 }
 
-// A default 100%-of-equity MARKET order placed and filled from true flat is
-// admitted on its frozen signal-price notional. With no opening commission,
-// a gap above that frozen price is deliberately exempt from the one-shot
-// post-fill affordability trim.
+// A default 100%-of-equity MARKET order placed and filled from true flat.
+// A ZERO-commission fill is admitted only within one lot of the frozen sizing
+// notional: a larger gap-up is REJECTED at fill and silently dropped
+// (design-cntvxiao-gap-reject). A COMMISSIONED fill is never gap-rejected (its
+// opening fee is nonzero) and instead keeps the KI-61 fill-then-entry-bar
+// affordability-trim path.
 class FrozenAllInFlatLongProbe : public MCEngine {
 public:
     explicit FrozenAllInFlatLongProbe(double commission_percent) {
@@ -295,8 +297,14 @@ public:
     }
 };
 
-static void test_zero_cost_frozen_all_in_true_flat_gap_is_exempt() {
-    std::printf("test_zero_cost_frozen_all_in_true_flat_gap_is_exempt\n");
+// Zero commission + an above-lot gap-up: the frozen 10-lot notional at the
+// 120 fill (1200) exceeds the 1000 sizing equity by more than one lot (one lot
+// = qty_step*fill = 120), so TV REJECTS the entry at fill and it is silently
+// dropped — the account stays FLAT, no trade row. (Pre-gap-reject the engine
+// HELD the 10-lot fill exempt from the affordability trim; the rejection is
+// design-cntvxiao-gap-reject.)
+static void test_zero_cost_frozen_all_in_true_flat_gap_is_rejected() {
+    std::printf("test_zero_cost_frozen_all_in_true_flat_gap_is_rejected\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
         mk_bar(2000, 120.0, 125.0,  80.0, 110.0, 1.0),
@@ -305,8 +313,8 @@ static void test_zero_cost_frozen_all_in_true_flat_gap_is_exempt() {
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() == 0);
-    CHECK(near(eng.position_size(), 10.0));
-    CHECK(std::isnan(eng.liq_price()));
+    CHECK(near(eng.position_size(), 0.0));   // was 10 (held); now dropped
+    CHECK(eng.position_size() == 0.0);
 }
 
 static void test_commissioned_frozen_all_in_true_flat_gap_is_eligible() {
@@ -1099,7 +1107,7 @@ int main() {
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();
     test_long_100pct_margin_no_call();
-    test_zero_cost_frozen_all_in_true_flat_gap_is_exempt();
+    test_zero_cost_frozen_all_in_true_flat_gap_is_rejected();
     test_commissioned_frozen_all_in_true_flat_gap_is_eligible();
     test_paired_short_close_default_long_gap_remains_eligible();
     test_long_100pct_margin_sublot_overage_is_held();

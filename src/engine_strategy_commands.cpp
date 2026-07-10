@@ -117,20 +117,25 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     // pre-fix engine rejected those at fill time while TV accepted
     // them at signal time — accumulating into community/IES's PnL
     // drift. Verified empirically by parity-probe-04..06 (all 57/57
-    // matched) and parity-anomalies/equity-mirror (full-equity sizing
-    // right at the 1× boundary, where TV's behaviour is itself
-    // non-deterministic — see corpus/parity-anomalies/README.md).
+    // matched) and the equity-mirror anomaly (full-equity sizing right at the
+    // 1× boundary, where TV's behaviour is itself non-deterministic — see
+    // corpus/validation/anomaly-equity-mirror-strategy-equity-01).
     // Only applied to MARKET entries (limit/stop entries have their
     // own price baked into the order itself).
     //
     // Scope: this signal-time gate covers EXPLICIT-qty market entries only
     // (the empirical base above — parity-probe-04..06 — is all explicit
-    // ``qty = <expr>`` sizing). DEFAULT-sized (qty=na) market entries never
-    // reach it (qty is NaN here); their quantity is frozen at this bar's
-    // close further below (see frozen_default_market_qty), AFTER this gate,
-    // precisely so the freeze cannot accidentally activate a gate whose
-    // equity basis (realized-only current_equity()) was never validated
-    // for default sizing.
+    // ``qty = <expr>`` sizing, all with headroom at the boundary). DEFAULT-
+    // sized (qty=na) market entries never reach it (qty is NaN here); their
+    // quantity is frozen at this bar's close further below (see
+    // frozen_default_market_qty), AFTER this gate, precisely so the freeze
+    // cannot accidentally activate a gate whose equity basis (realized-only
+    // current_equity()) was never validated for default sizing. Those frozen
+    // default-sized entries instead get their own, much narrower fill-time
+    // re-check: the percent==100 zero-commission true-flat above-lot gap-reject
+    // in apply_filled_order_to_state (design-cntvxiao-gap-reject). It does NOT
+    // contradict the explicit-qty "signal-time only" rule above — different
+    // sizing regime, different TV ground truth.
     if (!std::isnan(qty) && std::isnan(limit_price) && std::isnan(stop_price)) {
         double margin_pct = is_long ? margin_long_ : margin_short_;
         if (margin_pct > 0.0 && !std::isnan(current_bar_.close)) {
@@ -250,14 +255,26 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             order.sizing_equity =
                 current_equity() + open_profit(current_bar_.close);
             order.sizing_mark = current_bar_.close;
+            // Direction-neutral: two fill-time consumers read this flag.
+            //   1. KI-61 long entry-bar affordability trim
+            //      (engine_fills.cpp): re-checks order.is_long and margin_long
+            //      via long_full_margin_after_fill, so its long-only semantics
+            //      are invariant to widening this to shorts.
+            //   2. gap-reject (design-cntvxiao-gap-reject, engine_fills.cpp):
+            //      direction-symmetric — drops a true-flat all-in zero-comm
+            //      entry whose gapped fill notional exceeds equity by >1 lot,
+            //      on EITHER side.
+            // The margin term is the direction-appropriate one so a short at
+            // margin_short==100 qualifies exactly as a long at margin_long==100.
+            const double affordability_margin =
+                is_long ? margin_long_ : margin_short_;
             order.opening_affordability_exemption_candidate =
-                is_long
-                && order.created_position_side == PositionSide::FLAT
+                order.created_position_side == PositionSide::FLAT
                 && !order.created_after_position_close_in_bar
                 && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
                 && std::abs(default_qty_value_ - 100.0) < 1e-12
-                && std::isfinite(margin_long_)
-                && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12
+                && std::isfinite(affordability_margin)
+                && std::abs(affordability_margin / 100.0 - 1.0) < 1e-12
                 && std::isfinite(order.frozen_default_qty)
                 && std::isfinite(order.sizing_equity)
                 && std::isfinite(order.sizing_price)
