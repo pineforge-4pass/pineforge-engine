@@ -206,6 +206,19 @@ struct PendingOrder {
     // FLAT before a paired reentry is placed, but that reentry is not an
     // independent true-flat opening for KI-61 affordability purposes.
     bool created_after_position_close_in_bar = false;
+    // True when this SAME-direction MARKET/ENTRY order was OVER the pyramiding
+    // cap at PLACEMENT — i.e. the position was already held in this order's
+    // direction with position_entry_count_ >= pyramiding_ at the moment it was
+    // placed. Snapshotted at every entry placement site so it mirrors the
+    // fill-time pyramiding gate (add_to_pyramid_market / the strategy.order add
+    // gate) exactly. The post-full-close same-direction wipe reads this to
+    // distinguish a TV-admissible (within-cap) co-queue — which survives a
+    // deferred full close that flattens on the fill bar — from one TradingView
+    // rejects at placement (over cap), which must still be cancelled even though
+    // the co-queued close zeroed position_entry_count_ before the add's fill-time
+    // gate ran. See classify_order_eligibility / compact_filled_pending_orders
+    // and test_close_all_coqueued_entry.cpp.
+    bool over_pyramiding_cap_at_placement = false;
     // Snapshot of the position's quantity at the moment this order was
     // PLACED (0 if placed from flat). Used by execute_market_entry's
     // flat branch to apply TradingView's deferred-flip growth rule:
@@ -294,6 +307,29 @@ struct PendingOrder {
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
     bool created_while_in_position = false;  // true if position was open when order was placed
+    // design-declined-reversal-close-leg: set at the KI-54 percent-of-equity
+    // reversal-decline site when this pending FULL close was co-queued AFTER,
+    // and on the same bar as, the declined MARKET reversal entry targeting the
+    // position that reversal would have flipped. TradingView refuses the whole
+    // reversal atomically and HOLDS the position, so the co-queued close must
+    // not fire either. classify_order_eligibility Removes a flagged order from
+    // BOTH fill kernels; apply_filled_order_to_state additionally no-ops it at
+    // apply time (the KI-60 COOF kernel pre-classifies its candidates, so a flag
+    // set mid-segment by an earlier candidate's decline is only seen there). On
+    // an ADMITTED reversal the entry fills and the close is a plain no-op — the
+    // flag is never set, so the fix is inert. See suppress_declined_reversal_
+    // close_legs (engine_fills.cpp).
+    bool suppress_as_declined_reversal_close = false;
+    // Qty this deferred close debited from id_unclosed_qty_[<bare id>] in
+    // compute_close_target_qty's default-FIFO branch at strategy.close CALL
+    // time. On the false->true suppression transition it is re-credited to that
+    // ledger EXACTLY ONCE, so a later strategy.close(id) on the still-held
+    // position resolves a nonzero target and fires (precedent: the COOF reissue
+    // re-credit, engine_strategy_commands.cpp). NaN = nothing to re-credit (the
+    // ANY close-entries rule, an explicit qty/qty_percent, and close_all do not
+    // debit the id ledger).
+    double suppressed_close_consumed_ledger_qty =
+        std::numeric_limits<double>::quiet_NaN();
 };
 
 // default_qty_type constants (matches TradingView)
@@ -1764,6 +1800,12 @@ private:
                                      int& exit_closed_from_bar,
                                      bool& exit_closed_was_long,
                                      std::vector<size_t>& filled_indices);
+    // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
+    // site with the just-declined MARKET reversal entry. Flags every pending
+    // FULL close that was co-queued after it on the same bar against the held
+    // side (see PendingOrder::suppress_as_declined_reversal_close), re-crediting
+    // each flagged close's consumed id-ledger exactly once.
+    void suppress_declined_reversal_close_legs(const PendingOrder& declined_entry);
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
@@ -1848,7 +1890,9 @@ private:
                                     double qty_to_close,
                                     double matching_qty,
                                     bool closes_full_position,
-                                    bool closes_any_qty);
+                                    bool closes_any_qty,
+                                    double consumed_ledger_qty =
+                                        std::numeric_limits<double>::quiet_NaN());
     void clear_existing_exit_order(const std::string& id,
                                    const std::string& from_entry,
                                    bool has_trail_request,

@@ -10,9 +10,9 @@
 [![Parity](https://img.shields.io/badge/TV%20parity-251%2F252-brightgreen)](#cross-engine-comparison)
 [![Speed](https://img.shields.io/badge/median%20162%C3%97%20vs%20PyneCore%20%2899%20strategies%29-success)](benchmarks/results/speed.md)<br>
 [![codegen on PyPI](https://img.shields.io/pypi/v/pineforge-codegen?label=codegen&logo=pypi&logoColor=white)](https://pypi.org/project/pineforge-codegen/)
-[![MCP server](https://img.shields.io/badge/MCP-server-1565c0?logo=docker&logoColor=white)](https://github.com/pineforge-4pass/pineforge-codegen-mcp)
+[![MCP server](https://img.shields.io/badge/MCP-server-1565c0?logo=docker&logoColor=white)](https://github.com/pineforge-4pass/pineforge-backtest-mcp)
 
-**[🌐 pineforge.dev](https://www.pineforge.dev) · [☁️ Hosted MCP (no install)](https://mcp.pineforge.dev/mcp) · [🐳 Run locally (Docker MCP)](https://github.com/pineforge-4pass/pineforge-codegen-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
+**[🌐 pineforge.dev](https://www.pineforge.dev) · [☁️ Hosted MCP (no install)](https://mcp.pineforge.dev/mcp) · [🐳 Run locally (Docker MCP)](https://github.com/pineforge-4pass/pineforge-backtest-mcp) · [📦 Transpiler (pip)](https://github.com/pineforge-4pass/pineforge-codegen-oss)**<br>
 **[📖 API Documentation](https://cdocs.pineforge.dev) · [⚡ 60-second Tutorial](tutorial/) · [🧪 Coverage Map](docs/coverage.md) · [🔬 Benchmarks](benchmarks/)**
 
 </div>
@@ -31,7 +31,7 @@ Click on below for 60 seconds tutorial
 </div>
 
 The fastest way to use PineForge: let your AI agent write, run, and optimize
-strategies for you via the **[`pineforge-codegen-mcp`](https://github.com/pineforge-4pass/pineforge-codegen-mcp)**
+strategies for you via the **[`pineforge-backtest-mcp`](https://github.com/pineforge-4pass/pineforge-backtest-mcp)**
 container — a single self-contained image (built on the
 [`pineforge-release`](https://github.com/pineforge-4pass/pineforge-release) image, which bundles the
 engine runtime **and** the transpiler) that runs the whole transpile→backtest loop in-process. Pull
@@ -65,8 +65,8 @@ never add `-t` (a TTY corrupts the stdio JSON-RPC stream).
 ### Claude Code (one command)
 
 ```bash
-claude mcp add pineforge-codegen \
-  -- docker run --rm -i -v "$PWD:/work" ghcr.io/pineforge-4pass/pineforge-codegen-mcp:latest
+claude mcp add pineforge-backtest \
+  -- docker run --rm -i -v "$PWD:/work" ghcr.io/pineforge-4pass/pineforge-backtest-mcp:latest
 ```
 
 ### Claude Desktop / Cursor / any MCP client
@@ -74,12 +74,12 @@ claude mcp add pineforge-codegen \
 ```jsonc
 {
   "mcpServers": {
-    "pineforge-codegen": {
+    "pineforge-backtest": {
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
         "-v", "${workspaceFolder}:/work",
-        "ghcr.io/pineforge-4pass/pineforge-codegen-mcp:latest"
+        "ghcr.io/pineforge-4pass/pineforge-backtest-mcp:latest"
       ]
     }
   }
@@ -96,14 +96,14 @@ Once connected, your AI agent can:
 | "Sweep fast length 8–21, slow 21–55, rank by net PnL" | `backtest_pine_grid` |
 | "What broker overrides are available?" | `list_engine_params` |
 
-See the [server README](https://github.com/pineforge-4pass/pineforge-codegen-mcp)
+See the [server README](https://github.com/pineforge-4pass/pineforge-backtest-mcp)
 for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWHERE`,
 `PINEFORGE_IMAGE`, …).
 
 > **Transpiler is open.** The Pine → C++ transpiler is source-available
 > (`pip install pineforge-codegen`, [repo](https://github.com/pineforge-4pass/pineforge-codegen-oss)) and ships inside the container — so the whole transpile→backtest loop runs on your machine.
 
-> **The npm package** [`@pineforge/codegen-mcp`](https://www.npmjs.com/package/@pineforge/codegen-mcp)
+> **The npm package** [`@pineforge/backtest-mcp`](https://www.npmjs.com/package/@pineforge/backtest-mcp)
 > mirrors the same server for discoverability; the container above is the
 > recommended way to run it (engine bundled in-process, one image, no host setup).
 

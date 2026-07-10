@@ -696,8 +696,20 @@ void BacktestEngine::compact_filled_pending_orders(
             && pending_orders_[read].created_bar < bar_index_
             && !std::isnan(pending_orders_[read].limit_price)
             && std::isnan(pending_orders_[read].stop_price);
+        // Mirror classify_order_eligibility's M1v2 narrowed co-queue exemption
+        // (they MUST stay in lockstep): a same-direction entry co-queued on the
+        // close's own call bar survives ONLY if it was within the pyramiding cap
+        // at placement. A co-queued STOP that does NOT fill on the close bar
+        // reaches compaction without ever entering filled_indices, so without
+        // this term it would be wiped here even though classify spared it (the
+        // reverted M1 hit exactly this — R-KEEP-stop failed under a classify-only
+        // fix). Over-cap co-queues and prior-bar carries are still compacted away.
+        bool coqueued_within_cap =
+            pending_orders_[read].created_bar == exit_closed_from_bar
+            && !pending_orders_[read].over_pyramiding_cap_at_placement;
         bool stale_same_direction_entry_after_exit =
             exit_closed_from_bar >= 0
+            && !coqueued_within_cap
             && (pending_orders_[read].type == OrderType::ENTRY
                 || pending_orders_[read].type == OrderType::MARKET)
             && pending_orders_[read].is_long == exit_closed_was_long
@@ -728,6 +740,17 @@ void BacktestEngine::apply_filled_order_to_state(
         int& exit_closed_from_bar,
         bool& exit_closed_was_long,
         std::vector<size_t>& filled_indices) {
+    // design-declined-reversal-close-leg: a close flagged by the reversal
+    // decline is Removed by classify_order_eligibility in the ordinary kernel,
+    // so this order never reaches apply there. The KI-60 COOF kernel, however,
+    // pre-classifies its whole candidate set BEFORE any candidate is applied,
+    // so a flag set mid-segment by an earlier candidate's decline is not seen
+    // by classify — catch it here (no-op the fill, mark for compaction). Shared
+    // by both kernels; must precede every state mutation below.
+    if (order.suppress_as_declined_reversal_close) {
+        filled_indices.push_back(order_index);
+        return;
+    }
     // Fill-local proof that KI-54 admitted this order as a flat open on its
     // frozen sizing price. Merely carrying a snapshot is insufficient: true
     // reversals are admitted on their actual fill, and paired reentries may
@@ -1028,6 +1051,14 @@ void BacktestEngine::apply_filled_order_to_state(
                                             * account_currency_fx_
                                             * (margin_pct / 100.0));
             if (required_margin > free_funds + epsilon) {
+                // design-declined-reversal-close-leg: ONLY the reversal decline
+                // triggers close-leg suppression (admit_price == slipped fill,
+                // MARKET). The same_dir add decline (probe65 shape) and the
+                // disjoint gap-reject/GB2 declines above are intentionally
+                // excluded — see suppress_declined_reversal_close_legs.
+                if (reversal && order.type == OrderType::MARKET) {
+                    suppress_declined_reversal_close_legs(order);
+                }
                 filled_indices.push_back(order_index);
                 return;
             }
@@ -1739,6 +1770,60 @@ void BacktestEngine::materialize_relative_exit_prices_for_live_position() {
 }
 
 
+// design-declined-reversal-close-leg. When the KI-54 percent-of-equity gate
+// declines a MARKET reversal entry at fill, TradingView refuses the whole
+// reversal ATOMICALLY and HOLDS the position — so a strategy.close leg
+// co-queued AFTER that reversal on the SAME bar, targeting the very position
+// the reversal would have flipped, must not fire either (the pre-fix engine let
+// it fill and went flat, then re-entered on a later mid-span signal TV no-ops).
+// Flag every matching pending close; classify_order_eligibility and the
+// apply-time guard then Remove it from both fill kernels. NEVER erase
+// pending_orders_ in place and NEVER push later indices into filled_indices
+// here — that would corrupt the fill loop / compaction binary-search invariant.
+//
+// Binding (design doc item 3, verified against the actual queue_deferred_close_
+// order / strategy.close conventions):
+//   - EXIT order whose id has the "__close__" prefix WITH a nonempty target
+//     (bare "__close__" close_all is out of scope — R5 characterization freeze);
+//   - created on the SAME bar (created_bar) as the declined entry — its signal
+//     bar, not bar_index_;
+//   - created AFTER the declined entry (created_seq): a close created FIRST
+//     fires (chawarat's sell leg, R7 — and the sort processes it before the
+//     entry anyway);
+//   - against the HELD side (created_position_side == position_side_, still the
+//     held side at decline time, the reversal not yet applied);
+//   - FULL close only (qty_percent >= 100-eps && isnan(qty)); partial closes
+//     are excluded (no exemplar — R7/partial-close row) and documented.
+//
+// Ledger re-credit (design doc item 4): the deferred close debited
+// id_unclosed_qty_[<bare id>] at strategy.close CALL time. Re-credit it EXACTLY
+// ONCE, on the false->true flag transition, so a later close(id) on the still-
+// held position resolves a nonzero target and fires. The `continue` on an
+// already-flagged order makes a second same-bar decline idempotent (single
+// re-credit).
+void BacktestEngine::suppress_declined_reversal_close_legs(
+        const PendingOrder& declined_entry) {
+    static const std::string kClosePrefix = "__close__";
+    for (PendingOrder& co : pending_orders_) {
+        if (co.suppress_as_declined_reversal_close) continue;   // idempotent
+        if (co.type != OrderType::EXIT) continue;
+        if (co.id.size() <= kClosePrefix.size()) continue;      // bare close_all excluded
+        if (co.id.compare(0, kClosePrefix.size(), kClosePrefix) != 0) continue;
+        if (co.created_bar != declined_entry.created_bar) continue;
+        if (co.created_seq <= declined_entry.created_seq) continue;   // created-after only
+        if (co.created_position_side != position_side_) continue;     // held side
+        const bool full_close =
+            std::isnan(co.qty) && co.qty_percent >= 100.0 - kFullPercentEps;
+        if (!full_close) continue;
+        co.suppress_as_declined_reversal_close = true;          // false->true transition
+        if (!std::isnan(co.suppressed_close_consumed_ledger_qty)
+            && co.suppressed_close_consumed_ledger_qty > 0.0) {
+            id_unclosed_qty_[co.id.substr(kClosePrefix.size())]
+                += co.suppressed_close_consumed_ledger_qty;
+        }
+    }
+}
+
 // ── Inner-loop phase 1: order eligibility ─────────────────────────────
 // Returns whether the given pending order should be processed this
 // iteration. Walks the chain of TV-empirical "skip" / "cancel" rules
@@ -1749,6 +1834,13 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
         int exit_closed_from_bar, bool exit_closed_was_long, const Bar& bar) {
     using internal::DualEntryStopPathWinner;
+    // design-declined-reversal-close-leg: a close flagged at the KI-54 reversal
+    // decline is held atomically with the refused reversal — Remove it from both
+    // fill kernels before any other classification runs. Unconditional (across
+    // both opposing passes): a flagged order is never eligible.
+    if (order.suppress_as_declined_reversal_close) {
+        return OrderEligibility::Remove;
+    }
     if (opposing_pass == 1) {
         if (!pass0_opposing_skip_ids.count(order.id)) {
             return OrderEligibility::Skip;
@@ -1904,11 +1996,31 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         && order.created_bar < bar_index_
         && !std::isnan(order.limit_price)
         && std::isnan(order.stop_price);
+    // M1v2 narrowed co-queue exemption (pyramid-deferred-flip-close-all-01):
+    // a same-direction entry co-queued on the close's OWN call bar
+    // (order.created_bar == exit_closed_from_bar, where exit_closed_from_bar is
+    // the close order's created_bar — see apply_exit_order_fill) SURVIVES the
+    // full close, but ONLY if it was within the pyramiding cap at placement. A
+    // DEFERRED close_all created on bar N fills at bar N+1's open, so an entry
+    // co-queued on bar N is a "same on_bar as the fired exit" placement TV keeps
+    // (a market fills at the next open; a stop fires when later touched). But an
+    // add placed OVER the pyramiding cap is one TV rejects at placement, and the
+    // fill-time gate misses it because the co-queued close zeroes
+    // position_entry_count_ first — so over_pyramiding_cap_at_placement keeps it
+    // in the wipe. PRIOR-bar carries (created_bar < the close's call bar) are
+    // always cancelled — the deferred-flip carry this wipe exists for
+    // (test_deferred_flip_carry_close_only.cpp, probes 72/80/93). The reverted
+    // M1 used the created_bar term alone and un-cancelled over-cap co-queues
+    // (probe65 732→1463; the composite bracket fell below strong).
+    bool coqueued_within_cap =
+        order.created_bar == exit_closed_from_bar
+        && !order.over_pyramiding_cap_at_placement;
     if (exit_closed_from_bar >= 0
         && (order.type == OrderType::MARKET || order.type == OrderType::ENTRY)
         && order.is_long == exit_closed_was_long
         && order.created_position_side == closed_side
-        && !resting_limit_entry_carry) {
+        && !resting_limit_entry_carry
+        && !coqueued_within_cap) {
         return OrderEligibility::Remove;
     }
 
