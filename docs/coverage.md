@@ -75,7 +75,7 @@ declared there:
 | `strategy_set_trace_enabled`             | Toggle per-bar trace recording                                    |
 | `strategy_set_trade_start_time`          | Earliest Unix-ms at which order commands may fire                 |
 | `strategy_stream_begin`                  | Warm on confirmed OHLCV and enter realtime mode                   |
-| `strategy_stream_push_tick`              | Push one ordered exchange trade                                  |
+| `strategy_stream_push_tick`              | Push one normalized ordered trade                                |
 | `strategy_stream_push_ticks`             | Push one contiguous ordered-trade array                           |
 | `strategy_stream_advance_time`            | Confirm elapsed bars and materialize quiet intervals              |
 | `strategy_stream_end`                    | End the realtime lifecycle                                       |

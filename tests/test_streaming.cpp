@@ -31,7 +31,7 @@ Bar flat_bar(double price, int64_t timestamp, double volume = 1.0) {
 
 TradeTick tick(int64_t timestamp, uint64_t id, double price,
                double qty = 1.0) {
-    return TradeTick{timestamp, id, price, qty, false};
+    return TradeTick{timestamp, id, price, qty};
 }
 
 class ContinuityStrategy final : public BacktestEngine {
@@ -90,8 +90,8 @@ void test_position_pending_order_and_equity_continue() {
     CHECK(!strategy.saw_islast[1]);
 
     // The close order created on the final historical bar fills at the first
-    // raw exchange print. A second run() would have erased both the open lot
-    // and this pending order, so this is the core lifecycle regression test.
+    // normalized source record. A second run() would have erased both the open
+    // lot and this pending order, so this is the core lifecycle regression test.
     CHECK(strategy.stream_push_tick(tick(120'123, 1, 110.0, 0.25)));
     CHECK(strategy.trade_count() == 1);
     CHECK(near(strategy.position_size(), 0.0));
@@ -179,13 +179,26 @@ void test_clock_materializes_quiet_bars() {
     }
 }
 
+void test_clock_skips_out_of_session_intervals() {
+    CaptureStrategy strategy;
+    strategy.set_syminfo_timezone("UTC");
+    strategy.set_syminfo_session("0000-0001");
+    const Bar warmup[] = {flat_bar(42.0, 0, 3.0)};
+    CHECK(strategy.stream_begin(warmup, 1, "1", "1"));
+    CHECK(strategy.stream_advance_time(240'000));
+
+    // Minute zero is the configured session. Minutes one through three are
+    // closed and must not become synthetic tradable bars.
+    CHECK(strategy.bars.size() == 1);
+}
+
 void test_rejects_replayed_or_out_of_order_ticks() {
     CaptureStrategy strategy;
     const Bar warmup[] = {flat_bar(100.0, 0)};
     CHECK(strategy.stream_begin(warmup, 1, "1", "1"));
     CHECK(strategy.stream_push_tick(tick(60'100, 100, 100.0)));
     CHECK(!strategy.stream_push_tick(tick(60'200, 100, 101.0)));
-    CHECK(strategy.last_error().find("trade_id") != std::string::npos);
+    CHECK(strategy.last_error().find("sequence") != std::string::npos);
     CHECK(!strategy.stream_push_tick(tick(60'050, 101, 101.0)));
     CHECK(strategy.last_error().find("backwards") != std::string::npos);
 }
@@ -197,6 +210,7 @@ int main() {
     test_raw_tick_gap_fill_uses_observed_price_and_time();
     test_partial_mtf_aggregator_survives_handoff();
     test_clock_materializes_quiet_bars();
+    test_clock_skips_out_of_session_intervals();
     test_rejects_replayed_or_out_of_order_ticks();
 
     if (failures == 0) {

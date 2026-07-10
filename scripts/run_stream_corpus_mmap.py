@@ -35,8 +35,8 @@ from run_stream_corpus import (  # noqa: E402
     parse_utc, run_batch, utc_ms,
 )
 
-TICK_STRUCT = struct.Struct("<qQddi4x")
-assert TICK_STRUCT.size == ctypes.sizeof(TradeTickC) == 40
+TICK_STRUCT = struct.Struct("<qQdd")
+assert TICK_STRUCT.size == ctypes.sizeof(TradeTickC) == 32
 
 
 @dataclass
@@ -115,19 +115,18 @@ def build_tick_tape(data_root: Path, tape: Path, start_ms: int, end_ms: int) -> 
                                 continue
                             if timestamp >= end_ms:
                                 break
-                            trade_id = int(row["id"])
-                            if trade_id <= previous_id:
+                            sequence = int(row["id"])
+                            if sequence <= previous_id:
                                 skipped_nonmonotonic += 1
                                 continue
-                            previous_id = trade_id
+                            previous_id = sequence
                             if index >= expected:
                                 raise RuntimeError(
                                     "raw trade count exceeds OHLCV count oracle")
                             TICK_STRUCT.pack_into(
                                 view, index * TICK_STRUCT.size,
-                                timestamp, trade_id, float(row["price"]),
-                                float(row["qty"]),
-                                1 if row["is_buyer_maker"].strip().lower() == "true" else 0)
+                                timestamp, sequence, float(row["price"]),
+                                float(row["qty"]))
                             index += 1
                 print(f"tape_archive={day.isoformat()} ticks={index}", flush=True)
             if index != expected:

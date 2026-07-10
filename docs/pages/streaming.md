@@ -3,7 +3,7 @@
 @tableofcontents
 
 Use the streaming lifecycle when a strategy must warm on confirmed OHLCV and
-then continue on ordered exchange trades **without replacing its instance**.
+then continue on normalized ordered trades **without replacing its instance**.
 The handoff preserves broker state, position and equity, pending orders, Pine
 series and variables, TA objects, `request.security()` evaluators, and a
 partially formed higher-timeframe candle.
@@ -11,7 +11,7 @@ partially formed higher-timeframe candle.
 This is the runtime model used by a continuously running strategy:
 
 1. Call #strategy_stream_begin with every confirmed historical input bar.
-2. Feed exchange trades with #strategy_stream_push_tick, or pass one contiguous
+2. Feed normalized trades with #strategy_stream_push_tick, or pass one contiguous
    replay tape to #strategy_stream_push_ticks.
 3. Call #strategy_stream_advance_time at wall-clock boundaries, including
    quiet periods where no trade arrived.
@@ -42,7 +42,9 @@ MACD historical -> realtime stream
 ```
 
 The tutorial's OHLC expansion keeps it self-contained. A production service
-should populate #pf_trade_tick_t from its exchange or market-data provider.
+should normalize any provider payload into #pf_trade_tick_t before calling the
+engine. Authentication, transport, symbol mapping, and provider-only metadata
+remain outside the runtime.
 
 ## C lifecycle
 
@@ -55,10 +57,9 @@ if (strategy_stream_begin(strategy, history, history_n, "1", "1") != 0)
 /* A live service normally calls this once for every received trade. */
 pf_trade_tick_t tick = {
     .timestamp = 1743206400123LL,
-    .trade_id = 1234567,
+    .sequence = 1234567,
     .price = 1823.45,
-    .qty = 0.125,
-    .is_buyer_maker = 0,
+    .quantity = 0.125,
 };
 if (strategy_stream_push_tick(strategy, &tick) != 0)
     fail(strategy_get_last_error(strategy));
@@ -83,20 +84,22 @@ Every stream function returns `0` on success and `-1` on failure. Read
 ## Tick and bar semantics
 
 - Warmup bars must be strictly increasing, confirmed, and use a fixed-duration
-  input timeframe. The first raw trade belongs at or after the next input-bar
-  open.
-- Timestamps may be equal but cannot move backwards. Non-zero trade IDs must
-  increase strictly; use zero if the source has no stable sequence ID.
+  input timeframe. The first normalized trade belongs at or after the next
+  input-bar open.
+- Timestamps may be equal but cannot move backwards. Non-zero normalized
+  sequence values must increase strictly; use zero if the source has no stable
+  ordering key.
 - Price must be finite and positive. Quantity must be finite and non-negative;
   quantities accumulate into the forming bar's volume.
 - The default Pine strategy cadence remains close-only. Strategy code runs
   when a realtime bar closes, while broker orders resting from an earlier
-  calculation evaluate against every raw trade.
+  calculation evaluate against every normalized trade.
 - A market order created at the preceding close fills at the first subsequent
   trade. Stops and limits see the observed trade path, not an inferred OHLC
   traversal.
-- #strategy_stream_advance_time materializes elapsed quiet intervals as
-  zero-volume carry-forward bars.
+- #strategy_stream_advance_time materializes elapsed quiet in-session intervals
+  as zero-volume carry-forward bars. Intervals outside the configured syminfo
+  session are skipped, so closed markets do not acquire synthetic bars.
 
 ## One tick versus a contiguous replay
 

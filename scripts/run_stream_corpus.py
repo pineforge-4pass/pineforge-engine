@@ -121,22 +121,21 @@ def load_tick_slice(data_root: Path, start_ms: int, end_ms: int) -> tuple[ctypes
                         continue
                     if timestamp >= end_ms:
                         break
-                    trade_id = int(row["id"])
-                    if trade_id <= previous_id:
+                    sequence = int(row["id"])
+                    if sequence <= previous_id:
                         skipped_nonmonotonic += 1
                         continue
-                    previous_id = trade_id
+                    previous_id = sequence
                     rows.append((
                         timestamp,
-                        trade_id,
+                        sequence,
                         float(row["price"]),
                         float(row["qty"]),
-                        1 if row["is_buyer_maker"].strip().lower() == "true" else 0,
                     ))
 
     ticks = (TradeTickC * len(rows))()
-    for i, (timestamp, trade_id, price, qty, maker) in enumerate(rows):
-        ticks[i] = TradeTickC(timestamp, trade_id, price, qty, maker)
+    for i, (timestamp, sequence, price, quantity) in enumerate(rows):
+        ticks[i] = TradeTickC(timestamp, sequence, price, quantity)
     return ticks, {
         "count": len(rows),
         "skipped_nonmonotonic": skipped_nonmonotonic,

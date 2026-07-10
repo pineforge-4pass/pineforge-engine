@@ -314,10 +314,9 @@ class TradeTickC(ctypes.Structure):
     """Mirror of pf_trade_tick_t for historical -> realtime handoff."""
     _fields_ = [
         ("timestamp", ctypes.c_int64),
-        ("trade_id", ctypes.c_uint64),
+        ("sequence", ctypes.c_uint64),
         ("price", ctypes.c_double),
-        ("qty", ctypes.c_double),
-        ("is_buyer_maker", ctypes.c_int),
+        ("quantity", ctypes.c_double),
     ]
 
 

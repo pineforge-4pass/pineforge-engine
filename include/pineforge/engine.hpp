@@ -1242,7 +1242,7 @@ protected:
     // --- Historical -> realtime stream lifecycle ---
     // stream_begin() executes the historical warmup through the normal run()
     // path exactly once, then these fields carry the SAME broker, Pine series,
-    // TA and timeframe-aggregator state forward while raw trades arrive.
+    // TA and timeframe-aggregator state forward while normalized trades arrive.
     enum class StreamPhase { IDLE, REALTIME, ENDED };
     StreamPhase stream_phase_ = StreamPhase::IDLE;
     bool stream_warmup_mode_ = false;
@@ -1250,8 +1250,8 @@ protected:
     int64_t stream_next_input_open_ms_ = 0;
     int64_t stream_clock_ms_ = 0;
     int64_t stream_last_tick_ms_ = 0;
-    uint64_t stream_last_trade_id_ = 0;
-    bool stream_seen_trade_id_ = false;
+    uint64_t stream_last_sequence_ = 0;
+    bool stream_seen_sequence_ = false;
     bool stream_has_input_bar_ = false;
     Bar stream_input_bar_{};
     double stream_last_price_ = 0.0;
@@ -1826,9 +1826,10 @@ public:
 
     // Execute confirmed historical bars, then keep this exact instance alive
     // for realtime trade updates. The warmup feed must contain at least one
-    // complete input-timeframe bar. Raw ticks begin at or after the next input
-    // bar's open; gaps are materialized as zero-volume carry-forward bars when
-    // a later tick or stream_advance_time() crosses their close boundary.
+    // complete input-timeframe bar. Normalized ticks begin at or after the next
+    // input bar's open; in-session gaps are materialized as zero-volume
+    // carry-forward bars when a later tick or stream_advance_time() crosses
+    // their close boundary. Configured out-of-session intervals are skipped.
     bool stream_begin(const Bar* warmup_bars, int n_warmup,
                       const std::string& input_tf,
                       const std::string& script_tf = "");

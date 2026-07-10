@@ -132,8 +132,8 @@ void BacktestEngine::reset_run_state() {
     stream_next_input_open_ms_ = 0;
     stream_clock_ms_ = 0;
     stream_last_tick_ms_ = 0;
-    stream_last_trade_id_ = 0;
-    stream_seen_trade_id_ = false;
+    stream_last_sequence_ = 0;
+    stream_seen_sequence_ = false;
     stream_has_input_bar_ = false;
     stream_input_bar_ = Bar{};
     stream_last_price_ = 0.0;

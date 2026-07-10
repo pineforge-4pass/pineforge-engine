@@ -324,7 +324,7 @@ int main(void) {
 | `strategy_set_trace_enabled`             | Toggle per-bar trace recording               |
 | `strategy_set_trade_start_time`          | Suppress historical order placement          |
 | `strategy_stream_begin`                  | Warm on OHLCV, then enter realtime mode       |
-| `strategy_stream_push_tick`              | Push one raw exchange trade                   |
+| `strategy_stream_push_tick`              | Push one normalized ordered trade             |
 | `strategy_stream_push_ticks`             | Push a raw-trade batch                        |
 | `strategy_stream_advance_time`           | Confirm bars / materialize quiet intervals    |
 | `strategy_stream_end`                    | End a realtime stream                         |

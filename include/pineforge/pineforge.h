@@ -113,17 +113,18 @@ typedef struct pf_bar_s {
     int64_t timestamp;  /**< Bar open time, Unix milliseconds. */
 } pf_bar_t;
 
-/** One realtime exchange trade update.
+/** One provider-neutral realtime executed-trade update.
  *
- *  `trade_id` is optional: pass 0 when the source has no stable sequence id.
- *  Non-zero ids must increase strictly within a stream. `qty` is base-asset
- *  quantity and is accumulated into the input bar's volume. */
+ *  `sequence` is optional: pass 0 when the normalized source has no stable
+ *  ordering key. Non-zero values must increase strictly within a stream.
+ *  `quantity` is expressed in the configured symbol's volume units and is
+ *  accumulated into the input bar's volume. The source adapter owns all
+ *  provider-specific fields and normalization. */
 typedef struct pf_trade_tick_s {
-    int64_t  timestamp;       /**< Trade time, Unix milliseconds. */
-    uint64_t trade_id;        /**< Exchange sequence id, or 0 if unavailable. */
-    double   price;           /**< Executed trade price (> 0). */
-    double   qty;             /**< Executed base quantity (>= 0). */
-    int      is_buyer_maker;  /**< Boolean maker-side flag (0 / non-zero). */
+    int64_t  timestamp;  /**< Source event time, Unix milliseconds. */
+    uint64_t sequence;   /**< Normalized per-stream sequence, or 0. */
+    double   price;      /**< Executed trade price (> 0). */
+    double   quantity;   /**< Traded quantity in symbol volume units (>= 0). */
 } pf_trade_tick_t;
 
 /** Closed-trade record returned in pf_report_t::trades.
@@ -507,7 +508,7 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
 
 /** @defgroup pf_streaming Historical to realtime streaming
  *  @brief Warm on confirmed OHLCV and continue the same strategy instance on
- *         ordered exchange trades.
+ *         normalized ordered trades from any data source.
  *  @{
  */
 
@@ -516,9 +517,9 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
  *  Pine variables, TA state, request.security state, or timeframe aggregation.
  *
  *  The warmup must contain at least one complete fixed-duration input bar.
- *  Raw ticks start at or after the next input bar's open. This lifecycle uses
- *  close-only strategy calculation (the Pine strategy default) while resting
- *  broker orders are evaluated on every raw trade.
+ *  Normalized ticks start at or after the next input bar's open. This
+ *  lifecycle uses close-only strategy calculation (the Pine strategy default)
+ *  while resting broker orders are evaluated on every normalized trade.
  *
  *  @return 0 on success, -1 on failure. Inspect #strategy_get_last_error. */
 PF_API int strategy_stream_begin(pf_strategy_t s,
@@ -527,7 +528,7 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
                                  const char* input_tf,
                                  const char* script_tf);
 
-/** Push one realtime exchange trade. Returns 0 on success, -1 on failure. */
+/** Push one normalized realtime trade. Returns 0 on success, -1 on failure. */
 PF_API int strategy_stream_push_tick(pf_strategy_t s,
                                      const pf_trade_tick_t* tick);
 
@@ -538,7 +539,8 @@ PF_API int strategy_stream_push_ticks(pf_strategy_t s,
                                       int n);
 
 /** Advance the stream clock and close every input bar whose end is <= the
- *  supplied time. Quiet intervals become zero-volume carry-forward bars. */
+ *  supplied time. Quiet in-session intervals become zero-volume carry-forward
+ *  bars; intervals outside the configured syminfo session are skipped. */
 PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms);
 
 /** End a realtime stream. When @p finalize_partial_input_bar is non-zero, the

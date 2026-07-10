@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Historical OHLCV warmup -> realtime trade-stream tutorial.
 
-The frozen tutorial dataset contains bars rather than exchange trades. To keep
+The frozen tutorial dataset contains bars rather than normalized trades. To keep
 this example self-contained, the final LIVE_BARS candles are expanded into a
-deterministic open/high/low/close trade path. Production callers should pass
-their exchange's actual ordered trade feed through the same ABI.
+deterministic open/high/low/close trade path. Production callers should
+normalize their provider's ordered trade feed into the same ABI.
 """
 from __future__ import annotations
 
@@ -24,10 +24,9 @@ class TradeTickC(ctypes.Structure):
 
     _fields_ = [
         ("timestamp", ctypes.c_int64),
-        ("trade_id", ctypes.c_uint64),
+        ("sequence", ctypes.c_uint64),
         ("price", ctypes.c_double),
-        ("qty", ctypes.c_double),
-        ("is_buyer_maker", ctypes.c_int),
+        ("quantity", ctypes.c_double),
     ]
 
 
@@ -69,14 +68,14 @@ def main() -> int:
     offsets = (0, INPUT_TF_MS // 3, 2 * INPUT_TF_MS // 3,
                INPUT_TF_MS - 1)
     tick_index = 0
-    trade_id = 1
+    sequence = 1
     for bar in bars[warmup_n:]:
         for offset, price in zip(offsets, price_path(bar)):
             ticks[tick_index] = TradeTickC(
-                bar.timestamp + offset, trade_id, price,
-                bar.volume / 4.0, 0)
+                bar.timestamp + offset, sequence, price,
+                bar.volume / 4.0)
             tick_index += 1
-            trade_id += 1
+            sequence += 1
 
     lib = ctypes.CDLL(str(SO))
     check_abi(lib)

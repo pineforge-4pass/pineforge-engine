@@ -69,12 +69,11 @@ int main(void) {
     pf_trade_tick_t tick;
     memset(&tick, 0, sizeof(tick));
     tick.timestamp = 1700000000123LL;
-    tick.trade_id = 987654321ULL;
+    tick.sequence = 987654321ULL;
     tick.price = 103.25;
-    tick.qty = 0.125;
-    tick.is_buyer_maker = 1;
-    CHECK(tick.trade_id == 987654321ULL, "tick.trade_id roundtrip");
-    CHECK(tick.is_buyer_maker == 1,      "tick maker flag roundtrip");
+    tick.quantity = 0.125;
+    CHECK(tick.sequence == 987654321ULL, "tick.sequence roundtrip");
+    CHECK(tick.quantity == 0.125,        "tick.quantity roundtrip");
 
     /* ── Trade ───────────────────────────────────────────────────── */
     pf_trade_t trade;
@@ -105,6 +104,8 @@ int main(void) {
      *     struct membership) ─────────────────────────────────────── */
     CHECK(sizeof(pf_bar_t)            >= 6 * sizeof(double),
           "pf_bar_t too small for OHLCV + timestamp");
+    CHECK(sizeof(pf_trade_tick_t)     == 32,
+          "pf_trade_tick_t must remain a four-field 32-byte POD");
     CHECK(sizeof(pf_trade_t)          >= 80,
           "pf_trade_t unexpectedly small");
     CHECK(sizeof(pf_report_t)         >= 80 + sizeof(pf_metrics_t)

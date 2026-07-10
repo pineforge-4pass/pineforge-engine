@@ -27,11 +27,10 @@ class pf_bar_t(ctypes.Structure):
 
 class pf_trade_tick_t(ctypes.Structure):
     _fields_ = [
-        ("timestamp",       ctypes.c_int64),
-        ("trade_id",        ctypes.c_uint64),
-        ("price",           ctypes.c_double),
-        ("qty",             ctypes.c_double),
-        ("is_buyer_maker",  ctypes.c_int),
+        ("timestamp", ctypes.c_int64),
+        ("sequence",  ctypes.c_uint64),
+        ("price",     ctypes.c_double),
+        ("quantity",  ctypes.c_double),
     ]
 
 class pf_trade_t(ctypes.Structure):

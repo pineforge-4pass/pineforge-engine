@@ -79,7 +79,7 @@ if (strategy_stream_begin(s, history, history_n, "1", "1") != 0)
     fail(strategy_get_last_error(s));
 
 for (;;) {
-    pf_trade_tick_t tick = next_exchange_trade();
+    pf_trade_tick_t tick = next_normalized_trade();
     if (strategy_stream_push_tick(s, &tick) != 0)
         fail(strategy_get_last_error(s));
 
@@ -95,16 +95,16 @@ strategy_stream_fill_report(s, &r);
 ```
 
 The default strategy cadence remains close-only. Resting broker orders are
-checked on every raw trade, so stop/limit fills use the observed exchange path
+checked on every normalized trade, so stop/limit fills use the observed source path
 and a market order from the preceding close fills on the first subsequent
 trade. `strategy_stream_push_ticks()` is the batch equivalent for replay and
 reduces FFI overhead without changing tick semantics.
 
-The warmup's last bar must be confirmed. Begin raw trades at or after the next
-input-bar open. Call `strategy_stream_advance_time()` at confirmed boundaries;
-it closes elapsed bars and creates zero-volume carry-forward bars for quiet
-intervals. Normally end with `finalize_partial_input_bar = 0` to avoid treating
-an open bar as confirmed.
+The warmup's last bar must be confirmed. Begin normalized trades at or after
+the next input-bar open. Call `strategy_stream_advance_time()` at confirmed boundaries;
+it closes elapsed bars, creates zero-volume carry-forward bars for quiet
+in-session intervals, and skips configured out-of-session intervals. Normally
+end with `finalize_partial_input_bar = 0` to avoid treating an open bar as confirmed.
 
 See [Historical to realtime streaming](@ref streaming) for the complete tick
 validation rules, a contiguous-replay example, and the runnable Python

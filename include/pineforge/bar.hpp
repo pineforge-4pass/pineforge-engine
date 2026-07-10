@@ -8,15 +8,15 @@ struct Bar {
     int64_t timestamp;  // Unix milliseconds
 };
 
-// One exchange trade update consumed by BacktestEngine's realtime stream.
-// trade_id is optional (0 means unavailable); when present it must increase
-// strictly so callers cannot silently replay or reorder exchange prints.
+// One provider-neutral executed-trade update consumed by BacktestEngine's
+// realtime stream. `sequence` is assigned by the normalized data source: zero
+// means unavailable, while non-zero values must increase strictly so callers
+// cannot silently replay or reorder records.
 struct TradeTick {
     int64_t timestamp;       // Unix milliseconds
-    uint64_t trade_id;
+    uint64_t sequence;
     double price;
-    double qty;              // base-asset quantity, accumulated into volume
-    bool is_buyer_maker;
+    double quantity;         // normalized size, accumulated into bar volume
 };
 
 } // namespace pineforge

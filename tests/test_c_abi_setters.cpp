@@ -192,9 +192,9 @@ int main() {
 
     pf_trade_tick_t tick{};
     tick.timestamp = 60010;
-    tick.trade_id = 7;
+    tick.sequence = 7;
     tick.price = 101.0;
-    tick.qty = 0.5;
+    tick.quantity = 0.5;
     CHECK(strategy_stream_push_tick(sh, &tick) == 0);
     CHECK(strategy_stream_push_ticks(sh, nullptr, 0) == 0);
     CHECK(strategy_stream_advance_time(sh, 120000) == 0);

@@ -42,6 +42,23 @@ static_assert(offsetof(pf_bar_t, volume) == offsetof(pineforge::Bar, volume),
 static_assert(offsetof(pf_bar_t, timestamp) == offsetof(pineforge::Bar, timestamp),
               "pf_bar_t::timestamp offset mismatch");
 
+/* ── Normalized trade-tick layout parity ───────────────────────── */
+
+static_assert(sizeof(pf_trade_tick_t) == sizeof(pineforge::TradeTick),
+              "pf_trade_tick_t / pineforge::TradeTick size mismatch");
+static_assert(offsetof(pf_trade_tick_t, timestamp)
+                  == offsetof(pineforge::TradeTick, timestamp),
+              "pf_trade_tick_t::timestamp offset mismatch");
+static_assert(offsetof(pf_trade_tick_t, sequence)
+                  == offsetof(pineforge::TradeTick, sequence),
+              "pf_trade_tick_t::sequence offset mismatch");
+static_assert(offsetof(pf_trade_tick_t, price)
+                  == offsetof(pineforge::TradeTick, price),
+              "pf_trade_tick_t::price offset mismatch");
+static_assert(offsetof(pf_trade_tick_t, quantity)
+                  == offsetof(pineforge::TradeTick, quantity),
+              "pf_trade_tick_t::quantity offset mismatch");
+
 /* ── Trade layout parity ────────────────────────────────────────── */
 
 static_assert(sizeof(pf_trade_t) == sizeof(pineforge::TradeC),
@@ -176,15 +193,10 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
 PF_API int strategy_stream_push_tick(pf_strategy_t s,
                                      const pf_trade_tick_t* tick) {
     if (!s || !tick) return -1;
-    const pineforge::TradeTick native{
-        tick->timestamp,
-        tick->trade_id,
-        tick->price,
-        tick->qty,
-        tick->is_buyer_maker != 0,
-    };
-    return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(native)
-        ? 0 : -1;
+    const auto* native = reinterpret_cast<const pineforge::TradeTick*>(tick);
+    return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(*native)
+        ? 0
+        : -1;
 }
 
 PF_API int strategy_stream_push_ticks(pf_strategy_t s,
@@ -192,17 +204,8 @@ PF_API int strategy_stream_push_ticks(pf_strategy_t s,
                                       int n) {
     if (!s || n < 0 || (n > 0 && !ticks)) return -1;
     auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-    for (int i = 0; i < n; ++i) {
-        const pineforge::TradeTick native{
-            ticks[i].timestamp,
-            ticks[i].trade_id,
-            ticks[i].price,
-            ticks[i].qty,
-            ticks[i].is_buyer_maker != 0,
-        };
-        if (!engine->stream_push_tick(native)) return -1;
-    }
-    return 0;
+    const auto* native = reinterpret_cast<const pineforge::TradeTick*>(ticks);
+    return engine->stream_push_ticks(native, n) ? 0 : -1;
 }
 
 PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms) {

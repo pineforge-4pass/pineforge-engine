@@ -51,7 +51,8 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
         }
 
         // A stream's warmup is historical context, not the rightmost realtime
-        // bar. This keeps barstate.islast false until raw trades take over.
+        // bar. This keeps barstate.islast false until normalized trades take
+        // over.
         stream_warmup_mode_ = true;
         run(warmup_bars, n_warmup, input_tf, script_tf,
             /*bar_magnifier=*/false, 4, MagnifierDistribution::ENDPOINTS);
@@ -68,8 +69,8 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
         stream_next_input_open_ms_ = last_open + stream_input_tf_ms_;
         stream_clock_ms_ = stream_next_input_open_ms_;
         stream_last_tick_ms_ = 0;
-        stream_last_trade_id_ = 0;
-        stream_seen_trade_id_ = false;
+        stream_last_sequence_ = 0;
+        stream_seen_sequence_ = false;
         stream_has_input_bar_ = false;
         stream_input_bar_ = Bar{};
         stream_last_price_ = warmup_bars[n_warmup - 1].close;
@@ -80,10 +81,10 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
         stream_script_tick_seen_ = false;
         stream_phase_ = StreamPhase::REALTIME;
 
-        // Exact exchange trades now drive the broker instead of inferred OHLC
-        // paths. Strategy code remains close-only unless codegen later opts in
+        // Exact normalized trades now drive the broker instead of inferred
+        // OHLC paths. Strategy code remains close-only unless codegen opts in
         // to calc_on_every_tick; resting orders are nevertheless fillable on
-        // each raw trade, as on TradingView's realtime broker emulator.
+        // each normalized trade, as on TradingView's realtime broker emulator.
         bar_magnifier_enabled_ = true;
         bar_index_ = stream_next_script_bar_index_;
         last_bar_index_ = bar_index_;
@@ -112,15 +113,15 @@ bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
         if (!std::isfinite(tick.price) || tick.price <= 0.0) {
             throw std::runtime_error("stream tick price must be finite and positive");
         }
-        if (!std::isfinite(tick.qty) || tick.qty < 0.0) {
+        if (!std::isfinite(tick.quantity) || tick.quantity < 0.0) {
             throw std::runtime_error("stream tick quantity must be finite and non-negative");
         }
         if (tick.timestamp < stream_clock_ms_) {
             throw std::runtime_error("stream tick timestamp moved backwards");
         }
-        if (tick.trade_id != 0 && stream_seen_trade_id_
-            && tick.trade_id <= stream_last_trade_id_) {
-            throw std::runtime_error("stream trade_id must be strictly increasing");
+        if (tick.sequence != 0 && stream_seen_sequence_
+            && tick.sequence <= stream_last_sequence_) {
+            throw std::runtime_error("stream sequence must be strictly increasing");
         }
 
         if (!stream_finalize_until(tick.timestamp)) {
@@ -129,36 +130,36 @@ bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
 
         if (!stream_has_input_bar_) {
             stream_input_bar_ = price_point(
-                tick.price, tick.qty, stream_next_input_open_ms_);
+                tick.price, tick.quantity, stream_next_input_open_ms_);
             stream_has_input_bar_ = true;
         } else {
             stream_input_bar_.high = std::max(stream_input_bar_.high, tick.price);
             stream_input_bar_.low = std::min(stream_input_bar_.low, tick.price);
             stream_input_bar_.close = tick.price;
-            stream_input_bar_.volume += tick.qty;
+            stream_input_bar_.volume += tick.quantity;
         }
 
         stream_last_price_ = tick.price;
         stream_has_last_price_ = true;
         stream_last_tick_ms_ = tick.timestamp;
         stream_clock_ms_ = tick.timestamp;
-        if (tick.trade_id != 0) {
-            stream_last_trade_id_ = tick.trade_id;
-            stream_seen_trade_id_ = true;
+        if (tick.sequence != 0) {
+            stream_last_sequence_ = tick.sequence;
+            stream_seen_sequence_ = true;
         }
 
         // Broker-only tick pass. Pine strategy code stays on its default
         // close-only cadence, but orders created on the preceding close fill
-        // at the first actual exchange print and priced orders see the exact
+        // at the first actual source record and priced orders see the exact
         // trade path rather than an inferred OHLC traversal.
-        current_bar_ = price_point(tick.price, tick.qty, tick.timestamp);
+        current_bar_ = price_point(tick.price, tick.quantity, tick.timestamp);
         bar_index_ = stream_next_script_bar_index_;
         last_bar_index_ = bar_index_;
         last_bar_time_ = tick.timestamp;
         barstate_islast_ = true;
         is_first_tick_ = !stream_script_tick_seen_;
         is_last_tick_ = false;
-        // The overwhelming majority of exchange prints arrive while many
+        // The overwhelming majority of source records arrive while many
         // strategies are flat and have no order in the broker. Such a print
         // still contributes to the forming OHLCV bar above, but there is no
         // broker, excursion, or margin state it can possibly mutate. Avoiding
@@ -245,6 +246,20 @@ bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
 bool BacktestEngine::stream_finalize_until(int64_t timestamp_ms) {
     while (timestamp_ms >= stream_next_input_open_ms_ + stream_input_tf_ms_) {
         const bool had_tick = stream_has_input_bar_;
+        const bool in_session = pine_session_ismarket(
+            syminfo_.session, syminfo_.timezone,
+            stream_next_input_open_ms_);
+
+        // A normalized provider may jump from one market session to the next.
+        // Do not turn the closed interval into synthetic tradable bars. A real
+        // source record is still honored even if the configured metadata is
+        // imperfect, so provider data remains authoritative.
+        if (!had_tick && !in_session) {
+            stream_input_bar_ = Bar{};
+            stream_next_input_open_ms_ += stream_input_tf_ms_;
+            continue;
+        }
+
         Bar completed;
         if (had_tick) {
             completed = stream_input_bar_;
@@ -309,7 +324,7 @@ void BacktestEngine::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
 
     // A synthesized zero-volume interval has no raw broker pass. Give resting
     // market orders one carried-price point at its open so time advancement is
-    // deterministic even through quiet exchange intervals.
+    // deterministic even through quiet in-session intervals.
     if (!had_tick) {
         current_bar_ = price_point(bar.open, 0.0, bar.timestamp);
         process_pending_orders(current_bar_);
@@ -354,7 +369,7 @@ void BacktestEngine::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
     record_equity_point(bar.timestamp);
     prev_bar_timestamp_ = bar.timestamp;
 
-    // Raw ticks belonging to the next script bar must compare pending-order
+    // Ticks belonging to the next script bar must compare pending-order
     // created_bar values against the next index before that bar closes.
     bar_index_ = stream_next_script_bar_index_;
     last_bar_index_ = bar_index_;
