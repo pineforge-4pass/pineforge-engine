@@ -93,7 +93,9 @@ public:
         margin_call_enabled_ = false;
     }
     // 'L' = default long "L", 'A' = default long add "L2",
-    // 'S' = default short "S", '.' = nothing.
+    // 'S' = default short "S", 'B' = default long then short in one
+    // execution, 'C' = default short then long in one execution,
+    // 'E' = explicit-qty long then short in one execution, '.' = nothing.
     std::string script;
     void on_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
@@ -101,6 +103,18 @@ public:
             case 'L': strategy_entry("L", true); break;
             case 'A': strategy_entry("L2", true); break;
             case 'S': strategy_entry("S", false); break;
+            case 'B':
+                strategy_entry("L", true);
+                strategy_entry("S", false);
+                break;
+            case 'C':
+                strategy_entry("S", false);
+                strategy_entry("L", true);
+                break;
+            case 'E':
+                strategy_entry("L", true, kNaN, kNaN, 1.0);
+                strategy_entry("S", false, kNaN, kNaN, 1.0);
+                break;
             default: break;
         }
     }
@@ -110,8 +124,18 @@ public:
     using BacktestEngine::slippage_;
     using BacktestEngine::initial_capital_;
     using BacktestEngine::margin_long_;
+    using BacktestEngine::margin_short_;
     const std::vector<Trade>& all_trades() const { return trades_; }
 };
+
+static void run_constant_100_script(Probe& eng, const std::string& script) {
+    eng.script = script;
+    std::vector<Bar> bars(5, mk_bar(1000, 100, 100, 100, 100));
+    for (int i = 0; i < static_cast<int>(bars.size()); ++i) {
+        bars[i].timestamp = (i + 1) * 1000;
+    }
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+}
 
 // A. Flat open, gap UP: admitted, qty stays frozen (10000/100 = 100).
 void test_flat_gap_up_admitted() {
@@ -370,6 +394,182 @@ void test_margin_above_100_flat_open_admitted() {
     CHECK_NEAR(eng.position_qty_, 100.0, 1e-9);
 }
 
+// L. A MARKET entry that was same-direction when created can become a
+// reversal when an earlier sibling flips the position at the shared next
+// tick. TV rechecks this newly augmented transaction against free margin:
+//
+//   held margin       = live_qty(1) * price(100) = 100
+//   reversal order    = close_qty(1) + new_qty(1) = 2 * 100 = 200
+//   total requirement = 300
+//
+// With equity 299 the second order is silently declined, leaving the first
+// reversal's LONG open. At the exact equity=300 boundary, required margin and
+// held+transaction capital are equal and the second order is admitted; 301 is
+// the funded control. This is pinned by the gb2wgkrtxs export: among common
+// two-order timestamps, TV keeps both in 992/992 cases above held+transaction
+// margin and only one in 470/471 cases below it.
+void test_same_side_market_becomes_reversal_free_margin_gate() {
+    std::printf("-- L: same-side market becomes reversal, free-margin gate --\n");
+    {
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 299.0;
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 1);              // Seed closed by L only
+        CHECK(eng.position_side_ == PositionSide::LONG);
+        CHECK_NEAR(eng.position_qty_, 1.0, 1e-9);
+    }
+    {
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 300.0;
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 2);              // exact tie is admitted
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK_NEAR(eng.position_qty_, 1.0, 1e-9);
+    }
+    {
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 301.0;
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK_NEAR(eng.position_qty_, 1.0, 1e-9);
+    }
+}
+
+// M. Mutation-killing scope controls for the bounded GB2 gate. Every fixture
+// starts one dollar below the 300-dollar fixed/default admission boundary, so
+// accidentally widening exactly one guard turns the expected fill into a
+// decline:
+//   - explicit qty remains owned by strategy_entry's signal-time admission;
+//   - both the held side and requested side must independently be 100% margin;
+//   - an ordinary same-direction FIXED add never became a reversal;
+//   - PERCENT_OF_EQUITY=100 remains owned by KI-54's frozen-sizing gate.
+void test_same_side_role_change_scope_controls() {
+    std::printf("-- M: same-side role-change scope controls --\n");
+    {
+        std::printf("   M.1 explicit qty is inert\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 299.0;
+        run_constant_100_script(eng, "S.E..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK_NEAR(eng.position_qty_, 1.0, 1e-9);
+    }
+    {
+        std::printf("   M.2 held-side margin != 100 is inert\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 299.0;
+        eng.margin_long_ = 50.0;       // live held side before the second fill
+        eng.margin_short_ = 100.0;     // requested side
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK_NEAR(eng.position_qty_, 1.0, 1e-9);
+    }
+    {
+        std::printf("   M.3 requested-side margin != 100 is inert\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 299.0;
+        eng.margin_long_ = 100.0;      // live held side before the second fill
+        eng.margin_short_ = 50.0;      // requested side
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK_NEAR(eng.position_qty_, 1.0, 1e-9);
+    }
+    {
+        std::printf("   M.4 ordinary same-direction FIXED add is inert\n");
+        Probe eng(QtyType::FIXED, 1.0, 2);
+        eng.initial_capital_ = 299.0;
+        run_constant_100_script(eng, "LA...");
+        CHECK(eng.trade_count() == 0);
+        CHECK(eng.position_side_ == PositionSide::LONG);
+        CHECK_NEAR(eng.position_qty_, 2.0, 1e-9);
+    }
+    {
+        std::printf("   M.5 percent-of-equity role change stays in KI-54\n");
+        Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
+        eng.initial_capital_ = 300.0;
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK_NEAR(eng.position_qty_, 3.0, 1e-9);
+    }
+}
+
+// N. Slippage-basis boundary. With 100 ticks at mintick .01, each buy books
+// at 101 and each sell at 99 while the broker's matched mark remains raw 100.
+// The role-changing order must therefore use raw 100 for open equity and held
+// margin, but the requested transaction must use its slipped execution price.
+//
+// SHORT request after a SHORT->LONG first sibling:
+//   realized=-2, open=-1 at raw 100, held=100, required=2*99=198
+//   capital 301 => free=198 (admit); capital 300 => free=197 (decline).
+// LONG request after a LONG->SHORT first sibling:
+//   realized=-2, open=-1 at raw 100, held=100, required=2*101=202
+//   capital 305 => free=202 (admit); capital 304 => free=201 (decline).
+// These four edges kill raw-fill transaction pricing and slipped-mark
+// substitutions independently in both directions.
+void test_same_side_role_change_slippage_basis() {
+    std::printf("-- N: same-side role-change slippage basis --\n");
+    {
+        std::printf("   N.1 slipped SHORT transaction exact tie admits\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 301.0;
+        eng.slippage_ = 100;
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        if (eng.trade_count() == 2) {
+            CHECK_NEAR(eng.all_trades()[0].entry_price, 99.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[0].exit_price, 101.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[1].entry_price, 101.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[1].exit_price, 99.0, 1e-9);
+        }
+    }
+    {
+        std::printf("   N.2 slipped SHORT transaction one dollar short declines\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 300.0;
+        eng.slippage_ = 100;
+        run_constant_100_script(eng, "S.B..");
+        CHECK(eng.trade_count() == 1);
+        CHECK(eng.position_side_ == PositionSide::LONG);
+        if (eng.trade_count() == 1) {
+            CHECK_NEAR(eng.all_trades()[0].entry_price, 99.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[0].exit_price, 101.0, 1e-9);
+        }
+    }
+    {
+        std::printf("   N.3 slipped LONG transaction exact tie admits\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 305.0;
+        eng.slippage_ = 100;
+        run_constant_100_script(eng, "L.C..");
+        CHECK(eng.trade_count() == 2);
+        CHECK(eng.position_side_ == PositionSide::LONG);
+        if (eng.trade_count() == 2) {
+            CHECK_NEAR(eng.all_trades()[0].entry_price, 101.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[0].exit_price, 99.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[1].entry_price, 99.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[1].exit_price, 101.0, 1e-9);
+        }
+    }
+    {
+        std::printf("   N.4 slipped LONG transaction one dollar short declines\n");
+        Probe eng(QtyType::FIXED, 1.0, 1);
+        eng.initial_capital_ = 304.0;
+        eng.slippage_ = 100;
+        run_constant_100_script(eng, "L.C..");
+        CHECK(eng.trade_count() == 1);
+        CHECK(eng.position_side_ == PositionSide::SHORT);
+        if (eng.trade_count() == 1) {
+            CHECK_NEAR(eng.all_trades()[0].entry_price, 101.0, 1e-9);
+            CHECK_NEAR(eng.all_trades()[0].exit_price, 99.0, 1e-9);
+        }
+    }
+}
+
 int main() {
     std::printf("--- margin_admission_gate ---\n");
     test_flat_gap_up_admitted();
@@ -383,6 +583,9 @@ int main() {
     test_fractional_add_marked_to_market();
     test_negative_equity_gate_does_not_run();
     test_margin_above_100_flat_open_admitted();
+    test_same_side_market_becomes_reversal_free_margin_gate();
+    test_same_side_role_change_scope_controls();
+    test_same_side_role_change_slippage_basis();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
