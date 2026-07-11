@@ -795,7 +795,8 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            double trail_best_start,
                                            bool is_entry_bar,
                                            bool magnifier_active,
-                                           double syminfo_mintick) {
+                                           double syminfo_mintick,
+                                           bool cascade_wp_gap) {
     ExitPathFill fill;
     if (position_side == PositionSide::FLAT) return fill;
 
@@ -817,7 +818,12 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
     // shortcut on the entry bar in magnifier mode only; the wrong-side
     // eligibility skip in classify_order_eligibility still gates the non-
     // magnifier path against bogus na-arithmetic stops.
-    if (!is_entry_bar || magnifier_active) {
+    // cascade_wp_gap is the KI-67 exit-cascade in-flight leg-end waypoint POINT
+    // (a degenerate O=H=L=C=W bar). The Model S gate has already established that
+    // the exit level lies in the in-flight remainder in the trigger direction, so
+    // the order gap-fills at that waypoint price — force the open-gap shortcut on
+    // even though entry and exit share this bar (is_entry_bar).
+    if (!is_entry_bar || magnifier_active || cascade_wp_gap) {
         if (try_exit_open_gap_fill(bar, is_long, has_stop, stop_price,
                                    has_limit, limit_price, trail, &fill)) {
             return fill;
@@ -854,6 +860,41 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
     }
 
     return fill;
+}
+
+
+bool cascade_exit_inflight_fires(const Bar& bar, double ap, int seg_i,
+                                 PositionSide position_side,
+                                 double stop_price, double limit_price) {
+    // A terminal (seg_i == 2 -> C) or off-path (seg_i < 0) in-flight leg never
+    // gap-fills same-bar; only the two extreme-ending legs (O->W1, W1->W2) do.
+    if (seg_i < 0 || seg_i >= 2) return false;
+
+    double path[4];
+    fill_bar_path_points(bar, path);
+
+    const bool is_long = (position_side == PositionSide::LONG);
+    // W0 is the in-flight leg-end waypoint; the in-flight remainder is ap -> W0
+    // (a fill AT the leg's start waypoint makes ap == path[seg_i], sweeping the
+    // whole leg). A limit fires on the with-cursor-direction leg (better than the
+    // level); a stop would need the opposite direction, so it can only trigger on
+    // a later (reversed) leg — the general form is kept for brackets.
+    const double W0 = path[seg_i + 1];
+    const bool goes_up = W0 >= ap;
+    const bool has_stop = !std::isnan(stop_price);
+    const bool has_limit = !std::isnan(limit_price);
+    bool trig = false;
+    if (has_stop) {
+        trig = trig
+            || (is_long && !goes_up && W0 <= stop_price && stop_price <= ap)
+            || (!is_long && goes_up && ap <= stop_price && stop_price <= W0);
+    }
+    if (has_limit) {
+        trig = trig
+            || (is_long && goes_up && ap < limit_price && limit_price <= W0)
+            || (!is_long && !goes_up && W0 <= limit_price && limit_price < ap);
+    }
+    return trig;
 }
 
 

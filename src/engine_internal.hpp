@@ -218,7 +218,21 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            double trail_best_start,
                                            bool is_entry_bar,
                                            bool magnifier_active,
-                                           double syminfo_mintick);
+                                           double syminfo_mintick,
+                                           bool cascade_wp_gap = false);
+
+
+// KI-67 exit cascade (Model S "R-cascade-gapjump"). Given the in-flight LEG
+// index seg_i (0 = O->W1, 1 = W1->W2, 2 = W2->C; supplied by the dispatch loop's
+// real cursor position), the full script bar, and the recalc price ap the
+// triggering fill landed on, returns true when the exit level lies inside the
+// in-flight remainder (ap -> leg-end waypoint W0 = path[seg_i+1]) in the trigger
+// direction on a NON-terminal leg — i.e. it gap-fills same-bar at W0 (limits
+// fill better than the level, stops worse). False for a terminal (seg_i>=2) or
+// off-path (seg_i<0) leg, and whenever the level is not swept in the remainder.
+bool cascade_exit_inflight_fires(const Bar& bar, double ap, int seg_i,
+                                 PositionSide position_side,
+                                 double stop_price, double limit_price);
 
 
 // ── Lower-TF emulation helpers (defined in engine_lower_tf.cpp) ──
