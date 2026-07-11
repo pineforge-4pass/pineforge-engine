@@ -187,6 +187,11 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
+    // KI-67: a fill recalc that was NOT triggered at the bar-open tick is a
+    // mid-bar recalc; orders it places are cascade orders (eligible only at the
+    // remaining extreme waypoints of the historical 4-tick path).
+    order.coof_born_mid_bar =
+        coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     order.created_position_side = position_side_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
@@ -800,6 +805,11 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
+    // KI-67: a fill recalc that was NOT triggered at the bar-open tick is a
+    // mid-bar recalc; orders it places are cascade orders (eligible only at the
+    // remaining extreme waypoints of the historical 4-tick path).
+    order.coof_born_mid_bar =
+        coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     if (coof_fill_recalc_active_ && coof_scheduler_active_
         && std::isfinite(coof_cursor_price_)
         && position_side_ != PositionSide::FLAT
@@ -871,6 +881,11 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
+    // KI-67: a fill recalc that was NOT triggered at the bar-open tick is a
+    // mid-bar recalc; orders it places are cascade orders (eligible only at the
+    // remaining extreme waypoints of the historical 4-tick path).
+    order.coof_born_mid_bar =
+        coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     order.created_position_side = position_side_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
@@ -1155,6 +1170,11 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
+    // KI-67: a fill recalc that was NOT triggered at the bar-open tick is a
+    // mid-bar recalc; orders it places are cascade orders (eligible only at the
+    // remaining extreme waypoints of the historical 4-tick path).
+    order.coof_born_mid_bar =
+        coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     order.created_position_side = position_side_;
     order.tv_carry_qty = position_qty_;
     order.comment = comment;

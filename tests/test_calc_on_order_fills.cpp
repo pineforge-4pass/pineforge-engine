@@ -464,10 +464,12 @@ void test_stop_limit_activation_survives_segment_split() {
     }
 }
 
-// Candidate discovery may look beyond the broker cursor, but stop-limit
-// activation cannot. A's stop sits beyond the last event-budget cursor (105);
-// scanning the full O->H segment must not pre-arm it and allow its 95 limit to
-// fill on a later bar that never touches the 108 stop.
+// KI-67: with the fixed 4-event budget removed the broker cursor traverses the
+// WHOLE O->L->H->C path, so A's stop=108 IS genuinely reached on the L->H leg
+// (the bar prints 110) and A activates; its limit=95 then fills on bar index 2
+// when the low reaches 90. (The old budget stopped the cursor at 105 and A
+// never armed — a truncation artifact, not TV behaviour.) A is a resting order,
+// not a cascade order, so the cascade waypoint gate never applies to it.
 class StopLimitSpeculationProbe final : public CoofBase {
 public:
     void on_bar(const Bar&) override {
@@ -493,18 +495,25 @@ void test_stop_limit_activation_commits_only_through_consumed_cursor() {
 
     CHECK(p.last_error().empty());
     const auto ids = p.open_lot_ids();
-    CHECK(ids.size() == 4);
-    if (ids.size() == 4) {
+    const auto lpx = p.open_lot_prices();
+    CHECK(ids.size() == 5);
+    if (ids.size() == 5) {
         CHECK(ids[0] == "M0");
         CHECK(ids[1] == "M1");
         CHECK(ids[2] == "B103");
         CHECK(ids[3] == "B105");
+        CHECK(ids[4] == "A");        // KI-67: A's stop=108 is truly reached; it
+        CHECK(near(lpx[4], 95.0));   // arms and its limit fills at 95 on bar 2.
     }
 }
 
 // The legacy one-priced-entry-per-bar throttle predates COOF. A priced entry
 // born in a fill recalc belongs to the new broker epoch and may itself fill,
 // recalc, and place another priced entry on the remaining same-bar segment.
+// KI-67: L1 is placed by the bar-OPEN recalc (standard: exact fill at 105);
+// L2 is placed by the MID-BAR recalc that L1's fill triggered, so it is a
+// cascade order and GAP-fills at the next extreme waypoint (W2=110), not at its
+// interpolated 108 level on the L->H segment.
 class RecalcPricedEntryCascadeProbe final : public CoofBase {
 public:
     void on_bar(const Bar&) override {
@@ -538,7 +547,9 @@ void test_fill_recalc_priced_entries_bypass_legacy_bar_throttle() {
         CHECK(ids[2] == "L2");
         CHECK(near(px[0], 100.0));
         CHECK(near(px[1], 105.0));
-        CHECK(near(px[2], 108.0));
+        // KI-67: cascade L2 gap-fills at the extreme waypoint W2=110, not at
+        // its interpolated 108 level inside the L->H segment.
+        CHECK(near(px[2], 110.0));
     }
 }
 
@@ -850,10 +861,14 @@ void test_pooc_same_tick_requires_close_cursor_or_immediately() {
     }
 }
 
-// POOC's legacy same-bar priced-order carve-out applies to orders created by
-// the ordinary CLOSE execution. A bracket born in an INTRABAR fill recalc is
-// already live at the broker cursor and must use normal remaining-path trigger
-// semantics, not the close endpoint's gap/reissue pricing.
+// A bracket born in an INTRABAR fill recalc is a KI-67 cascade order: it may
+// fill ONLY at a remaining extreme waypoint of the historical 4-tick path,
+// never at an interpolated intra-segment level and never at C. Entry stop
+// L=105 fills mid-bar (path tie -> O=100,L=90,H=110,C=100), so the bracket is a
+// cascade order with only the W2=110 extreme left, and NEITHER leg is reachable
+// there (sl=102 needs a fall to 102; tp=112 needs a rise to 112 — 110 delivers
+// neither). Both therefore convert to ordinary resting orders and fill on the
+// NEXT bar, instead of the old behaviour of exact-level-filling on the segment.
 class PoocIntrabarBracketProbe final : public CoofBase {
 public:
     enum class Leg { STOP, LIMIT };
@@ -869,7 +884,7 @@ public:
             if (leg_ == Leg::STOP) {
                 strategy_exit("X", "L", kNaN, 102.0);
             } else {
-                strategy_exit("X", "L", 109.0, kNaN);
+                strategy_exit("X", "L", 112.0, kNaN);
             }
         }
     }
@@ -883,26 +898,35 @@ void test_pooc_intrabar_recalc_priced_order_uses_remaining_path() {
     Bar bars[] = {
         {100.0, 101.0, 99.0, 100.0, 1000.0,   900'000},
         {100.0, 110.0, 90.0, 100.0, 1000.0, 1'800'000},
+        {103.0, 113.0, 95.0,  98.0, 1000.0, 2'700'000},
     };
 
+    // Cascade sl=102 is not reachable at the only remaining extreme (W2=110); it
+    // converts to an ordinary resting order and fills at 102 on the NEXT bar
+    // (bar 2 dips to 95), NOT via an exact-level fill on the bar-1 110->100 leg.
     PoocIntrabarBracketProbe stop(PoocIntrabarBracketProbe::Leg::STOP);
-    stop.run(bars, 2);
+    stop.run(bars, 3);
     CHECK(stop.last_error().empty());
     CHECK(stop.trade_count() == 1);
     if (stop.trade_count() == 1) {
         CHECK(near(stop.get_trade(0).entry_price, 105.0));
         CHECK(near(stop.get_trade(0).exit_price, 102.0));
-        CHECK(stop.get_trade(0).entry_bar_index == stop.get_trade(0).exit_bar_index);
+        CHECK(stop.get_trade(0).entry_bar_index == 1);
+        CHECK(stop.get_trade(0).exit_bar_index == 2);
     }
 
+    // Cascade tp=112 is likewise unreachable at W2=110 on bar 1; it converts to
+    // a resting limit and fills at 112 on bar 2 (which rises to 113), NOT at an
+    // interpolated level on the bar-1 105->110 segment.
     PoocIntrabarBracketProbe limit(PoocIntrabarBracketProbe::Leg::LIMIT);
-    limit.run(bars, 2);
+    limit.run(bars, 3);
     CHECK(limit.last_error().empty());
     CHECK(limit.trade_count() == 1);
     if (limit.trade_count() == 1) {
         CHECK(near(limit.get_trade(0).entry_price, 105.0));
-        CHECK(near(limit.get_trade(0).exit_price, 109.0));
-        CHECK(limit.get_trade(0).entry_bar_index == limit.get_trade(0).exit_bar_index);
+        CHECK(near(limit.get_trade(0).exit_price, 112.0));
+        CHECK(limit.get_trade(0).entry_bar_index == 1);
+        CHECK(limit.get_trade(0).exit_bar_index == 2);
     }
 }
 
@@ -1357,12 +1381,12 @@ void test_pooc_ordinary_close_reversal_siblings_share_live_c() {
     CHECK(near(p.signed_size(), -1.0));
 }
 
-// An EXPLICIT immediate close produced by the final allowed INTRABAR recalc
-// consumes the same four-event historical budget. The carried five-unit fill
-// is event 1, so only three one-unit immediate closes may execute; admitting a
-// fourth close would silently produce a fifth broker event. This control is
-// deliberately non-POOC: its carried entry fills at O, so all recalculations
-// occur before the terminal close phase.
+// KI-67: TradingView applies NO per-bar fill-event budget. A carried five-unit
+// entry fills at O and each fill recalc closes one more unit immediately; with
+// the fixed 4-event cap removed, all five one-unit closes execute and the
+// position ends flat (the old budget stopped after three, leaving 2 units).
+// This control is deliberately non-POOC: its carried entry fills at O, so all
+// recalculations occur before the terminal close phase.
 class RecalcChainBudgetProbe final : public CoofBase {
 public:
     void on_bar(const Bar&) override {
@@ -1385,8 +1409,9 @@ void test_intrabar_direct_fill_from_last_recalc_respects_event_budget() {
     p.run(bars, 2);
 
     CHECK(p.last_error().empty());
-    CHECK(p.trade_count() == 3);
-    CHECK(near(p.signed_size(), 2.0));
+    // KI-67: no fill-event budget — all five one-unit closes execute (was 3).
+    CHECK(p.trade_count() == 5);
+    CHECK(near(p.signed_size(), 0.0));
 }
 
 struct IdentitySnapshot {
