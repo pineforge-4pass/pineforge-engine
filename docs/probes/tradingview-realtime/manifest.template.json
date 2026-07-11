@@ -25,6 +25,8 @@
     "alert_id": "replace-me",
     "created_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
     "condition": "order fills and alert() function calls",
+    "event_schema": "pf-tv-probe-event-v2",
+    "command_schema": "pf-tv-probe-command-v2",
     "message_template_sha256": "replace-me",
     "webhook_receiver": "redacted-host-label"
   },

@@ -14,34 +14,61 @@ int offsetTicks = input.int(300, "Initial trail offset (ticks)", minval=2)
 int changedOffsetTicks = input.int(100, "Changed-offset delta (ticks)", minval=1)
 int timeoutBars = input.int(240, "Timeout bars", minval=4)
 bool arm = input.bool(true, "Arm at scheduled time")
+string MODE = mode
 
 trace(string tag) =>
-    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","tag":"' + tag +
-     '","bar_index":' + str.tostring(bar_index) +
-     ',"bar_time_ms":' + str.tostring(time) +
-     ',"time_close_ms":' + str.tostring(time_close) +
-     ',"price":' + str.tostring(close, format.mintick) +
-     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+    '{"schema":"pf-tv-probe-event-v2","source":"tradingview","event_type":"trace","event_key_hint":"' +
+     PROBE + '|' + runId + '|trace|' + tag + '|' + str.tostring(bar_index) +
+     '|' + str.tostring(time) + '|' + str.tostring(timenow) +
+     '","probe":{"id":"' + PROBE + '","run_id":"' + runId +
+     '","mode":"' + MODE + '"},"event":{"name":"' + tag +
+     '"},"market":{"tickerid":"' + syminfo.tickerid +
+     '","interval":"' + timeframe.period + '","bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"bar_close_ms":' + str.tostring(time_close) + ',"server_time_ms":' +
+     str.tostring(timenow) + ',"price":' + str.tostring(close, format.mintick) +
+     '},"strategy":{"position_size":' + str.tostring(strategy.position_size) + '}}'
 
-fill(string tag) =>
-    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","order_tag":"' + tag +
-     '","command_bar_index":' + str.tostring(bar_index) +
-     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+jsonNumber(float value) => na(value) ? "null" : str.tostring(value)
+jsonStringOrNull(string value) => value == "" ? "null" : '"' + value + '"'
+commandMessage(string tag, string api, string action, string orderId,
+     int sourceOrder, string side, string orderType, string fromEntry,
+     float qty, float stopValue, float limitValue, float trailPoints,
+     float trailOffset, string ocaName, string ocaType, string intent) =>
+    '{"schema":"pf-tv-probe-command-v2","probe":{"id":"' + PROBE +
+     '","run_id":"' + runId + '","mode":"' + MODE +
+     '"},"command":{"tag":"' + tag + '","api":"' + api +
+     '","action":"' + action + '","order_id":"' + orderId +
+     '","source_order":' + str.tostring(sourceOrder) + ',"side":"' + side +
+     '","order_type":"' + orderType + '","from_entry":' +
+     jsonStringOrNull(fromEntry) + ',"qty":' + jsonNumber(qty) +
+     ',"stop_price":' + jsonNumber(stopValue) + ',"limit_price":' +
+     jsonNumber(limitValue) + ',"profit_ticks":null,"loss_ticks":null,"trail_points":' +
+     jsonNumber(trailPoints) +
+     ',"trail_offset":' + jsonNumber(trailOffset) + ',"oca_name":' +
+     jsonStringOrNull(ocaName) + ',"oca_type":' + jsonStringOrNull(ocaType) +
+     ',"debug_intent":"' + intent + '"},"message_evaluation":{"bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"server_time_ms":' + str.tostring(timenow) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}}'
 
 traceCandidates(string tag, float watermark, float preservedLevel,
      float resetLevel) =>
-    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","tag":"' + tag +
-     '","bar_index":' + str.tostring(bar_index) +
-     ',"bar_time_ms":' + str.tostring(time) +
-     ',"time_close_ms":' + str.tostring(time_close) +
-     ',"price":' + str.tostring(close, format.mintick) +
-     ',"pre_reissue_watermark":' + str.tostring(watermark, format.mintick) +
+    '{"schema":"pf-tv-probe-event-v2","source":"tradingview","event_type":"trace","event_key_hint":"' +
+     PROBE + '|' + runId + '|trace|' + tag + '|' + str.tostring(bar_index) +
+     '|' + str.tostring(time) + '|' + str.tostring(timenow) +
+     '","probe":{"id":"' + PROBE + '","run_id":"' + runId +
+     '","mode":"' + MODE + '"},"event":{"name":"' + tag +
+     '"},"market":{"tickerid":"' + syminfo.tickerid +
+     '","interval":"' + timeframe.period + '","bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"bar_close_ms":' + str.tostring(time_close) + ',"server_time_ms":' +
+     str.tostring(timenow) + ',"price":' + str.tostring(close, format.mintick) +
+     '},"strategy":{"position_size":' + str.tostring(strategy.position_size) +
+     '},"debug":{"pre_reissue_watermark":' + str.tostring(watermark, format.mintick) +
      ',"preserved_stop_candidate":' + str.tostring(preservedLevel, format.mintick) +
      ',"reset_stop_candidate":' + str.tostring(resetLevel, format.mintick) +
-     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+     '}}'
 
 var int liveBars = 0
 var bool entryPlaced = false
@@ -102,15 +129,22 @@ if active
         liveBars += 1
         if not entryPlaced
             entryPlaced := true
+            alert(trace("command_entry_issued"), alert.freq_all)
             strategy.entry("L", strategy.long, qty=1,
-                 alert_message=fill("entry"))
+                 alert_message=commandMessage("entry", "strategy.entry",
+                 "create", "L", 1, "long", "market", "", 1, na, na,
+                 na, na, "", "", "open position for trailing reissue probe"))
             alert(trace("market_entry_created"), alert.freq_all)
         else if strategy.position_size > 0 and not trailPlaced
             trailPlaced := true
             trailPlacedBar := bar_index
+            alert(trace("command_trail_initial_issued"), alert.freq_all)
             strategy.exit("TX", "L", trail_points=activationTicks,
                  trail_offset=offsetTicks,
-                 alert_message=fill("trail_initial"))
+                 alert_message=commandMessage("trail_initial", "strategy.exit",
+                 "create", "TX", 1, "exit_long", "trailing_exit", "L", na,
+                 na, na, activationTicks, offsetTicks, "", "",
+                 "create initial trailing exit before activation"))
             alert(trace("trail_initial_created"), alert.freq_all)
         else if strategy.position_size > 0 and activationObserved and not reissued and
              bar_index > trailPlacedBar and close < observedWatermark and
@@ -122,9 +156,13 @@ if active
             preReissueWatermark := observedWatermark
             preservedStopCandidate := preReissueWatermark - nextOffset * syminfo.mintick
             resetStopCandidate := close - nextOffset * syminfo.mintick
+            alert(trace("command_trail_reissued_issued"), alert.freq_all)
             strategy.exit("TX", "L", trail_points=activationTicks,
                  trail_offset=nextOffset,
-                 alert_message=fill("trail_reissued"))
+                 alert_message=commandMessage("trail_reissued", "strategy.exit",
+                 "replace", "TX", 1, "exit_long", "trailing_exit", "L", na,
+                 na, na, activationTicks, nextOffset, "", "",
+                 "test whether reissue preserves the pre-reissue watermark"))
             alert(traceCandidates("trail_reissued_on_discriminating_retrace",
                  preReissueWatermark, preservedStopCandidate, resetStopCandidate),
                  alert.freq_all)
@@ -133,10 +171,15 @@ if active
             alert(trace("inconclusive_trail_filled_before_reissue"), alert.freq_all)
         else if not timedOut and liveBars >= timeoutBars
             timedOut := true
+            alert(trace("command_cancel_TX_timeout"), alert.freq_all)
             strategy.cancel("TX")
             if strategy.position_size != 0
+                alert(trace("command_timeout_close_issued"), alert.freq_all)
                 strategy.close("L", immediately=true,
-                     alert_message=fill("timeout_close"))
+                     alert_message=commandMessage("timeout_close",
+                     "strategy.close", "cleanup", "L", 1, "flat",
+                     "market_close", "L", na, na, na, na, na, "", "",
+                     "cleanup residual long position after P4 timeout"))
             alert(trace("timeout_cleanup_inconclusive"), alert.freq_all)
 
 plot(observedWatermark, "observed tick watermark", color=color.aqua)

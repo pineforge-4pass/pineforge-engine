@@ -13,21 +13,47 @@ int profitTicks = input.int(10000, "Exit profit distance (ticks)", minval=1)
 int lossTicks = input.int(10000, "Exit loss distance (ticks)", minval=1)
 int timeoutBars = input.int(360, "Timeout bars", minval=5)
 bool arm = input.bool(true, "Arm at scheduled time")
+string MODE = mode
 
 trace(string tag) =>
-    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","tag":"' + tag +
-     '","bar_index":' + str.tostring(bar_index) +
-     ',"bar_time_ms":' + str.tostring(time) +
-     ',"time_close_ms":' + str.tostring(time_close) +
-     ',"price":' + str.tostring(close, format.mintick) +
-     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+    '{"schema":"pf-tv-probe-event-v2","source":"tradingview","event_type":"trace","event_key_hint":"' +
+     PROBE + '|' + runId + '|trace|' + tag + '|' + str.tostring(bar_index) +
+     '|' + str.tostring(time) + '|' + str.tostring(timenow) +
+     '","probe":{"id":"' + PROBE + '","run_id":"' + runId +
+     '","mode":"' + MODE + '"},"event":{"name":"' + tag +
+     '"},"market":{"tickerid":"' + syminfo.tickerid +
+     '","interval":"' + timeframe.period + '","bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"bar_close_ms":' + str.tostring(time_close) + ',"server_time_ms":' +
+     str.tostring(timenow) + ',"price":' + str.tostring(close, format.mintick) +
+     '},"strategy":{"position_size":' + str.tostring(strategy.position_size) + '}}'
 
-fill(string tag) =>
-    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","order_tag":"' + tag +
-     '","command_bar_index":' + str.tostring(bar_index) +
-     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+jsonNumber(float value) => na(value) ? "null" : str.tostring(value)
+jsonStringOrNull(string value) => value == "" ? "null" : '"' + value + '"'
+commandMessage(string tag, string api, string action, string orderId,
+     int sourceOrder, string side, string orderType, string fromEntry,
+     float qty, float stopValue, float limitValue, float trailPoints,
+     float trailOffset, string ocaName, string ocaType, string intent) =>
+    float profitValue = orderType == "relative_bracket" or
+         orderType == "profit_exit" ? profitTicks : na
+    float lossValue = orderType == "relative_bracket" or
+         orderType == "stop_loss" ? lossTicks : na
+    '{"schema":"pf-tv-probe-command-v2","probe":{"id":"' + PROBE +
+     '","run_id":"' + runId + '","mode":"' + MODE +
+     '"},"command":{"tag":"' + tag + '","api":"' + api +
+     '","action":"' + action + '","order_id":"' + orderId +
+     '","source_order":' + str.tostring(sourceOrder) + ',"side":"' + side +
+     '","order_type":"' + orderType + '","from_entry":' +
+     jsonStringOrNull(fromEntry) + ',"qty":' + jsonNumber(qty) +
+     ',"stop_price":' + jsonNumber(stopValue) + ',"limit_price":' +
+     jsonNumber(limitValue) + ',"profit_ticks":' + jsonNumber(profitValue) +
+     ',"loss_ticks":' + jsonNumber(lossValue) + ',"trail_points":' + jsonNumber(trailPoints) +
+     ',"trail_offset":' + jsonNumber(trailOffset) + ',"oca_name":' +
+     jsonStringOrNull(ocaName) + ',"oca_type":' + jsonStringOrNull(ocaType) +
+     ',"debug_intent":"' + intent + '"},"message_evaluation":{"bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"server_time_ms":' + str.tostring(timenow) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}}'
 
 var int liveBars = 0
 var bool firstEntryPlaced = false
@@ -51,32 +77,59 @@ if active and barstate.isconfirmed and bar_index > armedBar
     liveBars += 1
     if not firstEntryPlaced
         firstEntryPlaced := true
+        alert(trace("command_entry_A_issued"), alert.freq_all)
         strategy.entry("A", strategy.long, qty=1,
-             alert_message=fill("entry_A"))
+             alert_message=commandMessage("entry_A", "strategy.entry",
+             "create", "A", 1, "long", "market", "", 1, na, na, na, na,
+             "", "", "open first lot before creating the unscoped exit"))
         alert(trace("entry_A_created"), alert.freq_all)
     else if strategy.position_size >= 1 and not exitPlaced
         exitPlaced := true
         exitPlacedBar := bar_index
+        alert(trace("command_exit_without_from_entry_issued"), alert.freq_all)
         strategy.exit("X", profit=profitTicks, loss=lossTicks,
              comment_profit="profit", comment_loss="loss",
-             alert_message=fill("exit_without_from_entry"),
-             alert_profit=fill("exit_profit"), alert_loss=fill("exit_loss"))
+             alert_message=commandMessage("exit_without_from_entry",
+             "strategy.exit", "create", "X", 1, "exit_long",
+             "relative_bracket", "", na, na, na, na, na, "", "",
+             "unscoped bracket created while only entry A exists"),
+             alert_profit=commandMessage("exit_profit", "strategy.exit",
+             "create", "X", 1, "exit_long", "profit_exit", "", na, na, na,
+             na, na, "", "", "profit child of exit X for original scope"),
+             alert_loss=commandMessage("exit_loss", "strategy.exit", "create",
+             "X", 1, "exit_long", "stop_loss", "", na, na, na, na, na,
+             "", "", "loss child of exit X for original scope"))
         alert(trace("exit_without_from_entry_created_for_A"), alert.freq_all)
     else if strategy.position_size >= 1 and exitPlaced and not secondEntryPlaced and
          bar_index > exitPlacedBar
         secondEntryPlaced := true
+        alert(trace("command_entry_B_later_issued"), alert.freq_all)
         strategy.entry("B", strategy.long, qty=1,
-             alert_message=fill("entry_B_later"))
+             alert_message=commandMessage("entry_B_later", "strategy.entry",
+             "create", "B", 1, "long", "market", "", 1, na, na, na, na,
+             "", "", "open later lot B after unscoped exit X already exists"))
         alert(trace("later_entry_B_created"), alert.freq_all)
     else if strategy.position_size >= 2 and not twoLotsObserved
         twoLotsObserved := true
         if mode == "positive_control_reissue_after_B"
             controlReissued := true
+            alert(trace("command_positive_control_exit_reissued_after_B_issued"),
+                 alert.freq_all)
             strategy.exit("X", profit=profitTicks, loss=lossTicks,
                  comment_profit="profit", comment_loss="loss",
-                 alert_message=fill("positive_control_exit_reissued_after_B"),
-                 alert_profit=fill("positive_control_profit"),
-                 alert_loss=fill("positive_control_loss"))
+                 alert_message=commandMessage(
+                 "positive_control_exit_reissued_after_B", "strategy.exit",
+                 "replace", "X", 1, "exit_long", "relative_bracket", "", na,
+                 na, na, na, na, "", "",
+                 "positive control reissues X after both A and B exist"),
+                 alert_profit=commandMessage("positive_control_profit",
+                 "strategy.exit", "replace", "X", 1, "exit_long",
+                 "profit_exit", "", na, na, na, na, na, "", "",
+                 "profit child of reissued positive-control exit X"),
+                 alert_loss=commandMessage("positive_control_loss",
+                 "strategy.exit", "replace", "X", 1, "exit_long",
+                 "stop_loss", "", na, na, na, na, na, "", "",
+                 "loss child of reissued positive-control exit X"))
             alert(trace("positive_control_exit_reissued_after_B"), alert.freq_all)
         else
             alert(trace("two_lots_open_exit_not_reissued"), alert.freq_all)
@@ -86,8 +139,13 @@ if active and barstate.isconfirmed and bar_index > armedBar
         alert(trace("inconclusive_A_exited_before_B"), alert.freq_all)
     else if not timedOut and liveBars >= timeoutBars
         timedOut := true
+        alert(trace("command_cancel_all_timeout"), alert.freq_all)
         strategy.cancel_all()
         if strategy.position_size != 0
+            alert(trace("command_timeout_close_all_issued"), alert.freq_all)
             strategy.close_all(immediately=true,
-                 alert_message=fill("timeout_close_all"))
+                 alert_message=commandMessage("timeout_close_all",
+                 "strategy.close_all", "cleanup", "__close_all__", 1,
+                 "flat", "market_close", "", na, na, na, na, na, "", "",
+                 "cleanup residual lots after P5 timeout"))
         alert(trace("timeout_cleanup_inconclusive"), alert.freq_all)

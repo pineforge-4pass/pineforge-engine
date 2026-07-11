@@ -14,21 +14,45 @@ int trailActivationTicks = input.int(500, "Trail activation distance (ticks)", m
 int trailOffsetTicks = input.int(300, "Trail offset (ticks)", minval=1)
 int timeoutBars = input.int(480, "Timeout bars", minval=8)
 bool arm = input.bool(true, "Arm at scheduled time")
+string MODE = "qty1_qty2_any"
 
 trace(string tag) =>
-    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","tag":"' + tag +
-     '","bar_index":' + str.tostring(bar_index) +
-     ',"bar_time_ms":' + str.tostring(time) +
-     ',"time_close_ms":' + str.tostring(time_close) +
-     ',"price":' + str.tostring(close, format.mintick) +
-     ',"position_size":' + str.tostring(strategy.position_size) + '}'
+    '{"schema":"pf-tv-probe-event-v2","source":"tradingview","event_type":"trace","event_key_hint":"' +
+     PROBE + '|' + runId + '|trace|' + tag + '|' + str.tostring(bar_index) +
+     '|' + str.tostring(time) + '|' + str.tostring(timenow) +
+     '","probe":{"id":"' + PROBE + '","run_id":"' + runId +
+     '","mode":"' + MODE + '"},"event":{"name":"' + tag +
+     '"},"market":{"tickerid":"' + syminfo.tickerid +
+     '","interval":"' + timeframe.period + '","bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"bar_close_ms":' + str.tostring(time_close) + ',"server_time_ms":' +
+     str.tostring(timenow) + ',"price":' + str.tostring(close, format.mintick) +
+     '},"strategy":{"position_size":' + str.tostring(strategy.position_size) + '}}'
 
-fill(string tag) =>
-    '{"schema":"pf-tv-probe-order-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","order_tag":"' + tag +
-     '","command_bar_index":' + str.tostring(bar_index) +
-     ',"command_bar_time_ms":' + str.tostring(time) + '}'
+jsonNumber(float value) => na(value) ? "null" : str.tostring(value)
+jsonStringOrNull(string value) => value == "" ? "null" : '"' + value + '"'
+commandMessage(string tag, string api, string action, string orderId,
+     int sourceOrder, string side, string orderType, string fromEntry,
+     float qty, float stopValue, float limitValue, float trailPoints,
+     float trailOffset, string ocaName, string ocaType, string intent) =>
+    float lossValue = orderType == "relative_stop_or_trail" or
+         orderType == "stop_loss" ? lossTicks : na
+    '{"schema":"pf-tv-probe-command-v2","probe":{"id":"' + PROBE +
+     '","run_id":"' + runId + '","mode":"' + MODE +
+     '"},"command":{"tag":"' + tag + '","api":"' + api +
+     '","action":"' + action + '","order_id":"' + orderId +
+     '","source_order":' + str.tostring(sourceOrder) + ',"side":"' + side +
+     '","order_type":"' + orderType + '","from_entry":' +
+     jsonStringOrNull(fromEntry) + ',"qty":' + jsonNumber(qty) +
+     ',"stop_price":' + jsonNumber(stopValue) + ',"limit_price":' +
+     jsonNumber(limitValue) + ',"profit_ticks":null,"loss_ticks":' +
+     jsonNumber(lossValue) + ',"trail_points":' + jsonNumber(trailPoints) +
+     ',"trail_offset":' + jsonNumber(trailOffset) + ',"oca_name":' +
+     jsonStringOrNull(ocaName) + ',"oca_type":' + jsonStringOrNull(ocaType) +
+     ',"debug_intent":"' + intent + '"},"message_evaluation":{"bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"server_time_ms":' + str.tostring(timenow) +
+     ',"position_size":' + str.tostring(strategy.position_size) + '}}'
 
 traceLots(string tag, float entry0, int entryTime0, bool active0,
      float watermark0, float entry1, int entryTime1, bool active1,
@@ -39,25 +63,31 @@ traceLots(string tag, float entry0, int entryTime0, bool active0,
     float activation1 = entry1 + trailActivationTicks * syminfo.mintick
     float trailing0 = watermark0 - trailOffsetTicks * syminfo.mintick
     float trailing1 = watermark1 - trailOffsetTicks * syminfo.mintick
-    '{"schema":"pf-tv-probe-trace-v1","probe":"' + PROBE +
-     '","run_id":"' + runId + '","tag":"' + tag +
-     '","bar_index":' + str.tostring(bar_index) +
-     ',"bar_time_ms":' + str.tostring(time) +
-     ',"price":' + str.tostring(close, format.mintick) +
-     ',"lot0_entry_time_ms":' + str.tostring(entryTime0) +
-     ',"lot0_entry_price":' + str.tostring(entry0, format.mintick) +
-     ',"lot0_fixed_stop":' + str.tostring(fixed0, format.mintick) +
-     ',"lot0_activation":' + str.tostring(activation0, format.mintick) +
+    '{"schema":"pf-tv-probe-event-v2","source":"tradingview","event_type":"trace","event_key_hint":"' +
+     PROBE + '|' + runId + '|trace|' + tag + '|' + str.tostring(bar_index) +
+     '|' + str.tostring(time) + '|' + str.tostring(timenow) +
+     '","probe":{"id":"' + PROBE + '","run_id":"' + runId +
+     '","mode":"' + MODE + '"},"event":{"name":"' + tag +
+     '"},"market":{"tickerid":"' + syminfo.tickerid +
+     '","interval":"' + timeframe.period + '","bar_index":' +
+     str.tostring(bar_index) + ',"bar_time_ms":' + str.tostring(time) +
+     ',"bar_close_ms":' + str.tostring(time_close) + ',"server_time_ms":' +
+     str.tostring(timenow) + ',"price":' + str.tostring(close, format.mintick) +
+     '},"strategy":{"position_size":' + str.tostring(strategy.position_size) +
+     '},"debug":{"lot0_entry_time_ms":' + str.tostring(entryTime0) +
+     ',"lot0_entry_price":' + jsonNumber(entry0) +
+     ',"lot0_fixed_stop":' + jsonNumber(fixed0) +
+     ',"lot0_activation":' + jsonNumber(activation0) +
      ',"lot0_active":' + str.tostring(active0) +
-     ',"lot0_watermark":' + str.tostring(watermark0, format.mintick) +
-     ',"lot0_trailing_candidate":' + str.tostring(trailing0, format.mintick) +
+     ',"lot0_watermark":' + jsonNumber(watermark0) +
+     ',"lot0_trailing_candidate":' + jsonNumber(trailing0) +
      ',"lot1_entry_time_ms":' + str.tostring(entryTime1) +
-     ',"lot1_entry_price":' + str.tostring(entry1, format.mintick) +
-     ',"lot1_fixed_stop":' + str.tostring(fixed1, format.mintick) +
-     ',"lot1_activation":' + str.tostring(activation1, format.mintick) +
+     ',"lot1_entry_price":' + jsonNumber(entry1) +
+     ',"lot1_fixed_stop":' + jsonNumber(fixed1) +
+     ',"lot1_activation":' + jsonNumber(activation1) +
      ',"lot1_active":' + str.tostring(active1) +
-     ',"lot1_watermark":' + str.tostring(watermark1, format.mintick) +
-     ',"lot1_trailing_candidate":' + str.tostring(trailing1, format.mintick) + '}'
+     ',"lot1_watermark":' + jsonNumber(watermark1) +
+     ',"lot1_trailing_candidate":' + jsonNumber(trailing1) + '}}'
 
 var int liveBars = 0
 var int firstEntryBar = na
@@ -116,16 +146,22 @@ if active and barstate.isconfirmed and bar_index > armedBar
     if not firstEntryPlaced
         firstEntryPlaced := true
         firstEntryBar := bar_index
+        alert(trace("command_same_id_lot_1_issued"), alert.freq_all)
         strategy.entry("L", strategy.long, qty=1,
-             alert_message=fill("same_id_lot_1"))
+             alert_message=commandMessage("same_id_lot_1", "strategy.entry",
+             "create", "L", 1, "long", "market", "", 1, na, na, na, na,
+             "", "", "create first same-ID lot with quantity 1"))
         alert(trace("first_same_id_entry_created"), alert.freq_all)
     else if strategy.position_size >= 1 and not secondEntryPlaced and
          bar_index >= firstEntryBar + secondEntryDelayBars and
          math.abs(close - strategy.position_avg_price) >=
              minimumEntrySeparationTicks * syminfo.mintick
         secondEntryPlaced := true
+        alert(trace("command_same_id_lot_2_issued"), alert.freq_all)
         strategy.entry("L", strategy.long, qty=2,
-             alert_message=fill("same_id_lot_2"))
+             alert_message=commandMessage("same_id_lot_2", "strategy.entry",
+             "add", "L", 1, "long", "market", "", 2, na, na, na, na,
+             "", "", "add second same-ID lot with quantity 2"))
         alert(trace("second_same_id_entry_created"), alert.freq_all)
     else if strategy.position_size >= 3 and not exitPlaced and not separationRejected
         lot0Entry := strategy.opentrades.entry_price(0)
@@ -142,20 +178,36 @@ if active and barstate.isconfirmed and bar_index > armedBar
                  lot1EntryTime, lot1Active, lot1Watermark), alert.freq_all)
         else
             exitPlaced := true
+            alert(trace("command_shared_exit_fixed_stop_or_trail_issued"),
+                 alert.freq_all)
             strategy.exit("X", "L", loss=lossTicks,
                  trail_points=trailActivationTicks,
                  trail_offset=trailOffsetTicks,
                  comment_loss="fixed_stop", comment_trailing="trailing_stop",
-                 alert_message=fill("shared_exit_fixed_stop_or_trail"),
-                 alert_loss=fill("fixed_stop_fill"),
-                 alert_trailing=fill("trailing_stop_fill"))
+                 alert_message=commandMessage("shared_exit_fixed_stop_or_trail",
+                 "strategy.exit", "create", "X", 1, "exit_long",
+                 "relative_stop_or_trail", "L", na, na, na,
+                 trailActivationTicks, trailOffsetTicks, "", "",
+                 "shared exit X chooses fixed loss or trailing stop per lot"),
+                 alert_loss=commandMessage("fixed_stop_fill", "strategy.exit",
+                 "create", "X", 1, "exit_long", "stop_loss", "L", na, na,
+                 na, na, na, "", "", "fixed-stop child selected for a lot"),
+                 alert_trailing=commandMessage("trailing_stop_fill",
+                 "strategy.exit", "create", "X", 1, "exit_long",
+                 "trailing_exit", "L", na, na, na, trailActivationTicks,
+                 trailOffsetTicks, "", "", "trailing-stop child selected for a lot"))
             alert(traceLots("shared_exit_created_for_two_lots", lot0Entry,
                  lot0EntryTime, lot0Active, lot0Watermark, lot1Entry,
                  lot1EntryTime, lot1Active, lot1Watermark), alert.freq_all)
     else if not timedOut and liveBars >= timeoutBars
         timedOut := true
+        alert(trace("command_cancel_all_timeout"), alert.freq_all)
         strategy.cancel_all()
         if strategy.position_size != 0
+            alert(trace("command_timeout_close_all_issued"), alert.freq_all)
             strategy.close_all(immediately=true,
-                 alert_message=fill("timeout_close_all"))
+                 alert_message=commandMessage("timeout_close_all",
+                 "strategy.close_all", "cleanup", "__close_all__", 1,
+                 "flat", "market_close", "", na, na, na, na, na, "", "",
+                 "cleanup residual lots after P9 timeout"))
         alert(trace("timeout_cleanup_inconclusive"), alert.freq_all)

@@ -5,12 +5,14 @@ These Pine v6 strategies answer the nine open broker-emulator questions in
 a general TradingView oracle. PineForge's deterministic replay and invariant
 tests remain the primary regression gate.
 
-The probes emit two JSON-only event families:
+The probes emit one versioned JSON-only event envelope with two event types:
 
-- `pf-tv-probe-trace-v1` from `alert()` records command creation and selected
-  price milestones.
-- `pf-tv-probe-fill-v1` from TradingView order-fill alerts records the actual
-  broker fill, wrapping the order's `alert_message` object.
+- `trace` from `alert()` records arming, command creation, cancellation, and
+  selected price milestones.
+- `order_fill` from TradingView's broker emulator records the actual fill and
+  embeds the exact order call's `pf-tv-probe-command-v2` diagnostic message.
+
+See [`PAYLOAD.md`](PAYLOAD.md) for the complete payload and receiver contract.
 
 TradingView references used by this protocol:
 
@@ -37,7 +39,8 @@ Use one probe and one alert at a time.
 7. Add the strategy, then create a strategy alert with both **Order fills and
    alert() function calls** enabled. TradingView snapshots the script and its
    inputs when the alert is created; after any change, delete and recreate it.
-8. Configure the webhook URL and paste the fill message template below exactly.
+8. Configure the webhook URL and paste
+   [`fill-alert-message.template.txt`](fill-alert-message.template.txt) exactly.
 9. Keep `Arm at scheduled time` enabled. Historical bars never place probe
    orders, and commands wait until a later confirmed bar. A run is valid only
    when TradingView's alert log shows `armed` before every command/fill; receiver
@@ -45,18 +48,25 @@ Use one probe and one alert at a time.
 10. Capture until the expected fill or the probe's timeout trace. Export
    **Strategy Tester -> List of Trades** as CSV after the run.
 
-Fill alert message template:
-
-```json
-{"schema":"pf-tv-probe-fill-v1","probe_payload":{{strategy.order.alert_message}},"ticker":"{{ticker}}","interval":"{{interval}}","fill_bar_time":"{{time}}","server_time":"{{timenow}}","order_id":"{{strategy.order.id}}","action":"{{strategy.order.action}}","contracts":{{strategy.order.contracts}},"price":{{strategy.order.price}},"position_size":{{strategy.position_size}}}
-```
-
 The unexpanded template is not JSON; the delivered webhook body is. Every
 probe supplies `strategy.order.alert_message` as a JSON object, not a quoted
-string. `probe_payload.command_bar_*` identifies the calculation that created
-or reissued the order; outer `fill_bar_time` and `server_time` identify the
-actual fill notification. Use fill-bar open time—not raw `bar_index`—for
-bar-level regression comparisons.
+string. Each order action has a distinct `command.tag`, API, create/replace/
+cleanup action, order ID, source-call order, order type and parameters, and
+plain-language `debug_intent`. TradingView documents variables in
+`alert_message` as evaluated when the order executes, so `message_evaluation`
+is fill-time diagnostic context—not proof of the command creation bar. Use the
+adjacent `trace` event to establish command creation, and outer
+`market.fill_bar_time` / `market.server_time` for the fill. Use fill-bar open
+time—not raw `bar_index`—for bar-level regression comparisons.
+
+Every order-generating call also emits a `command_<tag>_issued` trace immediately
+before the call. This preserves creation evidence even when the order is later
+replaced, rejected, cancelled, or never filled and therefore never exposes its
+`alert_message` through an order-fill alert.
+
+TradingView's cancellation APIs accept no `alert_message` and produce no fill
+alert. Every `strategy.cancel*()` in these probes therefore has an immediately
+adjacent `command_cancel*` trace. Do not infer cancellation from silence.
 
 ## Required artifacts
 
@@ -66,8 +76,8 @@ Store one directory per run:
 P3-unchanged-2026-07-12T0100Z/
   manifest.json
   webhook.jsonl
-  receipt.jsonl         # receiver sequence/time/body hash; no TV fields added
-  alert-message.txt     # exact fill template pasted into TradingView
+  receipt.jsonl         # receipt_id/sequence/UTC time/body hash; separate metadata
+  alert-message.txt     # copied fill-alert-message.template.txt
   tv-alert-log.csv       # export/copy when available
   tv-trades.csv
   tv-bars.csv            # exported chart OHLCV covering the observation window
