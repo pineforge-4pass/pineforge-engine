@@ -493,6 +493,27 @@ protected:
     std::string sb_close_comment_;    // surviving order's comment
     std::unordered_map<std::string, double> close_reserved_qty_;
 
+    // --- KI-64: POOC script-visible position freeze ---
+    // Under process_orders_on_close, a strategy.close/close_all that fills
+    // IN-LINE (execute_immediate_close) mutates the broker position mid-on_bar,
+    // but TradingView keeps the SCRIPT position accessor
+    // ``strategy.position_size`` (signed_position_size(), and the
+    // opentrades/position_avg_price na-guards derived from it) reporting the
+    // PRE-close position until the NEXT bar. While ``pos_view_freeze_bar_ ==
+    // bar_index_`` the script-facing signed_position_size() returns this frozen
+    // snapshot; broker / order state and every internal position_qty_ /
+    // position_side_ read (order sizing, affordability, reversal qty, exit
+    // sizing) are UNAFFECTED. Armed in strategy_close on the ordinary POOC
+    // immediate-close path (NOT immediately=true, which is defined to reflect
+    // its fill at once); cleared at the top of flush_same_bar_close() — the
+    // first thing after every POOC on_bar — so step-4 and post-run reads see
+    // the real position. The bar_index_ scoping is a defensive backstop: the
+    // snapshot auto-expires when the script advances a bar even if a clear site
+    // is ever missed.
+    int pos_view_freeze_bar_ = -1;
+    PositionSide pos_view_frozen_side_ = PositionSide::FLAT;
+    double pos_view_frozen_qty_ = 0.0;
+
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
     bool process_orders_on_close_ = false;
@@ -1161,10 +1182,36 @@ protected:
 
     // --- Strategy variable accessors ---
     double signed_position_size() const {
+        // KI-64: while a POOC same-bar in-line close is frozen for this bar,
+        // the SCRIPT sees the pre-close position (TV defers close visibility to
+        // the next bar). Broker/internal reads use position_side_/position_qty_
+        // directly and are unaffected.
+        if (pos_view_freeze_bar_ == bar_index_) {
+            if (pos_view_frozen_side_ == PositionSide::LONG) return pos_view_frozen_qty_;
+            if (pos_view_frozen_side_ == PositionSide::SHORT) return -pos_view_frozen_qty_;
+            return 0.0;
+        }
         if (position_side_ == PositionSide::LONG) return position_qty_;
         if (position_side_ == PositionSide::SHORT) return -position_qty_;
         return 0.0;
     }
+
+    // KI-64: freeze the pre-close position for the script-visible position
+    // accessor before an ordinary POOC strategy.close/close_all fills in-line
+    // this bar. Capture-once per on_bar (a second same-bar close keeps the
+    // FIRST pre-close snapshot). Caller guards process_orders_on_close_ &&
+    // !immediately; this reads position_side_/position_qty_ while they still
+    // hold the pre-close values (execute_immediate_close has not run yet).
+    void freeze_script_position_view() {
+        if (pos_view_freeze_bar_ == bar_index_) return;
+        pos_view_freeze_bar_ = bar_index_;
+        pos_view_frozen_side_ = position_side_;
+        pos_view_frozen_qty_ = position_qty_;
+    }
+    // KI-64: release the freeze so the next script-visible read returns the real
+    // (post-close) position. Called at the top of flush_same_bar_close(), i.e.
+    // immediately after every POOC on_bar returns.
+    void clear_script_position_view() { pos_view_freeze_bar_ = -1; }
 
     double net_profit() const { return net_profit_sum_; }
     double gross_profit() const { return gross_profit_sum_; }

@@ -397,6 +397,14 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
     if ((pooc_can_fill_at_this_cursor || immediately)
         && !(coof_scheduler_active_
              && coof_direct_fill_events_remaining_ == 0)) {
+        // KI-64: for an ORDINARY POOC close (not immediately=true, which is
+        // defined to reflect its fill at once) freeze the script-visible
+        // position BEFORE execute_immediate_close mutates it, so a later
+        // strategy.position_size gate in THIS bar still sees the pre-close
+        // position. Broker/order side effects below are unchanged.
+        if (process_orders_on_close_ && !immediately) {
+            freeze_script_position_view();
+        }
         execute_immediate_close(id, comment, qty_to_close, matching_qty,
                                 closes_full_position, closes_fifo_qty, closes_any_qty);
         return;
@@ -513,6 +521,13 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
 // the magnifier's last tick), i.e. the same bar and price the immediate
 // path used, after the strategy's on_bar has fully run.
 void BacktestEngine::flush_same_bar_close() {
+    // KI-64: on_bar has returned — release any POOC script-visible position
+    // freeze so the flush below, step-4 order processing, and post-run reads
+    // all observe the real (post-close) position. Runs on every POOC bar
+    // (flush is the first call after each POOC on_bar), before the early
+    // return so a bar with an in-line close but no enqueued survivor still
+    // clears. Broker reads here use position_side_/position_qty_ directly.
+    clear_script_position_view();
     if (!sb_close_active_) return;
     const std::string id = sb_close_id_;
     const std::string comment = sb_close_comment_;

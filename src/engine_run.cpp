@@ -129,6 +129,7 @@ uint64_t BacktestEngine::execute_coof_script_body(
     is_last_tick_ = true;
     history_slot_is_new_ = !coof_checkpoint_contains_current_bar_;
     pending_close_qty_in_bar_ = 0.0;
+    pos_view_freeze_bar_ = -1;   // KI-64: recompute re-arms the freeze fresh
     _push_source_series();
     update_per_trade_extremes();
 
@@ -366,6 +367,7 @@ void BacktestEngine::reset_run_state() {
                                       // pyramid_entries_, trail, partial ids
     pending_orders_.clear();
     pending_close_qty_in_bar_ = 0.0;
+    pos_view_freeze_bar_ = -1;   // KI-64: fresh run starts with no frozen view
     sb_close_active_ = false;
     sb_close_bar_ = -1;
     sb_close_calls_ = 0;
