@@ -292,6 +292,38 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                 && std::isfinite(order.sizing_price)
                 && std::isfinite(order.sizing_mark);
         }
+        // design-explicit-qty-fill-admission: capture the fill-time admission
+        // snapshot for an EXPLICIT-qty (the caller passed a finite qty) MARKET
+        // entry created TRUE-FLAT. The signal-time gate above (~:139-158)
+        // already rejected orders whose notional at THIS bar's close overshoots
+        // equity; this snapshot lets the fill-time re-check drop the entry when
+        // the next-bar fill gaps adversely enough that |qty|*slipped_fill
+        // exceeds the placement equity — TV's pinned behavior for the all-in
+        // floor idiom (probe-68 / mdfe3757). Disjoint from the frozen default-
+        // sizing snapshot above (that path requires isnan(qty)); priced
+        // (limit/stop) entries never reach here (else-branch) and RAW
+        // strategy.order builds its order elsewhere, so neither carries the
+        // candidate flag. Commission is EXCLUDED from the fill predicate.
+        if (!std::isnan(qty) && !std::isnan(current_bar_.close)) {
+            const double explicit_margin = is_long ? margin_long_ : margin_short_;
+            // Equity basis matches the frozen path (KI-54): realized equity plus
+            // open profit marked at the signal close. == current_equity() when
+            // flat, which every candidate is (created_position_side == FLAT).
+            const double placement_equity =
+                current_equity() + open_profit(current_bar_.close);
+            const double slipped_signal_close =
+                frozen_sizing_price(/*is_buy=*/is_long);
+            order.explicit_flat_admission_candidate =
+                order.created_position_side == PositionSide::FLAT
+                && !order.created_after_position_close_in_bar
+                && std::isfinite(explicit_margin) && explicit_margin > 0.0
+                && std::isfinite(placement_equity)
+                && std::isfinite(slipped_signal_close);
+            if (order.explicit_flat_admission_candidate) {
+                order.explicit_placement_equity = placement_equity;
+                order.explicit_slipped_signal_close = slipped_signal_close;
+            }
+        }
     } else {
         order.type = OrderType::ENTRY;
         order.limit_price = limit_price;
