@@ -179,7 +179,8 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
                                  pe.max_runup * keep_scale,
                                  pe.max_drawdown * keep_scale,
                                  pe.skip_entry_bar_high,
-                                 pe.skip_entry_bar_low});
+                                 pe.skip_entry_bar_low,
+                                 pe.market_pyramid_add});
         }
     }
 
@@ -269,6 +270,54 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
     // Close FIFO, but only from entries matching from_entry.
     fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
     settle_position_after_partial_exit();
+}
+
+
+// KI-62: after a from_entry PRICED bracket exit fills, scratch (close dur-0)
+// any same-bar same-id MARKET pyramid-add slice still open — it filled earlier
+// this bar, ahead of the exit in TV's open-tick fill sequence, so TV's exit
+// covers it. Targets ONLY flagged same-bar (entry_bar_index == bar_index_)
+// market-add slices of this from_entry: the frozen pre-add lot was already
+// drained by the normal close, and prior-bar slices (entry_bar_index <
+// bar_index_) are never touched — so multi-bar pyramids stay untouched. A
+// strict no-op when no such slice exists (the KEEP cell fills the exit first,
+// so the add is not yet open; non-collision shapes flag no add). Emits each
+// covered slice as its own dur-0 trade (entry at the add's fill price, exit at
+// this exit's fill price), matching TV's per-pyramid scratch reporting.
+double BacktestEngine::cover_samebar_market_adds_on_exit(const PendingOrder& order,
+                                                         double fill_price) {
+    if (order.from_entry.empty()) return 0.0;
+    if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return 0.0;
+    // Scope to a PRICED bracket (stop/limit/trail). A plain market close /
+    // close_all already flattens the whole position through its own path.
+    bool priced_bracket = !std::isnan(order.stop_price)
+        || !std::isnan(order.limit_price)
+        || !std::isnan(order.trail_points)
+        || !std::isnan(order.trail_price);
+    if (!priced_bracket) return 0.0;
+
+    bool is_buy = (position_side_ == PositionSide::SHORT);
+    double slipped = apply_fill_slippage(fill_price, is_buy);
+    bool was_long = (position_side_ == PositionSide::LONG);
+
+    std::vector<PyramidEntry> remaining;
+    remaining.reserve(pyramid_entries_.size());
+    double closed = 0.0;
+    for (auto& pe : pyramid_entries_) {
+        if (pe.market_pyramid_add
+            && pe.entry_bar_index == bar_index_
+            && pe.entry_id == order.from_entry) {
+            emit_close_trade(pe, pe.qty, slipped, was_long);
+            closed += pe.qty;
+        } else {
+            remaining.push_back(pe);
+        }
+    }
+    if (closed <= kQtyEpsilon) return 0.0;   // nothing covered
+    pyramid_entries_ = std::move(remaining);
+    position_qty_ -= closed;
+    settle_position_after_partial_exit();
+    return closed;
 }
 
 
@@ -705,6 +754,9 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
     position_entry_count_++;
     trail_best_price_ = fill_price;
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id, bar_index_});
+    // KI-62: only a same-direction MARKET add is scratched by a same-bar
+    // from_entry bracket exit; a priced pyramid add is not this collision.
+    pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
     id_unclosed_qty_[id] += new_qty;
 }
 

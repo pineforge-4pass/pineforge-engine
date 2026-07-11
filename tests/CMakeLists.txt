@@ -75,6 +75,7 @@ set(TEST_SOURCES
     test_full_close_while_pyramiding
     test_deferred_flip_carry_close_only
     test_close_all_coqueued_entry
+    test_same_bar_add_exit_coverage
     test_declined_reversal_close_leg
     test_dual_entry_placement_sizing
     test_lower_tf_parse_extra

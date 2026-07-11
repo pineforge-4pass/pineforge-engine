@@ -53,6 +53,12 @@ struct PyramidEntry {
     // the full bar).
     bool skip_entry_bar_high = false;
     bool skip_entry_bar_low = false;
+    // KI-62: this slice opened as a same-direction MARKET pyramid add (not the
+    // base open, not a priced entry). When a from_entry priced bracket exit
+    // fills on this add's OWN entry bar and after it in TV's open-tick fill
+    // sequence, the exit covers (scratches) the add dur-0. Gated by
+    // entry_bar_index == bar_index_ so prior-bar slices are never covered.
+    bool market_pyramid_add = false;
 };
 
 struct Trade {
@@ -1883,6 +1889,12 @@ private:
     void execute_partial_exit(double fill_price, double qty_percent);
     void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
     void execute_partial_exit_by_entry_percent(double fill_price, const std::string& from_entry, double qty_percent);
+    // KI-62: scratch (close dur-0) any same-bar same-id MARKET pyramid-add
+    // slices still open after a from_entry priced bracket exit fills — TV's
+    // open-tick fill sequence covered them. Targets only flagged same-bar add
+    // slices (never the frozen pre-add lot, never a prior-bar slice). Returns
+    // the qty scratched (0 = no collision → strict no-op).
+    double cover_samebar_market_adds_on_exit(const PendingOrder& order, double fill_price);
     void cancel_oca_group(const std::string& oca_name, const std::string& exclude_id);
     // Pine v6 oca.reduce: when one sibling fills qty Q, reduce remaining
     // siblings' qty by Q. Siblings whose qty becomes <= 0 are cancelled.
