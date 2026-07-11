@@ -12,6 +12,7 @@ set(TEST_SOURCES
     test_ta_indicators_extras
     test_kc
     test_ta_rma_warmup
+    test_ta_na_source_rules
     test_matrix
     test_session_time
     test_time_tradingday

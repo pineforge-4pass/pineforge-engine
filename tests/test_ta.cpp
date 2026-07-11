@@ -206,9 +206,12 @@ static int test_ema_ignores_na_inputs() {
         fails++;
     }
 
+    // KI-66: ta.ema RETURNS NA on the na-input bar. The na neither updates nor
+    // resets the recursion — the prior value survives as STATE (not as this
+    // bar's output), which `c` below confirms by resuming the recursion from 10.
     double b = ema.compute(na<double>());
-    if (!near(b, 10.0, 1e-12)) {
-        std::printf("FAIL ema na ignore: na input should keep prior value, got=%g want=10\n", b);
+    if (!is_na(b)) {
+        std::printf("FAIL ema na rule: na input should return na, got=%g want=na\n", b);
         fails++;
     }
 
