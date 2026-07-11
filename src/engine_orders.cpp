@@ -179,7 +179,8 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
                                  pe.max_runup * keep_scale,
                                  pe.max_drawdown * keep_scale,
                                  pe.skip_entry_bar_high,
-                                 pe.skip_entry_bar_low});
+                                 pe.skip_entry_bar_low,
+                                 pe.entry_lot_id});
         }
     }
 
@@ -273,12 +274,30 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
 
 
 // Internal helper: cancel OCA group members (except the one that just filled)
-void BacktestEngine::cancel_oca_group(const std::string& oca_name, const std::string& exclude_id) {
+void BacktestEngine::cancel_oca_group(const std::string& oca_name, int oca_type,
+                                      const std::string& exclude_id,
+                                      uint64_t exclude_order_leg_id) {
     if (oca_name.empty()) return;
+    const bool leg_specific = stream_phase_ == StreamPhase::REALTIME;
+    for (const PendingOrder& order : pending_orders_) {
+        const bool excluded = leg_specific
+            ? order.order_leg_id == exclude_order_leg_id
+            : order.id == exclude_id;
+        if (order.oca_name == oca_name && order.oca_type == oca_type
+            && !excluded) {
+            record_order_transition(
+                order, lifecycle_state(order), OrderLifecycleState::CANCELLED,
+                OrderTransition::CANCELLED, OrderTransitionReason::OCA_EFFECT);
+        }
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& o) {
-                return o.oca_name == oca_name && o.id != exclude_id;
+                const bool excluded = leg_specific
+                    ? o.order_leg_id == exclude_order_leg_id
+                    : o.id == exclude_id;
+                return o.oca_name == oca_name && o.oca_type == oca_type
+                    && !excluded;
             }),
         pending_orders_.end());
 }
@@ -291,17 +310,38 @@ void BacktestEngine::cancel_oca_group(const std::string& oca_name, const std::st
 // per-order qty applied at place time, so we conservatively cancel them
 // (this matches the prior, blanket-cancel behaviour for that subset).
 void BacktestEngine::reduce_oca_group(const std::string& oca_name,
+                                      int oca_type,
                                       const std::string& exclude_id,
+                                      uint64_t exclude_order_leg_id,
                                       double filled_qty) {
     if (oca_name.empty()) return;
     if (!(filled_qty > 0.0)) return;  // nothing to subtract
+    const bool leg_specific = stream_phase_ == StreamPhase::REALTIME;
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](PendingOrder& o) {
-                if (o.oca_name != oca_name || o.id == exclude_id) return false;
-                if (std::isnan(o.qty)) return true;  // default-sized: cancel
+                const bool excluded = leg_specific
+                    ? o.order_leg_id == exclude_order_leg_id
+                    : o.id == exclude_id;
+                if (o.oca_name != oca_name || o.oca_type != oca_type || excluded)
+                    return false;
+                if (std::isnan(o.qty)) {
+                    record_order_transition(
+                        o, lifecycle_state(o), OrderLifecycleState::CANCELLED,
+                        OrderTransition::CANCELLED,
+                        OrderTransitionReason::OCA_EFFECT);
+                    return true;
+                }
                 o.qty -= filled_qty;
-                return o.qty <= kOcaQtyEpsilon;
+                const bool cancelled = o.qty <= kOcaQtyEpsilon;
+                record_order_transition(
+                    o, lifecycle_state(o),
+                    cancelled ? OrderLifecycleState::CANCELLED
+                              : lifecycle_state(o),
+                    cancelled ? OrderTransition::CANCELLED
+                              : OrderTransition::REDUCED,
+                    OrderTransitionReason::OCA_EFFECT);
+                return cancelled;
             }),
         pending_orders_.end());
 }
@@ -545,7 +585,9 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     id_unclosed_qty_.clear();
     close_reserved_qty_.clear();
     consumed_partial_exit_ids_.clear();
-    pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
+    pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id,
+                                bar_index_, "", 0.0, 0.0, false, false, 0});
+    assign_entry_lot_identity(pyramid_entries_.back());
     id_unclosed_qty_[id] += qty;
 }
 
@@ -704,7 +746,9 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
     position_qty_ = total_qty;
     position_entry_count_++;
     trail_best_price_ = fill_price;
-    pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id, bar_index_});
+    pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id,
+                                bar_index_, "", 0.0, 0.0, false, false, 0});
+    assign_entry_lot_identity(pyramid_entries_.back());
     id_unclosed_qty_[id] += new_qty;
 }
 

@@ -1,0 +1,60 @@
+{
+  "schema": "pf-tv-probe-manifest-v1",
+  "probe": "P0",
+  "mode": "replace-me",
+  "run_id": "P0-mode-YYYYMMDDTHHMMSSZ",
+  "script_file": "p0_replace_me.pine",
+  "script_sha256": "replace-me",
+  "pine_version": "6",
+  "tradingview_plan": "replace-me",
+  "tickerid": "replace-me",
+  "timeframe": "1",
+  "chart_type": "candles",
+  "chart_timezone": "UTC",
+  "session": "replace-me",
+  "strategy_properties": {
+    "pyramiding": 1,
+    "process_orders_on_close": false,
+    "calc_on_every_tick": false,
+    "calc_on_order_fills": false,
+    "bar_magnifier": false
+  },
+  "inputs": {},
+  "scheduled_start_utc": "YYYY-MM-DDTHH:MM:SSZ",
+  "alert": {
+    "alert_id": "replace-me",
+    "created_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
+    "condition": "order fills and alert() function calls",
+    "event_schema": "pf-tv-probe-event-v2",
+    "command_schema": "pf-tv-probe-command-v2",
+    "message_template_sha256": "replace-me",
+    "webhook_receiver": "redacted-host-label"
+  },
+  "observation": {
+    "armed_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
+    "started_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
+    "ended_at_utc": "YYYY-MM-DDTHH:MM:SSZ",
+    "webhook_event_count": 0,
+    "tradingview_alert_event_count": 0,
+    "trade_count": 0,
+    "receiver_first_sequence": 0,
+    "receiver_last_sequence": 0,
+    "chart_reloaded_or_changed": false
+  },
+  "artifacts": {
+    "webhook_jsonl_sha256": "replace-me",
+    "receipt_jsonl_sha256": "replace-me",
+    "tv_alert_log_sha256": "replace-me",
+    "tv_trades_csv_sha256": "replace-me",
+    "tv_bars_csv_sha256": "replace-me",
+    "chart_png_sha256": "replace-me",
+    "notes_md_sha256": "replace-me",
+    "results_md_sha256": "replace-me"
+  },
+  "deployed_source_sha256": "replace-me",
+  "result": {
+    "status": "inconclusive",
+    "conclusion": "replace-me",
+    "ambiguities": []
+  }
+}

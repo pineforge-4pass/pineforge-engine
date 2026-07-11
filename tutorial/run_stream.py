@@ -89,6 +89,8 @@ def main() -> int:
         ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
         ctypes.c_char_p, ctypes.c_char_p]
     lib.strategy_stream_begin.restype = ctypes.c_int
+    lib.strategy_stream_set_gap_policy.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    lib.strategy_stream_set_gap_policy.restype = ctypes.c_int
     lib.strategy_stream_push_ticks.argtypes = [
         ctypes.c_void_p, ctypes.POINTER(TradeTickC), ctypes.c_int]
     lib.strategy_stream_push_ticks.restype = ctypes.c_int
@@ -106,6 +108,8 @@ def main() -> int:
         sys.exit("strategy_create failed")
     report = ReportC()
     try:
+        check_call(lib, state, lib.strategy_stream_set_gap_policy(
+            state, 0), "set fixed-grid gap policy")
         check_call(lib, state, lib.strategy_stream_begin(
             state, bars, warmup_n, b"15", b"15"), "stream begin")
 
@@ -135,6 +139,14 @@ def main() -> int:
               f"{report.script_bars_processed} script bars")
         print(f"  trades:     {report.trades_len}")
         print(f"  net pnl:    {report.net_profit:+.2f}")
+        print(f"  order log:  {report.order_event_count} transitions, "
+              f"hash={report.order_event_hash:016x}")
+        for i in range(min(5, report.order_events_len)):
+            event = report.order_events[i]
+            event_id = event.id.decode("utf-8", "replace") if event.id else ""
+            print(f"    #{event.transition_sequence} id={event_id} "
+                  f"rev={event.command_revision_id} leg={event.order_leg_id} "
+                  f"transition={event.transition} fill={event.fill_id}")
     except RuntimeError as exc:
         print(f"stream error: {exc}", file=sys.stderr)
         return 1

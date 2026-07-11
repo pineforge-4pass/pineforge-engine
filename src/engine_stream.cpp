@@ -20,6 +20,24 @@ Bar price_point(double price, double volume, int64_t timestamp) {
 
 }  // namespace
 
+bool BacktestEngine::stream_set_gap_policy(int policy) {
+    last_error_.clear();
+    if (stream_phase_ == StreamPhase::REALTIME) {
+        last_error_ = "stream gap policy cannot change after stream_begin";
+        return false;
+    }
+    if (policy == static_cast<int>(StreamGapPolicy::FIXED_GRID)) {
+        stream_gap_policy_ = StreamGapPolicy::FIXED_GRID;
+        return true;
+    }
+    if (policy == static_cast<int>(StreamGapPolicy::DATA_DRIVEN)) {
+        stream_gap_policy_ = StreamGapPolicy::DATA_DRIVEN;
+        return true;
+    }
+    last_error_ = "unknown stream gap policy";
+    return false;
+}
+
 bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
@@ -27,6 +45,24 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
     try {
         if (stream_phase_ == StreamPhase::REALTIME) {
             throw std::runtime_error("stream is already realtime");
+        }
+        // Validate the calculation profile before run() resets or otherwise
+        // mutates the strategy instance. Realtime v1 is close-only: silently
+        // warming with one scheduler and continuing with another would make
+        // the handoff state impossible to reason about or reproduce.
+        if (calc_on_every_tick_) {
+            throw std::runtime_error(
+                "stream profile unsupported: calc_on_every_tick requires "
+                "realtime rollback semantics");
+        }
+        if (calc_on_every_history_tick_) {
+            throw std::runtime_error(
+                "stream profile unsupported: calc_on_every_history_tick");
+        }
+        if (calc_on_order_fills_) {
+            throw std::runtime_error(
+                "stream profile unsupported: calc_on_order_fills requires "
+                "a realtime fill-recalculation scheduler");
         }
         if (warmup_bars == nullptr || n_warmup <= 0) {
             throw std::runtime_error(
@@ -73,19 +109,46 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
         stream_seen_sequence_ = false;
         stream_has_input_bar_ = false;
         stream_input_bar_ = Bar{};
+        stream_input_last_trade_ms_ = 0;
+        stream_input_last_trade_sequence_ = 0;
         stream_last_price_ = warmup_bars[n_warmup - 1].close;
         stream_has_last_price_ = true;
         stream_next_script_bar_index_ =
             static_cast<int>(diag_script_bars_processed_);
         stream_script_bar_had_tick_ = false;
+        stream_script_last_trade_ms_ = 0;
+        stream_script_last_trade_sequence_ = 0;
         stream_script_tick_seen_ = false;
         stream_phase_ = StreamPhase::REALTIME;
+
+        // Lifecycle diagnostics describe the realtime contract. Do not retain
+        // a potentially year-long warmup command log; instead start a fresh
+        // canonical sequence and snapshot every broker leg carried across the
+        // handoff with its already-assigned immutable identity.
+        order_events_.clear();
+        order_event_count_ = 0;
+        order_event_hash_ = 1469598103934665603ULL;
+        order_event_dropped_ = 0;
+        next_transition_sequence_ = 1;
+        position_episode_id_ = position_side_ == PositionSide::FLAT ? 0 : 1;
+        order_event_recording_enabled_ = true;
+        for (const PendingOrder& pending : pending_orders_) {
+            record_order_transition(
+                pending, OrderLifecycleState::NONE, lifecycle_state(pending),
+                OrderTransition::CREATED, OrderTransitionReason::NONE,
+                0.0, std::numeric_limits<double>::quiet_NaN(),
+                signed_position_size(),
+                current_equity() + open_profit(current_bar_.close));
+        }
 
         // Exact normalized trades now drive the broker instead of inferred
         // OHLC paths. Strategy code remains close-only unless codegen opts in
         // to calc_on_every_tick; resting orders are nevertheless fillable on
         // each normalized trade, as on TradingView's realtime broker emulator.
-        bar_magnifier_enabled_ = true;
+        // Exact trade events are their own execution model, not the historical
+        // bar magnifier. Reporting the magnifier as enabled here conflates two
+        // distinct schedulers and makes handoff configuration diagnostics lie.
+        bar_magnifier_enabled_ = false;
         bar_index_ = stream_next_script_bar_index_;
         last_bar_index_ = bar_index_;
         last_bar_time_ = stream_next_input_open_ms_;
@@ -142,6 +205,8 @@ bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
         stream_last_price_ = tick.price;
         stream_has_last_price_ = true;
         stream_last_tick_ms_ = tick.timestamp;
+        stream_input_last_trade_ms_ = tick.timestamp;
+        stream_input_last_trade_sequence_ = tick.sequence;
         stream_clock_ms_ = tick.timestamp;
         if (tick.sequence != 0) {
             stream_last_sequence_ = tick.sequence;
@@ -228,7 +293,10 @@ bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
             throw std::runtime_error("stream_end requires a realtime stream");
         }
         if (finalize_partial_input_bar && stream_has_input_bar_) {
-            stream_feed_input_bar(stream_input_bar_, /*had_tick=*/true);
+            stream_feed_input_bar(
+                stream_input_bar_, /*had_tick=*/true,
+                stream_input_last_trade_ms_,
+                stream_input_last_trade_sequence_);
             stream_has_input_bar_ = false;
             stream_next_input_open_ms_ += stream_input_tf_ms_;
         }
@@ -259,6 +327,11 @@ bool BacktestEngine::stream_finalize_until(int64_t timestamp_ms) {
             stream_next_input_open_ms_ += stream_input_tf_ms_;
             continue;
         }
+        if (!had_tick && stream_gap_policy_ == StreamGapPolicy::DATA_DRIVEN) {
+            stream_input_bar_ = Bar{};
+            stream_next_input_open_ms_ += stream_input_tf_ms_;
+            continue;
+        }
 
         Bar completed;
         if (had_tick) {
@@ -272,15 +345,22 @@ bool BacktestEngine::stream_finalize_until(int64_t timestamp_ms) {
                 stream_last_price_, 0.0, stream_next_input_open_ms_);
         }
 
-        stream_feed_input_bar(completed, had_tick);
+        stream_feed_input_bar(
+            completed, had_tick,
+            had_tick ? stream_input_last_trade_ms_ : 0,
+            had_tick ? stream_input_last_trade_sequence_ : 0);
         stream_has_input_bar_ = false;
         stream_input_bar_ = Bar{};
+        stream_input_last_trade_ms_ = 0;
+        stream_input_last_trade_sequence_ = 0;
         stream_next_input_open_ms_ += stream_input_tf_ms_;
     }
     return true;
 }
 
-void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
+void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick,
+                                           int64_t last_trade_ms,
+                                           uint64_t last_trade_sequence) {
     ++diag_input_bars_processed_;
     last_bar_time_ = bar.timestamp;
 
@@ -289,7 +369,8 @@ void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
     }
 
     if (!diag_needs_aggregation_) {
-        stream_dispatch_script_bar(bar, had_tick);
+        stream_dispatch_script_bar(
+            bar, had_tick, last_trade_ms, last_trade_sequence);
         return;
     }
 
@@ -300,18 +381,35 @@ void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
         // The current input bar opened the next bucket; the aggregator emitted
         // the preceding partial bucket before retaining this bar as its new
         // current state.
-        stream_dispatch_script_bar(ab.bar, stream_script_bar_had_tick_);
+        stream_dispatch_script_bar(
+            ab.bar, stream_script_bar_had_tick_,
+            stream_script_last_trade_ms_,
+            stream_script_last_trade_sequence_);
         stream_script_bar_had_tick_ = had_tick;
+        stream_script_last_trade_ms_ = had_tick ? last_trade_ms : 0;
+        stream_script_last_trade_sequence_ =
+            had_tick ? last_trade_sequence : 0;
     } else {
         stream_script_bar_had_tick_ = stream_script_bar_had_tick_ || had_tick;
+        if (had_tick) {
+            stream_script_last_trade_ms_ = last_trade_ms;
+            stream_script_last_trade_sequence_ = last_trade_sequence;
+        }
         if (ab.is_complete) {
-            stream_dispatch_script_bar(ab.bar, stream_script_bar_had_tick_);
+            stream_dispatch_script_bar(
+                ab.bar, stream_script_bar_had_tick_,
+                stream_script_last_trade_ms_,
+                stream_script_last_trade_sequence_);
             stream_script_bar_had_tick_ = false;
+            stream_script_last_trade_ms_ = 0;
+            stream_script_last_trade_sequence_ = 0;
         }
     }
 }
 
-void BacktestEngine::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
+void BacktestEngine::stream_dispatch_script_bar(
+        const Bar& bar, bool had_tick, int64_t last_trade_ms,
+        uint64_t last_trade_sequence) {
     const int this_bar_index = stream_next_script_bar_index_++;
     bar_index_ = this_bar_index;
     last_bar_index_ = this_bar_index;
@@ -321,20 +419,6 @@ void BacktestEngine::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
     is_last_tick_ = true;
     ++diag_script_bars_processed_;
     pending_close_qty_in_bar_ = 0.0;
-
-    // A synthesized zero-volume interval has no raw broker pass. Give resting
-    // market orders one carried-price point at its open so time advancement is
-    // deterministic even through quiet in-session intervals.
-    if (!had_tick) {
-        current_bar_ = price_point(bar.open, 0.0, bar.timestamp);
-        process_pending_orders(current_bar_);
-        update_per_trade_extremes();
-        const std::size_t trades_before_mc = trades_.size();
-        process_margin_call(current_bar_);
-        if (trades_.size() != trades_before_mc) {
-            refresh_frozen_default_sizing_after_margin_call();
-        }
-    }
 
     current_bar_ = bar;
     session_ismarket_ = pine_session_ismarket(
@@ -351,17 +435,19 @@ void BacktestEngine::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
 
     _push_source_series();
     on_bar(current_bar_);
-    if (process_orders_on_close_) {
+    if (process_orders_on_close_ && had_tick) {
         flush_same_bar_close();
         // New close-time orders only get the closing price point. Re-walking
         // the full OHLC range would let a just-created order see prices that
         // occurred before it existed.
         const Bar completed_bar = current_bar_;
         current_bar_ = price_point(
-            completed_bar.close, 0.0, completed_bar.timestamp);
+            completed_bar.close, 0.0, last_trade_ms);
         process_pending_orders(current_bar_);
         current_bar_ = completed_bar;
     }
+
+    (void)last_trade_sequence;  // retained for lifecycle provenance reporting
 
     finalize_bar();
     prev_in_session_ = session_ismarket_;

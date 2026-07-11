@@ -64,6 +64,10 @@ example expands each live candle into a deterministic OHLC trade path. Replace
 that expansion with your exchange feed in production. The public API and state
 lifecycle remain the same.
 
+The example also prints the canonical lifecycle count/hash and the first few
+command-revision, executable-leg, and fill identities. Build JSON webhook
+payloads above this simulator API and deduplicate delivery on `fill_id`.
+
 ## Path B — Docker (no local toolchain)
 
 Mount the strategy + OHLCV into the published runtime image; get a

@@ -1,5 +1,10 @@
 # TV-Parity Probe Spec (handoff)
 
+For the realtime broker-emulator questions P1-P9, use the runnable JSON/webhook
+kit in [`docs/probes/tradingview-realtime/`](probes/tradingview-realtime/README.md).
+This document continues to cover historical export probes for instruments,
+margin, TA, higher timeframes, and report fields.
+
 > These probes need a **TradingView export** (`tv_trades.csv`) as ground truth,
 > which cannot be generated from this repo. Each entry is a clean-room
 > `strategy.pine` + the exact capture recipe + expected outcome, ready for

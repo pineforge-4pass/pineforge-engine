@@ -11,6 +11,8 @@ docs/
 ├── Doxyfile           # Doxygen config — input, theme, options
 ├── build.sh           # one-shot: fetch theme, run doxygen → docs/site/html/
 ├── coverage.md        # canonical Pine v6 coverage map (also referenced as a page)
+├── probes/            # manually captured external semantic oracles
+│   └── tradingview-realtime/ # P1-P9 Pine v6 JSON/webhook probe kit
 ├── pages/             # narrative markdown pages
 │   ├── index.md          # @mainpage — landing
 │   ├── getting-started.md

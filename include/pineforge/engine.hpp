@@ -53,6 +53,7 @@ struct PyramidEntry {
     // the full bar).
     bool skip_entry_bar_high = false;
     bool skip_entry_bar_low = false;
+    uint64_t entry_lot_id = 0;
 };
 
 struct Trade {
@@ -116,6 +117,30 @@ struct TraceEntryC {
     double value;
 };
 
+enum class OrderLifecycleState : int32_t {
+    NONE = 0, PENDING_MARKET = 1, PENDING_LIMIT = 2, PENDING_STOP = 3,
+    PENDING_STOP_LIMIT = 4, ACTIVE_STOP_LIMIT = 5,
+    PENDING_TRAIL_ACTIVATION = 6, ACTIVE_TRAIL = 7,
+    FILLED = 8, CANCELLED = 9, REPLACED = 10, REJECTED = 11, EXPIRED = 12
+};
+enum class OrderTransition : int32_t {
+    CREATED = 1, REPLACED = 2, ACTIVATED = 3, RATCHETED = 4,
+    FILLED = 5, CANCELLED = 6, REDUCED = 7, REJECTED = 8, EXPIRED = 9
+};
+enum class OrderTransitionReason : int32_t {
+    NONE = 0, COMMAND_REISSUE = 1, USER_CANCEL = 2,
+    STOP_LIMIT_TRIGGER = 3, TRAIL_TRIGGER = 4, TRAIL_FAVORABLE_PRICE = 5,
+    PRICE_FILL = 6, RISK_REJECT = 7, OCA_EFFECT = 8, FLAT_PURGE = 9,
+    STREAM_CLOSE_EVENT = 10
+};
+
+struct OrderLifecycleEvent {
+    pf_order_event_t value{};
+    std::string id;
+    std::string from_entry;
+    std::string oca_name;
+};
+
 struct ReportC {
     int total_trades;
     TradeC* trades;
@@ -149,6 +174,11 @@ struct ReportC {
     pf_metrics_t metrics;
     pf_equity_point_t* equity_curve;
     int64_t equity_curve_len;
+    pf_order_event_t* order_events;
+    int64_t order_events_len;
+    uint64_t order_event_count;
+    uint64_t order_event_hash;
+    uint64_t order_event_dropped;
 };
 
 enum class OrderType { MARKET, ENTRY, EXIT, RAW_ORDER };
@@ -176,6 +206,19 @@ struct PendingOrder {
     int oca_type;              // 0=none, 1=cancel, 2=reduce
     int created_bar;           // bar_index when order was created
     int64_t created_seq = 0;
+    // Stable broker identities are distinct from the public Pine ID and from
+    // priority. Reissuing the same command key creates a fresh revision and
+    // leg while preserving or resetting priority according to created_seq.
+    uint64_t command_revision_id = 0;
+    uint64_t order_leg_id = 0;
+    uint64_t priority_sequence = 0;
+    uint64_t terminal_fill_id = 0;
+    // Realtime trailing state is executable-leg state, never position-global.
+    // The historical OHLC kernel continues to use trail_best_price_ until its
+    // path semantics can be refactored without corpus drift.
+    double realtime_trail_best_price =
+        std::numeric_limits<double>::quiet_NaN();
+    bool realtime_trail_activated = false;
     // Entry stop-limit activation is durable broker state. Once the stop leg
     // fires, later bars—and later COOF scheduler segments on the same bar—
     // evaluate only the live limit leg until the order fills or is replaced.
@@ -410,6 +453,8 @@ struct StrategyOverrides {
     int default_qty_type = -1;
     int process_orders_on_close = -1;
     int calc_on_order_fills = -1;
+    int calc_on_every_tick = -1;
+    int calc_on_every_history_tick = -1;
     int close_entries_rule = -1;
 };
 
@@ -499,6 +544,11 @@ protected:
     // Historical fill-triggered recalculation is strictly opt-in. The false
     // branch in dispatch_bar remains the legacy control path.
     bool calc_on_order_fills_ = false;
+    // Realtime execution profiles beyond close-only are deliberately explicit.
+    // Codegen may set these directly from strategy() declarations; stream_begin
+    // rejects them before warmup until their rollback schedulers exist.
+    bool calc_on_every_tick_ = false;
+    bool calc_on_every_history_tick_ = false;
     QtyType default_qty_type_ = QtyType::FIXED;
     double default_qty_value_ = 1.0;
     int pyramiding_ = 1;            // max additional entries in same direction
@@ -1385,6 +1435,17 @@ protected:
     // finite historical/magnifier event budget as every other broker fill.
     uint64_t coof_direct_fill_events_remaining_ = 0;
     uint64_t broker_fill_event_seq_ = 0;
+    uint64_t next_command_revision_id_ = 1;
+    uint64_t next_order_leg_id_ = 1;
+    uint64_t next_entry_lot_id_ = 1;
+    uint64_t next_transition_sequence_ = 1;
+    uint64_t position_episode_id_ = 0;
+    std::vector<OrderLifecycleEvent> order_events_;
+    uint64_t order_event_count_ = 0;
+    uint64_t order_event_hash_ = 1469598103934665603ULL;
+    uint64_t order_event_dropped_ = 0;
+    bool order_event_recording_enabled_ = false;
+    static constexpr std::size_t kOrderEventRetentionCapacity = 65536;
 
     // input.source histories are base-owned script state and must roll back
     // with generated state between historical fill recalculations.
@@ -1424,7 +1485,9 @@ protected:
     // path exactly once, then these fields carry the SAME broker, Pine series,
     // TA and timeframe-aggregator state forward while normalized trades arrive.
     enum class StreamPhase { IDLE, REALTIME, ENDED };
+    enum class StreamGapPolicy { FIXED_GRID = 0, DATA_DRIVEN = 1 };
     StreamPhase stream_phase_ = StreamPhase::IDLE;
+    StreamGapPolicy stream_gap_policy_ = StreamGapPolicy::FIXED_GRID;
     bool stream_warmup_mode_ = false;
     int64_t stream_input_tf_ms_ = 0;
     int64_t stream_next_input_open_ms_ = 0;
@@ -1434,10 +1497,14 @@ protected:
     bool stream_seen_sequence_ = false;
     bool stream_has_input_bar_ = false;
     Bar stream_input_bar_{};
+    int64_t stream_input_last_trade_ms_ = 0;
+    uint64_t stream_input_last_trade_sequence_ = 0;
     double stream_last_price_ = 0.0;
     bool stream_has_last_price_ = false;
     int stream_next_script_bar_index_ = 0;
     bool stream_script_bar_had_tick_ = false;
+    int64_t stream_script_last_trade_ms_ = 0;
+    uint64_t stream_script_last_trade_sequence_ = 0;
     bool stream_script_tick_seen_ = false;
 
     // --- request.security state ---
@@ -1801,11 +1868,14 @@ private:
     void execute_partial_exit(double fill_price, double qty_percent);
     void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
     void execute_partial_exit_by_entry_percent(double fill_price, const std::string& from_entry, double qty_percent);
-    void cancel_oca_group(const std::string& oca_name, const std::string& exclude_id);
+    void cancel_oca_group(const std::string& oca_name, int oca_type,
+                          const std::string& exclude_id,
+                          uint64_t exclude_order_leg_id);
     // Pine v6 oca.reduce: when one sibling fills qty Q, reduce remaining
     // siblings' qty by Q. Siblings whose qty becomes <= 0 are cancelled.
-    void reduce_oca_group(const std::string& oca_name, const std::string& exclude_id,
-                          double filled_qty);
+    void reduce_oca_group(const std::string& oca_name, int oca_type,
+                          const std::string& exclude_id,
+                          uint64_t exclude_order_leg_id, double filled_qty);
     void purge_exit_orders(bool retain_for_pending_entries = false);
 
     // process_pending_orders helpers (defined in engine_fills.cpp).
@@ -1864,6 +1934,16 @@ private:
                               int& exit_closed_from_bar,
                               bool& exit_closed_was_long);
     void materialize_relative_exit_prices_for_live_position();
+    void assign_pending_order_identity(PendingOrder& order);
+    void assign_entry_lot_identity(PyramidEntry& entry);
+    OrderLifecycleState lifecycle_state(const PendingOrder& order) const;
+    void record_order_transition(
+        const PendingOrder& order, OrderLifecycleState before,
+        OrderLifecycleState after, OrderTransition transition,
+        OrderTransitionReason reason, double filled_quantity = 0.0,
+        double fill_price = std::numeric_limits<double>::quiet_NaN(),
+        double position_before = std::numeric_limits<double>::quiet_NaN(),
+        double equity_before = std::numeric_limits<double>::quiet_NaN());
 
     // Inner-loop phase split for process_pending_orders.
     // The inner loop iterates `pending_orders_` and processes each via
@@ -2017,14 +2097,19 @@ private:
     void run_aggregation_bar_loop(const Bar* input_bars, int n_input,
                                   bool bar_magnifier, int expected_script_bars);
     bool stream_finalize_until(int64_t timestamp_ms);
-    void stream_feed_input_bar(const Bar& bar, bool had_tick);
-    void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
+    void stream_feed_input_bar(const Bar& bar, bool had_tick,
+                               int64_t last_trade_ms,
+                               uint64_t last_trade_sequence);
+    void stream_dispatch_script_bar(const Bar& bar, bool had_tick,
+                                    int64_t last_trade_ms,
+                                    uint64_t last_trade_sequence);
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;
     void fill_metrics_section(ReportC* out) const;
     void fill_security_diag_section(ReportC* out) const;
     void fill_trace_section(ReportC* out) const;
+    void fill_order_events_section(ReportC* out) const;
 
 public:
     virtual ~BacktestEngine() = default;
@@ -2048,6 +2133,7 @@ public:
     bool stream_begin(const Bar* warmup_bars, int n_warmup,
                       const std::string& input_tf,
                       const std::string& script_tf = "");
+    bool stream_set_gap_policy(int policy);
     bool stream_push_tick(const TradeTick& tick);
     bool stream_push_ticks(const TradeTick* ticks, int n);
     bool stream_advance_time(int64_t timestamp_ms);

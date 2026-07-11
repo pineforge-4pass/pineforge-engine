@@ -26,6 +26,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_syminfo_metadata",
     "strategy_get_last_error",
     "strategy_stream_begin",
+    "strategy_stream_set_gap_policy",
     "strategy_stream_push_tick",
     "strategy_stream_push_ticks",
     "strategy_stream_advance_time",

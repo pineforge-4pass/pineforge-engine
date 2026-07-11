@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -54,6 +55,34 @@ void BacktestEngine::fill_report(ReportC* out) const {
 
     fill_security_diag_section(out);
     fill_trace_section(out);
+    fill_order_events_section(out);
+}
+
+void BacktestEngine::fill_order_events_section(ReportC* out) const {
+    const int64_t n = static_cast<int64_t>(order_events_.size());
+    out->order_events_len = n;
+    out->order_event_count = order_event_count_;
+    out->order_event_hash = order_event_hash_;
+    out->order_event_dropped = order_event_dropped_;
+    if (n == 0) {
+        out->order_events = nullptr;
+        return;
+    }
+    out->order_events = new pf_order_event_t[n]{};
+    auto copy_string = [](const std::string& source) {
+        char* result = new char[source.size() + 1];
+        std::memcpy(result, source.c_str(), source.size() + 1);
+        return result;
+    };
+    for (int64_t i = 0; i < n; ++i) {
+        out->order_events[i] = order_events_[static_cast<std::size_t>(i)].value;
+        out->order_events[i].id = copy_string(
+            order_events_[static_cast<std::size_t>(i)].id);
+        out->order_events[i].from_entry = copy_string(
+            order_events_[static_cast<std::size_t>(i)].from_entry);
+        out->order_events[i].oca_name = copy_string(
+            order_events_[static_cast<std::size_t>(i)].oca_name);
+    }
 }
 
 
@@ -213,6 +242,19 @@ void BacktestEngine::free_report(ReportC* report) {
         delete[] report->equity_curve;
         report->equity_curve = nullptr;
         report->equity_curve_len = 0;
+    }
+    if (report && report->order_events) {
+        for (int64_t i = 0; i < report->order_events_len; ++i) {
+            delete[] report->order_events[i].id;
+            delete[] report->order_events[i].from_entry;
+            delete[] report->order_events[i].oca_name;
+        }
+        delete[] report->order_events;
+        report->order_events = nullptr;
+        report->order_events_len = 0;
+        report->order_event_count = 0;
+        report->order_event_hash = 0;
+        report->order_event_dropped = 0;
     }
 }
 

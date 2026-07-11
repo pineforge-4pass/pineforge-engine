@@ -84,6 +84,36 @@ class _Trace(ctypes.Structure):
     _fields_ = [("timestamp", ctypes.c_int64), ("bar_index", ctypes.c_int32),
                 ("name_id",   ctypes.c_int32), ("value",     ctypes.c_double)]
 
+class OrderEventC(ctypes.Structure):
+    _fields_ = [
+        ("transition_sequence", ctypes.c_uint64),
+        ("command_revision_id", ctypes.c_uint64),
+        ("order_leg_id", ctypes.c_uint64),
+        ("priority_sequence", ctypes.c_uint64),
+        ("fill_id", ctypes.c_uint64), ("entry_lot_id", ctypes.c_uint64),
+        ("position_episode_id", ctypes.c_uint64),
+        ("event_timestamp", ctypes.c_int64),
+        ("event_sequence", ctypes.c_uint64),
+        ("input_bar_index", ctypes.c_int64),
+        ("script_bar_index", ctypes.c_int32),
+        ("command_kind", ctypes.c_int32), ("leg_kind", ctypes.c_int32),
+        ("state_before", ctypes.c_int32), ("state_after", ctypes.c_int32),
+        ("transition", ctypes.c_int32), ("reason", ctypes.c_int32),
+        ("side", ctypes.c_int32), ("oca_type", ctypes.c_int32),
+        ("requested_quantity", ctypes.c_double),
+        ("remaining_quantity", ctypes.c_double),
+        ("filled_quantity", ctypes.c_double),
+        ("observed_price", ctypes.c_double), ("stop_price", ctypes.c_double),
+        ("limit_price", ctypes.c_double),
+        ("trail_activation_price", ctypes.c_double),
+        ("trail_watermark", ctypes.c_double), ("fill_price", ctypes.c_double),
+        ("position_size_before", ctypes.c_double),
+        ("position_size_after", ctypes.c_double),
+        ("equity_before", ctypes.c_double), ("equity_after", ctypes.c_double),
+        ("id", ctypes.c_char_p), ("from_entry", ctypes.c_char_p),
+        ("oca_name", ctypes.c_char_p),
+    ]
+
 class ReportC(ctypes.Structure):
     _fields_ = [("total_trades", ctypes.c_int),
                 ("trades", ctypes.POINTER(TradeC)), ("trades_len", ctypes.c_int),
@@ -107,12 +137,17 @@ class ReportC(ctypes.Structure):
                 ("trace_names_len", ctypes.c_int),
                 ("metrics", MetricsC),
                 ("equity_curve", ctypes.POINTER(EquityPointC)),
-                ("equity_curve_len", ctypes.c_int64)]  # int64, NOT c_int
+                ("equity_curve_len", ctypes.c_int64),
+                ("order_events", ctypes.POINTER(OrderEventC)),
+                ("order_events_len", ctypes.c_int64),
+                ("order_event_count", ctypes.c_uint64),
+                ("order_event_hash", ctypes.c_uint64),
+                ("order_event_dropped", ctypes.c_uint64)]
 
 
 # pf_report_t is caller-allocated, so a stale mirror means the runtime
 # writes past our buffer. Assert the .so's ABI version before any run.
-EXPECTED_PF_ABI = 2
+EXPECTED_PF_ABI = 3
 
 def check_abi(lib: ctypes.CDLL) -> None:
     try:

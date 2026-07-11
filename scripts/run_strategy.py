@@ -406,6 +406,38 @@ class TraceEntryC(ctypes.Structure):
     ]
 
 
+class OrderEventC(ctypes.Structure):
+    _fields_ = [
+        ("transition_sequence", ctypes.c_uint64),
+        ("command_revision_id", ctypes.c_uint64),
+        ("order_leg_id", ctypes.c_uint64),
+        ("priority_sequence", ctypes.c_uint64),
+        ("fill_id", ctypes.c_uint64),
+        ("entry_lot_id", ctypes.c_uint64),
+        ("position_episode_id", ctypes.c_uint64),
+        ("event_timestamp", ctypes.c_int64),
+        ("event_sequence", ctypes.c_uint64),
+        ("input_bar_index", ctypes.c_int64),
+        ("script_bar_index", ctypes.c_int32),
+        ("command_kind", ctypes.c_int32), ("leg_kind", ctypes.c_int32),
+        ("state_before", ctypes.c_int32), ("state_after", ctypes.c_int32),
+        ("transition", ctypes.c_int32), ("reason", ctypes.c_int32),
+        ("side", ctypes.c_int32), ("oca_type", ctypes.c_int32),
+        ("requested_quantity", ctypes.c_double),
+        ("remaining_quantity", ctypes.c_double),
+        ("filled_quantity", ctypes.c_double),
+        ("observed_price", ctypes.c_double), ("stop_price", ctypes.c_double),
+        ("limit_price", ctypes.c_double),
+        ("trail_activation_price", ctypes.c_double),
+        ("trail_watermark", ctypes.c_double), ("fill_price", ctypes.c_double),
+        ("position_size_before", ctypes.c_double),
+        ("position_size_after", ctypes.c_double),
+        ("equity_before", ctypes.c_double), ("equity_after", ctypes.c_double),
+        ("id", ctypes.c_char_p), ("from_entry", ctypes.c_char_p),
+        ("oca_name", ctypes.c_char_p),
+    ]
+
+
 class ReportC(ctypes.Structure):
     _fields_ = [
         ("total_trades", ctypes.c_int),
@@ -433,6 +465,11 @@ class ReportC(ctypes.Structure):
         ("metrics", MetricsC),
         ("equity_curve", ctypes.POINTER(EquityPointC)),
         ("equity_curve_len", ctypes.c_int64),  # int64 in the C header, NOT c_int
+        ("order_events", ctypes.POINTER(OrderEventC)),
+        ("order_events_len", ctypes.c_int64),
+        ("order_event_count", ctypes.c_uint64),
+        ("order_event_hash", ctypes.c_uint64),
+        ("order_event_dropped", ctypes.c_uint64),
     ]
 
 
@@ -440,7 +477,7 @@ class ReportC(ctypes.Structure):
 # pf_report_t is CALLER-allocated: running an old .so against the v2
 # ReportC mirror (or vice versa) silently corrupts memory, so the .so's
 # pf_abi_version() export is asserted before any run.
-EXPECTED_PF_ABI = 2
+EXPECTED_PF_ABI = 3
 
 
 def _check_abi(lib: ctypes.CDLL) -> None:
@@ -617,6 +654,8 @@ class Strategy:
             L.strategy_get_last_error.argtypes = [ctypes.c_void_p]
             L.strategy_get_last_error.restype = ctypes.c_char_p
         if hasattr(L, "strategy_stream_begin"):
+            L.strategy_stream_set_gap_policy.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            L.strategy_stream_set_gap_policy.restype = ctypes.c_int
             L.strategy_stream_begin.argtypes = [
                 ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
                 ctypes.c_char_p, ctypes.c_char_p]
@@ -943,6 +982,30 @@ def _report_to_dict(r: ReportC) -> dict:
             "name": name,
             "value": float(e.value),
         })
+    order_events = []
+    for i in range(r.order_events_len):
+        e = r.order_events[i]
+        text = lambda p: p.decode("utf-8", "replace") if p else ""
+        order_events.append({
+            "transition_sequence": int(e.transition_sequence),
+            "command_revision_id": int(e.command_revision_id),
+            "order_leg_id": int(e.order_leg_id),
+            "priority_sequence": int(e.priority_sequence),
+            "fill_id": int(e.fill_id),
+            "entry_lot_id": int(e.entry_lot_id),
+            "position_episode_id": int(e.position_episode_id),
+            "event_timestamp": int(e.event_timestamp),
+            "event_sequence": int(e.event_sequence),
+            "script_bar_index": int(e.script_bar_index),
+            "command_kind": int(e.command_kind), "leg_kind": int(e.leg_kind),
+            "state_before": int(e.state_before), "state_after": int(e.state_after),
+            "transition": int(e.transition), "reason": int(e.reason),
+            "id": text(e.id), "from_entry": text(e.from_entry),
+            "oca_name": text(e.oca_name),
+            "filled_quantity": float(e.filled_quantity),
+            "observed_price": float(e.observed_price),
+            "fill_price": float(e.fill_price),
+        })
     return {
         "total_trades": int(r.total_trades),
         "net_profit": float(r.net_profit),
@@ -954,6 +1017,10 @@ def _report_to_dict(r: ReportC) -> dict:
         "trades": trades,
         "trace": trace,
         "trace_names": trace_names,
+        "order_events": order_events,
+        "order_event_count": int(r.order_event_count),
+        "order_event_hash": f"{int(r.order_event_hash):016x}",
+        "order_event_dropped": int(r.order_event_dropped),
     }
 
 

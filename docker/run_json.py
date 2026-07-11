@@ -401,6 +401,38 @@ class TraceEntryC(ctypes.Structure):
     ]
 
 
+class OrderEventC(ctypes.Structure):
+    _fields_ = [
+        ("transition_sequence", ctypes.c_uint64),
+        ("command_revision_id", ctypes.c_uint64),
+        ("order_leg_id", ctypes.c_uint64),
+        ("priority_sequence", ctypes.c_uint64),
+        ("fill_id", ctypes.c_uint64),
+        ("entry_lot_id", ctypes.c_uint64),
+        ("position_episode_id", ctypes.c_uint64),
+        ("event_timestamp", ctypes.c_int64),
+        ("event_sequence", ctypes.c_uint64),
+        ("input_bar_index", ctypes.c_int64),
+        ("script_bar_index", ctypes.c_int32),
+        ("command_kind", ctypes.c_int32), ("leg_kind", ctypes.c_int32),
+        ("state_before", ctypes.c_int32), ("state_after", ctypes.c_int32),
+        ("transition", ctypes.c_int32), ("reason", ctypes.c_int32),
+        ("side", ctypes.c_int32), ("oca_type", ctypes.c_int32),
+        ("requested_quantity", ctypes.c_double),
+        ("remaining_quantity", ctypes.c_double),
+        ("filled_quantity", ctypes.c_double),
+        ("observed_price", ctypes.c_double), ("stop_price", ctypes.c_double),
+        ("limit_price", ctypes.c_double),
+        ("trail_activation_price", ctypes.c_double),
+        ("trail_watermark", ctypes.c_double), ("fill_price", ctypes.c_double),
+        ("position_size_before", ctypes.c_double),
+        ("position_size_after", ctypes.c_double),
+        ("equity_before", ctypes.c_double), ("equity_after", ctypes.c_double),
+        ("id", ctypes.c_char_p), ("from_entry", ctypes.c_char_p),
+        ("oca_name", ctypes.c_char_p),
+    ]
+
+
 class ReportC(ctypes.Structure):
     _fields_ = [
         ("total_trades",                 ctypes.c_int),
@@ -428,6 +460,11 @@ class ReportC(ctypes.Structure):
         ("metrics",                      MetricsC),
         ("equity_curve",                 ctypes.POINTER(EquityPointC)),
         ("equity_curve_len",             ctypes.c_int64),  # int64, NOT c_int
+        ("order_events",                 ctypes.POINTER(OrderEventC)),
+        ("order_events_len",             ctypes.c_int64),
+        ("order_event_count",            ctypes.c_uint64),
+        ("order_event_hash",             ctypes.c_uint64),
+        ("order_event_dropped",          ctypes.c_uint64),
     ]
 
 
@@ -456,7 +493,7 @@ def engine_version(lib: ctypes.CDLL) -> dict:
 
 # pf_report_t is CALLER-allocated: a .so built against a different ABI
 # writes past (or short of) our ReportC buffer. Assert version up front.
-EXPECTED_PF_ABI = 2
+EXPECTED_PF_ABI = 3
 
 
 def check_abi(lib: ctypes.CDLL) -> None:
@@ -650,6 +687,31 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                 "open_profit": _num(p.open_profit),
             })
 
+    order_events = []
+    for i in range(int(report.order_events_len)):
+        e = report.order_events[i]
+        text = lambda p: p.decode("utf-8", "replace") if p else ""
+        order_events.append({
+            "transition_sequence": int(e.transition_sequence),
+            "command_revision_id": int(e.command_revision_id),
+            "order_leg_id": int(e.order_leg_id),
+            "priority_sequence": int(e.priority_sequence),
+            "fill_id": int(e.fill_id),
+            "entry_lot_id": int(e.entry_lot_id),
+            "position_episode_id": int(e.position_episode_id),
+            "event_timestamp": int(e.event_timestamp),
+            "event_sequence": int(e.event_sequence),
+            "script_bar_index": int(e.script_bar_index),
+            "command_kind": int(e.command_kind), "leg_kind": int(e.leg_kind),
+            "state_before": int(e.state_before), "state_after": int(e.state_after),
+            "transition": int(e.transition), "reason": int(e.reason),
+            "id": text(e.id), "from_entry": text(e.from_entry),
+            "oca_name": text(e.oca_name),
+            "filled_quantity": _num(e.filled_quantity),
+            "observed_price": _num(e.observed_price),
+            "fill_price": _num(e.fill_price),
+        })
+
     return {
         "engine": "pineforge",
         "input": {
@@ -682,10 +744,14 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "magnifier_sub_bars_total":     int(report.magnifier_sub_bars_total),
             "magnifier_sample_ticks_total": int(report.magnifier_sample_ticks_total),
             "bar_magnifier_enabled":        bool(report.bar_magnifier_enabled),
+            "order_event_count":            int(report.order_event_count),
+            "order_event_hash":             f"{int(report.order_event_hash):016x}",
+            "order_event_dropped":          int(report.order_event_dropped),
         },
         "trades": trades,
         "metrics": metrics,
         "equity_curve": equity_curve,
+        "order_events": order_events,
     }
 
 
