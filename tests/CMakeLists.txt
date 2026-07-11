@@ -91,6 +91,7 @@ set(TEST_SOURCES
     test_streaming
     test_calc_on_order_fills
     test_coof_cascade_eligibility
+    test_cascade_exit_gapjump
     test_pooc_position_visibility
 )
 

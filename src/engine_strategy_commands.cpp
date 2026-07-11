@@ -847,6 +847,27 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         order.coof_suppress_stop_on_entry_bar = stop_marketable;
         order.coof_suppress_limit_on_entry_bar = limit_marketable;
     }
+    // KI-67 exit cascade (Model S). Record this mid-bar cascade exit's in-flight
+    // leg so the historical dispatch gate can hold it on that leg's remainder,
+    // exact-fill it on subsequent legs, and gap-fill it at the in-flight leg-end
+    // waypoint. seg_i is the loop's REAL in-flight leg at this recalc — not
+    // re-derived from the recalc price, which is ambiguous when the triggering
+    // fill lands exactly on a waypoint ("a fill AT a waypoint starts the NEXT
+    // leg"). current_bar_ is the full script bar during a fill recalc; the
+    // magnifier path owns its own tick model and is scoped out.
+    if (order.coof_born_mid_bar && !bar_magnifier_enabled_
+        && coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
+        && position_side_ != PositionSide::FLAT
+        && (!std::isnan(order.stop_price) || !std::isnan(order.limit_price))
+        && std::isnan(order.trail_points) && std::isnan(order.trail_price)) {
+        const int si = coof_cascade_recalc_leg_;
+        order.coof_cascade_seg_i =
+            (si >= 0 && si <= 2) ? static_cast<int8_t>(si)
+                                 : static_cast<int8_t>(-1);
+        order.coof_cascade_inflight_fires = internal::cascade_exit_inflight_fires(
+            current_bar_, coof_cursor_price_, si, position_side_,
+            order.stop_price, order.limit_price);
+    }
     // Position-derived captures use the post-batched-close view (see
     // live_pos_qty above) so an exit armed after a same-bar strategy.close
     // records the same state it did when the close executed mid-bar.

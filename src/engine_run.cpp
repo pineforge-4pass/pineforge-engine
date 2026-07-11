@@ -229,6 +229,10 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
+    coof_hist_is_segment_ = false;
+    coof_hist_path_index_ = -1;
+    coof_cascade_recalc_leg_ = -1;
+    coof_cascade_force_wp_gap_ = false;
 
     double path[4];
     fill_bar_path_points(script_bar, path);
@@ -264,12 +268,20 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
             // not admit them.
             coof_at_extreme_waypoint_ =
                 (next_waypoint == 2 || next_waypoint == 3);
+            // KI-67 exit cascade: publish this POINT's path index (cursor ==
+            // path[next_waypoint-1]) for the strategy.exit cascade gate.
+            coof_hist_is_segment_ = false;
+            coof_hist_path_index_ = next_waypoint - 1;
             const Bar point = coof_point_bar(script_bar, cursor);
             current_bar_ = point;
             CoofFillResult fill = process_next_pending_order(
                 point, /*allow_market_orders=*/true,
                 exit_closed_from_bar, exit_closed_was_long);
             if (fill.filled) {
+                // A fill at this POINT (cursor == path[next_waypoint-1]) puts the
+                // in-flight leg at path[next_waypoint-1] -> path[next_waypoint],
+                // i.e. leg (next_waypoint-1) — the leg the loop traverses next.
+                coof_cascade_recalc_leg_ = next_waypoint - 1;
                 consume_fill(
                     fill, cursor_is_close,
                     /*filled_at_bar_open_point=*/next_waypoint == 1);
@@ -284,8 +296,14 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
         const Bar segment = coof_segment_bar(script_bar, cursor, target);
         current_bar_ = segment;
         coof_evaluating_path_segment_ = true;
-        // No intra-segment exact-level fills for cascade orders.
+        // No intra-segment exact-level fills for ENTRY cascade orders. EXIT
+        // cascade orders exact-fill on SUBSEQUENT legs (leg index > seg_i); the
+        // gate uses the published leg index below to distinguish them.
         coof_at_extreme_waypoint_ = false;
+        // KI-67 exit cascade: publish this SEGMENT's leg index
+        // (path[next_waypoint-1] -> path[next_waypoint]).
+        coof_hist_is_segment_ = true;
+        coof_hist_path_index_ = next_waypoint - 1;
         CoofFillResult fill = process_next_pending_order(
             segment, /*allow_market_orders=*/false,
             exit_closed_from_bar, exit_closed_was_long);
@@ -295,6 +313,11 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
                 std::abs(fill.fill_price - target) <= kSegmentDenomEps;
             const bool cursor_is_close = next_waypoint == 3
                 && reached_target;
+            // A fill mid-leg leaves the in-flight leg at (next_waypoint-1); a fill
+            // that reaches the leg-end waypoint (path[next_waypoint]) advances to
+            // the NEXT leg (next_waypoint) — the loop's ++next_waypoint below.
+            coof_cascade_recalc_leg_ =
+                reached_target ? next_waypoint : (next_waypoint - 1);
             consume_fill(
                 fill, cursor_is_close,
                 /*filled_at_bar_open_point=*/false);
@@ -312,7 +335,14 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
 
     // Past the extreme waypoints: neither the ordinary close execution nor the
     // POOC-C / margin passes admit cascade orders (they hold to the next bar).
+    // Publishing the C waypoint (index 3) also holds EXIT cascade orders there:
+    // a terminal in-flight leg never gap-fills, and no leg is "subsequent" to C.
     coof_at_extreme_waypoint_ = false;
+    coof_hist_is_segment_ = false;
+    coof_hist_path_index_ = 3;
+    // No in-flight leg remains: any exit placed by the ordinary-close / POOC-C /
+    // margin recalcs is terminal and rolls.
+    coof_cascade_recalc_leg_ = -1;
 
     // The regular historical close execution is still required after all
     // fill-triggered executions. It starts from the prior committed checkpoint
@@ -373,6 +403,10 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
+    coof_hist_is_segment_ = false;
+    coof_hist_path_index_ = -1;
+    coof_cascade_recalc_leg_ = -1;
+    coof_cascade_force_wp_gap_ = false;
     coof_direct_fill_events_remaining_ = 0;
     coof_checkpoint_contains_current_bar_ = false;
     history_slot_is_new_ = true;
@@ -444,6 +478,10 @@ void BacktestEngine::reset_run_state() {
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
+    coof_hist_is_segment_ = false;
+    coof_hist_path_index_ = -1;
+    coof_cascade_recalc_leg_ = -1;
+    coof_cascade_force_wp_gap_ = false;
     coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
     coof_direct_fill_events_remaining_ = 0;
     coof_checkpoint_contains_current_bar_ = false;
@@ -903,6 +941,10 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
+    coof_hist_is_segment_ = false;
+    coof_hist_path_index_ = -1;
+    coof_cascade_recalc_leg_ = -1;
+    coof_cascade_force_wp_gap_ = false;
     coof_direct_fill_events_remaining_ = 0;
     coof_checkpoint_contains_current_bar_ = false;
     history_slot_is_new_ = true;

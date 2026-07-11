@@ -861,14 +861,17 @@ void test_pooc_same_tick_requires_close_cursor_or_immediately() {
     }
 }
 
-// A bracket born in an INTRABAR fill recalc is a KI-67 cascade order: it may
-// fill ONLY at a remaining extreme waypoint of the historical 4-tick path,
-// never at an interpolated intra-segment level and never at C. Entry stop
-// L=105 fills mid-bar (path tie -> O=100,L=90,H=110,C=100), so the bracket is a
-// cascade order with only the W2=110 extreme left, and NEITHER leg is reachable
-// there (sl=102 needs a fall to 102; tp=112 needs a rise to 112 — 110 delivers
-// neither). Both therefore convert to ordinary resting orders and fill on the
-// NEXT bar, instead of the old behaviour of exact-level-filling on the segment.
+// A priced bracket born in an INTRABAR fill recalc is a KI-67 cascade EXIT and
+// follows Model S ("R-cascade-gapjump"): held on its in-flight leg, then it
+// gap-fills at that leg-end waypoint if its level is in the in-flight remainder,
+// and EXACT-level fills on any subsequent leg. Entry stop L=105 fills mid-bar
+// (path tie -> O=100,L=90,H=110,C=100 => O->L->H->C), so the exit's in-flight
+// leg is L->H (90->110) and the subsequent leg is H->C (110->100).
+//   sl=102: below the rising in-flight leg, but the reversed subsequent leg
+//           110->100 crosses it — EXACT fill at 102, SAME bar (KI-67 residual
+//           fix; pre-fix this rolled because only the W2=110 extreme was eligible).
+//   tp=112: not in the in-flight remainder (105,110] and never reached on the
+//           down subsequent leg — it rolls to the next bar (rises to 113 there).
 class PoocIntrabarBracketProbe final : public CoofBase {
 public:
     enum class Leg { STOP, LIMIT };
@@ -901,9 +904,9 @@ void test_pooc_intrabar_recalc_priced_order_uses_remaining_path() {
         {103.0, 113.0, 95.0,  98.0, 1000.0, 2'700'000},
     };
 
-    // Cascade sl=102 is not reachable at the only remaining extreme (W2=110); it
-    // converts to an ordinary resting order and fills at 102 on the NEXT bar
-    // (bar 2 dips to 95), NOT via an exact-level fill on the bar-1 110->100 leg.
+    // Cascade sl=102 (KI-67 Model S): the subsequent leg H->C (110->100) crosses
+    // it, so it EXACT-level fills at 102 on the SAME bar (bar 1), not at the
+    // W2=110 extreme and not rolled to the next bar.
     PoocIntrabarBracketProbe stop(PoocIntrabarBracketProbe::Leg::STOP);
     stop.run(bars, 3);
     CHECK(stop.last_error().empty());
@@ -912,7 +915,7 @@ void test_pooc_intrabar_recalc_priced_order_uses_remaining_path() {
         CHECK(near(stop.get_trade(0).entry_price, 105.0));
         CHECK(near(stop.get_trade(0).exit_price, 102.0));
         CHECK(stop.get_trade(0).entry_bar_index == 1);
-        CHECK(stop.get_trade(0).exit_bar_index == 2);
+        CHECK(stop.get_trade(0).exit_bar_index == 1);   // KI-67 residual: was 2
     }
 
     // Cascade tp=112 is likewise unreachable at W2=110 on bar 1; it converts to

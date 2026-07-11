@@ -214,7 +214,26 @@ struct PendingOrder {
     // in the BAR-OPEN recalc (or resting at bar start) keep standard exact-level
     // semantics and leave this false. Scoped to the historical path; the
     // magnifier path (bar_magnifier_enabled_) ignores this bit entirely.
+    //
+    // ENTRY cascade orders use the plain "extreme-waypoint only" reach above.
+    // strategy.exit cascade orders follow the finer KI-67 Model S rule
+    // ("R-cascade-gapjump") captured by the two fields below.
     bool coof_born_mid_bar = false;
+    // KI-67 exit cascade (Model S). Set at birth for a coof_born_mid_bar
+    // strategy.exit order: the historical-path LEG index (0 = O->W1, 1 = W1->W2,
+    // 2 = W2->C) the triggering intrabar fill (coof_cursor_price_ "ap") landed
+    // on — the "in-flight" leg. -1 when the order is not a mid-bar cascade exit,
+    // or ap is off-path (roll). The gate holds the order on that leg's remainder,
+    // lets it EXACT-level fill on every SUBSEQUENT leg, and (when
+    // coof_cascade_inflight_fires) gap-fills it at the in-flight leg-end waypoint.
+    int8_t coof_cascade_seg_i = -1;
+    // KI-67 exit cascade: true when the exit level lies inside the in-flight
+    // remainder (ap -> leg-end waypoint) in the trigger direction on a
+    // NON-terminal in-flight leg, so it gap-fills same-bar AT that waypoint price
+    // (Model S clause 1: limits better than level, stops worse). False otherwise
+    // — subsequent legs fill at the exact level and a terminal in-flight leg
+    // (seg_i == 2) or off-path (seg_i < 0) rolls to the next bar.
+    bool coof_cascade_inflight_fires = false;
     PositionSide created_position_side = PositionSide::FLAT;
     // True when a successful strategy.close/close_all call earlier in this
     // same on_bar already targeted live quantity. This remains distinct from
@@ -1465,6 +1484,28 @@ protected:
     // are held (they convert to ordinary resting orders at bar end). Set only by
     // the historical dispatch; the magnifier path never sets it.
     bool coof_at_extreme_waypoint_ = false;
+    // KI-67 exit cascade: the historical dispatch publishes its current path
+    // position here for the strategy.exit cascade gate. coof_hist_is_segment_
+    // marks a segment (vs point) evaluation; coof_hist_path_index_ is the LEG
+    // index (0..2) on a segment, or the path WAYPOINT index (0..3, cursor =
+    // path[index]) on a point. Meaningful only while coof_scheduler_active_ on
+    // the non-magnifier historical path; the POOC-C / margin passes publish the
+    // C waypoint (index 3) so cascade exits are held there.
+    bool coof_hist_is_segment_ = false;
+    int coof_hist_path_index_ = -1;
+    // KI-67 exit cascade: the in-flight leg index (0..2) the CURRENT fill recalc
+    // was triggered on — the leg the dispatch cursor traverses next after the
+    // triggering fill. Published by the loop right before each recalc so a
+    // strategy.exit placed in that recalc records its seg_i from the loop's real
+    // position ("a fill AT a waypoint starts the NEXT leg"), rather than
+    // re-deriving it from the fill price (ambiguous exactly at waypoints). -1 (or
+    // >=3) outside a mid-bar historical recalc / at the terminal C tick.
+    int coof_cascade_recalc_leg_ = -1;
+    // KI-67 exit cascade: set by the gate immediately before evaluate_fill_price
+    // so resolve_exit_path_fill runs its open-gap shortcut on the in-flight
+    // leg-end waypoint POINT even when is_entry_bar (entry + exit share a bar).
+    // Reset right after that evaluation; never set on the magnifier path.
+    bool coof_cascade_force_wp_gap_ = false;
     bool coof_checkpoint_contains_current_bar_ = false;
     double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
     // Direct strategy.close / POOC fills can occur inside on_bar rather than

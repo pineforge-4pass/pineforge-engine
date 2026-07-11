@@ -192,24 +192,59 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
             }
 
             // KI-67 cascade eligibility (historical 4-tick path only). An order
-            // born in a MID-BAR fill recalc is eligible ONLY at the remaining
-            // extreme waypoints (W1/W2) of the bar it was born on: never
-            // intra-segment at an exact level, never at C. Hold it otherwise —
-            // it stays pending and, once bar_index_ advances past its creation
-            // bar, becomes an ordinary resting order (a market cascade rolls to
-            // the next-bar open; a priced one resumes standard semantics). The
-            // magnifier path (bar_magnifier_enabled_) owns its own tick model
-            // and is scoped out.
+            // born in a MID-BAR fill recalc ("cascade" order) has restricted
+            // same-bar reach. The magnifier path (bar_magnifier_enabled_) owns
+            // its own tick model and is scoped out.
+            coof_cascade_force_wp_gap_ = false;
             if (!bar_magnifier_enabled_ && coof_scheduler_active_
                 && order.coof_born_mid_bar
-                && order.created_bar == bar_index_
-                && !coof_at_extreme_waypoint_) {
-                continue;
+                && order.created_bar == bar_index_) {
+                // Model S governs only PRICED (stop/limit, non-trail)
+                // strategy.exit cascade orders — the class the probe pinned.
+                // Opposing raw strategy.order brackets, market exits/closes and
+                // trailing exits keep the plain PR#95 extreme-waypoint reach
+                // alongside entries (a market cascade fills at the next extreme
+                // or rolls).
+                const bool priced_exit =
+                    order.type == OrderType::EXIT
+                    && (!std::isnan(order.stop_price)
+                        || !std::isnan(order.limit_price))
+                    && std::isnan(order.trail_points)
+                    && std::isnan(order.trail_price);
+                if (!priced_exit) {
+                    // ENTRY / market-close / trailing cascade order: eligible
+                    // ONLY at the remaining extreme waypoints (W1/W2); never
+                    // intra-segment, never at C. Held otherwise, converting to an
+                    // ordinary resting order once bar_index_ advances past its
+                    // creation bar.
+                    if (!coof_at_extreme_waypoint_) continue;
+                } else {
+                    // EXIT cascade order (KI-67 Model S "R-cascade-gapjump").
+                    // seg_i is the in-flight leg the triggering fill landed on.
+                    // Hold the order on that leg's remainder; gap-fill it at the
+                    // leg-end waypoint POINT iff its level is in the in-flight
+                    // remainder (coof_cascade_inflight_fires); EXACT-level fill it
+                    // on every SUBSEQUENT leg's segment. A terminal in-flight leg
+                    // (seg_i == 2) or an off-path fill (seg_i < 0) rolls.
+                    const int si = order.coof_cascade_seg_i;
+                    bool admit = false;
+                    if (si >= 0) {
+                        if (coof_hist_is_segment_) {
+                            admit = coof_hist_path_index_ > si;
+                        } else if (coof_hist_path_index_ == si + 1 && si < 2
+                                   && order.coof_cascade_inflight_fires) {
+                            admit = true;
+                            coof_cascade_force_wp_gap_ = true;
+                        }
+                    }
+                    if (!admit) continue;
+                }
             }
 
             auto fill = evaluate_fill_price(
                 order, i, bar, opposing_pass, trail_best_path_state,
                 pass0_opposing_skip_ids);
+            coof_cascade_force_wp_gap_ = false;
             if (fill.kind != FillEvaluation::Kind::Fill) continue;
 
             double path_position = 0.0;
@@ -2371,7 +2406,8 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             trail_best_path_state,
             is_entry_bar,
             bar_magnifier_enabled_,
-            syminfo_mintick_);
+            syminfo_mintick_,
+            coof_cascade_force_wp_gap_);
         if (exit_fill.should_fill) {
             fill_price = exit_fill.fill_price;
             should_fill = true;
