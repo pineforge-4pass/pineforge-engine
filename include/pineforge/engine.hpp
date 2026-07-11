@@ -304,6 +304,36 @@ struct PendingOrder {
     //      frozen-qty notional at the slipped fill price exceeds sizing_equity
     //      by more than one lot, given zero actual opening commission.
     bool opening_affordability_exemption_candidate = false;
+    // design-explicit-qty-fill-admission: fill-time TV admission re-check for an
+    // EXPLICIT-qty (the caller passed a finite qty) true-flat MARKET entry — the
+    // explicit-qty sibling of the frozen gap-reject above, which the shipped
+    // frozen fix deliberately left alone. Set at PLACEMENT in strategy_entry's
+    // explicit-qty MARKET branch (the branch that does NOT freeze default
+    // sizing). True only for a high-level MARKET strategy.entry with a finite
+    // explicit qty, created TRUE-FLAT (created_position_side==FLAT &&
+    // !created_after_position_close_in_bar), direction-appropriate margin_pct>0,
+    // and finite snapshots. Fill-time consumer: the disjoint explicit-qty
+    // decline branch in apply_filled_order_to_state silently drops the entry (no
+    // trade row) when, at a still-FLAT fill, its notional at the SLIPPED FILL
+    // price overshoots the placement equity snapshot with zero structural slack.
+    // Commission is EXCLUDED from that predicate. Priced (limit/stop) entries
+    // carry no snapshot (type==ENTRY, not MARKET); RAW strategy.order never sets
+    // the flag. Evidence: probe-68 (data/probes/pf-probe-allin-floor-comm0,
+    // 4,740 from-flat attempts, decline iff fill notional > equity, zero slack,
+    // 99.94%); mdfe3757 306/306.
+    bool explicit_flat_admission_candidate = false;
+    // Placement-time equity snapshot (account ccy) for the explicit-qty gate:
+    //   current_equity() + open_profit(close(S))   == realized equity when flat
+    // Captured at the explicit-qty MARKET placement point. NaN = no snapshot.
+    double explicit_placement_equity = std::numeric_limits<double>::quiet_NaN();
+    // Slipped signal close at placement (frozen_sizing_price convention:
+    // close(S) + slippage*mintick*(+1 buy / -1 sell)). Its |qty|-scaled notional
+    // floors the fill-time decline threshold, so a fill AT/BELOW the slipped
+    // signal close — POOC (fill == close(S)+slip both sides), a no-gap open, or a
+    // favorable gap — is a structural no-op even with slippage != 0; only an
+    // ADVERSE gap beyond the slip can decline. NaN = no snapshot.
+    double explicit_slipped_signal_close =
+        std::numeric_limits<double>::quiet_NaN();
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
     bool created_while_in_position = false;  // true if position was open when order was placed

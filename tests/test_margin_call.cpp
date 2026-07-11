@@ -423,75 +423,93 @@ private:
     double qty_;
 };
 
-static void test_long_100pct_margin_sublot_overage_is_held() {
-    std::printf("test_long_100pct_margin_sublot_overage_is_held\n");
+// Repurposed from the KI-61 "sublot overage held" fixture (design-explicit-qty-
+// fill-admission). This is an EXPLICIT-qty all-in true-flat MARKET entry
+// (strategy.entry with qty=10 == equity/close) whose next-bar fill gaps
+// ADVERSELY to 110: notional 10*110 = 1100 overshoots equity 1000. TV DECLINES
+// it outright with ZERO slack — the frozen path's one-lot lot-floor slack does
+// NOT apply to explicit qty — so the pre-fix "held 10 via lot-floor dust"
+// outcome is dead: no fill, no rows, no margin call. Evidence:
+// data/probes/pf-probe-allin-floor-comm0 (4,740 from-flat attempts; decline iff
+// fill notional > equity, commission-independent, zero slack). The KI-61
+// lot-floored opening-affordability trim these fixtures once exercised is still
+// pinned by the frozen/default-sized path (test_commissioned_frozen_all_in_
+// true_flat_gap_is_eligible for commissioned-adverse admit+trim; the frozen
+// exemption tests for the sub-lot held case) plus test_explicit_qty_fill_
+// admission's GREEN-D.
+static void test_explicit_all_in_zero_comm_adverse_gap_declined() {
+    std::printf("test_explicit_all_in_zero_comm_adverse_gap_declined\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: signal @ close 100
-        mk_bar(2000, 110.0, 112.0,  50.0,  90.0, 1.0),  // 1: restore=.909 lot
-        mk_bar(3000,  90.0,  91.0,   1.0,   2.0, 1.0),  // 2: later crash
+        mk_bar(2000, 110.0, 112.0,  50.0,  90.0, 1.0),  // 1: gap 110 -> 1100 > 1000 DECLINE
+        mk_bar(3000,  90.0,  91.0,   1.0,   2.0, 1.0),  // 2: later crash: nothing held
     };
     LongOverAllocProbe eng(/*qty_step=*/1.0);
     eng.run(bars.data(), (int)bars.size());
 
-    // Restoring affordability at the 110 fill needs only 0.909 lot. Flooring
-    // to qty_step=1 produces zero, so TV does not trim. Later lows cannot turn
-    // that dust overage into an adverse-price liquidation.
     CHECK(eng.trade_count() == 0);
-    CHECK(near(eng.position_size(), 10.0));
+    CHECK(near(eng.position_size(), 0.0));    // pre-fix: held 10
     CHECK(std::isnan(eng.liq_price()));
 }
 
-static void test_long_100pct_margin_lot_trim_uses_entry_affordability() {
-    std::printf("test_long_100pct_margin_lot_trim_uses_entry_affordability\n");
+// Repurposed from the KI-61 "lot trim uses entry affordability" fixture. An
+// EXPLICIT-qty all-in true-flat MARKET entry (qty=10 == equity/close), commission
+// 4%, fill gaps ADVERSELY to 120: the NOTIONAL 10*120 = 1200 alone overshoots
+// equity 1000 (the fee is irrelevant to the predicate). Commission-scoping is
+// DEAD (data/probes/pf-probe-allin-floor-comm0 is comm=0 and still declines), so
+// TV DECLINES this too — the pre-fix "fill 10@120 then 4x entry-bar trim to hold
+// 2" outcome is dead. No fill, no Margin-call rows. The commissioned admit+trim
+// KI-61 semantics remain pinned by the FROZEN path
+// (test_commissioned_frozen_all_in_true_flat_gap_is_eligible).
+static void test_explicit_all_in_commissioned_adverse_gap_declined() {
+    std::printf("test_explicit_all_in_commissioned_adverse_gap_declined\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),
-        mk_bar(2000, 120.0, 122.0, 100.0, 110.0, 1.0),
+        mk_bar(2000, 120.0, 122.0, 100.0, 110.0, 1.0),   // gap 120 -> 1200 > 1000 DECLINE
         mk_bar(3000, 110.0, 111.0,  10.0,  20.0, 1.0),
     };
     LongOverAllocProbe eng(/*qty_step=*/1.0, /*commission_percent=*/4.0);
     eng.run(bars.data(), (int)bars.size());
 
-    // Entry fee is 48, so q_restore = 10 - (1000-48)/120 = 2.066..., floors
-    // to two lots and the 4x rule trims eight. Omitting the entry commission
-    // would floor q_restore to one lot. The action is entry-bar/entry-priced,
-    // never based on that bar's later low of 100.
-    CHECK(eng.trade_count() == 1);
-    CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.entry_price(0), 120.0));
-    CHECK(near(eng.exit_price(0), 120.0));
-    CHECK(near(eng.trade_size(0), 8.0));
-    CHECK(eng.entry_bar(0) == 1);
-    CHECK(eng.exit_bar(0) == 1);
-    CHECK(near(eng.position_size(), 2.0));
+    CHECK(eng.trade_count() == 0);            // pre-fix: 1 (fill + Margin-call trim)
+    CHECK(near(eng.position_size(), 0.0));    // pre-fix: held 2
     CHECK(std::isnan(eng.liq_price()));
 }
 
-static void test_long_100pct_margin_trim_without_qty_step() {
-    std::printf("test_long_100pct_margin_trim_without_qty_step\n");
+// Repurposed from the KI-61 "trim without qty_step" fixture. EXPLICIT-qty all-in
+// true-flat MARKET entry (qty=10 == equity/close), zero commission, qty_step=0
+// (continuous mode), fill gaps ADVERSELY to 110: notional 1100 > equity 1000.
+// This is exactly test_explicit_qty_fill_admission RED-1's class (zero comm,
+// zero slack, adverse gap), so TV DECLINES — the pre-fix fractional entry-bar
+// trim is dead. No fill, no rows.
+static void test_explicit_all_in_zero_comm_no_qty_step_declined() {
+    std::printf("test_explicit_all_in_zero_comm_no_qty_step_declined\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
-        mk_bar(2000, 110.0, 112.0, 50.0,  90.0, 1.0),
+        mk_bar(2000, 110.0, 112.0, 50.0,  90.0, 1.0),   // gap 110 -> 1100 > 1000 DECLINE
         mk_bar(3000,  90.0,  91.0,  1.0,   2.0, 1.0),
     };
     LongOverAllocProbe eng(/*qty_step=*/0.0);
     eng.run(bars.data(), (int)bars.size());
 
-    // qty_step==0 is the engine's continuous-quantity mode: there is no lot
-    // floor, so the positive restore quantity remains a fractional trim.
-    const double expected = 4.0 * (10.0 - 1000.0 / 110.0);
-    CHECK(eng.trade_count() == 1);
-    CHECK(near(eng.trade_size(0), expected));
-    CHECK(near(eng.entry_price(0), 110.0));
-    CHECK(near(eng.exit_price(0), 110.0));
-    CHECK(near(eng.position_size(), 10.0 - expected));
+    CHECK(eng.trade_count() == 0);            // pre-fix: 1 (fill + fractional trim)
+    CHECK(near(eng.position_size(), 0.0));    // pre-fix: held 10 - trim
+    CHECK(std::isnan(eng.liq_price()));
 }
 
-static void test_long_100pct_margin_combines_fx_pointvalue_and_commission() {
-    std::printf("test_long_100pct_margin_combines_fx_pointvalue_and_commission\n");
+// Repurposed from the KI-61 "combines fx/pointvalue/commission" fixture. The
+// explicit-qty fill-admission predicate carries the SAME pv/fx/margin factors as
+// KI-61 (|qty|*slipped_fill*pv*fx*margin/100). Signal-time admission is exact
+// (5*10*pv10*fx2 == 1000 == equity); the ADVERSE fill at 12 makes the notional
+// 5*12*10*2 = 1200 > equity 1000, so TV DECLINES (commission 10% excluded from
+// the predicate). Pins that the decline arithmetic combines pv, fx, and margin
+// exactly like the KI-61 trim it replaces here. No fill, no rows.
+static void test_explicit_all_in_fx_pointvalue_commission_declined() {
+    std::printf("test_explicit_all_in_fx_pointvalue_commission_declined\n");
     std::vector<Bar> bars = {
         // Signal-time admission is exact: 5 * 10 * pv10 * fx2 == 1000.
         mk_bar(1000, 10.0, 10.0,  9.0, 10.0, 1.0),
-        mk_bar(2000, 12.0, 13.0,  8.0, 11.0, 1.0),
+        mk_bar(2000, 12.0, 13.0,  8.0, 11.0, 1.0),   // 5*12*10*2 = 1200 > 1000 DECLINE
         mk_bar(3000, 11.0, 12.0,  1.0,  2.0, 1.0),
     };
     LongOverAllocProbe eng(/*qty_step=*/1.0, /*commission_percent=*/10.0,
@@ -500,15 +518,9 @@ static void test_long_100pct_margin_combines_fx_pointvalue_and_commission() {
                            /*pointvalue=*/10.0, /*qty=*/5.0);
     eng.run(bars.data(), (int)bars.size());
 
-    // Fill notional is 5*12*10*2=1200 and entry fee is 120, so
-    // q_restore = 5 - (1000-120)/(12*10*2) = 1.333..., floors to one lot,
-    // then 4x -> four. Omitting commission, FX, or pointvalue misses this
-    // deliberately chosen lot boundary.
-    CHECK(eng.trade_count() == 1);
-    CHECK(near(eng.trade_size(0), 4.0));
-    CHECK(near(eng.entry_price(0), 12.0));
-    CHECK(near(eng.exit_price(0), 12.0));
-    CHECK(near(eng.position_size(), 1.0));
+    CHECK(eng.trade_count() == 0);            // pre-fix: 1 (fill + trim to hold 1)
+    CHECK(near(eng.position_size(), 0.0));    // pre-fix: held 1
+    CHECK(std::isnan(eng.liq_price()));
 }
 
 static void test_long_100pct_margin_trim_process_orders_on_close() {
@@ -1110,10 +1122,10 @@ int main() {
     test_zero_cost_frozen_all_in_true_flat_gap_is_rejected();
     test_commissioned_frozen_all_in_true_flat_gap_is_eligible();
     test_paired_short_close_default_long_gap_remains_eligible();
-    test_long_100pct_margin_sublot_overage_is_held();
-    test_long_100pct_margin_lot_trim_uses_entry_affordability();
-    test_long_100pct_margin_trim_without_qty_step();
-    test_long_100pct_margin_combines_fx_pointvalue_and_commission();
+    test_explicit_all_in_zero_comm_adverse_gap_declined();
+    test_explicit_all_in_commissioned_adverse_gap_declined();
+    test_explicit_all_in_zero_comm_no_qty_step_declined();
+    test_explicit_all_in_fx_pointvalue_commission_declined();
     test_long_100pct_margin_trim_process_orders_on_close();
     test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip();
     test_long_100pct_margin_limit_trim_uses_raw_base_and_exit_slip();

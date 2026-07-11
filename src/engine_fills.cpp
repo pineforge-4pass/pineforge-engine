@@ -1070,6 +1070,65 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
+    // design-explicit-qty-fill-admission: TV declines an EXPLICIT-qty (caller
+    // passed a finite qty) true-flat MARKET entry at fill when its notional at
+    // the SLIPPED FILL price overshoots the placement equity snapshot. This is
+    // the explicit-qty sibling of the frozen gap-reject family above (those all
+    // require isnan(qty) via the frozen snapshot / candidate flag); the shipped
+    // frozen fix deliberately left the explicit path alone.
+    //
+    //   |qty| * slipped_fill * pv * fx * (margin_pct/100)
+    //     >  max(placement_equity,
+    //            |qty| * slipped_signal_close * pv * fx * margin/100)
+    //        + max(1e-9, |placement_equity| * 1e-12)      (float guard only)
+    //
+    // The slipped-signal-close notional floors the threshold: a fill AT/BELOW
+    // the slipped signal close (POOC — fill == close(S)+slip on both sides — a
+    // no-gap open, or a favorable gap) can never decline, so the fill-time gate
+    // never re-declines what the signal-time gate already admitted; only an
+    // ADVERSE gap beyond the slip declines. With slippage 0 the floor collapses
+    // to the pure "fill notional > equity" rule the census pins (probe-68 comm=0
+    // decline-iff-notional>equity, zero slack, 99.94%; mdfe3757 306/306).
+    //
+    // Scope: created TRUE-FLAT (candidate flag) AND still FLAT at THIS fill,
+    // MARKET only, margin_pct>0. Commission is EXCLUDED — a fee-only overage
+    // ADMITS here, then the KI-61-family entry-bar trim may fire downstream.
+    // Reversals/adds are out of scope (flat-at-fill required — the flag is only
+    // set from a true-flat placement, and position_side_==FLAT is re-proven
+    // here). Runs BEFORE the intraday-cap accounting below: a declined order
+    // never filled, so it must not consume a max_intraday_filled_orders slot.
+    // order.qty is NOT mutated (isnan(order.qty) stays a live default-sizing
+    // discriminator for OCA / reversal-binding / partial-exit classification).
+    if (order.explicit_flat_admission_candidate
+        && order.type == OrderType::MARKET
+        && position_side_ == PositionSide::FLAT
+        && !std::isnan(order.qty)
+        && !std::isnan(order.explicit_placement_equity)
+        && !std::isnan(order.explicit_slipped_signal_close)) {
+        const double margin_pct = order.is_long ? margin_long_ : margin_short_;
+        if (margin_pct > 0.0) {
+            const double slipped_fill =
+                apply_fill_slippage(fill_price, order.is_long);
+            const double notional_k = syminfo_.pointvalue * account_currency_fx_
+                                      * (margin_pct / 100.0);
+            const double fill_notional =
+                std::abs(order.qty) * slipped_fill * notional_k;
+            // POOC / no-gap admission floor: a fill at the slipped signal close
+            // was already admitted at signal time.
+            const double signal_notional =
+                std::abs(order.qty) * order.explicit_slipped_signal_close
+                * notional_k;
+            const double threshold =
+                std::max(order.explicit_placement_equity, signal_notional);
+            const double float_guard =
+                std::max(1e-9, std::abs(order.explicit_placement_equity) * 1e-12);
+            if (fill_notional > threshold + float_guard) {
+                filled_indices.push_back(order_index);
+                return;
+            }
+        }
+    }
+
     // Check max_intraday_filled_orders limit.
     //
     // TV's broker emulator (LATCH-TILL-DAY-ROLLOVER semantics):
