@@ -229,6 +229,19 @@ struct PendingOrder {
     // gate ran. See classify_order_eligibility / compact_filled_pending_orders
     // and test_close_all_coqueued_entry.cpp.
     bool over_pyramiding_cap_at_placement = false;
+    // KI-65 dual same-bar opposite entry (probe pf-probe-ki65-dual-entry-
+    // precedence): true when this priced (stop/limit) ENTRY was placed from
+    // FLAT and an EARLIER same-on_bar OPPOSITE-direction MARKET entry is
+    // pending. TV runs no arbitration on two opposite same-bar strategy.entry
+    // calls — BOTH execute; the second call's sizing freezes at placement as
+    // own + the pending opposite MARKET qty (a pending STOP contributes 0 — the
+    // SS cells stay single-close; a placement-rejected market never reaches the
+    // pending queue, so it contributes 0 too). When set, apply_entry_order_fill
+    // scopes the M2a close_only_opposite gate OUT so this leg FULLY REVERSES the
+    // position the market leg opened (flip_market_position_to) instead of
+    // collapsing to close-only-flat. Scoped to created-FLAT so the deferred-flip
+    // carry (created OPPOSITE) is untouched.
+    bool reverses_same_bar_market_from_flat = false;
     // Snapshot of the position's quantity at the moment this order was
     // PLACED (0 if placed from flat). Used by execute_market_entry's
     // flat branch to apply TradingView's deferred-flip growth rule:

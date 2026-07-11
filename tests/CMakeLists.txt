@@ -76,6 +76,7 @@ set(TEST_SOURCES
     test_deferred_flip_carry_close_only
     test_close_all_coqueued_entry
     test_declined_reversal_close_leg
+    test_dual_entry_placement_sizing
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra
     test_ta_osc_edge
