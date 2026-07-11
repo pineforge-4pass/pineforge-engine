@@ -199,6 +199,16 @@ struct PendingOrder {
     // expires unless an ordinary execution reissues it; priced GTC orders
     // become ordinary carried orders on the next bar.
     bool coof_born_at_close_recalc = false;
+    // KI-67 cascade provenance: true when this order was placed by a MID-BAR
+    // fill recalc (a recalc chain triggered by a fill that did NOT occur at the
+    // bar-open tick). Such "cascade" orders are eligible ONLY at the remaining
+    // EXTREME waypoints (W1/W2) of the historical 4-tick path — never
+    // intra-segment at an exact level and never at C — for the bar they are
+    // born on; at bar end they convert to ordinary resting orders. Orders born
+    // in the BAR-OPEN recalc (or resting at bar start) keep standard exact-level
+    // semantics and leave this false. Scoped to the historical path; the
+    // magnifier path (bar_magnifier_enabled_) ignores this bit entirely.
+    bool coof_born_mid_bar = false;
     PositionSide created_position_side = PositionSide::FLAT;
     // True when a successful strategy.close/close_all call earlier in this
     // same on_bar already targeted live quantity. This remains distinct from
@@ -1424,6 +1434,18 @@ protected:
     bool coof_fill_recalc_active_ = false;
     bool coof_cursor_is_bar_close_ = false;
     bool coof_evaluating_path_segment_ = false;
+    // KI-67: true while the active fill recalc chain was triggered by a fill AT
+    // the bar-open tick (O). Orders placed while this holds keep STANDARD
+    // exact-level semantics; orders placed while it is false are MID-BAR cascade
+    // orders (see PendingOrder::coof_born_mid_bar).
+    bool coof_recalc_at_bar_open_ = false;
+    // KI-67: true only during a point-bar evaluation that sits AT an extreme
+    // waypoint (W1 or W2) of the historical 4-tick path. Cascade orders born
+    // this bar may fill only while this holds; on segments, at O, at C, and on
+    // the ordinary-close / POOC-C / margin passes it is false so cascade orders
+    // are held (they convert to ordinary resting orders at bar end). Set only by
+    // the historical dispatch; the magnifier path never sets it.
+    bool coof_at_extreme_waypoint_ = false;
     bool coof_checkpoint_contains_current_bar_ = false;
     double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
     // Direct strategy.close / POOC fills can occur inside on_bar rather than
@@ -2053,10 +2075,12 @@ private:
                                       double broker_cursor_price,
                                       bool is_fill_recalc,
                                       bool cursor_is_bar_close,
+                                      bool recalc_at_bar_open,
                                       uint64_t direct_fill_event_budget);
     uint64_t run_coof_recalc_chain(const Bar& script_bar,
                                    double broker_cursor_price,
                                    bool cursor_is_bar_close,
+                                   bool recalc_at_bar_open,
                                    uint64_t triggering_events,
                                    uint64_t max_events,
                                    uint64_t events_already);

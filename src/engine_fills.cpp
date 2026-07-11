@@ -191,6 +191,22 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
                 continue;
             }
 
+            // KI-67 cascade eligibility (historical 4-tick path only). An order
+            // born in a MID-BAR fill recalc is eligible ONLY at the remaining
+            // extreme waypoints (W1/W2) of the bar it was born on: never
+            // intra-segment at an exact level, never at C. Hold it otherwise —
+            // it stays pending and, once bar_index_ advances past its creation
+            // bar, becomes an ordinary resting order (a market cascade rolls to
+            // the next-bar open; a priced one resumes standard semantics). The
+            // magnifier path (bar_magnifier_enabled_) owns its own tick model
+            // and is scoped out.
+            if (!bar_magnifier_enabled_ && coof_scheduler_active_
+                && order.coof_born_mid_bar
+                && order.created_bar == bar_index_
+                && !coof_at_extreme_waypoint_) {
+                continue;
+            }
+
             auto fill = evaluate_fill_price(
                 order, i, bar, opposing_pass, trail_best_path_state,
                 pass0_opposing_skip_ids);
