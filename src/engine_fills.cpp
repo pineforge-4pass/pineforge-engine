@@ -646,8 +646,55 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             bool b_exit_style = order_is_exit_style(b, position_side_);
             bool a_entry_same = is_entry_same_as_current_position(a);
             bool b_entry_same = is_entry_same_as_current_position(b);
-            if (a_exit_style && b_entry_same) return true;
-            if (b_exit_style && a_entry_same) return false;
+            // KI-62: a from_entry PRICED bracket exit that gaps through a leg
+            // at the open, paired with its OWN same-id MARKET pyramid add (also
+            // filling at the open). TV's open-tick fill priority is
+            // buy-market-like(1) → sell-market-like(2) → gapped-through
+            // limit(3); the exit covers (scratches) the add iff the add fills
+            // at-or-before the exit. Order the pair by that priority instead of
+            // the blanket exit-before-same-dir-entry rule (which keeps every
+            // add → uniform-KEEP). Returns 1 = exit first, 0 = add first,
+            // -1 = not this collision (fall through to the blanket rule).
+            auto samebar_add_exit_first = [&](const PendingOrder& ex,
+                                              const PendingOrder& add) -> int {
+                if (ex.type != OrderType::EXIT) return -1;
+                if (ex.from_entry.empty() || ex.from_entry != add.id) return -1;
+                // The add must be a pure market order (no priced/trail leg).
+                if (!std::isnan(add.stop_price) || !std::isnan(add.limit_price)
+                    || !std::isnan(add.trail_points)
+                    || !std::isnan(add.trail_price)) {
+                    return -1;
+                }
+                bool ex_stop = !std::isnan(ex.stop_price);
+                bool ex_limit = !std::isnan(ex.limit_price);
+                bool ex_trail = !std::isnan(ex.trail_points)
+                    || !std::isnan(ex.trail_price);
+                if (ex_trail || (!ex_stop && !ex_limit)) return -1;
+                int exit_prio;
+                if (position_side_ == PositionSide::LONG) {
+                    if (ex_stop && bar.open <= ex.stop_price) exit_prio = 2;
+                    else if (ex_limit && bar.open >= ex.limit_price) exit_prio = 3;
+                    else return -1;   // not gapped through a leg at the open
+                } else {  // SHORT
+                    if (ex_stop && bar.open >= ex.stop_price) exit_prio = 1;
+                    else if (ex_limit && bar.open <= ex.limit_price) exit_prio = 3;
+                    else return -1;
+                }
+                int add_prio = add.is_long ? 1 : 2;
+                // The exit sorts first only when it strictly precedes the add;
+                // add_prio <= exit_prio ⇒ add fills first ⇒ exit scratches it.
+                return (exit_prio < add_prio) ? 1 : 0;
+            };
+            if (a_exit_style && b_entry_same) {
+                int d = samebar_add_exit_first(a, b);
+                if (d != -1) return d == 1;
+                return true;
+            }
+            if (b_exit_style && a_entry_same) {
+                int d = samebar_add_exit_first(b, a);
+                if (d != -1) return d == 0;
+                return false;
+            }
             // TradingView empirically processes a same-bar full market
             // exit BEFORE an opposite-direction priced (stop/limit) entry,
             // even when the priced entry gaps through the open and would
@@ -1669,10 +1716,25 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
         consumed_partial_exit_ids_.insert(order.id);
     }
 
+    // KI-62: the normal close above drained only the frozen pre-add reserve
+    // (FIFO, oldest lot). A same-id MARKET add that filled earlier THIS bar
+    // (ahead of the exit in TV's open-tick fill sequence) is still open; TV
+    // covers it — scratch it dur-0 at the exit's fill price. A strict no-op
+    // when no such add filled (the KEEP cell: the exit fills first, so the add
+    // is not yet open here; and non-collision shapes flag no add slice).
+    double scratched = cover_samebar_market_adds_on_exit(order, fill_price);
+
     // Full exit that closed the position: pending SAME-direction entries
     // placed on a different on_bar are cancelled for the rest of this
-    // bar (TV's same-direction cancellation rule).
-    if (!is_partial && position_side_ == PositionSide::FLAT) {
+    // bar (TV's same-direction cancellation rule). A same-bar-add scratch that
+    // flattens the position is such a full close (the exit covered lot + add),
+    // so key on the post-scratch FLAT state rather than the exit's own
+    // pre-scratch is_partial (which reads true when the add filled first).
+    // Byte-identical pre-fix: a genuine partial exit never flattens
+    // (reserved < position), so !is_partial && FLAT == FLAT there.
+    (void)scratched;
+    if (position_side_ == PositionSide::FLAT
+        && side_before_exit != PositionSide::FLAT) {
         exit_closed_from_bar = order.created_bar;
         exit_closed_was_long = (side_before_exit == PositionSide::LONG);
     }
@@ -1812,6 +1874,9 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             position_entry_count_++;
             trail_best_price_ = fill_price;
             pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+            // KI-62: flag same-direction MARKET adds (strategy.order path) so a
+            // same-bar from_entry bracket exit can scratch them dur-0.
+            pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
             id_unclosed_qty_[order.id] += new_qty;
             if (is_priced_entry) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
