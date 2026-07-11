@@ -88,6 +88,7 @@ set(TEST_SOURCES
     test_margin_call
     test_streaming
     test_calc_on_order_fills
+    test_pooc_position_visibility
 )
 
 find_package(Threads REQUIRED)
