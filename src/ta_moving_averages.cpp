@@ -88,6 +88,13 @@ double SMA::recalculate_exact_sum() const {
 
 double SMA::compute(double src) {
     if (is_na(src)) {
+        // Pine ta.sma (KI-66): an na input never enters the compact last-N-
+        // valid window. Once `length` valid values have been seen the buffer
+        // mean is HELD and re-emitted on every bar including na-input bars;
+        // before seeding an na input is still na. State is left untouched.
+        if (bar_count >= length) {
+            return running_sum / length;
+        }
         return na<double>();
     }
 
@@ -146,8 +153,13 @@ double EMA::compute(double src) {
         warmup_latched_ = true;
     }
     if (is_na(src)) {
-        // Pine semantics: ignore na inputs and keep prior EMA value.
-        return output_val;
+        // Pine ta.ema (KI-66): an na input neither updates nor resets the
+        // recursion — the function itself RETURNS NA on this bar and resumes
+        // over the valid inputs on the next valid bar. Mirrors ta.rma
+        // (RMA::compute, the pinned reference). State is left untouched, so
+        // the KI-55 na_warmup pre-seed accumulation is unaffected: output_val
+        // is still na during warmup, so the return is na either way.
+        return na<double>();
     }
 
     if (na_warmup_) {
