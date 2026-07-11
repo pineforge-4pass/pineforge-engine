@@ -333,6 +333,29 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         order.type = OrderType::ENTRY;
         order.limit_price = limit_price;
         order.stop_price = stop_price;
+        // KI-65 placement-time pending-market awareness (probe pf-probe-ki65-
+        // dual-entry-precedence): a priced entry placed from FLAT that will
+        // reverse a position an EARLIER same-on_bar OPPOSITE-direction MARKET
+        // entry opens must FULLY reverse (open its own leg), not collapse to
+        // close-only-flat. TV runs no arbitration on same-bar opposite entries —
+        // both execute; the second call sells own + the pending opposite MARKET
+        // qty. A pending STOP contributes 0 (require type==MARKET), and a
+        // placement-rejected market never reaches pending_orders_ (the signal-
+        // time margin gate above `return`s before push_back), so it too
+        // contributes 0. created_seq scopes it to a market placed BEFORE this
+        // entry (the E1-first, E2-second probe framing). Deferred-flip carry is
+        // excluded (created_position_side != FLAT).
+        if (order.created_position_side == PositionSide::FLAT) {
+            for (const auto& sib : pending_orders_) {
+                if (sib.type == OrderType::MARKET
+                    && sib.is_long != is_long
+                    && sib.created_bar == order.created_bar
+                    && sib.created_seq < order.created_seq) {
+                    order.reverses_same_bar_market_from_flat = true;
+                    break;
+                }
+            }
+        }
     }
 
     pending_orders_.push_back(std::move(order));

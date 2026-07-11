@@ -1584,7 +1584,14 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     bool close_only_opposite =
         position_side_ != PositionSide::FLAT
         && entry_req != position_side_
-        && order.created_position_side != position_side_;
+        && order.created_position_side != position_side_
+        // KI-65: a flat-armed priced entry reversing a position opened THIS bar
+        // by an EARLIER opposite MARKET entry fully reverses (holds its own
+        // leg) — it is NOT the deferred-flip close-only case. The flag is set
+        // at placement only when a pending opposite same-bar MARKET entry
+        // existed (STOP-first / placement-rejected cells leave it false, so
+        // they keep the close-only single-close semantics).
+        && !order.reverses_same_bar_market_from_flat;
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, close_only_opposite,
                          /*is_priced_entry=*/true,
