@@ -865,6 +865,48 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
+    // KI-62 STAGE 3: margin fill-time admission for STOP-ENTRY fills. Under
+    // margin simulation (margin_long_/margin_short_ > 0) TV gates every stop
+    // entry AT THE FILL MOMENT against the fill bar's OPEN price,
+    // side-symmetrically — decline iff qty*open*margin% > available (realized)
+    // equity. Admission ignores intrabar extremes: it costs the bar OPEN, NOT
+    // the touched level / the fill price / the bar high. So a marginal all-in
+    // stop touched INTRABAR (open past the level in the adverse direction:
+    // short open>stop, long open<stop) sizes qty ~= equity/level and
+    // qty*open > equity -> DECLINE; only a bar that OPENS THROUGH the level
+    // (short open<=stop, long open>=stop) costs qty*open <= equity and fills at
+    // that open — reproducing the waranyutrkm 369/369 "fill at first open<=stop"
+    // census + the 13/13 long re-touch fills (pf-probe-ki62-margin-deferral,
+    // pinned 99.17%). A declined stop is CANCELLED (consumed here, removed by
+    // compaction); an arm-once entry silently dies (SAO NOFILL), a Pine-level
+    // reissue re-posts next bar and fills at the first admissible bar. An
+    // under-margined ADMITTED fill still nibbles at bar end via the existing
+    // KI-31 4x cascade (unchanged). Scope: an ENTRY with a stop trigger and no
+    // limit; margin_pct>0; positive fill qty. The available equity is
+    // realized-only (current_equity()) — the engine's validated stop-entry
+    // sizing basis (3,160/3,160). Does NOT touch the :443 created_bar
+    // eligibility, the signal-time MARKET-only gate, or any margin=0 path (all
+    // byte-identical when margin_pct==0). The qty is exactly the fill kernel's
+    // (calc_qty_for_type at the fill price) so the gate cannot diverge from the
+    // fill it guards.
+    if (order.type == OrderType::ENTRY
+        && !std::isnan(order.stop_price)
+        && std::isnan(order.limit_price)) {
+        const double margin_pct = order.is_long ? margin_long_ : margin_short_;
+        if (margin_pct > 0.0 && std::isfinite(bar.open) && bar.open > 0.0) {
+            const double fill_qty =
+                std::abs(calc_qty_for_type(fill_price, order.qty, order.qty_type));
+            const double required = fill_qty * bar.open * syminfo_.pointvalue
+                                    * account_currency_fx_ * (margin_pct / 100.0);
+            const double available = current_equity();
+            const double eps = std::max(1e-9, std::abs(available) * 1e-12);
+            if (fill_qty > 0.0 && required > available + eps) {
+                filled_indices.push_back(order_index);   // decline + cancel
+                return;
+            }
+        }
+    }
+
     // A fixed-default MARKET entry can change role between placement and fill:
     // it was a same-direction order when the script emitted it, but an earlier
     // sibling at the shared next tick can flip the live position first, making
@@ -988,13 +1030,49 @@ void BacktestEngine::apply_filled_order_to_state(
     // priced (limit/stop) entries carry no snapshot. Runs BEFORE the
     // intraday-cap accounting below: a dropped order was never filled, so
     // it must not consume a max_intraday_filled_orders slot.
+    // KI-72: a default-sized percent_of_equity MARKET/RAW order whose FROZEN
+    // sizing produced a NON-POSITIVE quantity is DECLINED CLEANLY (no fill, no
+    // trade row) instead of opening a corrupt position. apply_qty_step returns
+    // the quantity UNFLOORED for qty <= 0 (engine.hpp), so sizing_equity <= 0 —
+    // realized + open PnL underwater past the whole account, reachable when a
+    // held SHORT's unbounded adverse excursion drives equity negative while its
+    // reversal keeps getting declined — yields a NEGATIVE frozen_default_qty.
+    // Admitting it (the legacy path below runs only for sizing_equity > 0, so a
+    // negative-equity order fell straight through to the fill kernel) opens a
+    // negative-qty position via open_fresh_position, and every subsequent close
+    // then emits emit_close_trade(pe, pe.qty<0, ...): a NEGATIVE-qty trade row
+    // that flips the exported PnL sign and blows the cumulative-PnL column,
+    // while the realized net_profit_sum_ stays healthy — the emission/accounting
+    // split (PARK-DOSSIER D1a; surfaced by symmetric-scope KI-57 on almesned,
+    // every exported qty negative, cumulative -122k). A negative-equity account
+    // can afford nothing, so the clean decline is the symmetric, corruption-free
+    // behavior on BOTH sides — the exact counterpart of a declined long. It
+    // fires ONLY in the bankrupt regime (solvent equity always sizes qty > 0),
+    // so every gate below is byte-untouched. For a MARKET reversal, suppress the
+    // co-queued close legs exactly like the KI-54 reversal decline so the flip
+    // is refused atomically and the underwater position rides on (to be margin-
+    // called or re-flipped later), never seeding a corrupt negative-qty leg.
+    if (!std::isnan(order.frozen_default_qty)
+        && order.frozen_default_qty <= 0.0
+        && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+        && (order.type == OrderType::MARKET
+            || order.type == OrderType::RAW_ORDER)) {
+        const bool same_dir = position_side_ != PositionSide::FLAT
+            && ((position_side_ == PositionSide::LONG) == order.is_long);
+        const bool reversal = position_side_ != PositionSide::FLAT && !same_dir;
+        if (reversal && order.type == OrderType::MARKET) {
+            suppress_declined_reversal_close_legs(order);
+        }
+        filled_indices.push_back(order_index);
+        return;
+    }
     // sizing_equity > 0 and frozen_default_qty > 0 are part of the invariant,
     // not paranoia: apply_qty_step returns qty UNFLOORED for qty <= 0
     // (engine.hpp), so on a bankrupt account the frozen quantity is negative,
     // |qty|*sizing_price == |sizing_equity|, and free_funds < 0 — every order,
-    // including a flat open, would be declined forever. There is no TV ground
-    // truth for what a negative-equity account may open; leave it to the
-    // legacy path.
+    // including a flat open, would be declined forever. The KI-72 branch above
+    // now catches that non-positive-qty case explicitly (clean decline); this
+    // gate keeps its own > 0 guards so the solvent-path arithmetic is unchanged.
     if (!std::isnan(order.sizing_equity) && !std::isnan(order.sizing_price)
         && !std::isnan(order.frozen_default_qty)
         && order.sizing_equity > 0.0 && order.frozen_default_qty > 0.0

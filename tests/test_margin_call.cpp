@@ -584,15 +584,26 @@ static void test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip() {
     LongPricedOverAllocProbe eng(LongPricedOverAllocProbe::Kind::Stop);
     eng.run(bars.data(), (int)bars.size());
 
-    // stop 120.2 first snaps upward to raw matched base 121, then buy-side
-    // slippage reports entry 123. The broker trim independently applies
-    // sell-side slippage to raw 121, reporting 119. It must not use bar.low.
-    CHECK(eng.trade_count() == 1);
-    CHECK(near(eng.trade_size(0), 4.0));
-    CHECK(near(eng.entry_price(0), 123.0));
-    CHECK(near(eng.exit_price(0), 119.0));
-    CHECK(eng.entry_bar(0) == 1);
-    CHECK(eng.exit_bar(0) == 1);
+    // KI-62 STAGE 3 (margin fill-time admission): this buy-stop 120.2 is
+    // OVER-ALLOCATED — qty 10 on a $1,000 account, and the margin gate costs it
+    // at the FILL BAR'S OPEN (110): required 10*110*100% = 1100 > equity 1000 ->
+    // DECLINE. The order never fills, so the old KI-61 1x-long dust-trim (which
+    // used to report fill@123 then trim to size 4) does NOT fire — the
+    // "declined fills must not fire the dust-trim" reconciliation.
+    //
+    // TV declines over-allocated stops too: cross-confirmed by
+    // pf-probe-ki65-dual-entry-precedence, whose UQ=1,000,000 (>=1000x
+    // over-notional) stop cells decline under the identical rule, lifting its
+    // canonical TV match 93.8% -> 100.0%. The LIMIT sibling below is UNAFFECTED
+    // (the gate is stop-entry-only) and still fills + trims.
+    //
+    // CAVEAT (register): the OVER-ALLOCATED FIXED-QTY class is UNPINNED by the
+    // ki62 probe itself (which used all-in / marginal / fixed-small sizing). It
+    // is a candidate future-probe cell; if any tier ever regresses tracing to a
+    // strategy relying on the old admit-and-trim vs TV, this scopes back to
+    // admit-then-nibble and the cell becomes a probe requirement.
+    CHECK(eng.trade_count() == 0);            // declined at the fill-bar open
+    CHECK(near(eng.position_size(), 0.0));    // nothing opened
     CHECK(!eng.opening_pending());
     CHECK(!eng.opening_eligible());
     CHECK(std::isnan(eng.opening_raw_base()));
