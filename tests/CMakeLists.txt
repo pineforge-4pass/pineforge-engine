@@ -66,6 +66,8 @@ set(TEST_SOURCES
     test_fills_edge
     test_default_qty_signal_freeze
     test_margin_admission_gate
+    test_short_reversal_emission
+    test_margin_stop_admission
     test_frozen_flat_gap_reject
     test_explicit_qty_fill_admission
     test_limit_fill_slippage

@@ -360,18 +360,18 @@ void test_fractional_add_marked_to_market() {
 }
 
 // J. Bankrupt account: sizing_equity <= 0 makes the frozen qty NEGATIVE, and
-//    apply_qty_step returns it unfloored, so |qty|*sizing_price ==
-//    |sizing_equity| while free_funds < 0. Without the guard the gate would
-//    decline every order forever — flat opens included — silently zeroing out
-//    a strategy that the pre-gate engine still traded.
+//    apply_qty_step returns it unfloored. The LEGACY path opened a negative-qty
+//    position; every close of it then emitted a negative-qty trade row that
+//    flipped the exported PnL sign (the KI-72 emission/accounting split).
 //
-//    Pinned behaviour is the LEGACY path: the engine opens a negative-qty
-//    position. That is a separate, pre-existing pathology (an order sized off
-//    negative equity should arguably not be placed at all) and it is NOT this
-//    gate's job to hide it. If the guard is removed, position_qty_ becomes 0
-//    and this pin fails.
-void test_negative_equity_gate_does_not_run() {
-    std::printf("-- J: gate does not run on a bankrupt account --\n");
+//    KI-72 FIX: a default-sized percent_of_equity MARKET/RAW order whose frozen
+//    sizing is NON-POSITIVE is now DECLINED CLEANLY (no fill, no trade row) —
+//    a bankrupt account can afford nothing, symmetric on both sides. So the
+//    order does not open and position_qty_ stays 0 (was -50 under the legacy
+//    path). This is the exact behaviour test_short_reversal_emission pins from
+//    the fill side; here it is pinned at the gate.
+void test_negative_equity_reversal_declined_clean() {
+    std::printf("-- J: bankrupt-account order declined cleanly (KI-72) --\n");
     Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
     eng.initial_capital_ = -5000.0;
     eng.script = "L..";
@@ -381,7 +381,9 @@ void test_negative_equity_gate_does_not_run() {
         mk_bar(3000, 100, 100, 100, 100),
     };
     eng.run(bars.data(), (int)bars.size());
-    CHECK_NEAR(eng.position_qty_, -50.0, 1e-9);   // legacy path, gate inert
+    CHECK_NEAR(eng.position_qty_, 0.0, 1e-9);      // clean decline, no neg-qty open
+    CHECK(eng.position_side_ == PositionSide::FLAT);
+    CHECK(eng.trade_count() == 0);                 // no corrupt trade row emitted
 }
 
 // K. margin > 100 (sub-1x leverage) breaks the flat-open invariant:
@@ -588,7 +590,7 @@ int main() {
     test_slipped_short_reversal_zero_gap_admitted();
     test_reversal_lot_step_slack();
     test_fractional_add_marked_to_market();
-    test_negative_equity_gate_does_not_run();
+    test_negative_equity_reversal_declined_clean();
     test_margin_above_100_flat_open_admitted();
     test_same_side_market_becomes_reversal_free_margin_gate();
     test_same_side_role_change_scope_controls();

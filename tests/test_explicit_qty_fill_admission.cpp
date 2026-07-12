@@ -306,14 +306,16 @@ void test_greenE_margin_variants() {
     }
 }
 
-// GREEN-F. Priced (stop=) entry + RAW strategy.order are UNAFFECTED.
-//   F1: an explicit-qty LONG STOP entry (stop 100) that arms and fills on an
-//       adverse gap keeps its own price; it carries no admission snapshot
-//       (type == ENTRY, not MARKET) so the fill gate never fires -> fills.
+// GREEN-F. The EXPLICIT-QTY MARKET admission gate this file pins is stop-agnostic
+// and RAW-agnostic. F1 is now dominated by the SEPARATE KI-62 stage-3 margin gate;
+// F2 (RAW) remains unaffected.
+//   F1: an explicit-qty all-in LONG STOP entry (stop 100) gapping through on an
+//       adverse open is DECLINED by the KI-62 stage-3 margin fill-time gate
+//       (required at the fill-bar open > equity) — NOT by this file's MARKET gate.
 //   F2: a RAW strategy.order all-in adverse gap never sets the candidate flag
 //       -> fills.
 void test_greenF_priced_and_raw_unaffected() {
-    std::printf("-- GREEN-F1: priced (stop) entry adverse gap unaffected --\n");
+    std::printf("-- GREEN-F1: priced (stop) entry adverse gap -> KI-62 margin decline --\n");
     {
         Probe eng(/*capital=*/10000.0, /*comm=*/0.0, /*slip=*/0, /*margin=*/100.0,
                   /*pooc=*/false, /*enable_mc=*/false);
@@ -322,12 +324,18 @@ void test_greenF_priced_and_raw_unaffected() {
         eng.script = "P..";
         std::vector<Bar> bars = {
             mk_bar(1000, 90, 90, 90, 90),               // P armed (stop 100)
-            mk_bar(2000, 101, 102, 100, 101),           // gaps through 100 -> fills
+            mk_bar(2000, 101, 102, 100, 101),           // gaps through: fill-bar open 101
             mk_bar(3000, 101, 101, 101, 101),
         };
         eng.run(bars.data(), (int)bars.size());
-        CHECK(eng.position_side_ == PositionSide::LONG);
-        CHECK_NEAR(eng.position_size(), 100.0, 1e-9);
+        // KI-62 STAGE 3: all-in stop (qty 100, cap 10000) gapping through 100 costs
+        // required = 100*open(101)*100% = 10100 > equity 10000 -> the margin
+        // fill-time gate DECLINES it (side-symmetric; TV declines all-in stops on
+        // an adverse gap-open). This is the stage-3 STOP gate, not the explicit-qty
+        // MARKET gate (which stays stop-agnostic). ki65 cross-confirms over-alloc
+        // stop declines (canonical TV match 93.8% -> 100.0%).
+        CHECK(eng.position_side_ == PositionSide::FLAT);   // stage-3 decline (was LONG 100)
+        CHECK_NEAR(eng.position_size(), 0.0, 1e-9);
     }
     std::printf("-- GREEN-F2: RAW strategy.order adverse gap unaffected --\n");
     {
