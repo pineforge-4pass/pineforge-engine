@@ -2225,6 +2225,20 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
                 && pyramid_entries_.back().entry_id == order.id) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), bar,
                                                pyramid_entries_.back().price);
+                // Keep the bracket-activation cursor separate from the booked
+                // fill price used by excursion accounting. Stop fills can be
+                // rounded or slipped; the child becomes live at the actual,
+                // direction-aware parent trigger crossing.
+                if (!std::isnan(order.stop_price)
+                    && std::isnan(order.limit_price)) {
+                    double entry_path_position = 0.0;
+                    if (internal::entry_stop_first_touch(
+                            bar, order.stop_price, order.is_long,
+                            &entry_path_position)) {
+                        pyramid_entries_.back().entry_path_position =
+                            entry_path_position;
+                    }
+                }
             }
         }
         trail_best_path_state = trail_best_after_fill;
@@ -2920,6 +2934,54 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             is_limit_fill = true;
         }
     } else if (!should_fill && exit_style && (has_stop || has_limit || has_trail)) {
+        double path_start_position = 0.0;
+        // Ordinary historical processing scans the retained pure-stop parent
+        // entry and its from_entry bracket in one pass. Once the parent fills,
+        // the child may inspect only the remaining OHLC path. COOF already
+        // supplies a monotonic segment cursor, and magnifier has its own tick
+        // path, so neither is routed through this full-bar coordinate. Keep
+        // multi-order exit groups on the existing path until their sibling
+        // ordering metric is cursor-aware; a single strategy.exit may still
+        // carry both its stop and limit legs inside one order.
+        if (is_entry_bar
+            && order.type == OrderType::EXIT
+            && !order.from_entry.empty()
+            && !order.created_while_in_position
+            && std::isnan(order.trail_points)
+            && std::isnan(order.trail_price)
+            && !bar_magnifier_enabled_
+            && !(calc_on_order_fills_ && coof_scheduler_active_)) {
+            int matching_exit_orders = 0;
+            for (const PendingOrder& pending : pending_orders_) {
+                if (pending.type == OrderType::EXIT
+                    && pending.from_entry == order.from_entry) {
+                    ++matching_exit_orders;
+                }
+            }
+            bool found_parent = false;
+            double earliest_parent = std::numeric_limits<double>::infinity();
+            for (const PyramidEntry& pe : pyramid_entries_) {
+                if (matching_exit_orders != 1) break;
+                if (pe.entry_id != order.from_entry
+                    || pe.entry_bar_index != bar_index_
+                    || pe.time != bar.timestamp) {
+                    continue;
+                }
+                found_parent = true;
+                // A matching market/raw parent was active from the open, so
+                // the bracket keeps the full path even if another same-id
+                // priced add filled later this bar.
+                if (!std::isfinite(pe.entry_path_position)) {
+                    earliest_parent = 0.0;
+                    break;
+                }
+                earliest_parent = std::min(earliest_parent,
+                                           pe.entry_path_position);
+            }
+            if (found_parent && std::isfinite(earliest_parent)) {
+                path_start_position = earliest_parent;
+            }
+        }
         ExitPathFill exit_fill = resolve_exit_path_fill(
             bar,
             position_side_,
@@ -2933,7 +2995,8 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             is_entry_bar,
             bar_magnifier_enabled_,
             syminfo_mintick_,
-            coof_cascade_force_wp_gap_);
+            coof_cascade_force_wp_gap_,
+            path_start_position);
         if (exit_fill.should_fill) {
             fill_price = exit_fill.fill_price;
             should_fill = true;

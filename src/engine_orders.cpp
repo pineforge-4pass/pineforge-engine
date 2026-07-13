@@ -188,7 +188,8 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
                                  pe.max_drawdown * keep_scale,
                                  pe.skip_entry_bar_high,
                                  pe.skip_entry_bar_low,
-                                 pe.market_pyramid_add});
+                                 pe.market_pyramid_add,
+                                 pe.entry_path_position});
         }
     }
 
