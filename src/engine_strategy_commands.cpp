@@ -328,8 +328,8 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             // Direction-neutral: two fill-time consumers read this flag.
             //   1. KI-61 long entry-bar affordability trim
             //      (engine_fills.cpp): re-checks order.is_long and margin_long
-            //      via long_full_margin_after_fill, so its long-only semantics
-            //      are invariant to widening this to shorts.
+            //      via long_full_margin_after_fill, so its long-only exemption
+            //      remains invariant.
             //   2. gap-reject (design-cntvxiao-gap-reject, engine_fills.cpp):
             //      direction-symmetric — drops a true-flat all-in zero-comm
             //      entry whose gapped fill notional exceeds equity by >1 lot,

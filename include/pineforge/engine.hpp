@@ -399,10 +399,9 @@ struct PendingOrder {
     // placement, and no earlier paired close in this on_bar. Consumers:
     //   1. KI-61 long entry-bar affordability EXEMPTION (engine_fills.cpp):
     //      long-only — it independently re-checks order.is_long and margin_long
-    //      via long_full_margin_after_fill, so widening this flag to shorts
-    //      leaves the exemption's derivation unchanged. Fill-time code must
-    //      additionally prove true-flat fill, sizing-price admission, success,
-    //      and zero actual opening commission before treating it as exempt.
+    //      via long_full_margin_after_fill. Fill-time code must additionally
+    //      prove true-flat fill, sizing-price admission, success, and zero
+    //      actual opening commission before treating it as exempt.
     //   2. gap-reject (design-cntvxiao-gap-reject, engine_fills.cpp):
     //      direction-symmetric — silently drops the entry at fill when the
     //      frozen-qty notional at the slipped fill price exceeds sizing_equity
@@ -522,13 +521,16 @@ protected:
     // --- Position state ---
     PositionSide position_side_ = PositionSide::FLAT;
     double position_entry_price_ = 0.0;   // volume-weighted average (for strategy calculations)
-    // One-shot post-fill affordability event for a 100%-margin long. Every
-    // successful fresh opening or accepted positive-qty same-direction add
-    // queues exactly one event carrying the raw matched-price base. The event
-    // is eligible unless the fill proves the narrow frozen-all-in true-flat
-    // MARKET exemption; rejected/no-op attempts leave an existing event
-    // untouched. process_margin_call consumes and clears the event on the
-    // current script bar. Do not reconstruct it from trade rows or
+    // One-shot post-fill affordability event. Every 100%-margin LONG opening /
+    // accepted add queues it as before; SHORT queues it only for a high-level
+    // explicit-qty MARKET strategy.entry opening/add at margin_short=100.
+    // The event carries the raw matched-price base and is eligible unless a
+    // LONG fill proves the narrow frozen-all-in true-flat MARKET exemption.
+    // Rejected/no-op attempts leave an existing event untouched; a later
+    // successful SHORT opening/add with any non-scoped shape invalidates prior
+    // short provenance rather than letting end-of-bar reuse its stale fill.
+    // process_margin_call consumes and clears it on the current script bar.
+    // Do not reconstruct it from trade rows or
     // position_entry_count_: a paired close/reentry can create zero-PnL rows,
     // and FIFO can reduce a real pyramid back to one live lot.
     bool opening_affordability_pending_ = false;

@@ -421,19 +421,29 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // A LONG at exactly 100% margin has no leverage-derived liquidation price:
     // compute_liquidation_price() returns na because m/100 - direction == 0.
     // Its only broker action is the non-price affordability event attached to
-    // the successful fill. Explicit pending provenance is essential: an add
-    // can occur on a carried position, and FIFO can later make the mutable
-    // position_entry_count_ equal one again.
+    // the successful fill. The same event is consumed for the narrowly pinned
+    // SHORT shape: a high-level explicit-qty MARKET opening/add at 100% margin,
+    // whose individually admitted fills can over-allocate the combined short.
+    // Other short order shapes retain the ordinary finite-price cascade.
     const bool long_full_margin =
         (position_side_ == PositionSide::LONG)
         && std::isfinite(margin_long_)
         && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
-    const bool long_opening_affordability =
-        long_full_margin
-        && opening_event_pending
+    const bool short_full_margin =
+        (position_side_ == PositionSide::SHORT)
+        && std::isfinite(margin_short_)
+        && std::abs(margin_short_ / 100.0 - 1.0) < 1e-12;
+    const bool event_is_actionable =
+        opening_event_pending
         && opening_event_eligible
         && std::isfinite(opening_event_raw_fill_base)
         && opening_event_raw_fill_base > 0.0;
+    const bool long_opening_affordability =
+        long_full_margin && event_is_actionable;
+    const bool short_opening_affordability =
+        short_full_margin && event_is_actionable;
+    const bool opening_affordability =
+        long_opening_affordability || short_opening_affordability;
 
     // A carried 1x long has no adverse-price liquidation. A just-filled 1x
     // long with no event is likewise ineligible, while a pending-but-exempt
@@ -442,15 +452,15 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
 
     // A leveraged position filled at the bar CLOSE has no post-fill adverse
     // path on that bar, so its first price liquidation remains next-bar-only.
-    // The 1x-long opening check is affordability at the fill, not an adverse-
-    // path test, and therefore still runs for a POOC close fill.
+    // The 1x opening check is affordability at the fill, not an adverse-path
+    // test, and therefore still runs for a POOC close fill on either side.
     if (process_orders_on_close_ && opened_this_bar
-        && !long_opening_affordability) {
+        && !opening_affordability) {
         return;
     }
 
     const double liq = compute_liquidation_price();
-    if (std::isnan(liq) && !long_opening_affordability) {
+    if (std::isnan(liq) && !opening_affordability) {
         return;  // includes every carried/ineligible 1x long
     }
 
@@ -471,7 +481,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
 
     double q_min = 0.0;
     double raw_exit_fill_base = 0.0;
-    if (long_opening_affordability) {
+    if (opening_affordability) {
         // Post-fill affordability is evaluated from the current position's
         // actual, directionally snapped/slipped entry basis. Capital and
         // realized PnL are account-currency-native; price notional is quote
@@ -487,7 +497,15 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         // broker-generated closing fill below.
         const double fx = account_currency_fx_;
         if (!std::isfinite(fx) || !(fx > 0.0)) return;
-        const double margin_per_unit = position_entry_price_ * pv * fx * m;
+        // Preserve the established long calculation byte-for-byte. A scoped
+        // short add instead marks the WHOLE position at the latest raw fill:
+        // required margin uses that price, and carried lots contribute their
+        // open PnL at the same mark. Using the post-add VWAP for required
+        // margin makes base2@100 + add2@110 on equity420 look like an exact
+        // 4*105 tie and suppresses the required broker action.
+        const double opening_mark = short_opening_affordability
+            ? opening_event_raw_fill_base : position_entry_price_;
+        const double margin_per_unit = opening_mark * pv * fx * m;
         double entry_commission = 0.0;
         for (const auto& pe : pyramid_entries_) {
             // A requested add can floor to zero yet leave a bookkeeping row.
@@ -498,8 +516,12 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
             if (!std::isfinite(lot_commission)) return;
             entry_commission += lot_commission;
         }
-        const double opening_equity =
+        double opening_equity =
             initial_capital_ + net_profit_sum_ - entry_commission;
+        if (short_opening_affordability) {
+            opening_equity += direction
+                * (opening_mark - position_entry_price_) * qty * pv * fx;
+        }
         if (!std::isfinite(margin_per_unit) || !(margin_per_unit > 0.0)
             || !std::isfinite(entry_commission)
             || !std::isfinite(opening_equity)) {
@@ -510,17 +532,22 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         q_min = qty - opening_equity / margin_per_unit;
         raw_exit_fill_base = opening_event_raw_fill_base;
     } else {
-        // Preserve the established finite-price cascade math and operation
-        // ordering byte-for-byte: shorts and leveraged longs still check the
-        // adverse extreme and fill there.
+        // Shorts and leveraged longs without a fresh opening event keep the
+        // established adverse-extreme cascade. Equity and required margin are
+        // account-currency values, so quote-currency price PnL/notional must
+        // carry the configured FX multiplier on this path just as they do in
+        // the opening-budget branch above. FX=1 preserves the old arithmetic.
         const double adverse =
             (position_side_ == PositionSide::LONG) ? bar.low : bar.high;
         if (!std::isfinite(adverse) || !(adverse > 0.0)) return;
+        const double fx = account_currency_fx_;
+        if (!std::isfinite(fx) || !(fx > 0.0)) return;
         const double equity_adv = initial_capital_ + net_profit_sum_
-            + direction * (adverse - position_entry_price_) * qty * pv;
-        const double req_margin_adv = qty * adverse * pv * m;
+            + direction * (adverse - position_entry_price_) * qty * pv * fx;
+        const double margin_per_unit_adv = adverse * pv * fx * m;
+        const double req_margin_adv = qty * margin_per_unit_adv;
         if (equity_adv >= req_margin_adv) return;
-        q_min = qty - equity_adv / (adverse * pv * m);
+        q_min = qty - equity_adv / margin_per_unit_adv;
         raw_exit_fill_base = adverse;
     }
 
@@ -542,7 +569,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // not a reason to force the generic finite-price cascade's one-step
     // progress fallback. qty_step==0 intentionally retains continuous-qty
     // behavior because no exchange lot floor was configured.
-    if (long_opening_affordability && q_min <= kQtyEpsilon) return;
+    if (opening_affordability && q_min <= kQtyEpsilon) return;
     double qty_liq = 4.0 * q_min;
     if (qty_step_ > 0.0) {
         // q_min is already a multiple of qty_step_, so 4*q_min is mathematically
@@ -553,7 +580,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         // with it alpha-wizard-channel cascade-1 matches TV 19/19 bit-exact.
         double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
         if (floored <= kQtyEpsilon) {
-            if (long_opening_affordability) return;
+            if (opening_affordability) return;
             // A liquidation IS required (we passed the margin-shortfall gate)
             // but the floored lot rounds to zero (sub-lot shortfall). Take the
             // smallest step that still makes progress — one qty_step_, or the
@@ -567,7 +594,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return;
 
     // Finite-price calls pass the raw adverse extreme to the close helper. A
-    // 1x-long opening trim instead passes the captured raw matched entry base.
+    // 1x opening trim instead passes the captured raw matched entry base.
     // current_fill_is_limit_ is false here, so both routes independently apply
     // the closing side's market snap/slippage. This is load-bearing for both a
     // buy-slipped stop/market entry and an unslipped limit entry; attempting to
@@ -1764,7 +1791,10 @@ void BacktestEngine::apply_filled_order_to_state(
     // dispatch point shared by MARKET, priced ENTRY, and RAW_ORDER fills while
     // the exact raw matched base is still available. A rejected or zero-effect
     // attempt changes neither the live quantity nor the pyramid roster and
-    // therefore leaves a prior event untouched.
+    // therefore leaves a prior event untouched. A successful short open/add
+    // with a non-scoped shape instead supersedes any earlier short provenance:
+    // its latest fill changed the position that end-of-bar will evaluate, so
+    // retaining an older raw base would misclassify the combined position.
     const bool entry_like_order =
         order.type == OrderType::MARKET
         || order.type == OrderType::ENTRY
@@ -1788,9 +1818,35 @@ void BacktestEngine::apply_filled_order_to_state(
             position_side_ == PositionSide::LONG
             && std::isfinite(margin_long_)
             && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+        // Scope the new short event to the TV-pinned generic shape only:
+        // high-level strategy.entry, explicit finite qty, pure MARKET order,
+        // SHORT at margin_short=100. Default-sized percent/cash entries,
+        // priced ENTRY orders, RAW strategy.order, and other margin settings
+        // retain their prior short-side event behavior (none).
+        const bool explicit_market_short_full_margin_after_fill =
+            position_side_ == PositionSide::SHORT
+            && std::isfinite(margin_short_)
+            && std::abs(margin_short_ / 100.0 - 1.0) < 1e-12
+            && order.type == OrderType::MARKET
+            && !order.is_long
+            && std::isfinite(order.qty);
         const bool positive_raw_base =
             std::isfinite(fill_price) && fill_price > 0.0;
-        if (long_full_margin_after_fill && positive_raw_base
+        const bool successful_short_open_or_add =
+            requested_side == PositionSide::SHORT
+            && (successful_fresh_open || accepted_additional_entry);
+        const bool scoped_short_opening_fill =
+            explicit_market_short_full_margin_after_fill
+            && positive_raw_base;
+        if (successful_short_open_or_add && !scoped_short_opening_fill) {
+            opening_affordability_pending_ = false;
+            opening_affordability_eligible_ = false;
+            opening_affordability_raw_fill_base_ =
+                std::numeric_limits<double>::quiet_NaN();
+        }
+        if ((long_full_margin_after_fill
+             || explicit_market_short_full_margin_after_fill)
+            && positive_raw_base
             && (successful_fresh_open || accepted_additional_entry)) {
             // The only exemption requires every item of provenance to agree:
             // omitted qty; a frozen 100%-equity high-level MARKET snapshot;

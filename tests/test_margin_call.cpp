@@ -90,7 +90,8 @@ public:
 class ShortLiqProbe : public MCEngine {
 public:
     bool disable_mc_ = false;
-    explicit ShortLiqProbe(bool disable_mc = false, double qty_step = 0.0) {
+    explicit ShortLiqProbe(bool disable_mc = false, double qty_step = 0.0,
+                           double account_fx = 1.0) {
         initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;          // size the short at 100% of equity
@@ -100,6 +101,7 @@ public:
         process_orders_on_close_ = true;     // market entry fills at bar close
         disable_mc_ = disable_mc;
         qty_step_ = qty_step;                // 0 = no lot quantization
+        account_currency_fx_ = account_fx;
         if (disable_mc_) set_margin_call_enabled(false);
     }
     void on_bar(const Bar& /*bar*/) override {
@@ -239,6 +241,27 @@ static void test_short_margin_call_qty_step() {
     raw.run(bars.data(), (int)bars.size());
     CHECK(near(raw.trade_size(0), 3.80952381, 1e-4));
     CHECK(!is_multiple_of(raw.trade_size(0), step));
+}
+
+static void test_short_margin_call_account_fx() {
+    std::printf("test_short_margin_call_account_fx\n");
+    constexpr double account_fx = 2.0;
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),
+        mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),
+    };
+    ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/0.0, account_fx);
+    eng.run(bars.data(), (int)bars.size());
+
+    // FX-aware percent sizing opens qty=1000/(100*2)=5. At high=105:
+    // equity=1000-(105-100)*5*2=950, margin=5*105*2=1050, so the
+    // finite-price 4x restore is 4*(5-950/(105*2)).
+    const double expected_qty = 4.0 * (5.0 - 950.0 / (105.0 * account_fx));
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.exit_price(0), 105.0));
+    CHECK(near(eng.trade_size(0), expected_qty));
+    CHECK(near(eng.position_size(), -(5.0 - expected_qty)));
 }
 
 // ---- B: long at 100% margin is never liquidated ----------------------------
@@ -677,6 +700,389 @@ static int margin_call_rows(const MCEngine& eng) {
         if (eng.exit_comment(i) == std::string("Margin call")) ++count;
     }
     return count;
+}
+
+// Two explicit qty=2 market entries are each affordable on their own, but the
+// accepted same-bar pyramid (qty=4) exceeds a 100%-margin account after the
+// configured account-currency FX conversion and opening commissions. The
+// resulting broker action is direction-symmetric: it restores margin from the
+// raw matched fill, not from the short side's later adverse-price path.
+class SameBarExplicitPairOpeningProbe : public MCEngine {
+public:
+    SameBarExplicitPairOpeningProbe(bool is_long, double account_fx,
+                                    double initial_capital)
+        : is_long_(is_long) {
+        initial_capital_ = initial_capital;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::CASH_PER_CONTRACT;
+        commission_value_ = 20.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+        account_currency_fx_ = account_fx;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+
+        strategy_entry("BASE", is_long_, kNaN, kNaN, /*qty=*/2.0);
+        process_pending_orders(current_bar_);
+        strategy_entry("ADD", is_long_, kNaN, kNaN, /*qty=*/2.0);
+        process_pending_orders(current_bar_);
+    }
+
+private:
+    bool is_long_;
+};
+
+static double expected_same_bar_pair_opening_liquidation(
+        double initial_capital, double raw_fill, double account_fx) {
+    constexpr double total_qty = 4.0;
+    constexpr double cash_per_contract = 20.0;
+    constexpr double qty_step = 0.0001;
+    const double margin_per_unit = raw_fill * account_fx;
+    const double opening_commission = total_qty * cash_per_contract;
+    const double opening_equity = initial_capital - opening_commission;
+    double q_min = total_qty - opening_equity / margin_per_unit;
+    q_min = std::floor(q_min / qty_step) * qty_step;
+    double qty_liq = 4.0 * q_min;
+    qty_liq = std::floor(qty_liq / qty_step + 1e-6) * qty_step;
+    return std::min(qty_liq, total_qty);
+}
+
+static void check_same_bar_explicit_pair_opening_trim(
+        bool is_long, double account_fx, double initial_capital) {
+    constexpr double raw_fill = 1741.23;
+    constexpr double one_entry_qty = 2.0;
+    constexpr double total_qty = 4.0;
+    constexpr double entry_fee = 20.0;
+
+    // The admission fork is cumulative, not per-order: each order fits, but
+    // the accepted pair plus its account-native opening fees does not.
+    CHECK(one_entry_qty * raw_fill * account_fx < initial_capital);
+    CHECK(total_qty * raw_fill * account_fx + total_qty * entry_fee
+          > initial_capital);
+
+    SameBarExplicitPairOpeningProbe eng(is_long, account_fx, initial_capital);
+    std::vector<Bar> bars = {
+        mk_bar(1000, raw_fill, raw_fill, raw_fill, raw_fill, 1.0),
+    };
+    eng.run(bars.data(), (int)bars.size());
+
+    const double expected_qty = expected_same_bar_pair_opening_liquidation(
+        initial_capital, raw_fill, account_fx);
+    double liquidated_qty = 0.0;
+    for (int i = 0; i < eng.trade_count(); ++i) {
+        CHECK(eng.exit_comment(i) == std::string("Margin call"));
+        CHECK(near(eng.entry_price(i), raw_fill));
+        CHECK(near(eng.exit_price(i), raw_fill));
+        liquidated_qty += eng.trade_size(i);
+    }
+    CHECK(margin_call_rows(eng) == 2);
+    CHECK(near(liquidated_qty, expected_qty));
+    CHECK(near(std::fabs(eng.position_size()), total_qty - expected_qty));
+}
+
+static void test_same_bar_explicit_pair_foreign_fx_direction_symmetry() {
+    std::printf("test_same_bar_explicit_pair_foreign_fx_direction_symmetry\n");
+    constexpr double account_fx = 88.0;
+    constexpr double initial_capital = 500000.0;
+    check_same_bar_explicit_pair_opening_trim(
+        /*is_long=*/true, account_fx, initial_capital);
+    check_same_bar_explicit_pair_opening_trim(
+        /*is_long=*/false, account_fx, initial_capital);
+}
+
+static void test_same_bar_explicit_pair_fx1_direction_symmetry() {
+    std::printf("test_same_bar_explicit_pair_fx1_direction_symmetry\n");
+    constexpr double account_fx = 1.0;
+    constexpr double initial_capital = 6000.0;
+    check_same_bar_explicit_pair_opening_trim(
+        /*is_long=*/true, account_fx, initial_capital);
+    check_same_bar_explicit_pair_opening_trim(
+        /*is_long=*/false, account_fx, initial_capital);
+}
+
+// The add fills above the base short. Marking required margin at the VWAP
+// (105) reports an exact 4*105 == 420 tie and incorrectly does nothing;
+// TradingView marks the whole position at the latest raw fill (110), including
+// the carried short's open loss, and immediately restores margin there.
+class UnequalFillShortAddProbe : public MCEngine {
+public:
+    UnequalFillShortAddProbe() {
+        initial_capital_ = 420.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("BASE", false, kNaN, kNaN, /*qty=*/2.0);
+        } else if (bar_index_ == 1) {
+            strategy_entry("ADD", false, kNaN, kNaN, /*qty=*/2.0);
+        }
+    }
+};
+
+static void test_short_add_opening_margin_marks_latest_raw_fill() {
+    std::printf("test_short_add_opening_margin_marks_latest_raw_fill\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 110.0, 110.0, 110.0, 110.0, 1.0),
+    };
+    UnequalFillShortAddProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    // At the latest fill, equity is 420 - (110-100)*2 = 400 and required
+    // margin is 4*110=440. The 4x restore closes 4*(4-400/110).
+    const double expected_qty = 4.0 * (4.0 - 400.0 / 110.0);
+    CHECK(eng.trade_count() == 1);
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 100.0));
+    CHECK(near(eng.exit_price(0), 110.0));
+    CHECK(near(eng.trade_size(0), expected_qty));
+    CHECK(near(eng.position_size(), -(4.0 - expected_qty)));
+}
+
+// Literal non-POOC geometry from the Thula margin fork. The effective fixed FX
+// is deliberately inside the observed interval but remains an ordinary runtime
+// input; the expected broker rows are pinned directly, not computed by a copy
+// of the implementation formula.
+class NextOpenExplicitShortPairProbe : public MCEngine {
+public:
+    NextOpenExplicitShortPairProbe() {
+        // Prior realized loss leaves 497641.70 before these fills; four
+        // account-native 20-per-contract opening fees make the broker's
+        // opening-equity basis exactly 497561.70.
+        initial_capital_ = 497641.70;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::CASH_PER_CONTRACT;
+        commission_value_ = 20.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        pyramiding_ = 2;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+        account_currency_fx_ = 85.3567;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        strategy_entry("BASE", false, kNaN, kNaN, /*qty=*/2.0);
+        strategy_entry("ADD", false, kNaN, kNaN, /*qty=*/2.0);
+    }
+};
+
+static void test_thula_next_open_short_pair_exact_margin_rows() {
+    std::printf("test_thula_next_open_short_pair_exact_margin_rows\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1700.0, 1700.0, 1700.0, 1700.0, 1.0),
+        mk_bar(2000, 1741.23, 1741.23, 1741.23, 1741.23, 1.0),
+    };
+    NextOpenExplicitShortPairProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 2);
+    CHECK(margin_call_rows(eng) == 2);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(eng.exit_comment(1) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 1741.23));
+    CHECK(near(eng.entry_price(1), 1741.23));
+    CHECK(near(eng.exit_price(0), 1741.23));
+    CHECK(near(eng.exit_price(1), 1741.23));
+    CHECK(near(eng.trade_size(0), 2.0));
+    CHECK(near(eng.trade_size(1), 0.6088));
+    CHECK(near(eng.position_size(), -1.3912));
+}
+
+class ShortOpeningEventScopeProbe : public MCEngine {
+public:
+    enum class Shape { DefaultPercent, DefaultCash, Priced, Raw, MarginNot100 };
+    bool widened_event = false;
+    bool priced_fill_observed = false;
+
+    explicit ShortOpeningEventScopeProbe(Shape shape) : shape_(shape) {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 2.0;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = shape == Shape::MarginNot100 ? 80.0 : 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+        if (shape == Shape::DefaultPercent) {
+            default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+            default_qty_value_ = 50.0;
+        } else if (shape == Shape::DefaultCash) {
+            default_qty_type_ = QtyType::CASH;
+            default_qty_value_ = 200.0;
+        }
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        // The priced control must be a real fill, not merely a pending shape.
+        // Arm it below the market on bar 0, then observe its short fill after
+        // bar 1 gaps to the limit. dispatch_bar's step 1 applies that resting
+        // order before this callback, while its event provenance is visible.
+        if (shape_ == Shape::Priced) {
+            if (bar_index_ == 0) {
+                strategy_entry("S", false, /*limit=*/110.0, kNaN,
+                               /*qty=*/2.0);
+            } else if (bar_index_ == 1) {
+                priced_fill_observed =
+                    position_side_ == PositionSide::SHORT
+                    && near(position_qty_, 2.0)
+                    && !pyramid_entries_.empty()
+                    && near(pyramid_entries_.back().price, 110.0);
+                widened_event = opening_affordability_pending_
+                    || opening_affordability_eligible_
+                    || std::isfinite(opening_affordability_raw_fill_base_);
+            }
+            return;
+        }
+
+        if (bar_index_ != 0) return;
+        switch (shape_) {
+            case Shape::DefaultPercent:
+            case Shape::DefaultCash:
+                strategy_entry("S", false, kNaN, kNaN, kNaN);
+                break;
+            case Shape::Priced:
+                break;  // handled above on two distinct bars
+            case Shape::Raw:
+                strategy_order("S", false, /*qty=*/2.0);
+                break;
+            case Shape::MarginNot100:
+                strategy_entry("S", false, kNaN, kNaN, /*qty=*/2.0);
+                break;
+        }
+        process_pending_orders(current_bar_);
+        widened_event = opening_affordability_pending_
+            || opening_affordability_eligible_
+            || std::isfinite(opening_affordability_raw_fill_base_);
+    }
+
+private:
+    Shape shape_;
+};
+
+static void test_short_opening_event_scope_is_explicit_market_margin100_only() {
+    std::printf("test_short_opening_event_scope_is_explicit_market_margin100_only\n");
+    const ShortOpeningEventScopeProbe::Shape shapes[] = {
+        ShortOpeningEventScopeProbe::Shape::DefaultPercent,
+        ShortOpeningEventScopeProbe::Shape::DefaultCash,
+        ShortOpeningEventScopeProbe::Shape::Priced,
+        ShortOpeningEventScopeProbe::Shape::Raw,
+        ShortOpeningEventScopeProbe::Shape::MarginNot100,
+    };
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 110.0, 110.0, 110.0, 110.0, 1.0),
+    };
+    for (auto shape : shapes) {
+        ShortOpeningEventScopeProbe eng(shape);
+        eng.run(bars.data(), (int)bars.size());
+        if (shape == ShortOpeningEventScopeProbe::Shape::Priced) {
+            CHECK(eng.priced_fill_observed);
+        }
+        CHECK(!eng.widened_event);
+    }
+}
+
+// A scoped explicit MARKET short event is only provenance for that exact
+// fill. If a later successful same-direction short fill in the same dispatch
+// cycle has a non-scoped shape, the earlier event must not survive to the
+// end-of-bar margin pass. These mutations use a later synthetic broker sample
+// so BASE fills at 100 and the accepted add really fills at 110.
+class ShortOpeningEventMutationProbe : public MCEngine {
+public:
+    enum class LaterFill { PricedEntry, RawOrder };
+    bool base_event_captured = false;
+    bool later_add_filled = false;
+    bool stale_event_cleared = false;
+
+    explicit ShortOpeningEventMutationProbe(LaterFill later_fill)
+        : later_fill_(later_fill) {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = true;
+        pyramiding_ = 2;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+
+        strategy_entry("BASE", false, kNaN, kNaN, /*qty=*/2.0);
+        process_pending_orders(current_bar_);
+        base_event_captured = opening_affordability_pending_
+            && opening_affordability_eligible_
+            && near(opening_affordability_raw_fill_base_, 100.0);
+
+        if (later_fill_ == LaterFill::PricedEntry) {
+            strategy_entry("ADD", false, /*limit=*/110.0, kNaN,
+                           /*qty=*/2.0);
+        } else {
+            strategy_order("ADD", false, /*qty=*/2.0);
+        }
+
+        const Bar later_sample =
+            mk_bar(current_bar_.timestamp, 110.0, 110.0, 110.0, 110.0, 1.0);
+        process_pending_orders(later_sample);
+        later_add_filled = position_side_ == PositionSide::SHORT
+            && near(position_qty_, 4.0)
+            && pyramid_entries_.size() == 2
+            && near(pyramid_entries_.back().price, 110.0);
+        stale_event_cleared = !opening_affordability_pending_
+            && !opening_affordability_eligible_
+            && std::isnan(opening_affordability_raw_fill_base_);
+    }
+
+private:
+    LaterFill later_fill_;
+};
+
+static void test_priced_short_add_invalidates_scoped_opening_event() {
+    std::printf("test_priced_short_add_invalidates_scoped_opening_event\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    ShortOpeningEventMutationProbe eng(
+        ShortOpeningEventMutationProbe::LaterFill::PricedEntry);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.base_event_captured);
+    CHECK(eng.later_add_filled);
+    CHECK(eng.stale_event_cleared);
+    CHECK(margin_call_rows(eng) == 0);
+    CHECK(near(eng.position_size(), -4.0));
+}
+
+static void test_raw_short_add_invalidates_scoped_opening_event() {
+    std::printf("test_raw_short_add_invalidates_scoped_opening_event\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    ShortOpeningEventMutationProbe eng(
+        ShortOpeningEventMutationProbe::LaterFill::RawOrder);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.base_event_captured);
+    CHECK(eng.later_add_filled);
+    CHECK(eng.stale_event_cleared);
+    CHECK(margin_call_rows(eng) == 0);
+    CHECK(near(eng.position_size(), -4.0));
 }
 
 // A genuine accepted same-direction add is itself a post-fill affordability
@@ -1127,6 +1533,7 @@ static void test_long_leveraged_margin_call() {
 int main() {
     test_short_margin_call();
     test_short_margin_call_qty_step();
+    test_short_margin_call_account_fx();
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();
     test_long_100pct_margin_no_call();
@@ -1141,6 +1548,13 @@ int main() {
     test_long_100pct_margin_stop_trim_uses_raw_base_and_exit_slip();
     test_long_100pct_margin_limit_trim_uses_raw_base_and_exit_slip();
     test_raw_order_fresh_open_captures_affordability();
+    test_same_bar_explicit_pair_foreign_fx_direction_symmetry();
+    test_same_bar_explicit_pair_fx1_direction_symmetry();
+    test_short_add_opening_margin_marks_latest_raw_fill();
+    test_thula_next_open_short_pair_exact_margin_rows();
+    test_short_opening_event_scope_is_explicit_market_margin100_only();
+    test_priced_short_add_invalidates_scoped_opening_event();
+    test_raw_short_add_invalidates_scoped_opening_event();
     test_accepted_add_fifo_keeps_add_affordability_event();
     test_rejected_add_preserves_opening_eligibility();
     test_zero_qty_add_preserves_opening_eligibility();
