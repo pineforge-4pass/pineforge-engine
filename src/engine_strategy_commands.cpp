@@ -753,6 +753,23 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double qty, const std::string& oca_name,
                                     double profit_ticks, double loss_ticks) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    const bool has_actionable_exit = !std::isnan(limit_price)
+        || !std::isnan(stop_price)
+        || !std::isnan(profit_ticks)
+        || !std::isnan(loss_ticks)
+        || !std::isnan(trail_points)
+        || !std::isnan(trail_price);
+    if (!has_actionable_exit) {
+        // TV probe N0/NR: an all-actionable-NaN strategy.exit is inert, not a
+        // market close. A same-id call still cancels its prior bracket, so the
+        // return follows matching-EXIT removal but precedes all sizing and
+        // reservation work. trail_offset alone is intentionally insufficient.
+        int64_t discarded_seq = 0;
+        double discarded_reserved_qty = std::numeric_limits<double>::quiet_NaN();
+        clear_existing_exit_order(id, from_entry, /*has_trail_request=*/false,
+                                  discarded_seq, discarded_reserved_qty);
+        return;
+    }
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
     // A default-FIFO strategy.close batched earlier on this SAME bar has not

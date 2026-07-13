@@ -1490,6 +1490,9 @@ static void test_reversal_uses_explicit_qty_for_new_side() {
 
 class PyramidPartialExitStrategy : public BacktestEngine {
 public:
+    double position_before_close_all = -1.0;
+    int partial_trade_rows = -1;
+
     PyramidPartialExitStrategy() {
         initial_capital_ = 100000;
         default_qty_type_ = QtyType::FIXED;
@@ -1502,16 +1505,23 @@ public:
         if (bar_index_ == 1) strategy_entry("E1", true);
         if (bar_index_ == 2) strategy_entry("E2", true);
         if (bar_index_ == 3) strategy_entry("E3", true);
-        // Partial exit: 50% of position
+        // Actionable partial exit: bar 6 reaches the 110 limit and closes
+        // exactly 50% of the three-lot pyramided position.
         if (bar_index_ == 5) strategy_exit("X1", "",
-            std::numeric_limits<double>::quiet_NaN(),  // no limit
+            110.0,                                     // actionable limit
             std::numeric_limits<double>::quiet_NaN(),  // no stop
             std::numeric_limits<double>::quiet_NaN(),  // no trail_points
             std::numeric_limits<double>::quiet_NaN(),  // no trail_offset
             std::numeric_limits<double>::quiet_NaN(),  // no trail_price
             50.0);  // qty_percent
-        if (bar_index_ == 7) strategy_close_all();
+        if (bar_index_ == 7) {
+            position_before_close_all = signed_position_size();
+            partial_trade_rows = trade_count();
+            strategy_close_all();
+        }
     }
+
+    double final_position() const { return signed_position_size(); }
 };
 
 static void test_pyramid_partial_exit() {
@@ -1522,11 +1532,22 @@ static void test_pyramid_partial_exit() {
         bars[i] = {100.0 + i, 105.0 + i, 95.0 + i, 102.0 + i, 50, (int64_t)(i + 1) * 60000};
     strat.run(bars, 9);
 
-    // Should have trades from partial exit + final close_all
-    CHECK(strat.trade_count() >= 2);
+    // The partial leg must have executed before close_all: qty 3 -> 1.5.
+    CHECK(near(strat.position_before_close_all, 1.5, 1e-9));
+    CHECK(strat.partial_trade_rows > 0);
+    double partial_qty = 0.0;
+    for (int i = 0; i < strat.trade_count(); ++i) {
+        if (strat.get_trade(i).exit_id == "X1") {
+            partial_qty += strat.get_trade(i).qty;
+        }
+    }
+    CHECK(near(partial_qty, 1.5, 1e-9));
+    CHECK(near(strat.final_position(), 0.0, 1e-9));
 }
 
-// strategy.exit(..., qty_percent<100) should reduce, not flatten, a position.
+// An actionable strategy.exit(..., qty_percent<100) should reduce, not flatten,
+// a position. The limit leg is required: an all-actionable-NaN strategy.exit is
+// inert under the TV-pinned high-level command contract.
 static void test_exit_qty_percent_reduces_position() {
     std::printf("test_exit_qty_percent_reduces_position\n");
 
@@ -1546,7 +1567,7 @@ static void test_exit_qty_percent_reduces_position() {
             }
             if (bar_index_ == 1) {
                 strategy_exit("PX", "L",
-                    std::numeric_limits<double>::quiet_NaN(),  // no limit
+                    102.0,                                     // actionable limit, reached on bar 2
                     std::numeric_limits<double>::quiet_NaN(),  // no stop
                     std::numeric_limits<double>::quiet_NaN(),  // no trail_points
                     std::numeric_limits<double>::quiet_NaN(),  // no trail_offset
