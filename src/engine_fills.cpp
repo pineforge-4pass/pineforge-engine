@@ -1063,6 +1063,98 @@ bool BacktestEngine::pending_flat_market_pair_is_live(
     return false;
 }
 
+// A strategy.exit can be armed on the signal bar together with the MARKET
+// strategy.entry named by from_entry. The child is valid before the parent
+// fills: TradingView binds it to the eventual lot, and if the next open has
+// already breached its stop, it fills both parent and child at that same open.
+// Clean-room probe order-market-reversal-resting-bracket-gap-01 pins this for
+// both directions and for parents placed from true flat or as reversals.
+//
+// Do not turn this into a general entry-bar wrong-side bypass. The exact
+// provenance below keeps freshly emitted/stale exits, priced parents, MARKET
+// pyramid adds, partial/sibling groups, POOC, COOF, and magnifier on their
+// existing paths. Generated Pine already lowers flat
+// strategy.position_avg_price to na, so an avg-derived flat bracket never
+// reaches this helper with a finite stop.
+bool BacktestEngine::prearmed_market_parent_stop_gaps_at_open(
+        const PendingOrder& order, const Bar& bar) const {
+    if (process_orders_on_close_ || calc_on_order_fills_ || bar_magnifier_enabled_) {
+        return false;
+    }
+    if (position_side_ == PositionSide::FLAT
+        || position_open_bar_ != bar_index_
+        || order.type != OrderType::EXIT
+        || order.from_entry.empty()
+        || order.created_bar != bar_index_ - 1
+        || order.created_during_coof_recalc
+        || order.requested_partial
+        || order.qty_percent < 100.0 - kFullPercentEps
+        || !std::isfinite(order.stop_price)
+        || !std::isnan(order.trail_points)
+        || !std::isnan(order.trail_price)) {
+        return false;
+    }
+
+    const bool live_long = position_side_ == PositionSide::LONG;
+    const bool stop_gapped = live_long ? bar.open <= order.stop_price
+                                       : bar.open >= order.stop_price;
+    if (!stop_gapped) return false;
+
+    // The oracle has a correctly-sided, nonmarketable limit sibling inside the
+    // same bracket, not a second open-gap leg. Keep dual-marketable brackets
+    // out until a dedicated priority oracle exists. Test the actual W0 broker
+    // predicate: equality is marketable, and slippage can make the booked entry
+    // price differ from the bar open.
+    if (!std::isnan(order.limit_price)) {
+        const bool limit_gapped = live_long ? bar.open >= order.limit_price
+                                             : bar.open <= order.limit_price;
+        if (limit_gapped) return false;
+    }
+
+    int matching_children = 0;
+    for (const PendingOrder& pending : pending_orders_) {
+        if (pending.type == OrderType::EXIT
+            && pending.from_entry == order.from_entry) {
+            ++matching_children;
+        }
+    }
+    if (matching_children != 1) return false;
+
+    // This oracle path is a one-parent/one-lot scratch. Requiring the fresh
+    // matching lot to be the entire live position prevents a bracket for E
+    // from consuming a co-queued MARKET sibling F. An explicit qty armed while
+    // flat is not labelled requested_partial at placement, so also prove that
+    // its literal quantity covers the newborn lot before taking the shortcut.
+    if (pyramid_entries_.size() != 1) return false;
+    const PyramidEntry& fresh_lot = pyramid_entries_.front();
+    if (fresh_lot.entry_id != order.from_entry
+        || fresh_lot.entry_bar_index != bar_index_
+        || fresh_lot.time != bar.timestamp
+        || std::isfinite(fresh_lot.entry_path_position)
+        || (std::isfinite(order.qty)
+            && fresh_lot.qty - order.qty > kQtyEpsilon)) {
+        return false;
+    }
+
+    for (const PendingOrder& parent : pending_orders_) {
+        if (parent.id != order.from_entry
+            || parent.type != OrderType::MARKET
+            || parent.created_bar != order.created_bar
+            || parent.created_seq >= order.created_seq
+            || parent.created_position_side != order.created_position_side
+            || parent.is_long != live_long) {
+            continue;
+        }
+        // True-flat parents and opposite-side reversals are pinned. A parent
+        // born in the live side is a pyramid add and remains out of scope.
+        if (parent.created_position_side == PositionSide::FLAT
+            || parent.created_position_side != position_side_) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void BacktestEngine::invalidate_pending_flat_market_pair(int64_t created_seq) {
     if (created_seq <= 0) return;
     for (PendingOrder& order : pending_orders_) {
@@ -2809,17 +2901,13 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
 
     // Same-bar exit handling: TradingView evaluates priced exits (stop/limit/
     // trail) on the entry bar itself (entry fills at open, then intra-bar
-    // data evaluates exits). But skip if the exit has garbage values
-    // (computed when position was flat).
+    // data evaluates exits). A generic wrong-side level is blocked unless the
+    // prearmed MARKET-parent helper proves that it is a valid open-gap child.
     //
     // The wrong-side eligibility skip (stop > entry for long, etc.) gates
-    // out spurious orders whose stop/limit was derived from
-    // ``strategy.position_avg_price`` while flat: Pine returns ``na`` and
-    // arithmetic propagates ``na`` (so the order becomes a no-op), but the
-    // engine returns ``0.0`` and arithmetic produces a numerically-valid
-    // but semantically-wrong-side level (negative or near-zero). Without
-    // the skip those orders gap-fill at the entry bar's open (every bar a
-    // signal fires would close at $0 PnL).
+    // out freshly emitted or stale levels that would have triggered before
+    // the position opened. Generated Pine separately preserves flat
+    // ``strategy.position_avg_price == na`` before it reaches this layer.
     //
     // The magnifier corpus (probe-01..08b) places exits with USER-COMPUTED
     // valid wrong-side stops (e.g. ``open + (high-open)*0.5`` is between
@@ -2844,7 +2932,9 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
                 return OrderEligibility::Skip;
             }
         }
-        if (!bar_magnifier_enabled_
+        const bool prearmed_market_gap =
+            prearmed_market_parent_stop_gaps_at_open(order, bar);
+        if (!prearmed_market_gap && !bar_magnifier_enabled_
             && !(calc_on_order_fills_ && coof_scheduler_active_
                  && order.created_during_coof_recalc)) {
             double ep = position_entry_price_;
@@ -2893,6 +2983,15 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     double fill_price = 0.0;
     bool should_fill = false;
     bool is_limit_fill = false;
+
+    // A valid child that was armed with its pending MARKET parent and whose
+    // stop is already breached at the parent's fill open scratches there.
+    // Route it directly: the generic entry-bar resolver intentionally blocks
+    // wrong-side levels and remains unchanged for every other provenance.
+    if (exit_style && prearmed_market_parent_stop_gaps_at_open(order, bar)) {
+        fill_price = bar.open;
+        should_fill = true;
+    }
 
     // If every non-trailing priced leg is suppressed on the entry bar, the
     // order is dormant rather than becoming a market exit. The original

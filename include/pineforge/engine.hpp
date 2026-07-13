@@ -2052,6 +2052,14 @@ private:
     void sort_orders_by_fill_phase(const Bar& bar);
     bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
     void invalidate_pending_flat_market_pair(int64_t created_seq);
+    // TradingView binds a valid, single/full, non-trailing strategy.exit to a
+    // co-queued high-level MARKET parent. If that parent fills at the next open
+    // and its stop is already breached, the newborn lot scratches at that open.
+    // The helper proves the parent/child/fresh-lot provenance; it deliberately
+    // excludes POOC, COOF, magnifier, same-direction adds, priced parents, and
+    // multi-child groups.
+    bool prearmed_market_parent_stop_gaps_at_open(
+        const PendingOrder& order, const Bar& bar) const;
     void compact_filled_pending_orders(const std::vector<size_t>& filled_indices,
                                        int exit_closed_from_bar,
                                        uint64_t exit_closed_from_incarnation,
