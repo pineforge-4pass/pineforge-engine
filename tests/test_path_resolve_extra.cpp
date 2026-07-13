@@ -278,6 +278,41 @@ static void test_resolve_exit_trail_fills() {
     CHECK(fs.should_fill == true);
     CHECK(near(fs.fill_price, 98.5));
 
+    // Explicit trail_offset=0 follows the same activation-only path as an
+    // omitted offset. These two bars are the first short/long trailing exits
+    // from the Boz WMA+ADX strategy. Before the fix, finite zero was treated
+    // as a normal trailing distance: the resolver armed at the favorable
+    // extreme, then retraced zero ticks and filled at that extreme instead of
+    // at the activation crossing.
+    //
+    // SHORT, dynamically re-issued exit:
+    //   entry=1861.49, latest trail_points=1872.14*0.008/0.01=1497.712
+    //   -> ceil(1497.712)=1498 ticks -> activation=1846.51.
+    //   High-first path 1872.14 -> 1875.00 -> 1843.97 -> 1849.27 must fill
+    //   at 1846.51, not the favorable low 1843.97.
+    Bar boz_short = mk(1872.14, 1875.00, 1843.97, 1849.27);
+    ExitPathFill boz_short_zero = resolve_exit_path_fill(
+        boz_short, PositionSide::SHORT, kNaN, kNaN,
+        /*trail_points=*/1497.712, /*trail_price=*/kNaN,
+        /*trail_offset=*/0.0, /*entry=*/1861.49,
+        /*best_start=*/1858.80, false, false, kMintick);
+    CHECK(boz_short_zero.should_fill == true);
+    CHECK(near(boz_short_zero.fill_price, 1846.51));
+
+    // LONG, first exit snapshot:
+    //   entry=1903.31, trail_points=1910*0.008/0.01=1528 ticks
+    //   -> activation=1918.59.
+    //   Low-first path 1910.00 -> 1907.98 -> 1920.58 -> 1919.43 must fill
+    //   at 1918.59, not the favorable high 1920.58.
+    Bar boz_long = mk(1910.00, 1920.58, 1907.98, 1919.43);
+    ExitPathFill boz_long_zero = resolve_exit_path_fill(
+        boz_long, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/1528.0, /*trail_price=*/kNaN,
+        /*trail_offset=*/0.0, /*entry=*/1903.31,
+        /*best_start=*/1910.00, false, false, kMintick);
+    CHECK(boz_long_zero.should_fill == true);
+    CHECK(near(boz_long_zero.fill_price, 1918.59));
+
     // LONG trail no-offset, ALREADY armed via best_start, bar opens past the
     // activation level -> gap-fill at the open (exits-at-activation gap arm).
     //   activation=101; best_start=101.5 (>=activation so armed); open=102>=101.

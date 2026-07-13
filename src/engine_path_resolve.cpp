@@ -560,7 +560,11 @@ ExitTrailState compute_exit_trail_state(bool is_long, double trail_points,
         // Absolute activation price level (no entry-relative tick rounding).
         s.activation_level = trail_price;
     }
-    if (!std::isnan(trail_offset)) {
+    // TV treats an explicit zero offset like an omitted offset: the exit fires
+    // at the activation crossing itself. Keep zero represented as NaN here so
+    // it follows the existing activation-only path; positive offsets retain
+    // the ordinary best-price-minus/plus-offset trailing behaviour.
+    if (!std::isnan(trail_offset) && trail_offset != 0.0) {
         s.trail_offset_price = std::ceil(trail_offset) * syminfo_mintick;
     }
     if (!std::isnan(s.best_price)) {
