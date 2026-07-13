@@ -211,6 +211,23 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             [&](const PendingOrder& o) { return o.id == id; }),
         pending_orders_.end());
 
+    // On the ordinary non-POOC path, TradingView rejects a same-direction
+    // priced strategy.entry call when the live position is already at the
+    // pyramiding cap. This is a placement-time admission rule, not merely a
+    // fill-time check: a rejected stop/limit must not survive a later reversal
+    // and fire against the new opposite position. Same-id replacement happens
+    // first, so an over-cap reissue also removes the older pending order without
+    // admitting the replacement. Market entries keep their fill-time role-
+    // change semantics, and POOC entry+close co-queues remain governed by the
+    // same-close-pass rules. Ground truth:
+    // order-entry-overcap-priced-admission-01 phases A/B.
+    bool over_pyramiding_cap =
+        position_side_ != PositionSide::FLAT
+        && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
+        && position_entry_count_ >= pyramiding_;
+    bool is_priced_entry = !std::isnan(limit_price) || !std::isnan(stop_price);
+    if (is_priced_entry && !process_orders_on_close_ && over_pyramiding_cap) return;
+
     PendingOrder order;
     order.id = id;
     order.from_entry = "";
@@ -238,18 +255,10 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_position_cycle_seq = position_cycle_seq_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
-    // Snapshot the placement-time over-pyramiding-cap status, mirroring the
-    // fill-time gate (add_to_pyramid_market, engine_orders.cpp) EXACTLY: a
-    // SAME-direction add against a position already at/over the pyramiding cap
-    // is one TradingView never admits. Same-id re-placement rebuilds this
-    // PendingOrder wholesale, so the snapshot naturally refreshes each call.
-    // The post-full-close same-direction wipe reads this flag to keep drop-
-    // ping over-cap co-queues even when a co-queued full close zeroes
-    // position_entry_count_ before the add's fill-time gate runs.
-    order.over_pyramiding_cap_at_placement =
-        position_side_ != PositionSide::FLAT
-        && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
-        && position_entry_count_ >= pyramiding_;
+    // Market orders and the POOC priced path retain the placement snapshot for
+    // the downstream full-close compaction and role-change rules. Ordinary
+    // non-POOC priced orders that are over cap returned above.
+    order.over_pyramiding_cap_at_placement = over_pyramiding_cap;
     // TradingView empirical rule (probe 52 trade 113): the deferred-flip
     // carry is the position size at THIS placement, not the original.
     // ``strategy.entry`` with the same id replaces the pending order
