@@ -811,11 +811,16 @@ protected:
     Bar current_bar_;
     int bar_index_ = 0;
     int bar_index_offset_ = 0;
-    // Opt-in KI-55 HTF warmup parity (see set_syminfo_metadata,
-    // "security_range_start_na_warmup"). When enabled, request.security series
-    // aggregate from security_range_start_ms_ instead of the feed start and
-    // their embedded ta.ema na-warm per TV built-in semantics. Default OFF →
-    // byte-identical behavior; touched only through feed_security_eval_state.
+    // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
+    // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
+    // first used by on_bar na-warm per TV built-in semantics. This selector is
+    // scoped independently from request.security so the two execution contexts
+    // cannot leak their warmup mode into each other. Default OFF.
+    bool chart_ema_na_warmup_ = false;
+    // Independent opt-in KI-55 HTF warmup parity. When enabled,
+    // request.security series aggregate from security_range_start_ms_ instead
+    // of the feed start and their embedded ta.ema na-warm per TV built-in
+    // semantics. Default OFF; touched only through feed_security_eval_state.
     bool security_range_start_na_warmup_ = false;
     int64_t security_range_start_ms_ = 0;
     // Opt-in historical-only request.security lookahead projection. TradingView
@@ -2256,6 +2261,7 @@ private:
     // Shared by run(), run_simple_bar_loop, and the no-magnifier aggregation
     // path. The magnifier tick loop does NOT use this — it gates the sequence
     // on is_last_tick_ and forces is_first_tick_ before on_bar.
+    void invoke_chart_on_bar(const Bar& bar);
     void dispatch_bar();
     void dispatch_bar_calc_on_order_fills();
     void snapshot_coof_script_state();
@@ -2453,6 +2459,14 @@ public:
         if (key == "historical_security_lookahead_projection") {
             historical_security_lookahead_projection_ =
                 std::isfinite(value) && value > 0.0;
+        }
+        // Opt-in KI-55 chart-timeframe EMA warmup parity. This is a boolean
+        // run configuration carried through the existing metadata channel:
+        // positive finite values enable it; 0 / NaN / negative disable it.
+        // Unlike security_range_start_na_warmup, it carries no timestamp and
+        // does not change request.security aggregation boundaries.
+        if (key == "chart_ema_na_warmup") {
+            chart_ema_na_warmup_ = std::isfinite(value) && value > 0.0;
         }
         // "qty_step" is the per-instrument lot increment used by the forced-
         // liquidation quantizer. Route it onto the dedicated member so the

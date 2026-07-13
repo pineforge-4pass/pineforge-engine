@@ -25,6 +25,7 @@ set(TEST_SOURCES
     test_request_security
     test_historical_security_lookahead_projection
     test_security_range_start_na_warmup
+    test_chart_ema_na_warmup
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
     test_ltf_buffer_no_leak
