@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace pineforge {
@@ -1845,22 +1846,73 @@ void BacktestEngine::apply_filled_order_to_state(
     }
     if (order.type == OrderType::MARKET) {
         // TV same-tick multi-entry rule R* (see
-        // sequential_same_tick_reversal_fill): detect whether ANOTHER
-        // same-direction market entry with a DIFFERENT id, placed on the
-        // same on_bar, fills later at this same processing point. Orders
-        // after order_index in the sorted array are exactly the ones this
-        // pass has not yet evaluated (market orders always fill at the
-        // first processing point after placement, so a pending sibling
-        // here IS a same-tick fill).
+        // sequential_same_tick_reversal_fill): detect the paired-entry-block
+        // topology proven by the Jevond oracle. Both this entry and a later
+        // same-direction, different-id MARKET sibling must own live,
+        // actionable, default-sized full from_entry brackets created AFTER
+        // their respective entry calls on the same on_bar. A bare later entry
+        // is not enough: Rsantana queues an unbracketed primary reversal
+        // followed by a bracketed duplicate, and TV gives the primary the
+        // ordinary full reversal quantity rather than Jevond's sequential
+        // plain-transaction remainder. Deferred strategy.close EXIT orders,
+        // explicit/partial reservations, and pre-entry bracket reissues are
+        // deliberately excluded from this narrow oracle-backed shape.
+        //
+        // Orders after order_index in the sorted array are exactly the ones
+        // this pass has not yet evaluated (market orders always fill at the
+        // first processing point after placement, so an eligible sibling here
+        // IS a same-tick fill).
         bool later_same_tick_entry = false;
-        for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
-            const PendingOrder& sib = pending_orders_[j];
-            if (sib.type == OrderType::MARKET
-                && sib.is_long == order.is_long
-                && sib.id != order.id
-                && sib.created_bar == order.created_bar) {
-                later_same_tick_entry = true;
-                break;
+        const PositionSide requested_side = order.is_long
+            ? PositionSide::LONG : PositionSide::SHORT;
+        const bool is_reversal = position_side_ != PositionSide::FLAT
+            && position_side_ != requested_side;
+        if (is_reversal) {
+            // Build the child index once. Ordinary flat opens and adds skip all
+            // bracket scans, and a reversal remains linear in queue size.
+            std::unordered_map<std::string, int64_t> full_bracket_child_seq;
+            for (const PendingOrder& child : pending_orders_) {
+                const bool actionable = !std::isnan(child.limit_price)
+                    || !std::isnan(child.stop_price)
+                    || !std::isnan(child.trail_points)
+                    || !std::isnan(child.trail_price)
+                    || !std::isnan(child.profit_ticks)
+                    || !std::isnan(child.loss_ticks);
+                const double qp = std::isnan(child.qty_percent)
+                    ? 100.0 : child.qty_percent;
+                if (child.type != OrderType::EXIT
+                    || child.from_entry.empty()
+                    || child.created_bar != order.created_bar
+                    || child.suppress_as_declined_reversal_close
+                    || !actionable
+                    || child.requested_partial
+                    || !std::isnan(child.qty)
+                    || qp < 100.0 - kFullPercentEps) {
+                    continue;
+                }
+                auto [it, inserted] = full_bracket_child_seq.emplace(
+                    child.from_entry, child.created_seq);
+                if (!inserted && child.created_seq > it->second) {
+                    it->second = child.created_seq;
+                }
+            }
+            auto has_full_bracket_child = [&](const PendingOrder& entry) {
+                const auto it = full_bracket_child_seq.find(entry.id);
+                return it != full_bracket_child_seq.end()
+                    && it->second > entry.created_seq;
+            };
+            if (has_full_bracket_child(order)) {
+                for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
+                    const PendingOrder& sib = pending_orders_[j];
+                    if (sib.type == OrderType::MARKET
+                        && sib.is_long == order.is_long
+                        && sib.id != order.id
+                        && sib.created_bar == order.created_bar
+                        && has_full_bracket_child(sib)) {
+                        later_same_tick_entry = true;
+                        break;
+                    }
+                }
             }
         }
         apply_market_order_fill(order, fill_price, bar, trail_best_path_state,
