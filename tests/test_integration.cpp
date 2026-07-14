@@ -2662,8 +2662,8 @@ static void test_position_reversal_state() {
 // calls on the SAME bar (the grid-bot pattern) collapse into a single
 // surviving fill — the LAST nonzero-target call wins, its id-ledger is NOT
 // consumed by the fill (the remainder stays closable by a later close of the
-// same id), and the FIRST replaced call's ledger is consumed silently with
-// no fill. Empirically derived from the 3commas grid-bot TradingView exports
+// same id). The first replaced call's unreserved logical slot is consumed;
+// intermediate replaced calls keep theirs. Empirically derived from 3commas
 // (xau/xlm/pol/xrp) — see fix/same-bar-multi-close-single-fill.
 
 class SameBarMultiCloseStrategy : public BacktestEngine {
@@ -2683,7 +2683,7 @@ public:
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 2.0);
         if (bar_index_ == 2) {
-            strategy_close("A", "tpA");   // replaced: ledger consumed, no fill
+            strategy_close("A", "tpA");   // first replacement: ledger consumed
             strategy_close("B", "tpB");   // survivor: fills qty 2 (FIFO drain)
         }
         if (bar_index_ == 3) strategy_entry("B", true, na, na, 2.0);
@@ -2724,6 +2724,248 @@ static void test_same_bar_multi_close_single_fill() {
         CHECK(near(strat.get_trade(3).exit_price, 110.0));
     }
     CHECK(near(strat.final_pos, 0.0));
+}
+
+class CloseReplacementProbeBase : public BacktestEngine {
+public:
+    CloseReplacementProbeBase() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+    double ledger(const std::string& id) const {
+        auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+    double reservation(const std::string& id) const {
+        auto it = close_reserved_qty_.find(id);
+        return it == close_reserved_qty_.end() ? 0.0 : it->second;
+    }
+    double two_call_first_qty(const std::string& id) const {
+        auto it = close_two_call_first_qty_.find(id);
+        return it == close_two_call_first_qty_.end() ? 0.0 : it->second;
+    }
+};
+
+// ENA discriminator: only an exact-two-call batch may create provenance, and
+// only a later exact-two-call batch may consume it. The carried quantity is
+// the PRIOR batch's FIRST target (2), not B's ledger (6), reservation (3), or
+// ledger-minus-reservation (3).
+class TwoCallReplacementChainStrategy : public CloseReplacementProbeBase {
+public:
+    double prior_res_b = -1.0;
+    double prior_first_b = -1.0;
+    double carried_ledger_b = -1.0;
+    double released_res_b = -1.0;
+    double released_first_b = -1.0;
+    double final_pos = -1.0;
+    void on_bar(const Bar&) override {
+        double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 2.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 3.0);
+        if (bar_index_ == 2) strategy_entry("C", true, na, na, 3.0);
+        if (bar_index_ == 3) {
+            strategy_close("A", "priorA");
+            strategy_close("B", "priorB");
+        }
+        if (bar_index_ == 4) {
+            prior_res_b = reservation("B");
+            prior_first_b = two_call_first_qty("B");
+            strategy_entry("B", true, na, na, 3.0);  // ledger B: 3 -> 6
+        }
+        if (bar_index_ == 5) {
+            strategy_close("B", "currentB");
+            strategy_close("C", "currentC");
+        }
+        if (bar_index_ == 6) {
+            carried_ledger_b = ledger("B");
+            released_res_b = reservation("B");
+            released_first_b = two_call_first_qty("B");
+            strategy_entry("B", true, na, na, 3.0);  // ledger B: 2 -> 5
+        }
+        if (bar_index_ == 7) strategy_close("B", "finalB");
+        if (bar_index_ == 8) final_pos = signed_position_size();
+    }
+};
+
+static void test_exact_two_call_replacement_carries_prior_first_target() {
+    std::printf("test_exact_two_call_replacement_carries_prior_first_target\n");
+    TwoCallReplacementChainStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+        {100, 101, 99, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
+        {100, 101, 99, 100, 50, 420000},
+        {100, 101, 99, 100, 50, 480000},
+        {100, 101, 99, 100, 50, 540000},
+    };
+    strat.run(bars, 9);
+
+    CHECK(near(strat.prior_res_b, 3.0));
+    CHECK(near(strat.prior_first_b, 2.0));
+    CHECK(near(strat.carried_ledger_b, 2.0));
+    CHECK(near(strat.released_res_b, 0.0));
+    CHECK(near(strat.released_first_b, 0.0));
+    CHECK(near(strat.final_pos, 3.0));
+    CHECK(strat.trade_count() == 6);
+    if (strat.trade_count() == 6) {
+        const double expected_qty[] = {2.0, 1.0, 2.0, 1.0, 2.0, 3.0};
+        for (int i = 0; i < 6; ++i) {
+            CHECK(near(strat.get_trade(i).qty, expected_qty[i]));
+        }
+    }
+}
+
+// XAU L37 control: a 3+ call batch creates a reservation but no two-call
+// provenance, so a later two-call replacement keeps the legacy full erase.
+// The subsequent sole close also clears the survivor's reservation/provenance,
+// and close_all exercises the flat-position reset.
+class ThreeToTwoReplacementStrategy : public CloseReplacementProbeBase {
+public:
+    double prior_res_b = -1.0;
+    double prior_first_b = -1.0;
+    double ledger_b = -1.0;
+    double res_b = -1.0;
+    double first_b = -1.0;
+    double res_c_after_sole = -1.0;
+    double first_c_after_sole = -1.0;
+    double final_pos = -1.0;
+    size_t final_reservations = 99;
+    size_t final_provenance = 99;
+    void on_bar(const Bar&) override {
+        double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("X", true, na, na, 1.0);
+        if (bar_index_ == 2) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ == 3) strategy_entry("C", true, na, na, 1.0);
+        if (bar_index_ == 4) {
+            strategy_close("A", "priorA");
+            strategy_close("X", "priorX");
+            strategy_close("B", "priorB");
+        }
+        if (bar_index_ == 5) {
+            prior_res_b = reservation("B");
+            prior_first_b = two_call_first_qty("B");
+            strategy_close("B", "currentB");
+            strategy_close("C", "currentC");
+        }
+        if (bar_index_ == 6) {
+            ledger_b = ledger("B");
+            res_b = reservation("B");
+            first_b = two_call_first_qty("B");
+            strategy_close("C", "soleC");
+        }
+        if (bar_index_ == 7) {
+            res_c_after_sole = reservation("C");
+            first_c_after_sole = two_call_first_qty("C");
+            strategy_close_all();
+        }
+        if (bar_index_ == 8) {
+            final_pos = signed_position_size();
+            final_reservations = close_reserved_qty_.size();
+            final_provenance = close_two_call_first_qty_.size();
+        }
+    }
+};
+
+static void test_three_call_batch_does_not_create_two_call_provenance() {
+    std::printf("test_three_call_batch_does_not_create_two_call_provenance\n");
+    ThreeToTwoReplacementStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+        {100, 101, 99, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
+        {100, 101, 99, 100, 50, 420000},
+        {100, 101, 99, 100, 50, 480000},
+        {100, 101, 99, 100, 50, 540000},
+    };
+    strat.run(bars, 9);
+
+    CHECK(near(strat.prior_res_b, 1.0));
+    CHECK(near(strat.prior_first_b, 0.0));
+    CHECK(near(strat.ledger_b, 0.0));
+    CHECK(near(strat.res_b, 0.0));
+    CHECK(near(strat.first_b, 0.0));
+    CHECK(near(strat.res_c_after_sole, 0.0));
+    CHECK(near(strat.first_c_after_sole, 0.0));
+    CHECK(near(strat.final_pos, 0.0));
+    CHECK(strat.final_reservations == 0);
+    CHECK(strat.final_provenance == 0);
+}
+
+// A prior exact-two batch does create provenance, but a third call in the
+// current batch invalidates its provisional carry. Intermediate ledgers remain
+// intact and a 3+ survivor must not create new two-call provenance.
+class TwoToThreeReplacementStrategy : public CloseReplacementProbeBase {
+public:
+    double prior_res_b = -1.0;
+    double prior_first_b = -1.0;
+    double ledger_b = -1.0;
+    double ledger_c = -1.0;
+    double ledger_d = -1.0;
+    double res_b = -1.0;
+    double res_d = -1.0;
+    double first_d = -1.0;
+    void on_bar(const Bar&) override {
+        double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ == 2) strategy_entry("C", true, na, na, 1.0);
+        if (bar_index_ == 3) strategy_entry("D", true, na, na, 1.0);
+        if (bar_index_ == 4) {
+            strategy_close("A", "priorA");
+            strategy_close("B", "priorB");
+        }
+        if (bar_index_ == 5) {
+            prior_res_b = reservation("B");
+            prior_first_b = two_call_first_qty("B");
+            strategy_close("B", "currentB");
+            strategy_close("C", "currentC");
+            strategy_close("D", "currentD");
+        }
+        if (bar_index_ == 6) {
+            ledger_b = ledger("B");
+            ledger_c = ledger("C");
+            ledger_d = ledger("D");
+            res_b = reservation("B");
+            res_d = reservation("D");
+            first_d = two_call_first_qty("D");
+        }
+    }
+};
+
+static void test_three_call_current_batch_invalidates_two_call_carry() {
+    std::printf("test_three_call_current_batch_invalidates_two_call_carry\n");
+    TwoToThreeReplacementStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+        {100, 101, 99, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
+        {100, 101, 99, 100, 50, 420000},
+    };
+    strat.run(bars, 7);
+
+    CHECK(near(strat.prior_res_b, 1.0));
+    CHECK(near(strat.prior_first_b, 1.0));
+    CHECK(near(strat.ledger_b, 0.0));
+    CHECK(near(strat.ledger_c, 1.0));
+    CHECK(near(strat.ledger_d, 1.0));
+    CHECK(near(strat.res_b, 0.0));
+    CHECK(near(strat.res_d, 1.0));
+    CHECK(near(strat.first_d, 0.0));
 }
 
 // ---- 38b. process_orders_on_close: an exit gated on position visibility must
@@ -4465,6 +4707,9 @@ int main() {
     test_win_loss_tracking();
     test_position_reversal_state();
     test_same_bar_multi_close_single_fill();
+    test_exact_two_call_replacement_carries_prior_first_target();
+    test_three_call_batch_does_not_create_two_call_provenance();
+    test_three_call_current_batch_invalidates_two_call_carry();
     test_pooc_exit_not_triggered_on_entry_bar();
     test_commission_deducted();
     test_slippage_applied();

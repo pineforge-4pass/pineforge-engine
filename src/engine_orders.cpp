@@ -569,6 +569,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
     close_reserved_qty_.clear();
+    close_two_call_first_qty_.clear();
     consumed_partial_exit_ids_.clear();
 }
 
@@ -617,6 +618,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
     close_reserved_qty_.clear();
+    close_two_call_first_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
     id_unclosed_qty_[id] += qty;

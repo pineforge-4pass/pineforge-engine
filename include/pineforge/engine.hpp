@@ -603,8 +603,13 @@ protected:
     // process_orders_on_close: every later close() call on the same bar
     // REPLACES the pending close order. Empirically (3commas grid-bot TV
     // exports, xau/xlm/pol/xrp — see fix/same-bar-multi-close-single-fill):
-    //   - the FIRST replaced call's id-ledger is consumed silently (no
-    //     fill, no trade rows);
+    //   - the FIRST replaced call's id-ledger is provisionally consumed
+    //     silently (no fill, no trade rows);
+    //   - when both the prior and current batches contain exactly two calls,
+    //     the prior batch's first admitted target is restored to that ledger. This is
+    //     provenance from the broker replacement chain, not a physical-lot
+    //     recount or ledger-minus-reservation calculation;
+    //   - 3+ call batches never restore or create two-call provenance;
     //   - intermediate replaced calls keep their ledgers intact;
     //   - the SURVIVING (last nonzero-target) call fills min(ledger,
     //     avail) at the bar close WITHOUT consuming its id-ledger; the
@@ -620,11 +625,19 @@ protected:
     // full-position close still run at CALL time (unchanged timing).
     bool sb_close_active_ = false;
     int sb_close_bar_ = -1;
-    int sb_close_calls_ = 0;          // nonzero-target close calls this bar
-    std::string sb_close_first_id_;   // consumed when a 2nd call arrives
+    int sb_close_calls_ = 0;          // effective distinct nonzero-target calls
+    std::string sb_close_first_id_;   // first call, provisionally consumed at call 2
+    double sb_close_first_target_ = 0.0;
+    bool sb_close_first_carry_valid_ = false;
+    double sb_close_first_carry_qty_ = 0.0;
     std::string sb_close_id_;         // surviving order's id
     std::string sb_close_comment_;    // surviving order's comment
     std::unordered_map<std::string, double> close_reserved_qty_;
+    // Live exact-two-call replacement provenance. A survivor id maps to the
+    // prior batch's FIRST target and is valid only while its reservation is
+    // live. A later exact-two-call batch can restore precisely that slice if
+    // this id is its first replaced call (ENA's two-call replacement chain).
+    std::unordered_map<std::string, double> close_two_call_first_qty_;
 
     // --- KI-64: POOC script-visible position freeze ---
     // Under process_orders_on_close, a strategy.close/close_all that fills

@@ -471,9 +471,13 @@ void BacktestEngine::reset_run_state() {
     sb_close_bar_ = -1;
     sb_close_calls_ = 0;
     sb_close_first_id_.clear();
+    sb_close_first_target_ = 0.0;
+    sb_close_first_carry_valid_ = false;
+    sb_close_first_carry_qty_ = 0.0;
     sb_close_id_.clear();
     sb_close_comment_.clear();
     close_reserved_qty_.clear();
+    close_two_call_first_qty_.clear();
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
     last_exit_fill_was_trail_ = false;

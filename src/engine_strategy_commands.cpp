@@ -637,6 +637,9 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
         sb_close_bar_ = bar_index_;
         sb_close_calls_ = 1;
         sb_close_first_id_ = id;
+        sb_close_first_target_ = target;
+        sb_close_first_carry_valid_ = false;
+        sb_close_first_carry_qty_ = 0.0;
         sb_close_id_ = id;
         sb_close_comment_ = comment;
         return;
@@ -649,12 +652,30 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
     }
     sb_close_calls_ += 1;
     if (sb_close_calls_ == 2) {
-        // The FIRST replaced call's ledger is consumed silently: no fill,
-        // no trade rows, reservation released. Intermediate replaced
-        // calls (3rd+) keep their ledgers intact.
+        const auto reserved = close_reserved_qty_.find(sb_close_first_id_);
+        const auto provenance =
+            close_two_call_first_qty_.find(sb_close_first_id_);
+        if (reserved != close_reserved_qty_.end()
+            && provenance != close_two_call_first_qty_.end()) {
+            // Snapshot before releasing the old reservation. Restoration is
+            // deferred until flush proves the CURRENT batch also has exactly
+            // two calls; a later 3rd call invalidates this carry.
+            sb_close_first_carry_valid_ = true;
+            sb_close_first_carry_qty_ = provenance->second;
+        }
+        // Preserve the established provisional replacement rule immediately.
+        // Besides matching the broker lifecycle, this makes a later A,B,A
+        // source revisit observe A as zero-target while this batch is pending.
         id_unclosed_qty_.erase(sb_close_first_id_);
         close_reserved_qty_.erase(sb_close_first_id_);
+        close_two_call_first_qty_.erase(sb_close_first_id_);
+    } else if (sb_close_calls_ == 3) {
+        // The current batch is no longer exact-two. Keep the provisional
+        // ledger erase and discard the snapshotted two-call carry.
+        sb_close_first_carry_valid_ = false;
+        sb_close_first_carry_qty_ = 0.0;
     }
+    // Intermediate replaced calls (3rd+) keep their ledgers as before.
     sb_close_id_ = id;
     sb_close_comment_ = comment;
 }
@@ -674,11 +695,19 @@ void BacktestEngine::flush_same_bar_close() {
     if (!sb_close_active_) return;
     const std::string id = sb_close_id_;
     const std::string comment = sb_close_comment_;
-    const bool sole_call = (sb_close_calls_ == 1);
+    const int batch_calls = sb_close_calls_;
+    const bool sole_call = (batch_calls == 1);
+    const std::string first_id = sb_close_first_id_;
+    const double first_target = sb_close_first_target_;
+    const bool first_carry_valid = sb_close_first_carry_valid_;
+    const double first_carry_qty = sb_close_first_carry_qty_;
     sb_close_active_ = false;
     sb_close_bar_ = -1;
     sb_close_calls_ = 0;
     sb_close_first_id_.clear();
+    sb_close_first_target_ = 0.0;
+    sb_close_first_carry_valid_ = false;
+    sb_close_first_carry_qty_ = 0.0;
     sb_close_id_.clear();
     sb_close_comment_.clear();
     if (position_side_ == PositionSide::FLAT) return;
@@ -714,6 +743,7 @@ void BacktestEngine::flush_same_bar_close() {
             id_unclosed_qty_.erase(it);
         }
         close_reserved_qty_.erase(id);
+        close_two_call_first_qty_.erase(id);
     }
 
     size_t trades_before = trades_.size();
@@ -744,19 +774,35 @@ void BacktestEngine::flush_same_bar_close() {
         trades_[ti].exit_comment = comment;
         trades_[ti].exit_id = "__close__" + id;
     }
-    if (position_side_ != side_before
+    const bool close_filled = position_side_ != side_before
         || std::abs(position_qty_ - qty_before) > eps
-        || trades_.size() != trades_before) {
+        || trades_.size() != trades_before;
+    if (close_filled) {
         ++broker_fill_event_seq_;
         if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
             --coof_direct_fill_events_remaining_;
         }
     }
-    if (!sole_call && position_side_ != PositionSide::FLAT) {
+    if (!sole_call && close_filled
+        && position_side_ != PositionSide::FLAT) {
         // Surviving multi-call close: ledger NOT consumed (TV leaves the
         // id closable again later); the filled amount stays reserved
         // against the position for other ids' close targets.
+        if (batch_calls == 2 && first_carry_valid
+            && std::isfinite(first_carry_qty) && first_carry_qty > eps) {
+            // Exact two-call -> two-call replacement chain: restore the PRIOR
+            // batch's first admitted target, never ledger-reservation and
+            // never +=. ENA's L59 chain carries 0.0991 here; a 5->2 XAU chain
+            // has no provenance. Restore only after a real broker fill so a
+            // zero/deferred batch cannot resurrect a replaced ledger.
+            id_unclosed_qty_[first_id] = first_carry_qty;
+        }
         close_reserved_qty_[id] = target;
+        if (batch_calls == 2) {
+            close_two_call_first_qty_[id] = first_target;
+        } else {
+            close_two_call_first_qty_.erase(id);
+        }
     }
 }
 
