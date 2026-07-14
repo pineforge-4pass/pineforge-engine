@@ -243,6 +243,197 @@ static void test_short_margin_call_qty_step() {
     CHECK(!is_multiple_of(raw.trade_size(0), step));
 }
 
+// A $100-scale all-in short can breach margin by less than one quantity step.
+// TV still emits a Margin-call trade, but its truncated cover amount is zero;
+// the broker closes the full residual instead of fabricating a one-step nibble.
+class ShortZeroCoverProbe : public MCEngine {
+public:
+    explicit ShortZeroCoverProbe(double qty_step) {
+        initial_capital_ = 100.384250;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_value_ = 0.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = qty_step;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, kNaN);
+        }
+    }
+};
+
+static void test_short_margin_call_zero_cover_closes_full_residual() {
+    std::printf("test_short_margin_call_zero_cover_closes_full_residual\n");
+    std::vector<Bar> bars = {
+        // Signal close freezes floor(100.38425 / 3788 / 0.0001) = 0.0265.
+        mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
+        // At HIGH: equity=100.37153, required=100.39472, so
+        // q_min=0.000006121... < qty_step and the truncated cover is zero.
+        mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
+    };
+
+    ShortZeroCoverProbe eng(/*qty_step=*/0.0001);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 3788.00));
+    CHECK(near(eng.exit_price(0), 3788.48));
+    CHECK(near(eng.trade_size(0), 0.0265));
+    CHECK(near(eng.position_size(), 0.0));
+}
+
+static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble() {
+    std::printf("test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble\n");
+    constexpr double step = 0.0001;
+    // For a 10@100 all-in short, q_min = 20 - 2000/adverse. This adverse is
+    // mathematically exactly one step, but the engine's equivalent arithmetic
+    // represents the quotient just below 1. A bare floor would erase the lot
+    // and incorrectly enter the zero-cover full-close fallback.
+    const double adverse = 2000.0 / (20.0 - step);
+    const double equity_at_high = 1000.0 - (adverse - 100.0) * 10.0;
+    const double q_min = 10.0 - equity_at_high / adverse;
+    CHECK(q_min < step);
+    CHECK(q_min / step + 1e-6 >= 1.0);
+
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, adverse, 99.0, 100.0, 1.0),
+    };
+
+    ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.exit_price(0), 100.01, 1e-12));
+    CHECK(near(eng.trade_size(0), 4.0 * step, 1e-12));
+    CHECK(near(eng.position_size(), -(10.0 - 4.0 * step), 1e-12));
+}
+
+static void test_short_margin_call_just_below_step_still_zero_covers() {
+    std::printf("test_short_margin_call_just_below_step_still_zero_covers\n");
+    constexpr double step = 0.0001;
+    constexpr double below_guard_ratio = 1.0 - 2e-6;
+    // This is genuinely below one step by more than the 1e-6 representation
+    // guard. It must still quantize to zero and close the full residual.
+    const double adverse = 2000.0 / (20.0 - step * below_guard_ratio);
+    const double equity_at_high = 1000.0 - (adverse - 100.0) * 10.0;
+    const double q_min = 10.0 - equity_at_high / adverse;
+    CHECK(q_min < step);
+    CHECK(q_min / step + 1e-6 < 1.0);
+
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, adverse, 99.0, 100.0, 1.0),
+    };
+
+    ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.exit_price(0), 100.01, 1e-12));
+    CHECK(near(eng.trade_size(0), 10.0, 1e-12));
+    CHECK(near(eng.position_size(), 0.0, 1e-12));
+}
+
+static void test_short_margin_call_zero_cover_without_qty_step_stays_continuous() {
+    std::printf("test_short_margin_call_zero_cover_without_qty_step_stays_continuous\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
+        mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
+    };
+
+    ShortZeroCoverProbe eng(/*qty_step=*/0.0);
+    eng.run(bars.data(), (int)bars.size());
+
+    const double opened_qty = 100.384250 / 3788.00;
+    const double equity_at_high = 100.384250
+        - (3788.48 - 3788.00) * opened_qty;
+    const double q_min = opened_qty - equity_at_high / 3788.48;
+    const double expected_liquidation = 4.0 * q_min;
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), expected_liquidation, 1e-9));
+    CHECK(eng.trade_size(0) < opened_qty);
+    CHECK(near(eng.position_size(), -(opened_qty - expected_liquidation), 1e-9));
+}
+
+static void test_short_margin_call_nonzero_cover_keeps_four_x_nibble() {
+    std::printf("test_short_margin_call_nonzero_cover_keeps_four_x_nibble\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
+        // q_min=0.15085... = 1.50 qty steps. Floor-before-4x must
+        // therefore close 0.4, not the full 10-contract position.
+        mk_bar(2000, 100.0, 100.76, 99.0, 100.0, 1.0),
+    };
+
+    ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/0.1);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.exit_price(0), 100.76));
+    CHECK(near(eng.trade_size(0), 0.4));
+    CHECK(near(eng.position_size(), -9.6));
+}
+
+// Opening-affordability uses a separate, one-shot budget check. Its sub-lot
+// shortfall is intentionally untradeable dust and must remain a no-op when the
+// finite-price zero-cover fallback changes.
+class ShortOpeningDustProbe : public MCEngine {
+public:
+    bool saw_actionable_opening_event = false;
+
+    ShortOpeningDustProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.015;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 1.0;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, /*qty=*/10.0);
+        } else if (bar_index_ == 1) {
+            // The next-open fill precedes this callback. Prove this fixture
+            // actually reaches the opening-affordability branch before its
+            // one-shot event is consumed at bar end.
+            saw_actionable_opening_event = opening_affordability_pending_
+                && opening_affordability_eligible_
+                && std::isfinite(opening_affordability_raw_fill_base_);
+        }
+    }
+};
+
+static void test_short_opening_affordability_zero_cover_remains_dust_noop() {
+    std::printf("test_short_opening_affordability_zero_cover_remains_dust_noop\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 99.99, 99.99, 99.99, 99.99, 1.0),
+        // Required margin is 999.90. The 0.015% opening fee leaves equity
+        // 999.850015, so q_min=0.0004999... < the 1-contract step.
+        mk_bar(2000, 99.99, 99.99, 99.99, 99.99, 1.0),
+    };
+
+    ShortOpeningDustProbe eng;
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.saw_actionable_opening_event);
+    CHECK(eng.trade_count() == 0);
+    CHECK(near(eng.position_size(), -10.0));
+    CHECK(!eng.opening_pending());
+    CHECK(!eng.opening_eligible());
+    CHECK(std::isnan(eng.opening_raw_base()));
+}
+
 static void test_short_margin_call_account_fx() {
     std::printf("test_short_margin_call_account_fx\n");
     constexpr double account_fx = 2.0;
@@ -1533,6 +1724,12 @@ static void test_long_leveraged_margin_call() {
 int main() {
     test_short_margin_call();
     test_short_margin_call_qty_step();
+    test_short_margin_call_zero_cover_closes_full_residual();
+    test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble();
+    test_short_margin_call_just_below_step_still_zero_covers();
+    test_short_margin_call_zero_cover_without_qty_step_stays_continuous();
+    test_short_margin_call_nonzero_cover_keeps_four_x_nibble();
+    test_short_opening_affordability_zero_cover_remains_dust_noop();
     test_short_margin_call_account_fx();
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();

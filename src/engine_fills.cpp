@@ -563,7 +563,11 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // qty_step_ == 0 (corpus default; the explicit-leverage p2/5x margin probes
     // never set it) leaves both q_min and qty_liq untouched -> byte-identical.
     if (qty_step_ > 0.0) {
-        q_min = std::floor(q_min / qty_step_) * qty_step_;
+        // The quotient can land microscopically below an exact integer because
+        // of binary representation (for example, one mathematical lot can be
+        // 0.99999999998 lots here). Use the same 1e-6-of-step guard as the
+        // downstream 4x quantizer so an exact grid value is not erased.
+        q_min = std::floor(q_min / qty_step_ + 1e-6) * qty_step_;
     }
     // A sub-lot 1x-long opening shortfall is untradeable dust. It is a no-op,
     // not a reason to force the generic finite-price cascade's one-step
@@ -581,12 +585,12 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
         if (floored <= kQtyEpsilon) {
             if (opening_affordability) return;
-            // A liquidation IS required (we passed the margin-shortfall gate)
-            // but the floored lot rounds to zero (sub-lot shortfall). Take the
-            // smallest step that still makes progress — one qty_step_, or the
-            // full residual if it is smaller — so the per-bar call loop cannot
-            // stall forever.
-            floored = std::min(qty_step_, qty);
+            // A finite-price liquidation IS required, but the documented
+            // minimum-restore quantity truncates to zero at the instrument lot
+            // precision. TradingView closes the whole residual in this zero-
+            // cover case rather than inventing a one-step nibble. Opening-
+            // affordability dust remains the explicit no-op above.
+            floored = qty;
         }
         qty_liq = floored;
     }
