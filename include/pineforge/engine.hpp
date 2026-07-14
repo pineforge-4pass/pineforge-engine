@@ -2156,7 +2156,8 @@ private:
                                   double& qty_to_close_out,
                                   bool& all_entries_match_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
-    void cancel_same_bar_market_reentries_after_full_close(bool closed_long);
+    void cancel_same_bar_market_reentries_after_full_close(
+        bool closed_long, bool preserve_undercap_entries);
     // Same-bar close batching (TV one-fill-per-bar; see the field-block
     // comment at close_reserved_qty_). enqueue replaces the pending
     // same-bar close; flush executes the surviving one at bar close.
@@ -2170,7 +2171,8 @@ private:
                                  double matching_qty,
                                  bool closes_full_position,
                                  bool closes_fifo_qty,
-                                 bool closes_any_qty);
+                                 bool closes_any_qty,
+                                 bool preserve_undercap_entries);
     uint64_t queue_deferred_close_order(
         const std::string& id,
         const std::string& comment,

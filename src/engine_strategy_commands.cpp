@@ -495,8 +495,12 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         if (process_orders_on_close_ && !immediately) {
             freeze_script_position_view();
         }
+        const bool ordinary_pooc_close_all =
+            pooc_can_fill_at_this_cursor && !immediately && id.empty()
+            && !coof_scheduler_active_;
         execute_immediate_close(id, comment, qty_to_close, matching_qty,
-                                closes_full_position, closes_fifo_qty, closes_any_qty);
+                                closes_full_position, closes_fifo_qty, closes_any_qty,
+                                ordinary_pooc_close_all);
         return;
     }
 
@@ -724,7 +728,8 @@ void BacktestEngine::flush_same_bar_close() {
         // must survive exactly as they did under the immediate path.
         execute_market_exit(broker_price);
         if (position_side_ == PositionSide::FLAT) {
-            cancel_same_bar_market_reentries_after_full_close(closed_long);
+            cancel_same_bar_market_reentries_after_full_close(
+                closed_long, /*preserve_undercap_entries=*/false);
         }
     } else {
         execute_partial_exit_qty(broker_price, target);
@@ -1264,7 +1269,8 @@ void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*
         pending_orders_.end());
 }
 
-void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(bool closed_long) {
+void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(
+        bool closed_long, bool preserve_undercap_entries) {
     const PositionSide closed_side = closed_long ? PositionSide::LONG : PositionSide::SHORT;
     pending_orders_.erase(
         std::remove_if(
@@ -1274,14 +1280,19 @@ void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(bool clos
                 // Deferred full exits already remove same-direction market
                 // entries through process_pending_orders' exit_closed_from_bar
                 // machinery. POOC/immediate closes execute outside that loop,
-                // so mirror only the market-reentry cleanup here. Priced
-                // entries intentionally survive (covered by
-                // test_strategy_close_pooc_keeps_same_bar_pending_entry), and
-                // opposite-direction market entries remain valid reversals.
+                // so mirror only the market-reentry cleanup here. An ordinary
+                // POOC close_all preserves an entry created before it when the
+                // entry was under the pyramiding cap at placement;
+                // over-cap entries still drop. Explicit immediately=true and
+                // flush-time strategy.close(id) keep blanket cancellation.
+                // Priced entries intentionally survive, and opposite-direction
+                // market entries remain valid reversals.
                 return o.type == OrderType::MARKET
                     && o.created_bar == bar_index_
                     && o.created_position_side == closed_side
-                    && o.is_long == closed_long;
+                    && o.is_long == closed_long
+                    && (!preserve_undercap_entries
+                        || o.over_pyramiding_cap_at_placement);
             }),
         pending_orders_.end());
 }
@@ -1296,7 +1307,8 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
                                              double matching_qty,
                                              bool closes_full_position,
                                              bool closes_fifo_qty,
-                                             bool closes_any_qty) {
+                                             bool closes_any_qty,
+                                             bool preserve_undercap_entries) {
     const double eps = kQtyEpsilon;
     size_t trades_before = trades_.size();
     PositionSide side_before = position_side_;
@@ -1309,7 +1321,8 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
         execute_market_exit(broker_price);
         purge_exit_orders();
         if (position_side_ == PositionSide::FLAT) {
-            cancel_same_bar_market_reentries_after_full_close(closed_long);
+            cancel_same_bar_market_reentries_after_full_close(
+                closed_long, preserve_undercap_entries);
         }
     } else if (closes_fifo_qty) {
         execute_partial_exit_qty(broker_price, qty_to_close);
