@@ -2457,7 +2457,19 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     if (close_entries_rule_any_ && !order.from_entry.empty()) {
         // close_entries_rule="ANY": close only matching entries
         if (is_partial) {
-            execute_partial_exit_by_entry_percent(fill_price, order.from_entry, qp);
+            // A live-position strategy.exit freezes its percent-derived
+            // reservation into order.qty. Honor that absolute quantity after
+            // earlier same-bar siblings reduce the position; reapplying qp to
+            // the smaller live lot double-shrinks layered exits (Vimal's
+            // 40/30/30 TP stack). Only flat/deferred NaN reservations resolve
+            // their percentage at fill time.
+            if (has_explicit_qty_to_close) {
+                execute_partial_exit_by_entry_qty(
+                    fill_price, order.from_entry, order.qty);
+            } else {
+                execute_partial_exit_by_entry_percent(
+                    fill_price, order.from_entry, qp);
+            }
         } else {
             execute_partial_exit_by_entry(fill_price, order.from_entry);
         }

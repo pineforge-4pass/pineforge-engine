@@ -2056,6 +2056,9 @@ private:
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
     void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
+    void execute_partial_exit_by_entry_qty(double fill_price,
+                                           const std::string& from_entry,
+                                           double qty_to_close);
     void execute_partial_exit_by_entry_percent(double fill_price, const std::string& from_entry, double qty_percent);
     // KI-62: scratch (close dur-0) any same-bar same-id MARKET pyramid-add
     // slices still open after a from_entry priced bracket exit fills — TV's
@@ -2228,8 +2231,8 @@ private:
     // drains across all entries. Emits one close Trade per drained slice at
     // fill_price (already slippage-adjusted) and rebuilds pyramid_entries_ /
     // decrements position_qty_ by the amount drained. Returns the total qty
-    // drained. Shared by execute_partial_exit_qty and
-    // execute_partial_exit_by_entry_percent.
+    // drained. Shared by execute_partial_exit_qty and both entry-scoped
+    // partial-exit helpers.
     double fifo_drain(const std::string* from_entry, double qty_limit,
                       double fill_price, bool was_long);
     void reset_position_state_to_flat();

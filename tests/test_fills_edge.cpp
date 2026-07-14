@@ -338,6 +338,56 @@ static void test_partial_exit_by_entry_percent() {
     CHECK(near(p.signed_pos(), 3.0));
 }
 
+// A live-position strategy.exit freezes each percentage-derived reservation
+// into PendingOrder::qty. Under close_entries_rule="ANY", a later sibling
+// filling on the same bar must close that frozen absolute quantity from the
+// matching entry id — it must not reapply qty_percent to the position already
+// reduced by the earlier sibling (Vimal layered TP1/TP2/TP3 + residual TSL).
+class LayeredPartialByEntryQty : public BacktestEngine {
+public:
+    LayeredPartialByEntryQty() {
+        initial_capital_ = 1'000'000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 10.0;
+        slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
+        syminfo_mintick_ = 0.01;
+        close_entries_rule_any_ = true;
+    }
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0)
+            strategy_entry("L", true, kNaN, kNaN, 10.0, "long");
+        if (position_side_ == PositionSide::LONG) {
+            strategy_exit("TP40", "L", /*limit=*/110.0, /*stop=*/kNaN,
+                          kNaN, kNaN, kNaN, /*qty_percent=*/40.0, "tp40");
+            strategy_exit("TP30", "L", /*limit=*/111.0, /*stop=*/kNaN,
+                          kNaN, kNaN, kNaN, /*qty_percent=*/30.0, "tp30");
+        }
+    }
+    double signed_pos() const { return signed_position_size(); }
+};
+
+static void test_layered_partial_by_entry_uses_frozen_qty() {
+    std::printf("test_layered_partial_by_entry_uses_frozen_qty\n");
+    LayeredPartialByEntryQty p;
+    Bar bars[5] = {
+        {100, 100.5, 99.5, 100, 1000, kT0_UTC + 0 * k15m_ms},
+        {100, 101,   99,   100, 1000, kT0_UTC + 1 * k15m_ms},
+        {100, 112,   99,   100, 1000, kT0_UTC + 2 * k15m_ms},
+        {100, 101,   99,   100, 1000, kT0_UTC + 3 * k15m_ms},
+        {100, 101,   99,   100, 1000, kT0_UTC + 4 * k15m_ms},
+    };
+    p.run(bars, 5);
+
+    CHECK(p.trade_count() == 2);
+    if (p.trade_count() == 2) {
+        CHECK(near(p.get_trade(0).qty, 4.0));
+        CHECK(near(p.get_trade(0).exit_price, 110.0));
+        CHECK(near(p.get_trade(1).qty, 3.0));
+        CHECK(near(p.get_trade(1).exit_price, 111.0));
+    }
+    CHECK(near(p.signed_pos(), 3.0));
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // 6. TV-pinned generic strategy.exit actionability.
 //
@@ -777,6 +827,7 @@ int main() {
     test_two_sibling_exits_path_order();
     test_cap_autoclose_at_bar_extreme_and_rollover();
     test_partial_exit_by_entry_percent();
+    test_layered_partial_by_entry_uses_frozen_qty();
     test_no_actionable_exit_fresh_is_inert();
     test_no_actionable_reissue_cancels_prior_exit();
     test_inert_exit_does_not_bind_pending_entry();
