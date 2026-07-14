@@ -666,6 +666,12 @@ protected:
     // process_margin_call floors each liquidation lot DOWN to a multiple of
     // this, matching TradingView's per-instrument margin-call lot sizing.
     double qty_step_ = 0.0;
+    // Opt-in oracle candidate for the ambiguous finite-price margin case where
+    // the documented minimum restore quantity floors to zero.  The established
+    // default makes progress by one quantity step; selected historical exports
+    // instead close the whole residual.  Keep that alternative default-off so
+    // it cannot rewrite otherwise matching trade tapes.
+    bool margin_zero_cover_full_liquidation_ = false;
     int max_intraday_filled_orders_ = 0; // 0 = unlimited
     bool close_entries_rule_any_ = false; // true = "ANY", false = "FIFO" (default)
     // Percentage of margin required to open a long/short position. Default
@@ -2487,6 +2493,14 @@ public:
         // does not change request.security aggregation boundaries.
         if (key == "chart_ema_na_warmup") {
             chart_ema_na_warmup_ = std::isfinite(value) && value > 0.0;
+        }
+        // Default-off verifier candidate for a finite-price margin call whose
+        // lot-quantized restore quantity is zero. Positive finite values close
+        // the residual; absent/zero/non-finite values preserve the established
+        // one-step progress fallback.
+        if (key == "margin_zero_cover_full_liquidation") {
+            margin_zero_cover_full_liquidation_ =
+                std::isfinite(value) && value > 0.0;
         }
         // "qty_step" is the per-instrument lot increment used by the forced-
         // liquidation quantizer. Route it onto the dedicated member so the

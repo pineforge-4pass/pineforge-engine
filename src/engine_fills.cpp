@@ -565,9 +565,17 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     if (qty_step_ > 0.0) {
         // The quotient can land microscopically below an exact integer because
         // of binary representation (for example, one mathematical lot can be
-        // 0.99999999998 lots here). Use the same 1e-6-of-step guard as the
-        // downstream 4x quantizer so an exact grid value is not erased.
-        q_min = std::floor(q_min / qty_step_ + 1e-6) * qty_step_;
+        // 0.99999999998 lots here). The full-residual candidate uses the same
+        // 1e-6-of-step guard as the downstream 4x quantizer; the default keeps
+        // the established bare floor byte-for-byte.
+        double step_count = q_min / qty_step_;
+        if (margin_zero_cover_full_liquidation_) {
+            const double nearest_step = std::round(step_count);
+            if (std::abs(step_count - nearest_step) < 1e-6) {
+                step_count = nearest_step;
+            }
+        }
+        q_min = std::floor(step_count) * qty_step_;
     }
     // A sub-lot 1x-long opening shortfall is untradeable dust. It is a no-op,
     // not a reason to force the generic finite-price cascade's one-step
@@ -587,10 +595,13 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
             if (opening_affordability) return;
             // A finite-price liquidation IS required, but the documented
             // minimum-restore quantity truncates to zero at the instrument lot
-            // precision. TradingView closes the whole residual in this zero-
-            // cover case rather than inventing a one-step nibble. Opening-
-            // affordability dust remains the explicit no-op above.
-            floored = qty;
+            // precision. Exports disagree on this edge: some close the whole
+            // residual while others continue with a bounded nibble. Preserve
+            // the established one-step default, and expose the full-residual
+            // interpretation only through an explicit verifier candidate.
+            floored = margin_zero_cover_full_liquidation_
+                ? qty
+                : std::min(qty_step_, qty);
         }
         qty_liq = floored;
     }

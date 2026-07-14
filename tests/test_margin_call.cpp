@@ -206,6 +206,7 @@ static void test_short_margin_call_qty_step() {
 
     const double step = 0.5;
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
+    eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() >= 1);
@@ -276,6 +277,7 @@ static void test_short_margin_call_zero_cover_closes_full_residual() {
     };
 
     ShortZeroCoverProbe eng(/*qty_step=*/0.0001);
+    eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() == 1);
@@ -284,6 +286,22 @@ static void test_short_margin_call_zero_cover_closes_full_residual() {
     CHECK(near(eng.exit_price(0), 3788.48));
     CHECK(near(eng.trade_size(0), 0.0265));
     CHECK(near(eng.position_size(), 0.0));
+}
+
+static void test_short_margin_call_zero_cover_defaults_to_one_step() {
+    std::printf("test_short_margin_call_zero_cover_defaults_to_one_step\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
+        mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
+    };
+
+    ShortZeroCoverProbe eng(/*qty_step=*/0.0001);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 0.0001));
+    CHECK(near(eng.position_size(), -0.0264));
 }
 
 static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble() {
@@ -296,15 +314,24 @@ static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble()
     const double adverse = 2000.0 / (20.0 - step);
     const double equity_at_high = 1000.0 - (adverse - 100.0) * 10.0;
     const double q_min = 10.0 - equity_at_high / adverse;
+    const double step_count = q_min / step;
     CHECK(q_min < step);
-    CHECK(q_min / step + 1e-6 >= 1.0);
+    CHECK(std::abs(step_count - std::round(step_count)) < 1e-6);
 
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
         mk_bar(2000, 100.0, adverse, 99.0, 100.0, 1.0),
     };
 
+    ShortLiqProbe default_eng(/*disable_mc=*/false, /*qty_step=*/step);
+    default_eng.run(bars.data(), (int)bars.size());
+    CHECK(default_eng.trade_count() == 1);
+    CHECK(default_eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(default_eng.trade_size(0), step, 1e-12));
+    CHECK(near(default_eng.position_size(), -(10.0 - step), 1e-12));
+
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
+    eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() == 1);
@@ -323,8 +350,9 @@ static void test_short_margin_call_just_below_step_still_zero_covers() {
     const double adverse = 2000.0 / (20.0 - step * below_guard_ratio);
     const double equity_at_high = 1000.0 - (adverse - 100.0) * 10.0;
     const double q_min = 10.0 - equity_at_high / adverse;
+    const double step_count = q_min / step;
     CHECK(q_min < step);
-    CHECK(q_min / step + 1e-6 < 1.0);
+    CHECK(std::abs(step_count - std::round(step_count)) > 1e-6);
 
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),
@@ -332,6 +360,7 @@ static void test_short_margin_call_just_below_step_still_zero_covers() {
     };
 
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
+    eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() == 1);
@@ -374,6 +403,7 @@ static void test_short_margin_call_nonzero_cover_keeps_four_x_nibble() {
     };
 
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/0.1);
+    eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.trade_count() == 1);
@@ -424,6 +454,7 @@ static void test_short_opening_affordability_zero_cover_remains_dust_noop() {
     };
 
     ShortOpeningDustProbe eng;
+    eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.saw_actionable_opening_event);
@@ -1725,6 +1756,7 @@ int main() {
     test_short_margin_call();
     test_short_margin_call_qty_step();
     test_short_margin_call_zero_cover_closes_full_residual();
+    test_short_margin_call_zero_cover_defaults_to_one_step();
     test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble();
     test_short_margin_call_just_below_step_still_zero_covers();
     test_short_margin_call_zero_cover_without_qty_step_stays_continuous();
