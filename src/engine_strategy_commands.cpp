@@ -421,6 +421,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     }
 
     pending_orders_.push_back(std::move(order));
+    invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
 }
 
 void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
@@ -825,6 +826,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                               preserved_seq, preserved_reserved_qty);
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
+    bool bind_global_full_exit_dynamic_qty = false;
     if (has_explicit_qty) {
         // Honour the explicit qty literally (clamped to the live position
         // and subject to the same already-reserved accounting). This is
@@ -923,11 +925,72 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                 break;  // entry ids are unique in pending_orders_
             }
         }
-        if (!bind_to_pending_reversal_entry
-            && !compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
-                                          live_pos_qty, qp, is_partial, reserved_qty)) {
-            return;
+
+        // POOC global-full-exit reservation: when the complete pending
+        // entry-like queue consists only of ordinary same-direction high-level
+        // MARKET adds created on this bar, each under the pyramiding cap, those
+        // adds fill at C before this later-created priced exit can trigger. A
+        // global (omitted from_entry) 100% bracket covers that post-add
+        // position on TradingView. Keep the normal finite reservation for
+        // sibling accounting, then mark this one order so the fill path closes
+        // the full live position after the adds have joined it.
+        //
+        // This is deliberately narrower than the reversal binding above:
+        // POOC only; every pending MARKET/ENTRY/RAW order must be an ordinary
+        // same-bar high-level MARKET entry on the same side at placement and
+        // now, under the pyramiding cap; at least one such add must exist;
+        // global full-percent default sizing only. Explicit exit qty uses the
+        // separate branch, while from_entry, partial, RAW_ORDER, priced,
+        // opposite, prior-bar, COOF-recalc, over-cap, and mixed-queue shapes
+        // retain the established frozen reservation.
+        bool eligible_global_full_exit_dynamic_qty = false;
+        if (from_entry.empty()
+            && process_orders_on_close_
+            && !effectively_flat
+            && qp >= 100.0 - kFullPercentEps) {
+            bool found_qualifying_add = false;
+            bool entry_queue_is_bounded = true;
+            for (const auto& o : pending_orders_) {
+                if (o.type != OrderType::MARKET
+                    && o.type != OrderType::ENTRY
+                    && o.type != OrderType::RAW_ORDER) {
+                    continue;
+                }
+                const PositionSide entry_dir = o.is_long
+                    ? PositionSide::LONG : PositionSide::SHORT;
+                const bool qualifies = o.created_bar == bar_index_
+                    && o.type == OrderType::MARKET
+                    && !o.created_during_coof_recalc
+                    && !o.over_pyramiding_cap_at_placement
+                    && entry_dir == position_side_
+                    && o.created_position_side == position_side_;
+                if (!qualifies) {
+                    entry_queue_is_bounded = false;
+                    break;
+                }
+                found_qualifying_add = true;
+            }
+            eligible_global_full_exit_dynamic_qty =
+                found_qualifying_add
+                && entry_queue_is_bounded;
         }
+
+        if (!bind_to_pending_reversal_entry) {
+            if (!compute_exit_reserved_qty(
+                    from_entry, preserved_reserved_qty, live_pos_qty,
+                    qp, is_partial, reserved_qty)) {
+                return;
+            }
+            eligible_global_full_exit_dynamic_qty =
+                eligible_global_full_exit_dynamic_qty
+                && !is_partial
+                && std::isfinite(reserved_qty)
+                && reserved_qty >= live_pos_qty - kFullQtyEps;
+        }
+
+        // The pending order stores this below after the common construction.
+        bind_global_full_exit_dynamic_qty =
+            eligible_global_full_exit_dynamic_qty;
     }
 
     PendingOrder order;
@@ -946,6 +1009,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.qty_type = -1;
     order.qty_percent = qp;
     order.requested_partial = is_partial;
+    order.pooc_global_full_exit_dynamic_qty =
+        bind_global_full_exit_dynamic_qty;
     // OCA-name plumbing: ``strategy.exit`` supports oca_name (Pine v6) so
     // siblings in different OCA groups can fire independently. The cancel
     // sweep predicate (engine_fills.cpp::apply_filled_order_to_state →
@@ -1146,6 +1211,21 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     }
 
     pending_orders_.push_back(std::move(order));
+    invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
+}
+
+void BacktestEngine::invalidate_unsafe_pooc_global_full_exit_dynamic_qty() {
+    // This helper is called only after a later entry-like placement was
+    // successfully admitted. The oracle covers adds already pending BEFORE
+    // the global exit, not any order emitted after it—even another same-side
+    // MARKET add. Clear every still-live marker, including candidates carried
+    // into a later bar; their finite ``qty`` remains the conservative
+    // reservation automatically.
+    for (auto& o : pending_orders_) {
+        if (o.type == OrderType::EXIT) {
+            o.pooc_global_full_exit_dynamic_qty = false;
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────

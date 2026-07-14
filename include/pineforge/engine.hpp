@@ -444,6 +444,14 @@ struct PendingOrder {
         std::numeric_limits<double>::quiet_NaN();
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
+    // Narrow POOC global-full-exit candidate. ``qty`` deliberately keeps the
+    // normal finite reservation so sibling exits see and respect its capacity.
+    // At fill time this bit upgrades that one reservation to the full live
+    // position, covering same-bar MARKET pyramid adds that were already
+    // pending when the exit was placed. Any later admitted entry-like order
+    // clears the bit, making the finite qty the automatic conservative
+    // fallback—even when that later order is placed on a future bar.
+    bool pooc_global_full_exit_dynamic_qty = false;
     bool created_while_in_position = false;  // true if position was open when order was placed
     // design-declined-reversal-close-leg: set at the KI-54 percent-of-equity
     // reversal-decline site when this pending FULL close was co-queued AFTER,
@@ -2193,6 +2201,7 @@ private:
                                    double& qp_io,
                                    bool& is_partial_io,
                                    double& reserved_qty_out);
+    void invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
 
     // execute_market_entry / execute_partial_exit_* helpers (defined in
     // engine_orders.cpp).

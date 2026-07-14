@@ -2346,11 +2346,16 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
                                            uint64_t& exit_closed_from_incarnation,
                                            bool& exit_closed_was_long) {
     double qp = std::isnan(order.qty_percent) ? 100.0 : std::clamp(order.qty_percent, 0.0, 100.0);
-    bool has_explicit_qty_to_close = !std::isnan(order.qty);
+    const bool dynamic_full_live_qty =
+        order.pooc_global_full_exit_dynamic_qty;
+    bool has_explicit_qty_to_close =
+        !dynamic_full_live_qty && !std::isnan(order.qty);
     double qty_before_exit = position_qty_;
-    bool is_partial = has_explicit_qty_to_close
-        ? order.qty < qty_before_exit - kFullQtyEps
-        : qp < 100.0 - kFullPercentEps;
+    bool is_partial = dynamic_full_live_qty
+        ? false
+        : (has_explicit_qty_to_close
+            ? order.qty < qty_before_exit - kFullQtyEps
+            : qp < 100.0 - kFullPercentEps);
     size_t trades_before_exit = trades_.size();
     PositionSide side_before_exit = position_side_;
 
@@ -2362,7 +2367,9 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
             execute_partial_exit_by_entry(fill_price, order.from_entry);
         }
     } else {
-        if (has_explicit_qty_to_close) {
+        if (dynamic_full_live_qty) {
+            execute_market_exit(fill_price);
+        } else if (has_explicit_qty_to_close) {
             execute_partial_exit_qty(fill_price, order.qty);
         } else if (is_partial) {
             execute_partial_exit(fill_price, qp);

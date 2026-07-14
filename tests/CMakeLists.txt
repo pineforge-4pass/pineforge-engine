@@ -24,6 +24,7 @@ set(TEST_SOURCES
     test_integration
     test_request_security
     test_historical_security_lookahead_projection
+    test_pooc_global_full_exit
     test_security_range_start_na_warmup
     test_chart_ema_na_warmup
     test_security_tf_validation
