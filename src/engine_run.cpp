@@ -1028,6 +1028,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     validate_security_timeframes(effective_input_tf);
 
     init_security_eval_states_for_run(effective_input_tf);
+    prepare_historical_security_lookahead_projections(
+        input_bars, n_input, effective_input_tf);
 
     if (!needs_aggregation && !bar_magnifier) {
         run_simple_bar_loop(input_bars, n_input);
@@ -1035,9 +1037,12 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
         run_aggregation_bar_loop(input_bars, n_input, bar_magnifier,
                                  expected_script_bars);
     }
+    clear_historical_security_lookahead_projections();
     } catch (const std::exception& e) {
+        clear_historical_security_lookahead_projections();
         last_error_ = e.what();
     } catch (...) {
+        clear_historical_security_lookahead_projections();
         last_error_ = "unknown error during BacktestEngine::run";
     }
 }
@@ -1076,6 +1081,9 @@ void BacktestEngine::init_security_eval_states_for_run(
         state.current_sub_bar_count = 0;
         state.lower_tf_sub_bar_index = 0;
         state.lower_tf_input_buffer.clear();
+        state.historical_projections.clear();
+        state.historical_projection_cursor = 0;
+        state.historical_projection_feed_index = 0;
         state.aggregator = TimeframeAggregator();
         if (state.lower_tf_emulation || state.lower_tf_use_input) {
             continue;
@@ -1086,6 +1094,124 @@ void BacktestEngine::init_security_eval_states_for_run(
         } else if (req_ratio == -1) {
             state.aggregator = TimeframeAggregator(state.tf, effective_input_tf);
         }
+    }
+}
+
+
+// Build the finite-batch oracle used by the opt-in historical lookahead
+// candidate. Each eligible HTF bucket is aggregated from all input bars that
+// are available in the batch and stored once with its first-child index. The
+// evaluator is dispatched only at that index (engine_security.cpp), so the
+// value is projected there and held for the rest of the bucket. A trailing
+// bucket that has not reached its natural boundary is still projected from the
+// available bars, but remains an incomplete evaluation so committed security
+// history does not advance prematurely.
+void BacktestEngine::prepare_historical_security_lookahead_projections(
+        const Bar* input_bars, int n_input,
+        const std::string& effective_input_tf) {
+    clear_historical_security_lookahead_projections();
+
+    const int input_seconds = tf_to_seconds(effective_input_tf);
+    const int script_seconds = script_tf_seconds_;
+    if (!historical_security_lookahead_projection_
+            || stream_warmup_mode_
+            // The finite-batch oracle is built from raw input bars. Until it
+            // can consume script-TF aggregates, activating it across a
+            // separate input->script aggregation stage would project the
+            // wrong child indexes and values.
+            || effective_input_tf != script_tf_
+            // Range-start warmup deliberately drops pre-range bars inside
+            // feed_security_eval_state(). Precomputing them here would leave
+            // the projection cursor out of sync with that trimmed feed.
+            || security_range_start_na_warmup_
+            || input_bars == nullptr || n_input <= 0
+            || input_seconds <= 0 || script_seconds <= 0) {
+        return;
+    }
+
+    historical_security_lookahead_projection_active_ = true;
+    const int64_t input_ms = static_cast<int64_t>(input_seconds) * 1000;
+
+    for (auto& state : security_eval_states_) {
+        const int requested_seconds = tf_to_seconds(state.tf);
+        const bool eligible = !state.lower_tf_requested
+            && !state.lower_tf_emulation
+            && !state.lower_tf_use_input
+            && state.lookahead_on
+            && !state.gaps_on
+            && !state.heikinashi
+            && requested_seconds > script_seconds;
+        if (!eligible) {
+            continue;
+        }
+
+        const int expected_children = std::max(
+            1, requested_seconds / input_seconds);
+        state.historical_projections.reserve(static_cast<std::size_t>(
+            n_input / expected_children + 1));
+        state.historical_projection_cursor = 0;
+        state.historical_projection_feed_index = 0;
+
+        auto crosses_requested_boundary = [&](int64_t from_ms,
+                                               int64_t to_ms) {
+            // tf_change treats epoch zero as an uninitialized sentinel. Keep
+            // tests/synthetic feeds beginning at zero correct via the fixed-TF
+            // bucket fallback; real feeds take the calendar-aware path.
+            if (from_ms != 0 && to_ms != 0) {
+                return tf_change(from_ms, to_ms, state.tf);
+            }
+            const int64_t requested_ms =
+                static_cast<int64_t>(requested_seconds) * 1000;
+            return requested_ms > 0
+                && from_ms / requested_ms != to_ms / requested_ms;
+        };
+
+        auto merge = [](Bar& aggregate, const Bar& child) {
+            aggregate.high = std::max(aggregate.high, child.high);
+            aggregate.low = std::min(aggregate.low, child.low);
+            aggregate.close = child.close;
+            aggregate.volume += child.volume;
+        };
+
+        auto publish_group = [&](int begin, const Bar& aggregate,
+                                 bool is_complete) {
+            state.historical_projections.push_back(
+                HistoricalSecurityProjection{
+                    aggregate, static_cast<std::size_t>(begin), is_complete});
+        };
+
+        int group_begin = 0;
+        Bar aggregate = input_bars[0];
+        for (int i = 1; i < n_input; ++i) {
+            if (crosses_requested_boundary(aggregate.timestamp,
+                                           input_bars[i].timestamp)) {
+                // A later bucket proves this group is historical/confirmed,
+                // even when sparse input omitted its natural final child.
+                publish_group(group_begin, aggregate, true);
+                group_begin = i;
+                aggregate = input_bars[i];
+            } else {
+                merge(aggregate, input_bars[i]);
+            }
+        }
+
+        bool final_complete = false;
+        const int64_t last_timestamp = input_bars[n_input - 1].timestamp;
+        if (last_timestamp <= std::numeric_limits<int64_t>::max() - input_ms) {
+            final_complete = crosses_requested_boundary(
+                last_timestamp, last_timestamp + input_ms);
+        }
+        publish_group(group_begin, aggregate, final_complete);
+    }
+}
+
+
+void BacktestEngine::clear_historical_security_lookahead_projections() {
+    historical_security_lookahead_projection_active_ = false;
+    for (auto& state : security_eval_states_) {
+        state.historical_projections.clear();
+        state.historical_projection_cursor = 0;
+        state.historical_projection_feed_index = 0;
     }
 }
 
