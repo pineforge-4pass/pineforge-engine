@@ -1879,6 +1879,38 @@ void BacktestEngine::apply_filled_order_to_state(
         || std::abs(position_qty_ - position_qty_before_fill) > kQtyEpsilon
         || pyramid_entries_.size() != pyramid_lots_before_fill
         || trades_.size() != trades_before;
+
+    // Bounded POOC global-exit growth. Only MARKET adds that were already
+    // pending when the one tracking EXIT was armed carry this relation bit.
+    // Grow its ordinary finite reservation by the actual same-side quantity
+    // delta—not requested qty—so fill-time rejection, zero-fill, reversal, or
+    // flat-open role changes add nothing. The tracking bit intentionally
+    // survives dynamic-marker invalidation: a post-exit order can be admitted
+    // before this pre-exit add reaches the POOC close fill point.
+    if (order.type == OrderType::MARKET
+        && order.pooc_global_full_exit_bound_add) {
+        const PositionSide requested_side = order.is_long
+            ? PositionSide::LONG : PositionSide::SHORT;
+        const bool successful_same_side_add =
+            requested_side == order.created_position_side
+            && position_side_before_fill == requested_side
+            && position_side_ == requested_side
+            && position_qty_ > position_qty_before_fill + kQtyEpsilon;
+        if (successful_same_side_add) {
+            const double added_qty =
+                position_qty_ - position_qty_before_fill;
+            for (auto& candidate : pending_orders_) {
+                if (candidate.type != OrderType::EXIT
+                    || !candidate.pooc_global_full_exit_tracks_bound_adds
+                    || !std::isfinite(candidate.qty)) {
+                    continue;
+                }
+                candidate.qty += added_qty;
+                break;  // reservation accounting admits at most one tracker
+            }
+        }
+    }
+
     if (primary_fill_applied) {
         ++broker_fill_event_seq_;
     }

@@ -56,6 +56,8 @@ struct CaseConfig {
     bool prior_partial_global_exit = false;
     bool replace_first_add_after_exit = false;
     bool later_bar_same_direction_entry = false;
+    bool later_bar_sibling_exit = false;
+    bool defer_exit_until_bar4 = false;
 };
 
 class ReservationProbe final : public BacktestEngine {
@@ -79,14 +81,38 @@ public:
                 queue_carried_entry(config_.carried_entry_shapes[i], i);
             }
         }
-        if (bar_index_ == 2 && config_.later_bar_same_direction_entry
+        if (bar_index_ == 2
+            && (config_.later_bar_same_direction_entry
+                || config_.later_bar_sibling_exit
+                || config_.defer_exit_until_bar4)
             && position_side_ == PositionSide::LONG) {
-            strategy_entry("LATER_BAR_ADD", /*is_long=*/true,
-                           kNaN, kNaN, /*qty=*/1.0);
+            for (const auto& order : pending_orders_) {
+                if (order.type == OrderType::EXIT && order.id == "EXIT") {
+                    post_fill_exit_qty_ = order.qty;
+                }
+            }
+            if (config_.later_bar_same_direction_entry) {
+                strategy_entry("LATER_BAR_ADD", /*is_long=*/true,
+                               kNaN, kNaN, /*qty=*/1.0);
+            }
+            if (config_.later_bar_sibling_exit) {
+                strategy_exit("LATER_SIBLING", "",
+                              /*limit=*/120.0, /*stop=*/kNaN,
+                              /*trail_points=*/kNaN,
+                              /*trail_offset=*/kNaN,
+                              /*trail_price=*/kNaN,
+                              /*qty_percent=*/100.0,
+                              "later sibling");
+            }
             for (const auto& order : pending_orders_) {
                 if (order.type == OrderType::EXIT && order.id == "EXIT") {
                     later_bar_exit_dynamic_qty_ =
                         order.pooc_global_full_exit_dynamic_qty;
+                    post_fill_exit_qty_ = order.qty;
+                }
+                if (order.type == OrderType::EXIT
+                    && order.id == "LATER_SIBLING") {
+                    later_bar_sibling_captured_ = true;
                 }
             }
         }
@@ -106,9 +132,11 @@ public:
                           /*qty_percent=*/50.0, "partial sibling");
         }
 
+        const bool defer_exit = config_.later_bar_same_direction_entry
+            || config_.later_bar_sibling_exit
+            || config_.defer_exit_until_bar4;
         strategy_exit("EXIT", config_.from_entry,
-                      /*limit=*/config_.later_bar_same_direction_entry
-                          ? 150.0 : 105.0,
+                      /*limit=*/defer_exit ? 110.0 : 105.0,
                       /*stop=*/kNaN,
                       /*trail_points=*/kNaN, /*trail_offset=*/kNaN,
                       /*trail_price=*/kNaN,
@@ -161,6 +189,10 @@ public:
     bool exit_dynamic_qty() const { return exit_dynamic_qty_; }
     bool later_bar_exit_dynamic_qty() const {
         return later_bar_exit_dynamic_qty_;
+    }
+    double post_fill_exit_qty() const { return post_fill_exit_qty_; }
+    bool later_bar_sibling_captured() const {
+        return later_bar_sibling_captured_;
     }
 
 private:
@@ -226,6 +258,8 @@ private:
     bool second_exit_captured_ = false;
     bool exit_dynamic_qty_ = false;
     bool later_bar_exit_dynamic_qty_ = false;
+    double post_fill_exit_qty_ = kNaN;
+    bool later_bar_sibling_captured_ = false;
 };
 
 Bar make_bar(double open, double high, double low, double close,
@@ -238,6 +272,7 @@ Bar bars[] = {
     make_bar(100.0, 102.0, 98.0, 100.0, 1'800'000),
     make_bar(100.0, 106.0, 98.0, 100.0, 2'700'000),
     make_bar(100.0, 101.0, 99.0, 100.0, 3'600'000),
+    make_bar(100.0, 111.0, 99.0, 100.0, 4'500'000),
 };
 
 ReservationProbe run_case(CaseConfig config) {
@@ -426,6 +461,10 @@ void test_same_id_add_replacement_after_exit_clears_dynamic_sizing() {
           "post-exit same-id replacement clears dynamic sizing");
     CHECK(!probe.exit_qty_is_nan() && near(probe.exit_qty(), 1.0),
           "same-id replacement retains the finite pre-add fallback");
+    CHECK(probe.trade_count() == 1,
+          "replacement add is not counted as a bound pre-exit fill");
+    CHECK(near(probe.position_size(), 1.0),
+          "finite fallback leaves the unbound replacement add open");
 }
 
 void test_later_bar_entry_clears_resting_dynamic_sizing() {
@@ -436,6 +475,60 @@ void test_later_bar_entry_clears_resting_dynamic_sizing() {
           "pre-exit add initially enables dynamic sizing");
     CHECK(!probe.later_bar_exit_dynamic_qty(),
           "later-bar admitted entry clears resting dynamic sizing");
+    CHECK(near(probe.post_fill_exit_qty(), 2.0),
+          "filled pre-exit add grows finite reservation before invalidation");
+    CHECK(probe.trade_count() == 2,
+          "finite exit closes base and the covered pre-exit add");
+    CHECK(near(probe.position_size(), 1.0),
+          "finite exit leaves the later unbound add open");
+}
+
+void test_samebar_later_add_does_not_erase_preexit_add_coverage() {
+    CaseConfig config;
+    config.entry_shapes_after_exit = {
+        QueuedEntryShape::SameDirectionMarket,
+    };
+    config.defer_exit_until_bar4 = true;
+    ReservationProbe probe = run_case(config);
+    CHECK(!probe.exit_dynamic_qty(),
+          "post-exit same-bar add clears dynamic sizing before fills");
+    CHECK(near(probe.post_fill_exit_qty(), 2.0),
+          "pre-exit bound add still grows finite reservation at fill");
+    CHECK(probe.trade_count() == 2,
+          "bounded reservation closes base and pre-exit add only");
+    CHECK(near(probe.position_size(), 1.0),
+          "same-bar post-exit add remains outside bounded coverage");
+}
+
+void test_later_bar_sibling_sees_grown_finite_reservation() {
+    CaseConfig config;
+    config.later_bar_sibling_exit = true;
+    ReservationProbe probe = run_case(config);
+    CHECK(near(probe.post_fill_exit_qty(), 2.0),
+          "successful covered add grows first exit reservation");
+    CHECK(!probe.later_bar_sibling_captured(),
+          "later sibling is rejected after bounded reservation growth");
+    CHECK(probe.trade_count() == 2,
+          "first exit closes both bounded lots");
+    CHECK(near(probe.position_size(), 0.0),
+          "later sibling scenario finishes flat");
+}
+
+void test_rejected_bound_add_does_not_inflate_finite_reservation() {
+    CaseConfig config;
+    config.entry_shapes = {
+        QueuedEntryShape::SameDirectionMarket,
+        QueuedEntryShape::SameDirectionMarket,
+    };
+    config.pyramiding = 2;
+    config.defer_exit_until_bar4 = true;
+    ReservationProbe probe = run_case(config);
+    CHECK(near(probe.post_fill_exit_qty(), 2.0),
+          "only the one admitted bound add grows finite reservation");
+    CHECK(probe.trade_count() == 2,
+          "rejected second add creates no extra covered trade");
+    CHECK(near(probe.position_size(), 0.0),
+          "admitted base and add are fully covered");
 }
 
 void test_multiple_qualifying_adds_remain_covered() {
@@ -444,6 +537,7 @@ void test_multiple_qualifying_adds_remain_covered() {
         QueuedEntryShape::SameDirectionMarket,
         QueuedEntryShape::SameDirectionMarket,
     };
+    config.defer_exit_until_bar4 = true;
     ReservationProbe probe = run_case(config);
     CHECK(!probe.exit_qty_is_nan(),
           "multiple qualifying adds keep finite sibling reservation");
@@ -451,6 +545,8 @@ void test_multiple_qualifying_adds_remain_covered() {
           "multiple-add exit retains the one-lot fallback");
     CHECK(probe.exit_dynamic_qty(),
           "multiple pre-exit qualifying adds enable dynamic sizing");
+    CHECK(near(probe.post_fill_exit_qty(), 3.0),
+          "each successful pre-exit add grows finite reservation exactly");
     CHECK(probe.trade_count() == 3,
           "global bracket closes base and both qualifying adds");
     CHECK(near(probe.position_size(), 0.0),
@@ -475,6 +571,9 @@ int main() {
     test_prior_partial_sibling_blocks_dynamic_full_reservation();
     test_same_id_add_replacement_after_exit_clears_dynamic_sizing();
     test_later_bar_entry_clears_resting_dynamic_sizing();
+    test_samebar_later_add_does_not_erase_preexit_add_coverage();
+    test_later_bar_sibling_sees_grown_finite_reservation();
+    test_rejected_bound_add_does_not_inflate_finite_reservation();
     test_multiple_qualifying_adds_remain_covered();
     if (failures != 0) {
         std::printf("%d check(s) FAILED\n", failures);

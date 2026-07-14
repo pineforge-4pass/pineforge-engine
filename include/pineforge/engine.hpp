@@ -452,6 +452,15 @@ struct PendingOrder {
     // clears the bit, making the finite qty the automatic conservative
     // fallback—even when that later order is placed on a future bar.
     bool pooc_global_full_exit_dynamic_qty = false;
+    // Persistent half of the bounded POOC relation. Unlike ``dynamic_qty``,
+    // later entries do not clear this bit: pre-exit adds may still be waiting
+    // to fill when invalidation occurs. Each successfully filled bound add
+    // grows this EXIT's finite qty by its exact same-side position delta.
+    bool pooc_global_full_exit_tracks_bound_adds = false;
+    // Set only on qualifying high-level MARKET adds already pending when the
+    // tracking global EXIT is placed. Same-id replacement constructs a fresh
+    // PendingOrder and therefore drops the relation; later orders never get it.
+    bool pooc_global_full_exit_bound_add = false;
     bool created_while_in_position = false;  // true if position was open when order was placed
     // design-declined-reversal-close-leg: set at the KI-54 percent-of-equity
     // reversal-decline site when this pending FULL close was co-queued AFTER,

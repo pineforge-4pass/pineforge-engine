@@ -827,6 +827,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
     bool bind_global_full_exit_dynamic_qty = false;
+    std::vector<std::size_t> pooc_global_full_exit_bound_add_indices;
     if (has_explicit_qty) {
         // Honour the explicit qty literally (clamped to the live position
         // and subject to the same already-reserved accounting). This is
@@ -950,7 +951,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
             && qp >= 100.0 - kFullPercentEps) {
             bool found_qualifying_add = false;
             bool entry_queue_is_bounded = true;
-            for (const auto& o : pending_orders_) {
+            for (std::size_t i = 0; i < pending_orders_.size(); ++i) {
+                const PendingOrder& o = pending_orders_[i];
                 if (o.type != OrderType::MARKET
                     && o.type != OrderType::ENTRY
                     && o.type != OrderType::RAW_ORDER) {
@@ -969,6 +971,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                     break;
                 }
                 found_qualifying_add = true;
+                pooc_global_full_exit_bound_add_indices.push_back(i);
             }
             eligible_global_full_exit_dynamic_qty =
                 found_qualifying_add
@@ -1011,6 +1014,13 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.requested_partial = is_partial;
     order.pooc_global_full_exit_dynamic_qty =
         bind_global_full_exit_dynamic_qty;
+    order.pooc_global_full_exit_tracks_bound_adds =
+        bind_global_full_exit_dynamic_qty;
+    if (bind_global_full_exit_dynamic_qty) {
+        for (std::size_t index : pooc_global_full_exit_bound_add_indices) {
+            pending_orders_[index].pooc_global_full_exit_bound_add = true;
+        }
+    }
     // OCA-name plumbing: ``strategy.exit`` supports oca_name (Pine v6) so
     // siblings in different OCA groups can fire independently. The cancel
     // sweep predicate (engine_fills.cpp::apply_filled_order_to_state →
