@@ -32,7 +32,7 @@ import argparse
 import csv
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -268,6 +268,88 @@ class TradePair:
     pnl_pct: float = 0.0
     mfe: float = 0.0
     mae: float = 0.0
+
+
+@dataclass
+class VerificationResult:
+    """Canonical structured parity analysis for one corpus strategy.
+
+    ``verify_one`` is intentionally only a presentation wrapper around this
+    object.  Report generators must consume :func:`analyze_strategy` instead
+    of copying the rubric; otherwise a new gate can silently change CLI tiers
+    without changing the generated validation report.
+    """
+
+    strategy_dir: Path
+    rel: str
+    label: str
+    profile: str = "n/a"
+    notes: str = ""
+    tv_path: Path | None = None
+    eng_path: Path | None = None
+    tv_exists: bool = True
+    eng_exists: bool = True
+    no_aligned_trades: bool = False
+    tv_count: int = 0
+    eng_count: int = 0
+    tv_raw_count: int = 0
+    eng_raw_count: int = 0
+    matched_count: int = 0
+    gating_matched_count: int = 0
+    tv_gate_count: int = 0
+    eng_gate_count: int = 0
+    count_delta: float = 0.0
+    count_abs_delta: int = 0
+    entry_p90: float = 0.0
+    exit_p90: float = 0.0
+    pnl_p90: float = 0.0
+    coverage: float = 0.0
+    unmatched_total: int = 0
+    coverage_tv_count: int = 0
+    trim_bars: int = 0
+    warmup_bars: int = 0
+    bounds: tuple[int, int] | None = None
+    count_ok: bool = False
+    entry_ok: bool = False
+    exit_ok: bool = False
+    pnl_ok: bool = False
+    coverage_ok: bool = False
+    unmatched_in_window: int = 0
+    entry_p100: float = 0.0
+    exit_p100: float = 0.0
+    pnl_p100: float = 0.0
+    qty_p100: float = 0.0
+    pnlpct_p100: float = 0.0
+    mfe_p90: float = 0.0
+    mae_p90: float = 0.0
+    matched: list[tuple[TradePair, TradePair]] = field(default_factory=list, repr=False)
+    entry_deltas: list[float] = field(default_factory=list, repr=False)
+    exit_deltas: list[float] = field(default_factory=list, repr=False)
+    pnl_deltas: list[float] = field(default_factory=list, repr=False)
+    qty_deltas: list[float] = field(default_factory=list, repr=False)
+    pnlpct_deltas: list[float] = field(default_factory=list, repr=False)
+
+    @property
+    def tier(self) -> str:
+        return self.label
+
+    def report_row(self) -> dict:
+        """Return the canonical report-facing fields without re-analysis."""
+        return {
+            "slug": self.strategy_dir.name,
+            "rel": self.rel,
+            "tier": self.label,
+            "tv": self.tv_count,
+            "eng": self.eng_count,
+            "matched": self.matched_count,
+            "count_delta": self.count_delta,
+            "count_abs_delta": self.count_abs_delta,
+            "entry_p90": self.entry_p90,
+            "exit_p90": self.exit_p90,
+            "pnl_p90": self.pnl_p90,
+            "profile": self.profile,
+            "notes": self.notes,
+        }
 
 
 def tv_tzinfo(meta: dict):
@@ -641,7 +723,12 @@ def percentile(xs: list[float], p: float) -> float:
     return s[f] * (c - k) + s[c] * (k - f)
 
 
-def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0) -> str:
+def analyze_strategy(strategy_dir: Path) -> VerificationResult:
+    """Analyze one strategy using the canonical parity rubric.
+
+    This is the single structured API for both the CLI and generated reports.
+    Keep all tier-affecting and metric-affecting logic inside this function.
+    """
     rel = strategy_dir.name
     if strategy_dir.parent.name in {"basic", "community", "validation", "parity-anomalies"}:
         rel = f"{strategy_dir.parent.name}/{strategy_dir.name}"
@@ -649,9 +736,16 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     tv_path = strategy_dir / str(meta.get("tv_trades_csv", "tv_trades.csv"))
     eng_path = strategy_dir / "engine_trades.csv"
     if not tv_path.exists() or not eng_path.exists():
-        if verbose:
-            print(f"{rel}\n  MISSING (tv: {tv_path.exists()}, engine: {eng_path.exists()})")
-        return "missing"
+        return VerificationResult(
+            strategy_dir=strategy_dir,
+            rel=rel,
+            label="missing",
+            notes="tv_trades.csv or engine_trades.csv missing",
+            tv_path=tv_path,
+            eng_path=eng_path,
+            tv_exists=tv_path.exists(),
+            eng_exists=eng_path.exists(),
+        )
 
     tv_raw_all = parse_trades(tv_path, tz=tv_tzinfo(meta))
     eng_raw_all = parse_trades(eng_path, tz=timezone.utc)
@@ -668,9 +762,24 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     matched = align_by_time(tv_cmp, eng_cmp)
 
     if not matched:
-        if verbose:
-            print(f"{rel}: TV={len(tv)} engine={len(eng)} matched=0  (no aligned trades)")
-        return "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
+        label = "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
+        return VerificationResult(
+            strategy_dir=strategy_dir,
+            rel=rel,
+            label=label,
+            profile=resolve_profile(strategy_dir, meta),
+            notes=str(meta.get("notes", "")).strip() or "no aligned trades",
+            tv_path=tv_path,
+            eng_path=eng_path,
+            no_aligned_trades=True,
+            tv_count=len(tv_cmp),
+            eng_count=len(eng_cmp),
+            tv_raw_count=len(tv),
+            eng_raw_count=len(eng),
+            count_delta=relative_max(len(tv_cmp), len(eng_cmp)),
+            count_abs_delta=abs(len(tv_cmp) - len(eng_cmp)),
+            count_ok=len(tv_cmp) == len(eng_cmp),
+        )
 
     # Resolve parity profile (strict vs production) per probe.
     profile = resolve_profile(strategy_dir, meta)
@@ -880,56 +989,146 @@ def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0)
     if not expect_tv_match and label != "excellent":
         label = "engine_only"
 
-    if verbose:
-        check = lambda b: "OK" if b else "X"
-        match_pct = 100.0 * len(matched) / max(len(tv), 1)
-        interior_line = ""
-        if bounds is not None:
-            interior_line = (
-                f"  Interior-only: tv={len(tv_gate)} eng={len(eng_gate)} "
-                f"matched={len(gating_matched)} (trim_bars={trim_bars}, warmup_bars={warmup_bars})\n"
-            )
+    notes = ""
+    if label != "excellent":
+        notes = str(meta.get("notes", "")).strip()
+        if not notes:
+            failures = []
+            if not count_ok:
+                failures.append(f"count Δ {count_delta*100:.2f}%")
+            if not entry_ok:
+                failures.append(f"entry p90 {entry_p90*100:.4f}%")
+            if not exit_ok:
+                failures.append(f"exit p90 {exit_p90*100:.4f}%")
+            if not pnl_ok:
+                failures.append(f"pnl p90 {pnl_p90*100:.4f}%")
+            if not cov_excellent:
+                failures.append(f"coverage {coverage*100:.1f}%")
+            notes = "; ".join(failures) if failures else "non-excellent"
+
+    return VerificationResult(
+        strategy_dir=strategy_dir,
+        rel=rel,
+        label=label,
+        profile=profile,
+        notes=notes,
+        tv_path=tv_path,
+        eng_path=eng_path,
+        tv_count=len(tv_cmp),
+        eng_count=len(eng_cmp),
+        tv_raw_count=len(tv),
+        eng_raw_count=len(eng),
+        matched_count=len(matched),
+        gating_matched_count=len(gating_matched),
+        tv_gate_count=len(tv_gate),
+        eng_gate_count=len(eng_gate),
+        count_delta=count_delta,
+        count_abs_delta=count_abs_delta,
+        entry_p90=entry_p90,
+        exit_p90=exit_p90,
+        pnl_p90=pnl_p90,
+        coverage=coverage,
+        unmatched_total=unmatched_total,
+        coverage_tv_count=len(tv_cov_denom),
+        trim_bars=trim_bars,
+        warmup_bars=warmup_bars,
+        bounds=bounds,
+        count_ok=count_ok,
+        entry_ok=entry_ok,
+        exit_ok=exit_ok,
+        pnl_ok=pnl_ok,
+        coverage_ok=cov_excellent,
+        unmatched_in_window=unmatched_in_window,
+        entry_p100=entry_p100,
+        exit_p100=exit_p100,
+        pnl_p100=pnl_p100,
+        qty_p100=qty_p100,
+        pnlpct_p100=pnlpct_p100,
+        mfe_p90=mfe_p90,
+        mae_p90=mae_p90,
+        matched=matched,
+        entry_deltas=entry_deltas,
+        exit_deltas=exit_deltas,
+        pnl_deltas=pnl_deltas,
+        qty_deltas=qty_deltas,
+        pnlpct_deltas=pnlpct_deltas,
+    )
+
+
+def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> None:
+    if result.label == "missing":
         print(
-            f"{rel}\n"
-            f"  Profile:       {profile}\n"
-            f"  TV trades:     {len(tv_cmp)}  (raw {len(tv)})\n"
-            f"  Engine trades: {len(eng_cmp)}  (raw {len(eng)})\n"
-            f"  Matched:       {len(matched)} ({match_pct:.1f}% of TV)\n"
-            f"{interior_line}"
-            f"  Count delta:           {count_delta * 100:8.4f}%  ({check(count_ok)}; abs={count_abs_delta})\n"
-            f"  Entry-price p90 delta: {entry_p90  * 100:8.4f}%  ({check(entry_ok)})\n"
-            f"  Exit-price  p90 delta: {exit_p90   * 100:8.4f}%  ({check(exit_ok)})\n"
-            f"  PnL         p90 delta: {pnl_p90    * 100:8.4f}%  ({check(pnl_ok)})\n"
-            f"  Coverage:              {coverage * 100:8.1f}%  ({check(cov_excellent)}; unmatched={unmatched_total} of {len(tv_cov_denom)} TV)\n"
-            f"  -- report-only (not gated; MAE/MFE are intrabar-path-limited) --\n"
-            f"  Entry/Exit  p99 delta:  {percentile(entry_deltas,0.99)*100:.4f}% / {percentile(exit_deltas,0.99)*100:.4f}%\n"
-            f"  Entry/Exit/PnL p100:   {entry_p100*100:.4f}% / {exit_p100*100:.4f}% / {pnl_p100*100:.4f}%\n"
-            f"  Qty   p90/p100 delta:  {percentile(qty_deltas,0.90)*100:.4f}% / {qty_p100*100:.4f}%\n"
-            f"  PnL%  p90/p100 (pts):  {percentile(pnlpct_deltas,0.90):.4f} / {pnlpct_p100:.4f}\n"
-            f"  MFE/MAE p90 delta:     {mfe_p90*100:.4f}% / {mae_p90*100:.4f}%\n"
-            f"  Unmatched-in-window:   {unmatched_in_window}\n"
-            f"  -> {label}"
+            f"{result.rel}\n"
+            f"  MISSING (tv: {result.tv_exists}, engine: {result.eng_exists})"
         )
-        if show_diffs > 0:
-            # Show the trades with the worst deltas
-            ranked = sorted(zip(matched, entry_deltas, exit_deltas, pnl_deltas),
-                            key=lambda x: -max(x[1], x[2], x[3]))
-            print(f"\n  worst {show_diffs} matched trades by max-of-(entry, exit, pnl) delta:")
-            for (tv_t, e_t), ed, xd, pd in ranked[:show_diffs]:
-                print(
-                    f"    TV  #{tv_t.trade_num:4d} {tv_t.direction:5s} "
-                    f"@{datetime.fromtimestamp(tv_t.entry_time, tz=timezone.utc):%Y-%m-%d %H:%M} "
-                    f"entry={tv_t.entry_price:10.4f} exit={tv_t.exit_price:10.4f} pnl={tv_t.pnl:+10.4f}"
-                )
-                print(
-                    f"    eng #{e_t.trade_num:4d} {e_t.direction:5s} "
-                    f"@{datetime.fromtimestamp(e_t.entry_time, tz=timezone.utc):%Y-%m-%d %H:%M} "
-                    f"entry={e_t.entry_price:10.4f} exit={e_t.exit_price:10.4f} pnl={e_t.pnl:+10.4f}"
-                )
-                print(
-                    f"           deltas: entry={ed*100:.4f}% exit={xd*100:.4f}% pnl={pd*100:.4f}%"
-                )
-    return label
+        return
+    if result.no_aligned_trades:
+        print(
+            f"{result.rel}: TV={result.tv_raw_count} engine={result.eng_raw_count} "
+            "matched=0  (no aligned trades)"
+        )
+        return
+
+    check = lambda b: "OK" if b else "X"
+    match_pct = 100.0 * result.matched_count / max(result.tv_raw_count, 1)
+    interior_line = ""
+    if result.bounds is not None:
+        interior_line = (
+            f"  Interior-only: tv={result.tv_gate_count} eng={result.eng_gate_count} "
+            f"matched={result.gating_matched_count} "
+            f"(trim_bars={result.trim_bars}, warmup_bars={result.warmup_bars})\n"
+        )
+    print(
+        f"{result.rel}\n"
+        f"  Profile:       {result.profile}\n"
+        f"  TV trades:     {result.tv_count}  (raw {result.tv_raw_count})\n"
+        f"  Engine trades: {result.eng_count}  (raw {result.eng_raw_count})\n"
+        f"  Matched:       {result.matched_count} ({match_pct:.1f}% of TV)\n"
+        f"{interior_line}"
+        f"  Count delta:           {result.count_delta * 100:8.4f}%  ({check(result.count_ok)}; abs={result.count_abs_delta})\n"
+        f"  Entry-price p90 delta: {result.entry_p90  * 100:8.4f}%  ({check(result.entry_ok)})\n"
+        f"  Exit-price  p90 delta: {result.exit_p90   * 100:8.4f}%  ({check(result.exit_ok)})\n"
+        f"  PnL         p90 delta: {result.pnl_p90    * 100:8.4f}%  ({check(result.pnl_ok)})\n"
+        f"  Coverage:              {result.coverage * 100:8.1f}%  ({check(result.coverage_ok)}; unmatched={result.unmatched_total} of {result.coverage_tv_count} TV)\n"
+        f"  -- report-only (not gated; MAE/MFE are intrabar-path-limited) --\n"
+        f"  Entry/Exit  p99 delta:  {percentile(result.entry_deltas,0.99)*100:.4f}% / {percentile(result.exit_deltas,0.99)*100:.4f}%\n"
+        f"  Entry/Exit/PnL p100:   {result.entry_p100*100:.4f}% / {result.exit_p100*100:.4f}% / {result.pnl_p100*100:.4f}%\n"
+        f"  Qty   p90/p100 delta:  {percentile(result.qty_deltas,0.90)*100:.4f}% / {result.qty_p100*100:.4f}%\n"
+        f"  PnL%  p90/p100 (pts):  {percentile(result.pnlpct_deltas,0.90):.4f} / {result.pnlpct_p100:.4f}\n"
+        f"  MFE/MAE p90 delta:     {result.mfe_p90*100:.4f}% / {result.mae_p90*100:.4f}%\n"
+        f"  Unmatched-in-window:   {result.unmatched_in_window}\n"
+        f"  -> {result.label}"
+    )
+    if show_diffs > 0:
+        # Preserve the historical diagnostic display. Metrics and the tier are
+        # already fixed in ``result``; this formatting cannot affect grading.
+        ranked = sorted(
+            zip(result.matched, result.entry_deltas, result.exit_deltas, result.pnl_deltas),
+            key=lambda x: -max(x[1], x[2], x[3]),
+        )
+        print(f"\n  worst {show_diffs} matched trades by max-of-(entry, exit, pnl) delta:")
+        for (tv_t, e_t), ed, xd, pd in ranked[:show_diffs]:
+            print(
+                f"    TV  #{tv_t.trade_num:4d} {tv_t.direction:5s} "
+                f"@{datetime.fromtimestamp(tv_t.entry_time, tz=timezone.utc):%Y-%m-%d %H:%M} "
+                f"entry={tv_t.entry_price:10.4f} exit={tv_t.exit_price:10.4f} pnl={tv_t.pnl:+10.4f}"
+            )
+            print(
+                f"    eng #{e_t.trade_num:4d} {e_t.direction:5s} "
+                f"@{datetime.fromtimestamp(e_t.entry_time, tz=timezone.utc):%Y-%m-%d %H:%M} "
+                f"entry={e_t.entry_price:10.4f} exit={e_t.exit_price:10.4f} pnl={e_t.pnl:+10.4f}"
+            )
+            print(
+                f"           deltas: entry={ed*100:.4f}% exit={xd*100:.4f}% pnl={pd*100:.4f}%"
+            )
+
+
+def verify_one(strategy_dir: Path, *, verbose: bool = True, show_diffs: int = 0) -> str:
+    """Compatibility wrapper returning the tier and optionally printing it."""
+    result = analyze_strategy(strategy_dir)
+    if verbose:
+        _print_verification(result, show_diffs=show_diffs)
+    return result.label
 
 
 def main() -> int:

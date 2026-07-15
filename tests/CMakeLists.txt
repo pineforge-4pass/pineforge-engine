@@ -6,6 +6,7 @@ set(TEST_SOURCES
     test_magnifier_distributions
     test_path_at
     test_na_runtime
+    test_math_sum
     test_recompute
     test_str_utils
     test_ta
