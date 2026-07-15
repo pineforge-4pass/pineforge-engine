@@ -68,7 +68,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                           bool is_priced_entry,
                                           double tv_carry_qty,
                                           int created_bar,
-                                          bool later_same_tick_entry) {
+                                          bool later_same_tick_entry,
+                                          bool paired_flat_market_transaction) {
     // Degenerate-bar guard: never open a position at a non-finite fill price
     // (e.g. a NaN/Inf print). Dropping the fill keeps trade output finite and
     // a single bad tick from poisoning the backtest. Clean feeds never hit this.
@@ -82,7 +83,7 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     if (is_opposite_entry && direction_blocked) {
         double exit_fill = apply_slippage(fill_price, position_side_ == PositionSide::SHORT);
         execute_market_exit(exit_fill);
-        purge_exit_orders();
+        if (!paired_flat_market_transaction) purge_exit_orders();
         return;
     }
 
@@ -97,7 +98,9 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     if (position_side_ == PositionSide::FLAT) {
         enter_market_from_flat(id, is_long, fill_price, explicit_qty, explicit_qty_type,
                                created_position_side, is_priced_entry, tv_carry_qty,
-                               created_bar);
+                               created_bar,
+                               /*explicit_qty_prequantized=*/
+                                   paired_flat_market_transaction);
         return;
     }
 
@@ -108,7 +111,10 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     }
 
     if (created_position_side == PositionSide::FLAT && close_only_opposite) {
-        close_opposite_then_enter(id, is_long, fill_price, explicit_qty, explicit_qty_type);
+        close_opposite_then_enter(
+            id, is_long, fill_price, explicit_qty, explicit_qty_type,
+            /*purge_pending_exits=*/!paired_flat_market_transaction,
+            /*explicit_qty_prequantized=*/paired_flat_market_transaction);
         return;
     }
 
@@ -688,14 +694,17 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
                                             int explicit_qty_type,
                                             PositionSide created_position_side,
                                             bool is_priced_entry, double tv_carry_qty,
-                                            int created_bar) {
+                                            int created_bar,
+                                            bool explicit_qty_prequantized) {
     bool carry_was_long = (created_position_side == PositionSide::LONG);
     bool tv_deferred_flip =
         script_has_strategy_close_
         && is_priced_entry
         && tv_carry_qty > 0.0
         && (carry_was_long ? !is_long : is_long);
-    double base_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    double base_qty = explicit_qty_prequantized
+        ? explicit_qty
+        : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     double qty = tv_deferred_flip ? (tv_carry_qty + base_qty) : base_qty;
     if (tv_deferred_flip) {
         consume_tv_carry_from_siblings(id, created_position_side, created_bar);
@@ -767,14 +776,23 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
 // requested-direction remainder if any.
 void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_long,
                                                double fill_price, double explicit_qty,
-                                               int explicit_qty_type) {
-    double tx_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+                                               int explicit_qty_type,
+                                               bool purge_pending_exits,
+                                               bool explicit_qty_prequantized) {
+    double tx_qty = explicit_qty_prequantized
+        ? explicit_qty
+        : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     double close_qty = std::min(tx_qty, position_qty_);
     // execute_partial_exit_qty applies slippage internally (mirrors its other
     // callers, e.g. execute_partial_exit_by_percent). Pass the RAW fill_price —
     // pre-slipping here would double-slip the close leg (issue #27).
     execute_partial_exit_qty(fill_price, close_qty);
-    purge_exit_orders();
+    // The ordinary close-only-opposite path historically purges stale exits.
+    // A confirmed same-source flat MARKET pair is different: both transaction
+    // legs execute inside process_pending_orders, where erasing the vector
+    // would invalidate the active order reference and filled-index ledger.
+    // Its stale exits follow flip_market_position_to's safe next-pass cleanup.
+    if (purge_pending_exits) purge_exit_orders();
     double remainder = tx_qty - close_qty;
     if (remainder <= kQtyEpsilon) {
         return;
