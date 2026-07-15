@@ -612,13 +612,20 @@ protected:
     //   - 3+ call batches never restore or create two-call provenance;
     //   - intermediate replaced calls keep their ledgers intact;
     //   - the SURVIVING (last nonzero-target) call fills min(ledger,
-    //     avail) at the bar close WITHOUT consuming its id-ledger; the
-    //     unconsumed amount stays reserved against the position
-    //     (close_reserved_qty_) and caps other ids' later close targets
-    //     via avail = position_qty_ - sum(reservations of other ids);
+    //     avail) at the bar close. Its new reservation is capped to the
+    //     post-fill position capacity left after older reservations and caps
+    //     other ids' later targets via avail = position_qty_ -
+    //     sum(reservations of other ids). A positive truncated reservation
+    //     keeps the established survivor ledger; zero backing clears it;
+    //   - exact-two provenance is created only when that survivor's actual
+    //     fill remains fully backed after the fill;
+    //   - a nonzero logical ledger with zero unreserved physical capacity is
+    //     consumed without a broker fill, so a later same-id entry starts a
+    //     new logical close cycle instead of accumulating a stale slice;
     //   - a bar with exactly one close call behaves as before: fill =
     //     min(ledger, avail), ledger consumed, reservation released.
-    // Calls whose target resolves to zero are no-ops (cannot survive).
+    // Calls whose target resolves to zero cannot survive; a logically live
+    // but physically blocked id still consumes its stale logical cycle.
     // The batched fill executes at the end-of-bar order-processing point
     // (dispatch_bar step 4 / magnifier last tick) at the same bar-close
     // price the immediate path used. Order cancels/purges tied to a
@@ -2094,8 +2101,6 @@ private:
     bool pending_flat_market_pair_scope_is_live() const;
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
-    bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
-    void invalidate_pending_flat_market_pair(int64_t created_seq);
     // TradingView binds a valid, single/full, non-trailing strategy.exit to a
     // co-queued high-level MARKET parent. If that parent fills at the next open
     // and its stop is already breached, the newborn lot scratches at that open.
@@ -2104,6 +2109,8 @@ private:
     // multi-child groups.
     bool prearmed_market_parent_stop_gaps_at_open(
         const PendingOrder& order, const Bar& bar) const;
+    bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
+    void invalidate_pending_flat_market_pair(int64_t created_seq);
     void compact_filled_pending_orders(const std::vector<size_t>& filled_indices,
                                        int exit_closed_from_bar,
                                        uint64_t exit_closed_from_incarnation,
@@ -2494,14 +2501,6 @@ public:
                 security_range_start_ms_ = 0;
             }
         }
-        // Historical batch-only lookahead projection. This is intentionally a
-        // default-off verifier candidate: regular execution and every stream
-        // path keep progressive HTF aggregation unless a caller explicitly
-        // supplies a positive finite metadata value.
-        if (key == "historical_security_lookahead_projection") {
-            historical_security_lookahead_projection_ =
-                std::isfinite(value) && value > 0.0;
-        }
         // Opt-in KI-55 chart-timeframe EMA warmup parity. This is a boolean
         // run configuration carried through the existing metadata channel:
         // positive finite values enable it; 0 / NaN / negative disable it.
@@ -2510,8 +2509,16 @@ public:
         if (key == "chart_ema_na_warmup") {
             chart_ema_na_warmup_ = std::isfinite(value) && value > 0.0;
         }
+        // Historical batch-only lookahead projection. This is intentionally a
+        // default-off verifier candidate: regular execution and every stream
+        // path keep progressive HTF aggregation unless a caller explicitly
+        // supplies a positive finite metadata value.
+        if (key == "historical_security_lookahead_projection") {
+            historical_security_lookahead_projection_ =
+                std::isfinite(value) && value > 0.0;
+        }
         // Default-off verifier candidate for a finite-price margin call whose
-        // lot-quantized restore quantity is zero. Positive finite values close
+        // lot-quantized restore quantity is zero.  Positive finite values close
         // the residual; absent/zero/non-finite values preserve the established
         // one-step progress fallback.
         if (key == "margin_zero_cover_full_liquidation") {

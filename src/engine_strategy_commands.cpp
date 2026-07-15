@@ -618,7 +618,17 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
     double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
     double target = std::min(unclosed, avail);
     if (target <= eps) {
-        return;  // zero-target call: no-op, cannot become the survivor
+        if (unclosed > eps && avail <= eps) {
+            // The logical slot was asked to close, but earlier surviving
+            // multi-close orders already reserve every physically available
+            // unit. TV emits no broker fill here, yet the close command still
+            // consumes this logical cycle: a later same-id entry must not be
+            // added to the stale ledger and double-close on its next signal.
+            id_unclosed_qty_.erase(id);
+            close_reserved_qty_.erase(id);
+            close_two_call_first_qty_.erase(id);
+        }
+        return;  // no order/fill; a zero-target call cannot survive
     }
 
     // Same-bar source-order carry (see strategy_entry's tv_carry_qty): a
@@ -785,9 +795,10 @@ void BacktestEngine::flush_same_bar_close() {
     }
     if (!sole_call && close_filled
         && position_side_ != PositionSide::FLAT) {
-        // Surviving multi-call close: ledger NOT consumed (TV leaves the
-        // id closable again later); the filled amount stays reserved
-        // against the position for other ids' close targets.
+        // A surviving multi-call close normally keeps its established ledger
+        // (TV leaves the id closable again later). The post-fill reservation
+        // below determines whether any physical backing remains; zero backing
+        // clears that ledger, while a positive truncated reservation keeps it.
         if (batch_calls == 2 && first_carry_valid
             && std::isfinite(first_carry_qty) && first_carry_qty > eps) {
             // Exact two-call -> two-call replacement chain: restore the PRIOR
@@ -797,8 +808,23 @@ void BacktestEngine::flush_same_bar_close() {
             // zero/deferred batch cannot resurrect a replaced ledger.
             id_unclosed_qty_[first_id] = first_carry_qty;
         }
-        close_reserved_qty_[id] = target;
-        if (batch_calls == 2) {
+        // A reservation is bounded by physical capacity AFTER this fill.
+        // Existing reservations for other ids have first claim on the
+        // remaining position; blindly reserving the just-filled target can
+        // make total reservations exceed position_qty_ and suppress valid
+        // closes after the next entry. Preserve only the capacity left after
+        // those older claims (ETH grid-bot replacement chain).
+        const double actual_fill = std::max(0.0, qty_before - position_qty_);
+        const double reserve_capacity =
+            std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+        const double reserve = std::min(actual_fill, reserve_capacity);
+        if (reserve > eps) {
+            close_reserved_qty_[id] = reserve;
+        } else {
+            id_unclosed_qty_.erase(id);
+            close_reserved_qty_.erase(id);
+        }
+        if (batch_calls == 2 && reserve >= actual_fill - eps) {
             close_two_call_first_qty_[id] = first_target;
         } else {
             close_two_call_first_qty_.erase(id);

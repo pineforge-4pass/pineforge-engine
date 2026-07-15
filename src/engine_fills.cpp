@@ -1057,28 +1057,6 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
         });
 }
 
-bool BacktestEngine::pending_flat_market_pair_is_live(
-        const PendingOrder& order) const {
-    if (!pending_flat_market_pair_scope_is_live()
-        || order.type != OrderType::MARKET
-        || order.paired_flat_market_peer_seq <= 0
-        || !std::isfinite(order.paired_flat_market_transaction_qty)) {
-        return false;
-    }
-    for (const PendingOrder& peer : pending_orders_) {
-        if (peer.created_seq != order.paired_flat_market_peer_seq) continue;
-        return peer.type == OrderType::MARKET
-            && peer.paired_flat_market_peer_seq == order.created_seq
-            && std::isfinite(peer.paired_flat_market_transaction_qty)
-            && peer.id != order.id
-            && peer.is_long != order.is_long
-            && peer.created_bar == order.created_bar
-            && peer.created_position_side == PositionSide::FLAT
-            && order.created_position_side == PositionSide::FLAT;
-    }
-    return false;
-}
-
 // A strategy.exit can be armed on the signal bar together with the MARKET
 // strategy.entry named by from_entry. The child is valid before the parent
 // fills: TradingView binds it to the eventual lot, and if the next open has
@@ -1167,6 +1145,28 @@ bool BacktestEngine::prearmed_market_parent_stop_gaps_at_open(
             || parent.created_position_side != position_side_) {
             return true;
         }
+    }
+    return false;
+}
+
+bool BacktestEngine::pending_flat_market_pair_is_live(
+        const PendingOrder& order) const {
+    if (!pending_flat_market_pair_scope_is_live()
+        || order.type != OrderType::MARKET
+        || order.paired_flat_market_peer_seq <= 0
+        || !std::isfinite(order.paired_flat_market_transaction_qty)) {
+        return false;
+    }
+    for (const PendingOrder& peer : pending_orders_) {
+        if (peer.created_seq != order.paired_flat_market_peer_seq) continue;
+        return peer.type == OrderType::MARKET
+            && peer.paired_flat_market_peer_seq == order.created_seq
+            && std::isfinite(peer.paired_flat_market_transaction_qty)
+            && peer.id != order.id
+            && peer.is_long != order.is_long
+            && peer.created_bar == order.created_bar
+            && peer.created_position_side == PositionSide::FLAT
+            && order.created_position_side == PositionSide::FLAT;
     }
     return false;
 }

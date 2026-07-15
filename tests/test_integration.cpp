@@ -2968,6 +2968,147 @@ static void test_three_call_current_batch_invalidates_two_call_carry() {
     CHECK(near(strat.first_d, 0.0));
 }
 
+// A surviving multi-close may fill the entire position slice not already
+// claimed by older reservations. In that case no physical backing remains for
+// the survivor: its ledger/reservation/provenance must all clear. A later
+// zero-available close also consumes its stale logical cycle, so a same-id
+// re-entry starts fresh instead of accumulating an unfillable prior slice.
+class ZeroBackedCloseReservationStrategy : public CloseReplacementProbeBase {
+public:
+    double post_pos = -1.0;
+    double post_ledger_b = -1.0;
+    double post_res_b = -1.0;
+    double post_first_b = -1.0;
+    double post_total_res = -1.0;
+    double blocked_ledger_c = -1.0;
+    double reentry_ledger_c = -1.0;
+    double final_ledger_c = -1.0;
+    double final_pos = -1.0;
+
+    double total_reservations() const {
+        double total = 0.0;
+        for (const auto& kv : close_reserved_qty_) total += kv.second;
+        return total;
+    }
+
+    void on_bar(const Bar&) override {
+        double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("seed", true, na, na, 5.0);
+        if (bar_index_ == 1) {
+            // Model a FIFO history where logical ids overlap the five live
+            // physical units: R already owns two reserved units, while B's
+            // surviving close can fill the remaining three exactly.
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            id_unclosed_qty_["A"] = 1.0;
+            id_unclosed_qty_["B"] = 3.0;
+            id_unclosed_qty_["R"] = 2.0;
+            close_reserved_qty_["R"] = 2.0;
+            strategy_close("A", "first");
+            strategy_close("B", "survivor");
+        }
+        if (bar_index_ == 2) {
+            post_pos = signed_position_size();
+            post_ledger_b = ledger("B");
+            post_res_b = reservation("B");
+            post_first_b = two_call_first_qty("B");
+            post_total_res = total_reservations();
+
+            id_unclosed_qty_["C"] = 1.0;
+            strategy_close("C", "blocked");  // no unreserved physical qty
+            blocked_ledger_c = ledger("C");
+            strategy_entry("C", true, na, na, 1.0);
+        }
+        if (bar_index_ == 3) {
+            reentry_ledger_c = ledger("C");
+            strategy_close("C", "fresh-cycle");
+        }
+        if (bar_index_ == 4) {
+            final_ledger_c = ledger("C");
+            final_pos = signed_position_size();
+        }
+    }
+};
+
+static void test_zero_backed_close_reservation_clears_stale_cycle() {
+    std::printf("test_zero_backed_close_reservation_clears_stale_cycle\n");
+    ZeroBackedCloseReservationStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+        {100, 101, 99, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+    };
+    strat.run(bars, 5);
+
+    CHECK(near(strat.post_pos, 2.0));
+    CHECK(near(strat.post_ledger_b, 0.0));
+    CHECK(near(strat.post_res_b, 0.0));
+    CHECK(near(strat.post_first_b, 0.0));
+    CHECK(near(strat.post_total_res, 2.0));
+    CHECK(near(strat.blocked_ledger_c, 0.0));
+    CHECK(near(strat.reentry_ledger_c, 1.0));
+    CHECK(near(strat.final_ledger_c, 0.0));
+    CHECK(near(strat.final_pos, 2.0));
+    CHECK(strat.trade_count() == 2);
+}
+
+// ENA control: a positive truncated reservation is still a live replacement
+// chain. Keep the survivor's established logical ledger, but clamp the new
+// physical reservation and drop exact-two provenance because the fill is not
+// fully backed. This is intentionally distinct from the zero-backed ETH case.
+class PositiveTruncatedCloseReservationStrategy : public CloseReplacementProbeBase {
+public:
+    double final_pos = -1.0;
+    double ledger_b = -1.0;
+    double res_b = -1.0;
+    double first_b = -1.0;
+    double total_res = -1.0;
+
+    void on_bar(const Bar&) override {
+        double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("seed", true, na, na, 6.0);
+        if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            id_unclosed_qty_["A"] = 1.0;
+            id_unclosed_qty_["B"] = 4.0;
+            id_unclosed_qty_["R"] = 1.0;
+            close_reserved_qty_["R"] = 1.0;
+            strategy_close("A", "first");
+            strategy_close("B", "survivor");
+        }
+        if (bar_index_ == 2) {
+            final_pos = signed_position_size();
+            ledger_b = ledger("B");
+            res_b = reservation("B");
+            first_b = two_call_first_qty("B");
+            total_res = 0.0;
+            for (const auto& kv : close_reserved_qty_) total_res += kv.second;
+        }
+    }
+};
+
+static void test_positive_truncated_close_reservation_keeps_ledger_only() {
+    std::printf("test_positive_truncated_close_reservation_keeps_ledger_only\n");
+    PositiveTruncatedCloseReservationStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(near(strat.final_pos, 2.0));
+    CHECK(near(strat.ledger_b, 4.0));
+    CHECK(near(strat.res_b, 1.0));
+    CHECK(near(strat.first_b, 0.0));
+    CHECK(near(strat.total_res, 2.0));
+}
+
 // ---- 38b. process_orders_on_close: an exit gated on position visibility must
 // NOT fire on the entry bar. TradingView does not expose a just-placed market
 // entry through strategy.position_size until the next bar, so a regime/bias
@@ -4710,6 +4851,8 @@ int main() {
     test_exact_two_call_replacement_carries_prior_first_target();
     test_three_call_batch_does_not_create_two_call_provenance();
     test_three_call_current_batch_invalidates_two_call_carry();
+    test_zero_backed_close_reservation_clears_stale_cycle();
+    test_positive_truncated_close_reservation_keeps_ledger_only();
     test_pooc_exit_not_triggered_on_entry_bar();
     test_commission_deducted();
     test_slippage_applied();
