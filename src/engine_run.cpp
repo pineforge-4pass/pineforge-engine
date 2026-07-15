@@ -160,9 +160,9 @@ uint64_t BacktestEngine::execute_coof_script_body(
     coof_scheduler_active_ = true;
     coof_fill_recalc_active_ = is_fill_recalc;
     coof_cursor_is_bar_close_ = cursor_is_bar_close;
-    // KI-67: a fill recalc is "bar-open" only when its triggering fill occurred
-    // at the open tick; orders it places keep standard semantics. Any other
-    // recalc (segment/extreme/close fill) is mid-bar and places cascade orders.
+    // KI-67: only the first fill event at O owns "bar-open" provenance and
+    // places standard orders. A later fill at the same O, like a fill at any
+    // segment/extreme/close point, is mid-bar and places cascade orders.
     coof_recalc_at_bar_open_ = is_fill_recalc && recalc_at_bar_open;
     coof_cursor_price_ = broker_cursor_price;
     coof_direct_fill_events_remaining_ = direct_fill_event_budget;
@@ -176,6 +176,7 @@ uint64_t BacktestEngine::execute_coof_script_body(
     }
     coof_fill_recalc_active_ = false;
     coof_recalc_at_bar_open_ = false;
+    coof_recalc_after_first_open_fill_ = false;
     coof_direct_fill_events_remaining_ = 0;
     return broker_fill_event_seq_ - before;
 }
@@ -197,9 +198,16 @@ uint64_t BacktestEngine::run_coof_recalc_chain(
         const uint64_t used = events_already + total_events;
         const uint64_t direct_budget =
             used < max_events ? max_events - used : 0;
+        // Only the first fill event at O owns bar-open provenance. A direct or
+        // separately-dispatched later fill at that same O is a KI-67 cascade
+        // recalc whose remaining path starts on leg 0 (O->W1).
+        const bool first_open_fill_recalc =
+            recalc_at_bar_open && events_already == 0 && handled == 1;
+        coof_recalc_after_first_open_fill_ =
+            recalc_at_bar_open && !first_open_fill_recalc;
         const uint64_t direct = execute_coof_script_body(
             script_bar, broker_cursor_price, /*is_fill_recalc=*/true,
-            cursor_is_bar_close, recalc_at_bar_open,
+            cursor_is_bar_close, first_open_fill_recalc,
             direct_budget);
         total_events += direct;
         pending_recalcs += direct;
@@ -257,6 +265,7 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     coof_hist_path_index_ = -1;
     coof_cascade_recalc_leg_ = -1;
     coof_cascade_force_wp_gap_ = false;
+    coof_recalc_after_first_open_fill_ = false;
 
     double path[4];
     fill_bar_path_points(script_bar, path);
@@ -269,9 +278,9 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
                             bool filled_at_bar_open_point) {
         const uint64_t before = fill_events;
         cursor = fill.fill_price;
-        // A recalc chain triggered by a fill AT the open tick is "bar-open" and
-        // places STANDARD orders; any other fill point triggers a MID-BAR
-        // recalc that places cascade orders (PendingOrder::coof_born_mid_bar).
+        // The recalc chain receives O-point provenance, but only its first fill
+        // event is classified as bar-open. A later fill at the same O is a
+        // leg-0 cascade (PendingOrder::coof_born_mid_bar).
         fill_events += run_coof_recalc_chain(
             script_bar, cursor, cursor_is_close, filled_at_bar_open_point,
             fill.fill_events, kNoFillEventBudget, fill_events);
@@ -427,6 +436,7 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     coof_scheduler_active_ = false;
     coof_fill_recalc_active_ = false;
     coof_recalc_at_bar_open_ = false;
+    coof_recalc_after_first_open_fill_ = false;
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
@@ -507,6 +517,7 @@ void BacktestEngine::reset_run_state() {
     coof_scheduler_active_ = false;
     coof_fill_recalc_active_ = false;
     coof_recalc_at_bar_open_ = false;
+    coof_recalc_after_first_open_fill_ = false;
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
@@ -846,6 +857,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     coof_scheduler_active_ = true;
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
+    coof_recalc_after_first_open_fill_ = false;
 
     double cursor = ticks.front().price;
     int64_t cursor_ts = ticks.front().timestamp;
@@ -974,6 +986,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     coof_scheduler_active_ = false;
     coof_fill_recalc_active_ = false;
     coof_recalc_at_bar_open_ = false;
+    coof_recalc_after_first_open_fill_ = false;
     coof_cursor_is_bar_close_ = false;
     coof_evaluating_path_segment_ = false;
     coof_at_extreme_waypoint_ = false;
