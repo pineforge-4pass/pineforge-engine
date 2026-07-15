@@ -24,7 +24,9 @@ set(TEST_SOURCES
     test_integration
     test_request_security
     test_historical_security_lookahead_projection
+    test_pooc_global_full_exit
     test_security_range_start_na_warmup
+    test_chart_ema_na_warmup
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
     test_ltf_buffer_no_leak
@@ -97,6 +99,8 @@ set(TEST_SOURCES
     test_coof_cascade_eligibility
     test_cascade_exit_gapjump
     test_pooc_position_visibility
+    test_prearmed_exit_path_cursor
+    test_prearmed_market_parent_gap_exit
 )
 
 find_package(Threads REQUIRED)

@@ -555,12 +555,146 @@ static void test_per_leg_fifo_pnl_three_legs() {
     }
 }
 
+// A priced strategy.entry submitted in the current position's direction while
+// that position is already at the pyramiding cap is rejected at placement.
+// It must not remain armed and fire after a later reversal makes its direction
+// opposite to the live position. TradingView oracle:
+// order-entry-overcap-priced-admission-01, phase A.
+static void test_overcap_priced_entry_does_not_survive_reversal() {
+    std::printf("test_overcap_priced_entry_does_not_survive_reversal\n");
+    class Probe : public BacktestEngine {
+    public:
+        struct TradeRow {
+            std::string entry_id;
+            double exit_price;
+            int64_t exit_time;
+        };
+        std::vector<TradeRow> closed_trades;
+
+        Probe() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            slippage_ = 0;
+            commission_value_ = 0;
+            pyramiding_ = 1;
+        }
+
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0)
+                strategy_entry("base-long", true);
+            if (bar_index_ == 1 && position_side_ == PositionSide::LONG)
+                strategy_entry("overcap-long", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               /*stop=*/110.0);
+            if (bar_index_ == 2)
+                strategy_entry("live-short", false);
+            if (bar_index_ == 5)
+                strategy_close_all();
+            if (bar_index_ == 7) {
+                for (const auto& t : trades_)
+                    closed_trades.push_back({t.entry_id, t.exit_price, t.exit_time});
+            }
+        }
+    };
+
+    Probe p;
+    Bar bars[8];
+    for (int i = 0; i < 8; ++i) {
+        bars[i] = {100, 101, 99, 100, 1000, (int64_t)(i + 1) * 60'000};
+    }
+    // If the over-cap stop leaked into pending_orders_, it fires here while
+    // SHORT and closes that position at 110 instead of the later cleanup.
+    bars[4].high = 115;
+    p.run(bars, 8);
+
+    CHECK(p.closed_trades.size() == 2);
+    bool found_short = false;
+    for (const auto& tr : p.closed_trades) {
+        if (tr.entry_id == "live-short") {
+            found_short = true;
+            CHECK(near(tr.exit_price, 100.0));
+            CHECK(tr.exit_time == bars[6].timestamp);
+        }
+    }
+    CHECK(found_short);
+}
+
+// Same-id contract: an over-cap reissue first replaces (removes) the older
+// pending order, then the new priced order is rejected. Neither the new level
+// nor the old level may fire after a reversal. TradingView oracle:
+// order-entry-overcap-priced-admission-01, phase B.
+static void test_overcap_same_id_reissue_removes_old_pending_order() {
+    std::printf("test_overcap_same_id_reissue_removes_old_pending_order\n");
+    class Probe : public BacktestEngine {
+    public:
+        struct TradeRow {
+            std::string entry_id;
+            double exit_price;
+            int64_t exit_time;
+        };
+        std::vector<TradeRow> closed_trades;
+
+        Probe() {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            slippage_ = 0;
+            commission_value_ = 0;
+            pyramiding_ = 1;
+        }
+
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0)
+                strategy_entry("pending-long", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               /*stop=*/130.0);
+            if (bar_index_ == 1)
+                strategy_entry("base-long", true);
+            if (bar_index_ == 2 && position_side_ == PositionSide::LONG)
+                strategy_entry("pending-long", true,
+                               std::numeric_limits<double>::quiet_NaN(),
+                               /*stop=*/110.0);
+            if (bar_index_ == 3)
+                strategy_entry("live-short", false);
+            if (bar_index_ == 7)
+                strategy_close_all();
+            if (bar_index_ == 9) {
+                for (const auto& t : trades_)
+                    closed_trades.push_back({t.entry_id, t.exit_price, t.exit_time});
+            }
+        }
+    };
+
+    Probe p;
+    Bar bars[10];
+    for (int i = 0; i < 10; ++i) {
+        bars[i] = {100, 101, 99, 100, 1000, (int64_t)(i + 1) * 60'000};
+    }
+    bars[5].high = 115;  // would touch the rejected replacement at 110
+    bars[6].high = 135;  // would touch the removed old order at 130
+    p.run(bars, 10);
+
+    CHECK(p.closed_trades.size() == 2);
+    bool found_short = false;
+    for (const auto& tr : p.closed_trades) {
+        if (tr.entry_id == "live-short") {
+            found_short = true;
+            CHECK(near(tr.exit_price, 100.0));
+            CHECK(tr.exit_time == bars[8].timestamp);
+        }
+    }
+    CHECK(found_short);
+}
+
 int main() {
     test_deferred_flip_chain_grows();
     test_same_direction_no_carry();
     test_two_cycle_siblings_independent_carry();
     test_per_bar_pending_close_resets_in_script_tf_run();
     test_per_leg_fifo_pnl_three_legs();
+    test_overcap_priced_entry_does_not_survive_reversal();
+    test_overcap_same_id_reissue_removes_old_pending_order();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

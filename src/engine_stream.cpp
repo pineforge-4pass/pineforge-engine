@@ -350,7 +350,7 @@ void BacktestEngine::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
     }
 
     _push_source_series();
-    on_bar(current_bar_);
+    invoke_chart_on_bar(current_bar_);
     if (process_orders_on_close_) {
         flush_same_bar_close();
         // New close-time orders only get the closing price point. Re-walking

@@ -219,7 +219,8 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            bool is_entry_bar,
                                            bool magnifier_active,
                                            double syminfo_mintick,
-                                           bool cascade_wp_gap = false);
+                                           bool cascade_wp_gap = false,
+                                           double path_start_position = 0.0);
 
 
 // KI-67 exit cascade (Model S "R-cascade-gapjump"). Given the in-flight LEG

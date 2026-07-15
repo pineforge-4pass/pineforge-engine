@@ -211,6 +211,23 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             [&](const PendingOrder& o) { return o.id == id; }),
         pending_orders_.end());
 
+    // On the ordinary non-POOC path, TradingView rejects a same-direction
+    // priced strategy.entry call when the live position is already at the
+    // pyramiding cap. This is a placement-time admission rule, not merely a
+    // fill-time check: a rejected stop/limit must not survive a later reversal
+    // and fire against the new opposite position. Same-id replacement happens
+    // first, so an over-cap reissue also removes the older pending order without
+    // admitting the replacement. Market entries keep their fill-time role-
+    // change semantics, and POOC entry+close co-queues remain governed by the
+    // same-close-pass rules. Ground truth:
+    // order-entry-overcap-priced-admission-01 phases A/B.
+    bool over_pyramiding_cap =
+        position_side_ != PositionSide::FLAT
+        && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
+        && position_entry_count_ >= pyramiding_;
+    bool is_priced_entry = !std::isnan(limit_price) || !std::isnan(stop_price);
+    if (is_priced_entry && !process_orders_on_close_ && over_pyramiding_cap) return;
+
     PendingOrder order;
     order.id = id;
     order.from_entry = "";
@@ -238,18 +255,10 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_position_cycle_seq = position_cycle_seq_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
-    // Snapshot the placement-time over-pyramiding-cap status, mirroring the
-    // fill-time gate (add_to_pyramid_market, engine_orders.cpp) EXACTLY: a
-    // SAME-direction add against a position already at/over the pyramiding cap
-    // is one TradingView never admits. Same-id re-placement rebuilds this
-    // PendingOrder wholesale, so the snapshot naturally refreshes each call.
-    // The post-full-close same-direction wipe reads this flag to keep drop-
-    // ping over-cap co-queues even when a co-queued full close zeroes
-    // position_entry_count_ before the add's fill-time gate runs.
-    order.over_pyramiding_cap_at_placement =
-        position_side_ != PositionSide::FLAT
-        && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
-        && position_entry_count_ >= pyramiding_;
+    // Market orders and the POOC priced path retain the placement snapshot for
+    // the downstream full-close compaction and role-change rules. Ordinary
+    // non-POOC priced orders that are over cap returned above.
+    order.over_pyramiding_cap_at_placement = over_pyramiding_cap;
     // TradingView empirical rule (probe 52 trade 113): the deferred-flip
     // carry is the position size at THIS placement, not the original.
     // ``strategy.entry`` with the same id replaces the pending order
@@ -328,8 +337,8 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             // Direction-neutral: two fill-time consumers read this flag.
             //   1. KI-61 long entry-bar affordability trim
             //      (engine_fills.cpp): re-checks order.is_long and margin_long
-            //      via long_full_margin_after_fill, so its long-only semantics
-            //      are invariant to widening this to shorts.
+            //      via long_full_margin_after_fill, so its long-only exemption
+            //      remains invariant.
             //   2. gap-reject (design-cntvxiao-gap-reject, engine_fills.cpp):
             //      direction-symmetric — drops a true-flat all-in zero-comm
             //      entry whose gapped fill notional exceeds equity by >1 lot,
@@ -412,6 +421,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     }
 
     pending_orders_.push_back(std::move(order));
+    invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
 }
 
 void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
@@ -486,8 +496,12 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
         if (process_orders_on_close_ && !immediately) {
             freeze_script_position_view();
         }
+        const bool ordinary_pooc_close_all =
+            pooc_can_fill_at_this_cursor && !immediately && id.empty()
+            && !coof_scheduler_active_;
         execute_immediate_close(id, comment, qty_to_close, matching_qty,
-                                closes_full_position, closes_fifo_qty, closes_any_qty);
+                                closes_full_position, closes_fifo_qty, closes_any_qty,
+                                ordinary_pooc_close_all);
         return;
     }
 
@@ -604,7 +618,17 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
     double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
     double target = std::min(unclosed, avail);
     if (target <= eps) {
-        return;  // zero-target call: no-op, cannot become the survivor
+        if (unclosed > eps && avail <= eps) {
+            // The logical slot was asked to close, but earlier surviving
+            // multi-close orders already reserve every physically available
+            // unit. TV emits no broker fill here, yet the close command still
+            // consumes this logical cycle: a later same-id entry must not be
+            // added to the stale ledger and double-close on its next signal.
+            id_unclosed_qty_.erase(id);
+            close_reserved_qty_.erase(id);
+            close_two_call_first_qty_.erase(id);
+        }
+        return;  // no order/fill; a zero-target call cannot survive
     }
 
     // Same-bar source-order carry (see strategy_entry's tv_carry_qty): a
@@ -623,6 +647,9 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
         sb_close_bar_ = bar_index_;
         sb_close_calls_ = 1;
         sb_close_first_id_ = id;
+        sb_close_first_target_ = target;
+        sb_close_first_carry_valid_ = false;
+        sb_close_first_carry_qty_ = 0.0;
         sb_close_id_ = id;
         sb_close_comment_ = comment;
         return;
@@ -635,12 +662,30 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
     }
     sb_close_calls_ += 1;
     if (sb_close_calls_ == 2) {
-        // The FIRST replaced call's ledger is consumed silently: no fill,
-        // no trade rows, reservation released. Intermediate replaced
-        // calls (3rd+) keep their ledgers intact.
+        const auto reserved = close_reserved_qty_.find(sb_close_first_id_);
+        const auto provenance =
+            close_two_call_first_qty_.find(sb_close_first_id_);
+        if (reserved != close_reserved_qty_.end()
+            && provenance != close_two_call_first_qty_.end()) {
+            // Snapshot before releasing the old reservation. Restoration is
+            // deferred until flush proves the CURRENT batch also has exactly
+            // two calls; a later 3rd call invalidates this carry.
+            sb_close_first_carry_valid_ = true;
+            sb_close_first_carry_qty_ = provenance->second;
+        }
+        // Preserve the established provisional replacement rule immediately.
+        // Besides matching the broker lifecycle, this makes a later A,B,A
+        // source revisit observe A as zero-target while this batch is pending.
         id_unclosed_qty_.erase(sb_close_first_id_);
         close_reserved_qty_.erase(sb_close_first_id_);
+        close_two_call_first_qty_.erase(sb_close_first_id_);
+    } else if (sb_close_calls_ == 3) {
+        // The current batch is no longer exact-two. Keep the provisional
+        // ledger erase and discard the snapshotted two-call carry.
+        sb_close_first_carry_valid_ = false;
+        sb_close_first_carry_qty_ = 0.0;
     }
+    // Intermediate replaced calls (3rd+) keep their ledgers as before.
     sb_close_id_ = id;
     sb_close_comment_ = comment;
 }
@@ -660,11 +705,19 @@ void BacktestEngine::flush_same_bar_close() {
     if (!sb_close_active_) return;
     const std::string id = sb_close_id_;
     const std::string comment = sb_close_comment_;
-    const bool sole_call = (sb_close_calls_ == 1);
+    const int batch_calls = sb_close_calls_;
+    const bool sole_call = (batch_calls == 1);
+    const std::string first_id = sb_close_first_id_;
+    const double first_target = sb_close_first_target_;
+    const bool first_carry_valid = sb_close_first_carry_valid_;
+    const double first_carry_qty = sb_close_first_carry_qty_;
     sb_close_active_ = false;
     sb_close_bar_ = -1;
     sb_close_calls_ = 0;
     sb_close_first_id_.clear();
+    sb_close_first_target_ = 0.0;
+    sb_close_first_carry_valid_ = false;
+    sb_close_first_carry_qty_ = 0.0;
     sb_close_id_.clear();
     sb_close_comment_.clear();
     if (position_side_ == PositionSide::FLAT) return;
@@ -700,6 +753,7 @@ void BacktestEngine::flush_same_bar_close() {
             id_unclosed_qty_.erase(it);
         }
         close_reserved_qty_.erase(id);
+        close_two_call_first_qty_.erase(id);
     }
 
     size_t trades_before = trades_.size();
@@ -715,7 +769,8 @@ void BacktestEngine::flush_same_bar_close() {
         // must survive exactly as they did under the immediate path.
         execute_market_exit(broker_price);
         if (position_side_ == PositionSide::FLAT) {
-            cancel_same_bar_market_reentries_after_full_close(closed_long);
+            cancel_same_bar_market_reentries_after_full_close(
+                closed_long, /*preserve_undercap_entries=*/false);
         }
     } else {
         execute_partial_exit_qty(broker_price, target);
@@ -729,19 +784,51 @@ void BacktestEngine::flush_same_bar_close() {
         trades_[ti].exit_comment = comment;
         trades_[ti].exit_id = "__close__" + id;
     }
-    if (position_side_ != side_before
+    const bool close_filled = position_side_ != side_before
         || std::abs(position_qty_ - qty_before) > eps
-        || trades_.size() != trades_before) {
+        || trades_.size() != trades_before;
+    if (close_filled) {
         ++broker_fill_event_seq_;
         if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
             --coof_direct_fill_events_remaining_;
         }
     }
-    if (!sole_call && position_side_ != PositionSide::FLAT) {
-        // Surviving multi-call close: ledger NOT consumed (TV leaves the
-        // id closable again later); the filled amount stays reserved
-        // against the position for other ids' close targets.
-        close_reserved_qty_[id] = target;
+    if (!sole_call && close_filled
+        && position_side_ != PositionSide::FLAT) {
+        // A surviving multi-call close normally keeps its established ledger
+        // (TV leaves the id closable again later). The post-fill reservation
+        // below determines whether any physical backing remains; zero backing
+        // clears that ledger, while a positive truncated reservation keeps it.
+        if (batch_calls == 2 && first_carry_valid
+            && std::isfinite(first_carry_qty) && first_carry_qty > eps) {
+            // Exact two-call -> two-call replacement chain: restore the PRIOR
+            // batch's first admitted target, never ledger-reservation and
+            // never +=. ENA's L59 chain carries 0.0991 here; a 5->2 XAU chain
+            // has no provenance. Restore only after a real broker fill so a
+            // zero/deferred batch cannot resurrect a replaced ledger.
+            id_unclosed_qty_[first_id] = first_carry_qty;
+        }
+        // A reservation is bounded by physical capacity AFTER this fill.
+        // Existing reservations for other ids have first claim on the
+        // remaining position; blindly reserving the just-filled target can
+        // make total reservations exceed position_qty_ and suppress valid
+        // closes after the next entry. Preserve only the capacity left after
+        // those older claims (ETH grid-bot replacement chain).
+        const double actual_fill = std::max(0.0, qty_before - position_qty_);
+        const double reserve_capacity =
+            std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+        const double reserve = std::min(actual_fill, reserve_capacity);
+        if (reserve > eps) {
+            close_reserved_qty_[id] = reserve;
+        } else {
+            id_unclosed_qty_.erase(id);
+            close_reserved_qty_.erase(id);
+        }
+        if (batch_calls == 2 && reserve >= actual_fill - eps) {
+            close_two_call_first_qty_[id] = first_target;
+        } else {
+            close_two_call_first_qty_.erase(id);
+        }
     }
 }
 
@@ -753,6 +840,23 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double qty, const std::string& oca_name,
                                     double profit_ticks, double loss_ticks) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    const bool has_actionable_exit = !std::isnan(limit_price)
+        || !std::isnan(stop_price)
+        || !std::isnan(profit_ticks)
+        || !std::isnan(loss_ticks)
+        || !std::isnan(trail_points)
+        || !std::isnan(trail_price);
+    if (!has_actionable_exit) {
+        // TV probe N0/NR: an all-actionable-NaN strategy.exit is inert, not a
+        // market close. A same-id call still cancels its prior bracket, so the
+        // return follows matching-EXIT removal but precedes all sizing and
+        // reservation work. trail_offset alone is intentionally insufficient.
+        int64_t discarded_seq = 0;
+        double discarded_reserved_qty = std::numeric_limits<double>::quiet_NaN();
+        clear_existing_exit_order(id, from_entry, /*has_trail_request=*/false,
+                                  discarded_seq, discarded_reserved_qty);
+        return;
+    }
     bool has_explicit_qty = !std::isnan(qty);
     double qp = std::isnan(qty_percent) ? 100.0 : std::clamp(qty_percent, 0.0, 100.0);
     // A default-FIFO strategy.close batched earlier on this SAME bar has not
@@ -794,6 +898,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                               preserved_seq, preserved_reserved_qty);
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
+    bool bind_global_full_exit_dynamic_qty = false;
+    std::vector<std::size_t> pooc_global_full_exit_bound_add_indices;
     if (has_explicit_qty) {
         // Honour the explicit qty literally (clamped to the live position
         // and subject to the same already-reserved accounting). This is
@@ -892,11 +998,74 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                 break;  // entry ids are unique in pending_orders_
             }
         }
-        if (!bind_to_pending_reversal_entry
-            && !compute_exit_reserved_qty(from_entry, preserved_reserved_qty,
-                                          live_pos_qty, qp, is_partial, reserved_qty)) {
-            return;
+
+        // POOC global-full-exit reservation: when the complete pending
+        // entry-like queue consists only of ordinary same-direction high-level
+        // MARKET adds created on this bar, each under the pyramiding cap, those
+        // adds fill at C before this later-created priced exit can trigger. A
+        // global (omitted from_entry) 100% bracket covers that post-add
+        // position on TradingView. Keep the normal finite reservation for
+        // sibling accounting, then mark this one order so the fill path closes
+        // the full live position after the adds have joined it.
+        //
+        // This is deliberately narrower than the reversal binding above:
+        // POOC only; every pending MARKET/ENTRY/RAW order must be an ordinary
+        // same-bar high-level MARKET entry on the same side at placement and
+        // now, under the pyramiding cap; at least one such add must exist;
+        // global full-percent default sizing only. Explicit exit qty uses the
+        // separate branch, while from_entry, partial, RAW_ORDER, priced,
+        // opposite, prior-bar, COOF-recalc, over-cap, and mixed-queue shapes
+        // retain the established frozen reservation.
+        bool eligible_global_full_exit_dynamic_qty = false;
+        if (from_entry.empty()
+            && process_orders_on_close_
+            && !effectively_flat
+            && qp >= 100.0 - kFullPercentEps) {
+            bool found_qualifying_add = false;
+            bool entry_queue_is_bounded = true;
+            for (std::size_t i = 0; i < pending_orders_.size(); ++i) {
+                const PendingOrder& o = pending_orders_[i];
+                if (o.type != OrderType::MARKET
+                    && o.type != OrderType::ENTRY
+                    && o.type != OrderType::RAW_ORDER) {
+                    continue;
+                }
+                const PositionSide entry_dir = o.is_long
+                    ? PositionSide::LONG : PositionSide::SHORT;
+                const bool qualifies = o.created_bar == bar_index_
+                    && o.type == OrderType::MARKET
+                    && !o.created_during_coof_recalc
+                    && !o.over_pyramiding_cap_at_placement
+                    && entry_dir == position_side_
+                    && o.created_position_side == position_side_;
+                if (!qualifies) {
+                    entry_queue_is_bounded = false;
+                    break;
+                }
+                found_qualifying_add = true;
+                pooc_global_full_exit_bound_add_indices.push_back(i);
+            }
+            eligible_global_full_exit_dynamic_qty =
+                found_qualifying_add
+                && entry_queue_is_bounded;
         }
+
+        if (!bind_to_pending_reversal_entry) {
+            if (!compute_exit_reserved_qty(
+                    from_entry, preserved_reserved_qty, live_pos_qty,
+                    qp, is_partial, reserved_qty)) {
+                return;
+            }
+            eligible_global_full_exit_dynamic_qty =
+                eligible_global_full_exit_dynamic_qty
+                && !is_partial
+                && std::isfinite(reserved_qty)
+                && reserved_qty >= live_pos_qty - kFullQtyEps;
+        }
+
+        // The pending order stores this below after the common construction.
+        bind_global_full_exit_dynamic_qty =
+            eligible_global_full_exit_dynamic_qty;
     }
 
     PendingOrder order;
@@ -915,6 +1084,15 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.qty_type = -1;
     order.qty_percent = qp;
     order.requested_partial = is_partial;
+    order.pooc_global_full_exit_dynamic_qty =
+        bind_global_full_exit_dynamic_qty;
+    order.pooc_global_full_exit_tracks_bound_adds =
+        bind_global_full_exit_dynamic_qty;
+    if (bind_global_full_exit_dynamic_qty) {
+        for (std::size_t index : pooc_global_full_exit_bound_add_indices) {
+            pending_orders_[index].pooc_global_full_exit_bound_add = true;
+        }
+    }
     // OCA-name plumbing: ``strategy.exit`` supports oca_name (Pine v6) so
     // siblings in different OCA groups can fire independently. The cancel
     // sweep predicate (engine_fills.cpp::apply_filled_order_to_state →
@@ -1115,6 +1293,21 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     }
 
     pending_orders_.push_back(std::move(order));
+    invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
+}
+
+void BacktestEngine::invalidate_unsafe_pooc_global_full_exit_dynamic_qty() {
+    // This helper is called only after a later entry-like placement was
+    // successfully admitted. The oracle covers adds already pending BEFORE
+    // the global exit, not any order emitted after it—even another same-side
+    // MARKET add. Clear every still-live marker, including candidates carried
+    // into a later bar; their finite ``qty`` remains the conservative
+    // reservation automatically.
+    for (auto& o : pending_orders_) {
+        if (o.type == OrderType::EXIT) {
+            o.pooc_global_full_exit_dynamic_qty = false;
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -1238,7 +1431,8 @@ void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*
         pending_orders_.end());
 }
 
-void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(bool closed_long) {
+void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(
+        bool closed_long, bool preserve_undercap_entries) {
     const PositionSide closed_side = closed_long ? PositionSide::LONG : PositionSide::SHORT;
     pending_orders_.erase(
         std::remove_if(
@@ -1248,14 +1442,19 @@ void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(bool clos
                 // Deferred full exits already remove same-direction market
                 // entries through process_pending_orders' exit_closed_from_bar
                 // machinery. POOC/immediate closes execute outside that loop,
-                // so mirror only the market-reentry cleanup here. Priced
-                // entries intentionally survive (covered by
-                // test_strategy_close_pooc_keeps_same_bar_pending_entry), and
-                // opposite-direction market entries remain valid reversals.
+                // so mirror only the market-reentry cleanup here. An ordinary
+                // POOC close_all preserves an entry created before it when the
+                // entry was under the pyramiding cap at placement;
+                // over-cap entries still drop. Explicit immediately=true and
+                // flush-time strategy.close(id) keep blanket cancellation.
+                // Priced entries intentionally survive, and opposite-direction
+                // market entries remain valid reversals.
                 return o.type == OrderType::MARKET
                     && o.created_bar == bar_index_
                     && o.created_position_side == closed_side
-                    && o.is_long == closed_long;
+                    && o.is_long == closed_long
+                    && (!preserve_undercap_entries
+                        || o.over_pyramiding_cap_at_placement);
             }),
         pending_orders_.end());
 }
@@ -1270,7 +1469,8 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
                                              double matching_qty,
                                              bool closes_full_position,
                                              bool closes_fifo_qty,
-                                             bool closes_any_qty) {
+                                             bool closes_any_qty,
+                                             bool preserve_undercap_entries) {
     const double eps = kQtyEpsilon;
     size_t trades_before = trades_.size();
     PositionSide side_before = position_side_;
@@ -1283,7 +1483,8 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
         execute_market_exit(broker_price);
         purge_exit_orders();
         if (position_side_ == PositionSide::FLAT) {
-            cancel_same_bar_market_reentries_after_full_close(closed_long);
+            cancel_same_bar_market_reentries_after_full_close(
+                closed_long, preserve_undercap_entries);
         }
     } else if (closes_fifo_qty) {
         execute_partial_exit_qty(broker_price, qty_to_close);

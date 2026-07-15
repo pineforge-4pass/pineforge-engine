@@ -560,7 +560,11 @@ ExitTrailState compute_exit_trail_state(bool is_long, double trail_points,
         // Absolute activation price level (no entry-relative tick rounding).
         s.activation_level = trail_price;
     }
-    if (!std::isnan(trail_offset)) {
+    // TV treats an explicit zero offset like an omitted offset: the exit fires
+    // at the activation crossing itself. Keep zero represented as NaN here so
+    // it follows the existing activation-only path; positive offsets retain
+    // the ordinary best-price-minus/plus-offset trailing behaviour.
+    if (!std::isnan(trail_offset) && trail_offset != 0.0) {
         s.trail_offset_price = std::ceil(trail_offset) * syminfo_mintick;
     }
     if (!std::isnan(s.best_price)) {
@@ -796,7 +800,8 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
                                            bool is_entry_bar,
                                            bool magnifier_active,
                                            double syminfo_mintick,
-                                           bool cascade_wp_gap) {
+                                           bool cascade_wp_gap,
+                                           double path_start_position) {
     ExitPathFill fill;
     if (position_side == PositionSide::FLAT) return fill;
 
@@ -823,7 +828,9 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
     // the exit level lies in the in-flight remainder in the trigger direction, so
     // the order gap-fills at that waypoint price — force the open-gap shortcut on
     // even though entry and exit share this bar (is_entry_bar).
-    if (!is_entry_bar || magnifier_active || cascade_wp_gap) {
+    const double path_cursor = std::clamp(path_start_position, 0.0, 3.0);
+    if (path_cursor <= kPathPosEps
+        && (!is_entry_bar || magnifier_active || cascade_wp_gap)) {
         if (try_exit_open_gap_fill(bar, is_long, has_stop, stop_price,
                                    has_limit, limit_price, trail, &fill)) {
             return fill;
@@ -834,8 +841,21 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
     fill_bar_path_points(bar, path);
 
     for (int seg_idx = 1; seg_idx < 4; ++seg_idx) {
-        const double from_price = path[seg_idx - 1];
+        // A priced parent entry can activate a resting from_entry bracket in
+        // the middle of this path. Skip every elapsed segment and truncate
+        // the containing segment to the unconsumed suffix. A waypoint cursor
+        // resumes on the following segment under that segment's normal
+        // direction-specific stop/limit rules.
+        if (path_cursor >= static_cast<double>(seg_idx) - kPathPosEps) {
+            continue;
+        }
+        double from_price = path[seg_idx - 1];
         const double to_price = path[seg_idx];
+        const double seg_start = static_cast<double>(seg_idx - 1);
+        if (path_cursor > seg_start + kPathPosEps) {
+            const double t = std::clamp(path_cursor - seg_start, 0.0, 1.0);
+            from_price += (to_price - from_price) * t;
+        }
         const bool rising = to_price > from_price;
         const bool falling = to_price < from_price;
 

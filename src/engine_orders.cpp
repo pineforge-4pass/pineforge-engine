@@ -188,7 +188,8 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
                                  pe.max_drawdown * keep_scale,
                                  pe.skip_entry_bar_high,
                                  pe.skip_entry_bar_low,
-                                 pe.market_pyramid_add});
+                                 pe.market_pyramid_add,
+                                 pe.entry_path_position});
         }
     }
 
@@ -255,15 +256,30 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std:
 }
 
 
-// Internal helper: partially close entries matching from_entry by qty_percent.
-void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
-                                                           const std::string& from_entry,
-                                                           double qty_percent) {
+// Internal helper: close an exact quantity only from entries matching
+// from_entry. Live-position strategy.exit calls freeze their percent-derived
+// reservations into PendingOrder::qty; when layered siblings fill on one bar,
+// that absolute reservation must survive earlier reductions of the position.
+void BacktestEngine::execute_partial_exit_by_entry_qty(
+        double fill_price, const std::string& from_entry, double qty_to_close) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
+    if (!std::isfinite(qty_to_close) || qty_to_close <= kQtyEpsilon) return;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
     fill_price = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
+
+    fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
+    settle_position_after_partial_exit();
+}
+
+
+// Internal helper: resolve a genuinely deferred percentage at fill time, then
+// close that quantity only from entries matching from_entry.
+void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
+                                                           const std::string& from_entry,
+                                                           double qty_percent) {
+    if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     double matched_qty = 0.0;
     for (const auto& pe : pyramid_entries_) {
@@ -275,9 +291,7 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
     double qty_to_close = matched_qty * (pct / 100.0);
     if (qty_to_close <= kQtyEpsilon) return;
 
-    // Close FIFO, but only from entries matching from_entry.
-    fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
-    settle_position_after_partial_exit();
+    execute_partial_exit_by_entry_qty(fill_price, from_entry, qty_to_close);
 }
 
 
@@ -555,6 +569,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
     close_reserved_qty_.clear();
+    close_two_call_first_qty_.clear();
     consumed_partial_exit_ids_.clear();
 }
 
@@ -603,6 +618,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
     close_reserved_qty_.clear();
+    close_two_call_first_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
     id_unclosed_qty_[id] += qty;

@@ -101,6 +101,10 @@ public:
     int race_bar = 2;             // bar issuing both entry blocks
     bool race_is_long = true;
     int second_race_bar = -1;     // optional class-D repeat (-1 = none)
+    bool first_has_bracket = true;
+    bool last_has_bracket = true;
+    double first_bracket_qty_percent = 100.0;
+    double last_bracket_qty_percent = 100.0;
 
     // Brackets (long-side values; short-side mirrors around 100).
     // First entry's bracket fires strictly EARLIER on the path than the
@@ -130,18 +134,30 @@ public:
     void issue_race_blocks() {
         if (race_is_long) {
             strategy_entry("Long", true, kNaN, kNaN, kNaN, "");
-            strategy_exit("Long Exit", "Long", first_limit_long,
-                          first_stop_long, kNaN, kNaN, kNaN, 100.0, "", kNaN, "");
+            if (first_has_bracket) {
+                strategy_exit("Long Exit", "Long", first_limit_long,
+                              first_stop_long, kNaN, kNaN, kNaN,
+                              first_bracket_qty_percent, "", kNaN, "");
+            }
             strategy_entry("Wyckoff Long", true, kNaN, kNaN, kNaN, "");
-            strategy_exit("Wyckoff Long Exit", "Wyckoff Long", last_limit_long,
-                          last_stop_long, kNaN, kNaN, kNaN, 100.0, "", kNaN, "");
+            if (last_has_bracket) {
+                strategy_exit("Wyckoff Long Exit", "Wyckoff Long", last_limit_long,
+                              last_stop_long, kNaN, kNaN, kNaN,
+                              last_bracket_qty_percent, "", kNaN, "");
+            }
         } else {
             strategy_entry("Short", false, kNaN, kNaN, kNaN, "");
-            strategy_exit("Short Exit", "Short", 200.0 - first_limit_long,
-                          200.0 - first_stop_long, kNaN, kNaN, kNaN, 100.0, "", kNaN, "");
+            if (first_has_bracket) {
+                strategy_exit("Short Exit", "Short", 200.0 - first_limit_long,
+                              200.0 - first_stop_long, kNaN, kNaN, kNaN,
+                              first_bracket_qty_percent, "", kNaN, "");
+            }
             strategy_entry("Wyckoff Short", false, kNaN, kNaN, kNaN, "");
-            strategy_exit("Wyckoff Short Exit", "Wyckoff Short", 200.0 - last_limit_long,
-                          200.0 - last_stop_long, kNaN, kNaN, kNaN, 100.0, "", kNaN, "");
+            if (last_has_bracket) {
+                strategy_exit("Wyckoff Short Exit", "Wyckoff Short", 200.0 - last_limit_long,
+                              200.0 - last_stop_long, kNaN, kNaN, kNaN,
+                              last_bracket_qty_percent, "", kNaN, "");
+            }
         }
     }
 
@@ -306,6 +322,82 @@ static void test_reversal_race_remainder_crosses_zero_first_id() {
     }
 }
 
+// Rsantana discriminator — a duplicate later MARKET entry does not activate
+// Jevond's sequential plain-transaction rule unless both entry blocks own
+// their own full from_entry brackets. The primary entry here is unbracketed;
+// TV therefore performs the ordinary full reversal under the primary id, and
+// the bracketed duplicate is rejected by the pyramiding gate.
+static void test_unbracketed_primary_reversal_keeps_full_qty() {
+    std::printf("test_unbracketed_primary_reversal_keeps_full_qty\n");
+    RaceProbe p;
+    p.seed_bar = 0;
+    p.seed_is_long = false;
+    p.seed_qty = 50.0;       // old short < q_plain, the old broad R* made 150
+    p.race_bar = 2;
+    p.race_is_long = true;
+    p.first_has_bracket = false;
+    p.last_has_bracket = true;
+    auto bars = flat_feed(6);
+    p.run(bars.data(), (int)bars.size());
+
+    double closed_seed = 0.0;
+    for (const auto& t : p.closed) {
+        if (t.entry_id == "Seed") closed_seed += t.qty;
+    }
+    CHECK(near(closed_seed, 50.0, 1e-9));
+    CHECK(p.final_side == PositionSide::LONG);
+    CHECK(p.open_lots.size() == 1);
+    if (p.open_lots.size() == 1) {
+        CHECK(p.open_lots[0].first == "Long");
+        CHECK(near(p.open_lots[0].second, 200.0, 1e-9));
+    }
+}
+
+static void check_nonpaired_reversal_keeps_full_qty(
+        const char* label, bool first_has_bracket, bool last_has_bracket,
+        double first_qty_percent, double last_qty_percent) {
+    std::printf("%s\n", label);
+    RaceProbe p;
+    p.seed_bar = 0;
+    p.seed_is_long = false;
+    p.seed_qty = 50.0;
+    p.race_bar = 2;
+    p.race_is_long = true;
+    p.first_has_bracket = first_has_bracket;
+    p.last_has_bracket = last_has_bracket;
+    p.first_bracket_qty_percent = first_qty_percent;
+    p.last_bracket_qty_percent = last_qty_percent;
+    auto bars = flat_feed(6);
+    p.run(bars.data(), (int)bars.size());
+
+    CHECK(p.final_side == PositionSide::LONG);
+    CHECK(p.open_lots.size() == 1);
+    if (p.open_lots.size() == 1) {
+        CHECK(p.open_lots[0].first == "Long");
+        CHECK(near(p.open_lots[0].second, 200.0, 1e-9));
+    }
+}
+
+// Both sides of the paired-bracket predicate are load-bearing. Neither a
+// missing later child nor a partial child may activate Jevond R*.
+static void test_unbracketed_later_reversal_keeps_full_qty() {
+    check_nonpaired_reversal_keeps_full_qty(
+        "test_unbracketed_later_reversal_keeps_full_qty",
+        true, false, 100.0, 100.0);
+}
+
+static void test_partial_primary_bracket_keeps_full_qty() {
+    check_nonpaired_reversal_keeps_full_qty(
+        "test_partial_primary_bracket_keeps_full_qty",
+        true, true, 50.0, 100.0);
+}
+
+static void test_partial_later_bracket_keeps_full_qty() {
+    check_nonpaired_reversal_keeps_full_qty(
+        "test_partial_later_bracket_keeps_full_qty",
+        true, true, 100.0, 50.0);
+}
+
 // Class D — same-direction position: both entries are rejected at execution
 // time; the position is unchanged and the live lot's bracket is refreshed
 // via from_entry binding.
@@ -414,6 +506,10 @@ int main() {
     test_reversal_race_last_id_owns_entry();
     test_reversal_race_operative_bracket_is_last();
     test_reversal_race_remainder_crosses_zero_first_id();
+    test_unbracketed_primary_reversal_keeps_full_qty();
+    test_unbracketed_later_reversal_keeps_full_qty();
+    test_partial_primary_bracket_keeps_full_qty();
+    test_partial_later_bracket_keeps_full_qty();
     test_same_direction_race_rejected();
     test_poc_close_batch_then_sequential_entries();
     test_single_entry_reversal_unchanged();

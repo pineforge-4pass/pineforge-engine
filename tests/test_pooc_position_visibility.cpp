@@ -174,6 +174,128 @@ static void test_G2_pooc_entry_before_close_still_fires() {
     CHECK(s.add_placed);   // the != 0 gate saw the real LONG before the close
 }
 
+// R3/R4 — ordinary POOC close_all preserves a same-direction MARKET entry that
+// was created BEFORE the close while still under the pyramiding cap. The close
+// fills at C, then the surviving entry opens a fresh position at that same C.
+// Anchored by a production long-side oracle and characterized symmetrically.
+static void test_pooc_undercap_entry_before_closeall_survives(bool held_long) {
+    std::printf("R3/R4: POOC under-cap %s entry before close_all survives\n",
+                held_long ? "long" : "short");
+    class Strat : public BacktestEngine {
+    public:
+        explicit Strat(bool held_long) : held_long_(held_long) {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            pyramiding_ = 2;
+            process_orders_on_close_ = true;
+        }
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0) strategy_entry("BASE", held_long_);
+            const double pos = signed_position_size();
+            const bool holding = held_long_ ? pos > 0.0 : pos < 0.0;
+            if (bar_index_ == 1 && holding) {
+                strategy_entry("ADD", held_long_);  // UNDER cap, before close
+                strategy_close_all();
+            }
+        }
+        double ssize() const { return signed_position_size(); }
+        std::string entry_id() const { return open_trade_entry_id(0); }
+    private:
+        bool held_long_;
+    } s(held_long);
+
+    s.run(bars4, 4);
+    CHECK(s.trade_count() == 1);  // BASE closed by close_all
+    CHECK(near(s.ssize(), held_long ? 1.0 : -1.0));  // ADD survived and reopened
+    CHECK(s.entry_id() == "ADD");
+}
+
+// Control — the same source order at the pyramiding cap remains rejected. The
+// close must flatten BASE without allowing the over-cap-at-placement ADD to reopen.
+static void test_pooc_overcap_entry_before_closeall_drops(bool held_long) {
+    std::printf("control: POOC over-cap %s entry before close_all drops\n",
+                held_long ? "long" : "short");
+    class Strat : public BacktestEngine {
+    public:
+        explicit Strat(bool held_long) : held_long_(held_long) {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            pyramiding_ = 1;
+            process_orders_on_close_ = true;
+        }
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0) strategy_entry("BASE", held_long_);
+            const double pos = signed_position_size();
+            const bool holding = held_long_ ? pos > 0.0 : pos < 0.0;
+            if (bar_index_ == 1 && holding) {
+                strategy_entry("ADD", held_long_);  // OVER cap, before close
+                strategy_close_all();
+            }
+        }
+        double ssize() const { return signed_position_size(); }
+    private:
+        bool held_long_;
+    } s(held_long);
+
+    s.run(bars4, 4);
+    CHECK(s.trade_count() == 1);
+    CHECK(near(s.ssize(), 0.0));
+}
+
+// COOF control — the production oracle has calc_on_order_fills=false, so the
+// ordinary-POOC carve-out above must not leak into the COOF scheduler. Keep the
+// established COOF full-close cleanup: an under-cap same-direction MARKET add
+// created before close_all at the ordinary C execution is cancelled. Direction
+// symmetry guards both LONG and SHORT cleanup predicates.
+static void test_coof_pooc_undercap_entry_before_closeall_still_cancels(
+        bool held_long) {
+    std::printf("control: COOF+POOC under-cap %s entry before close_all cancels\n",
+                held_long ? "long" : "short");
+    class Strat : public BacktestEngine {
+    public:
+        explicit Strat(bool held_long) : held_long_(held_long) {
+            initial_capital_ = 1'000'000;
+            default_qty_type_ = QtyType::FIXED;
+            default_qty_value_ = 1.0;
+            commission_value_ = 0.0;
+            slippage_ = 0;
+            pyramiding_ = 2;
+            process_orders_on_close_ = true;
+            calc_on_order_fills_ = true;
+        }
+        void on_bar(const Bar&) override {
+            if (bar_index_ == 0 && !base_placed_) {
+                base_placed_ = true;
+                strategy_entry("BASE", held_long_);
+            }
+            const double pos = signed_position_size();
+            const bool holding = held_long_ ? pos > 0.0 : pos < 0.0;
+            if (bar_index_ == 1 && holding && !close_cluster_placed_) {
+                close_cluster_placed_ = true;
+                strategy_entry("ADD", held_long_);  // UNDER cap, before close
+                strategy_close_all();
+            }
+        }
+        double ssize() const { return signed_position_size(); }
+        bool close_cluster_placed() const { return close_cluster_placed_; }
+    private:
+        bool held_long_;
+        bool base_placed_ = false;
+        bool close_cluster_placed_ = false;
+    } s(held_long);
+
+    s.run(bars4, 4);
+    CHECK(s.close_cluster_placed());
+    CHECK(s.trade_count() == 1);
+    CHECK(near(s.ssize(), 0.0));
+}
+
 // G3 — strategy.close(immediately=true) is DEFINED to reflect its fill at once,
 // so it must NOT be deferred: the mid-bar read is 0 and the prior same-dir
 // market re-entry is cancelled (test_integration :3896 shape). pyramiding=2.
@@ -286,6 +408,14 @@ int main() {
     test_R2_pooc_closeid_flat_gate_blocks_reentry();
     test_G1_non_pooc_unchanged();
     test_G2_pooc_entry_before_close_still_fires();
+    test_pooc_undercap_entry_before_closeall_survives(/*held_long=*/true);
+    test_pooc_undercap_entry_before_closeall_survives(/*held_long=*/false);
+    test_pooc_overcap_entry_before_closeall_drops(/*held_long=*/true);
+    test_pooc_overcap_entry_before_closeall_drops(/*held_long=*/false);
+    test_coof_pooc_undercap_entry_before_closeall_still_cancels(
+        /*held_long=*/true);
+    test_coof_pooc_undercap_entry_before_closeall_still_cancels(
+        /*held_long=*/false);
     test_G3_pooc_immediately_not_deferred();
     test_G5a_pooc_pure_reversal_flips();
     test_G5b_pooc_closeall_then_opposite_entry_flips();

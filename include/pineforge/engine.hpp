@@ -59,6 +59,11 @@ struct PyramidEntry {
     // sequence, the exit covers (scratches) the add dur-0. Gated by
     // entry_bar_index == bar_index_ so prior-bar slices are never covered.
     bool market_pyramid_add = false;
+    // Synthetic OHLC-path coordinate where a pure-stop strategy.entry fired.
+    // A single flat-born, non-trailing from_entry bracket may inspect only the
+    // path suffix at/after this cursor on the entry bar. NaN marks every
+    // unrouted parent class (market, limit, stop-limit, raw order).
+    double entry_path_position = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct Trade {
@@ -399,10 +404,9 @@ struct PendingOrder {
     // placement, and no earlier paired close in this on_bar. Consumers:
     //   1. KI-61 long entry-bar affordability EXEMPTION (engine_fills.cpp):
     //      long-only — it independently re-checks order.is_long and margin_long
-    //      via long_full_margin_after_fill, so widening this flag to shorts
-    //      leaves the exemption's derivation unchanged. Fill-time code must
-    //      additionally prove true-flat fill, sizing-price admission, success,
-    //      and zero actual opening commission before treating it as exempt.
+    //      via long_full_margin_after_fill. Fill-time code must additionally
+    //      prove true-flat fill, sizing-price admission, success, and zero
+    //      actual opening commission before treating it as exempt.
     //   2. gap-reject (design-cntvxiao-gap-reject, engine_fills.cpp):
     //      direction-symmetric — silently drops the entry at fill when the
     //      frozen-qty notional at the slipped fill price exceeds sizing_equity
@@ -440,6 +444,23 @@ struct PendingOrder {
         std::numeric_limits<double>::quiet_NaN();
     std::string comment;       // order comment for trade reporting
     bool requested_partial = false;         // true iff caller passed qty_percent < 100
+    // Narrow POOC global-full-exit candidate. ``qty`` deliberately keeps the
+    // normal finite reservation so sibling exits see and respect its capacity.
+    // At fill time this bit upgrades that one reservation to the full live
+    // position, covering same-bar MARKET pyramid adds that were already
+    // pending when the exit was placed. Any later admitted entry-like order
+    // clears the bit, making the finite qty the automatic conservative
+    // fallback—even when that later order is placed on a future bar.
+    bool pooc_global_full_exit_dynamic_qty = false;
+    // Persistent half of the bounded POOC relation. Unlike ``dynamic_qty``,
+    // later entries do not clear this bit: pre-exit adds may still be waiting
+    // to fill when invalidation occurs. Each successfully filled bound add
+    // grows this EXIT's finite qty by its exact same-side position delta.
+    bool pooc_global_full_exit_tracks_bound_adds = false;
+    // Set only on qualifying high-level MARKET adds already pending when the
+    // tracking global EXIT is placed. Same-id replacement constructs a fresh
+    // PendingOrder and therefore drops the relation; later orders never get it.
+    bool pooc_global_full_exit_bound_add = false;
     bool created_while_in_position = false;  // true if position was open when order was placed
     // design-declined-reversal-close-leg: set at the KI-54 percent-of-equity
     // reversal-decline site when this pending FULL close was co-queued AFTER,
@@ -522,13 +543,16 @@ protected:
     // --- Position state ---
     PositionSide position_side_ = PositionSide::FLAT;
     double position_entry_price_ = 0.0;   // volume-weighted average (for strategy calculations)
-    // One-shot post-fill affordability event for a 100%-margin long. Every
-    // successful fresh opening or accepted positive-qty same-direction add
-    // queues exactly one event carrying the raw matched-price base. The event
-    // is eligible unless the fill proves the narrow frozen-all-in true-flat
-    // MARKET exemption; rejected/no-op attempts leave an existing event
-    // untouched. process_margin_call consumes and clears the event on the
-    // current script bar. Do not reconstruct it from trade rows or
+    // One-shot post-fill affordability event. Every 100%-margin LONG opening /
+    // accepted add queues it as before; SHORT queues it only for a high-level
+    // explicit-qty MARKET strategy.entry opening/add at margin_short=100.
+    // The event carries the raw matched-price base and is eligible unless a
+    // LONG fill proves the narrow frozen-all-in true-flat MARKET exemption.
+    // Rejected/no-op attempts leave an existing event untouched; a later
+    // successful SHORT opening/add with any non-scoped shape invalidates prior
+    // short provenance rather than letting end-of-bar reuse its stale fill.
+    // process_margin_call consumes and clears it on the current script bar.
+    // Do not reconstruct it from trade rows or
     // position_entry_count_: a paired close/reentry can create zero-PnL rows,
     // and FIFO can reduce a real pyramid back to one live lot.
     bool opening_affordability_pending_ = false;
@@ -579,28 +603,48 @@ protected:
     // process_orders_on_close: every later close() call on the same bar
     // REPLACES the pending close order. Empirically (3commas grid-bot TV
     // exports, xau/xlm/pol/xrp — see fix/same-bar-multi-close-single-fill):
-    //   - the FIRST replaced call's id-ledger is consumed silently (no
-    //     fill, no trade rows);
+    //   - the FIRST replaced call's id-ledger is provisionally consumed
+    //     silently (no fill, no trade rows);
+    //   - when both the prior and current batches contain exactly two calls,
+    //     the prior batch's first admitted target is restored to that ledger. This is
+    //     provenance from the broker replacement chain, not a physical-lot
+    //     recount or ledger-minus-reservation calculation;
+    //   - 3+ call batches never restore or create two-call provenance;
     //   - intermediate replaced calls keep their ledgers intact;
     //   - the SURVIVING (last nonzero-target) call fills min(ledger,
-    //     avail) at the bar close WITHOUT consuming its id-ledger; the
-    //     unconsumed amount stays reserved against the position
-    //     (close_reserved_qty_) and caps other ids' later close targets
-    //     via avail = position_qty_ - sum(reservations of other ids);
+    //     avail) at the bar close. Its new reservation is capped to the
+    //     post-fill position capacity left after older reservations and caps
+    //     other ids' later targets via avail = position_qty_ -
+    //     sum(reservations of other ids). A positive truncated reservation
+    //     keeps the established survivor ledger; zero backing clears it;
+    //   - exact-two provenance is created only when that survivor's actual
+    //     fill remains fully backed after the fill;
+    //   - a nonzero logical ledger with zero unreserved physical capacity is
+    //     consumed without a broker fill, so a later same-id entry starts a
+    //     new logical close cycle instead of accumulating a stale slice;
     //   - a bar with exactly one close call behaves as before: fill =
     //     min(ledger, avail), ledger consumed, reservation released.
-    // Calls whose target resolves to zero are no-ops (cannot survive).
+    // Calls whose target resolves to zero cannot survive; a logically live
+    // but physically blocked id still consumes its stale logical cycle.
     // The batched fill executes at the end-of-bar order-processing point
     // (dispatch_bar step 4 / magnifier last tick) at the same bar-close
     // price the immediate path used. Order cancels/purges tied to a
     // full-position close still run at CALL time (unchanged timing).
     bool sb_close_active_ = false;
     int sb_close_bar_ = -1;
-    int sb_close_calls_ = 0;          // nonzero-target close calls this bar
-    std::string sb_close_first_id_;   // consumed when a 2nd call arrives
+    int sb_close_calls_ = 0;          // effective distinct nonzero-target calls
+    std::string sb_close_first_id_;   // first call, provisionally consumed at call 2
+    double sb_close_first_target_ = 0.0;
+    bool sb_close_first_carry_valid_ = false;
+    double sb_close_first_carry_qty_ = 0.0;
     std::string sb_close_id_;         // surviving order's id
     std::string sb_close_comment_;    // surviving order's comment
     std::unordered_map<std::string, double> close_reserved_qty_;
+    // Live exact-two-call replacement provenance. A survivor id maps to the
+    // prior batch's FIRST target and is valid only while its reservation is
+    // live. A later exact-two-call batch can restore precisely that slice if
+    // this id is its first replaced call (ENA's two-call replacement chain).
+    std::unordered_map<std::string, double> close_two_call_first_qty_;
 
     // --- KI-64: POOC script-visible position freeze ---
     // Under process_orders_on_close, a strategy.close/close_all that fills
@@ -642,6 +686,12 @@ protected:
     // process_margin_call floors each liquidation lot DOWN to a multiple of
     // this, matching TradingView's per-instrument margin-call lot sizing.
     double qty_step_ = 0.0;
+    // Opt-in oracle candidate for the ambiguous finite-price margin case where
+    // the documented minimum restore quantity floors to zero.  The established
+    // default makes progress by one quantity step; selected historical exports
+    // instead close the whole residual.  Keep that alternative default-off so
+    // it cannot rewrite otherwise matching trade tapes.
+    bool margin_zero_cover_full_liquidation_ = false;
     int max_intraday_filled_orders_ = 0; // 0 = unlimited
     bool close_entries_rule_any_ = false; // true = "ANY", false = "FIFO" (default)
     // Percentage of margin required to open a long/short position. Default
@@ -804,11 +854,16 @@ protected:
     Bar current_bar_;
     int bar_index_ = 0;
     int bar_index_offset_ = 0;
-    // Opt-in KI-55 HTF warmup parity (see set_syminfo_metadata,
-    // "security_range_start_na_warmup"). When enabled, request.security series
-    // aggregate from security_range_start_ms_ instead of the feed start and
-    // their embedded ta.ema na-warm per TV built-in semantics. Default OFF →
-    // byte-identical behavior; touched only through feed_security_eval_state.
+    // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
+    // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
+    // first used by on_bar na-warm per TV built-in semantics. This selector is
+    // scoped independently from request.security so the two execution contexts
+    // cannot leak their warmup mode into each other. Default OFF.
+    bool chart_ema_na_warmup_ = false;
+    // Independent opt-in KI-55 HTF warmup parity. When enabled,
+    // request.security series aggregate from security_range_start_ms_ instead
+    // of the feed start and their embedded ta.ema na-warm per TV built-in
+    // semantics. Default OFF; touched only through feed_security_eval_state.
     bool security_range_start_na_warmup_ = false;
     int64_t security_range_start_ms_ = 0;
     // Opt-in historical-only request.security lookahead projection. TradingView
@@ -2021,6 +2076,9 @@ private:
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
     void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
+    void execute_partial_exit_by_entry_qty(double fill_price,
+                                           const std::string& from_entry,
+                                           double qty_to_close);
     void execute_partial_exit_by_entry_percent(double fill_price, const std::string& from_entry, double qty_percent);
     // KI-62: scratch (close dur-0) any same-bar same-id MARKET pyramid-add
     // slices still open after a from_entry priced bracket exit fills — TV's
@@ -2043,6 +2101,14 @@ private:
     bool pending_flat_market_pair_scope_is_live() const;
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
+    // TradingView binds a valid, single/full, non-trailing strategy.exit to a
+    // co-queued high-level MARKET parent. If that parent fills at the next open
+    // and its stop is already breached, the newborn lot scratches at that open.
+    // The helper proves the parent/child/fresh-lot provenance; it deliberately
+    // excludes POOC, COOF, magnifier, same-direction adds, priced parents, and
+    // multi-child groups.
+    bool prearmed_market_parent_stop_gaps_at_open(
+        const PendingOrder& order, const Bar& bar) const;
     bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
     void invalidate_pending_flat_market_pair(int64_t created_seq);
     void compact_filled_pending_orders(const std::vector<size_t>& filled_indices,
@@ -2136,7 +2202,8 @@ private:
                                   double& qty_to_close_out,
                                   bool& all_entries_match_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
-    void cancel_same_bar_market_reentries_after_full_close(bool closed_long);
+    void cancel_same_bar_market_reentries_after_full_close(
+        bool closed_long, bool preserve_undercap_entries);
     // Same-bar close batching (TV one-fill-per-bar; see the field-block
     // comment at close_reserved_qty_). enqueue replaces the pending
     // same-bar close; flush executes the surviving one at bar close.
@@ -2150,7 +2217,8 @@ private:
                                  double matching_qty,
                                  bool closes_full_position,
                                  bool closes_fifo_qty,
-                                 bool closes_any_qty);
+                                 bool closes_any_qty,
+                                 bool preserve_undercap_entries);
     uint64_t queue_deferred_close_order(
         const std::string& id,
         const std::string& comment,
@@ -2171,6 +2239,7 @@ private:
                                    double& qp_io,
                                    bool& is_partial_io,
                                    double& reserved_qty_out);
+    void invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
 
     // execute_market_entry / execute_partial_exit_* helpers (defined in
     // engine_orders.cpp).
@@ -2182,8 +2251,8 @@ private:
     // drains across all entries. Emits one close Trade per drained slice at
     // fill_price (already slippage-adjusted) and rebuilds pyramid_entries_ /
     // decrements position_qty_ by the amount drained. Returns the total qty
-    // drained. Shared by execute_partial_exit_qty and
-    // execute_partial_exit_by_entry_percent.
+    // drained. Shared by execute_partial_exit_qty and both entry-scoped
+    // partial-exit helpers.
     double fifo_drain(const std::string* from_entry, double qty_limit,
                       double fill_price, bool was_long);
     void reset_position_state_to_flat();
@@ -2241,6 +2310,7 @@ private:
     // Shared by run(), run_simple_bar_loop, and the no-magnifier aggregation
     // path. The magnifier tick loop does NOT use this — it gates the sequence
     // on is_last_tick_ and forces is_first_tick_ before on_bar.
+    void invoke_chart_on_bar(const Bar& bar);
     void dispatch_bar();
     void dispatch_bar_calc_on_order_fills();
     void snapshot_coof_script_state();
@@ -2431,12 +2501,28 @@ public:
                 security_range_start_ms_ = 0;
             }
         }
+        // Opt-in KI-55 chart-timeframe EMA warmup parity. This is a boolean
+        // run configuration carried through the existing metadata channel:
+        // positive finite values enable it; 0 / NaN / negative disable it.
+        // Unlike security_range_start_na_warmup, it carries no timestamp and
+        // does not change request.security aggregation boundaries.
+        if (key == "chart_ema_na_warmup") {
+            chart_ema_na_warmup_ = std::isfinite(value) && value > 0.0;
+        }
         // Historical batch-only lookahead projection. This is intentionally a
         // default-off verifier candidate: regular execution and every stream
         // path keep progressive HTF aggregation unless a caller explicitly
         // supplies a positive finite metadata value.
         if (key == "historical_security_lookahead_projection") {
             historical_security_lookahead_projection_ =
+                std::isfinite(value) && value > 0.0;
+        }
+        // Default-off verifier candidate for a finite-price margin call whose
+        // lot-quantized restore quantity is zero.  Positive finite values close
+        // the residual; absent/zero/non-finite values preserve the established
+        // one-step progress fallback.
+        if (key == "margin_zero_cover_full_liquidation") {
+            margin_zero_cover_full_liquidation_ =
                 std::isfinite(value) && value > 0.0;
         }
         // "qty_step" is the per-instrument lot increment used by the forced-

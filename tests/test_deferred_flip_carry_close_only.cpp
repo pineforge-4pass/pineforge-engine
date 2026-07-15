@@ -78,11 +78,14 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
 // ─────────────────────────────────────────────────────────────────────
 // Deferred-flip carry: a short stop "S" is armed while SHORT (so its
 // created_position_side is SHORT), the position then flips to LONG via a
-// market entry, and "S" survives and triggers against that LONG. TV closes
-// the long only; the engine must NOT open a phantom short.
+// market entry, and "S" survives and triggers against that LONG. The fixture
+// uses pyramiding=2 so the stop is below cap and therefore valid at placement;
+// the separate over-cap oracle proves an at-cap stop is rejected. TV closes the
+// long only; the engine must NOT open a phantom short.
 //
 //   bar0: place market short "SH"
-//   bar1: SH fills @100 → SHORT 1; arm "S" short stop @95 (created SHORT)
+//   bar1: SH fills @100 → SHORT 1 (< cap 2); arm "S" short stop @95
+//         (created SHORT)
 //   bar2: place market long "L"
 //   bar3: L fills @100 → reverses to LONG 1 (SH closed @100). "S"@95 pending,
 //         still carrying created_position_side = SHORT.
@@ -103,7 +106,7 @@ static void test_carry_stop_flips_opposite_close_only() {
             default_qty_value_ = 1.0;
             slippage_ = 0;
             commission_value_ = 0;
-            pyramiding_ = 1;
+            pyramiding_ = 2;
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }

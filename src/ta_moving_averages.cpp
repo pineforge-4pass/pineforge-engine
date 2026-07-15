@@ -20,9 +20,9 @@ namespace pineforge {
 namespace ta {
 
 // Thread-local so parallel in-process engines never cross-contaminate. Default
-// false → src-seed EMA (byte-identical to prior behavior); the engine raises it
-// only around request.security evaluation under the security_range_start_na_warmup
-// run flag. See the declaration in <pineforge/ta.hpp> for the full rationale.
+// false → src-seed EMA (byte-identical to prior behavior); the engine scopes it
+// independently around chart on_bar and request.security evaluation under
+// their respective opt-in flags. See <pineforge/ta.hpp> for the full rationale.
 bool& ema_na_warmup_flag() {
     static thread_local bool flag = false;
     return flag;
@@ -142,12 +142,10 @@ EMA::EMA(int length)
 
 double EMA::compute(double src) {
     save();
-    // Latch the warmup mode once, on the first compute(). A security-embedded
-    // EMA's first compute() always runs inside the engine's request.security
-    // evaluation (where the flag is raised under security_range_start_na_warmup),
-    // and a chart EMA's never does — so the latch is consistent for the
-    // instance's whole life without threading any per-instance wiring through
-    // codegen.
+    // Latch the warmup mode once, on the first compute(). Chart and
+    // security-embedded EMAs first compute inside their respective engine
+    // dispatch scopes, so the latch is consistent for the instance's whole
+    // life without threading per-instance wiring through codegen.
     if (!warmup_latched_) {
         na_warmup_ = ema_na_warmup_flag();
         warmup_latched_ = true;

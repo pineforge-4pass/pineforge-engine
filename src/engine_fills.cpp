@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace pineforge {
@@ -421,19 +422,29 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // A LONG at exactly 100% margin has no leverage-derived liquidation price:
     // compute_liquidation_price() returns na because m/100 - direction == 0.
     // Its only broker action is the non-price affordability event attached to
-    // the successful fill. Explicit pending provenance is essential: an add
-    // can occur on a carried position, and FIFO can later make the mutable
-    // position_entry_count_ equal one again.
+    // the successful fill. The same event is consumed for the narrowly pinned
+    // SHORT shape: a high-level explicit-qty MARKET opening/add at 100% margin,
+    // whose individually admitted fills can over-allocate the combined short.
+    // Other short order shapes retain the ordinary finite-price cascade.
     const bool long_full_margin =
         (position_side_ == PositionSide::LONG)
         && std::isfinite(margin_long_)
         && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
-    const bool long_opening_affordability =
-        long_full_margin
-        && opening_event_pending
+    const bool short_full_margin =
+        (position_side_ == PositionSide::SHORT)
+        && std::isfinite(margin_short_)
+        && std::abs(margin_short_ / 100.0 - 1.0) < 1e-12;
+    const bool event_is_actionable =
+        opening_event_pending
         && opening_event_eligible
         && std::isfinite(opening_event_raw_fill_base)
         && opening_event_raw_fill_base > 0.0;
+    const bool long_opening_affordability =
+        long_full_margin && event_is_actionable;
+    const bool short_opening_affordability =
+        short_full_margin && event_is_actionable;
+    const bool opening_affordability =
+        long_opening_affordability || short_opening_affordability;
 
     // A carried 1x long has no adverse-price liquidation. A just-filled 1x
     // long with no event is likewise ineligible, while a pending-but-exempt
@@ -442,15 +453,15 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
 
     // A leveraged position filled at the bar CLOSE has no post-fill adverse
     // path on that bar, so its first price liquidation remains next-bar-only.
-    // The 1x-long opening check is affordability at the fill, not an adverse-
-    // path test, and therefore still runs for a POOC close fill.
+    // The 1x opening check is affordability at the fill, not an adverse-path
+    // test, and therefore still runs for a POOC close fill on either side.
     if (process_orders_on_close_ && opened_this_bar
-        && !long_opening_affordability) {
+        && !opening_affordability) {
         return;
     }
 
     const double liq = compute_liquidation_price();
-    if (std::isnan(liq) && !long_opening_affordability) {
+    if (std::isnan(liq) && !opening_affordability) {
         return;  // includes every carried/ineligible 1x long
     }
 
@@ -471,7 +482,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
 
     double q_min = 0.0;
     double raw_exit_fill_base = 0.0;
-    if (long_opening_affordability) {
+    if (opening_affordability) {
         // Post-fill affordability is evaluated from the current position's
         // actual, directionally snapped/slipped entry basis. Capital and
         // realized PnL are account-currency-native; price notional is quote
@@ -487,7 +498,15 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         // broker-generated closing fill below.
         const double fx = account_currency_fx_;
         if (!std::isfinite(fx) || !(fx > 0.0)) return;
-        const double margin_per_unit = position_entry_price_ * pv * fx * m;
+        // Preserve the established long calculation byte-for-byte. A scoped
+        // short add instead marks the WHOLE position at the latest raw fill:
+        // required margin uses that price, and carried lots contribute their
+        // open PnL at the same mark. Using the post-add VWAP for required
+        // margin makes base2@100 + add2@110 on equity420 look like an exact
+        // 4*105 tie and suppresses the required broker action.
+        const double opening_mark = short_opening_affordability
+            ? opening_event_raw_fill_base : position_entry_price_;
+        const double margin_per_unit = opening_mark * pv * fx * m;
         double entry_commission = 0.0;
         for (const auto& pe : pyramid_entries_) {
             // A requested add can floor to zero yet leave a bookkeeping row.
@@ -498,8 +517,12 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
             if (!std::isfinite(lot_commission)) return;
             entry_commission += lot_commission;
         }
-        const double opening_equity =
+        double opening_equity =
             initial_capital_ + net_profit_sum_ - entry_commission;
+        if (short_opening_affordability) {
+            opening_equity += direction
+                * (opening_mark - position_entry_price_) * qty * pv * fx;
+        }
         if (!std::isfinite(margin_per_unit) || !(margin_per_unit > 0.0)
             || !std::isfinite(entry_commission)
             || !std::isfinite(opening_equity)) {
@@ -510,17 +533,22 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         q_min = qty - opening_equity / margin_per_unit;
         raw_exit_fill_base = opening_event_raw_fill_base;
     } else {
-        // Preserve the established finite-price cascade math and operation
-        // ordering byte-for-byte: shorts and leveraged longs still check the
-        // adverse extreme and fill there.
+        // Shorts and leveraged longs without a fresh opening event keep the
+        // established adverse-extreme cascade. Equity and required margin are
+        // account-currency values, so quote-currency price PnL/notional must
+        // carry the configured FX multiplier on this path just as they do in
+        // the opening-budget branch above. FX=1 preserves the old arithmetic.
         const double adverse =
             (position_side_ == PositionSide::LONG) ? bar.low : bar.high;
         if (!std::isfinite(adverse) || !(adverse > 0.0)) return;
+        const double fx = account_currency_fx_;
+        if (!std::isfinite(fx) || !(fx > 0.0)) return;
         const double equity_adv = initial_capital_ + net_profit_sum_
-            + direction * (adverse - position_entry_price_) * qty * pv;
-        const double req_margin_adv = qty * adverse * pv * m;
+            + direction * (adverse - position_entry_price_) * qty * pv * fx;
+        const double margin_per_unit_adv = adverse * pv * fx * m;
+        const double req_margin_adv = qty * margin_per_unit_adv;
         if (equity_adv >= req_margin_adv) return;
-        q_min = qty - equity_adv / (adverse * pv * m);
+        q_min = qty - equity_adv / margin_per_unit_adv;
         raw_exit_fill_base = adverse;
     }
 
@@ -536,13 +564,25 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // qty_step_ == 0 (corpus default; the explicit-leverage p2/5x margin probes
     // never set it) leaves both q_min and qty_liq untouched -> byte-identical.
     if (qty_step_ > 0.0) {
-        q_min = std::floor(q_min / qty_step_) * qty_step_;
+        // The quotient can land microscopically below an exact integer because
+        // of binary representation (for example, one mathematical lot can be
+        // 0.99999999998 lots here). The full-residual candidate uses the same
+        // 1e-6-of-step guard as the downstream 4x quantizer; the default keeps
+        // the established bare floor byte-for-byte.
+        double step_count = q_min / qty_step_;
+        if (margin_zero_cover_full_liquidation_) {
+            const double nearest_step = std::round(step_count);
+            if (std::abs(step_count - nearest_step) < 1e-6) {
+                step_count = nearest_step;
+            }
+        }
+        q_min = std::floor(step_count) * qty_step_;
     }
     // A sub-lot 1x-long opening shortfall is untradeable dust. It is a no-op,
     // not a reason to force the generic finite-price cascade's one-step
     // progress fallback. qty_step==0 intentionally retains continuous-qty
     // behavior because no exchange lot floor was configured.
-    if (long_opening_affordability && q_min <= kQtyEpsilon) return;
+    if (opening_affordability && q_min <= kQtyEpsilon) return;
     double qty_liq = 4.0 * q_min;
     if (qty_step_ > 0.0) {
         // q_min is already a multiple of qty_step_, so 4*q_min is mathematically
@@ -553,13 +593,16 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         // with it alpha-wizard-channel cascade-1 matches TV 19/19 bit-exact.
         double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
         if (floored <= kQtyEpsilon) {
-            if (long_opening_affordability) return;
-            // A liquidation IS required (we passed the margin-shortfall gate)
-            // but the floored lot rounds to zero (sub-lot shortfall). Take the
-            // smallest step that still makes progress — one qty_step_, or the
-            // full residual if it is smaller — so the per-bar call loop cannot
-            // stall forever.
-            floored = std::min(qty_step_, qty);
+            if (opening_affordability) return;
+            // A finite-price liquidation IS required, but the documented
+            // minimum-restore quantity truncates to zero at the instrument lot
+            // precision. Exports disagree on this edge: some close the whole
+            // residual while others continue with a bounded nibble. Preserve
+            // the established one-step default, and expose the full-residual
+            // interpretation only through an explicit verifier candidate.
+            floored = margin_zero_cover_full_liquidation_
+                ? qty
+                : std::min(qty_step_, qty);
         }
         qty_liq = floored;
     }
@@ -567,7 +610,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return;
 
     // Finite-price calls pass the raw adverse extreme to the close helper. A
-    // 1x-long opening trim instead passes the captured raw matched entry base.
+    // 1x opening trim instead passes the captured raw matched entry base.
     // current_fill_is_limit_ is false here, so both routes independently apply
     // the closing side's market snap/slippage. This is load-bearing for both a
     // buy-slipped stop/market entry and an unslipped limit entry; attempting to
@@ -1012,6 +1055,98 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             if (a_seq != b_seq) return a_seq < b_seq;
             return a.created_seq < b.created_seq;
         });
+}
+
+// A strategy.exit can be armed on the signal bar together with the MARKET
+// strategy.entry named by from_entry. The child is valid before the parent
+// fills: TradingView binds it to the eventual lot, and if the next open has
+// already breached its stop, it fills both parent and child at that same open.
+// Clean-room probe order-market-reversal-resting-bracket-gap-01 pins this for
+// both directions and for parents placed from true flat or as reversals.
+//
+// Do not turn this into a general entry-bar wrong-side bypass. The exact
+// provenance below keeps freshly emitted/stale exits, priced parents, MARKET
+// pyramid adds, partial/sibling groups, POOC, COOF, and magnifier on their
+// existing paths. Generated Pine already lowers flat
+// strategy.position_avg_price to na, so an avg-derived flat bracket never
+// reaches this helper with a finite stop.
+bool BacktestEngine::prearmed_market_parent_stop_gaps_at_open(
+        const PendingOrder& order, const Bar& bar) const {
+    if (process_orders_on_close_ || calc_on_order_fills_ || bar_magnifier_enabled_) {
+        return false;
+    }
+    if (position_side_ == PositionSide::FLAT
+        || position_open_bar_ != bar_index_
+        || order.type != OrderType::EXIT
+        || order.from_entry.empty()
+        || order.created_bar != bar_index_ - 1
+        || order.created_during_coof_recalc
+        || order.requested_partial
+        || order.qty_percent < 100.0 - kFullPercentEps
+        || !std::isfinite(order.stop_price)
+        || !std::isnan(order.trail_points)
+        || !std::isnan(order.trail_price)) {
+        return false;
+    }
+
+    const bool live_long = position_side_ == PositionSide::LONG;
+    const bool stop_gapped = live_long ? bar.open <= order.stop_price
+                                       : bar.open >= order.stop_price;
+    if (!stop_gapped) return false;
+
+    // The oracle has a correctly-sided, nonmarketable limit sibling inside the
+    // same bracket, not a second open-gap leg. Keep dual-marketable brackets
+    // out until a dedicated priority oracle exists. Test the actual W0 broker
+    // predicate: equality is marketable, and slippage can make the booked entry
+    // price differ from the bar open.
+    if (!std::isnan(order.limit_price)) {
+        const bool limit_gapped = live_long ? bar.open >= order.limit_price
+                                             : bar.open <= order.limit_price;
+        if (limit_gapped) return false;
+    }
+
+    int matching_children = 0;
+    for (const PendingOrder& pending : pending_orders_) {
+        if (pending.type == OrderType::EXIT
+            && pending.from_entry == order.from_entry) {
+            ++matching_children;
+        }
+    }
+    if (matching_children != 1) return false;
+
+    // This oracle path is a one-parent/one-lot scratch. Requiring the fresh
+    // matching lot to be the entire live position prevents a bracket for E
+    // from consuming a co-queued MARKET sibling F. An explicit qty armed while
+    // flat is not labelled requested_partial at placement, so also prove that
+    // its literal quantity covers the newborn lot before taking the shortcut.
+    if (pyramid_entries_.size() != 1) return false;
+    const PyramidEntry& fresh_lot = pyramid_entries_.front();
+    if (fresh_lot.entry_id != order.from_entry
+        || fresh_lot.entry_bar_index != bar_index_
+        || fresh_lot.time != bar.timestamp
+        || std::isfinite(fresh_lot.entry_path_position)
+        || (std::isfinite(order.qty)
+            && fresh_lot.qty - order.qty > kQtyEpsilon)) {
+        return false;
+    }
+
+    for (const PendingOrder& parent : pending_orders_) {
+        if (parent.id != order.from_entry
+            || parent.type != OrderType::MARKET
+            || parent.created_bar != order.created_bar
+            || parent.created_seq >= order.created_seq
+            || parent.created_position_side != order.created_position_side
+            || parent.is_long != live_long) {
+            continue;
+        }
+        // True-flat parents and opposite-side reversals are pinned. A parent
+        // born in the live side is a pyramid add and remains out of scope.
+        if (parent.created_position_side == PositionSide::FLAT
+            || parent.created_position_side != position_side_) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool BacktestEngine::pending_flat_market_pair_is_live(
@@ -1711,22 +1846,73 @@ void BacktestEngine::apply_filled_order_to_state(
     }
     if (order.type == OrderType::MARKET) {
         // TV same-tick multi-entry rule R* (see
-        // sequential_same_tick_reversal_fill): detect whether ANOTHER
-        // same-direction market entry with a DIFFERENT id, placed on the
-        // same on_bar, fills later at this same processing point. Orders
-        // after order_index in the sorted array are exactly the ones this
-        // pass has not yet evaluated (market orders always fill at the
-        // first processing point after placement, so a pending sibling
-        // here IS a same-tick fill).
+        // sequential_same_tick_reversal_fill): detect the paired-entry-block
+        // topology proven by the Jevond oracle. Both this entry and a later
+        // same-direction, different-id MARKET sibling must own live,
+        // actionable, default-sized full from_entry brackets created AFTER
+        // their respective entry calls on the same on_bar. A bare later entry
+        // is not enough: Rsantana queues an unbracketed primary reversal
+        // followed by a bracketed duplicate, and TV gives the primary the
+        // ordinary full reversal quantity rather than Jevond's sequential
+        // plain-transaction remainder. Deferred strategy.close EXIT orders,
+        // explicit/partial reservations, and pre-entry bracket reissues are
+        // deliberately excluded from this narrow oracle-backed shape.
+        //
+        // Orders after order_index in the sorted array are exactly the ones
+        // this pass has not yet evaluated (market orders always fill at the
+        // first processing point after placement, so an eligible sibling here
+        // IS a same-tick fill).
         bool later_same_tick_entry = false;
-        for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
-            const PendingOrder& sib = pending_orders_[j];
-            if (sib.type == OrderType::MARKET
-                && sib.is_long == order.is_long
-                && sib.id != order.id
-                && sib.created_bar == order.created_bar) {
-                later_same_tick_entry = true;
-                break;
+        const PositionSide requested_side = order.is_long
+            ? PositionSide::LONG : PositionSide::SHORT;
+        const bool is_reversal = position_side_ != PositionSide::FLAT
+            && position_side_ != requested_side;
+        if (is_reversal) {
+            // Build the child index once. Ordinary flat opens and adds skip all
+            // bracket scans, and a reversal remains linear in queue size.
+            std::unordered_map<std::string, int64_t> full_bracket_child_seq;
+            for (const PendingOrder& child : pending_orders_) {
+                const bool actionable = !std::isnan(child.limit_price)
+                    || !std::isnan(child.stop_price)
+                    || !std::isnan(child.trail_points)
+                    || !std::isnan(child.trail_price)
+                    || !std::isnan(child.profit_ticks)
+                    || !std::isnan(child.loss_ticks);
+                const double qp = std::isnan(child.qty_percent)
+                    ? 100.0 : child.qty_percent;
+                if (child.type != OrderType::EXIT
+                    || child.from_entry.empty()
+                    || child.created_bar != order.created_bar
+                    || child.suppress_as_declined_reversal_close
+                    || !actionable
+                    || child.requested_partial
+                    || !std::isnan(child.qty)
+                    || qp < 100.0 - kFullPercentEps) {
+                    continue;
+                }
+                auto [it, inserted] = full_bracket_child_seq.emplace(
+                    child.from_entry, child.created_seq);
+                if (!inserted && child.created_seq > it->second) {
+                    it->second = child.created_seq;
+                }
+            }
+            auto has_full_bracket_child = [&](const PendingOrder& entry) {
+                const auto it = full_bracket_child_seq.find(entry.id);
+                return it != full_bracket_child_seq.end()
+                    && it->second > entry.created_seq;
+            };
+            if (has_full_bracket_child(order)) {
+                for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
+                    const PendingOrder& sib = pending_orders_[j];
+                    if (sib.type == OrderType::MARKET
+                        && sib.is_long == order.is_long
+                        && sib.id != order.id
+                        && sib.created_bar == order.created_bar
+                        && has_full_bracket_child(sib)) {
+                        later_same_tick_entry = true;
+                        break;
+                    }
+                }
             }
         }
         apply_market_order_fill(order, fill_price, bar, trail_best_path_state,
@@ -1756,6 +1942,38 @@ void BacktestEngine::apply_filled_order_to_state(
         || std::abs(position_qty_ - position_qty_before_fill) > kQtyEpsilon
         || pyramid_entries_.size() != pyramid_lots_before_fill
         || trades_.size() != trades_before;
+
+    // Bounded POOC global-exit growth. Only MARKET adds that were already
+    // pending when the one tracking EXIT was armed carry this relation bit.
+    // Grow its ordinary finite reservation by the actual same-side quantity
+    // delta—not requested qty—so fill-time rejection, zero-fill, reversal, or
+    // flat-open role changes add nothing. The tracking bit intentionally
+    // survives dynamic-marker invalidation: a post-exit order can be admitted
+    // before this pre-exit add reaches the POOC close fill point.
+    if (order.type == OrderType::MARKET
+        && order.pooc_global_full_exit_bound_add) {
+        const PositionSide requested_side = order.is_long
+            ? PositionSide::LONG : PositionSide::SHORT;
+        const bool successful_same_side_add =
+            requested_side == order.created_position_side
+            && position_side_before_fill == requested_side
+            && position_side_ == requested_side
+            && position_qty_ > position_qty_before_fill + kQtyEpsilon;
+        if (successful_same_side_add) {
+            const double added_qty =
+                position_qty_ - position_qty_before_fill;
+            for (auto& candidate : pending_orders_) {
+                if (candidate.type != OrderType::EXIT
+                    || !candidate.pooc_global_full_exit_tracks_bound_adds
+                    || !std::isfinite(candidate.qty)) {
+                    continue;
+                }
+                candidate.qty += added_qty;
+                break;  // reservation accounting admits at most one tracker
+            }
+        }
+    }
+
     if (primary_fill_applied) {
         ++broker_fill_event_seq_;
     }
@@ -1764,7 +1982,10 @@ void BacktestEngine::apply_filled_order_to_state(
     // dispatch point shared by MARKET, priced ENTRY, and RAW_ORDER fills while
     // the exact raw matched base is still available. A rejected or zero-effect
     // attempt changes neither the live quantity nor the pyramid roster and
-    // therefore leaves a prior event untouched.
+    // therefore leaves a prior event untouched. A successful short open/add
+    // with a non-scoped shape instead supersedes any earlier short provenance:
+    // its latest fill changed the position that end-of-bar will evaluate, so
+    // retaining an older raw base would misclassify the combined position.
     const bool entry_like_order =
         order.type == OrderType::MARKET
         || order.type == OrderType::ENTRY
@@ -1788,9 +2009,35 @@ void BacktestEngine::apply_filled_order_to_state(
             position_side_ == PositionSide::LONG
             && std::isfinite(margin_long_)
             && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+        // Scope the new short event to the TV-pinned generic shape only:
+        // high-level strategy.entry, explicit finite qty, pure MARKET order,
+        // SHORT at margin_short=100. Default-sized percent/cash entries,
+        // priced ENTRY orders, RAW strategy.order, and other margin settings
+        // retain their prior short-side event behavior (none).
+        const bool explicit_market_short_full_margin_after_fill =
+            position_side_ == PositionSide::SHORT
+            && std::isfinite(margin_short_)
+            && std::abs(margin_short_ / 100.0 - 1.0) < 1e-12
+            && order.type == OrderType::MARKET
+            && !order.is_long
+            && std::isfinite(order.qty);
         const bool positive_raw_base =
             std::isfinite(fill_price) && fill_price > 0.0;
-        if (long_full_margin_after_fill && positive_raw_base
+        const bool successful_short_open_or_add =
+            requested_side == PositionSide::SHORT
+            && (successful_fresh_open || accepted_additional_entry);
+        const bool scoped_short_opening_fill =
+            explicit_market_short_full_margin_after_fill
+            && positive_raw_base;
+        if (successful_short_open_or_add && !scoped_short_opening_fill) {
+            opening_affordability_pending_ = false;
+            opening_affordability_eligible_ = false;
+            opening_affordability_raw_fill_base_ =
+                std::numeric_limits<double>::quiet_NaN();
+        }
+        if ((long_full_margin_after_fill
+             || explicit_market_short_full_margin_after_fill)
+            && positive_raw_base
             && (successful_fresh_open || accepted_additional_entry)) {
             // The only exemption requires every item of provenance to agree:
             // omitted qty; a frozen 100%-equity high-level MARKET snapshot;
@@ -2169,6 +2416,20 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
                 && pyramid_entries_.back().entry_id == order.id) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), bar,
                                                pyramid_entries_.back().price);
+                // Keep the bracket-activation cursor separate from the booked
+                // fill price used by excursion accounting. Stop fills can be
+                // rounded or slipped; the child becomes live at the actual,
+                // direction-aware parent trigger crossing.
+                if (!std::isnan(order.stop_price)
+                    && std::isnan(order.limit_price)) {
+                    double entry_path_position = 0.0;
+                    if (internal::entry_stop_first_touch(
+                            bar, order.stop_price, order.is_long,
+                            &entry_path_position)) {
+                        pyramid_entries_.back().entry_path_position =
+                            entry_path_position;
+                    }
+                }
             }
         }
         trail_best_path_state = trail_best_after_fill;
@@ -2180,23 +2441,42 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
                                            uint64_t& exit_closed_from_incarnation,
                                            bool& exit_closed_was_long) {
     double qp = std::isnan(order.qty_percent) ? 100.0 : std::clamp(order.qty_percent, 0.0, 100.0);
-    bool has_explicit_qty_to_close = !std::isnan(order.qty);
+    const bool dynamic_full_live_qty =
+        order.pooc_global_full_exit_dynamic_qty;
+    bool has_explicit_qty_to_close =
+        !dynamic_full_live_qty && !std::isnan(order.qty);
     double qty_before_exit = position_qty_;
-    bool is_partial = has_explicit_qty_to_close
-        ? order.qty < qty_before_exit - kFullQtyEps
-        : qp < 100.0 - kFullPercentEps;
+    bool is_partial = dynamic_full_live_qty
+        ? false
+        : (has_explicit_qty_to_close
+            ? order.qty < qty_before_exit - kFullQtyEps
+            : qp < 100.0 - kFullPercentEps);
     size_t trades_before_exit = trades_.size();
     PositionSide side_before_exit = position_side_;
 
     if (close_entries_rule_any_ && !order.from_entry.empty()) {
         // close_entries_rule="ANY": close only matching entries
         if (is_partial) {
-            execute_partial_exit_by_entry_percent(fill_price, order.from_entry, qp);
+            // A live-position strategy.exit freezes its percent-derived
+            // reservation into order.qty. Honor that absolute quantity after
+            // earlier same-bar siblings reduce the position; reapplying qp to
+            // the smaller live lot double-shrinks layered exits (Vimal's
+            // 40/30/30 TP stack). Only flat/deferred NaN reservations resolve
+            // their percentage at fill time.
+            if (has_explicit_qty_to_close) {
+                execute_partial_exit_by_entry_qty(
+                    fill_price, order.from_entry, order.qty);
+            } else {
+                execute_partial_exit_by_entry_percent(
+                    fill_price, order.from_entry, qp);
+            }
         } else {
             execute_partial_exit_by_entry(fill_price, order.from_entry);
         }
     } else {
-        if (has_explicit_qty_to_close) {
+        if (dynamic_full_live_qty) {
+            execute_market_exit(fill_price);
+        } else if (has_explicit_qty_to_close) {
             execute_partial_exit_qty(fill_price, order.qty);
         } else if (is_partial) {
             execute_partial_exit(fill_price, qp);
@@ -2739,17 +3019,13 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
 
     // Same-bar exit handling: TradingView evaluates priced exits (stop/limit/
     // trail) on the entry bar itself (entry fills at open, then intra-bar
-    // data evaluates exits). But skip if the exit has garbage values
-    // (computed when position was flat).
+    // data evaluates exits). A generic wrong-side level is blocked unless the
+    // prearmed MARKET-parent helper proves that it is a valid open-gap child.
     //
     // The wrong-side eligibility skip (stop > entry for long, etc.) gates
-    // out spurious orders whose stop/limit was derived from
-    // ``strategy.position_avg_price`` while flat: Pine returns ``na`` and
-    // arithmetic propagates ``na`` (so the order becomes a no-op), but the
-    // engine returns ``0.0`` and arithmetic produces a numerically-valid
-    // but semantically-wrong-side level (negative or near-zero). Without
-    // the skip those orders gap-fill at the entry bar's open (every bar a
-    // signal fires would close at $0 PnL).
+    // out freshly emitted or stale levels that would have triggered before
+    // the position opened. Generated Pine separately preserves flat
+    // ``strategy.position_avg_price == na`` before it reaches this layer.
     //
     // The magnifier corpus (probe-01..08b) places exits with USER-COMPUTED
     // valid wrong-side stops (e.g. ``open + (high-open)*0.5`` is between
@@ -2774,7 +3050,9 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
                 return OrderEligibility::Skip;
             }
         }
-        if (!bar_magnifier_enabled_
+        const bool prearmed_market_gap =
+            prearmed_market_parent_stop_gaps_at_open(order, bar);
+        if (!prearmed_market_gap && !bar_magnifier_enabled_
             && !(calc_on_order_fills_ && coof_scheduler_active_
                  && order.created_during_coof_recalc)) {
             double ep = position_entry_price_;
@@ -2824,6 +3102,15 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool should_fill = false;
     bool is_limit_fill = false;
 
+    // A valid child that was armed with its pending MARKET parent and whose
+    // stop is already breached at the parent's fill open scratches there.
+    // Route it directly: the generic entry-bar resolver intentionally blocks
+    // wrong-side levels and remains unchanged for every other provenance.
+    if (exit_style && prearmed_market_parent_stop_gaps_at_open(order, bar)) {
+        fill_price = bar.open;
+        should_fill = true;
+    }
+
     // If every non-trailing priced leg is suppressed on the entry bar, the
     // order is dormant rather than becoming a market exit. The original
     // prices remain stored on PendingOrder and become active next bar.
@@ -2864,6 +3151,54 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             is_limit_fill = true;
         }
     } else if (!should_fill && exit_style && (has_stop || has_limit || has_trail)) {
+        double path_start_position = 0.0;
+        // Ordinary historical processing scans the retained pure-stop parent
+        // entry and its from_entry bracket in one pass. Once the parent fills,
+        // the child may inspect only the remaining OHLC path. COOF already
+        // supplies a monotonic segment cursor, and magnifier has its own tick
+        // path, so neither is routed through this full-bar coordinate. Keep
+        // multi-order exit groups on the existing path until their sibling
+        // ordering metric is cursor-aware; a single strategy.exit may still
+        // carry both its stop and limit legs inside one order.
+        if (is_entry_bar
+            && order.type == OrderType::EXIT
+            && !order.from_entry.empty()
+            && !order.created_while_in_position
+            && std::isnan(order.trail_points)
+            && std::isnan(order.trail_price)
+            && !bar_magnifier_enabled_
+            && !(calc_on_order_fills_ && coof_scheduler_active_)) {
+            int matching_exit_orders = 0;
+            for (const PendingOrder& pending : pending_orders_) {
+                if (pending.type == OrderType::EXIT
+                    && pending.from_entry == order.from_entry) {
+                    ++matching_exit_orders;
+                }
+            }
+            bool found_parent = false;
+            double earliest_parent = std::numeric_limits<double>::infinity();
+            for (const PyramidEntry& pe : pyramid_entries_) {
+                if (matching_exit_orders != 1) break;
+                if (pe.entry_id != order.from_entry
+                    || pe.entry_bar_index != bar_index_
+                    || pe.time != bar.timestamp) {
+                    continue;
+                }
+                found_parent = true;
+                // A matching market/raw parent was active from the open, so
+                // the bracket keeps the full path even if another same-id
+                // priced add filled later this bar.
+                if (!std::isfinite(pe.entry_path_position)) {
+                    earliest_parent = 0.0;
+                    break;
+                }
+                earliest_parent = std::min(earliest_parent,
+                                           pe.entry_path_position);
+            }
+            if (found_parent && std::isfinite(earliest_parent)) {
+                path_start_position = earliest_parent;
+            }
+        }
         ExitPathFill exit_fill = resolve_exit_path_fill(
             bar,
             position_side_,
@@ -2877,7 +3212,8 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             is_entry_bar,
             bar_magnifier_enabled_,
             syminfo_mintick_,
-            coof_cascade_force_wp_gap_);
+            coof_cascade_force_wp_gap_,
+            path_start_position);
         if (exit_fill.should_fill) {
             fill_price = exit_fill.fill_price;
             should_fill = true;

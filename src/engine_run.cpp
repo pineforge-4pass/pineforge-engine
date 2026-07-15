@@ -4,6 +4,8 @@
 
 #include "engine_internal.hpp"
 
+#include <pineforge/ta.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -15,6 +17,27 @@ using namespace internal;
 
 
 // open_trade_* accessors moved to engine_trade_accessors.cpp.
+
+// Invoke the generated chart strategy body under its own EMA warmup mode.
+// The selector is thread-local because multiple engines can run concurrently;
+// restoring the previous value (also during stack unwinding) prevents both
+// cross-engine contamination and leakage between chart and request.security
+// evaluation. The latter installs its own scope around every security
+// evaluator dispatch and restores the prior thread-local value on return.
+void BacktestEngine::invoke_chart_on_bar(const Bar& bar) {
+    struct ChartEmaNaWarmupScope {
+        bool previous;
+        explicit ChartEmaNaWarmupScope(bool enabled)
+            : previous(ta::ema_na_warmup_flag()) {
+            ta::ema_na_warmup_flag() = enabled;
+        }
+        ~ChartEmaNaWarmupScope() {
+            ta::ema_na_warmup_flag() = previous;
+        }
+    } scope(chart_ema_na_warmup_);
+
+    on_bar(bar);
+}
 
 // Standard per-script-bar dispatch sequence, shared by the simple run() loop,
 // run_simple_bar_loop, and the no-magnifier aggregation path. Operates on
@@ -41,13 +64,13 @@ void BacktestEngine::dispatch_bar() {
     if (process_orders_on_close_) {
         process_pending_orders(current_bar_);   // step 1: old stop/limit
         update_per_trade_extremes();             // step 2: update before strategy reads
-        on_bar(current_bar_);                    // step 3: strategy logic
+        invoke_chart_on_bar(current_bar_);       // step 3: strategy logic
         flush_same_bar_close();                  // step 3b: surviving strategy.close fill
         process_pending_orders(current_bar_);    // step 4: new market orders
     } else {
         process_pending_orders(current_bar_);
         update_per_trade_extremes();
-        on_bar(current_bar_);
+        invoke_chart_on_bar(current_bar_);
     }
     // TradingView forced-liquidation check, once per script bar after all order
     // processing, using this bar's full adverse extreme (high/low).
@@ -144,7 +167,7 @@ uint64_t BacktestEngine::execute_coof_script_body(
     coof_cursor_price_ = broker_cursor_price;
     coof_direct_fill_events_remaining_ = direct_fill_event_budget;
     const uint64_t before = broker_fill_event_seq_;
-    on_bar(current_bar_);
+    invoke_chart_on_bar(current_bar_);
     if (process_orders_on_close_) {
         // A same-bar close batch is a broker fill at the current monotonic
         // cursor. At the ordinary close execution that cursor is C; during a
@@ -448,9 +471,13 @@ void BacktestEngine::reset_run_state() {
     sb_close_bar_ = -1;
     sb_close_calls_ = 0;
     sb_close_first_id_.clear();
+    sb_close_first_target_ = 0.0;
+    sb_close_first_carry_valid_ = false;
+    sb_close_first_carry_qty_ = 0.0;
     sb_close_id_.clear();
     sb_close_comment_.clear();
     close_reserved_qty_.clear();
+    close_two_call_first_qty_.clear();
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
     last_exit_fill_was_trail_ = false;
@@ -704,7 +731,7 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
                     // magnifier: the single sub-bar IS the script bar).
                     current_bar_.timestamp = script_bar_ts;
                     _push_source_series();
-                    on_bar(current_bar_);
+                    invoke_chart_on_bar(current_bar_);
                     flush_same_bar_close();  // surviving strategy.close fill
                     process_pending_orders(current_bar_);
                 }
@@ -718,7 +745,7 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
                     // not the final sub-bar ts.
                     current_bar_.timestamp = script_bar_ts;
                     _push_source_series();
-                    on_bar(current_bar_);
+                    invoke_chart_on_bar(current_bar_);
                 }
             }
         }

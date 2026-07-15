@@ -16,18 +16,17 @@ namespace ta {
 // have accumulated, then seeds with the SMA of those first ``length`` values —
 // unlike the documented ``pine_ema`` reference impl (and this engine's default),
 // which seed ``ema := src`` on the first bar and are therefore never ``na``.
-// The difference only bites a ``request.security`` HTF series read under a
-// range-start-truncated feed (KI-55): the security's embedded ``ta.ema`` must
-// be ``na`` for its whole warmup window to match TV, exactly as ``ta.rma`` /
-// ``ta.sma`` already are.
+// The difference matters for range-start-truncated chart and
+// ``request.security`` series (KI-55): the relevant ``ta.ema`` must be ``na``
+// for its whole warmup window to match TV, exactly as ``ta.rma`` / ``ta.sma``
+// already are.
 //
 // An ``EMA`` instance latches this flag on its first ``compute()`` and keeps
-// that mode for life. The engine raises the flag ONLY around
-// ``request.security`` evaluation while the ``security_range_start_na_warmup``
-// run flag is active (see BacktestEngine::feed_security_eval_state), so
-// security-embedded EMAs latch ``true`` and chart-timeframe EMAs latch
-// ``false``. When the run flag is never set the toggle stays ``false`` and
-// every EMA is byte-identical to the prior src-seed behavior.
+// that mode for life. The engine scopes the flag independently around chart
+// ``on_bar`` dispatch (``chart_ema_na_warmup``) and request.security evaluation
+// (``security_range_start_na_warmup``), so either context can opt in without
+// contaminating the other. When neither run flag is set, every EMA is
+// byte-identical to the prior src-seed behavior.
 bool& ema_na_warmup_flag();
 
 class RMA {

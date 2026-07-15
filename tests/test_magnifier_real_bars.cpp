@@ -237,25 +237,26 @@ static void test_wrong_side_stop_fills_at_entry_under_magnifier() {
     }
 }
 
-// Without magnifier, the legacy non-magnifier path applies: a wrong-side
-// stop placed on the signal bar must NOT fire on the entry bar (the bar
-// path doesn't cross the stop on a falling segment, and the eligibility
-// skip in classify_order_eligibility blocks the gap-shortcut). This is
-// the gate that protects scripts which derive stops/limits from
-// strategy.position_avg_price while flat (the engine returns 0.0 there
-// instead of na, producing numerically-valid but semantically-wrong-side
-// levels — without the gate every such bar would close at $0 PnL).
-static void test_wrong_side_stop_blocked_without_magnifier() {
-    std::printf("test_wrong_side_stop_blocked_without_magnifier\n");
+// Without magnifier, a valid literal bracket prearmed with its pending MARKET
+// parent still gap-fills at the parent's next-open fill. The clean-room C/D
+// cells pin this independently of reversal provenance. Generated Pine protects
+// avg-derived flat brackets by lowering strategy.position_avg_price to na.
+static void test_prearmed_market_parent_stop_fills_without_magnifier() {
+    std::printf("test_prearmed_market_parent_stop_fills_without_magnifier\n");
 
     WrongSideStopStrat strat;
     auto bars = make_two_15m_bars_for_wrong_side();
-    // Aggregate to 15m but with magnifier OFF: the entry bar runs as a
-    // single tick and the wrong-side stop should not fire on it. The
-    // strategy never closes the position, so no trades are emitted.
+    // Aggregate to 15m with magnifier OFF: parent and child fill at the same
+    // script-bar open, producing one zero-PnL trade.
     strat.run(bars.data(), (int)bars.size(), "1", "15", false, 4,
               MagnifierDistribution::ENDPOINTS);
-    CHECK(strat.trade_count() == 0);
+    CHECK(strat.trade_count() == 1);
+    if (strat.trade_count() == 1) {
+        const auto& t = strat.get_trade(0);
+        CHECK(near(t.entry_price, 100.0, 1e-9));
+        CHECK(near(t.exit_price, 100.0, 1e-9));
+        CHECK(t.entry_bar_index == t.exit_bar_index);
+    }
 }
 
 int main() {
@@ -263,7 +264,7 @@ int main() {
     test_distribution_irrelevant_when_real_sub_bars();
     test_legacy_path_used_when_single_sub_bar();
     test_wrong_side_stop_fills_at_entry_under_magnifier();
-    test_wrong_side_stop_blocked_without_magnifier();
+    test_prearmed_market_parent_stop_fills_without_magnifier();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;
