@@ -5,6 +5,8 @@
 # 2. Run each strategy through the Python harness against the reference
 #    OHLCV feed; write engine_trades.csv next to each strategy.so.
 # 3. Verify TV parity with scripts/verify_corpus.py.
+# 4. Regenerate the canonical validation report and assert report/verifier
+#    lock-step on the historical drift fixtures.
 #
 # Honours these env vars:
 #   BUILD_DIR     — CMake build directory (default: build)
@@ -140,5 +142,11 @@ if [[ "${SKIP_VERIFY:-0}" != "1" ]]; then
         warn "This helper is not the canonical parity sweep; see corpus/README.md."
     fi
 fi
+
+# --- 4) report --------------------------------------------------------
+
+log "regenerating canonical validation report"
+"$PY" scripts/regen_validation_report.py
+"$PY" scripts/validation_report_self_test.py
 
 log "done."
