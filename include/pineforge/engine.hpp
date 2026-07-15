@@ -182,6 +182,10 @@ struct PendingOrder {
     int oca_type;              // 0=none, 1=cancel, 2=reduce
     int created_bar;           // bar_index when order was created
     int64_t created_seq = 0;
+    // Fresh identity for this exact pending-order object. Unlike created_seq,
+    // which intentionally survives same-id replacement to keep broker ordering
+    // stable, incarnation is never copied or reused by a replacement.
+    uint64_t incarnation = 0;
     // Entry stop-limit activation is durable broker state. Once the stop leg
     // fires, later bars—and later COOF scheduler segments on the same bar—
     // evaluate only the live limit leg until the order fills or is replaced.
@@ -235,6 +239,11 @@ struct PendingOrder {
     // (seg_i == 2) or off-path (seg_i < 0) rolls to the next bar.
     bool coof_cascade_inflight_fires = false;
     PositionSide created_position_side = PositionSide::FLAT;
+    // Monotonic identity of the live position instance at placement. Side
+    // alone is insufficient: a resting order can survive LONG -> SHORT ->
+    // LONG and must not be mistaken for an order born in the later LONG
+    // cycle. Zero means the order was created while broker-flat.
+    int64_t created_position_cycle_seq = 0;
     // True when a successful strategy.close/close_all call earlier in this
     // same on_bar already targeted live quantity. This remains distinct from
     // created_position_side: an immediate full close makes the engine truly
@@ -254,6 +263,15 @@ struct PendingOrder {
     // gate ran. See classify_order_eligibility / compact_filled_pending_orders
     // and test_close_all_coqueued_entry.cpp.
     bool over_pyramiding_cap_at_placement = false;
+    // Call-bar provenance for the one deferred close_all whose post-fill
+    // cleanup may preserve this order. Set only on a PRIOR-bar, pure-STOP
+    // strategy.entry that was under the pyramiding cap and reused the id of a
+    // physically-live same-side pyramid lot when close_all was called. The
+    // cleanup requires both this value AND the paired incarnation below to
+    // equal the ACTUAL order that flattened, so a same-call-bar earlier RAW or
+    // close(id) fill cannot impersonate close_all. -1/0 means no provenance.
+    int same_id_stop_deferred_close_all_bar = -1;
+    uint64_t same_id_stop_deferred_close_all_incarnation = 0;
     // KI-65 dual same-bar opposite entry (probe pf-probe-ki65-dual-entry-
     // precedence): true when this priced (stop/limit) ENTRY was placed from
     // FLAT and an EARLIER same-on_bar OPPOSITE-direction MARKET entry is
@@ -319,6 +337,13 @@ struct PendingOrder {
     // fires the chain resets to qty=1 (matching TV's behaviour at
     // probe 52 trade 113). Preserving the largest observed carry
     // across re-placements would over-extend chains.
+    //
+    // The same placement snapshot also pins the equality-only M2 rule for a
+    // priced explicit-FIXED same-cycle reversal: frozen broker transaction =
+    // this held qty + the order's own quantized qty. If later same-direction
+    // adds grow the live opposite position to exactly that transaction, the
+    // fill closes to flat and opens no new leg. Other size relations retain
+    // legacy reversal semantics; see apply_entry_order_fill.
     double tv_carry_qty = 0.0;
     // Quantity frozen at PLACEMENT (signal) time for a DEFAULT-sized (qty=na)
     // market order whose default sizing is price-dependent (percent_of_equity
@@ -524,6 +549,11 @@ protected:
     double position_qty_ = 0.0;
     int position_entry_count_ = 0;  // number of entries in current direction (for pyramiding)
     int position_open_bar_ = -1;    // bar_index_ when position was opened (for exit delay)
+    // Exact position-instance provenance for pending orders whose semantics
+    // depend on the position cycle in which they were placed. A fresh open or
+    // reversal gets a new nonzero id; same-direction pyramid adds retain it.
+    int64_t position_cycle_seq_ = 0;
+    int64_t next_position_cycle_seq_ = 1;
     std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting
     // Per-entry-id UNCLOSED quantity ledger, used ONLY by strategy.close(id)
     // under the default FIFO close-entries rule to decide how much to close.
@@ -789,6 +819,7 @@ protected:
     bool historical_security_lookahead_projection_ = false;
     bool historical_security_lookahead_projection_active_ = false;
     int64_t next_order_seq_ = 1;
+    uint64_t next_order_incarnation_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
     // opposing-stop resolution (see engine_fills.cpp).
@@ -989,6 +1020,7 @@ protected:
     CoofFillResult process_next_pending_order(const Bar& bar,
                                               bool allow_market_orders,
                                               int& exit_closed_from_bar,
+                                              uint64_t& exit_closed_from_incarnation,
                                               bool& exit_closed_was_long);
 
     // TradingView forced-liquidation (margin call). Finite-price liquidation
@@ -2015,6 +2047,7 @@ private:
     void invalidate_pending_flat_market_pair(int64_t created_seq);
     void compact_filled_pending_orders(const std::vector<size_t>& filled_indices,
                                        int exit_closed_from_bar,
+                                       uint64_t exit_closed_from_incarnation,
                                        bool exit_closed_was_long);
     // Apply a fill to engine state: dispatches by order.type to the
     // per-type apply_*_order_fill helpers below, plus runs the risk
@@ -2027,6 +2060,7 @@ private:
                                      const Bar& bar,
                                      double& trail_best_path_state,
                                      int& exit_closed_from_bar,
+                                     uint64_t& exit_closed_from_incarnation,
                                      bool& exit_closed_was_long,
                                      std::vector<size_t>& filled_indices);
     // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
@@ -2047,6 +2081,7 @@ private:
                                 double& trail_best_path_state);
     void apply_exit_order_fill(PendingOrder& order, double fill_price,
                                int& exit_closed_from_bar,
+                               uint64_t& exit_closed_from_incarnation,
                                bool& exit_closed_was_long);
     // Freeze the reserved qty of LAYERED strategy.exit legs (a qty_percent<100
     // partial + a sibling default/100% leg) that were armed while the position
@@ -2061,6 +2096,7 @@ private:
     void apply_raw_order_fill(PendingOrder& order, double fill_price,
                               double& trail_best_path_state,
                               int& exit_closed_from_bar,
+                              uint64_t& exit_closed_from_incarnation,
                               bool& exit_closed_was_long);
     void materialize_relative_exit_prices_for_live_position();
 
@@ -2075,7 +2111,8 @@ private:
         PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
-        int exit_closed_from_bar, bool exit_closed_was_long, const Bar& bar);
+        int exit_closed_from_bar, uint64_t exit_closed_from_incarnation,
+        bool exit_closed_was_long, const Bar& bar);
     struct FillEvaluation {
         enum class Kind { Fill, NoFill, DeferredToOpposingPass };
         Kind kind;
@@ -2114,14 +2151,15 @@ private:
                                  bool closes_full_position,
                                  bool closes_fifo_qty,
                                  bool closes_any_qty);
-    void queue_deferred_close_order(const std::string& id,
-                                    const std::string& comment,
-                                    double qty_to_close,
-                                    double matching_qty,
-                                    bool closes_full_position,
-                                    bool closes_any_qty,
-                                    double consumed_ledger_qty =
-                                        std::numeric_limits<double>::quiet_NaN());
+    uint64_t queue_deferred_close_order(
+        const std::string& id,
+        const std::string& comment,
+        double qty_to_close,
+        double matching_qty,
+        bool closes_full_position,
+        bool closes_any_qty,
+        double consumed_ledger_qty =
+            std::numeric_limits<double>::quiet_NaN());
     void clear_existing_exit_order(const std::string& id,
                                    const std::string& from_entry,
                                    bool has_trail_request,

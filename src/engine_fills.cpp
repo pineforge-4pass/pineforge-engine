@@ -13,6 +13,38 @@
 namespace pineforge {
 using namespace internal;
 
+namespace {
+
+// Both post-full-close cleanup sites must use this exact predicate. The
+// physical same-id fact is snapshotted when deferred close_all is called,
+// because the filling close drains pyramid_entries_ before cleanup runs.
+bool preserves_same_id_stop_across_deferred_close_all(
+        const PendingOrder& order,
+        int exit_closed_from_bar,
+        uint64_t exit_closed_from_incarnation,
+        bool exit_closed_was_long) {
+    const PositionSide closed_side =
+        exit_closed_was_long ? PositionSide::LONG : PositionSide::SHORT;
+    return exit_closed_from_bar >= 0
+        && order.same_id_stop_deferred_close_all_bar == exit_closed_from_bar
+        && exit_closed_from_incarnation > 0
+        && order.same_id_stop_deferred_close_all_incarnation
+            == exit_closed_from_incarnation
+        && order.type == OrderType::ENTRY
+        && order.created_bar < exit_closed_from_bar
+        && order.is_long == exit_closed_was_long
+        && order.created_position_side == closed_side
+        && !order.over_pyramiding_cap_at_placement
+        && std::isfinite(order.stop_price)
+        && std::isnan(order.limit_price)
+        && std::isnan(order.trail_points)
+        && std::isnan(order.trail_price)
+        && std::isnan(order.trail_offset)
+        && !order.stop_limit_activated;
+}
+
+}  // namespace
+
 
 // strategy_entry / strategy_close / strategy_close_all / strategy_exit
 // moved to engine_strategy_commands.cpp.
@@ -34,6 +66,7 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     }
 
     int exit_closed_from_bar = -1;   // created_bar of the last full-close exit
+    uint64_t exit_closed_from_incarnation = 0;
     bool exit_closed_was_long = false;  // direction of the closed position
 
     // Reusable member scratchpad (capacity persists across calls; avoids a
@@ -53,16 +86,17 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
         if (opposing_pass == 1 && pass0_opposing_skip_ids.empty()) break;
     std::vector<size_t>& filled_indices = scratch_filled_indices_;
     filled_indices.clear();
-    // TV cancels pending SAME-DIRECTION entries placed on a prior on_bar when
-    // a full strategy.exit closes the position on this bar. Opposite-direction
-    // (reversal) entries still fire. Entries placed on the SAME on_bar as the
-    // fired exit also still fire (close + entry reversal placed together).
+    // TV generally cancels stale SAME-DIRECTION entries after a full exit.
+    // Opposite entries, same-call-bar under-cap co-queues, resting pure LIMITs,
+    // and the physically-live same-ID pure-STOP close_all cell are the narrow
+    // independently-proven exceptions below.
 
     for (size_t i = 0; i < pending_orders_.size(); i++) {
         PendingOrder& order = pending_orders_[i];
         auto eligibility = classify_order_eligibility(
             order, opposing_pass, dual_entry_path_, pass0_opposing_skip_ids,
-            exit_closed_from_bar, exit_closed_was_long, bar);
+            exit_closed_from_bar, exit_closed_from_incarnation,
+            exit_closed_was_long, bar);
         if (eligibility == OrderEligibility::Remove) {
             invalidate_pending_flat_market_pair(order.created_seq);
             filled_indices.push_back(i);
@@ -82,11 +116,14 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
         apply_filled_order_to_state(
             order, i, fill.fill_price, fill.is_limit_fill, bar,
             trail_best_path_state,
-            exit_closed_from_bar, exit_closed_was_long,
+            exit_closed_from_bar, exit_closed_from_incarnation,
+            exit_closed_was_long,
             filled_indices);
         materialize_relative_exit_prices_for_live_position();
     }
-    compact_filled_pending_orders(filled_indices, exit_closed_from_bar, exit_closed_was_long);
+    compact_filled_pending_orders(
+        filled_indices, exit_closed_from_bar, exit_closed_from_incarnation,
+        exit_closed_was_long);
     }  // opposing_pass
 
     // If position is flat after processing, purge remaining exit orders — but
@@ -107,6 +144,7 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
         const Bar& bar,
         bool allow_market_orders,
         int& exit_closed_from_bar,
+        uint64_t& exit_closed_from_incarnation,
         bool& exit_closed_was_long) {
     CoofFillResult result;
 
@@ -177,7 +215,8 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
             PendingOrder& order = pending_orders_[i];
             auto eligibility = classify_order_eligibility(
                 order, opposing_pass, dual_entry_path, pass0_opposing_skip_ids,
-                exit_closed_from_bar, exit_closed_was_long, bar);
+                exit_closed_from_bar, exit_closed_from_incarnation,
+                exit_closed_was_long, bar);
             if (eligibility == OrderEligibility::Remove) {
                 invalidate_pending_flat_market_pair(order.created_seq);
                 filled_indices.push_back(i);
@@ -287,7 +326,8 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
                 order, candidate.order_index, candidate.fill.fill_price,
                 candidate.fill.is_limit_fill, bar,
                 trail_best_path_state, exit_closed_from_bar,
-                exit_closed_was_long, filled_indices);
+                exit_closed_from_incarnation, exit_closed_was_long,
+                filled_indices);
             materialize_relative_exit_prices_for_live_position();
 
             const uint64_t produced = broker_fill_event_seq_ - events_before;
@@ -300,7 +340,9 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
                 std::unique(filled_indices.begin(), filled_indices.end()),
                 filled_indices.end());
             compact_filled_pending_orders(
-                filled_indices, exit_closed_from_bar, exit_closed_was_long);
+                filled_indices, exit_closed_from_bar,
+                exit_closed_from_incarnation,
+                exit_closed_was_long);
             if (side_before_fill == PositionSide::FLAT
                 && position_side_ != PositionSide::FLAT) {
                 // The old cycle's same-direction cleanup has already swept
@@ -308,6 +350,7 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
                 // Orders born in its subsequent recalcs belong to the new
                 // position cycle and must not inherit the old close marker.
                 exit_closed_from_bar = -1;
+                exit_closed_from_incarnation = 0;
             }
             if (position_side_ == PositionSide::FLAT) {
                 purge_exit_orders(/*retain_for_pending_entries=*/true);
@@ -323,7 +366,9 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
             std::unique(filled_indices.begin(), filled_indices.end()),
             filled_indices.end());
         compact_filled_pending_orders(
-            filled_indices, exit_closed_from_bar, exit_closed_was_long);
+            filled_indices, exit_closed_from_bar,
+            exit_closed_from_incarnation,
+            exit_closed_was_long);
     }
 
     // No fill consumed this segment, so the broker reached its endpoint and
@@ -1011,6 +1056,7 @@ void BacktestEngine::invalidate_pending_flat_market_pair(int64_t created_seq) {
 void BacktestEngine::compact_filled_pending_orders(
         const std::vector<size_t>& filled_indices,
         int exit_closed_from_bar,
+        uint64_t exit_closed_from_incarnation,
         bool exit_closed_was_long) {
     if (filled_indices.empty()) return;
     // filled_indices is built by push_back(i) with i strictly increasing over
@@ -1039,13 +1085,20 @@ void BacktestEngine::compact_filled_pending_orders(
         // reaches compaction without ever entering filled_indices, so without
         // this term it would be wiped here even though classify spared it (the
         // reverted M1 hit exactly this — R-KEEP-stop failed under a classify-only
-        // fix). Over-cap co-queues and prior-bar carries are still compacted away.
+        // fix). Over-cap co-queues and ordinary different-ID prior-bar carries
+        // are still compacted away; the shared helper below owns the one proven
+        // prior-bar same-ID pure-STOP close_all exception.
         bool coqueued_within_cap =
             pending_orders_[read].created_bar == exit_closed_from_bar
             && !pending_orders_[read].over_pyramiding_cap_at_placement;
+        bool same_id_stop_preserved_by_deferred_close_all =
+            preserves_same_id_stop_across_deferred_close_all(
+                pending_orders_[read], exit_closed_from_bar,
+                exit_closed_from_incarnation, exit_closed_was_long);
         bool stale_same_direction_entry_after_exit =
             exit_closed_from_bar >= 0
             && !coqueued_within_cap
+            && !same_id_stop_preserved_by_deferred_close_all
             && (pending_orders_[read].type == OrderType::ENTRY
                 || pending_orders_[read].type == OrderType::MARKET)
             && pending_orders_[read].is_long == exit_closed_was_long
@@ -1074,6 +1127,7 @@ void BacktestEngine::apply_filled_order_to_state(
         const Bar& bar,
         double& trail_best_path_state,
         int& exit_closed_from_bar,
+        uint64_t& exit_closed_from_incarnation,
         bool& exit_closed_was_long,
         std::vector<size_t>& filled_indices) {
     auto decline_and_cancel = [&]() {
@@ -1680,10 +1734,14 @@ void BacktestEngine::apply_filled_order_to_state(
     } else if (order.type == OrderType::ENTRY) {
         apply_entry_order_fill(order, fill_price, bar, trail_best_path_state);
     } else if (order.type == OrderType::EXIT) {
-        apply_exit_order_fill(order, fill_price, exit_closed_from_bar, exit_closed_was_long);
+        apply_exit_order_fill(
+            order, fill_price, exit_closed_from_bar,
+            exit_closed_from_incarnation, exit_closed_was_long);
     } else if (order.type == OrderType::RAW_ORDER) {
         apply_raw_order_fill(order, fill_price, trail_best_path_state,
-                             exit_closed_from_bar, exit_closed_was_long);
+                             exit_closed_from_bar,
+                             exit_closed_from_incarnation,
+                             exit_closed_was_long);
     }
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
@@ -2019,17 +2077,29 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     //     and re-arms; the ungated engine wrongly opened the reversed leg at the
     //     stale level (25 phantom/early shorts on that probe).
     // A SAME-cycle reverse (created_position_side == the reversed side — the
-    // stop was placed while already holding the position it flips) DOES open
-    // the new leg, so it is excluded by the created!=current test. Deferred-flip
-    // carry entries that fire from FLAT are untouched (position_side_==FLAT).
-    // Approximation (no ground truth): created_position_side == position_side_
-    // stands in for "placed in THIS position instance's cycle". A double flip
-    // (created LONG, position flips SHORT then LONG again with the order still
-    // pending) reads as same-cycle and opens — out of scope.
+    // stop was placed while already holding the position it flips) ordinarily
+    // opens the new leg. There is one independently pinned exception: for an
+    // explicit-FIXED priced entry, TV freezes the broker transaction at
+    // placement as ``held_qty + own_qty``. If later same-direction adds make
+    // the live opposite position EXACTLY that frozen transaction when the
+    // order fills, the transaction is consumed by the close and no open-leg
+    // remainder exists. The equality-only scope is deliberate: the census
+    // pins all seven M2 rows at equality, while the ordinary H=1/live=1/Q=1
+    // (live < frozen) population must keep the legacy full reversal. No
+    // live>frozen behavior is inferred. Default/dynamic qty, MARKET orders,
+    // created-FLAT KI-65 orders, and prior-cycle carries are also excluded.
+    // Deferred-flip carry entries that fire from FLAT remain untouched
+    // (position_side_==FLAT).
+    // Position-cycle identity is load-bearing here. Side equality alone would
+    // misclassify a resting order that survives LONG -> SHORT -> LONG as born
+    // in the later LONG instance and could turn its legacy reversal into an
+    // incorrect close-only fill.
     PositionSide entry_req = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
-    bool close_only_opposite =
+    const bool opposite_live_position =
         position_side_ != PositionSide::FLAT
-        && entry_req != position_side_
+        && entry_req != position_side_;
+    const bool prior_cycle_close_only =
+        opposite_live_position
         && order.created_position_side != position_side_
         // KI-65: a flat-armed priced entry reversing a position opened THIS bar
         // by an EARLIER opposite MARKET entry fully reverses (holds its own
@@ -2038,6 +2108,29 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
         // existed (STOP-first / placement-rejected cells leave it false, so
         // they keep the close-only single-close semantics).
         && !order.reverses_same_bar_market_from_flat;
+    const bool explicit_fixed_qty =
+        std::isfinite(order.qty)
+        && order.qty > kQtyEpsilon
+        && (order.qty_type < 0
+            || order.qty_type == static_cast<int>(QtyType::FIXED));
+    const bool priced_entry =
+        !std::isnan(order.stop_price) || !std::isnan(order.limit_price);
+    const double fixed_own_qty = explicit_fixed_qty
+        ? std::abs(apply_qty_step(order.qty))
+        : std::numeric_limits<double>::quiet_NaN();
+    const double frozen_reversal_tx = order.tv_carry_qty + fixed_own_qty;
+    const bool same_cycle_frozen_tx_exact_flat =
+        opposite_live_position
+        && order.created_position_side == position_side_
+        && order.created_position_cycle_seq > 0
+        && order.created_position_cycle_seq == position_cycle_seq_
+        && priced_entry
+        && explicit_fixed_qty
+        && order.tv_carry_qty > kQtyEpsilon
+        && std::isfinite(frozen_reversal_tx)
+        && std::abs(position_qty_ - frozen_reversal_tx) <= kQtyEpsilon;
+    const bool close_only_opposite =
+        prior_cycle_close_only || same_cycle_frozen_tx_exact_flat;
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, close_only_opposite,
                          /*is_priced_entry=*/true,
@@ -2050,7 +2143,7 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
         || (position_entry_count_ != count_before)
         || (trades_.size() != trades_before_entry);
 
-    bool was_priced_entry = !std::isnan(order.stop_price) || !std::isnan(order.limit_price);
+    bool was_priced_entry = priced_entry;
     if (did_execute) {
         double trail_best_after_fill = trail_best_price_;
         if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
@@ -2084,6 +2177,7 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
 
 void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_price,
                                            int& exit_closed_from_bar,
+                                           uint64_t& exit_closed_from_incarnation,
                                            bool& exit_closed_was_long) {
     double qp = std::isnan(order.qty_percent) ? 100.0 : std::clamp(order.qty_percent, 0.0, 100.0);
     bool has_explicit_qty_to_close = !std::isnan(order.qty);
@@ -2135,6 +2229,7 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     if (position_side_ == PositionSide::FLAT
         && side_before_exit != PositionSide::FLAT) {
         exit_closed_from_bar = order.created_bar;
+        exit_closed_from_incarnation = order.incarnation;
         exit_closed_was_long = (side_before_exit == PositionSide::LONG);
     }
 }
@@ -2199,6 +2294,7 @@ void BacktestEngine::reconcile_deferred_layered_exits(const std::string& entry_i
 void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price,
                                           double& trail_best_path_state,
                                           int& exit_closed_from_bar,
+                                          uint64_t& exit_closed_from_incarnation,
                                           bool& exit_closed_was_long) {
     if (position_side_ == PositionSide::FLAT) {
         fill_price = apply_fill_slippage(fill_price, order.is_long);
@@ -2206,6 +2302,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         double qty = !std::isnan(order.frozen_default_qty) ? order.frozen_default_qty
                    : (std::isnan(order.qty) ? calc_qty(fill_price) : order.qty);
         position_side_ = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
         position_entry_price_ = fill_price;
         // The shared post-dispatch hook queues the new fill's event. Clear any
         // prior-cycle provenance first; RAW_ORDER opens do not route through
@@ -2284,6 +2381,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             execute_market_exit(fill_price);
             if (position_side_ == PositionSide::FLAT) {
                 exit_closed_from_bar = order.created_bar;
+                exit_closed_from_incarnation = order.incarnation;
                 exit_closed_was_long = (side_before_raw == PositionSide::LONG);
             }
         }
@@ -2378,7 +2476,8 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
-        int exit_closed_from_bar, bool exit_closed_was_long, const Bar& bar) {
+        int exit_closed_from_bar, uint64_t exit_closed_from_incarnation,
+        bool exit_closed_was_long, const Bar& bar) {
     using internal::DualEntryStopPathWinner;
     // design-declined-reversal-close-leg: a close flagged at the KI-54 reversal
     // decline is held atomically with the refused reversal — Remove it from both
@@ -2520,9 +2619,10 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         }
     }
 
-    // Cancel pending SAME-DIRECTION entry orders placed on a prior on_bar
-    // when a full strategy.exit has fired on this bar. Opposite-direction
-    // entries (reversal via stop/limit-then-new-signal) still fire.
+    // Cancel stale SAME-DIRECTION entry orders when a full strategy.exit has
+    // fired on this bar. Opposite-direction entries (reversal via
+    // stop/limit-then-new-signal) still fire, as do the narrow proven
+    // same-direction carve-outs below.
     // Restrict the wipe to entries actually ADDED to the just-closed
     // position (created_position_side matches the closed direction).
     PositionSide closed_side =
@@ -2553,20 +2653,26 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     // add placed OVER the pyramiding cap is one TV rejects at placement, and the
     // fill-time gate misses it because the co-queued close zeroes
     // position_entry_count_ first — so over_pyramiding_cap_at_placement keeps it
-    // in the wipe. PRIOR-bar carries (created_bar < the close's call bar) are
-    // always cancelled — the deferred-flip carry this wipe exists for
-    // (test_deferred_flip_carry_close_only.cpp, probes 72/80/93). The reverted
+    // in the wipe. Ordinary PRIOR-bar carries remain cancelled — the
+    // deferred-flip carry this wipe exists for (test_deferred_flip_carry_close_only.cpp,
+    // probes 72/80/93). The shared helper below excludes only a pure STOP with
+    // the physically-live same-ID deferred-close_all provenance. The reverted
     // M1 used the created_bar term alone and un-cancelled over-cap co-queues
     // (probe65 732→1463; the composite bracket fell below strong).
     bool coqueued_within_cap =
         order.created_bar == exit_closed_from_bar
         && !order.over_pyramiding_cap_at_placement;
+    bool same_id_stop_preserved_by_deferred_close_all =
+        preserves_same_id_stop_across_deferred_close_all(
+            order, exit_closed_from_bar, exit_closed_from_incarnation,
+            exit_closed_was_long);
     if (exit_closed_from_bar >= 0
         && (order.type == OrderType::MARKET || order.type == OrderType::ENTRY)
         && order.is_long == exit_closed_was_long
         && order.created_position_side == closed_side
         && !resting_limit_entry_carry
-        && !coqueued_within_cap) {
+        && !coqueued_within_cap
+        && !same_id_stop_preserved_by_deferred_close_all) {
         return OrderEligibility::Remove;
     }
 

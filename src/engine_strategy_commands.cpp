@@ -225,6 +225,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.oca_type = oca_type;
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
+    order.incarnation = next_order_incarnation_++;
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -234,6 +235,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.coof_born_mid_bar =
         coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     order.created_position_side = position_side_;
+    order.created_position_cycle_seq = position_cycle_seq_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
     // Snapshot the placement-time over-pyramiding-cap status, mirroring the
@@ -502,9 +504,57 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
     const double consumed_ledger_qty =
         (default_fifo_close && !immediate_ledger_recredit)
             ? qty_to_close : std::numeric_limits<double>::quiet_NaN();
-    queue_deferred_close_order(id, comment, qty_to_close, matching_qty,
-                               closes_full_position, closes_any_qty,
-                               consumed_ledger_qty);
+    const uint64_t deferred_close_incarnation = queue_deferred_close_order(
+        id, comment, qty_to_close, matching_qty,
+        closes_full_position, closes_any_qty,
+        consumed_ledger_qty);
+
+    // TradingView keeps one narrowly identifiable prior-bar broker order
+    // across an ordinary deferred close_all: a pure STOP strategy.entry that
+    // reuses the id of a physically-live lot on the held side and was within
+    // the pyramiding cap at placement. Snapshot physical pyramid_entries_
+    // here, before the close later drains them; id_unclosed_qty_ is purposely
+    // not used because default-FIFO close(id) can make that logical ledger
+    // disagree with the actually-live lot roster. Pair the snapshot with the
+    // newly queued close_all's fresh incarnation: created_seq intentionally
+    // survives same-id replacement for ordering, so it is not an identity.
+    // Sharing the call bar alone is also insufficient when an earlier RAW or
+    // ANY close(id) flattens first. No later full-close call globally clears
+    // this stamp: a coexisting earlier close_all still owns it, while a
+    // cancelled/replaced close_all can never be impersonated because its
+    // incarnation is never reused.
+    if (closes_full_position && id.empty() && !process_orders_on_close_) {
+        const bool closing_long = position_side_ == PositionSide::LONG;
+        for (PendingOrder& pending : pending_orders_) {
+            const bool pure_stop_entry =
+                pending.type == OrderType::ENTRY
+                && std::isfinite(pending.stop_price)
+                && std::isnan(pending.limit_price)
+                && std::isnan(pending.trail_points)
+                && std::isnan(pending.trail_price)
+                && std::isnan(pending.trail_offset)
+                && !pending.stop_limit_activated;
+            if (!pure_stop_entry
+                || pending.created_bar >= bar_index_
+                || pending.is_long != closing_long
+                || pending.created_position_side != position_side_
+                || pending.over_pyramiding_cap_at_placement) {
+                continue;
+            }
+            const bool has_physically_live_same_id_lot =
+                std::any_of(
+                    pyramid_entries_.begin(), pyramid_entries_.end(),
+                    [&](const PyramidEntry& lot) {
+                        return lot.entry_id == pending.id
+                            && lot.qty > kQtyEpsilon;
+                    });
+            if (has_physically_live_same_id_lot) {
+                pending.same_id_stop_deferred_close_all_bar = bar_index_;
+                pending.same_id_stop_deferred_close_all_incarnation =
+                    deferred_close_incarnation;
+            }
+        }
+    }
     // A default-FIFO close consumes id_unclosed_qty_ while resolving its
     // target above. When the command was born after an already-consumed POOC
     // close, its market order expires without a broker tick; keep the logical
@@ -876,6 +926,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.oca_type = oca_name.empty() ? 0 : 1;  // strategy.exit semantics: cancel
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
+    order.incarnation = next_order_incarnation_++;
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -1006,6 +1057,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     order.oca_type = oca_type;
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
+    order.incarnation = next_order_incarnation_++;
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -1263,13 +1315,14 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
 // be matched at the next bar's open by process_pending_orders. Mirrors
 // the qty / qty_percent shape that the partial-exit dispatch in
 // execute_immediate_close would have produced for the same flags.
-void BacktestEngine::queue_deferred_close_order(const std::string& id,
-                                                const std::string& comment,
-                                                double qty_to_close,
-                                                double matching_qty,
-                                                bool closes_full_position,
-                                                bool closes_any_qty,
-                                                double consumed_ledger_qty) {
+uint64_t BacktestEngine::queue_deferred_close_order(
+        const std::string& id,
+        const std::string& comment,
+        double qty_to_close,
+        double matching_qty,
+        bool closes_full_position,
+        bool closes_any_qty,
+        double consumed_ledger_qty) {
     const double eps = kQtyEpsilon;
     PendingOrder order;
     order.id = "__close__" + id;
@@ -1295,6 +1348,7 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     order.oca_type = 0;
     order.created_bar = bar_index_;
     order.created_seq = next_order_seq_++;
+    order.incarnation = next_order_incarnation_++;
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -1313,7 +1367,9 @@ void BacktestEngine::queue_deferred_close_order(const std::string& id,
     // debited (ANY rule / explicit qty / close_all).
     order.suppressed_close_consumed_ledger_qty = consumed_ledger_qty;
 
+    const uint64_t incarnation = order.incarnation;
     pending_orders_.push_back(std::move(order));
+    return incarnation;
 }
 
 // Capture seq + reserved qty of an existing pending exit with the
