@@ -104,6 +104,13 @@ set(TEST_SOURCES
 )
 
 find_package(Threads REQUIRED)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+add_test(
+    NAME test_derive_corpus_feeds
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/derive_corpus_feeds_self_test.py
+)
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
 # binaries — header-only code (Series, na, color, log, math::pine_random)
