@@ -124,10 +124,12 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
         return;
     }
 
-    // ``close_only_opposite`` reaches here only for a created_position_side !=
-    // FLAT reduce-only flip (the FLAT bracket case returned above via
-    // close_opposite_then_enter): a deferred-flip carry that flips the opposite
-    // position without opening its own leg.
+    // ``close_only_opposite`` reaches here for a created_position_side != FLAT
+    // reduce-only flip (the FLAT bracket case returned above via
+    // close_opposite_then_enter). This is either a deferred-flip carry that
+    // reverses a later position cycle, or the equality-only same-cycle frozen
+    // transaction whose whole broker movement is consumed by the close. Both
+    // close the live opposite position without opening their own leg.
     flip_market_position_to(id, is_long, fill_price, explicit_qty, explicit_qty_type,
                             /*close_only=*/close_only_opposite);
 }
@@ -539,6 +541,7 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
 // when the FIFO loop drained the position.
 void BacktestEngine::reset_position_state_to_flat() {
     position_side_ = PositionSide::FLAT;
+    position_cycle_seq_ = 0;
     position_entry_price_ = 0.0;
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
@@ -583,6 +586,7 @@ void BacktestEngine::settle_position_after_partial_exit() {
 void BacktestEngine::open_fresh_position(PositionSide requested, double fill_price,
                                          double qty, const std::string& id) {
     position_side_ = requested;
+    position_cycle_seq_ = next_position_cycle_seq_++;
     position_entry_price_ = fill_price;
     // The shared post-dispatch lifecycle hook queues the new fill's event.
     // Clear prior-cycle provenance now so reversals cannot expose it even
@@ -853,12 +857,11 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
     }
 
     if (close_only) {
-        // Deferred-flip carry reduce-only: this priced entry was armed during
-        // a prior position cycle and only flips the (later-opened) opposite
-        // position — its open leg is superseded by the same-id re-issue and
-        // re-arms at the modified level. Close the whole opposite position and
-        // stay flat; do NOT open. (See apply_entry_order_fill's
-        // close_only_opposite gate: created_position_side != position_side_.)
+        // Priced-entry reduce-only cases: either this order was armed during a
+        // prior cycle and flips a later opposite position, or its same-cycle
+        // frozen transaction exactly equals the grown live opposite position.
+        // In both cases close the whole position and stay flat; do NOT open.
+        // See apply_entry_order_fill's close_only_opposite predicates.
         reset_position_state_to_flat();
         return;
     }

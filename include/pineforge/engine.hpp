@@ -239,6 +239,11 @@ struct PendingOrder {
     // (seg_i == 2) or off-path (seg_i < 0) rolls to the next bar.
     bool coof_cascade_inflight_fires = false;
     PositionSide created_position_side = PositionSide::FLAT;
+    // Monotonic identity of the live position instance at placement. Side
+    // alone is insufficient: a resting order can survive LONG -> SHORT ->
+    // LONG and must not be mistaken for an order born in the later LONG
+    // cycle. Zero means the order was created while broker-flat.
+    int64_t created_position_cycle_seq = 0;
     // True when a successful strategy.close/close_all call earlier in this
     // same on_bar already targeted live quantity. This remains distinct from
     // created_position_side: an immediate full close makes the engine truly
@@ -332,6 +337,13 @@ struct PendingOrder {
     // fires the chain resets to qty=1 (matching TV's behaviour at
     // probe 52 trade 113). Preserving the largest observed carry
     // across re-placements would over-extend chains.
+    //
+    // The same placement snapshot also pins the equality-only M2 rule for a
+    // priced explicit-FIXED same-cycle reversal: frozen broker transaction =
+    // this held qty + the order's own quantized qty. If later same-direction
+    // adds grow the live opposite position to exactly that transaction, the
+    // fill closes to flat and opens no new leg. Other size relations retain
+    // legacy reversal semantics; see apply_entry_order_fill.
     double tv_carry_qty = 0.0;
     // Quantity frozen at PLACEMENT (signal) time for a DEFAULT-sized (qty=na)
     // market order whose default sizing is price-dependent (percent_of_equity
@@ -537,6 +549,11 @@ protected:
     double position_qty_ = 0.0;
     int position_entry_count_ = 0;  // number of entries in current direction (for pyramiding)
     int position_open_bar_ = -1;    // bar_index_ when position was opened (for exit delay)
+    // Exact position-instance provenance for pending orders whose semantics
+    // depend on the position cycle in which they were placed. A fresh open or
+    // reversal gets a new nonzero id; same-direction pyramid adds retain it.
+    int64_t position_cycle_seq_ = 0;
+    int64_t next_position_cycle_seq_ = 1;
     std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting
     // Per-entry-id UNCLOSED quantity ledger, used ONLY by strategy.close(id)
     // under the default FIFO close-entries rule to decide how much to close.

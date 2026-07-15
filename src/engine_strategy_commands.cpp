@@ -235,6 +235,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.coof_born_mid_bar =
         coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     order.created_position_side = position_side_;
+    order.created_position_cycle_seq = position_cycle_seq_;
     order.created_after_position_close_in_bar =
         pending_close_qty_in_bar_ > kQtyEpsilon;
     // Snapshot the placement-time over-pyramiding-cap status, mirroring the

@@ -2077,17 +2077,29 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     //     and re-arms; the ungated engine wrongly opened the reversed leg at the
     //     stale level (25 phantom/early shorts on that probe).
     // A SAME-cycle reverse (created_position_side == the reversed side — the
-    // stop was placed while already holding the position it flips) DOES open
-    // the new leg, so it is excluded by the created!=current test. Deferred-flip
-    // carry entries that fire from FLAT are untouched (position_side_==FLAT).
-    // Approximation (no ground truth): created_position_side == position_side_
-    // stands in for "placed in THIS position instance's cycle". A double flip
-    // (created LONG, position flips SHORT then LONG again with the order still
-    // pending) reads as same-cycle and opens — out of scope.
+    // stop was placed while already holding the position it flips) ordinarily
+    // opens the new leg. There is one independently pinned exception: for an
+    // explicit-FIXED priced entry, TV freezes the broker transaction at
+    // placement as ``held_qty + own_qty``. If later same-direction adds make
+    // the live opposite position EXACTLY that frozen transaction when the
+    // order fills, the transaction is consumed by the close and no open-leg
+    // remainder exists. The equality-only scope is deliberate: the census
+    // pins all seven M2 rows at equality, while the ordinary H=1/live=1/Q=1
+    // (live < frozen) population must keep the legacy full reversal. No
+    // live>frozen behavior is inferred. Default/dynamic qty, MARKET orders,
+    // created-FLAT KI-65 orders, and prior-cycle carries are also excluded.
+    // Deferred-flip carry entries that fire from FLAT remain untouched
+    // (position_side_==FLAT).
+    // Position-cycle identity is load-bearing here. Side equality alone would
+    // misclassify a resting order that survives LONG -> SHORT -> LONG as born
+    // in the later LONG instance and could turn its legacy reversal into an
+    // incorrect close-only fill.
     PositionSide entry_req = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
-    bool close_only_opposite =
+    const bool opposite_live_position =
         position_side_ != PositionSide::FLAT
-        && entry_req != position_side_
+        && entry_req != position_side_;
+    const bool prior_cycle_close_only =
+        opposite_live_position
         && order.created_position_side != position_side_
         // KI-65: a flat-armed priced entry reversing a position opened THIS bar
         // by an EARLIER opposite MARKET entry fully reverses (holds its own
@@ -2096,6 +2108,29 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
         // existed (STOP-first / placement-rejected cells leave it false, so
         // they keep the close-only single-close semantics).
         && !order.reverses_same_bar_market_from_flat;
+    const bool explicit_fixed_qty =
+        std::isfinite(order.qty)
+        && order.qty > kQtyEpsilon
+        && (order.qty_type < 0
+            || order.qty_type == static_cast<int>(QtyType::FIXED));
+    const bool priced_entry =
+        !std::isnan(order.stop_price) || !std::isnan(order.limit_price);
+    const double fixed_own_qty = explicit_fixed_qty
+        ? std::abs(apply_qty_step(order.qty))
+        : std::numeric_limits<double>::quiet_NaN();
+    const double frozen_reversal_tx = order.tv_carry_qty + fixed_own_qty;
+    const bool same_cycle_frozen_tx_exact_flat =
+        opposite_live_position
+        && order.created_position_side == position_side_
+        && order.created_position_cycle_seq > 0
+        && order.created_position_cycle_seq == position_cycle_seq_
+        && priced_entry
+        && explicit_fixed_qty
+        && order.tv_carry_qty > kQtyEpsilon
+        && std::isfinite(frozen_reversal_tx)
+        && std::abs(position_qty_ - frozen_reversal_tx) <= kQtyEpsilon;
+    const bool close_only_opposite =
+        prior_cycle_close_only || same_cycle_frozen_tx_exact_flat;
     execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
                          order.created_position_side, close_only_opposite,
                          /*is_priced_entry=*/true,
@@ -2108,7 +2143,7 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
         || (position_entry_count_ != count_before)
         || (trades_.size() != trades_before_entry);
 
-    bool was_priced_entry = !std::isnan(order.stop_price) || !std::isnan(order.limit_price);
+    bool was_priced_entry = priced_entry;
     if (did_execute) {
         double trail_best_after_fill = trail_best_price_;
         if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
@@ -2267,6 +2302,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         double qty = !std::isnan(order.frozen_default_qty) ? order.frozen_default_qty
                    : (std::isnan(order.qty) ? calc_qty(fill_price) : order.qty);
         position_side_ = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
         position_entry_price_ = fill_price;
         // The shared post-dispatch hook queues the new fill's event. Clear any
         // prior-cycle provenance first; RAW_ORDER opens do not route through
