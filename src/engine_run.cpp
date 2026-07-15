@@ -55,6 +55,35 @@ void BacktestEngine::dispatch_bar() {
         return;
     }
 
+    // A C-factor inheritance is same-ordinary-bar state. A candidate erased
+    // by replacement/OCA/cancel never reaches the fill kernel, so discard any
+    // stale identity before starting the next broker batch.
+    intraday_cap_pooc_close_inheritor_incarnation_ = 0;
+
+    // Opt-in POOC intraday-cap candidate: the cap-triggering MARKET entry
+    // filled at the prior signal close, while the broker-generated flatten is
+    // due at this next broker boundary.  Run it before resting orders and
+    // before the current bar's path is sampled so the exit is exactly at open.
+    if (intraday_cap_deferred_close_pending_) {
+        intraday_cap_deferred_close_pending_ = false;
+        if (position_side_ != PositionSide::FLAT) {
+            const size_t trades_before = trades_.size();
+            const PositionSide side_before = position_side_;
+            const double qty_before = position_qty_;
+            execute_market_exit(current_bar_.open);
+            if (position_side_ != side_before
+                || std::abs(position_qty_ - qty_before) > kQtyEpsilon
+                || trades_.size() != trades_before) {
+                ++broker_fill_event_seq_;
+            }
+            for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+                trades_[ti].exit_comment =
+                    "Close Position (Max number of filled orders in one day)";
+                trades_[ti].exit_id = "";
+            }
+        }
+    }
+
     // Advance native source-series history before strategy logic so
     // get_input_source()'s returned series is current for this bar. Covers
     // the simple run() loop, run_simple_bar_loop, and the no-magnifier
@@ -67,6 +96,7 @@ void BacktestEngine::dispatch_bar() {
         invoke_chart_on_bar(current_bar_);       // step 3: strategy logic
         flush_same_bar_close();                  // step 3b: surviving strategy.close fill
         process_pending_orders(current_bar_);    // step 4: new market orders
+        intraday_cap_pooc_close_inheritor_incarnation_ = 0;
     } else {
         process_pending_orders(current_bar_);
         update_per_trade_extremes();
@@ -513,6 +543,8 @@ void BacktestEngine::reset_run_state() {
     intraday_day_ = -1;
     intraday_cap_hit_ = false;
     intraday_fill_count_ = 0;
+    intraday_cap_deferred_close_pending_ = false;
+    intraday_cap_pooc_close_inheritor_incarnation_ = 0;
     broker_fill_event_seq_ = 0;
     coof_scheduler_active_ = false;
     coof_fill_recalc_active_ = false;

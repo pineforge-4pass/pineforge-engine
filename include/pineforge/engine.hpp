@@ -693,6 +693,12 @@ protected:
     // it cannot rewrite otherwise matching trade tapes.
     bool margin_zero_cover_full_liquidation_ = false;
     int max_intraday_filled_orders_ = 0; // 0 = unlimited
+    // Default-off validation candidates for independently testable intraday-
+    // cap broker semantics.  They ride the existing metadata channel
+    // so corpus execution remains byte-identical unless explicitly enabled.
+    bool intraday_cap_skip_noop_market_fills_ = false;
+    bool intraday_cap_defer_pooc_close_ = false;
+    bool intraday_cap_count_pooc_full_close_fills_ = false;
     bool close_entries_rule_any_ = false; // true = "ANY", false = "FIFO" (default)
     // Percentage of margin required to open a long/short position. Default
     // 100 = 1x leverage (no leverage). TradingView's strategy() takes these
@@ -951,6 +957,15 @@ protected:
     int intraday_fill_count_ = 0;
     int intraday_day_ = -1;       // day key (dayofmonth*100+month) for reset
     bool intraday_cap_hit_ = false;  // latched once per chart-day; reset on day rollover
+    // State, not configuration: a POOC MARKET fill reached the cap at the
+    // signal close and its risk-generated flatten is due at the next broker
+    // boundary (the next ordinary bar open).
+    bool intraday_cap_deferred_close_pending_ = false;
+    // An ordinary POOC strategy.close plus one co-queued opposite MARKET is
+    // materialized as two engine operations even when TV reports one reversal
+    // fill.  The close spends the quota immediately; this fresh order identity
+    // may inherit that already-spent slot if it survives every fill-time gate.
+    uint64_t intraday_cap_pooc_close_inheritor_incarnation_ = 0;
 
     // True iff the intraday cap is currently latched on the CURRENT bar's
     // chart-day. Performs a lazy day-rollover reset so callers outside the
@@ -2529,6 +2544,18 @@ public:
         // one-step progress fallback.
         if (key == "margin_zero_cover_full_liquidation") {
             margin_zero_cover_full_liquidation_ =
+                std::isfinite(value) && value > 0.0;
+        }
+        if (key == "intraday_cap_skip_noop_market_fills") {
+            intraday_cap_skip_noop_market_fills_ =
+                std::isfinite(value) && value > 0.0;
+        }
+        if (key == "intraday_cap_defer_pooc_close") {
+            intraday_cap_defer_pooc_close_ =
+                std::isfinite(value) && value > 0.0;
+        }
+        if (key == "intraday_cap_count_pooc_full_close_fills") {
+            intraday_cap_count_pooc_full_close_fills_ =
                 std::isfinite(value) && value > 0.0;
         }
         // "qty_step" is the per-instrument lot increment used by the forced-

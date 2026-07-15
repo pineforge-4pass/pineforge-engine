@@ -789,6 +789,62 @@ void BacktestEngine::flush_same_bar_close() {
         || trades_.size() != trades_before;
     if (close_filled) {
         ++broker_fill_event_seq_;
+        // Default-off follow-up to the no-op MARKET candidate: this broker
+        // fill bypasses apply_filled_order_to_state, but TradingView's
+        // max_intraday_filled_orders counts filled close orders too.  Without
+        // this accounting, removing phantom no-op fills merely unmasks the
+        // opposite under-count and can admit an extra late-day trade cycle.
+        // Scope to the ordinary POOC same-bar batch exercised by Regime; other
+        // immediate/COOF close variants remain unchanged pending their own
+        // oracle.
+        if (intraday_cap_count_pooc_full_close_fills_
+            && process_orders_on_close_
+            && !calc_on_order_fills_
+            && !coof_scheduler_active_
+            && !bar_magnifier_enabled_
+            && !stream_warmup_mode_
+            && stream_phase_ == StreamPhase::IDLE
+            && !close_entries_rule_any_
+            && closes_full_position
+            && max_intraday_filled_orders_ > 0) {
+            // Count the close now, never from the mere presence of a queued
+            // opposite order. If one co-queued opposite MARKET survives to
+            // its fill-time admission point, the earliest broker-order
+            // incarnation inherits this already-spent slot. A rejection,
+            // cancellation, replacement, or later no-op therefore cannot
+            // erase the real close fill; the marker simply expires.
+            const PendingOrder* inheritor = nullptr;
+            for (const PendingOrder& pending : pending_orders_) {
+                if (pending.type != OrderType::MARKET
+                    || pending.created_bar != bar_index_
+                    || pending.is_long
+                           == (side_before == PositionSide::LONG)) {
+                    continue;
+                }
+                if (inheritor == nullptr
+                    || pending.created_seq < inheritor->created_seq) {
+                    inheritor = &pending;
+                }
+            }
+            intraday_cap_pooc_close_inheritor_incarnation_ =
+                inheritor == nullptr ? 0 : inheritor->incarnation;
+
+            BarTime bt = _decompose_bar_time_chart_tz();
+            const int cur_day = bt.dayofmonth * 100 + bt.month;
+            if (cur_day != intraday_day_) {
+                intraday_day_ = cur_day;
+                intraday_fill_count_ = 0;
+                intraday_cap_hit_ = false;
+            }
+            if (!intraday_cap_hit_) {
+                ++intraday_fill_count_;
+                if (intraday_fill_count_ >= max_intraday_filled_orders_) {
+                    // The close already left the position flat, so no
+                    // synthetic risk close is needed; only latch the day.
+                    intraday_cap_hit_ = true;
+                }
+            }
+        }
         if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {
             --coof_direct_fill_events_remaining_;
         }
