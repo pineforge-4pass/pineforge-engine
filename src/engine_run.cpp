@@ -437,6 +437,7 @@ void BacktestEngine::reset_run_state() {
     reset_position_state_to_flat();   // position_side_/qty/price/time/count,
                                       // pyramid_entries_, trail, partial ids
     pending_orders_.clear();
+    pending_flat_market_pair_disqualified_bars_.clear();
     pending_close_qty_in_bar_ = 0.0;
     pos_view_freeze_bar_ = -1;   // KI-64: fresh run starts with no frozen view
     sb_close_active_ = false;

@@ -19,6 +19,7 @@ using namespace internal;
 void BacktestEngine::process_pending_orders(const Bar& bar) {
     // Update risk state
     update_risk_state();
+    finalize_pending_flat_market_pairs(bar);
 
     double trail_best_path_state = trail_best_price_;
     update_trail_best_for_bar_open(bar);
@@ -63,6 +64,7 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
             order, opposing_pass, dual_entry_path_, pass0_opposing_skip_ids,
             exit_closed_from_bar, exit_closed_was_long, bar);
         if (eligibility == OrderEligibility::Remove) {
+            invalidate_pending_flat_market_pair(order.created_seq);
             filled_indices.push_back(i);
             continue;
         }
@@ -177,6 +179,7 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
                 order, opposing_pass, dual_entry_path, pass0_opposing_skip_ids,
                 exit_closed_from_bar, exit_closed_was_long, bar);
             if (eligibility == OrderEligibility::Remove) {
+                invalidate_pending_flat_market_pair(order.created_seq);
                 filled_indices.push_back(i);
                 continue;
             }
@@ -623,12 +626,194 @@ void BacktestEngine::sort_exit_siblings_by_path_fill(const Bar& bar) {
         });
 }
 
+bool BacktestEngine::pending_flat_market_pair_scope_is_live() const {
+    return !process_orders_on_close_
+        && !calc_on_order_fills_
+        && slippage_ == 0
+        && pyramiding_ == 2
+        && std::abs(margin_long_ - 100.0) < 1e-12
+        && std::abs(margin_short_ - 100.0) < 1e-12
+        && risk_direction_ == RiskDirection::BOTH
+        && risk_max_cons_loss_days_ == 0
+        && risk_max_drawdown_ <= 0.0
+        && risk_max_intraday_loss_ <= 0.0
+        && risk_max_position_size_ <= 0.0
+        && max_intraday_filled_orders_ <= 0
+        && !risk_halted_;
+}
+
+// Finalize the deferred KI-65 MARKET/MARKET candidate set only after on_bar
+// has completed and the broker sees every call from that source bar. Each call
+// has already passed the ordinary own-qty placement gate. Exactly two eligible
+// opposite calls form a pair; larger/other sets are deliberately ordinary.
+// The later call alone receives the pending-aware GROSS admission check.
+void BacktestEngine::finalize_pending_flat_market_pairs(const Bar& bar) {
+    std::vector<int64_t> rejected_seqs;
+    std::unordered_set<int> finalized_bars;
+
+    for (size_t seed = 0; seed < pending_orders_.size(); ++seed) {
+        PendingOrder& seed_order = pending_orders_[seed];
+        if (!seed_order.paired_flat_market_candidate) continue;
+        const int source_bar = seed_order.created_bar;
+        if (!finalized_bars.insert(source_bar).second) continue;
+
+        std::vector<size_t> group;
+        int pending_entry_like_orders = 0;
+        for (size_t i = 0; i < pending_orders_.size(); ++i) {
+            const PendingOrder& order = pending_orders_[i];
+            const bool entry_like =
+                order.type == OrderType::MARKET
+                || order.type == OrderType::ENTRY
+                || order.type == OrderType::RAW_ORDER;
+            if (entry_like) ++pending_entry_like_orders;
+            if (order.paired_flat_market_candidate
+                && order.created_bar == source_bar) {
+                group.push_back(i);
+            }
+        }
+        for (size_t i : group) {
+            pending_orders_[i].paired_flat_market_candidate = false;
+        }
+
+        const bool source_bar_disqualified =
+            pending_flat_market_pair_disqualified_bars_.erase(source_bar) > 0;
+        if (group.size() != 2
+            || pending_entry_like_orders != 2
+            || source_bar_disqualified
+            || !pending_flat_market_pair_scope_is_live()) {
+            continue;
+        }
+        PendingOrder* first = &pending_orders_[group[0]];
+        PendingOrder* second = &pending_orders_[group[1]];
+        if (second->created_seq < first->created_seq) std::swap(first, second);
+        if (first->type != OrderType::MARKET
+            || second->type != OrderType::MARKET
+            || first->id == second->id
+            || first->is_long == second->is_long
+            || first->created_position_side != PositionSide::FLAT
+            || second->created_position_side != PositionSide::FLAT
+            || !std::isfinite(first->paired_flat_market_own_qty)
+            || !std::isfinite(second->paired_flat_market_own_qty)
+            || first->paired_flat_market_own_qty <= kQtyEpsilon
+            || second->paired_flat_market_own_qty <= kQtyEpsilon) {
+            continue;
+        }
+
+        const double gross_qty = first->paired_flat_market_own_qty
+            + second->paired_flat_market_own_qty;
+        const bool valid_snapshot =
+            std::isfinite(second->paired_flat_market_signal_close)
+            && second->paired_flat_market_signal_close > 0.0
+            && std::isfinite(second->paired_flat_market_signal_equity)
+            && std::isfinite(second->paired_flat_market_signal_margin_pct)
+            && second->paired_flat_market_signal_margin_pct > 0.0
+            && std::isfinite(second->paired_flat_market_signal_pointvalue)
+            && second->paired_flat_market_signal_pointvalue > 0.0
+            && std::isfinite(second->paired_flat_market_signal_fx)
+            && second->paired_flat_market_signal_fx > 0.0;
+        if (!valid_snapshot) continue;
+
+        const double required_margin =
+            gross_qty * second->paired_flat_market_signal_close
+            * second->paired_flat_market_signal_pointvalue
+            * second->paired_flat_market_signal_fx
+            * (second->paired_flat_market_signal_margin_pct / 100.0);
+        const double epsilon = std::max(
+            1e-9, std::abs(second->paired_flat_market_signal_equity) * 1e-12);
+        if (required_margin
+            > second->paired_flat_market_signal_equity + epsilon) {
+            rejected_seqs.push_back(second->created_seq);
+            continue;
+        }
+
+        // Defensive explicit-qty adverse-gap admission runs here BEFORE links
+        // can swap the pair around interleaved brackets. The buy is the first
+        // broker fill. When it is also the later source call (HSF), cost its
+        // GROSS transaction; otherwise cost the earlier buy's own quantity.
+        PendingOrder* buy = first->is_long ? first : second;
+        const double buy_transaction_qty = (buy == second)
+            ? gross_qty
+            : first->paired_flat_market_own_qty;
+        const bool valid_buy_snapshot =
+            std::isfinite(buy->paired_flat_market_signal_close)
+            && buy->paired_flat_market_signal_close > 0.0
+            && std::isfinite(buy->paired_flat_market_signal_equity)
+            && std::isfinite(buy->paired_flat_market_signal_margin_pct)
+            && buy->paired_flat_market_signal_margin_pct > 0.0
+            && std::isfinite(buy->paired_flat_market_signal_pointvalue)
+            && buy->paired_flat_market_signal_pointvalue > 0.0
+            && std::isfinite(buy->paired_flat_market_signal_fx)
+            && buy->paired_flat_market_signal_fx > 0.0;
+        if (valid_buy_snapshot && std::isfinite(bar.open) && bar.open > 0.0) {
+            const double buy_fill = apply_slippage(
+                bar.open, /*is_buy=*/buy->is_long);
+            const double notional_k =
+                buy->paired_flat_market_signal_pointvalue
+                * buy->paired_flat_market_signal_fx
+                * (buy->paired_flat_market_signal_margin_pct / 100.0);
+            const double fill_notional =
+                buy_transaction_qty * buy_fill * notional_k;
+            const double signal_notional =
+                buy_transaction_qty * buy->paired_flat_market_signal_close
+                * notional_k;
+            const double threshold = std::max(
+                buy->paired_flat_market_signal_equity, signal_notional);
+            const double gap_epsilon = std::max(
+                1e-9,
+                std::abs(buy->paired_flat_market_signal_equity) * 1e-12);
+            if (fill_notional > threshold + gap_epsilon) {
+                rejected_seqs.push_back(buy->created_seq);
+                continue;
+            }
+        }
+
+        first->paired_flat_market_peer_seq = second->created_seq;
+        first->paired_flat_market_transaction_qty =
+            first->paired_flat_market_own_qty;
+        second->paired_flat_market_peer_seq = first->created_seq;
+        second->paired_flat_market_transaction_qty = gross_qty;
+    }
+
+    if (!rejected_seqs.empty()) {
+        pending_orders_.erase(
+            std::remove_if(
+                pending_orders_.begin(), pending_orders_.end(),
+                [&](const PendingOrder& order) {
+                    return std::find(rejected_seqs.begin(), rejected_seqs.end(),
+                                     order.created_seq) != rejected_seqs.end();
+                }),
+            pending_orders_.end());
+    }
+    // A bar whose candidates were all canceled has no seed above to consume
+    // its tombstone. Once broker processing advances beyond that source bar it
+    // can no longer form a MARKET pair, so prune the stale taint cheaply.
+    for (auto it = pending_flat_market_pair_disqualified_bars_.begin();
+         it != pending_flat_market_pair_disqualified_bars_.end();) {
+        if (*it < bar_index_) {
+            it = pending_flat_market_pair_disqualified_bars_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 // Sort by the first possible fill point, then by PineScript source order.
 // Market orders fill at bar open. Priced orders that gap through at open
 // share that same fill point; other priced orders evaluate later on the
 // synthetic OHLC path. This avoids broad type-based reordering.
 void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
     if (pending_orders_.size() < 2) return;  // nothing to order; skips stable_sort's temp-buffer alloc
+
+    // Validate pair links before stable_sort starts moving elements. Scanning
+    // pending_orders_ from inside the comparator would make its result depend
+    // on the sort algorithm's transient moves. The immutable sequence set
+    // below instead gives the comparator a stable, transitive key.
+    std::unordered_set<int64_t> live_flat_market_pair_seqs;
+    for (const PendingOrder& order : pending_orders_) {
+        if (pending_flat_market_pair_is_live(order)) {
+            live_flat_market_pair_seqs.insert(order.created_seq);
+        }
+    }
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
         [&](const PendingOrder& a, const PendingOrder& b) {
             auto fill_phase = [&](const PendingOrder& o) {
@@ -761,8 +946,61 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             bool b_opp_priced = is_opposite_priced_entry(b);
             if (a_full_close && b_opp_priced) return true;
             if (b_full_close && a_opp_priced) return false;
+
+            // The confirmed flat MARKET pair is buy-before-sell even when the
+            // short call appeared first in source. Map the pair onto its two
+            // existing sequence slots (buy=min, sell=max), rather than adding a
+            // pair-only comparator edge that could cycle around interleaved
+            // orders such as strategy.exit brackets.
+            auto effective_seq = [&](const PendingOrder& order) {
+                if (live_flat_market_pair_seqs.count(order.created_seq) == 0) {
+                    return order.created_seq;
+                }
+                return order.is_long
+                    ? std::min(order.created_seq,
+                               order.paired_flat_market_peer_seq)
+                    : std::max(order.created_seq,
+                               order.paired_flat_market_peer_seq);
+            };
+            const int64_t a_seq = effective_seq(a);
+            const int64_t b_seq = effective_seq(b);
+            if (a_seq != b_seq) return a_seq < b_seq;
             return a.created_seq < b.created_seq;
         });
+}
+
+bool BacktestEngine::pending_flat_market_pair_is_live(
+        const PendingOrder& order) const {
+    if (!pending_flat_market_pair_scope_is_live()
+        || order.type != OrderType::MARKET
+        || order.paired_flat_market_peer_seq <= 0
+        || !std::isfinite(order.paired_flat_market_transaction_qty)) {
+        return false;
+    }
+    for (const PendingOrder& peer : pending_orders_) {
+        if (peer.created_seq != order.paired_flat_market_peer_seq) continue;
+        return peer.type == OrderType::MARKET
+            && peer.paired_flat_market_peer_seq == order.created_seq
+            && std::isfinite(peer.paired_flat_market_transaction_qty)
+            && peer.id != order.id
+            && peer.is_long != order.is_long
+            && peer.created_bar == order.created_bar
+            && peer.created_position_side == PositionSide::FLAT
+            && order.created_position_side == PositionSide::FLAT;
+    }
+    return false;
+}
+
+void BacktestEngine::invalidate_pending_flat_market_pair(int64_t created_seq) {
+    if (created_seq <= 0) return;
+    for (PendingOrder& order : pending_orders_) {
+        if (order.created_seq == created_seq
+            || order.paired_flat_market_peer_seq == created_seq) {
+            order.paired_flat_market_peer_seq = 0;
+            order.paired_flat_market_transaction_qty =
+                std::numeric_limits<double>::quiet_NaN();
+        }
+    }
 }
 
 // Remove filled orders in O(n) single pass and mirror the in-loop wipe
@@ -838,6 +1076,10 @@ void BacktestEngine::apply_filled_order_to_state(
         int& exit_closed_from_bar,
         bool& exit_closed_was_long,
         std::vector<size_t>& filled_indices) {
+    auto decline_and_cancel = [&]() {
+        invalidate_pending_flat_market_pair(order.created_seq);
+        filled_indices.push_back(order_index);
+    };
     // design-declined-reversal-close-leg: a close flagged by the reversal
     // decline is Removed by classify_order_eligibility in the ordinary kernel,
     // so this order never reaches apply there. The KI-60 COOF kernel, however,
@@ -846,7 +1088,7 @@ void BacktestEngine::apply_filled_order_to_state(
     // by classify — catch it here (no-op the fill, mark for compaction). Shared
     // by both kernels; must precede every state mutation below.
     if (order.suppress_as_declined_reversal_close) {
-        filled_indices.push_back(order_index);
+        decline_and_cancel();
         return;
     }
     // Fill-local proof that KI-54 admitted this order as a flat open on its
@@ -860,7 +1102,7 @@ void BacktestEngine::apply_filled_order_to_state(
         bool is_opposite_entry =
             position_side_ != PositionSide::FLAT && position_side_ != requested;
         if (!is_opposite_entry && !check_risk_allow_entry(order.is_long)) {
-            filled_indices.push_back(order_index);
+            decline_and_cancel();
             return;
         }
     }
@@ -901,7 +1143,7 @@ void BacktestEngine::apply_filled_order_to_state(
             const double available = current_equity();
             const double eps = std::max(1e-9, std::abs(available) * 1e-12);
             if (fill_qty > 0.0 && required > available + eps) {
-                filled_indices.push_back(order_index);   // decline + cancel
+                decline_and_cancel();
                 return;
             }
         }
@@ -961,7 +1203,7 @@ void BacktestEngine::apply_filled_order_to_state(
             const double epsilon =
                 std::max(1e-9, std::abs(equity_at_fill) * 1e-12);
             if (required_margin > free_funds + epsilon) {
-                filled_indices.push_back(order_index);
+                decline_and_cancel();
                 return;
             }
         }
@@ -1063,7 +1305,7 @@ void BacktestEngine::apply_filled_order_to_state(
         if (reversal && order.type == OrderType::MARKET) {
             suppress_declined_reversal_close_legs(order);
         }
-        filled_indices.push_back(order_index);
+        decline_and_cancel();
         return;
     }
     // sizing_equity > 0 and frozen_default_qty > 0 are part of the invariant,
@@ -1151,7 +1393,7 @@ void BacktestEngine::apply_filled_order_to_state(
                     std::max(1e-9, std::abs(order.sizing_equity) * 1e-12);
                 if (gap_notional
                     > order.sizing_equity + one_lot_slack + float_guard) {
-                    filled_indices.push_back(order_index);
+                    decline_and_cancel();
                     return;
                 }
             }
@@ -1235,7 +1477,7 @@ void BacktestEngine::apply_filled_order_to_state(
                 if (reversal && order.type == OrderType::MARKET) {
                     suppress_declined_reversal_close_legs(order);
                 }
-                filled_indices.push_back(order_index);
+                decline_and_cancel();
                 return;
             }
             admitted_flat_on_frozen_sizing_price =
@@ -1287,19 +1529,28 @@ void BacktestEngine::apply_filled_order_to_state(
                 apply_fill_slippage(fill_price, order.is_long);
             const double notional_k = syminfo_.pointvalue * account_currency_fx_
                                       * (margin_pct / 100.0);
+            // A finalized pair's first broker fill may be the later source
+            // call and moves the frozen GROSS transaction. Cost that exact
+            // transaction here; using order.qty would admit an adverse gap on
+            // half the notional the fill is about to open.
+            const bool paired_flat_market =
+                pending_flat_market_pair_is_live(order);
+            const double admission_qty = paired_flat_market
+                ? order.paired_flat_market_transaction_qty
+                : std::abs(order.qty);
             const double fill_notional =
-                std::abs(order.qty) * slipped_fill * notional_k;
+                admission_qty * slipped_fill * notional_k;
             // POOC / no-gap admission floor: a fill at the slipped signal close
             // was already admitted at signal time.
             const double signal_notional =
-                std::abs(order.qty) * order.explicit_slipped_signal_close
+                admission_qty * order.explicit_slipped_signal_close
                 * notional_k;
             const double threshold =
                 std::max(order.explicit_placement_equity, signal_notional);
             const double float_guard =
                 std::max(1e-9, std::abs(order.explicit_placement_equity) * 1e-12);
             if (fill_notional > threshold + float_guard) {
-                filled_indices.push_back(order_index);
+                decline_and_cancel();
                 return;
             }
         }
@@ -1344,7 +1595,7 @@ void BacktestEngine::apply_filled_order_to_state(
             // Latched: drop this pending order and skip dispatch.
             // Removing from pending_orders_ matches TV's behaviour of
             // silently consuming/rejecting fills past the daily cap.
-            filled_indices.push_back(order_index);
+            decline_and_cancel();
             return;
         }
         intraday_fill_count_++;
@@ -1522,12 +1773,34 @@ void BacktestEngine::apply_filled_order_to_state(
     double signed_pos_after = signed_pos();
     double filled_qty = std::abs(signed_pos_after - signed_pos_before);
 
+    const bool paired_flat_market_fill =
+        order.type == OrderType::MARKET
+        && pending_flat_market_pair_is_live(order);
+
+    // A paired first fill opens the transient broker GROSS quantity. Do not
+    // reconcile deferred/layered exits against that temporary size. After the
+    // second transaction nets the pair to its own surviving exposure, rebuild
+    // the logical close ledger from the physical lots and reconcile once.
+    if (paired_flat_market_fill
+        && std::abs(signed_pos_before) >= kQtyEpsilon
+        && position_side_ != PositionSide::FLAT) {
+        id_unclosed_qty_.clear();
+        for (const PyramidEntry& entry : pyramid_entries_) {
+            id_unclosed_qty_[entry.entry_id] += entry.qty;
+        }
+        if (!pyramid_entries_.empty()) {
+            reconcile_deferred_layered_exits(
+                pyramid_entries_.back().entry_id);
+        }
+    }
+
     // This fill just opened a position from FLAT via an entry order. Freeze
     // any LAYERED strategy.exit legs bound to that entry that were armed while
     // flat (qty=NaN, reservation deferred): bind each to a fixed slice of the
     // opened lot so a percent partial + its sibling 100% leg no longer
     // over-close the whole position depending on which leg fills first.
-    if (std::abs(signed_pos_before) < kQtyEpsilon
+    if (!paired_flat_market_fill
+        && std::abs(signed_pos_before) < kQtyEpsilon
         && position_side_ != PositionSide::FLAT
         && (order.type == OrderType::MARKET
             || order.type == OrderType::ENTRY
@@ -1677,15 +1950,28 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
     // fill does not re-derive it from the fill price. Explicit-qty and
     // FIXED-default orders keep their own (qty, qty_type) pair unchanged.
     const bool frozen = !std::isnan(order.frozen_default_qty);
+    const bool paired_flat_market =
+        pending_flat_market_pair_is_live(order);
+    const double dispatch_qty = paired_flat_market
+        ? order.paired_flat_market_transaction_qty
+        : (frozen ? order.frozen_default_qty : order.qty);
+    const int dispatch_qty_type = paired_flat_market
+        ? -1
+        : (frozen ? -1 : order.qty_type);
     execute_market_entry(order.id, order.is_long, fill_price,
-                         frozen ? order.frozen_default_qty : order.qty,
-                         frozen ? -1 : order.qty_type,
-                         order.created_position_side, /*close_only_opposite=*/false,
+                         dispatch_qty, dispatch_qty_type,
+                         order.created_position_side,
+                         /*close_only_opposite=*/paired_flat_market,
                          /*is_priced_entry=*/false, /*tv_carry_qty=*/0.0,
-                         order.created_bar, later_same_tick_entry);
+                         order.created_bar, later_same_tick_entry,
+                         paired_flat_market);
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
-    if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
+    if (!pyramid_entries_.empty()
+        && (!paired_flat_market
+            || pyramid_entries_.back().entry_id == order.id)) {
+        pyramid_entries_.back().entry_comment = order.comment;
+    }
     // Update trail_best_price_ with intra-bar extremes for same-bar exit eval
     // -- EXCEPT when this fill happened AT the bar's close (a POOC market
     // order created and filled on this same bar): the whole bar's high/low

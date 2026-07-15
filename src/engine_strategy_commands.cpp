@@ -105,6 +105,26 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     // day before the script's else-branch could cancel it).
     if (_intraday_cap_currently_latched()) return;
 
+    // KI-65 MARKET/MARKET follow-up. Every explicit MARKET call first receives
+    // the established OWN-qty admission below. Eligible own-admitted calls are
+    // merely snapshotted here; the broker pair is finalized at the next fill
+    // boundary, after the complete same-source-bar call set is known. Deferring
+    // prevents an alternating three-call set from prematurely gross-rejecting
+    // call 2 before call 3 exists.
+    const bool explicit_fixed_market_call =
+        std::isfinite(qty) && qty > kQtyEpsilon
+        && std::isnan(limit_price) && std::isnan(stop_price)
+        && oca_name.empty()
+        && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED));
+    const double paired_flat_market_own_qty = explicit_fixed_market_call
+        ? std::abs(apply_qty_step(qty))
+        : std::numeric_limits<double>::quiet_NaN();
+    const bool paired_flat_market_candidate =
+        explicit_fixed_market_call
+        && paired_flat_market_own_qty > kQtyEpsilon
+        && pending_flat_market_pair_scope_is_live()
+        && position_side_ == PositionSide::FLAT;
+
     // TradingView broker rule: market-entry orders are admitted only
     // when ``qty * <signal-bar close> * margin_pct/100 <= equity``.
     // The check happens HERE (at signal time, with current_bar_.close
@@ -165,6 +185,27 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     }
 
     // Remove existing pending order with same id
+    for (const PendingOrder& pending : pending_orders_) {
+        if (pending.id == id) {
+            const bool entry_like =
+                pending.type == OrderType::MARKET
+                || pending.type == OrderType::ENTRY
+                || pending.type == OrderType::RAW_ORDER;
+            // A candidate call that replaces any resting entry-like order is
+            // not an exact two-call source-bar set, even when the replaced
+            // order came from an earlier bar. Taint this call's bar as well as
+            // preserving the old-bar tombstone below.
+            if (paired_flat_market_candidate && entry_like) {
+                pending_flat_market_pair_disqualified_bars_.insert(bar_index_);
+            }
+            if (entry_like
+                && pending.created_position_side == PositionSide::FLAT) {
+                pending_flat_market_pair_disqualified_bars_.insert(
+                    pending.created_bar);
+            }
+            invalidate_pending_flat_market_pair(pending.created_seq);
+        }
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& o) { return o.id == id; }),
@@ -249,6 +290,16 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         order.type = OrderType::MARKET;
         order.limit_price = std::numeric_limits<double>::quiet_NaN();
         order.stop_price = std::numeric_limits<double>::quiet_NaN();
+        if (paired_flat_market_candidate) {
+            order.paired_flat_market_candidate = true;
+            order.paired_flat_market_own_qty = paired_flat_market_own_qty;
+            order.paired_flat_market_signal_close = current_bar_.close;
+            order.paired_flat_market_signal_equity = current_equity();
+            order.paired_flat_market_signal_margin_pct =
+                is_long ? margin_long_ : margin_short_;
+            order.paired_flat_market_signal_pointvalue = syminfo_.pointvalue;
+            order.paired_flat_market_signal_fx = account_currency_fx_;
+        }
         // TradingView freezes DEFAULT (qty=na) percent_of_equity / cash
         // market-order sizing at THIS (signal) bar's close — see
         // frozen_default_market_qty (engine.hpp) for the rule and the
@@ -880,6 +931,18 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
 }
 
 void BacktestEngine::strategy_cancel(const std::string& id) {
+    for (const PendingOrder& order : pending_orders_) {
+        if (order.id == id) {
+            if ((order.type == OrderType::MARKET
+                 || order.type == OrderType::ENTRY
+                 || order.type == OrderType::RAW_ORDER)
+                && order.created_position_side == PositionSide::FLAT) {
+                pending_flat_market_pair_disqualified_bars_.insert(
+                    order.created_bar);
+            }
+            invalidate_pending_flat_market_pair(order.created_seq);
+        }
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& o) { return o.id == id; }),
@@ -887,6 +950,15 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
 }
 
 void BacktestEngine::strategy_cancel_all() {
+    for (const PendingOrder& order : pending_orders_) {
+        if ((order.type == OrderType::MARKET
+             || order.type == OrderType::ENTRY
+             || order.type == OrderType::RAW_ORDER)
+            && order.created_position_side == PositionSide::FLAT) {
+            pending_flat_market_pair_disqualified_bars_.insert(
+                order.created_bar);
+        }
+    }
     pending_orders_.clear();
 }
 
@@ -903,6 +975,18 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     }
 
     // Remove existing pending order with same id
+    for (const PendingOrder& pending : pending_orders_) {
+        if (pending.id == id) {
+            if ((pending.type == OrderType::MARKET
+                 || pending.type == OrderType::ENTRY
+                 || pending.type == OrderType::RAW_ORDER)
+                && pending.created_position_side == PositionSide::FLAT) {
+                pending_flat_market_pair_disqualified_bars_.insert(
+                    pending.created_bar);
+            }
+            invalidate_pending_flat_market_pair(pending.created_seq);
+        }
+    }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& o) { return o.id == id; }),

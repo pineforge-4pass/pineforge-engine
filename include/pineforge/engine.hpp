@@ -267,6 +267,37 @@ struct PendingOrder {
     // collapsing to close-only-flat. Scoped to created-FLAT so the deferred-flip
     // carry (created OPPOSITE) is untouched.
     bool reverses_same_bar_market_from_flat = false;
+    // KI-65 MARKET/MARKET follow-up candidate. Every own-affordable explicit
+    // MARKET call in the pinned broker scope carries this snapshot until the
+    // next broker-processing boundary, where the complete source-bar set is
+    // known. Only a set of exactly two distinct-id opposite calls is finalized
+    // as a pair; larger sets remain ordinary source-ordered entries.
+    bool paired_flat_market_candidate = false;
+    double paired_flat_market_own_qty =
+        std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_close =
+        std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_equity =
+        std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_margin_pct =
+        std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_pointvalue =
+        std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_fx =
+        std::numeric_limits<double>::quiet_NaN();
+    // Finalized exact peer relation. Each side stores the other order's
+    // created_seq; zero means unpaired. The mutual relation lets fill sorting
+    // swap only this exact pair into TV's
+    // buy-before-sell broker priority without reordering unrelated MARKET calls.
+    int64_t paired_flat_market_peer_seq = 0;
+    // Finalization-frozen broker transaction quantity for the paired order. The
+    // earlier call carries its own qty; the later call carries
+    // own + earlier-pending-own. This is deliberately separate from ``qty``:
+    // ``qty`` remains the Pine call's own/target quantity and continues to drive
+    // explicit-qty provenance, exit reservations, and every unpaired path.
+    // NaN means ordinary strategy.entry reversal semantics.
+    double paired_flat_market_transaction_qty =
+        std::numeric_limits<double>::quiet_NaN();
     // Snapshot of the position's quantity at the moment this order was
     // PLACED (0 if placed from flat). Used by execute_market_entry's
     // flat branch to apply TradingView's deferred-flip growth rule:
@@ -791,6 +822,11 @@ protected:
 
     std::vector<Trade> trades_;
     std::vector<PendingOrder> pending_orders_;
+    // Source bars whose otherwise eligible flat MARKET candidate set was
+    // mutated (same-id replacement/cancel). Even if two orders survive, the
+    // original bar contained more/different calls and is outside the exact
+    // two-call oracle, so finalization must leave it ordinary.
+    std::unordered_set<int> pending_flat_market_pair_disqualified_bars_;
 
     // strategy.exit partial orders are one-shot per open position for a given id
     std::unordered_set<std::string> consumed_partial_exit_ids_;
@@ -1947,7 +1983,8 @@ private:
                               bool is_priced_entry = false,
                               double tv_carry_qty = 0.0,
                               int created_bar = -1,
-                              bool later_same_tick_entry = false);
+                              bool later_same_tick_entry = false,
+                              bool paired_flat_market_transaction = false);
     void execute_market_exit(double fill_price);
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
@@ -1971,7 +2008,11 @@ private:
     // bar-pump fill loop is reviewable rather than a 600-line monolith.
     void update_trail_best_for_bar_open(const Bar& bar);
     void sort_exit_siblings_by_path_fill(const Bar& bar);
+    bool pending_flat_market_pair_scope_is_live() const;
+    void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
+    bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
+    void invalidate_pending_flat_market_pair(int64_t created_seq);
     void compact_filled_pending_orders(const std::vector<size_t>& filled_indices,
                                        int exit_closed_from_bar,
                                        bool exit_closed_was_long);
@@ -2122,7 +2163,8 @@ private:
                                 int explicit_qty_type,
                                 PositionSide created_position_side,
                                 bool is_priced_entry, double tv_carry_qty,
-                                int created_bar);
+                                int created_bar,
+                                bool explicit_qty_prequantized = false);
     void add_to_pyramid_market(const std::string& id, bool is_long,
                                double fill_price, double explicit_qty,
                                int explicit_qty_type,
@@ -2130,7 +2172,9 @@ private:
                                bool is_priced_entry);
     void close_opposite_then_enter(const std::string& id, bool is_long,
                                    double fill_price, double explicit_qty,
-                                   int explicit_qty_type);
+                                   int explicit_qty_type,
+                                   bool purge_pending_exits = true,
+                                   bool explicit_qty_prequantized = false);
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
                                  int explicit_qty_type,
