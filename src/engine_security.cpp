@@ -295,6 +295,28 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         ~SecurityNaWarmupScope() { ta::ema_na_warmup_flag() = prev_; }
     } _na_warmup_scope(security_range_start_na_warmup_);
 
+    // Heikin-Ashi same-symbol read: replace an aggregated bar's OHLC with its
+    // HA candle before evaluating the security expression. The completed
+    // state advances once per committed HTF bucket; a partial/projection peek
+    // derives from the prior state without committing it.
+    auto apply_ha = [&state](Bar& b, bool commit) {
+        double ha_close = (b.open + b.high + b.low + b.close) / 4.0;
+        double ha_open = state.ha_seeded
+                             ? (state.ha_prev_open + state.ha_prev_close) / 2.0
+                             : (b.open + b.close) / 2.0;
+        double ha_high = std::max(b.high, std::max(ha_open, ha_close));
+        double ha_low = std::min(b.low, std::min(ha_open, ha_close));
+        b.open = ha_open;
+        b.high = ha_high;
+        b.low = ha_low;
+        b.close = ha_close;
+        if (commit) {
+            state.ha_prev_open = ha_open;
+            state.ha_prev_close = ha_close;
+            state.ha_seeded = true;
+        }
+    };
+
     if (state.lower_tf_use_input) {
         // Buffer raw input bars until we accumulate one full script-TF
         // chunk, then aggregate (if req > input) and dispatch each
@@ -427,36 +449,49 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         return;
     }
 
+    if (historical_security_lookahead_projection_active_
+            && !state.historical_projections.empty()) {
+        const std::size_t feed_index =
+            state.historical_projection_feed_index++;
+        while (state.historical_projection_cursor + 1
+                    < state.historical_projections.size()
+                && state.historical_projections[
+                       state.historical_projection_cursor + 1]
+                       .first_child_index <= feed_index) {
+            ++state.historical_projection_cursor;
+        }
+        const auto& projection = state.historical_projections[
+            state.historical_projection_cursor];
+        state.feed_count++;
+        if (projection.first_child_index != feed_index) {
+            // gaps_off holds the first-child projection unchanged until the
+            // next HTF bucket. No evaluator call means TA/security histories
+            // also advance exactly once per projected bucket.
+            return;
+        }
+
+        Bar projected_bar = projection.bar;
+        if (state.heikinashi) {
+            apply_ha(projected_bar, projection.is_complete);
+        }
+        state.current_bar = projected_bar;
+        // The projected HTF bucket is introduced on its first chart child, so
+        // generated security series must allocate a fresh history/TA slot even
+        // though projected_bar itself already contains every available child.
+        state.current_sub_bar_count = 1;
+        if (projection.is_complete) {
+            state.eval_complete_count++;
+        } else {
+            state.eval_partial_count++;
+        }
+        evaluate_security(state.sec_id, projected_bar,
+                          projection.is_complete);
+        return;
+    }
+
     AggregatedBar ab = state.aggregator.feed(input_bar);
     state.feed_count++;
     state.current_sub_bar_count = ab.sub_bar_count;
-    // Heikin-Ashi same-symbol read: replace the completed (aggregated) bar's
-    // OHLC with its HA candle before evaluating the security expression, so
-    // close/open/high/low inside request.security see HA values (TradingView
-    // ticker.heikinashi semantics):
-    //   haClose = (O+H+L+C)/4
-    //   haOpen  = seeded ? (prevHaOpen+prevHaClose)/2 : (O+C)/2
-    //   haHigh  = max(H, haOpen, haClose);  haLow = min(L, haOpen, haClose)
-    // HA is stateful; the running open/close advance once per COMPLETED bar
-    // (committed below). A partial lookahead peek derives from prior state
-    // without advancing it. The lambda mutates ab.bar in place.
-    auto apply_ha = [&state](Bar& b, bool commit) {
-        double ha_close = (b.open + b.high + b.low + b.close) / 4.0;
-        double ha_open = state.ha_seeded
-                             ? (state.ha_prev_open + state.ha_prev_close) / 2.0
-                             : (b.open + b.close) / 2.0;
-        double ha_high = std::max(b.high, std::max(ha_open, ha_close));
-        double ha_low = std::min(b.low, std::min(ha_open, ha_close));
-        b.open = ha_open;
-        b.high = ha_high;
-        b.low = ha_low;
-        b.close = ha_close;
-        if (commit) {
-            state.ha_prev_open = ha_open;
-            state.ha_prev_close = ha_close;
-            state.ha_seeded = true;
-        }
-    };
     if (ab.is_complete) {
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/true);
         state.current_bar = ab.bar;

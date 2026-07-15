@@ -750,6 +750,13 @@ protected:
     // byte-identical behavior; touched only through feed_security_eval_state.
     bool security_range_start_na_warmup_ = false;
     int64_t security_range_start_ms_ = 0;
+    // Opt-in historical-only request.security lookahead projection. TradingView
+    // can merge a completed higher-timeframe bar onto the first chart child
+    // when a finite historical batch is already known. The normal engine path
+    // remains progressive, and stream warmup/realtime deliberately ignore this
+    // selector so future data can never leak into a live continuation.
+    bool historical_security_lookahead_projection_ = false;
+    bool historical_security_lookahead_projection_active_ = false;
     int64_t next_order_seq_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
@@ -1570,6 +1577,12 @@ protected:
     bool stream_script_tick_seen_ = false;
 
     // --- request.security state ---
+    struct HistoricalSecurityProjection {
+        Bar bar{};
+        std::size_t first_child_index = 0;
+        bool is_complete = false;
+    };
+
     struct SecurityEvalState {
         int sec_id = 0;
         std::string tf;
@@ -1671,6 +1684,16 @@ protected:
         // lookahead_off — the already-correct cases) and leaves behavior
         // unchanged.
         int publish_gate_tf_seconds = 0;
+        // One entry per projected HTF bucket, populated only for an explicitly
+        // opted-in finite historical batch. Empty for every default/streaming
+        // run and for sites outside the narrow HTF lookahead_on+gaps_off
+        // contract. The feed index advances once per retained input bar (bars
+        // before an opt-in security range start are dropped by both producer
+        // and consumer); the projection cursor advances only at the next
+        // bucket's first child.
+        std::vector<HistoricalSecurityProjection> historical_projections;
+        std::size_t historical_projection_cursor = 0;
+        std::size_t historical_projection_feed_index = 0;
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
@@ -2125,6 +2148,10 @@ private:
     int  count_expected_script_bars(const Bar* input_bars, int n_input,
                                     bool needs_aggregation) const;
     void init_security_eval_states_for_run(const std::string& effective_input_tf);
+    void prepare_historical_security_lookahead_projections(
+        const Bar* input_bars, int n_input,
+        const std::string& effective_input_tf);
+    void clear_historical_security_lookahead_projections();
     // Runs the standard per-script-bar order/strategy sequence on current_bar_:
     //   process_pending_orders -> update_per_trade_extremes -> on_bar,
     // plus a second process_pending_orders when process_orders_on_close_ is set
@@ -2321,6 +2348,14 @@ public:
                 security_range_start_na_warmup_ = false;
                 security_range_start_ms_ = 0;
             }
+        }
+        // Historical batch-only lookahead projection. This is intentionally a
+        // default-off verifier candidate: regular execution and every stream
+        // path keep progressive HTF aggregation unless a caller explicitly
+        // supplies a positive finite metadata value.
+        if (key == "historical_security_lookahead_projection") {
+            historical_security_lookahead_projection_ =
+                std::isfinite(value) && value > 0.0;
         }
         // "qty_step" is the per-instrument lot increment used by the forced-
         // liquidation quantizer. Route it onto the dedicated member so the
