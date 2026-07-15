@@ -1120,17 +1120,33 @@ void BacktestEngine::prepare_historical_security_lookahead_projections(
             // separate input->script aggregation stage would project the
             // wrong child indexes and values.
             || effective_input_tf != script_tf_
-            // Range-start warmup deliberately drops pre-range bars inside
-            // feed_security_eval_state(). Precomputing them here would leave
-            // the projection cursor out of sync with that trimmed feed.
-            || security_range_start_na_warmup_
             || input_bars == nullptr || n_input <= 0
             || input_seconds <= 0 || script_seconds <= 0) {
         return;
     }
 
+    // Range-start warmup drops every earlier input in
+    // feed_security_eval_state(). Build the projection from that exact same
+    // retained suffix and store child indexes relative to it: the per-state
+    // feed cursor likewise starts at zero on the first retained child because
+    // the early-return path never increments it. This composes the two
+    // independently opt-in historical semantics without exposing a pre-range
+    // aggregate or shifting the first projected bucket.
+    int projection_begin = 0;
+    if (security_range_start_na_warmup_) {
+        while (projection_begin < n_input
+                && input_bars[projection_begin].timestamp
+                    < security_range_start_ms_) {
+            ++projection_begin;
+        }
+        if (projection_begin >= n_input) {
+            return;
+        }
+    }
+
     historical_security_lookahead_projection_active_ = true;
     const int64_t input_ms = static_cast<int64_t>(input_seconds) * 1000;
+    const int projection_count = n_input - projection_begin;
 
     for (auto& state : security_eval_states_) {
         const int requested_seconds = tf_to_seconds(state.tf);
@@ -1148,7 +1164,7 @@ void BacktestEngine::prepare_historical_security_lookahead_projections(
         const int expected_children = std::max(
             1, requested_seconds / input_seconds);
         state.historical_projections.reserve(static_cast<std::size_t>(
-            n_input / expected_children + 1));
+            projection_count / expected_children + 1));
         state.historical_projection_cursor = 0;
         state.historical_projection_feed_index = 0;
 
@@ -1181,14 +1197,15 @@ void BacktestEngine::prepare_historical_security_lookahead_projections(
         };
 
         int group_begin = 0;
-        Bar aggregate = input_bars[0];
-        for (int i = 1; i < n_input; ++i) {
+        Bar aggregate = input_bars[projection_begin];
+        for (int i = projection_begin + 1; i < n_input; ++i) {
+            const int retained_child_index = i - projection_begin;
             if (crosses_requested_boundary(aggregate.timestamp,
                                            input_bars[i].timestamp)) {
                 // A later bucket proves this group is historical/confirmed,
                 // even when sparse input omitted its natural final child.
                 publish_group(group_begin, aggregate, true);
-                group_begin = i;
+                group_begin = retained_child_index;
                 aggregate = input_bars[i];
             } else {
                 merge(aggregate, input_bars[i]);

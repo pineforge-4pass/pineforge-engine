@@ -1687,8 +1687,10 @@ protected:
         // One entry per projected HTF bucket, populated only for an explicitly
         // opted-in finite historical batch. Empty for every default/streaming
         // run and for sites outside the narrow HTF lookahead_on+gaps_off
-        // contract. The feed index advances once per input bar; the projection
-        // cursor advances only at the next bucket's first child.
+        // contract. The feed index advances once per retained input bar (bars
+        // before an opt-in security range start are dropped by both producer
+        // and consumer); the projection cursor advances only at the next
+        // bucket's first child.
         std::vector<HistoricalSecurityProjection> historical_projections;
         std::size_t historical_projection_cursor = 0;
         std::size_t historical_projection_feed_index = 0;

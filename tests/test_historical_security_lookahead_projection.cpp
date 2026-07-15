@@ -241,28 +241,45 @@ void test_input_tf_below_script_tf_ignores_projection_flag() {
     }
 }
 
-void test_range_start_warmup_ignores_projection_flag() {
+void test_range_start_warmup_composes_with_projection() {
     ProjectionHarness harness;
     harness.set_syminfo_metadata(
         "historical_security_lookahead_projection", 1.0);
-    // Drop the first 15m input bar. The established warmup path then builds a
-    // three-child partial 60m bucket before committing it at the next hour.
+    // Drop the first 15m input bar. The finite projection must aggregate only
+    // the retained range-start feed: a three-child historical 60m bucket,
+    // followed by the available two-child tail. The skipped chart child stays
+    // na because neither the range-start evaluator nor the projection has run.
     harness.set_syminfo_metadata(
         "security_range_start_na_warmup", 4'500'000.0);
     const auto bars = make_feed();
     harness.run(bars.data(), static_cast<int>(bars.size()), "15", "15");
 
     CHECK(harness.last_error().empty(), "range-start composition run succeeds");
-    CHECK(harness.dispatches.size() == 5,
-          "range-start warmup keeps trimmed security feed progressive");
-    const double expected_close[] = {20.0, 30.0, 40.0, 40.0, 60.0};
-    const bool expected_complete[] = {false, false, false, true, false};
+    CHECK(harness.dispatches.size() == 2,
+          "range-start feed projects once per retained HTF bucket");
+    if (harness.dispatches.size() == 2) {
+        const Dispatch& historical = harness.dispatches[0];
+        CHECK(historical.complete, "trimmed historical bucket is complete");
+        CHECK(same(historical.bar.open, 10.0), "trimmed projection open");
+        CHECK(same(historical.bar.high, 44.0), "trimmed projection high");
+        CHECK(same(historical.bar.low, 6.0), "trimmed projection low");
+        CHECK(same(historical.bar.close, 40.0), "trimmed projection close");
+        CHECK(same(historical.bar.volume, 9.0), "trimmed projection volume");
+
+        const Dispatch& tail = harness.dispatches[1];
+        CHECK(!tail.complete, "trimmed tail remains incomplete");
+        CHECK(same(tail.bar.close, 60.0), "trimmed tail available close");
+    }
+
+    const double expected_chart[] = {
+        na<double>(), 40.0, 40.0, 40.0, 60.0, 60.0,
+    };
+    CHECK(harness.chart_values.size() == 6,
+          "range-start composition preserves every chart child");
     for (std::size_t i = 0;
-         i < harness.dispatches.size() && i < 5; ++i) {
-        CHECK(same(harness.dispatches[i].bar.close, expected_close[i]),
-              "range-start progressive close sequence");
-        CHECK(harness.dispatches[i].complete == expected_complete[i],
-              "range-start completion cadence");
+         i < harness.chart_values.size() && i < 6; ++i) {
+        CHECK(same(harness.chart_values[i], expected_chart[i]),
+              "range-start projected chart sequence");
     }
 }
 
@@ -319,7 +336,7 @@ int main() {
     test_equal_timeframe_ignores_projection_flag();
     test_heikinashi_ignores_projection_flag();
     test_input_tf_below_script_tf_ignores_projection_flag();
-    test_range_start_warmup_ignores_projection_flag();
+    test_range_start_warmup_composes_with_projection();
     test_stream_warmup_and_continuation_stay_progressive();
     if (failures != 0) {
         std::printf("%d check(s) FAILED\n", failures);
