@@ -246,9 +246,9 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
-    // KI-67: a fill recalc that was NOT triggered at the bar-open tick is a
-    // mid-bar recalc; orders it places are cascade orders (eligible only at the
-    // remaining extreme waypoints of the historical 4-tick path).
+    // KI-67: a fill recalc without first-O provenance is mid-bar. This includes
+    // later fills at that same O; orders it places are cascade orders eligible
+    // only at the remaining extreme waypoints of the historical 4-tick path.
     order.coof_born_mid_bar =
         coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
     order.created_position_side = position_side_;
@@ -1110,22 +1110,53 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
     // KI-67: a fill recalc that was NOT triggered at the bar-open tick is a
     // mid-bar recalc; orders it places are cascade orders (eligible only at the
-    // remaining extreme waypoints of the historical 4-tick path).
+    // remaining extreme waypoints of the historical 4-tick path). The new
+    // later-same-O refinement is priced/non-trail only: a trail born in that
+    // exact cell retains its established standard/open path reach. Otherwise
+    // the refinement would newly hold it to W1/W2 instead of letting it arm and
+    // cross continuously on the remaining legs. Magnifier keeps its own tick
+    // model and is unchanged.
+    const bool preserve_later_same_open_trail_provenance =
+        !bar_magnifier_enabled_ && has_trail_request
+        && coof_fill_recalc_active_ && !coof_recalc_at_bar_open_
+        && coof_recalc_after_first_open_fill_
+        && coof_cascade_recalc_leg_ == 0;
     order.coof_born_mid_bar =
-        coof_fill_recalc_active_ && !coof_recalc_at_bar_open_;
+        coof_fill_recalc_active_ && !coof_recalc_at_bar_open_
+        && !preserve_later_same_open_trail_provenance;
+    // A priced exit born after a later fill at the SAME O is already held by
+    // the KI-67 cascade gate for its in-flight leg 0. The pinned exception is
+    // LIMIT-only: a marketable limit may resume at W1. A marketable stop keeps
+    // the established whole-entry-bar suppression (including M1).
+    const bool later_same_open_priced_exit_on_entry_bar =
+        !bar_magnifier_enabled_ && order.coof_born_mid_bar
+        && coof_recalc_after_first_open_fill_
+        && coof_cascade_recalc_leg_ == 0
+        && position_open_bar_ == bar_index_
+        && (!std::isnan(stop_price) || !std::isnan(limit_price))
+        && std::isnan(trail_points) && std::isnan(trail_price);
+    bool stop_marketable_at_coof_cursor = false;
+    bool limit_marketable_at_coof_cursor = false;
+    bool later_same_open_marketable_limit = false;
     if (coof_fill_recalc_active_ && coof_scheduler_active_
         && std::isfinite(coof_cursor_price_)
         && position_side_ != PositionSide::FLAT
         && position_open_bar_ == bar_index_) {
         const bool closing_long = position_side_ == PositionSide::LONG;
-        const bool stop_marketable = !std::isnan(stop_price)
+        stop_marketable_at_coof_cursor = !std::isnan(stop_price)
             && (closing_long ? coof_cursor_price_ <= stop_price
                              : coof_cursor_price_ >= stop_price);
-        const bool limit_marketable = !std::isnan(limit_price)
+        limit_marketable_at_coof_cursor = !std::isnan(limit_price)
             && (closing_long ? coof_cursor_price_ >= limit_price
                              : coof_cursor_price_ <= limit_price);
-        order.coof_suppress_stop_on_entry_bar = stop_marketable;
-        order.coof_suppress_limit_on_entry_bar = limit_marketable;
+        later_same_open_marketable_limit =
+            later_same_open_priced_exit_on_entry_bar
+            && limit_marketable_at_coof_cursor;
+        order.coof_suppress_stop_on_entry_bar =
+            stop_marketable_at_coof_cursor;
+        order.coof_suppress_limit_on_entry_bar =
+            limit_marketable_at_coof_cursor
+            && !later_same_open_marketable_limit;
     }
     // KI-67 exit cascade (Model S). Record this mid-bar cascade exit's in-flight
     // leg so the historical dispatch gate can hold it on that leg's remainder,
@@ -1147,6 +1178,13 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         order.coof_cascade_inflight_fires = internal::cascade_exit_inflight_fires(
             current_bar_, coof_cursor_price_, si, position_side_,
             order.stop_price, order.limit_price);
+        // The second fill at O has already consumed the only same-point refill
+        // exception. A marketable LIMIT born from that refill is held through
+        // O->W1 by the cascade gate, then gets one gap attempt at W1. STOP never
+        // enters this exception and retains its whole-entry-bar suppression.
+        if (later_same_open_marketable_limit) {
+            order.coof_cascade_inflight_fires = true;
+        }
     }
     // Position-derived captures use the post-batched-close view (see
     // live_pos_qty above) so an exit armed after a same-bar strategy.close

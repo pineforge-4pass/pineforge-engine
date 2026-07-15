@@ -215,14 +215,14 @@ struct PendingOrder {
     // become ordinary carried orders on the next bar.
     bool coof_born_at_close_recalc = false;
     // KI-67 cascade provenance: true when this order was placed by a MID-BAR
-    // fill recalc (a recalc chain triggered by a fill that did NOT occur at the
+    // fill recalc (a recalc chain that did not own the first fill event at the
     // bar-open tick). Such "cascade" orders are eligible ONLY at the remaining
     // EXTREME waypoints (W1/W2) of the historical 4-tick path — never
     // intra-segment at an exact level and never at C — for the bar they are
     // born on; at bar end they convert to ordinary resting orders. Orders born
-    // in the BAR-OPEN recalc (or resting at bar start) keep standard exact-level
-    // semantics and leave this false. Scoped to the historical path; the
-    // magnifier path (bar_magnifier_enabled_) ignores this bit entirely.
+    // in that first BAR-OPEN recalc (or resting at bar start) keep standard
+    // exact-level semantics and leave this false. Scoped to the historical
+    // path; the magnifier path (bar_magnifier_enabled_) ignores this bit.
     //
     // ENTRY cascade orders use the plain "extreme-waypoint only" reach above.
     // strategy.exit cascade orders follow the finer KI-67 Model S rule
@@ -236,12 +236,12 @@ struct PendingOrder {
     // lets it EXACT-level fill on every SUBSEQUENT leg, and (when
     // coof_cascade_inflight_fires) gap-fills it at the in-flight leg-end waypoint.
     int8_t coof_cascade_seg_i = -1;
-    // KI-67 exit cascade: true when the exit level lies inside the in-flight
-    // remainder (ap -> leg-end waypoint) in the trigger direction on a
-    // NON-terminal in-flight leg, so it gap-fills same-bar AT that waypoint price
-    // (Model S clause 1: limits better than level, stops worse). False otherwise
-    // — subsequent legs fill at the exact level and a terminal in-flight leg
-    // (seg_i == 2) or off-path (seg_i < 0) rolls to the next bar.
+    // KI-67 exit cascade: true when the exit may gap-fill at the in-flight
+    // leg-end waypoint. Normally its level lies inside the in-flight remainder
+    // in the trigger direction (Model S clause 1). The one scoped extension is
+    // a marketable LIMIT born after a later same-O fill: it is held through leg
+    // 0 and gets its gap attempt at W1. Marketable STOP never uses that extension.
+    // Otherwise subsequent legs exact-fill, while a terminal/off-path order rolls.
     bool coof_cascade_inflight_fires = false;
     PositionSide created_position_side = PositionSide::FLAT;
     // Monotonic identity of the live position instance at placement. Side
@@ -1602,11 +1602,17 @@ protected:
     bool coof_fill_recalc_active_ = false;
     bool coof_cursor_is_bar_close_ = false;
     bool coof_evaluating_path_segment_ = false;
-    // KI-67: true while the active fill recalc chain was triggered by a fill AT
-    // the bar-open tick (O). Orders placed while this holds keep STANDARD
-    // exact-level semantics; orders placed while it is false are MID-BAR cascade
-    // orders (see PendingOrder::coof_born_mid_bar).
+    // KI-67: true only while the active fill recalc owns the FIRST fill event
+    // at the bar-open tick (O). Orders placed while this holds keep STANDARD
+    // exact-level semantics. Later fills at that same O, like fills at every
+    // other path point, are MID-BAR cascades (PendingOrder::coof_born_mid_bar).
     bool coof_recalc_at_bar_open_ = false;
+    // True only while executing a fill recalc triggered by a later fill event
+    // at O, after the first O fill has already consumed bar-open provenance.
+    // Such a recalc is mid-bar for KI-67 and resumes on leg 0 (O->W1). This bit
+    // lets strategy.exit apply the one pinned exception: a marketable LIMIT may
+    // resume at W1, while marketable STOP suppression remains whole-entry-bar.
+    bool coof_recalc_after_first_open_fill_ = false;
     // KI-67: true only during a point-bar evaluation that sits AT an extreme
     // waypoint (W1 or W2) of the historical 4-tick path. Cascade orders born
     // this bar may fill only while this holds; on segments, at O, at C, and on
