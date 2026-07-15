@@ -228,6 +228,8 @@ If you encounter day-boundary alignment issues or want to force the engine to pr
 - CMake ≥ 3.16
 - A C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12)
 - [Eigen 3.3+](https://eigen.tuxfamily.org/) — used for matrix-typed PineScript. The build will fetch Eigen via CMake `FetchContent` if no system install is found.
+- Python 3 when the test suite is enabled (the default). Library-only builds
+  can pass `-DPINEFORGE_BUILD_TESTS=OFF`.
 
 ### Build + test
 
@@ -237,7 +239,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-Expect 39 tests to pass. The largest (`test_integration`, `test_request_security`) take a few hundred milliseconds; everything else completes faster.
+Expect 105 tests to pass. The largest (`test_integration`, `test_request_security`) take a few hundred milliseconds; everything else completes faster.
 
 ### Install
 
