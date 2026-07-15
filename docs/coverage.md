@@ -426,7 +426,7 @@ The runtime exposes only two pieces under math:
 | Symbol                                            | Signature                                    | Notes                                                                                                          |
 | ------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `pine_random(lo, call_site, hi, seed, bar_index)` | inline free function                         | Deterministic SplitMix64-style mixer. Stable across platforms / runs; **not** TradingView's PRNG.              |
-| `math::Sum(length)`                               | class with `compute(src)` / `recompute(src)` | Rolling-window sum used to back PineScript `math.sum(source, length)`. NaN inputs short-circuit to NaN output. |
+| `math::Sum(length)`                               | class with `compute(src)` / `recompute(src)` | Rolling sum used to back PineScript `math.sum(source, length)`. `na` sources are ignored: output stays `na` until `length` non-`na` values exist, then retains the sum of the last `length` non-`na` values, including on `na`-input bars. |
 
 
 Order-fill rounding to mintick lives on `BacktestEngine::round_to_mintick(price)`.

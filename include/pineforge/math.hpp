@@ -21,11 +21,25 @@ inline double pine_random(double lo, uint32_t call_site, double hi, uint32_t see
 
 namespace math {
 
-/// Rolling-window sum for PineScript `math.sum(source, length)` (not a `ta.*` builtin).
+/// Rolling sum over the last `length` non-na sources for PineScript
+/// `math.sum(source, length)` (not a `ta.*` builtin). Returns na until seeded,
+/// then holds the seeded sum on na-input bars.
 class Sum {
     int length_;
     std::deque<double> buffer_;
     double sum_;
+
+    // State needed to rewind the current bar before an intrabar recompute.
+    // A valid input can append one value and evict at most one old value, so
+    // restoring this delta stays O(1) without copying the rolling window.
+    double saved_sum_;
+    bool has_saved_state_;
+    bool current_value_added_;
+    bool current_value_evicted_;
+    double current_evicted_value_;
+
+    double apply(double src);
+    void restore();
 
 public:
     explicit Sum(int length);
