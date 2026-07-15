@@ -222,6 +222,7 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     constexpr int kCoofLoopGuard = 1 << 20;
     uint64_t fill_events = 0;
     int exit_closed_from_bar = -1;
+    uint64_t exit_closed_from_incarnation = 0;
     bool exit_closed_was_long = false;
 
     snapshot_coof_script_state();
@@ -276,7 +277,8 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
             current_bar_ = point;
             CoofFillResult fill = process_next_pending_order(
                 point, /*allow_market_orders=*/true,
-                exit_closed_from_bar, exit_closed_was_long);
+                exit_closed_from_bar, exit_closed_from_incarnation,
+                exit_closed_was_long);
             if (fill.filled) {
                 // A fill at this POINT (cursor == path[next_waypoint-1]) puts the
                 // in-flight leg at path[next_waypoint-1] -> path[next_waypoint],
@@ -306,7 +308,8 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
         coof_hist_path_index_ = next_waypoint - 1;
         CoofFillResult fill = process_next_pending_order(
             segment, /*allow_market_orders=*/false,
-            exit_closed_from_bar, exit_closed_was_long);
+            exit_closed_from_bar, exit_closed_from_incarnation,
+            exit_closed_was_long);
         coof_evaluating_path_segment_ = false;
         if (fill.filled) {
             const bool reached_target =
@@ -369,7 +372,8 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
             current_bar_ = close_point;
             CoofFillResult fill = process_next_pending_order(
                 close_point, /*allow_market_orders=*/true,
-                exit_closed_from_bar, exit_closed_was_long);
+                exit_closed_from_bar, exit_closed_from_incarnation,
+                exit_closed_was_long);
             if (!fill.filled) break;
             fill_events += fill.fill_events;
         }
@@ -809,6 +813,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     const uint64_t max_fill_events = static_cast<uint64_t>(ticks.size());
     uint64_t fill_events = 0;
     int exit_closed_from_bar = -1;
+    uint64_t exit_closed_from_incarnation = 0;
     bool exit_closed_was_long = false;
     snapshot_coof_script_state();
     coof_scheduler_active_ = true;
@@ -843,7 +848,8 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
             current_bar_ = point;
             CoofFillResult fill = process_next_pending_order(
                 point, /*allow_market_orders=*/true,
-                exit_closed_from_bar, exit_closed_was_long);
+                exit_closed_from_bar, exit_closed_from_incarnation,
+                exit_closed_was_long);
             if (fill.filled) {
                 consume_fill(
                     fill, cursor_is_close,
@@ -873,7 +879,8 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
         coof_evaluating_path_segment_ = true;
         CoofFillResult fill = process_next_pending_order(
             segment, /*allow_market_orders=*/false,
-            exit_closed_from_bar, exit_closed_was_long);
+            exit_closed_from_bar, exit_closed_from_incarnation,
+            exit_closed_was_long);
         coof_evaluating_path_segment_ = false;
         if (fill.filled) {
             cursor_ts = target.timestamp;
@@ -914,7 +921,8 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
             current_bar_ = close_point;
             CoofFillResult fill = process_next_pending_order(
                 close_point, /*allow_market_orders=*/true,
-                exit_closed_from_bar, exit_closed_was_long);
+                exit_closed_from_bar, exit_closed_from_incarnation,
+                exit_closed_was_long);
             if (!fill.filled) break;
             fill_events += fill.fill_events;
         }
