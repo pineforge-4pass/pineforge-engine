@@ -1265,7 +1265,15 @@ void BacktestEngine::apply_filled_order_to_state(
         uint64_t& exit_closed_from_incarnation,
         bool& exit_closed_was_long,
         std::vector<size_t>& filled_indices) {
+    const bool inherits_pooc_close_fill =
+        intraday_cap_count_pooc_full_close_fills_
+        && order.incarnation != 0
+        && order.incarnation
+               == intraday_cap_pooc_close_inheritor_incarnation_;
     auto decline_and_cancel = [&]() {
+        if (inherits_pooc_close_fill) {
+            intraday_cap_pooc_close_inheritor_incarnation_ = 0;
+        }
         invalidate_pending_flat_market_pair(order.created_seq);
         filled_indices.push_back(order_index);
     };
@@ -1745,6 +1753,27 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
+    // A same-direction MARKET can reach the fill kernel while the live
+    // position is already at its pyramiding cap (a later-bar reissue, or a
+    // same-tick sibling after an earlier entry opened the position). The
+    // established dispatch consumes it but mutates no position
+    // (add_to_pyramid_market's cap branch); opt-in factor A consumes it here
+    // before risk-cap accounting so an attempt that never filled does not
+    // spend max_intraday_filled_orders quota. Classify against LIVE state at
+    // fill time so close-then-reentry and reversals remain real fills.
+    if (intraday_cap_skip_noop_market_fills_
+        && max_intraday_filled_orders_ > 0
+        && order.type == OrderType::MARKET
+        && position_side_ != PositionSide::FLAT) {
+        const PositionSide requested =
+            order.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        if (position_side_ == requested
+            && position_entry_count_ >= pyramiding_) {
+            decline_and_cancel();
+            return;
+        }
+    }
+
     // Check max_intraday_filled_orders limit.
     //
     // TV's broker emulator (LATCH-TILL-DAY-ROLLOVER semantics):
@@ -1780,14 +1809,25 @@ void BacktestEngine::apply_filled_order_to_state(
             intraday_fill_count_ = 0;
             intraday_cap_hit_ = false;  // RESET LATCH on chart-day rollover
         }
-        if (intraday_cap_hit_) {
+        // A POOC close+opposite-entry reversal is split by the engine into a
+        // close operation followed by a MARKET operation. Factor C counted
+        // the close synchronously, before this order could be rejected or
+        // cancelled. Only the exact surviving incarnation may continue the
+        // same broker event without spending a second slot; all ordinary
+        // orders still obey the latch. Every pre-account admission failure
+        // above clears the inheritance while retaining the real close count.
+        if (intraday_cap_hit_ && !inherits_pooc_close_fill) {
             // Latched: drop this pending order and skip dispatch.
             // Removing from pending_orders_ matches TV's behaviour of
             // silently consuming/rejecting fills past the daily cap.
             decline_and_cancel();
             return;
         }
-        intraday_fill_count_++;
+        if (inherits_pooc_close_fill) {
+            intraday_cap_pooc_close_inheritor_incarnation_ = 0;
+        } else {
+            intraday_fill_count_++;
+        }
         will_trigger_cap =
             (intraday_fill_count_ >= max_intraday_filled_orders_);
     }
@@ -1942,6 +1982,17 @@ void BacktestEngine::apply_filled_order_to_state(
         || std::abs(position_qty_ - position_qty_before_fill) > kQtyEpsilon
         || pyramid_entries_.size() != pyramid_lots_before_fill
         || trades_.size() != trades_before;
+
+    // The POOC close's quota identity can transfer only to the first broker
+    // operation that immediately continues that close as its designated
+    // reversal MARKET. If any other order actually fills first, broker order
+    // has moved on: expire the token before OCA effects and before this fill's
+    // cap close/latch. A matched-but-rejected or zero-effect attempt is not a
+    // broker fill and intentionally leaves the exact inheritor eligible.
+    if (primary_fill_applied && !inherits_pooc_close_fill
+        && intraday_cap_pooc_close_inheritor_incarnation_ != 0) {
+        intraday_cap_pooc_close_inheritor_incarnation_ = 0;
+    }
 
     // Bounded POOC global-exit growth. Only MARKET adds that were already
     // pending when the one tracking EXIT was armed carry this relation bit.
@@ -2164,6 +2215,26 @@ void BacktestEngine::apply_filled_order_to_state(
     // only on chart-day rollover (see top of this function).
     if (will_trigger_cap) {
         if (position_side_ != PositionSide::FLAT) {
+            // Opt-in factor B is deliberately narrow: an ordinary historical
+            // POOC run, no COOF/magnifier scheduler, and a MARKET created on
+            // this bar.  TradingView accepts that entry at the signal close
+            // but emits the cap flatten at the next broker boundary.  Latch
+            // immediately below; dispatch_bar performs the pending close at
+            // the next bar's open before any other broker work.
+            const bool defer_pooc_market_close =
+                intraday_cap_defer_pooc_close_
+                && process_orders_on_close_
+                && !calc_on_order_fills_
+                && !bar_magnifier_enabled_
+                && !stream_warmup_mode_
+                && stream_phase_ == StreamPhase::IDLE
+                && order.type == OrderType::MARKET
+                && order.created_bar == bar_index_;
+            if (defer_pooc_market_close) {
+                intraday_cap_deferred_close_pending_ = true;
+                intraday_cap_hit_ = true;
+                return;
+            }
             // TV cap-close exit price empirics (probe 97 stop-entry +
             // cap composition):
             //
