@@ -824,8 +824,9 @@ bool BacktestEngine::pending_flat_market_pair_scope_is_live() const {
 // first call remains the sole fill.  The clean-room N=2 probe separates this
 // from order priority and bracket interaction: the duration-one survivor pins
 // the second source call for fixed qty=1, while Fran's ~95%-of-equity explicit
-// qty keeps only the first, with and without a position-scoped bracket. The
-// exact-equality comparator is inherited from the already-pinned KI-65 rule.
+// qty keeps only the first, with and without a position-scoped bracket. Those
+// controls bracket the behavior below and above budget; they do not pin exact
+// gross-equality behavior, which retains the engine's ordinary margin model.
 //
 // Keep this independent from the established KI-65 pending MARKET pair.  KI-65
 // owns a non-POOC/non-COOF pyramiding=2 buy-before-sell transaction model; this

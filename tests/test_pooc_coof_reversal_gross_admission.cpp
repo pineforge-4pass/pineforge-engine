@@ -158,12 +158,13 @@ static void test_red_gross_over_equity_declines_later_call() {
     assert_first_only(false);
 }
 
-static void test_green_fixed_and_exact_boundary_pairs_fill_both() {
-    std::printf("test_green_fixed_and_exact_boundary_pairs_fill_both\n");
+static void test_green_fixed_probe_and_margin_equality_policy() {
+    std::printf("test_green_fixed_probe_and_margin_equality_policy\n");
     for (bool first_long : {true, false}) {
         assert_both_fill(first_long, 1.0);
-        // Exact equality is inherited from the already-pinned KI-65
-        // 50%+50% admission boundary; the new N=2 probe pins this scope.
+        // Equality admission preserves the engine's ordinary `required >
+        // equity` margin model. The TV probes bracket low/high gross cases but
+        // do not claim to pin the exact equality point.
         assert_both_fill(first_long, 50.0);
     }
 }
@@ -177,6 +178,9 @@ public:
         CancelRearm,
         PriorRestingCancelRearm,
         RejectedExtra,
+        RejectedInfiniteExtra,
+        CancelAllThenPair,
+        NextBarCleanPair,
     };
 
     explicit MutationProbe(Shape shape) : shape_(shape) {
@@ -235,6 +239,19 @@ public:
             return;
         }
 
+        if (shape_ == Shape::NextBarCleanPair) {
+            if (bar_index_ == 0) {
+                strategy_entry("NB-X", true, kNaN, kNaN, 1.0);
+                strategy_cancel_all();
+            } else if (bar_index_ == 1) {
+                strategy_entry("NB-A", true, kNaN, kNaN, 95.0);
+                strategy_entry("NB-B", false, kNaN, kNaN, 95.0);
+            } else if (bar_index_ == 2) {
+                observe_and_close();
+            }
+            return;
+        }
+
         if (bar_index_ != 0) {
             if (bar_index_ == 1) observe_and_close();
             return;
@@ -253,6 +270,17 @@ public:
             strategy_entry("RX-X", true, kNaN, kNaN, 101.0);
             strategy_entry("RX-A", true, kNaN, kNaN, 55.0);
             strategy_entry("RX-B", false, kNaN, kNaN, 55.0);
+        } else if (shape_ == Shape::RejectedInfiniteExtra) {
+            strategy_entry(
+                "RI-X", true, kNaN, kNaN,
+                std::numeric_limits<double>::infinity());
+            strategy_entry("RI-A", true, kNaN, kNaN, 55.0);
+            strategy_entry("RI-B", false, kNaN, kNaN, 55.0);
+        } else if (shape_ == Shape::CancelAllThenPair) {
+            strategy_entry("CA-X", true, kNaN, kNaN, 1.0);
+            strategy_cancel_all();
+            strategy_entry("CA-A", true, kNaN, kNaN, 55.0);
+            strategy_entry("CA-B", false, kNaN, kNaN, 55.0);
         }
     }
 
@@ -269,7 +297,8 @@ private:
 
 static void test_green_mutated_two_order_books_fail_closed() {
     auto run = [](const char* label, MutationProbe::Shape shape,
-                  double expected_size, bool prior_bar = false) {
+                  double expected_size, bool prior_bar = false,
+                  int expected_trades = 1) {
         std::printf("%s\n", label);
         MutationProbe probe(shape);
         auto bars = prior_bar
@@ -279,7 +308,7 @@ static void test_green_mutated_two_order_books_fail_closed() {
             : flat_feed();
         probe.run(bars.data(), static_cast<int>(bars.size()));
         CHECK(probe.last_error().empty());
-        CHECK(probe.observed_trades == 1);
+        CHECK(probe.observed_trades == expected_trades);
         CHECK_NEAR(probe.observed_size, expected_size, 1e-9);
     };
 
@@ -297,6 +326,13 @@ static void test_green_mutated_two_order_books_fail_closed() {
         /*prior_bar=*/true);
     run("signal-rejected extra call stays on ordinary path",
         MutationProbe::Shape::RejectedExtra, -55.0);
+    run("infinite signal-rejected call stays on ordinary path",
+        MutationProbe::Shape::RejectedInfiniteExtra, -55.0);
+    run("cancel-all then pair stays on ordinary path",
+        MutationProbe::Shape::CancelAllThenPair, -55.0);
+    run("prior-bar tombstone does not suppress a clean next-bar pair",
+        MutationProbe::Shape::NextBarCleanPair, 95.0,
+        /*prior_bar=*/true, /*expected_trades=*/0);
 }
 
 static void assert_excluded_pair_uses_legacy_result(
@@ -339,7 +375,7 @@ static void test_green_scope_exclusions() {
 
 int main() {
     test_red_gross_over_equity_declines_later_call();
-    test_green_fixed_and_exact_boundary_pairs_fill_both();
+    test_green_fixed_probe_and_margin_equality_policy();
     test_green_mutated_two_order_books_fail_closed();
     test_green_scope_exclusions();
 

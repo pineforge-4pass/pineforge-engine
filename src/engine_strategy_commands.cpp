@@ -117,7 +117,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         && oca_name.empty()
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED));
     const bool pooc_coof_ordinary_flat_market_call =
-        std::isfinite(qty)
+        !std::isnan(qty)
         && std::isnan(limit_price) && std::isnan(stop_price)
         && process_orders_on_close_
         && calc_on_order_fills_
