@@ -59,10 +59,11 @@ struct PyramidEntry {
     // sequence, the exit covers (scratches) the add dur-0. Gated by
     // entry_bar_index == bar_index_ so prior-bar slices are never covered.
     bool market_pyramid_add = false;
-    // Synthetic OHLC-path coordinate where a pure-stop strategy.entry fired.
+    // Synthetic OHLC-path coordinate where a pure stop/limit strategy.entry
+    // fired.
     // A single flat-born, non-trailing from_entry bracket may inspect only the
     // path suffix at/after this cursor on the entry bar. NaN marks every
-    // unrouted parent class (market, limit, stop-limit, raw order).
+    // unrouted parent class (market, stop-limit, raw order).
     double entry_path_position = std::numeric_limits<double>::quiet_NaN();
 };
 

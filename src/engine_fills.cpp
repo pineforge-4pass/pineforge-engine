@@ -902,9 +902,87 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             live_flat_market_pair_seqs.insert(order.created_seq);
         }
     }
+    // A single relative strategy.exit armed while FLAT has no concrete
+    // stop/limit until its earlier same-bar from_entry parent fills. It
+    // otherwise looks like a phase-0 market order and sorts before a non-gap
+    // LIMIT parent; the flat-position scan skips it, then never revisits it
+    // after the parent materializes its prices.
+    //
+    // Put only that exact child in its parent's existing phase 1. Do not invent
+    // a global phase 2: that would move the child behind unrelated phase-1
+    // parents, and would also wake unsupported multi-child groups after their
+    // parent. Gap-at-open LIMIT parents already share phase 0 with the child
+    // and keep their established source ordering. COOF and magnifier own
+    // separate path schedulers and remain out of scope.
+    struct RelativeLimitParentFence {
+        int created_bar;
+        int64_t created_seq;
+    };
+    std::unordered_map<std::string, int> exit_children_by_parent;
+    std::unordered_map<std::string, RelativeLimitParentFence>
+        non_gap_limit_parents;
+    std::unordered_set<uint64_t> relative_limit_child_incarnations;
+    if (position_side_ == PositionSide::FLAT
+        && !calc_on_order_fills_
+        && !bar_magnifier_enabled_
+        && std::isfinite(bar.open)) {
+        for (const PendingOrder& order : pending_orders_) {
+            if (order.type == OrderType::EXIT && !order.from_entry.empty()) {
+                ++exit_children_by_parent[order.from_entry];
+            }
+        }
+        for (const PendingOrder& order : pending_orders_) {
+            const bool pure_limit_parent =
+                order.type == OrderType::ENTRY
+                && !order.id.empty()
+                && order.created_position_side == PositionSide::FLAT
+                && order.created_bar < bar_index_
+                && !order.created_during_coof_recalc
+                && std::isfinite(order.limit_price)
+                && std::isnan(order.stop_price)
+                && std::isnan(order.trail_points)
+                && std::isnan(order.trail_price)
+                && std::isnan(order.trail_offset);
+            const bool fills_at_open = pure_limit_parent
+                && (order.is_long ? bar.open <= order.limit_price
+                                  : bar.open >= order.limit_price);
+            if (pure_limit_parent && !fills_at_open) {
+                non_gap_limit_parents.emplace(
+                    order.id,
+                    RelativeLimitParentFence{
+                        order.created_bar, order.created_seq});
+            }
+        }
+        for (const PendingOrder& order : pending_orders_) {
+            auto parent = non_gap_limit_parents.find(order.from_entry);
+            if (parent == non_gap_limit_parents.end()) continue;
+            const bool exact_relative_child =
+                order.type == OrderType::EXIT
+                && !order.created_while_in_position
+                && order.created_position_side == PositionSide::FLAT
+                && !order.created_during_coof_recalc
+                && exit_children_by_parent[order.from_entry] == 1
+                && order.created_bar == parent->second.created_bar
+                && parent->second.created_seq < order.created_seq
+                && std::isnan(order.limit_price)
+                && std::isnan(order.stop_price)
+                && std::isnan(order.trail_points)
+                && std::isnan(order.trail_price)
+                && std::isnan(order.trail_offset)
+                && (std::isfinite(order.profit_ticks)
+                    || std::isfinite(order.loss_ticks));
+            if (exact_relative_child) {
+                relative_limit_child_incarnations.insert(order.incarnation);
+            }
+        }
+    }
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
         [&](const PendingOrder& a, const PendingOrder& b) {
             auto fill_phase = [&](const PendingOrder& o) {
+                if (relative_limit_child_incarnations.count(o.incarnation) != 0) {
+                    return 1;
+                }
+
                 bool exit_style = order_is_exit_style(o, position_side_);
                 const bool suppress_entry_bar_leg =
                     exit_style && position_open_bar_ == bar_index_;
@@ -2489,14 +2567,26 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
                                                pyramid_entries_.back().price);
                 // Keep the bracket-activation cursor separate from the booked
                 // fill price used by excursion accounting. Stop fills can be
-                // rounded or slipped; the child becomes live at the actual,
-                // direction-aware parent trigger crossing.
+                // rounded or slipped; limit fills can improve at the open. The
+                // child becomes live at the actual parent trigger crossing.
                 if (!std::isnan(order.stop_price)
                     && std::isnan(order.limit_price)) {
                     double entry_path_position = 0.0;
                     if (internal::entry_stop_first_touch(
                             bar, order.stop_price, order.is_long,
                             &entry_path_position)) {
+                        pyramid_entries_.back().entry_path_position =
+                            entry_path_position;
+                    }
+                } else if (std::isnan(order.stop_price)
+                           && !std::isnan(order.limit_price)) {
+                    double entry_path_position = 0.0;
+                    const bool fills_at_open = order.is_long
+                        ? bar.open <= order.limit_price
+                        : bar.open >= order.limit_price;
+                    if (fills_at_open
+                        || internal::first_touch_position(
+                            bar, order.limit_price, &entry_path_position)) {
                         pyramid_entries_.back().entry_path_position =
                             entry_path_position;
                     }
@@ -3223,9 +3313,9 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         }
     } else if (!should_fill && exit_style && (has_stop || has_limit || has_trail)) {
         double path_start_position = 0.0;
-        // Ordinary historical processing scans the retained pure-stop parent
-        // entry and its from_entry bracket in one pass. Once the parent fills,
-        // the child may inspect only the remaining OHLC path. COOF already
+        // Ordinary historical processing scans the retained pure stop/LIMIT
+        // parent entry and its from_entry bracket in one pass. Once the parent
+        // fills, the child may inspect only the remaining OHLC path. COOF already
         // supplies a monotonic segment cursor, and magnifier has its own tick
         // path, so neither is routed through this full-bar coordinate. Keep
         // multi-order exit groups on the existing path until their sibling
