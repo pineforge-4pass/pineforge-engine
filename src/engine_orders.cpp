@@ -69,7 +69,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                           double tv_carry_qty,
                                           int created_bar,
                                           bool later_same_tick_entry,
-                                          bool paired_flat_market_transaction) {
+                                          bool paired_flat_market_transaction,
+                                          bool explicit_qty_prequantized) {
     // Degenerate-bar guard: never open a position at a non-finite fill price
     // (e.g. a NaN/Inf print). Dropping the fill keeps trade output finite and
     // a single bad tick from poisoning the backtest. Clean feeds never hit this.
@@ -100,7 +101,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                created_position_side, is_priced_entry, tv_carry_qty,
                                created_bar,
                                /*explicit_qty_prequantized=*/
-                                   paired_flat_market_transaction);
+                                   (explicit_qty_prequantized
+                                    || paired_flat_market_transaction));
         return;
     }
 
@@ -114,7 +116,9 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
         close_opposite_then_enter(
             id, is_long, fill_price, explicit_qty, explicit_qty_type,
             /*purge_pending_exits=*/!paired_flat_market_transaction,
-            /*explicit_qty_prequantized=*/paired_flat_market_transaction);
+            /*explicit_qty_prequantized=*/
+                (explicit_qty_prequantized
+                 || paired_flat_market_transaction));
         return;
     }
 

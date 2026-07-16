@@ -328,6 +328,12 @@ struct PendingOrder {
     // NaN means ordinary strategy.entry reversal semantics.
     double paired_flat_market_transaction_qty =
         std::numeric_limits<double>::quiet_NaN();
+    // Candidate provenance for the narrow omitted-qty, PoE=100, true-flat
+    // MARKET/MARKET admission rule. Finalization waits for the complete source-
+    // bar book and considers exactly two fresh, consecutive, distinct-id,
+    // opposite entries. Without an over-equity gross transaction this remains
+    // metadata only and does not change dispatch.
+    bool default_flat_market_gross_candidate = false;
     // Snapshot of the position's quantity at the moment this order was
     // PLACED (0 if placed from flat). Used by execute_market_entry's
     // flat branch to apply TradingView's deferred-flip growth rule:
@@ -371,6 +377,18 @@ struct PendingOrder {
     // flips every one of them. Keep ``qty`` NaN; read this field only where a
     // quantity is actually computed.
     double frozen_default_qty = std::numeric_limits<double>::quiet_NaN();
+    // Placement snapshot for one narrowly scoped default-sized pure STOP. A
+    // next-bar open-marketable fill uses this already-quantized quantity for
+    // both margin admission and dispatch. Intrabar touches and every other
+    // priced-entry shape remain fill-time-sized. Keeping it separate from
+    // frozen_default_qty prevents generic MARKET consumers from widening the
+    // rule. NaN means ordinary stop sizing/admission.
+    double stop_placement_open_qty =
+        std::numeric_limits<double>::quiet_NaN();
+    double stop_placement_open_equity =
+        std::numeric_limits<double>::quiet_NaN();
+    double stop_placement_signal_close =
+        std::numeric_limits<double>::quiet_NaN();
     // TV margin-admission snapshot for a FROZEN default-sized market order
     // (KI-54). Captured at the same placement point as frozen_default_qty:
     //   sizing_equity = current_equity() + open_profit(close(S))   [account ccy]
@@ -927,6 +945,11 @@ protected:
     // different calls and is outside both exact two-call oracles (KI-65 and
     // terminal-C POOC+COOF), so finalization must leave it ordinary.
     std::unordered_set<int> pending_flat_market_pair_disqualified_bars_;
+    // A mutation or non-candidate entry-like call on a source bar prevents two
+    // surviving default MARKET objects from impersonating the original exact
+    // two-call book.
+    std::unordered_set<int>
+        default_flat_market_gross_disqualified_bars_;
 
     // strategy.exit partial orders are one-shot per open position for a given id
     std::unordered_set<std::string> consumed_partial_exit_ids_;
@@ -2100,7 +2123,8 @@ private:
                               double tv_carry_qty = 0.0,
                               int created_bar = -1,
                               bool later_same_tick_entry = false,
-                              bool paired_flat_market_transaction = false);
+                              bool paired_flat_market_transaction = false,
+                              bool explicit_qty_prequantized = false);
     void execute_market_exit(double fill_price);
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
@@ -2128,6 +2152,8 @@ private:
     void update_trail_best_for_bar_open(const Bar& bar);
     void sort_exit_siblings_by_path_fill(const Bar& bar);
     bool pending_flat_market_pair_scope_is_live() const;
+    bool default_flat_market_gross_scope_is_live() const;
+    void finalize_default_flat_market_gross_admission();
     void apply_pooc_coof_explicit_flat_market_gross_admission();
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
@@ -2160,6 +2186,8 @@ private:
                                      bool& exit_closed_was_long,
                                      std::vector<size_t>& filled_indices);
     bool stop_entry_margin_admission_declines(
+        const PendingOrder& order, double fill_price, const Bar& bar) const;
+    bool use_stop_placement_open_qty(
         const PendingOrder& order, double fill_price, const Bar& bar) const;
     // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
     // site with the just-declined MARKET reversal entry. Flags every pending
