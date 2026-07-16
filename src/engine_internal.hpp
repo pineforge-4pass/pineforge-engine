@@ -146,6 +146,17 @@ DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
                                                      int current_bar_index = -1);
 
 
+// Exact scope for continuing the historical path after a dual-stop winner is
+// declined by fill-time margin admission. Kept runtime-private so focused
+// tests can pin the POOC/COOF/magnifier and order-book fences directly.
+bool dual_stop_margin_decline_can_continue_path(
+    const std::vector<PendingOrder>& orders,
+    DualEntryStopPathWinner winner,
+    bool process_orders_on_close,
+    bool calc_on_order_fills,
+    bool bar_magnifier);
+
+
 // For OCA exit siblings (e.g., separate TP and SL strategy.order calls),
 // compute first-touch position on OHLC path for a single-priced order.
 bool exit_order_touch_position(const Bar& bar,
