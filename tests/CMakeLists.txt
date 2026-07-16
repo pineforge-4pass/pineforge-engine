@@ -72,6 +72,7 @@ set(TEST_SOURCES
     test_margin_admission_gate
     test_short_reversal_emission
     test_margin_stop_admission
+    test_stop_decline_continue_path
     test_frozen_flat_gap_reject
     test_explicit_qty_fill_admission
     test_limit_fill_slippage

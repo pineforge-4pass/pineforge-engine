@@ -44,7 +44,68 @@ bool preserves_same_id_stop_across_deferred_close_all(
         && !order.stop_limit_activated;
 }
 
+// TradingView continues along the historical OHLC path after the first
+// member of this exact dual-stop book is declined by margin admission. Keep
+// the exception on the independently-proven shape: two same-signal,
+// true-flat, unlinked strategy.entry pure STOPs and no competing entry-like
+// orders. EXIT orders are harmless while flat and retain ordinary cleanup.
+bool is_true_flat_unlinked_stop_pair(
+        const std::vector<PendingOrder>& orders,
+        DualEntryStopPathWinner winner) {
+    if (winner != DualEntryStopPathWinner::LongFirst
+        && winner != DualEntryStopPathWinner::ShortFirst) {
+        return false;
+    }
+
+    int pure_stop_entries = 0;
+    int source_bar = 0;
+    bool have_source_bar = false;
+    for (const PendingOrder& order : orders) {
+        const bool entry_like = order.type == OrderType::ENTRY
+            || order.type == OrderType::MARKET
+            || order.type == OrderType::RAW_ORDER;
+        if (!entry_like) continue;
+
+        const bool pure_stop = order.type == OrderType::ENTRY
+            && std::isfinite(order.stop_price)
+            && std::isnan(order.limit_price)
+            && std::isnan(order.trail_points)
+            && std::isnan(order.trail_price)
+            && std::isnan(order.trail_offset)
+            && !order.stop_limit_activated;
+        if (!pure_stop
+            || order.created_position_side != PositionSide::FLAT
+            || order.created_after_position_close_in_bar
+            || !order.oca_name.empty()
+            || order.oca_type != 0) {
+            return false;
+        }
+        if (!have_source_bar) {
+            source_bar = order.created_bar;
+            have_source_bar = true;
+        } else if (order.created_bar != source_bar) {
+            return false;
+        }
+        ++pure_stop_entries;
+    }
+    return pure_stop_entries == 2;
+}
+
 }  // namespace
+
+
+bool internal::dual_stop_margin_decline_can_continue_path(
+        const std::vector<PendingOrder>& orders,
+        DualEntryStopPathWinner winner,
+        bool process_orders_on_close,
+        bool calc_on_order_fills,
+        bool bar_magnifier) {
+    return winner != DualEntryStopPathWinner::None
+        && !process_orders_on_close
+        && !calc_on_order_fills
+        && !bar_magnifier
+        && is_true_flat_unlinked_stop_pair(orders, winner);
+}
 
 
 // strategy_entry / strategy_close / strategy_close_all / strategy_exit
@@ -79,6 +140,10 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
         dual_entry_path_ = dual_entry_stop_path_winner(
             bar, pending_orders_, bar_index_);
     }
+    const bool continue_after_stop_margin_decline_scope =
+        dual_stop_margin_decline_can_continue_path(
+            pending_orders_, dual_entry_path_, process_orders_on_close_,
+            calc_on_order_fills_, bar_magnifier_enabled_);
 
     for (int opposing_pass = 0; opposing_pass < 2; ++opposing_pass) {
         // Pass 1 only re-evaluates orders pass 0 deferred into the skip set;
@@ -114,12 +179,27 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
             continue;
         }
 
+        const bool path_winner_stop_margin_decline =
+            continue_after_stop_margin_decline_scope
+            && ((dual_entry_path_ == DualEntryStopPathWinner::LongFirst
+                 && order.is_long)
+                || (dual_entry_path_ == DualEntryStopPathWinner::ShortFirst
+                    && !order.is_long))
+            && check_risk_allow_entry(order.is_long)
+            && stop_entry_margin_admission_declines(
+                order, fill.fill_price, bar);
         apply_filled_order_to_state(
             order, i, fill.fill_price, fill.is_limit_fill, bar,
             trail_best_path_state,
             exit_closed_from_bar, exit_closed_from_incarnation,
             exit_closed_was_long,
             filled_indices);
+        if (path_winner_stop_margin_decline) {
+            // The path winner never became a broker fill. Releasing only the
+            // path-winner fence lets the already-deferred, path-later stop
+            // face every ordinary eligibility and admission rule in turn.
+            dual_entry_path_ = DualEntryStopPathWinner::None;
+        }
         materialize_relative_exit_prices_for_live_position();
     }
     compact_filled_pending_orders(
@@ -1327,6 +1407,27 @@ void BacktestEngine::compact_filled_pending_orders(
 }
 
 
+bool BacktestEngine::stop_entry_margin_admission_declines(
+        const PendingOrder& order, double fill_price, const Bar& bar) const {
+    if (order.type != OrderType::ENTRY
+        || std::isnan(order.stop_price)
+        || !std::isnan(order.limit_price)) {
+        return false;
+    }
+    const double margin_pct = order.is_long ? margin_long_ : margin_short_;
+    if (!(margin_pct > 0.0) || !std::isfinite(bar.open) || bar.open <= 0.0) {
+        return false;
+    }
+    const double fill_qty =
+        std::abs(calc_qty_for_type(fill_price, order.qty, order.qty_type));
+    const double required = fill_qty * bar.open * syminfo_.pointvalue
+                            * account_currency_fx_ * (margin_pct / 100.0);
+    const double available = current_equity();
+    const double eps = std::max(1e-9, std::abs(available) * 1e-12);
+    return fill_qty > 0.0 && required > available + eps;
+}
+
+
 // Apply a successfully matched fill to engine state. Dispatches by
 // order.type to the appropriate execute_* method, updates trailing-stop
 // best price, handles risk gating + intraday-fill caps + OCA group
@@ -1406,22 +1507,9 @@ void BacktestEngine::apply_filled_order_to_state(
     // byte-identical when margin_pct==0). The qty is exactly the fill kernel's
     // (calc_qty_for_type at the fill price) so the gate cannot diverge from the
     // fill it guards.
-    if (order.type == OrderType::ENTRY
-        && !std::isnan(order.stop_price)
-        && std::isnan(order.limit_price)) {
-        const double margin_pct = order.is_long ? margin_long_ : margin_short_;
-        if (margin_pct > 0.0 && std::isfinite(bar.open) && bar.open > 0.0) {
-            const double fill_qty =
-                std::abs(calc_qty_for_type(fill_price, order.qty, order.qty_type));
-            const double required = fill_qty * bar.open * syminfo_.pointvalue
-                                    * account_currency_fx_ * (margin_pct / 100.0);
-            const double available = current_equity();
-            const double eps = std::max(1e-9, std::abs(available) * 1e-12);
-            if (fill_qty > 0.0 && required > available + eps) {
-                decline_and_cancel();
-                return;
-            }
-        }
+    if (stop_entry_margin_admission_declines(order, fill_price, bar)) {
+        decline_and_cancel();
+        return;
     }
 
     // A fixed-default MARKET entry can change role between placement and fill:

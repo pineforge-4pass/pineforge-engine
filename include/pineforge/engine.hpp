@@ -2151,6 +2151,8 @@ private:
                                      uint64_t& exit_closed_from_incarnation,
                                      bool& exit_closed_was_long,
                                      std::vector<size_t>& filled_indices);
+    bool stop_entry_margin_admission_declines(
+        const PendingOrder& order, double fill_price, const Bar& bar) const;
     // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
     // site with the just-declined MARKET reversal entry. Flags every pending
     // FULL close that was co-queued after it on the same bar against the held
