@@ -116,6 +116,13 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         && std::isnan(limit_price) && std::isnan(stop_price)
         && oca_name.empty()
         && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED));
+    const bool pooc_coof_ordinary_flat_market_call =
+        !std::isnan(qty)
+        && std::isnan(limit_price) && std::isnan(stop_price)
+        && process_orders_on_close_
+        && calc_on_order_fills_
+        && !coof_fill_recalc_active_
+        && position_side_ == PositionSide::FLAT;
     const double paired_flat_market_own_qty = explicit_fixed_market_call
         ? std::abs(apply_qty_step(qty))
         : std::numeric_limits<double>::quiet_NaN();
@@ -124,6 +131,9 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         && paired_flat_market_own_qty > kQtyEpsilon
         && pending_flat_market_pair_scope_is_live()
         && position_side_ == PositionSide::FLAT;
+    const bool pooc_coof_explicit_flat_market_candidate =
+        explicit_fixed_market_call
+        && pooc_coof_ordinary_flat_market_call;
 
     // TradingView broker rule: market-entry orders are admitted only
     // when ``qty * <signal-bar close> * margin_pct/100 <= equity``.
@@ -172,6 +182,13 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             double available_equity = current_equity();
             double epsilon = std::max(1e-9, std::abs(available_equity) * 1e-12);
             if (required_margin > available_equity + epsilon) {
+                // A rejected third call leaves no PendingOrder or incarnation,
+                // but it still means the source body was not the clean exact
+                // two-call terminal-C shape. Preserve that invisible history.
+                if (pooc_coof_ordinary_flat_market_call) {
+                    pending_flat_market_pair_disqualified_bars_.insert(
+                        bar_index_);
+                }
                 return;
             }
         }
@@ -196,6 +213,13 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             // order came from an earlier bar. Taint this call's bar as well as
             // preserving the old-bar tombstone below.
             if (paired_flat_market_candidate && entry_like) {
+                pending_flat_market_pair_disqualified_bars_.insert(bar_index_);
+            }
+            // The POOC+COOF gross-admission oracle covers two fresh calls,
+            // not a current call that inherits an older order's broker
+            // priority. Taint the current source bar even when the replaced
+            // object came from a prior bar.
+            if (pooc_coof_explicit_flat_market_candidate) {
                 pending_flat_market_pair_disqualified_bars_.insert(bar_index_);
             }
             if (entry_like
@@ -243,6 +267,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
     order.incarnation = next_order_incarnation_++;
+    order.created_by_same_id_replacement = preserved_seq > 0;
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -1256,12 +1281,20 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
 void BacktestEngine::strategy_cancel(const std::string& id) {
     for (const PendingOrder& order : pending_orders_) {
         if (order.id == id) {
-            if ((order.type == OrderType::MARKET
-                 || order.type == OrderType::ENTRY
-                 || order.type == OrderType::RAW_ORDER)
-                && order.created_position_side == PositionSide::FLAT) {
-                pending_flat_market_pair_disqualified_bars_.insert(
-                    order.created_bar);
+            const bool entry_like =
+                order.type == OrderType::MARKET
+                || order.type == OrderType::ENTRY
+                || order.type == OrderType::RAW_ORDER;
+            if (entry_like) {
+                if (order.created_position_side == PositionSide::FLAT) {
+                    pending_flat_market_pair_disqualified_bars_.insert(
+                        order.created_bar);
+                }
+                if (process_orders_on_close_ && calc_on_order_fills_
+                    && !coof_fill_recalc_active_) {
+                    pending_flat_market_pair_disqualified_bars_.insert(
+                        bar_index_);
+                }
             }
             invalidate_pending_flat_market_pair(order.created_seq);
         }
@@ -1274,12 +1307,19 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
 
 void BacktestEngine::strategy_cancel_all() {
     for (const PendingOrder& order : pending_orders_) {
-        if ((order.type == OrderType::MARKET
-             || order.type == OrderType::ENTRY
-             || order.type == OrderType::RAW_ORDER)
-            && order.created_position_side == PositionSide::FLAT) {
-            pending_flat_market_pair_disqualified_bars_.insert(
-                order.created_bar);
+        const bool entry_like =
+            order.type == OrderType::MARKET
+            || order.type == OrderType::ENTRY
+            || order.type == OrderType::RAW_ORDER;
+        if (entry_like) {
+            if (order.created_position_side == PositionSide::FLAT) {
+                pending_flat_market_pair_disqualified_bars_.insert(
+                    order.created_bar);
+            }
+            if (process_orders_on_close_ && calc_on_order_fills_
+                && !coof_fill_recalc_active_) {
+                pending_flat_market_pair_disqualified_bars_.insert(bar_index_);
+            }
         }
     }
     pending_orders_.clear();
@@ -1300,12 +1340,20 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     // Remove existing pending order with same id
     for (const PendingOrder& pending : pending_orders_) {
         if (pending.id == id) {
-            if ((pending.type == OrderType::MARKET
-                 || pending.type == OrderType::ENTRY
-                 || pending.type == OrderType::RAW_ORDER)
-                && pending.created_position_side == PositionSide::FLAT) {
-                pending_flat_market_pair_disqualified_bars_.insert(
-                    pending.created_bar);
+            const bool entry_like =
+                pending.type == OrderType::MARKET
+                || pending.type == OrderType::ENTRY
+                || pending.type == OrderType::RAW_ORDER;
+            if (entry_like) {
+                if (pending.created_position_side == PositionSide::FLAT) {
+                    pending_flat_market_pair_disqualified_bars_.insert(
+                        pending.created_bar);
+                }
+                if (process_orders_on_close_ && calc_on_order_fills_
+                    && !coof_fill_recalc_active_) {
+                    pending_flat_market_pair_disqualified_bars_.insert(
+                        bar_index_);
+                }
             }
             invalidate_pending_flat_market_pair(pending.created_seq);
         }
