@@ -113,6 +113,7 @@ bool internal::dual_stop_margin_decline_can_continue_path(
 void BacktestEngine::process_pending_orders(const Bar& bar) {
     // Update risk state
     update_risk_state();
+    finalize_default_flat_market_gross_admission();
     finalize_pending_flat_market_pairs(bar);
 
     double trail_best_path_state = trail_best_price_;
@@ -808,6 +809,165 @@ bool BacktestEngine::pending_flat_market_pair_scope_is_live() const {
         && risk_max_position_size_ <= 0.0
         && max_intraday_filled_orders_ <= 0
         && !risk_halted_;
+}
+
+bool BacktestEngine::default_flat_market_gross_scope_is_live()
+        const {
+    return !process_orders_on_close_
+        && !calc_on_order_fills_
+        && !bar_magnifier_enabled_
+        && !coof_fill_recalc_active_
+        && position_side_ == PositionSide::FLAT
+        // Pine's default pyramiding=0 is represented by one admitted entry.
+        // Keep this scope away from KI-65's independently pinned pyramiding=2
+        // transaction model.
+        && pyramiding_ == 1
+        && slippage_ == 0
+        && commission_value_ == 0.0
+        && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+        && std::abs(default_qty_value_ - 100.0) < 1e-12
+        && std::abs(margin_long_ - 100.0) < 1e-12
+        && std::abs(margin_short_ - 100.0) < 1e-12
+        && risk_direction_ == RiskDirection::BOTH
+        && risk_max_cons_loss_days_ == 0
+        && risk_max_drawdown_ <= 0.0
+        && risk_max_intraday_loss_ <= 0.0
+        && risk_max_position_size_ <= 0.0
+        && max_intraday_filled_orders_ <= 0
+        && !risk_halted_;
+}
+
+// Two omitted-qty MARKET strategy.entry calls from true flat each freeze one
+// account-equity lot at the same signal close. The later opposite call is a
+// gross reversal transaction (first frozen qty + later frozen qty); at 1x and
+// PoE=100 that exceeds placement equity and is declined. Wait until the next
+// ordinary broker boundary so the complete source-bar book is known. Only an
+// exact two-object book of fresh, consecutive, distinct-id opposite entries
+// reaches this arithmetic; the first order follows existing fill rules.
+void BacktestEngine::finalize_default_flat_market_gross_admission() {
+    std::vector<size_t> group;
+    group.reserve(2);
+    for (size_t i = 0; i < pending_orders_.size(); ++i) {
+        if (pending_orders_[i]
+                .default_flat_market_gross_candidate) {
+            group.push_back(i);
+        }
+    }
+
+    if (group.empty()) {
+        for (auto it =
+                 default_flat_market_gross_disqualified_bars_.begin();
+             it != default_flat_market_gross_disqualified_bars_.end();) {
+            if (*it < bar_index_) {
+                it = default_flat_market_gross_disqualified_bars_
+                         .erase(it);
+            } else {
+                ++it;
+            }
+        }
+        return;
+    }
+
+    std::unordered_set<int> candidate_source_bars;
+    for (size_t index : group) {
+        candidate_source_bars.insert(pending_orders_[index].created_bar);
+        // One broker boundary owns one adjudication. An admitted/non-exact
+        // order must never be reconsidered on a later bar.
+        pending_orders_[index]
+            .default_flat_market_gross_candidate = false;
+    }
+
+    auto consume_source_tombstones = [&]() {
+        for (int source_bar : candidate_source_bars) {
+            default_flat_market_gross_disqualified_bars_.erase(
+                source_bar);
+        }
+    };
+
+    if (!default_flat_market_gross_scope_is_live()
+        || pending_orders_.size() != 2
+        || group.size() != 2
+        || candidate_source_bars.size() != 1) {
+        consume_source_tombstones();
+        return;
+    }
+
+    PendingOrder* first = &pending_orders_[group[0]];
+    PendingOrder* second = &pending_orders_[group[1]];
+    if (second->incarnation < first->incarnation) std::swap(first, second);
+    const int source_bar = first->created_bar;
+
+    auto eligible = [&](const PendingOrder& order) {
+        return order.type == OrderType::MARKET
+            && std::isnan(order.qty)
+            && std::isfinite(order.frozen_default_qty)
+            && order.frozen_default_qty > kQtyEpsilon
+            && order.opening_affordability_exemption_candidate
+            && !order.explicit_flat_admission_candidate
+            && !order.paired_flat_market_candidate
+            && order.paired_flat_market_peer_seq == 0
+            && order.oca_name.empty()
+            && order.created_bar == source_bar
+            && order.incarnation > 0
+            && order.created_seq > 0
+            && !order.created_by_same_id_replacement
+            && order.created_position_side == PositionSide::FLAT
+            && !order.created_after_position_close_in_bar
+            && !order.created_during_coof_recalc
+            && !order.coof_born_at_close_recalc
+            && !order.coof_born_mid_bar
+            && std::isfinite(order.sizing_equity)
+            && order.sizing_equity > 0.0
+            && std::isfinite(order.sizing_mark)
+            && order.sizing_mark > 0.0;
+    };
+
+    const bool source_bar_disqualified =
+        default_flat_market_gross_disqualified_bars_.erase(
+            source_bar) > 0;
+    if (source_bar_disqualified
+        || !eligible(*first)
+        || !eligible(*second)
+        || first->id == second->id
+        || first->is_long == second->is_long
+        || second->incarnation != first->incarnation + 1
+        || second->created_seq != first->created_seq + 1) {
+        return;
+    }
+
+    const double equity = second->sizing_equity;
+    const double signal_close = second->sizing_mark;
+    const double equity_guard = std::max(
+        1e-9, std::abs(equity) * 1e-12);
+    const double price_guard = std::max(
+        1e-12, std::abs(signal_close) * 1e-12);
+    if (std::abs(first->sizing_equity - equity) > equity_guard
+        || std::abs(first->sizing_mark - signal_close) > price_guard) {
+        return;
+    }
+
+    const double first_qty = std::abs(first->frozen_default_qty);
+    const double second_qty = std::abs(second->frozen_default_qty);
+    if (calc_commission(signal_close, first_qty) != 0.0
+        || calc_commission(signal_close, second_qty) != 0.0) {
+        return;
+    }
+    const double notional_k = syminfo_.pointvalue * account_currency_fx_;
+    if (!std::isfinite(notional_k) || !(notional_k > 0.0)) return;
+
+    const double gross_required =
+        (first_qty + second_qty) * signal_close * notional_k;
+    if (!(gross_required > equity + equity_guard)) return;
+
+    const uint64_t rejected_incarnation = second->incarnation;
+    invalidate_pending_flat_market_pair(second->created_seq);
+    pending_orders_.erase(
+        std::remove_if(
+            pending_orders_.begin(), pending_orders_.end(),
+            [&](const PendingOrder& order) {
+                return order.incarnation == rejected_incarnation;
+            }),
+        pending_orders_.end());
 }
 
 // TradingView admission for the exact Fran-470 terminal-close shape.  Two
@@ -1541,6 +1701,57 @@ void BacktestEngine::compact_filled_pending_orders(
 }
 
 
+bool BacktestEngine::use_stop_placement_open_qty(
+        const PendingOrder& order, double fill_price, const Bar& bar) const {
+    if (order.type != OrderType::ENTRY
+        || std::isnan(order.stop_price)
+        || !std::isnan(order.limit_price)
+        || !std::isfinite(bar.open)
+        || bar.open <= 0.0) {
+        return false;
+    }
+    const double margin_pct = order.is_long ? margin_long_ : margin_short_;
+    // A candidate snapshot is usable only on the immediately following bar
+    // when the pure STOP is already marketable at O and therefore fills exactly
+    // at O. Re-prove the ordinary scheduler and unchanged true-flat equity at
+    // consumption time; any intervening fill, delayed resting order, intrabar
+    // touch, OCA link, commission/slippage, or non-default sizing falls back to
+    // established fill-time sizing. This covers favorable and adverse gaps:
+    // both carry the placement qty, while only an adverse notional overshoot is
+    // declined by the caller's margin comparison.
+    const bool gap_open_marketable =
+        order.is_long ? bar.open >= order.stop_price
+                      : bar.open <= order.stop_price;
+    const double placement_equity =
+        order.stop_placement_open_equity;
+    const double equity_guard = std::isfinite(placement_equity)
+        ? std::max(1e-9, std::abs(placement_equity) * 1e-12)
+        : 0.0;
+    return std::isfinite(order.stop_placement_open_qty)
+        && order.stop_placement_open_qty > 0.0
+        && std::isfinite(placement_equity) && placement_equity > 0.0
+        && std::isfinite(order.stop_placement_signal_close)
+        && order.created_position_side == PositionSide::FLAT
+        && !order.created_after_position_close_in_bar
+        && position_side_ == PositionSide::FLAT
+        && order.created_bar == bar_index_ - 1
+        && !process_orders_on_close_
+        && !calc_on_order_fills_
+        && !bar_magnifier_enabled_
+        && !order.created_during_coof_recalc
+        && order.oca_name.empty() && order.oca_type == 0
+        && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+        && std::abs(default_qty_value_ - 100.0) < 1e-12
+        && std::abs(margin_pct - 100.0) < 1e-12
+        && slippage_ == 0
+        && gap_open_marketable
+        && fill_price == bar.open
+        && std::abs(current_equity() - placement_equity) <= equity_guard
+        && calc_commission(
+               fill_price, order.stop_placement_open_qty) == 0.0;
+}
+
+
 bool BacktestEngine::stop_entry_margin_admission_declines(
         const PendingOrder& order, double fill_price, const Bar& bar) const {
     if (order.type != OrderType::ENTRY
@@ -1552,11 +1763,16 @@ bool BacktestEngine::stop_entry_margin_admission_declines(
     if (!(margin_pct > 0.0) || !std::isfinite(bar.open) || bar.open <= 0.0) {
         return false;
     }
-    const double fill_qty =
-        std::abs(calc_qty_for_type(fill_price, order.qty, order.qty_type));
+    const bool use_placement_open_qty =
+        use_stop_placement_open_qty(order, fill_price, bar);
+    const double fill_qty = use_placement_open_qty
+        ? std::abs(order.stop_placement_open_qty)
+        : std::abs(calc_qty_for_type(fill_price, order.qty, order.qty_type));
     const double required = fill_qty * bar.open * syminfo_.pointvalue
                             * account_currency_fx_ * (margin_pct / 100.0);
-    const double available = current_equity();
+    const double available = use_placement_open_qty
+        ? order.stop_placement_open_equity
+        : current_equity();
     const double eps = std::max(1e-9, std::abs(available) * 1e-12);
     return fill_qty > 0.0 && required > available + eps;
 }
@@ -1638,9 +1854,11 @@ void BacktestEngine::apply_filled_order_to_state(
     // realized-only (current_equity()) — the engine's validated stop-entry
     // sizing basis (3,160/3,160). Does NOT touch the :443 created_bar
     // eligibility, the signal-time MARKET-only gate, or any margin=0 path (all
-    // byte-identical when margin_pct==0). The qty is exactly the fill kernel's
-    // (calc_qty_for_type at the fill price) so the gate cannot diverge from the
-    // fill it guards.
+    // byte-identical when margin_pct==0). The qty is exactly the fill kernel's:
+    // normally calc_qty_for_type at the fill price; for the narrowly scoped
+    // next-open STOP rule, the same placement snapshot that dispatch consumes
+    // below. Admission therefore never approves one quantity and executes
+    // another.
     if (stop_entry_margin_admission_declines(order, fill_price, bar)) {
         decline_and_cancel();
         return;
@@ -2749,11 +2967,22 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
         && std::abs(position_qty_ - frozen_reversal_tx) <= kQtyEpsilon;
     const bool close_only_opposite =
         prior_cycle_close_only || same_cycle_frozen_tx_exact_flat;
-    execute_market_entry(order.id, order.is_long, fill_price, order.qty, order.qty_type,
+    const bool use_placement_open_qty =
+        use_stop_placement_open_qty(order, fill_price, bar);
+    const double dispatch_qty = use_placement_open_qty
+        ? order.stop_placement_open_qty
+        : order.qty;
+    const int dispatch_qty_type = use_placement_open_qty ? -1 : order.qty_type;
+    execute_market_entry(order.id, order.is_long, fill_price,
+                         dispatch_qty, dispatch_qty_type,
                          order.created_position_side, close_only_opposite,
                          /*is_priced_entry=*/true,
                          order.tv_carry_qty,
-                         order.created_bar);
+                         order.created_bar,
+                         /*later_same_tick_entry=*/false,
+                         /*paired_flat_market_transaction=*/false,
+                         /*explicit_qty_prequantized=*/
+                             use_placement_open_qty);
 
     bool did_execute =
         (position_side_ != side_before)

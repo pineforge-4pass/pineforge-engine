@@ -72,6 +72,7 @@ set(TEST_SOURCES
     test_margin_admission_gate
     test_short_reversal_emission
     test_margin_stop_admission
+    test_stop_entry_placement_open_qty
     test_stop_decline_continue_path
     test_frozen_flat_gap_reject
     test_explicit_qty_fill_admission
@@ -86,6 +87,7 @@ set(TEST_SOURCES
     test_same_bar_add_exit_coverage
     test_declined_reversal_close_leg
     test_dual_entry_placement_sizing
+    test_default_flat_market_gross_admission
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra
     test_ta_osc_edge
