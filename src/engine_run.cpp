@@ -36,6 +36,7 @@ void BacktestEngine::invoke_chart_on_bar(const Bar& bar) {
         }
     } scope(chart_ema_na_warmup_);
 
+    named_entry_cancelled_incarnation_in_current_eval_.clear();
     on_bar(bar);
 }
 
@@ -511,6 +512,7 @@ void BacktestEngine::reset_run_state() {
     pending_orders_.clear();
     pending_flat_market_pair_disqualified_bars_.clear();
     default_flat_market_gross_disqualified_bars_.clear();
+    named_entry_cancelled_incarnation_in_current_eval_.clear();
     pending_close_qty_in_bar_ = 0.0;
     pos_view_freeze_bar_ = -1;   // KI-64: fresh run starts with no frozen view
     sb_close_active_ = false;

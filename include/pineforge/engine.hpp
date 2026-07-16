@@ -198,6 +198,20 @@ struct PendingOrder {
     // Exact clean-room two-call rules must fail closed on this provenance
     // rather than mistaking retained priority for current source order.
     bool created_by_same_id_replacement = false;
+    // For a strategy.exit replacement, the unique incarnation of the exact
+    // matching (id, from_entry) EXIT object it replaced. Zero for a fresh
+    // child. This correlates retained broker priority with a concrete prior
+    // child rather than a replacement-shaped call sequence created later.
+    uint64_t replaced_exit_order_incarnation = 0;
+    // Incarnation of the live priced ENTRY removed by strategy.cancel(id)
+    // earlier in the same source evaluation, copied only onto the first fresh
+    // same-id strategy.entry call and then consumed. Zero means there is no
+    // exact named-cancel -> fresh-recreate provenance.
+    uint64_t recreated_after_named_cancelled_entry_incarnation = 0;
+    // Incarnation of the unique attached EXIT child that was still live when
+    // the parent above was named-cancelled. Copied with the parent cancel
+    // token and consumed by the same fresh recreate call.
+    uint64_t named_cancel_surviving_exit_incarnation = 0;
     // Entry stop-limit activation is durable broker state. Once the stop leg
     // fires, later bars—and later COOF scheduler segments on the same bar—
     // evaluate only the live limit leg until the order fills or is replaced.
@@ -698,6 +712,15 @@ protected:
     // Historical fill-triggered recalculation is strictly opt-in. The false
     // branch in dispatch_bar remains the legacy control path.
     bool calc_on_order_fills_ = false;
+    // Narrow ordinary-POOC broker ordering rule for one exact book shape:
+    // while truly flat, a single reissued from_entry bracket can retain an
+    // older sequence slot than its same-source-bar pure-stop parent after the
+    // prior parent was explicitly cancelled and freshly recreated.
+    // That exact two-order book scans the parent first so the child can inspect
+    // the post-entry path before the close-time script body. The metadata key
+    // remains as an explicit A/B override; ordinary execution enables the
+    // TV-pinned rule by default.
+    bool flat_retained_child_fresh_parent_order_ = true;
     QtyType default_qty_type_ = QtyType::FIXED;
     double default_qty_value_ = 1.0;
     int pyramiding_ = 1;            // max additional entries in same direction
@@ -950,6 +973,16 @@ protected:
     // two-call book.
     std::unordered_set<int>
         default_flat_market_gross_disqualified_bars_;
+    // Evaluation-scoped tombstones for live priced ENTRY objects actually
+    // removed by strategy.cancel(id). invoke_chart_on_bar clears the map
+    // before each script execution; the first fresh same-id strategy.entry
+    // consumes the unique cancelled incarnation.
+    struct NamedEntryCancelContext {
+        uint64_t entry_incarnation = 0;
+        uint64_t surviving_exit_incarnation = 0;
+    };
+    std::unordered_map<std::string, NamedEntryCancelContext>
+        named_entry_cancelled_incarnation_in_current_eval_;
 
     // strategy.exit partial orders are one-shot per open position for a given id
     std::unordered_set<std::string> consumed_partial_exit_ids_;
@@ -2292,6 +2325,7 @@ private:
                                    const std::string& from_entry,
                                    bool has_trail_request,
                                    int64_t& preserved_seq_out,
+                                   uint64_t& replaced_incarnation_out,
                                    double& preserved_reserved_qty_out);
     bool compute_exit_reserved_qty(const std::string& from_entry,
                                    double preserved_reserved_qty,
@@ -2583,6 +2617,10 @@ public:
         // one-step progress fallback.
         if (key == "margin_zero_cover_full_liquidation") {
             margin_zero_cover_full_liquidation_ =
+                std::isfinite(value) && value > 0.0;
+        }
+        if (key == "flat_retained_child_fresh_parent_order") {
+            flat_retained_child_fresh_parent_order_ =
                 std::isfinite(value) && value > 0.0;
         }
         if (key == "intraday_cap_skip_noop_market_fills") {
