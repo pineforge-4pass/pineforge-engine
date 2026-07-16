@@ -810,6 +810,116 @@ bool BacktestEngine::pending_flat_market_pair_scope_is_live() const {
         && !risk_halted_;
 }
 
+// TradingView admission for the exact Fran-470 terminal-close shape.  Two
+// distinct explicit-FIXED opposite MARKET strategy.entry calls are emitted
+// from true flat in one ordinary historical evaluation with both POOC and COOF
+// enabled.  Each own quantity first passes strategy_entry's normal signal-time
+// check.  Before the terminal-C broker pass, TV additionally costs the LATER
+// call as the gross reversal transaction:
+//
+//   (first own qty + later own qty) * signal close * pointvalue * fx * margin
+//       <= placement equity
+//
+// If the pair exceeds that budget, the later call is silently declined and the
+// first call remains the sole fill.  The clean-room N=2 probe separates this
+// from order priority and bracket interaction: fixed qty=1 executes both in
+// source order, while Fran's ~95%-of-equity explicit qty keeps only the first,
+// with and without a position-scoped bracket.
+//
+// Keep this independent from the established KI-65 pending MARKET pair.  KI-65
+// owns a non-POOC/non-COOF pyramiding=2 buy-before-sell transaction model; this
+// terminal-C shape preserves source order and only adds the gross admission
+// fence.  The complete-book and default-risk guards deliberately fail closed
+// for third entries, OCA/raw/priced/resting siblings, same-direction calls,
+// after-close creation, COOF-born calls, magnifier, slippage, custom margin,
+// commission, or non-default risk policy.
+void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
+    if (!process_orders_on_close_
+        || !calc_on_order_fills_
+        || bar_magnifier_enabled_
+        || pyramiding_ != 0
+        || slippage_ != 0
+        || pending_orders_.size() != 2
+        || std::abs(margin_long_ - 100.0) >= 1e-12
+        || std::abs(margin_short_ - 100.0) >= 1e-12
+        || risk_direction_ != RiskDirection::BOTH
+        || risk_max_cons_loss_days_ != 0
+        || risk_max_drawdown_ > 0.0
+        || risk_max_intraday_loss_ > 0.0
+        || risk_max_position_size_ > 0.0
+        || max_intraday_filled_orders_ > 0
+        || risk_halted_) {
+        return;
+    }
+
+    PendingOrder* first = &pending_orders_[0];
+    PendingOrder* second = &pending_orders_[1];
+    if (second->created_seq < first->created_seq) std::swap(first, second);
+
+    auto eligible = [&](const PendingOrder& order) {
+        return order.type == OrderType::MARKET
+            && order.explicit_flat_admission_candidate
+            && std::isfinite(order.qty)
+            && order.qty > kQtyEpsilon
+            && (order.qty_type < 0
+                || order.qty_type == static_cast<int>(QtyType::FIXED))
+            && order.oca_name.empty()
+            && order.created_bar == bar_index_
+            && order.created_position_side == PositionSide::FLAT
+            && !order.created_after_position_close_in_bar
+            && !order.created_during_coof_recalc
+            && !order.coof_born_at_close_recalc
+            && !order.coof_born_mid_bar
+            && std::isfinite(order.explicit_placement_equity)
+            && order.explicit_placement_equity > 0.0
+            && std::isfinite(order.explicit_slipped_signal_close)
+            && order.explicit_slipped_signal_close > 0.0;
+    };
+    if (!eligible(*first)
+        || !eligible(*second)
+        || first->id == second->id
+        || first->is_long == second->is_long
+        || first->created_bar != second->created_bar) {
+        return;
+    }
+
+    const double first_qty = std::abs(apply_qty_step(first->qty));
+    const double second_qty = std::abs(apply_qty_step(second->qty));
+    if (!(first_qty > kQtyEpsilon) || !(second_qty > kQtyEpsilon)) return;
+
+    const double equity = second->explicit_placement_equity;
+    const double equity_guard = std::max(1e-9, std::abs(equity) * 1e-12);
+    if (std::abs(first->explicit_placement_equity - equity) > equity_guard) {
+        return;
+    }
+    const double signal_close = second->explicit_slipped_signal_close;
+    const double price_guard = std::max(1e-12, std::abs(signal_close) * 1e-12);
+    if (std::abs(first->explicit_slipped_signal_close - signal_close)
+        > price_guard) {
+        return;
+    }
+    if (calc_commission(signal_close, first_qty) != 0.0
+        || calc_commission(signal_close, second_qty) != 0.0) {
+        return;
+    }
+
+    const double notional_k = syminfo_.pointvalue * account_currency_fx_;
+    if (!std::isfinite(notional_k) || !(notional_k > 0.0)) return;
+    const double required_margin =
+        (first_qty + second_qty) * signal_close * notional_k;
+    if (!(required_margin > equity + equity_guard)) return;
+
+    const int64_t rejected_seq = second->created_seq;
+    invalidate_pending_flat_market_pair(rejected_seq);
+    pending_orders_.erase(
+        std::remove_if(
+            pending_orders_.begin(), pending_orders_.end(),
+            [&](const PendingOrder& order) {
+                return order.created_seq == rejected_seq;
+            }),
+        pending_orders_.end());
+}
+
 // Finalize the deferred KI-65 MARKET/MARKET candidate set only after on_bar
 // has completed and the broker sees every call from that source bar. Each call
 // has already passed the ordinary own-qty placement gate. Exactly two eligible

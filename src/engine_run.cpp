@@ -429,6 +429,11 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     // eligible order remains.
     if (process_orders_on_close_) {
         const Bar close_point = coof_point_bar(script_bar, cursor);
+        // The COOF terminal-C loop bypasses process_pending_orders(), so apply
+        // the exact two-call explicit reversal gross-admission fence once,
+        // after the ordinary close body has emitted the complete sibling book
+        // and before either sibling can fill.
+        apply_pooc_coof_explicit_flat_market_gross_admission();
         int c_guard = 0;
         while (++c_guard <= kCoofLoopGuard) {
             current_bar_ = close_point;

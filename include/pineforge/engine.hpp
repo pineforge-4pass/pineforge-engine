@@ -2121,6 +2121,7 @@ private:
     void update_trail_best_for_bar_open(const Bar& bar);
     void sort_exit_siblings_by_path_fill(const Bar& bar);
     bool pending_flat_market_pair_scope_is_live() const;
+    void apply_pooc_coof_explicit_flat_market_gross_admission();
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
     // TradingView binds a valid, single/full, non-trailing strategy.exit to a
