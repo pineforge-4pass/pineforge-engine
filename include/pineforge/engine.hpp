@@ -192,6 +192,12 @@ struct PendingOrder {
     // which intentionally survives same-id replacement to keep broker ordering
     // stable, incarnation is never copied or reused by a replacement.
     uint64_t incarnation = 0;
+    // True when this pending object was created by reissuing an id that was
+    // already live. The fresh incarnation above identifies the new call, but
+    // created_seq intentionally retains the replaced order's broker priority.
+    // Exact clean-room two-call rules must fail closed on this provenance
+    // rather than mistaking retained priority for current source order.
+    bool created_by_same_id_replacement = false;
     // Entry stop-limit activation is durable broker state. Once the stop leg
     // fires, later bars—and later COOF scheduler segments on the same bar—
     // evaluate only the live limit leg until the order fills or is replaced.
@@ -916,9 +922,10 @@ protected:
     std::vector<Trade> trades_;
     std::vector<PendingOrder> pending_orders_;
     // Source bars whose otherwise eligible flat MARKET candidate set was
-    // mutated (same-id replacement/cancel). Even if two orders survive, the
-    // original bar contained more/different calls and is outside the exact
-    // two-call oracle, so finalization must leave it ordinary.
+    // mutated (same-id replacement/cancel) or contained an extra rejected
+    // call. Even if two orders survive, the original bar contained more or
+    // different calls and is outside both exact two-call oracles (KI-65 and
+    // terminal-C POOC+COOF), so finalization must leave it ordinary.
     std::unordered_set<int> pending_flat_market_pair_disqualified_bars_;
 
     // strategy.exit partial orders are one-shot per open position for a given id

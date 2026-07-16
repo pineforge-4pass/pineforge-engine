@@ -822,24 +822,38 @@ bool BacktestEngine::pending_flat_market_pair_scope_is_live() const {
 //
 // If the pair exceeds that budget, the later call is silently declined and the
 // first call remains the sole fill.  The clean-room N=2 probe separates this
-// from order priority and bracket interaction: fixed qty=1 executes both in
-// source order, while Fran's ~95%-of-equity explicit qty keeps only the first,
-// with and without a position-scoped bracket.
+// from order priority and bracket interaction: the duration-one survivor pins
+// the second source call for fixed qty=1, while Fran's ~95%-of-equity explicit
+// qty keeps only the first, with and without a position-scoped bracket. The
+// exact-equality comparator is inherited from the already-pinned KI-65 rule.
 //
 // Keep this independent from the established KI-65 pending MARKET pair.  KI-65
 // owns a non-POOC/non-COOF pyramiding=2 buy-before-sell transaction model; this
 // terminal-C shape preserves source order and only adds the gross admission
 // fence.  The complete-book and default-risk guards deliberately fail closed
 // for third entries, OCA/raw/priced/resting siblings, same-direction calls,
-// after-close creation, COOF-born calls, magnifier, slippage, custom margin,
-// commission, or non-default risk policy.
+// replacement-tainted/cancel-rearmed books, after-close creation, COOF-born
+// calls, magnifier, slippage, custom margin, commission, or non-default risk
+// policy.
 void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
+    for (auto it = pending_flat_market_pair_disqualified_bars_.begin();
+         it != pending_flat_market_pair_disqualified_bars_.end();) {
+        if (*it < bar_index_) {
+            it = pending_flat_market_pair_disqualified_bars_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    const bool source_bar_disqualified =
+        pending_flat_market_pair_disqualified_bars_.find(bar_index_)
+        != pending_flat_market_pair_disqualified_bars_.end();
     if (!process_orders_on_close_
         || !calc_on_order_fills_
         || bar_magnifier_enabled_
         || pyramiding_ != 0
         || slippage_ != 0
         || pending_orders_.size() != 2
+        || source_bar_disqualified
         || std::abs(margin_long_ - 100.0) >= 1e-12
         || std::abs(margin_short_ - 100.0) >= 1e-12
         || risk_direction_ != RiskDirection::BOTH
@@ -854,7 +868,7 @@ void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
 
     PendingOrder* first = &pending_orders_[0];
     PendingOrder* second = &pending_orders_[1];
-    if (second->created_seq < first->created_seq) std::swap(first, second);
+    if (second->incarnation < first->incarnation) std::swap(first, second);
 
     auto eligible = [&](const PendingOrder& order) {
         return order.type == OrderType::MARKET
@@ -865,6 +879,8 @@ void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
                 || order.qty_type == static_cast<int>(QtyType::FIXED))
             && order.oca_name.empty()
             && order.created_bar == bar_index_
+            && order.incarnation > 0
+            && !order.created_by_same_id_replacement
             && order.created_position_side == PositionSide::FLAT
             && !order.created_after_position_close_in_bar
             && !order.created_during_coof_recalc
@@ -879,7 +895,14 @@ void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
         || !eligible(*second)
         || first->id == second->id
         || first->is_long == second->is_long
-        || first->created_bar != second->created_bar) {
+        || first->created_bar != second->created_bar
+        // No admitted order object may have been created between the two
+        // calls. Together with the mutation tombstone above, this excludes
+        // three-call books reduced back to two by replacement/cancel-rearm.
+        || second->incarnation != first->incarnation + 1
+        // A clean pair's retained broker sequence and fresh call identity
+        // have the same order. Any disagreement is replacement provenance.
+        || first->created_seq >= second->created_seq) {
         return;
     }
 
@@ -909,13 +932,13 @@ void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
         (first_qty + second_qty) * signal_close * notional_k;
     if (!(required_margin > equity + equity_guard)) return;
 
-    const int64_t rejected_seq = second->created_seq;
-    invalidate_pending_flat_market_pair(rejected_seq);
+    const uint64_t rejected_incarnation = second->incarnation;
+    invalidate_pending_flat_market_pair(second->created_seq);
     pending_orders_.erase(
         std::remove_if(
             pending_orders_.begin(), pending_orders_.end(),
             [&](const PendingOrder& order) {
-                return order.created_seq == rejected_seq;
+                return order.incarnation == rejected_incarnation;
             }),
         pending_orders_.end());
 }

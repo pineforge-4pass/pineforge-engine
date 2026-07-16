@@ -5,7 +5,9 @@
  * from true flat with process_orders_on_close + calc_on_order_fills.  Each own
  * qty passes the ordinary signal-time margin check.  TV nevertheless declines
  * the later source call when the pair's gross reversal transaction exceeds
- * placement equity.  Fixed/smaller pairs still execute both in source order.
+ * placement equity.  For fixed/smaller pairs, the duration-one survivor pins
+ * the second source call; TV's scratch-row direction is only report
+ * attribution and is not asserted here.
  *
  * Clean-room TV anchors:
  *   pf-probe-coof-pooc-opposite-market-ordering
@@ -160,8 +162,141 @@ static void test_green_fixed_and_exact_boundary_pairs_fill_both() {
     std::printf("test_green_fixed_and_exact_boundary_pairs_fill_both\n");
     for (bool first_long : {true, false}) {
         assert_both_fill(first_long, 1.0);
-        assert_both_fill(first_long, 50.0);  // gross exactly equals equity
+        // Exact equality is inherited from the already-pinned KI-65
+        // 50%+50% admission boundary; the new N=2 probe pins this scope.
+        assert_both_fill(first_long, 50.0);
     }
+}
+
+class MutationProbe final : public BacktestEngine {
+public:
+    enum class Shape {
+        SameBarReplacement,
+        PriorBarReplacement,
+        CanceledThird,
+        CancelRearm,
+        PriorRestingCancelRearm,
+        RejectedExtra,
+    };
+
+    explicit MutationProbe(Shape shape) : shape_(shape) {
+        initial_capital_ = 10'000.0;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        syminfo_mintick_ = 0.01;
+        qty_step_ = 0.0;
+        slippage_ = 0;
+        pyramiding_ = 0;
+        process_orders_on_close_ = true;
+        calc_on_order_fills_ = true;
+        margin_call_enabled_ = false;
+    }
+
+    double observed_size = 0.0;
+    int observed_trades = 0;
+
+    void on_bar(const Bar&) override {
+        if (shape_ == Shape::SameBarReplacement) {
+            if (bar_index_ == 0) {
+                strategy_entry("SR-A", true, kNaN, kNaN, 55.0);
+                strategy_entry("SR-B", false, kNaN, kNaN, 55.0);
+                strategy_entry("SR-A", true, kNaN, kNaN, 55.0);
+            } else if (bar_index_ == 1) {
+                observe_and_close();
+            }
+            return;
+        }
+
+        if (shape_ == Shape::PriorBarReplacement) {
+            if (bar_index_ == 0) {
+                strategy_entry("REP-A", true, 90.0, kNaN, 1.0);
+            } else if (bar_index_ == 1) {
+                strategy_entry("REP-B", false, kNaN, kNaN, 55.0);
+                strategy_entry("REP-A", true, kNaN, kNaN, 55.0);
+            } else if (bar_index_ == 2) {
+                observe_and_close();
+            }
+            return;
+        }
+
+        if (shape_ == Shape::PriorRestingCancelRearm) {
+            if (bar_index_ == 0) {
+                strategy_entry("PR-A", true, 90.0, kNaN, 1.0);
+            } else if (bar_index_ == 1) {
+                strategy_cancel("PR-A");
+                strategy_entry("PR-B", false, kNaN, kNaN, 55.0);
+                strategy_entry("PR-A", true, kNaN, kNaN, 55.0);
+            } else if (bar_index_ == 2) {
+                observe_and_close();
+            }
+            return;
+        }
+
+        if (bar_index_ != 0) {
+            if (bar_index_ == 1) observe_and_close();
+            return;
+        }
+        if (shape_ == Shape::CanceledThird) {
+            strategy_entry("CT-A", true, kNaN, kNaN, 55.0);
+            strategy_entry("CT-B", false, kNaN, kNaN, 55.0);
+            strategy_entry("CT-C", true, kNaN, kNaN, 55.0);
+            strategy_cancel("CT-C");
+        } else if (shape_ == Shape::CancelRearm) {
+            strategy_entry("CR-A", true, kNaN, kNaN, 55.0);
+            strategy_entry("CR-B", false, kNaN, kNaN, 55.0);
+            strategy_cancel("CR-A");
+            strategy_entry("CR-C", true, kNaN, kNaN, 55.0);
+        } else if (shape_ == Shape::RejectedExtra) {
+            strategy_entry("RX-X", true, kNaN, kNaN, 101.0);
+            strategy_entry("RX-A", true, kNaN, kNaN, 55.0);
+            strategy_entry("RX-B", false, kNaN, kNaN, 55.0);
+        }
+    }
+
+private:
+    void observe_and_close() {
+        observed_size = signed_position_size();
+        observed_trades = trade_count();
+        strategy_cancel_all();
+        strategy_close_all();
+    }
+
+    Shape shape_;
+};
+
+static void test_green_mutated_two_order_books_fail_closed() {
+    auto run = [](const char* label, MutationProbe::Shape shape,
+                  double expected_size, bool prior_bar = false) {
+        std::printf("%s\n", label);
+        MutationProbe probe(shape);
+        auto bars = prior_bar
+            ? std::vector<Bar>{
+                  bar(0, 100.0), bar(900'000, 100.0),
+                  bar(1'800'000, 100.0), bar(2'700'000, 100.0)}
+            : flat_feed();
+        probe.run(bars.data(), static_cast<int>(bars.size()));
+        CHECK(probe.last_error().empty());
+        CHECK(probe.observed_trades == 1);
+        CHECK_NEAR(probe.observed_size, expected_size, 1e-9);
+    };
+
+    run("same-bar replacement stays on ordinary path",
+        MutationProbe::Shape::SameBarReplacement, -55.0);
+    run("prior-bar replacement stays on ordinary path",
+        MutationProbe::Shape::PriorBarReplacement, -55.0,
+        /*prior_bar=*/true);
+    run("canceled third call stays on ordinary path",
+        MutationProbe::Shape::CanceledThird, -55.0);
+    run("cancel-rearm three-call set stays on ordinary path",
+        MutationProbe::Shape::CancelRearm, 55.0);
+    run("prior-resting cancel-rearm stays on ordinary path",
+        MutationProbe::Shape::PriorRestingCancelRearm, 55.0,
+        /*prior_bar=*/true);
+    run("signal-rejected extra call stays on ordinary path",
+        MutationProbe::Shape::RejectedExtra, -55.0);
 }
 
 static void assert_excluded_pair_uses_legacy_result(
@@ -205,6 +340,7 @@ static void test_green_scope_exclusions() {
 int main() {
     test_red_gross_over_equity_declines_later_call();
     test_green_fixed_and_exact_boundary_pairs_fill_both();
+    test_green_mutated_two_order_books_fail_closed();
     test_green_scope_exclusions();
 
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
