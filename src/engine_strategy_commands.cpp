@@ -86,6 +86,15 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      int qty_type) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
 
+    NamedEntryCancelContext named_cancel_context;
+    const auto named_cancel =
+        named_entry_cancelled_incarnation_in_current_eval_.find(id);
+    if (named_cancel
+        != named_entry_cancelled_incarnation_in_current_eval_.end()) {
+        named_cancel_context = named_cancel->second;
+        named_entry_cancelled_incarnation_in_current_eval_.erase(named_cancel);
+    }
+
     // TradingView intraday-cap freeze gate (Pine docs:
     // ``strategy.risk.max_intraday_filled_orders``):
     //   "If the limit is reached during the day, the strategy is closed
@@ -311,6 +320,12 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
     order.incarnation = next_order_incarnation_++;
     order.created_by_same_id_replacement = preserved_seq > 0;
+    if (preserved_seq == 0) {
+        order.recreated_after_named_cancelled_entry_incarnation =
+            named_cancel_context.entry_incarnation;
+        order.named_cancel_surviving_exit_incarnation =
+            named_cancel_context.surviving_exit_incarnation;
+    }
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -1021,9 +1036,11 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         // return follows matching-EXIT removal but precedes all sizing and
         // reservation work. trail_offset alone is intentionally insufficient.
         int64_t discarded_seq = 0;
+        uint64_t discarded_incarnation = 0;
         double discarded_reserved_qty = std::numeric_limits<double>::quiet_NaN();
         clear_existing_exit_order(id, from_entry, /*has_trail_request=*/false,
-                                  discarded_seq, discarded_reserved_qty);
+                                  discarded_seq, discarded_incarnation,
+                                  discarded_reserved_qty);
         return;
     }
     bool has_explicit_qty = !std::isnan(qty);
@@ -1062,9 +1079,11 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     }
 
     int64_t preserved_seq = 0;
+    uint64_t replaced_incarnation = 0;
     double preserved_reserved_qty = std::numeric_limits<double>::quiet_NaN();
     clear_existing_exit_order(id, from_entry, has_trail_request,
-                              preserved_seq, preserved_reserved_qty);
+                              preserved_seq, replaced_incarnation,
+                              preserved_reserved_qty);
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
     bool bind_global_full_exit_dynamic_qty = false;
@@ -1274,6 +1293,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.created_bar = bar_index_;
     order.created_seq = preserved_seq > 0 ? preserved_seq : next_order_seq_++;
     order.incarnation = next_order_incarnation_++;
+    order.created_by_same_id_replacement = preserved_seq > 0;
+    order.replaced_exit_order_incarnation = replaced_incarnation;
     order.created_during_coof_recalc = coof_fill_recalc_active_;
     order.coof_born_at_close_recalc =
         coof_fill_recalc_active_ && coof_cursor_is_bar_close_;
@@ -1375,6 +1396,15 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
                 order.created_bar);
         }
     }
+    uint64_t surviving_exit_incarnation = 0;
+    int surviving_exit_count = 0;
+    for (const PendingOrder& order : pending_orders_) {
+        if (order.type == OrderType::EXIT && order.from_entry == id) {
+            ++surviving_exit_count;
+            surviving_exit_incarnation = order.incarnation;
+        }
+    }
+    uint64_t removed_priced_entry_incarnation = 0;
     for (const PendingOrder& order : pending_orders_) {
         if (order.id == id) {
             const bool entry_like =
@@ -1392,8 +1422,19 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
                         bar_index_);
                 }
             }
+            if (order.type == OrderType::ENTRY && order.incarnation != 0) {
+                removed_priced_entry_incarnation = order.incarnation;
+            }
             invalidate_pending_flat_market_pair(order.created_seq);
         }
+    }
+    if (removed_priced_entry_incarnation != 0
+        && surviving_exit_count == 1
+        && surviving_exit_incarnation != 0) {
+        named_entry_cancelled_incarnation_in_current_eval_[id] =
+            {removed_priced_entry_incarnation, surviving_exit_incarnation};
+    } else if (removed_priced_entry_incarnation != 0) {
+        named_entry_cancelled_incarnation_in_current_eval_.erase(id);
     }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
@@ -1835,14 +1876,17 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
                                                const std::string& from_entry,
                                                bool has_trail_request,
                                                int64_t& preserved_seq_out,
+                                               uint64_t& replaced_incarnation_out,
                                                double& preserved_reserved_qty_out) {
     bool had_existing_order = false;
     preserved_seq_out = 0;
+    replaced_incarnation_out = 0;
     preserved_reserved_qty_out = std::numeric_limits<double>::quiet_NaN();
     for (const auto& o : pending_orders_) {
         if (o.type == OrderType::EXIT && o.id == id && o.from_entry == from_entry) {
             had_existing_order = true;
             preserved_seq_out = o.created_seq;
+            replaced_incarnation_out = o.incarnation;
             if (!std::isnan(o.qty)) {
                 preserved_reserved_qty_out = o.qty;
             }

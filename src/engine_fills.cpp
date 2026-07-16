@@ -1276,6 +1276,55 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             live_flat_market_pair_seqs.insert(order.created_seq);
         }
     }
+
+    // Default-on retained-child / fresh-parent rule. A child retained across
+    // an explicit parent cancellation can keep an older broker slot than the
+    // freshly recreated parent; reissuing the child on that same source bar
+    // preserves those unequal priorities even though created_bar is now equal. The
+    // ordinary sequence tie-break then scans the child while flat (Skip) and
+    // the parent afterwards, so POOC on_bar observes a transient position
+    // before the second broker pass can revisit the child.
+    //
+    // Keep the comparator edge acyclic by admitting only an exact two-object
+    // book and recording immutable incarnation ids before stable_sort.  Every
+    // provenance predicate below is intentional: ordinary POOC, no COOF or
+    // magnifier scheduler, one prior-bar freshly recreated pure-stop ENTRY, one
+    // same-source-bar flat-born full non-trailing EXIT child with older broker
+    // priority, and no OCA grouping.
+    uint64_t retained_child_parent_first_incarnation = 0;
+    uint64_t retained_child_later_incarnation = 0;
+    int64_t retained_child_parent_effective_seq = 0;
+    int64_t retained_child_later_effective_seq = 0;
+    if (pending_orders_.size() == 2) {
+        const PendingOrder* parent = nullptr;
+        const PendingOrder* child = nullptr;
+        for (const PendingOrder& order : pending_orders_) {
+            if (order.type == OrderType::ENTRY) {
+                parent = &order;
+            } else if (order.type == OrderType::EXIT) {
+                child = &order;
+            }
+        }
+        const RetainedChildFreshParentOrderContext context{
+            flat_retained_child_fresh_parent_order_,
+            position_side_ == PositionSide::FLAT,
+            process_orders_on_close_,
+            calc_on_order_fills_,
+            coof_scheduler_active_,
+            bar_magnifier_enabled_,
+            stream_warmup_mode_,
+            stream_phase_ == StreamPhase::IDLE,
+            pending_orders_.size(),
+            bar_index_,
+        };
+        if (retained_child_fresh_parent_order_pair(
+                context, parent, child)) {
+            retained_child_parent_first_incarnation = parent->incarnation;
+            retained_child_later_incarnation = child->incarnation;
+            retained_child_parent_effective_seq = child->created_seq;
+            retained_child_later_effective_seq = parent->created_seq;
+        }
+    }
     // A single relative strategy.exit armed while FLAT has no concrete
     // stop/limit until its earlier same-bar from_entry parent fills. It
     // otherwise looks like a phase-0 market order and sorts before a non-gap
@@ -1397,6 +1446,21 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             int pa = fill_phase(a);
             int pb = fill_phase(b);
             if (pa != pb) return pa < pb;
+            if (retained_child_parent_first_incarnation != 0) {
+                auto effective_seq = [&](const PendingOrder& order) {
+                    if (order.incarnation
+                        == retained_child_parent_first_incarnation) {
+                        return retained_child_parent_effective_seq;
+                    }
+                    if (order.incarnation == retained_child_later_incarnation) {
+                        return retained_child_later_effective_seq;
+                    }
+                    return order.created_seq;
+                };
+                const int64_t a_seq = effective_seq(a);
+                const int64_t b_seq = effective_seq(b);
+                if (a_seq != b_seq) return a_seq < b_seq;
+            }
             auto is_entry_same_as_current_position = [&](const PendingOrder& o) {
                 return (o.type == OrderType::MARKET || o.type == OrderType::ENTRY)
                     && ((position_side_ == PositionSide::LONG && o.is_long)
