@@ -101,6 +101,7 @@ set(TEST_SOURCES
     test_pooc_position_visibility
     test_prearmed_exit_path_cursor
     test_prearmed_market_parent_gap_exit
+    test_relative_exit_after_limit_parent
 )
 
 find_package(Threads REQUIRED)
