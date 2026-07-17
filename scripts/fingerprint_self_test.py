@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import ast
 import base64
+import hashlib
 import importlib.util
 import json
+import struct
 import sys
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -141,7 +144,6 @@ def main() -> int:
         check(f"{label}: token decodes to provenance", decoded == prov)
         check(f"{label}: digest prefixed sha256:", fp["digest"].startswith("sha256:"))
         canonical = json.dumps(prov, sort_keys=True, separators=(",", ":"))
-        import hashlib
         check(f"{label}: digest matches canonical sha256",
               fp["digest"] == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest())
         fp2 = m.build_fingerprint(prov)
@@ -189,6 +191,148 @@ def main() -> int:
     )
     check("run_strategy: main fingerprint path uses runtime helper",
           main_uses_helper)
+
+    # --- canonical source-feed identity ---------------------------------
+    # Seven test classes pin the feed contract independently of any strategy
+    # binary. Rows use the exact BarC field order: O,H,L,C,V,timestamp.
+    rows = [
+        (100.0, 101.0, 99.0, 100.5, 10.0, 1_000),
+        (100.5, 103.0, 100.0, 102.0, 20.0, 2_000),
+        (102.0, 104.0, 101.0, 103.5, 30.0, 3_000),
+        (103.5, 105.0, 102.5, 104.0, 40.0, 4_000),
+    ]
+
+    def expected_feed_sha(feed_rows) -> str:
+        h = hashlib.sha256()
+        h.update(b"pineforge:ohlcv:barc-le:v1\0")
+        record = struct.Struct("<5dq")
+        for row in feed_rows:
+            h.update(record.pack(*row))
+        return h.hexdigest()
+
+    def loader_fails(loader, path: Path) -> bool:
+        try:
+            loader(path)
+        except (OSError, KeyError, ValueError, IndexError):
+            return True
+        return False
+
+    def provenance_rejects(module, digest) -> bool:
+        try:
+            module.build_provenance({}, None, False, {}, {}, {},
+                                    source_feed_sha256=digest)
+        except ValueError:
+            return True
+        return False
+
+    with tempfile.TemporaryDirectory(prefix="pf-fingerprint-feed-") as td:
+        tmp = Path(td)
+        feed_a = tmp / "a.csv"
+        feed_b = tmp / "b.csv"
+        feed_changed = tmp / "changed.csv"
+        feed_reordered = tmp / "reordered.csv"
+        malformed = tmp / "malformed.csv"
+
+        # A: canonical bytes are domain-prefixed <5dq> records.
+        feed_a.write_text(
+            "timestamp,open,high,low,close,volume\n" + "".join(
+                f"{ts},{o:g},{h:g},{lo:g},{c:g},{v:g}\n"
+                for o, h, lo, c, v, ts in rows),
+            encoding="utf-8")
+        expected = expected_feed_sha(rows)
+        rs_bars, rs_n, rs_sha = rs._load_bars(feed_a)
+        check("feed A: local hash pins domain-prefixed <5dq> contract",
+              rs_n == len(rows) and rs_sha == expected
+              and len(rs_bars) == len(rows))
+
+        # B: Docker and local loaders must agree on one source tape.
+        rj_bars, rj_n, rj_sha = rj.load_bars(feed_a)
+        check("feed B: local/docker loaders agree",
+              rj_n == rs_n and len(rj_bars) == len(rows)
+              and rj_sha == rs_sha)
+
+        # C: path, header order, newline style and numeric spelling are not
+        # semantic; the parsed values stay identical.
+        feed_b.write_bytes((
+            "open,high,low,close,volume,timestamp\r\n" + "".join(
+                f"{o:.1f},{h:.1f},{lo:.1f},{c:.1f},{v:.1f},{ts}\r\n"
+                for o, h, lo, c, v, ts in rows)
+        ).encode("utf-8"))
+        _, _, rs_sha_b = rs._load_bars(feed_b)
+        _, _, rj_sha_b = rj.load_bars(feed_b)
+        check("feed C: equivalent parsed values ignore path/text formatting",
+              rs_sha_b == expected and rj_sha_b == expected)
+
+        # D: content and original row order are both identity-bearing, even
+        # when count plus first/last timestamps are unchanged.
+        changed_rows = list(rows)
+        changed_rows[1] = (*changed_rows[1][:3], 102.25,
+                           *changed_rows[1][4:])
+        feed_changed.write_text(
+            "timestamp,open,high,low,close,volume\n" + "".join(
+                f"{ts},{o},{h},{lo},{c},{v}\n"
+                for o, h, lo, c, v, ts in changed_rows),
+            encoding="utf-8")
+        reordered_rows = [rows[0], rows[2], rows[1], rows[3]]
+        feed_reordered.write_text(
+            "timestamp,open,high,low,close,volume\n" + "".join(
+                f"{ts},{o},{h},{lo},{c},{v}\n"
+                for o, h, lo, c, v, ts in reordered_rows),
+            encoding="utf-8")
+        _, _, changed_sha = rs._load_bars(feed_changed)
+        _, _, reordered_sha = rs._load_bars(feed_reordered)
+        check("feed D: middle value and row-order changes alter identity",
+              changed_sha != expected and reordered_sha != expected
+              and changed_sha != reordered_sha)
+
+        # E: source identity is computed before local start/end slicing.
+        _, filtered_n, filtered_sha = rs._load_bars(
+            feed_a, ohlcv_start_ms=3_000, ohlcv_end_ms=4_000)
+        check("feed E: validation slicing preserves source identity",
+              filtered_n == 2 and filtered_sha == expected)
+
+        # F: feed identity is mandatory provenance and changes the digest.
+        prov_rs = rs.build_provenance(
+            {}, None, False, {}, {}, {}, source_feed_sha256=expected)
+        prov_rj = rj.build_provenance(
+            {}, None, False, {}, {}, {}, source_feed_sha256=expected)
+        changed_prov = rs.build_provenance(
+            {}, None, False, {}, {}, {}, source_feed_sha256=changed_sha)
+        check("feed F: provenance records feed and digest discriminates tapes",
+              prov_rs == prov_rj
+              and prov_rs["feed"] == {
+                  "canonicalization": "pf-ohlcv-barc-le-v1",
+                  "source_values_sha256": expected,
+              }
+              and rs.build_fingerprint(prov_rs)["digest"]
+              != rs.build_fingerprint(changed_prov)["digest"])
+        check("feed F: null/invalid identities fail closed",
+              provenance_rejects(rs, None)
+              and provenance_rejects(rj, None)
+              and provenance_rejects(rs, expected.upper()))
+
+        # G: absent/malformed sources fail in both loaders before provenance.
+        malformed.write_text(
+            "timestamp,open,high,low,close\n1000,1,2,0,1.5\n",
+            encoding="utf-8")
+        missing = tmp / "missing.csv"
+        check("feed G: missing/malformed feeds produce no identity",
+              loader_fails(rs._load_bars, missing)
+              and loader_fails(rj.load_bars, missing)
+              and loader_fails(rs._load_bars, malformed)
+              and loader_fails(rj.load_bars, malformed))
+
+    # Pin production call-site plumbing so a future refactor cannot compute a
+    # digest and then silently omit it from one harness's provenance.
+    docker_tree = ast.parse(RUN_JSON.read_text(encoding="utf-8"))
+    callsite_has_feed = lambda tree: any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_provenance"
+        and any(kw.arg == "source_feed_sha256" for kw in node.keywords)
+        for node in ast.walk(tree))
+    check("feed call sites: local and docker require source identity",
+          callsite_has_feed(source_tree) and callsite_has_feed(docker_tree))
 
     # --- the two copies must agree byte-for-byte on the fixture ----------
     check("copies agree: parse_strategy_params",

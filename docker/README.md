@@ -211,6 +211,7 @@ reversible, no key required:
   "digest": "sha256:<hex>",
   "provenance": {
     "engine":   { "version_string": "...", "major": 0, "minor": 10, "patch": 2, "commit_sha": "..." },
+    "feed":     { "canonicalization": "pf-ohlcv-barc-le-v1", "source_values_sha256": "..." },
     "codegen":  { "version": "0.6.4", "generated_cpp_sha256": "...", "transpiled_from_pine": true },
     "strategy": { "initial_capital": 1000000.0, "pyramiding": 1, "commission_type": "percent", "...": "all strategy() params, effective" },
     "inputs":   { "Fast Length": { "type": "int", "default": 9, "value": "8" }, "...": "all input()s, effective" },
@@ -224,6 +225,13 @@ reversible, no key required:
 `strategy()` field and every `input()` value, with declared defaults, even
 when no override was passed. `value` is the applied override if one was given,
 otherwise the default. `digest` is a stable id for a run under a given harness and its runtime settings (same inputs + same settings ⇒ same digest).
+
+`feed.source_values_sha256` identifies the primary OHLCV source by hashing a
+versioned domain prefix followed by every parsed source row, in original order,
+as little-endian `<5dq>` records (`open`, `high`, `low`, `close`, `volume`,
+`timestamp`). The source identity is computed before validation-only start/end
+slicing, so slice bounds remain a separate runtime concern. Paths, CSV newline
+style, header order, and equivalent numeric spellings do not affect the hash.
 
 Decode the token to recover the provenance:
 

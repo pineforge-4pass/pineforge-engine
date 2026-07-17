@@ -46,6 +46,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import sys
 import time
 from datetime import datetime, timezone
@@ -124,6 +125,23 @@ _STRAT_FIELD_KEY = {
 
 _INPUT_RE = re.compile(
     r'get_input_(\w+)\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*((?:[^();]|\([^()]*\))*?)\s*\)')
+
+# Canonical primary-feed identity. Hash the numeric BarC values in source-row
+# order, before any validation-only start/end slicing. The domain prefix makes
+# the byte contract versioned and prevents cross-domain hash reuse.
+SOURCE_FEED_CANONICALIZATION = "pf-ohlcv-barc-le-v1"
+_SOURCE_FEED_HASH_PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
+_SOURCE_FEED_RECORD = struct.Struct("<5dq")
+
+
+def _new_source_feed_hasher():
+    h = hashlib.sha256()
+    h.update(_SOURCE_FEED_HASH_PREFIX)
+    return h
+
+
+def _update_source_feed_hash(h, row) -> None:
+    h.update(_SOURCE_FEED_RECORD.pack(*row))
 
 
 def _ctor_body(cpp_text: str) -> str:
@@ -254,7 +272,10 @@ def _codegen_version() -> str:
 
 def build_provenance(engine: dict, cpp_path, transpiled: bool,
                      inputs_applied: dict, overrides_applied: dict,
-                     runtime: dict | None) -> dict:
+                     runtime: dict | None, *, source_feed_sha256: str) -> dict:
+    if not isinstance(source_feed_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", source_feed_sha256):
+        raise ValueError("source_feed_sha256 must be a lowercase SHA-256 hex digest")
     cpp_text = ""
     cpp_sha = None
     if cpp_path:
@@ -266,6 +287,10 @@ def build_provenance(engine: dict, cpp_path, transpiled: bool,
             cpp_text = ""
     return {
         "engine": engine,
+        "feed": {
+            "canonicalization": SOURCE_FEED_CANONICALIZATION,
+            "source_values_sha256": source_feed_sha256,
+        },
         "codegen": {
             "version": _codegen_version(),
             "generated_cpp_sha256": cpp_sha,
@@ -738,16 +763,27 @@ class Strategy:
         (inclusive bound), letting validation tooling test alternate
         spans without a trimmed CSV copy.
 
+        CSV-backed runs also return ``source_feed_sha256``: the canonical
+        identity of the full parsed source tape before either bound is applied.
+        Preloaded-bar callers retain their established return shape and do not
+        receive an inferred identity for an already-sliced buffer.
+
         ``on_report`` (when given) is invoked with the live ``ReportC``
         after the engine-error check and BEFORE ``report_free``, so
         callers can read report fields the summary dict does not carry
         (``metrics.equity``, the raw ``equity_curve``, ...).
         """
+        source_feed_sha256 = None
         if preloaded_bars is not None:
+            # Preserve the established (bars, n) contract. A future
+            # fingerprinting caller using preloaded bars must supply the
+            # source-tape identity through an explicit API rather than hashing
+            # an already-sliced subset here.
             bars, n = preloaded_bars
         else:
-            bars, n = _load_bars(bars_csv, ohlcv_start_ms=ohlcv_start_ms,
-                                 ohlcv_end_ms=ohlcv_end_ms)
+            bars, n, source_feed_sha256 = _load_bars(
+                bars_csv, ohlcv_start_ms=ohlcv_start_ms,
+                ohlcv_end_ms=ohlcv_end_ms)
         params = params or {}
         params_json = json.dumps(params).encode()
 
@@ -849,14 +885,17 @@ class Strategy:
                         )
             if on_report is not None:
                 on_report(report)
-            return _report_to_dict(report)
+            result = _report_to_dict(report)
+            if source_feed_sha256 is not None:
+                result["source_feed_sha256"] = source_feed_sha256
+            return result
         finally:
             self.lib.report_free(ctypes.byref(report))
             self.lib.strategy_free(state)
 
 
 def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
-               ohlcv_end_ms: int | None = None) -> tuple[ctypes.Array, int]:
+               ohlcv_end_ms: int | None = None) -> tuple[ctypes.Array, int, str]:
     """Read OHLCV CSV (timestamp, open, high, low, close, volume) into BarC[].
 
     When ``ohlcv_start_ms`` is given, drop bars whose timestamp is below
@@ -864,6 +903,9 @@ def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
     chart history (per-probe ``inputs.json::ohlcv_start_ms`` metadata).
     ``ohlcv_end_ms`` symmetrically drops bars whose timestamp is above
     that bound (inclusive keep).
+
+    Returns ``(effective_bars, effective_count, source_feed_sha256)``. The hash
+    covers every parsed source row before either bound is applied.
     """
     # Vectorized load: parsing the CSV and building the BarC[] with a per-bar
     # Python/ctypes loop is ~99% of a run's wall time (the C++ backtest itself is
@@ -882,35 +924,47 @@ def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
         col = {name: header.index(name)
                for name in ("open", "high", "low", "close", "volume", "timestamp")}
         a = _np.loadtxt(csv_path, delimiter=",", skiprows=1, ndmin=2)
-        if a.size:
+        source_n = len(a)
+        dt = _np.dtype([("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
+                        ("close", "<f8"), ("volume", "<f8"), ("timestamp", "<i8")])
+        if dt.itemsize != _SOURCE_FEED_RECORD.size:  # pragma: no cover - invariant
+            raise RuntimeError("canonical OHLCV dtype does not match <5dq>")
+        source_rows = _np.empty(source_n, dtype=dt)
+        for name in ("open", "high", "low", "close", "volume"):
+            source_rows[name] = a[:, col[name]] if source_n else []
+        source_rows["timestamp"] = (
+            a[:, col["timestamp"]].astype("<i8") if source_n else [])
+        feed_hasher = _new_source_feed_hasher()
+        feed_hasher.update(memoryview(source_rows))
+        source_feed_sha256 = feed_hasher.hexdigest()
+
+        rows = source_rows
+        if a.size and (ohlcv_start_ms is not None or ohlcv_end_ms is not None):
             ts = a[:, col["timestamp"]]
             keep = _np.ones(len(a), dtype=bool)
             if ohlcv_start_ms is not None:
                 keep &= ts >= ohlcv_start_ms
             if ohlcv_end_ms is not None:
                 keep &= ts <= ohlcv_end_ms
-            a = a[keep]
-        n = len(a)
-        dt = _np.dtype([("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
-                        ("close", "<f8"), ("volume", "<f8"), ("timestamp", "<i8")])
-        s = _np.empty(n, dtype=dt)
-        for name in ("open", "high", "low", "close", "volume"):
-            s[name] = a[:, col[name]] if n else a[:0]
-        s["timestamp"] = a[:, col["timestamp"]].astype("<i8") if n else a[:0]
-        bars = (BarC * n).from_buffer_copy(s.tobytes()) if n else (BarC * 0)()
-        return bars, n
+            rows = source_rows[keep]
+        n = len(rows)
+        bars = (BarC * n).from_buffer_copy(rows.tobytes()) if n else (BarC * 0)()
+        return bars, n, source_feed_sha256
     # Fallback (no numpy): explicit parse + per-bar build.
     rows: list[tuple[float, float, float, float, float, int]] = []
+    feed_hasher = _new_source_feed_hasher()
     with csv_path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             ts = int(row["timestamp"])
+            parsed = (float(row["open"]), float(row["high"]), float(row["low"]),
+                      float(row["close"]), float(row["volume"]), ts)
+            _update_source_feed_hash(feed_hasher, parsed)
             if ohlcv_start_ms is not None and ts < ohlcv_start_ms:
                 continue
             if ohlcv_end_ms is not None and ts > ohlcv_end_ms:
                 continue
-            rows.append((float(row["open"]), float(row["high"]), float(row["low"]),
-                         float(row["close"]), float(row["volume"]), ts))
+            rows.append(parsed)
     n = len(rows)
     bars = (BarC * n)()
     for i, (o, h, l, c, v, ts) in enumerate(rows):
@@ -920,7 +974,7 @@ def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
         bars[i].close = c
         bars[i].volume = v
         bars[i].timestamp = ts
-    return bars, n
+    return bars, n, feed_hasher.hexdigest()
 
 
 def _report_to_dict(r: ReportC) -> dict:
@@ -1346,6 +1400,7 @@ def main() -> int:
                 inputs_applied,
                 overrides_applied,
                 runtime,
+                source_feed_sha256=report.get("source_feed_sha256"),
             ))
             args.fingerprint_json.parent.mkdir(parents=True, exist_ok=True)
             with args.fingerprint_json.open("w", encoding="utf-8") as f:

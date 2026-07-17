@@ -60,6 +60,7 @@ Schema:
         "digest": "sha256:<hex>",      # stable run id over canonical JSON
         "provenance": {
           "engine":   { version_string, major, minor, patch, commit_sha },
+          "feed":     { canonicalization, source_values_sha256 },
           "codegen":  { version, generated_cpp_sha256, transpiled_from_pine },
           "strategy": { ...all strategy() params, effective... },
           "inputs":   { "<title>": { type, default, value }, ... },
@@ -83,6 +84,7 @@ import hashlib
 import json
 import math
 import re
+import struct
 import sys
 import time
 from datetime import datetime, timezone
@@ -134,6 +136,23 @@ _STRAT_FIELD_KEY = {
 
 _INPUT_RE = re.compile(
     r'get_input_(\w+)\(\s*"((?:[^"\\]|\\.)*)"\s*,\s*((?:[^();]|\([^()]*\))*?)\s*\)')
+
+# Canonical primary-feed identity. Hash the numeric BarC values in source-row
+# order, before any validation-only start/end slicing. The domain prefix makes
+# the byte contract versioned and prevents cross-domain hash reuse.
+SOURCE_FEED_CANONICALIZATION = "pf-ohlcv-barc-le-v1"
+_SOURCE_FEED_HASH_PREFIX = b"pineforge:ohlcv:barc-le:v1\0"
+_SOURCE_FEED_RECORD = struct.Struct("<5dq")
+
+
+def _new_source_feed_hasher():
+    h = hashlib.sha256()
+    h.update(_SOURCE_FEED_HASH_PREFIX)
+    return h
+
+
+def _update_source_feed_hash(h, row) -> None:
+    h.update(_SOURCE_FEED_RECORD.pack(*row))
 
 
 def _ctor_body(cpp_text: str) -> str:
@@ -264,7 +283,10 @@ def _codegen_version() -> str:
 
 def build_provenance(engine: dict, cpp_path, transpiled: bool,
                      inputs_applied: dict, overrides_applied: dict,
-                     runtime: dict | None) -> dict:
+                     runtime: dict | None, *, source_feed_sha256: str) -> dict:
+    if not isinstance(source_feed_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", source_feed_sha256):
+        raise ValueError("source_feed_sha256 must be a lowercase SHA-256 hex digest")
     cpp_text = ""
     cpp_sha = None
     if cpp_path:
@@ -276,6 +298,10 @@ def build_provenance(engine: dict, cpp_path, transpiled: bool,
             cpp_text = ""
     return {
         "engine": engine,
+        "feed": {
+            "canonicalization": SOURCE_FEED_CANONICALIZATION,
+            "source_values_sha256": source_feed_sha256,
+        },
         "codegen": {
             "version": _codegen_version(),
             "generated_cpp_sha256": cpp_sha,
@@ -475,19 +501,23 @@ def check_abi(lib: ctypes.CDLL) -> None:
 
 # --- helpers ----------------------------------------------------------
 
-def load_bars(csv_path: Path) -> tuple[ctypes.Array, int]:
+def load_bars(csv_path: Path) -> tuple[ctypes.Array, int, str]:
+    """Load the source tape once and return bars, count, and canonical hash."""
     rows: list[tuple[float, float, float, float, float, int]] = []
+    feed_hasher = _new_source_feed_hasher()
     with csv_path.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            rows.append((
+            parsed = (
                 float(row["open"]),
                 float(row["high"]),
                 float(row["low"]),
                 float(row["close"]),
                 float(row["volume"]),
                 int(row["timestamp"]),
-            ))
+            )
+            _update_source_feed_hash(feed_hasher, parsed)
+            rows.append(parsed)
     n = len(rows)
     bars = (BarC * n)()
     for i, (o, h, l, c, v, ts) in enumerate(rows):
@@ -497,7 +527,7 @@ def load_bars(csv_path: Path) -> tuple[ctypes.Array, int]:
         bars[i].close     = c
         bars[i].volume    = v
         bars[i].timestamp = ts
-    return bars, n
+    return bars, n, feed_hasher.hexdigest()
 
 
 def load_strategy(so_path: Path) -> ctypes.CDLL:
@@ -823,7 +853,7 @@ def main() -> int:
     magnifier_samples = max(2, int(args.magnifier_samples))
     magnifier_dist = parse_magnifier_dist(args.magnifier_dist)
 
-    bars, n = load_bars(args.ohlcv)
+    bars, n, source_feed_sha256 = load_bars(args.ohlcv)
     first_ts, last_ts = bars[0].timestamp, bars[n - 1].timestamp
 
     lib = load_strategy(args.so)
@@ -931,6 +961,7 @@ def main() -> int:
                 inputs,
                 overrides,
                 applied_runtime,
+                source_feed_sha256=source_feed_sha256,
             ))
         except Exception:
             out["fingerprint"] = None
