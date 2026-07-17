@@ -13,6 +13,7 @@ Exit 0 iff every check passes.
 """
 from __future__ import annotations
 
+import ast
 import base64
 import importlib.util
 import json
@@ -145,6 +146,49 @@ def main() -> int:
               fp["digest"] == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest())
         fp2 = m.build_fingerprint(prov)
         check(f"{label}: deterministic token", fp["token"] == fp2["token"])
+
+    # --- the effective execution gate must participate in the fingerprint
+    runtime_kwargs = {
+        "input_tf": "15",
+        "script_tf": "",
+        "bar_magnifier": False,
+        "magnifier_samples": 4,
+        "magnifier_distribution": "ENDPOINTS",
+        "chart_timezone": "UTC",
+    }
+    gate_ms = 1712345678901
+    open_runtime = rs.build_runtime_provenance(runtime_kwargs, None)
+    gated_runtime = rs.build_runtime_provenance(runtime_kwargs, gate_ms)
+    same_gate_runtime = rs.build_runtime_provenance(runtime_kwargs, str(gate_ms))
+    check("run_strategy: open execution records trade_start_ms=null",
+          "trade_start_ms" in open_runtime and open_runtime["trade_start_ms"] is None)
+    check("run_strategy: gated execution records trade_start_ms as int",
+          gated_runtime["trade_start_ms"] == gate_ms
+          and isinstance(gated_runtime["trade_start_ms"], int))
+    check("run_strategy: equivalent gate values normalize identically",
+          same_gate_runtime == gated_runtime)
+    check("run_strategy: runtime helper is pure",
+          "trade_start_ms" not in runtime_kwargs)
+
+    open_fp = rs.build_fingerprint({"runtime": open_runtime})
+    gated_fp = rs.build_fingerprint({"runtime": gated_runtime})
+    same_gate_fp = rs.build_fingerprint({"runtime": same_gate_runtime})
+    check("run_strategy: gated/open digests differ",
+          gated_fp["digest"] != open_fp["digest"])
+    check("run_strategy: same effective gate has deterministic digest",
+          gated_fp["digest"] == same_gate_fp["digest"])
+
+    source_tree = ast.parse(RUN_STRATEGY.read_text(encoding="utf-8"))
+    main_fn = next((node for node in source_tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == "main"), None)
+    main_uses_helper = main_fn is not None and any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_runtime_provenance"
+        for node in ast.walk(main_fn)
+    )
+    check("run_strategy: main fingerprint path uses runtime helper",
+          main_uses_helper)
 
     # --- the two copies must agree byte-for-byte on the fixture ----------
     check("copies agree: parse_strategy_params",

@@ -292,6 +292,19 @@ def build_fingerprint(provenance: dict) -> dict:
 # <<< fingerprint helpers
 
 
+def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> dict:
+    """Return the effective runtime settings that participate in a fingerprint."""
+    return {
+        "input_tf": run_kwargs.get("input_tf") or "",
+        "script_tf": run_kwargs.get("script_tf") or "",
+        "bar_magnifier": bool(run_kwargs.get("bar_magnifier")),
+        "magnifier_samples": int(run_kwargs.get("magnifier_samples") or 4),
+        "magnifier_distribution": run_kwargs.get("magnifier_distribution") or "ENDPOINTS",
+        "chart_timezone": run_kwargs.get("chart_timezone") or "",
+        "trade_start_ms": None if trade_start_ms is None else int(trade_start_ms),
+    }
+
+
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
 #
 # Field order, types, and widths must match the C struct exactly. The
@@ -1325,14 +1338,7 @@ def main() -> int:
             overrides_applied = {
                 str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
             }
-            runtime = {
-                "input_tf": run_kwargs.get("input_tf") or "",
-                "script_tf": run_kwargs.get("script_tf") or "",
-                "bar_magnifier": bool(run_kwargs.get("bar_magnifier")),
-                "magnifier_samples": int(run_kwargs.get("magnifier_samples") or 4),
-                "magnifier_distribution": run_kwargs.get("magnifier_distribution") or "ENDPOINTS",
-                "chart_timezone": run_kwargs.get("chart_timezone") or "",
-            }
+            runtime = build_runtime_provenance(run_kwargs, trade_start_ms)
             fp = build_fingerprint(build_provenance(
                 engine_version(strat.lib),
                 cpp_path if cpp_path.exists() else None,
