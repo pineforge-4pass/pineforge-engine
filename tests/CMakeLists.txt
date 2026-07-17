@@ -123,6 +123,12 @@ add_test(
             ${PROJECT_SOURCE_DIR}/scripts/fingerprint_self_test.py
 )
 
+add_test(
+    NAME test_verify_corpus_metrics
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_metrics.py
+)
+
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
 # binaries — header-only code (Series, na, color, log, math::pine_random)
 # is otherwise reported as 0% because it's only inlined into test TUs.
