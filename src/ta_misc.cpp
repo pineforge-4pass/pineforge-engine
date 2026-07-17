@@ -19,6 +19,21 @@
 namespace pineforge {
 namespace ta {
 
+namespace {
+
+constexpr double kPineFloatEqualityBand = 1e-10;
+
+bool percentrank_less_equal(double lhs, double rhs) {
+    if (is_na(lhs) || is_na(rhs)) return false;
+    const bool equal =
+        lhs == rhs ||
+        (std::isfinite(lhs) && std::isfinite(rhs) &&
+         std::fabs(lhs - rhs) <= kPineFloatEqualityBand);
+    return lhs < rhs || equal;
+}
+
+}  // namespace
+
 
 // --- Linreg (Linear Regression) ---
 
@@ -87,7 +102,7 @@ double PercentRank::compute(double src) {
         double v = buffer_[i];
         if (is_na(v)) continue;
         valid++;
-        if (v <= current) {
+        if (percentrank_less_equal(v, current)) {
             count++;
         }
     }
@@ -240,7 +255,7 @@ double PercentRank::recompute(double src) {
         double v = buffer_[i];
         if (is_na(v)) continue;
         valid++;
-        if (v <= current) count++;
+        if (percentrank_less_equal(v, current)) count++;
     }
     if (valid == 0) return na<double>();
     return ((double)count / (double)valid) * 100.0;

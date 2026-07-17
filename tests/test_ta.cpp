@@ -171,6 +171,82 @@ static int test_percentrank_pine_semantics() {
             fails++;
         }
     }
+    {
+        // PercentRank uses Pine's fixed finite comparison band internally:
+        // values at most 1e-10 above the current sample compare equal.
+        ta::PercentRank causal(2);
+        causal.compute(-10.0);
+        causal.compute(-5.349999999999909);
+        double got = causal.compute(-5.350000000000136);
+        if (!near(got, 100.0)) {
+            std::printf("FAIL percentrank fixed-band causal: got %g want 100\n", got);
+            fails++;
+        }
+
+        ta::PercentRank inside(2);
+        inside.compute(-1.0);
+        inside.compute(9e-11);
+        got = inside.compute(0.0);
+        if (!near(got, 100.0)) {
+            std::printf("FAIL percentrank fixed-band inside: got %g want 100\n", got);
+            fails++;
+        }
+
+        ta::PercentRank endpoint(2);
+        endpoint.compute(-1.0);
+        endpoint.compute(1e-10);
+        got = endpoint.compute(0.0);
+        if (!near(got, 100.0)) {
+            std::printf("FAIL percentrank fixed-band endpoint: got %g want 100\n", got);
+            fails++;
+        }
+
+        ta::PercentRank outside(2);
+        outside.compute(-1.0);
+        outside.compute(1.1e-10);
+        got = outside.compute(0.0);
+        if (!near(got, 50.0)) {
+            std::printf("FAIL percentrank fixed-band outside: got %g want 50\n", got);
+            fails++;
+        }
+    }
+    {
+        const double inf = std::numeric_limits<double>::infinity();
+
+        ta::PercentRank positive_inf(2);
+        positive_inf.compute(-inf);
+        positive_inf.compute(inf);
+        double got = positive_inf.compute(inf);
+        if (!near(got, 100.0)) {
+            std::printf("FAIL percentrank positive infinity: got %g want 100\n", got);
+            fails++;
+        }
+
+        ta::PercentRank negative_inf(2);
+        negative_inf.compute(-inf);
+        negative_inf.compute(inf);
+        got = negative_inf.compute(-inf);
+        if (!near(got, 50.0)) {
+            std::printf("FAIL percentrank negative infinity: got %g want 50\n", got);
+            fails++;
+        }
+    }
+    {
+        ta::PercentRank recomputed(2);
+        recomputed.compute(-1.0);
+        recomputed.compute(1.9e-10);
+        recomputed.compute(0.0);
+        double got = recomputed.recompute(1e-10);
+
+        ta::PercentRank fresh(2);
+        fresh.compute(-1.0);
+        fresh.compute(1.9e-10);
+        double want = fresh.compute(1e-10);
+        if (!near(got, 100.0) || !near(got, want)) {
+            std::printf("FAIL percentrank fixed-band recompute: got %g want %g\n", got, want);
+            fails++;
+        }
+    }
     return fails;
 }
 
