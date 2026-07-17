@@ -591,14 +591,73 @@ def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
     return out
 
 
-def has_fragmented_fifo_groups(pairs: list[TradePair]) -> bool:
-    seen: set[tuple[int, float, str]] = set()
-    for t in pairs:
-        key = (t.entry_time, t.entry_price, t.direction)
-        if key in seen:
-            return True
-        seen.add(key)
-    return False
+def has_cross_entry_fifo_allocation(pairs: list[TradePair]) -> bool:
+    """Return whether raw rows expose a genuinely ambiguous FIFO schedule.
+
+    A repeated entry key alone is not enough.  Margin calls and other partial
+    exits split one ordinary (pyramiding=0) position into several rows too,
+    but there is no cross-entry allocation ambiguity in that shape.  The
+    schedule-level rescue is justified only when BOTH facts are present:
+
+    1. one entry fill drains through multiple distinct exit events; and
+    2. one exact exit event closes quantity owned by multiple distinct entry
+       fills (the defining FIFO-grid allocation collision).
+
+    Exit identity deliberately matches :func:`schedule_exit_metrics` so the
+    eligibility predicate and the metric it enables cannot disagree about
+    which broker event is shared.
+    """
+    entry_exits: dict[
+        tuple[int, float, str], set[tuple[int, float, str]]
+    ] = {}
+    exit_owners: dict[
+        tuple[int, float, str], set[tuple[int, float, str]]
+    ] = {}
+    for trade in pairs:
+        entry_key = (trade.entry_time, trade.entry_price, trade.direction)
+        exit_key = (trade.exit_time, round(trade.exit_price, 6), trade.direction)
+        entry_exits.setdefault(entry_key, set()).add(exit_key)
+        exit_owners.setdefault(exit_key, set()).add(entry_key)
+
+    multi_exit_entries = {
+        entry_key for entry_key, exits in entry_exits.items() if len(exits) > 1
+    }
+    return any(
+        len(owners) > 1 and bool(owners & multi_exit_entries)
+        for owners in exit_owners.values()
+    )
+
+
+def schedule_rows_for_gate(
+    tv_raw: list[TradePair],
+    eng_raw: list[TradePair],
+    tv_gate: list[TradePair],
+    eng_gate: list[TradePair],
+    gating_matched: list[tuple[TradePair, TradePair]],
+) -> tuple[list[TradePair], list[TradePair]]:
+    """Select the scored raw-entry groups for schedule comparison.
+
+    Canonical alignment permits a TV/engine entry pair to differ by up to the
+    match window.  Bounding both raw schedules only by independently gated
+    entry times can then drop one half of an already scored boundary pair.
+    Select each side's gate entries plus its half of every scored match.  Exact
+    entry keys preserve every raw fragment without re-importing unrelated
+    out-of-gate rows that happen to lie between two boundary timestamps.
+    """
+    def entry_key(trade: TradePair) -> tuple[int, float, str]:
+        return (trade.entry_time, trade.entry_price, trade.direction)
+
+    tv_keys = {entry_key(trade) for trade in tv_gate}
+    eng_keys = {entry_key(trade) for trade in eng_gate}
+    for tv_trade, eng_trade in gating_matched:
+        tv_keys.add(entry_key(tv_trade))
+        eng_keys.add(entry_key(eng_trade))
+    if not tv_keys and not eng_keys:
+        return tv_raw, eng_raw
+    return (
+        [trade for trade in tv_raw if entry_key(trade) in tv_keys],
+        [trade for trade in eng_raw if entry_key(trade) in eng_keys],
+    )
 
 
 def schedule_exit_metrics(tv_raw: list[TradePair], eng_raw: list[TradePair]) -> tuple[list[float], list[float]]:
@@ -628,6 +687,8 @@ def schedule_exit_metrics(tv_raw: list[TradePair], eng_raw: list[TradePair]) -> 
         if matched_qty > 1e-9:
             exit_deltas.append(0.0)
         if tv_qty - matched_qty > 1e-9:
+            exit_deltas.append(1.0)
+        if eng_qty - matched_qty > 1e-9:
             exit_deltas.append(1.0)
     for key, eng_qty in eng_sched.items():
         if key not in tv_sched and eng_qty > 1e-9:
@@ -851,15 +912,14 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # position-level close events while entry-grouped consolidation smears exit
     # prices across different FIFO lot boundaries. Under a strict guard, score
     # exit/PnL on the raw exit schedule instead of the consolidated deal blend.
-    fragmented_fifo = has_fragmented_fifo_groups(tv_raw_all) or has_fragmented_fifo_groups(eng_raw_all)
+    tv_sched_rows, eng_sched_rows = schedule_rows_for_gate(
+        tv_raw_all, eng_raw_all, tv_gate, eng_gate, gating_matched
+    )
+    fragmented_fifo = (
+        has_cross_entry_fifo_allocation(tv_sched_rows)
+        or has_cross_entry_fifo_allocation(eng_sched_rows)
+    )
     if fragmented_fifo and entry_p90 < 1e-12 and count_delta < STRONG_COUNT_DELTA:
-        if tv_gate:
-            lo = min(t.entry_time for t in tv_gate)
-            hi = max(t.entry_time for t in tv_gate)
-            tv_sched_rows = [t for t in tv_raw_all if lo <= t.entry_time <= hi]
-            eng_sched_rows = [e for e in eng_raw_all if lo <= e.entry_time <= hi]
-        else:
-            tv_sched_rows, eng_sched_rows = tv_raw_all, eng_raw_all
         sched_exit_deltas, sched_pnl_deltas = schedule_exit_metrics(tv_sched_rows, eng_sched_rows)
         if sched_exit_deltas:
             sched_exit_p90 = percentile(sched_exit_deltas, 0.90)
