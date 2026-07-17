@@ -712,6 +712,26 @@ def load_strategy_metadata(strategy_dir: Path) -> dict:
         return json.load(f)
 
 
+def _apply_declared_tier_override(label: str, meta: dict) -> str:
+    """Apply documented-divergence metadata without masking a real TV match.
+
+    ``expected_tier`` owns explicit anomaly/engine-only declarations.  The
+    canonical ``validation_overrides.expect_tv_match=false`` spelling then
+    resolves to engine-only, matching the historical precedence when both are
+    present.  Metadata is evaluated before the excellent guards, preserving
+    the normal path's fail-closed behavior for malformed override objects.
+    """
+    expected_tier = str(meta.get("expected_tier", "")).strip().lower()
+    if expected_tier in {"anomaly", "engine_only"} and label != "excellent":
+        label = expected_tier
+
+    val_overrides = meta.get("validation_overrides") or {}
+    if (not bool(val_overrides.get("expect_tv_match", True))
+            and label != "excellent"):
+        label = "engine_only"
+    return label
+
+
 def tv_timezone_offset(meta: dict) -> int:
     tz_name = str(meta.get("tv_trades_csv_tz", "")).lower()
     return TV_TZ_BY_NAME.get(tz_name, TV_CSV_TZ_OFFSET_HOURS)
@@ -824,6 +844,11 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
 
     if not matched:
         label = "excellent" if len(tv_cmp) == 0 and len(eng_cmp) == 0 else "minimal"
+        # The historical both-empty Excellent branch returned before reading
+        # override metadata. Keep that exact behavior while fixing declared
+        # divergence for the non-excellent zero-alignment branch.
+        if label != "excellent":
+            label = _apply_declared_tier_override(label, meta)
         return VerificationResult(
             strategy_dir=strategy_dir,
             rel=rel,
@@ -1021,33 +1046,10 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     else:
         label = "minimal"
 
-    # Per-probe override: if inputs.json declares an `expected_tier` of
-    # "anomaly" or "engine_only", honor it instead of the raw computed tier.
-    # Mirrors canonical pineforge-utils/validator/validate.py semantics:
-    #   - "anomaly"     = engine produces correct output; TV is non-deterministic
-    #                     or wrong on this probe (documented divergence). Reported
-    #                     separately so it doesn't mask as a regression.
-    #   - "engine_only" = probe is engine-only by design (no faithful TV reference);
-    #                     surfaced separately, excluded from headline parity counts.
-    # The override only fires when the computed tier is below `excellent` so a
-    # future engine improvement that genuinely matches TV is NOT silently masked.
-    expected_tier = str(meta.get("expected_tier", "")).strip().lower()
-    if expected_tier in {"anomaly", "engine_only"} and label != "excellent":
-        label = expected_tier
-
-    # Per-probe override (canonical schema): inputs.json may declare
-    # `validation_overrides.expect_tv_match: false` for probes where the
-    # engine is correct but TV intentionally diverges (e.g. documented
-    # TV-side boundary-bar non-determinism). Mirrors canonical
-    # pineforge-utils/validator/validate.py::expect_tv_match=False handling
-    # (search ENGINE_ONLY_LABEL there): relabel as `engine_only` so it
-    # doesn't mask as a low-tier regression. Same `excellent` guard as
-    # above so a future engine fix that genuinely matches TV is not
-    # silently masked.
-    val_overrides = meta.get("validation_overrides") or {}
-    expect_tv_match = bool(val_overrides.get("expect_tv_match", True))
-    if not expect_tv_match and label != "excellent":
-        label = "engine_only"
+    # Documented-divergence metadata is shared with the no-alignment path.
+    # Keeping the precedence in one helper prevents an early-return branch
+    # from silently turning declared engine-only/anomaly probes into Minimal.
+    label = _apply_declared_tier_override(label, meta)
 
     notes = ""
     if label != "excellent":
@@ -1125,7 +1127,7 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
     if result.no_aligned_trades:
         print(
             f"{result.rel}: TV={result.tv_raw_count} engine={result.eng_raw_count} "
-            "matched=0  (no aligned trades)"
+            f"matched=0  (no aligned trades)\n  -> {result.label}"
         )
         return
 
