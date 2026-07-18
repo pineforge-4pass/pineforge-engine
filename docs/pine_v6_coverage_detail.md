@@ -1,33 +1,33 @@
 # Pine v6 Coverage — Identifier-by-Identifier Audit
 
-> ✅ **RECONCILED 2026-06-10** against pineforge-codegen-oss `7bd20eb` (orig. `974cda7`) ("audit-fix sweep") and pineforge-engine `6aa1d13`. Every row flagged wrong by the 2026-05-21 master audit ([`pine_v6_audit_master.md`](pine_v6_audit_master.md)) — and every row touched by the Phase B/C/D rejections and the 2026-06-10 audit-fix sweep — has been corrected against the current code. This was a **surgical refresh**, not a full per-identifier re-derivation: untouched rows still carry the 2026-05-17 sprint snapshot, and the ❓ bucket has not been re-audited. Headline totals are delta-reconciled (see the footnote under the totals table).
+> ✅ **RECONCILED 2026-07-18** against pineforge-codegen-oss `cefeec8` and pineforge-engine `06bb724`. The 2026-07-18 delta records end-to-end `PineMap<K,V>` integration and its fail-closed boundaries on top of the 2026-06-10 audit-fix sweep. This remains a **surgical refresh**, not a full per-identifier re-derivation: untouched rows still carry the 2026-05-17 sprint snapshot, and the ❓ bucket has not been re-audited. Headline totals are delta-reconciled (see the footnote under the totals table).
 
 | Field | Value |
 |---|---|
 | **Generated** | 2026-05-17 (post Pine v6 HIGH+MEDIUM sprint) |
-| **Reconciled** | 2026-06-10 — vs codegen-oss `7bd20eb` (orig. `974cda7`) / engine `6aa1d13`; audit-flagged rows fixed, bucket totals re-counted by delta |
-| **Audit trail** | `pine_v6_audit_master.md` (2026-05-21 audit + per-fix [RESOLVED] tags) |
+| **Reconciled** | 2026-07-18 — vs codegen-oss `cefeec8` / engine `06bb724`; map type + 11 map functions moved from 🔧 to ✅ after bounded runtime integration |
+| **Audit trail** | `pine_v6_audit_master.md` (2026-05-21 audit + per-fix [RESOLVED] tags), pineforge-engine#122, pineforge-codegen-oss#78 |
 | **Pine v6 reference** | https://www.tradingview.com/pine-script-reference/v6/ (JS-rendered, scraped 2026-05-16) |
-| **PineForge engine version** | 0.4.1 + sprint + 2026-06-10 fixes |
+| **PineForge engine version** | v0.12.0-24-g06bb724 (commit `06bb724`) |
 | **Total Pine v6 identifiers** | 941 |
 
 ## Headline totals
 
 | Bucket | Count | % of 941 |
 |---|---|---|
-| ✅ Runtime | 181 | 19% |
-| 🔧 Transpiler | 228 | 24% |
+| ✅ Runtime | 193 | 21% |
+| 🔧 Transpiler | 216 | 23% |
 | ⏭️ Parse-and-skip | 216 | 23% |
 | ❌ Unsupported | 175 | 19% |
 | ❓ Unknown / not classified | 141 | 15% |
 
-> **"Fully runs" headline:** PineForge executes **409 of 941** Pine v6 identifiers (✅ Runtime + 🔧 Transpiler = **43%**). An additional 23% parse-and-skip silently (no error, no effect — drawing/plotting + syminfo na-accepts). 19% are rejected loudly at transpile or produce na-returns — this bucket *grew* in the 2026-06-10 sweep because ~35 identifiers that previously miscompiled silently (constant-namespace free reads, `varip`, `footprint.*`/`volume_row.*`, bare `color()`, `color.from_gradient`, drawing-typed `array.new_*`, `max_bars_back`, `timeframe.from_seconds`, `indicator()`, `chart.bg/fg_color`) now hard-reject with a precise error. 15% remain not-yet-audited at single-identifier precision.
+> **"Fully runs" headline:** PineForge executes **409 of 941** Pine v6 identifiers (✅ Runtime + 🔧 Transpiler = **43%**). The 2026-07-18 map integration reclassifies the `map` type and 11 `map.*` functions from 🔧 to ✅ without changing that combined total. An additional 23% parse-and-skip silently (no error, no effect — drawing/plotting + syminfo na-accepts). 19% are rejected loudly at transpile or produce na-returns — this bucket *grew* in the 2026-06-10 sweep because ~35 identifiers that previously miscompiled silently (constant-namespace free reads, `varip`, `footprint.*`/`volume_row.*`, bare `color()`, `color.from_gradient`, drawing-typed `array.new_*`, `max_bars_back`, `timeframe.from_seconds`, `indicator()`, `chart.bg/fg_color`) now hard-reject with a precise error. 15% remain not-yet-audited at single-identifier precision.
 
 > **Sprint delta (2026-05-17):** +17 ✅ Runtime, +21 🔧 Transpiler, +12 ⏭️ Parse-and-skip, +9 ❌ Unsupported (ticker.* split), −59 ❓ Unknown. See [Sprint changes](#sprint-changes-2026-05-17) section below.
 
-> **Counting basis (2026-06-10 totals):**[^totals] the five totals above were produced by applying the per-row bucket moves of this reconciliation to the 2026-05-17 baseline (199/219/220/142/161 — which was itself doc-stated, never re-derived from scratch). Moves applied: **✅→🔧 17** (8 bare time/date variables + 8 date/time fn-forms now tz-aware inline lambdas, `strategy.closedtrades.first_index` constant); **✅→❌ 1** (bare `color()`); **🔧→❌ 9** (`max_bars_back`, `timeframe.from_seconds`, `varip`, 6 drawing-typed `array.new_*`); **⏭️→❌ 3** (`indicator()`, `chart.bg_color`, `chart.fg_color`); **⏭️→🔧 1** (`syminfo.prefix`, now derived); **❓→❌ 20** (`footprint` type + 9 fns, `volume_row` type + 8 fns, `color.from_gradient`). Net: ✅ 199−18=181, 🔧 219+18−9=228, ⏭️ 220−4=216, ❌ 142+33=175, ❓ 161−20=141; sum 941 ✓.
+> **Counting basis (2026-07-18 totals):**[^totals] the 2026-06-10 delta produced 181/228/216/175/141. The bounded PineMap integration moves the `map` type and 11 `map.*` functions from 🔧 to ✅: ✅ 181+12=193, 🔧 228−12=216, while ⏭️ 216, ❌ 175, and ❓ 141 remain unchanged; sum 941 ✓.
 
-[^totals]: A full re-derivation (re-bucketing all 941 identifiers from code) has not been done; rows untouched by the master audit and the 2026-06-10 sweep are trusted as of 2026-05-17.
+[^totals]: A full re-derivation (re-bucketing all 941 identifiers from code) has not been done; rows untouched by the master audit, the 2026-06-10 sweep, and the 2026-07-18 PineMap delta are trusted as of 2026-05-17.
 
 ---
 
@@ -64,7 +64,7 @@
 | `label` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
 | `line` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
 | `linefill` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
-| `map` | type | 🔧 Transpiler | `PineMap<K,V>` runtime foundation exists in `map.hpp`; current transpiler still emits `std::unordered_map<K,V>` | Runtime migration and recursive reference-graph rollback are pending; not yet end-to-end runtime-backed |
+| `map` | type | ✅ Runtime | `PineMap<K,V>` in `map.hpp`, emitted by the transpiler | End-to-end for supported string-key/primitive-value maps; unsupported history, nested map-bearing matrices, and ambiguous inferred specializations fail closed |
 | `matrix` | type | ✅ Runtime | `matrix.hpp` / `generic_matrix.hpp` | |
 | `polyline` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
 | `series` | type/qualifier | ✅ Runtime | `series.hpp` — `Series<T>` ring buffer | |
@@ -586,14 +586,16 @@ All **⏭️ Parse-and-skip** — drawing object methods; no runtime backing.
 
 ### Functions — map.* (11 entries)
 
-End-to-end status remains **🔧 Transpiler**: current generated strategies emit
-against `std::unordered_map<K,V>`. A dedicated `PineMap<K,V>` foundation now
-exists in `map.hpp` with null map IDs, alias-preserving assignment, explicit
-container copy, insertion ordering, Pine-aware float/`na` keys, typed missing
-results, `put_all`, the 50,000-pair limit, and primitive-value snapshot/restore.
-Codegen has not yet switched these 11 calls to that API, and recursive
-checkpointing for maps nested in UDTs/collections is still pending. Therefore
-these rows must not be read as ✅ Runtime or as completed end-to-end parity.
+End-to-end status is **✅ Runtime** within the transpiler's explicit supported
+boundary. Generated strategies call `PineMap<K,V>` in `map.hpp`, including null
+map IDs, alias-preserving assignment, explicit container copy, insertion
+ordering, typed missing results, `put_all`, the 50,000-pair limit, pair loops,
+and primitive-value snapshot/restore. Codegen propagates supported map types
+through variables, UDT fields, parameters, returns, wrappers, and `na`, while
+preserving once-only receiver/key/value evaluation. It fails closed for
+map-bearing history, nested map-bearing matrices, incompatible inferred
+specializations, and other paths whose rollback or type semantics are not yet
+safe; ✅ here is not a claim that those rejected boundaries are supported.
 
 ### Functions — math.*
 
