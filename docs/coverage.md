@@ -18,11 +18,12 @@
 > - (b) PineForge's separate, source-available PineScript-to-C++ transpiler. Some Pine
 > surface (arrays, UDTs, most scalar `math.`* calls) has no dedicated
 > runtime class because the transpiler emits the implementation inline using
-> the C++ standard library or generated structs. Maps are in transition:
-> `map.hpp` now provides the standalone `PineMap<K,V>` runtime foundation, but
-> the current transpiler still emits `std::unordered_map<K,V>` and does not yet
-> route generated strategies through it. Where this distinction matters, the
-> buckets below call it out explicitly.
+> the C++ standard library or generated structs. Maps span both layers:
+> `map.hpp` provides the `PineMap<K,V>` runtime and the transpiler routes its
+> supported map surface through that handle type. The transpiler also owns the
+> conservative type/admission checks for map-bearing history, collection, and
+> specialization boundaries. Where this distinction matters, the buckets below
+> call it out explicitly.
 >
 > **Out of scope today.** Visual / charting / alert APIs are not implemented
 > by this runtime regardless of consumer. The runtime now accepts continuous
@@ -51,7 +52,7 @@
 | Color                       | Supported                                                                  | `pine_color` constants plus `new_color`, `r`, `g`, `b`, `t` helpers.                                                                                                                                                                                                                                                                                                |
 | `na` / `is_na`              | Supported                                                                  | Generic `na<T>()` and `is_na(...)` for double / integer / bool, plus null-ID detection for `PineMap<K,V>`.                                                                                                                                                                                                                                                           |
 | Logging / runtime errors    | Supported                                                                  | `pine_log_info / warning / error`, `pine_runtime_error` (throws).                                                                                                                                                                                                                                                                                                   |
-| Maps                        | Runtime foundation; transpiler migration pending                           | `map.hpp` provides ordered `PineMap<K,V>` handles, Pine alias/copy/null semantics, typed missing values, the 50,000-pair limit, and primitive-only rollback snapshots. Current generated strategies still use the transpiler's legacy `std::unordered_map<K,V>` path, so these runtime semantics are not yet end-to-end.                              |
+| Maps                        | Supported within explicit codegen boundaries                               | `map.hpp` provides ordered `PineMap<K,V>` handles, Pine alias/copy/null semantics, typed missing values, the 50,000-pair limit, and primitive-only rollback snapshots. Generated strategies use this runtime for supported string-key/primitive-value maps; unsupported map history, nested map-bearing matrices, and ambiguous specializations fail closed. |
 | Arrays / UDTs               | **No runtime module** (Pine surface still supported via consumer compiler) | Pine arrays and UDTs work through transpiler-emitted `std::vector<T>` and generated C++ structs. Recursive snapshotting for UDTs or collections containing map/reference handles remains a codegen/type-system responsibility.                                                                                                                                        |
 | Drawing / plotting / alerts | **No runtime module**                                                      | No charting / drawing / alert types exist in the runtime. PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                            |
 
@@ -130,7 +131,7 @@ single `.hpp`):
 | Bar magnifier      | `magnifier.hpp`          | `magnifier.cpp`                                                                                                                                                                                                                          | OHLC price-path sampling with six distribution modes; optional volume-weighted sample density.                                                                |
 | Matrices           | `matrix.hpp`             | `matrix.cpp`                                                                                                                                                                                                                             | Eigen-backed `PineMatrix`.                                                                                                                                    |
 | Generic matrices   | `generic_matrix.hpp`     | header-only                                                                                                                                                                                                                              | Template `PineGenericMatrix<T>` over `std::vector<std::vector<T>>` (T=bool specialized to `vector<vector<char>>`) for non-double element types.               |
-| Maps               | `map.hpp`                | header-only                                                                                                                                                                                                                              | `PineMap<K,V>` handle runtime with insertion ordering, Pine-aware primitive keys, null IDs, 50,000-pair cap, explicit container copy, and primitive-value snapshot/restore. Current codegen integration is pending.              |
+| Maps               | `map.hpp`                | header-only                                                                                                                                                                                                                              | `PineMap<K,V>` handle runtime with insertion ordering, Pine-aware primitive keys, null IDs, 50,000-pair cap, explicit container copy, and primitive-value snapshot/restore. The transpiler emits this runtime for its supported map boundary. |
 | Series history     | `series.hpp`             | header-only                                                                                                                                                                                                                              | Generic `Series<T>` deque with `push` / `update` / `[k]` indexing.                                                                                            |
 | `na`               | `na.hpp`, `map.hpp`      | header-only                                                                                                                                                                                                                              | `na<T>()` generators and `is_na(...)` checks, including the null-ID overload for `PineMap<K,V>`.                                                             |
 | Bar struct         | `bar.hpp`                | header-only                                                                                                                                                                                                                              | `struct Bar { double open, high, low, close, volume; int64_t timestamp; };` (Unix milliseconds).                                                              |
@@ -742,16 +743,19 @@ The two lists below distinguish between *PineForge does not support
 this at all* and *the runtime has no module for this, but PineForge
 supports it via the consumer compiler's emitted code*.
 
-### Runtime foundation present — consumer integration pending
+### Runtime present — consumer compiler owns conservative boundaries
 
-- Pine `map<K,V>` now has a dedicated header-only `PineMap<K,V>` foundation in
+- Pine `map<K,V>` has a dedicated header-only `PineMap<K,V>` runtime in
   `map.hpp`. It implements map-ID aliasing, `map.copy()` container separation,
   insertion-ordered keys/values, typed missing results, null IDs, Pine-aware
-  float keys, and the 50,000-pair limit. Public rollback snapshots are
-  deliberately available only for primitive values. The transpiler still
-  emits `std::unordered_map<K,V>`, so map calls do **not** use this runtime
-  foundation end-to-end yet; nested UDT/array/reference-handle rollback also
-  remains pending in codegen.
+  primitive keys, and the 50,000-pair limit. The transpiler now emits this
+  runtime for supported string-key/primitive-value maps, including typed and
+  inferred `na`, UDF/UDT parameter and return propagation, once-only receiver
+  evaluation, pair iteration, and supported checkpoint alias/rebind behavior.
+  Public runtime snapshots remain deliberately limited to primitive values;
+  the transpiler rejects map-bearing history, nested map-bearing matrices,
+  incompatible inferred specializations, and other ambiguous paths instead of
+  silently emitting incorrect C++.
 
 ### No runtime module — Pine surface still supported via consumer compiler
 
