@@ -64,7 +64,7 @@
 | `label` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
 | `line` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
 | `linefill` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
-| `map` | type | 🔧 Transpiler | `std::unordered_map<K,V>` emitted by transpiler | |
+| `map` | type | 🔧 Transpiler | `PineMap<K,V>` runtime foundation exists in `map.hpp`; current transpiler still emits `std::unordered_map<K,V>` | Runtime migration and recursive reference-graph rollback are pending; not yet end-to-end runtime-backed |
 | `matrix` | type | ✅ Runtime | `matrix.hpp` / `generic_matrix.hpp` | |
 | `polyline` | type | ⏭️ Parse-and-skip | Drawing object; no runtime | |
 | `series` | type/qualifier | ✅ Runtime | `series.hpp` — `Series<T>` ring buffer | |
@@ -586,7 +586,14 @@ All **⏭️ Parse-and-skip** — drawing object methods; no runtime backing.
 
 ### Functions — map.* (11 entries)
 
-All **🔧 Transpiler** — emitted against `std::unordered_map<K,V>`. No runtime module.
+End-to-end status remains **🔧 Transpiler**: current generated strategies emit
+against `std::unordered_map<K,V>`. A dedicated `PineMap<K,V>` foundation now
+exists in `map.hpp` with null map IDs, alias-preserving assignment, explicit
+container copy, insertion ordering, Pine-aware float/`na` keys, typed missing
+results, `put_all`, the 50,000-pair limit, and primitive-value snapshot/restore.
+Codegen has not yet switched these 11 calls to that API, and recursive
+checkpointing for maps nested in UDTs/collections is still pending. Therefore
+these rows must not be read as ✅ Runtime or as completed end-to-end parity.
 
 ### Functions — math.*
 

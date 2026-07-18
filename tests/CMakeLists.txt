@@ -45,6 +45,7 @@ set(TEST_SOURCES
     test_generic_matrix_bool_proxy
     test_generic_matrix_series
     test_generic_matrix_bool_dispatch
+    test_map
     test_session_predicates
     test_vwap_bands
     test_get_input_int64

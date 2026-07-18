@@ -16,13 +16,13 @@
 > **Two layers of "supported".** PineForge as a whole = (a) this runtime
 >
 > - (b) PineForge's separate, source-available PineScript-to-C++ transpiler. Some Pine
-> surface (arrays, maps, UDTs, most scalar `math.`* calls) has no
-> dedicated runtime class because the transpiler emits the implementation
-> inline using the C++ standard library or generated structs. Those are
-> still fully supported in PineForge end-to-end; they just don't appear
-> as a runtime module here. Where this distinction matters, the
-> "no runtime module — Pine surface still supported" bucket below calls
-> it out.
+> surface (arrays, UDTs, most scalar `math.`* calls) has no dedicated
+> runtime class because the transpiler emits the implementation inline using
+> the C++ standard library or generated structs. Maps are in transition:
+> `map.hpp` now provides the standalone `PineMap<K,V>` runtime foundation, but
+> the current transpiler still emits `std::unordered_map<K,V>` and does not yet
+> route generated strategies through it. Where this distinction matters, the
+> buckets below call it out explicitly.
 >
 > **Out of scope today.** Visual / charting / alert APIs are not implemented
 > by this runtime regardless of consumer. The runtime now accepts continuous
@@ -49,9 +49,10 @@
 | Typed matrices              | Supported                                                                  | `PineGenericMatrix<T>` (header-only template) for `int / bool / string / color / UDT` element types — structural ops only (numeric methods stay on `PineMatrix`).                                                                                                                                                                                                   |
 | Series history              | Supported                                                                  | `Series<T>` ring buffer with Pine `[k]` semantics.                                                                                                                                                                                                                                                                                                                  |
 | Color                       | Supported                                                                  | `pine_color` constants plus `new_color`, `r`, `g`, `b`, `t` helpers.                                                                                                                                                                                                                                                                                                |
-| `na` / `is_na`              | Supported                                                                  | Generic `na<T>()` and `is_na(...)` for double / integer / bool.                                                                                                                                                                                                                                                                                                     |
+| `na` / `is_na`              | Supported                                                                  | Generic `na<T>()` and `is_na(...)` for double / integer / bool, plus null-ID detection for `PineMap<K,V>`.                                                                                                                                                                                                                                                           |
 | Logging / runtime errors    | Supported                                                                  | `pine_log_info / warning / error`, `pine_runtime_error` (throws).                                                                                                                                                                                                                                                                                                   |
-| Arrays / maps / UDTs        | **No runtime module** (Pine surface still supported via consumer compiler) | The runtime ships no `array.hpp` / `map.hpp` / UDT module — its generic value containers are `Series<T>` (history), `PineMatrix` (numeric matrices), and `PineGenericMatrix<T>` (typed matrices). Pine arrays / maps / UDTs themselves work in PineForge: PineForge's transpiler emits them as `std::vector<T>`, `std::unordered_map<K,V>`, and generated C++ structs against this runtime's primitives. |
+| Maps                        | Runtime foundation; transpiler migration pending                           | `map.hpp` provides ordered `PineMap<K,V>` handles, Pine alias/copy/null semantics, typed missing values, the 50,000-pair limit, and primitive-only rollback snapshots. Current generated strategies still use the transpiler's legacy `std::unordered_map<K,V>` path, so these runtime semantics are not yet end-to-end.                              |
+| Arrays / UDTs               | **No runtime module** (Pine surface still supported via consumer compiler) | Pine arrays and UDTs work through transpiler-emitted `std::vector<T>` and generated C++ structs. Recursive snapshotting for UDTs or collections containing map/reference handles remains a codegen/type-system responsibility.                                                                                                                                        |
 | Drawing / plotting / alerts | **No runtime module**                                                      | No charting / drawing / alert types exist in the runtime. PineForge's transpiler parses-and-skips these so the strategy still compiles and runs, but no visual side-effects are emitted.                                                                                                                                                                            |
 
 
@@ -129,8 +130,9 @@ single `.hpp`):
 | Bar magnifier      | `magnifier.hpp`          | `magnifier.cpp`                                                                                                                                                                                                                          | OHLC price-path sampling with six distribution modes; optional volume-weighted sample density.                                                                |
 | Matrices           | `matrix.hpp`             | `matrix.cpp`                                                                                                                                                                                                                             | Eigen-backed `PineMatrix`.                                                                                                                                    |
 | Generic matrices   | `generic_matrix.hpp`     | header-only                                                                                                                                                                                                                              | Template `PineGenericMatrix<T>` over `std::vector<std::vector<T>>` (T=bool specialized to `vector<vector<char>>`) for non-double element types.               |
+| Maps               | `map.hpp`                | header-only                                                                                                                                                                                                                              | `PineMap<K,V>` handle runtime with insertion ordering, Pine-aware primitive keys, null IDs, 50,000-pair cap, explicit container copy, and primitive-value snapshot/restore. Current codegen integration is pending.              |
 | Series history     | `series.hpp`             | header-only                                                                                                                                                                                                                              | Generic `Series<T>` deque with `push` / `update` / `[k]` indexing.                                                                                            |
-| `na`               | `na.hpp`                 | header-only                                                                                                                                                                                                                              | `na<T>()` generators and `is_na(...)` checks.                                                                                                                 |
+| `na`               | `na.hpp`, `map.hpp`      | header-only                                                                                                                                                                                                                              | `na<T>()` generators and `is_na(...)` checks, including the null-ID overload for `PineMap<K,V>`.                                                             |
 | Bar struct         | `bar.hpp`                | header-only                                                                                                                                                                                                                              | `struct Bar { double open, high, low, close, volume; int64_t timestamp; };` (Unix milliseconds).                                                              |
 | Color              | `color.hpp`              | header-only                                                                                                                                                                                                                              | 17 named ARGB constants plus `new_color`, `r`, `g`, `b`, `t`.                                                                                                 |
 | Logging            | `log.hpp`                | header-only                                                                                                                                                                                                                              | `pine_log_info / warning / error` (stderr) and `pine_runtime_error` (throws `std::runtime_error`).                                                            |
@@ -740,15 +742,24 @@ The two lists below distinguish between *PineForge does not support
 this at all* and *the runtime has no module for this, but PineForge
 supports it via the consumer compiler's emitted code*.
 
+### Runtime foundation present — consumer integration pending
+
+- Pine `map<K,V>` now has a dedicated header-only `PineMap<K,V>` foundation in
+  `map.hpp`. It implements map-ID aliasing, `map.copy()` container separation,
+  insertion-ordered keys/values, typed missing results, null IDs, Pine-aware
+  float keys, and the 50,000-pair limit. Public rollback snapshots are
+  deliberately available only for primitive values. The transpiler still
+  emits `std::unordered_map<K,V>`, so map calls do **not** use this runtime
+  foundation end-to-end yet; nested UDT/array/reference-handle rollback also
+  remains pending in codegen.
+
 ### No runtime module — Pine surface still supported via consumer compiler
 
 These features work in PineForge code today; the runtime simply does
 not own a dedicated class or function for them. PineForge's transpiler
-emits inline C++ against `<cmath>`, `<vector>`, `<unordered_map>`, and
-generated structs.
+emits inline C++ against `<cmath>`, `<vector>`, and generated structs.
 
 - Pine `array<T>` — emitted as `std::vector<T>` by PineForge's transpiler.
-- Pine `map<K,V>` — emitted as `std::unordered_map<K,V>`.
 - User-defined types (UDTs) — emitted as plain C++ structs; nested fields and `array<UDT>` are also handled there.
 - Currency conversion (`strategy.convert_to_`*) — no runtime feed; PineForge's transpiler treats this as identity (no FX adjustment).
 - Most scalar `math.`* functions (`abs`, `sqrt`, `min`, `max`, trig, `round`, etc.) — PineForge emits these against `<cmath>` / inline expressions.
