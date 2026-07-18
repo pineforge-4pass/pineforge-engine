@@ -74,16 +74,20 @@ static void test_na_id_and_stable_errors() {
 
 static void test_copy_aliases_and_explicit_copy_is_independent() {
     auto map = PineMap<std::string, double>::new_();
-    assert(pineforge::is_na(map.put("alpha", 1.0)));
+    const auto initial_previous = map.put("alpha", 1.0);
+    assert(pineforge::is_na(initial_previous));
 
     auto alias = map;
     assert(alias.get("alpha") == 1.0);
-    assert(alias.put("alpha", 2.0) == 1.0);
+    const auto alias_previous = alias.put("alpha", 2.0);
+    assert(alias_previous == 1.0);
     assert(map.get("alpha") == 2.0);
 
     auto independent = map.copy();
-    assert(independent.put("alpha", 3.0) == 2.0);
-    assert(pineforge::is_na(independent.put("beta", 4.0)));
+    const auto independent_previous = independent.put("alpha", 3.0);
+    const auto independent_missing = independent.put("beta", 4.0);
+    assert(independent_previous == 2.0);
+    assert(pineforge::is_na(independent_missing));
     assert(map.get("alpha") == 2.0);
     assert(!map.contains("beta"));
 
@@ -114,11 +118,15 @@ static void test_move_preserves_source_handle_alias() {
 
 static void test_put_get_and_stable_insertion_order() {
     auto map = PineMap<std::string, int>::new_();
-    assert(pineforge::is_na(map.put("second", 2)));
-    assert(pineforge::is_na(map.put("first", 1)));
-    assert(pineforge::is_na(map.put("third", 3)));
+    const auto second_previous = map.put("second", 2);
+    const auto first_previous = map.put("first", 1);
+    const auto third_previous = map.put("third", 3);
+    assert(pineforge::is_na(second_previous));
+    assert(pineforge::is_na(first_previous));
+    assert(pineforge::is_na(third_previous));
 
-    assert(map.put("first", 10) == 1);
+    const auto overwrite_previous = map.put("first", 10);
+    assert(overwrite_previous == 1);
     assert((map.keys() == std::vector<std::string>{"second", "first", "third"}));
     assert((map.values() == std::vector<int>{2, 10, 3}));
     assert(map.size() == 3);
@@ -133,21 +141,26 @@ static void test_float_keys_use_pine_na_and_zero_equality() {
     const double na_one = std::numeric_limits<double>::quiet_NaN();
     const double na_two = std::nan("42");
 
-    assert(pineforge::is_na(map.put(na_one, 1)));
+    const auto na_previous = map.put(na_one, 1);
+    assert(pineforge::is_na(na_previous));
     assert(map.contains(na_two));
     assert(map.get(na_two) == 1);
-    assert(map.put(na_two, 2) == 1);
+    const auto na_overwrite_previous = map.put(na_two, 2);
+    assert(na_overwrite_previous == 1);
     assert(map.size() == 1);
     assert(map.keys().size() == 1);
     assert(std::isnan(map.keys().front()));
 
-    assert(pineforge::is_na(map.put(-0.0, 3)));
+    const auto zero_previous = map.put(-0.0, 3);
+    assert(pineforge::is_na(zero_previous));
     assert(map.contains(+0.0));
     assert(map.get(+0.0) == 3);
-    assert(map.put(+0.0, 4) == 3);
+    const auto zero_overwrite_previous = map.put(+0.0, 4);
+    assert(zero_overwrite_previous == 3);
     assert(map.size() == 2);
 
-    assert(map.remove(na_two) == 2);
+    const auto removed_na = map.remove(na_two);
+    assert(removed_na == 2);
     assert(!map.contains(na_one));
     assert((map.values() == std::vector<int>{4}));
 }
@@ -159,13 +172,16 @@ static void test_remove_updates_order_and_reinsert_appends() {
     map.put(3, "three");
     map.put(4, "four");
 
-    assert(map.remove(2) == "two");
+    const auto removed_two = map.remove(2);
+    assert(removed_two == "two");
     assert((map.keys() == std::vector<int>{1, 3, 4}));
     assert((map.values() == std::vector<std::string>{"one", "three", "four"}));
-    assert(map.remove(99).empty());
+    const auto removed_missing = map.remove(99);
+    assert(removed_missing.empty());
     assert((map.keys() == std::vector<int>{1, 3, 4}));
 
-    assert(map.put(2, "two-again").empty());
+    const auto reinsert_previous = map.put(2, "two-again");
+    assert(reinsert_previous.empty());
     assert((map.keys() == std::vector<int>{1, 3, 4, 2}));
 }
 
@@ -200,19 +216,23 @@ static void test_50000_pair_capacity_and_put_all_preflight() {
 
     auto map = Map::new_();
     for (int key = 0; key < Map::max_pairs; ++key) {
-        assert(pineforge::is_na(map.put(key, key)));
+        const auto previous = map.put(key, key);
+        assert(pineforge::is_na(previous));
     }
     assert(map.size() == Map::max_pairs);
 
     // Overwriting at the limit is permitted and does not move or grow a key.
-    assert(map.put(0, -1) == 0);
+    const auto limit_overwrite_previous = map.put(0, -1);
+    assert(limit_overwrite_previous == 0);
     assert(map.size() == Map::max_pairs);
     expect_runtime_error(
         [&] { (void)map.put(Map::max_pairs, 1); }, capacity_error);
     assert(map.size() == Map::max_pairs);
 
-    assert(map.remove(2) == 2);
-    assert(pineforge::is_na(map.put(Map::max_pairs, 50000)));
+    const auto removed_for_capacity = map.remove(2);
+    const auto replacement_previous = map.put(Map::max_pairs, 50000);
+    assert(removed_for_capacity == 2);
+    assert(pineforge::is_na(replacement_previous));
     assert(map.size() == Map::max_pairs);
 
     auto overwrite_only = Map::new_();
@@ -251,21 +271,26 @@ static void test_clear_mutates_alias_only() {
 static void test_typed_missing_values_for_primitive_templates() {
     auto doubles = PineMap<int, double>::new_();
     assert(pineforge::is_na(doubles.get(1)));
-    assert(pineforge::is_na(doubles.remove(1)));
+    const auto removed_double = doubles.remove(1);
+    assert(pineforge::is_na(removed_double));
 
     auto integers = PineMap<std::string, int64_t>::new_();
     assert(pineforge::is_na(integers.get("missing")));
-    assert(pineforge::is_na(integers.put("answer", int64_t{42})));
+    const auto integer_previous = integers.put("answer", int64_t{42});
+    assert(pineforge::is_na(integer_previous));
     assert(integers.get("answer") == 42);
 
     auto strings = PineMap<bool, std::string>::new_();
     assert(strings.get(true).empty());
-    assert(strings.remove(false).empty());
+    const auto removed_string = strings.remove(false);
+    assert(removed_string.empty());
 
     auto booleans = PineMap<double, bool>::new_();
     assert(!booleans.get(1.5));
-    assert(!booleans.remove(1.5));
-    assert(!booleans.put(1.5, true));
+    const auto removed_bool = booleans.remove(1.5);
+    const auto bool_previous = booleans.put(1.5, true);
+    assert(!removed_bool);
+    assert(!bool_previous);
     assert(booleans.get(1.5));
 }
 
@@ -276,7 +301,8 @@ static void test_copy_of_nested_handle_is_outer_deep_inner_shallow() {
     auto inner = Inner::new_();
     inner.put(1, 10);
     auto outer = Outer::new_();
-    assert(pineforge::is_na(outer.put(7, inner)));
+    const auto outer_previous = outer.put(7, inner);
+    assert(pineforge::is_na(outer_previous));
 
     auto copied = outer.copy();
     copied.get(7).put(2, 20);
@@ -307,7 +333,8 @@ static void test_snapshot_surface_is_primitive_only() {
     // Non-primitive values remain usable for ordinary Pine map operations;
     // only the unsafe public rollback surface is unavailable.
     auto udts = UdtValue::new_();
-    assert(udts.put(1, SnapshotUnsafeUdt{7}).value == 0);
+    const auto udt_previous = udts.put(1, SnapshotUnsafeUdt{7});
+    assert(udt_previous.value == 0);
     assert(udts.get(1).value == 7);
 }
 
