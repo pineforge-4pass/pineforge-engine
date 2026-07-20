@@ -80,18 +80,18 @@ End-to-end, runnable examples that go beyond the MACD tutorial:
 
 ## API at a glance
 
-The entire public surface fits in **one header** and **26 functions**:
+The entire public surface fits in **one header** and **27 functions**:
 
 | Group | Symbols | Reference |
 | --- | --- | --- |
 | Lifecycle | `strategy_create`, `strategy_free`, `run_backtest`, `run_backtest_full`, `report_free` | @ref pf_lifecycle |
 | Streaming | `strategy_stream_begin`, `strategy_stream_push_tick`, `strategy_stream_push_ticks`, `strategy_stream_advance_time`, `strategy_stream_end`, `strategy_stream_fill_report` | @ref pf_streaming |
-| Configuration | Inputs, strategy overrides, tracing, trade start, chart / symbol timezone, session, tick size, point value, and numeric metadata | @ref pf_config |
+| Configuration | Inputs, strategy overrides, tracing, trade start, chart / symbol timezone, session, tick size, point value, numeric metadata, and timestamped account-currency FX | @ref pf_config |
 | Diagnostics | `strategy_get_last_error` | #strategy_get_last_error |
 | Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 
-Every PineForge-generated strategy `.so` exports exactly these 26 symbols
+Every PineForge-generated strategy `.so` exports exactly these 27 symbols
 and zero internal C++ symbols — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 

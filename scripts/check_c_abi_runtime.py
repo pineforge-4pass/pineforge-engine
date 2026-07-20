@@ -24,6 +24,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_syminfo_mintick",
     "strategy_set_syminfo_pointvalue",
     "strategy_set_syminfo_metadata",
+    "strategy_set_account_currency_fx_series",
     "strategy_get_last_error",
     "strategy_stream_begin",
     "strategy_stream_push_tick",

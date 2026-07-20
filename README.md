@@ -120,7 +120,7 @@ for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWH
 
 - 🎯 **TradingView-exact.** 251 of 252 reference strategies match TV trade-for-trade. The lone outlier is a stress probe at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct. **100 of 100** PineForge excellent vs PyneCore + PineTS on the public three-way benchmark (~167,000 TV trades; PyneCore: 85 of 100; PineTS indicator-only).
 - ⚡ **Microsecond-class.** Median **162× faster than PyneCore** across 99 commonly-timed strategies (full 41,307-bar OHLCV, magnifier-on hot loop; see [benchmarks/results/speed.md](benchmarks/results/speed.md)). Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
-- 🔒 **Stable C ABI.** 26 functions, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
+- 🔒 **Stable C ABI.** 27 functions, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
 - 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
 - 🧰 **FFI-friendly.** Call from Python (`ctypes`), Rust (`libloading`), Go (`cgo`), Node, Julia. Worked examples for [pure C](https://cdocs.pineforge.dev/examples_c.html), [Python sweep](https://cdocs.pineforge.dev/examples_python_sweep.html), [Rust](https://cdocs.pineforge.dev/examples_rust.html), [multi-strategy harness](https://cdocs.pineforge.dev/examples_multi.html), and [magnifier A/B](https://cdocs.pineforge.dev/examples_magnifier.html) ship in the docs.
 - 🌍 **Cross-platform CI.** Linux + macOS × Release + Debug. Universal mac binary. Static library, no runtime DSO surprises at deploy time.
@@ -129,7 +129,7 @@ for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWH
 
 ## For developers: embed the runtime directly
 
-PineForge ships as a static C library (`libpineforge.a`) with a stable 26-symbol C ABI. Call from C, Python, Rust, Go, Node, Julia — one harness, swap strategies forever.
+PineForge ships as a static C library (`libpineforge.a`) with a stable 27-symbol C ABI. Call from C, Python, Rust, Go, Node, Julia — one harness, swap strategies forever.
 
 ### See it in 30 seconds
 
@@ -337,6 +337,7 @@ int main(void) {
 | `strategy_set_syminfo_mintick`           | Set symbol tick size                          |
 | `strategy_set_syminfo_pointvalue`        | Set symbol point value                        |
 | `strategy_set_syminfo_metadata`          | Inject numeric symbol metadata                |
+| `strategy_set_account_currency_fx_series`| Set effective-time quote-to-account FX        |
 | `strategy_get_last_error`                | Read the latest runtime error                 |
 | `pf_version_get`                         | Runtime version                              |
 | `pf_abi_version`                         | Struct-layout version (`PF_ABI_VERSION`)     |
@@ -397,7 +398,7 @@ cmake/smoke_consumer/   - Minimal find_package(PineForge) CI smoke project
 
 ## Visibility hygiene
 
-Every compiled strategy `.so` that statically links `libpineforge.a` exports **exactly the 26 documented C ABI symbols** and zero internal C++ symbols. This is enforced at the library level:
+Every compiled strategy `.so` that statically links `libpineforge.a` exports **exactly the 27 documented C ABI symbols** and zero internal C++ symbols. This is enforced at the library level:
 
 - `libpineforge.a` is built with `-fvisibility=hidden -fvisibility-inlines-hidden`
 - Public symbols are tagged `PF_API` (visibility=default)

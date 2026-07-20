@@ -463,6 +463,174 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
     return result;
 }
 
+// Timestamped quote->account FX rollover for a carried 1x long.  Unlike the
+// ordinary adverse-price pass below, this is consumed at the first broker open
+// under the newly effective provider epoch, before pending orders and on_bar.
+bool BacktestEngine::process_carried_long_full_margin_fx_rollover(
+        const Bar& bar) {
+    if (account_currency_fx_timestamps_.empty()) return false;
+
+    const auto effective_end = std::upper_bound(
+        account_currency_fx_timestamps_.begin(),
+        account_currency_fx_timestamps_.end(), bar.timestamp);
+    const std::size_t effective_epoch = static_cast<std::size_t>(
+        std::distance(account_currency_fx_timestamps_.begin(), effective_end));
+    const double effective_rate = effective_epoch == 0
+        ? account_currency_fx_
+        : account_currency_fx_rates_[effective_epoch - 1];
+
+    // The first script bar establishes the broker's starting epoch.  Later
+    // epoch changes are consumed exactly once, including while flat or on an
+    // ineligible position, so a subsequently opened position cannot inherit a
+    // stale rollover event.
+    if (!account_currency_fx_broker_epoch_initialized_) {
+        account_currency_fx_broker_epoch_initialized_ = true;
+        account_currency_fx_broker_epoch_ = effective_epoch;
+        account_currency_fx_broker_rate_ = effective_rate;
+        return false;
+    }
+    if (effective_epoch == account_currency_fx_broker_epoch_) return false;
+
+    const double previous_rate = account_currency_fx_broker_rate_;
+    account_currency_fx_broker_epoch_ = effective_epoch;
+    account_currency_fx_broker_rate_ = effective_rate;
+
+    const bool carried_position =
+        position_side_ != PositionSide::FLAT
+        && position_open_bar_ < bar_index_;
+    const double carried_margin = position_side_ == PositionSide::LONG
+        ? margin_long_ : margin_short_;
+    const bool supported_carried_rollover =
+        position_side_ == PositionSide::LONG
+        && std::isfinite(margin_long_)
+        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+    if (effective_rate != previous_rate
+        && margin_call_enabled_
+        && carried_position
+        && std::isfinite(carried_margin)
+        && carried_margin > 0.0
+        && !supported_carried_rollover) {
+        throw std::runtime_error(
+            "timestamped account-currency FX broker-open rollover supports "
+            "only carried 1x long positions");
+    }
+
+    const bool carried_long_full_margin =
+        margin_call_enabled_
+        && position_side_ == PositionSide::LONG
+        && position_open_bar_ < bar_index_
+        && std::isfinite(margin_long_)
+        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+    if (!carried_long_full_margin
+        || !std::isfinite(previous_rate) || !(previous_rate > 0.0)
+        || !std::isfinite(effective_rate) || !(effective_rate > 0.0)
+        || effective_rate == previous_rate
+        || !std::isfinite(bar.open) || !(bar.open > 0.0)) {
+        return false;
+    }
+
+    const double qty = position_qty_;
+    const double pv = syminfo_.pointvalue;
+    if (!std::isfinite(qty) || !(qty > 0.0)
+        || !std::isfinite(position_entry_price_)
+        || !std::isfinite(pv)
+        || !std::isfinite(initial_capital_)
+        || !std::isfinite(net_profit_sum_)) {
+        return false;
+    }
+
+    // TV revalues a carried 1x long at the first broker open under the newly
+    // confirmed rate.  Entry fees are immediate account-currency costs; this
+    // engine otherwise realizes both fee legs when a trade closes, so include
+    // the still-open entry fees explicitly in the affordability ledger.
+    double entry_commission = 0.0;
+    for (const auto& pe : pyramid_entries_) {
+        if (pe.qty <= kQtyEpsilon) continue;
+        const double lot_commission = open_entry_commission(pe);
+        if (!std::isfinite(lot_commission)) return false;
+        entry_commission += lot_commission;
+    }
+    const double margin_per_unit = bar.open * pv * effective_rate;
+    const double opening_equity = initial_capital_ + net_profit_sum_
+        - entry_commission
+        + (bar.open - position_entry_price_) * qty * pv * effective_rate;
+    if (!std::isfinite(entry_commission)
+        || !std::isfinite(margin_per_unit) || !(margin_per_unit > 0.0)
+        || !std::isfinite(opening_equity)) {
+        return false;
+    }
+    const double required_margin = qty * margin_per_unit;
+    if (!std::isfinite(required_margin) || opening_equity >= required_margin) {
+        return false;
+    }
+
+    double q_min = qty - opening_equity / margin_per_unit;
+    if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return false;
+    const double raw_q_min = q_min;
+    if (qty_step_ > 0.0) {
+        double step_count = q_min / qty_step_;
+        if (margin_zero_cover_full_liquidation_) {
+            const double nearest_step = std::round(step_count);
+            if (std::abs(step_count - nearest_step) < 1e-6) {
+                step_count = nearest_step;
+            }
+        }
+        q_min = std::floor(step_count) * qty_step_;
+    }
+
+    // TV's converted-currency carried-rollover edge is discontinuous: when a
+    // real positive restore quantity floors below the instrument lot step, it
+    // closes one whole contract (not one tiny qty_step and not a dust no-op).
+    // Keep the candidate capped to a sub-one position and require it to lie on
+    // the configured grid; otherwise fail closed rather than invent a fill.
+    double floor_zero_fallback = std::numeric_limits<double>::quiet_NaN();
+    if (q_min <= kQtyEpsilon) {
+        if (qty_step_ > 0.0
+            && qty_step_ <= 1.0
+            && raw_q_min > kQtyEpsilon
+            && raw_q_min < 1.0) {
+            const double candidate = std::min(1.0, qty);
+            const bool full_position_cap = candidate >= qty - kQtyEpsilon;
+            const double gridded = apply_exit_qty_step(candidate);
+            const double grid_guard = std::max(
+                1e-12, std::abs(candidate) * 1e-12);
+            if (full_position_cap
+                || std::abs(gridded - candidate) <= grid_guard) {
+                floor_zero_fallback = candidate;
+            }
+        }
+        if (!std::isfinite(floor_zero_fallback)) return false;
+    }
+
+    double qty_liq = std::isfinite(floor_zero_fallback)
+        ? floor_zero_fallback
+        : 4.0 * q_min;
+    if (qty_step_ > 0.0) {
+        double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
+        if (floored <= kQtyEpsilon) {
+            return false;
+        }
+        qty_liq = floored;
+    }
+    if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;
+    if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
+
+    const std::size_t trades_before = trades_.size();
+    if (qty_liq >= qty - kQtyEpsilon) {
+        execute_market_exit(bar.open);
+    } else {
+        execute_partial_exit_qty(bar.open, qty_liq);
+    }
+    if (trades_.size() == trades_before) return false;
+
+    ++broker_fill_event_seq_;
+    for (std::size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = "Margin call";
+        trades_[ti].exit_id = "__margin_call__";
+    }
+    return true;
+}
+
 // TradingView force-liquidation (margin call).
 //
 // Run once per script bar (end of dispatch_bar / magnifier bar) after all
@@ -581,7 +749,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         // q_min then removes only enough required margin to restore that
         // opening budget. The raw matched base is retained separately for the
         // broker-generated closing fill below.
-        const double fx = account_currency_fx_;
+        const double fx = active_account_currency_fx();
         if (!std::isfinite(fx) || !(fx > 0.0)) return;
         // Preserve the established long calculation byte-for-byte. A scoped
         // short add instead marks the WHOLE position at the latest raw fill:
@@ -598,7 +766,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
             // It was not an accepted fill and must not incur CASH_PER_ORDER's
             // fixed fee in this post-fill affordability sum.
             if (pe.qty <= kQtyEpsilon) continue;
-            const double lot_commission = calc_commission(pe.price, pe.qty);
+            const double lot_commission = open_entry_commission(pe);
             if (!std::isfinite(lot_commission)) return;
             entry_commission += lot_commission;
         }
@@ -623,8 +791,18 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         // Keep both comparisons directional and tolerance-aware.  An absolute
         // difference alone would turn affordable headroom into a false call.
         const double pre_fee_equity = opening_equity + entry_commission;
+        // TV's converted account-currency broker ledger is cent-rounded at
+        // this discontinuity. A sub-half-cent post-fee deficit is therefore
+        // still affordable only when a quote->account conversion provider is
+        // active. Same-currency strategies retain the raw directional test:
+        // z8830's tape proves that a ~$0.0026 deficit still receives the
+        // one-contract fallback, while crypt0graf's converted USD ledger does
+        // not act on the corresponding ~$0.0025 conversion remainder.
+        // Keep the comparison directional so positive headroom cannot be
+        // mistaken for a deficit merely because its absolute magnitude matches.
         const double comparison_guard = std::max(
-            1e-9, std::abs(pre_fee_equity) * 1e-12);
+            account_currency_fx_timestamps_.empty() ? 1e-9 : 0.005,
+            std::abs(pre_fee_equity) * 1e-12);
         const double pre_fee_headroom = pre_fee_equity - required_margin;
         const double post_fee_deficit = required_margin - opening_equity;
         fee_created_floor_zero_candidate =
@@ -644,7 +822,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         const double adverse =
             (position_side_ == PositionSide::LONG) ? bar.low : bar.high;
         if (!std::isfinite(adverse) || !(adverse > 0.0)) return;
-        const double fx = account_currency_fx_;
+        const double fx = active_account_currency_fx();
         if (!std::isfinite(fx) || !(fx > 0.0)) return;
         const double equity_adv = initial_capital_ + net_profit_sum_
             + direction * (adverse - position_entry_price_) * qty * pv * fx;
@@ -996,7 +1174,8 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
         || calc_commission(signal_close, second_qty) != 0.0) {
         return;
     }
-    const double notional_k = syminfo_.pointvalue * account_currency_fx_;
+    const double notional_k = syminfo_.pointvalue
+                              * active_account_currency_fx();
     if (!std::isfinite(notional_k) || !(notional_k > 0.0)) return;
 
     const double gross_required =
@@ -1131,7 +1310,8 @@ void BacktestEngine::apply_pooc_coof_explicit_flat_market_gross_admission() {
         return;
     }
 
-    const double notional_k = syminfo_.pointvalue * account_currency_fx_;
+    const double notional_k = syminfo_.pointvalue
+                              * active_account_currency_fx();
     if (!std::isfinite(notional_k) || !(notional_k > 0.0)) return;
     const double required_margin =
         (first_qty + second_qty) * signal_close * notional_k;
@@ -1877,7 +2057,8 @@ bool BacktestEngine::stop_entry_margin_admission_declines(
         ? std::abs(order.stop_placement_open_qty)
         : std::abs(calc_qty_for_type(fill_price, order.qty, order.qty_type));
     const double required = fill_qty * bar.open * syminfo_.pointvalue
-                            * account_currency_fx_ * (margin_pct / 100.0);
+                            * active_account_currency_fx()
+                            * (margin_pct / 100.0);
     const double available = use_placement_open_qty
         ? order.stop_placement_open_equity
         : current_equity();
@@ -2016,13 +2197,13 @@ void BacktestEngine::apply_filled_order_to_state(
                 current_equity() + open_profit(fill_price);
             const double held_margin =
                 std::abs(position_qty_) * fill_price
-                * syminfo_.pointvalue * account_currency_fx_;
+                * syminfo_.pointvalue * active_account_currency_fx();
             const double free_funds = equity_at_fill - held_margin;
             const double transaction_qty =
                 std::abs(position_qty_) + std::abs(new_qty);
             const double required_margin =
                 transaction_qty * admit_price
-                * syminfo_.pointvalue * account_currency_fx_;
+                * syminfo_.pointvalue * active_account_currency_fx();
             const double epsilon =
                 std::max(1e-9, std::abs(equity_at_fill) * 1e-12);
             if (required_margin > free_funds + epsilon) {
@@ -2150,6 +2331,14 @@ void BacktestEngine::apply_filled_order_to_state(
         bool reversal = position_side_ != PositionSide::FLAT && !same_dir;
         bool raw_opposite_close = order.type == OrderType::RAW_ORDER && reversal;
         double margin_pct = order.is_long ? margin_long_ : margin_short_;
+        // The qty/equity/price admission tuple is a signal-time snapshot.
+        // Keep FX on that same lifecycle boundary: when a daily rate becomes
+        // effective on the next-bar fill, TV admits the frozen order first and
+        // lets the post-fill affordability pass trim it at the new rate.
+        const double sizing_fx =
+            std::isfinite(order.sizing_fx) && order.sizing_fx > 0.0
+                ? order.sizing_fx
+                : active_account_currency_fx();
         // Gap-reject (design-cntvxiao-gap-reject, PANEL-CLEARED): a high-level
         // strategy.entry with omitted qty, sized percent_of_equity at EXACTLY
         // 100%, direction-appropriate margin == 100, placed TRUE-FLAT and still
@@ -2206,11 +2395,11 @@ void BacktestEngine::apply_filled_order_to_state(
             if (calc_commission(slipped_fill, order.frozen_default_qty) == 0.0) {
                 const double gap_notional = std::abs(order.frozen_default_qty)
                                             * slipped_fill * syminfo_.pointvalue
-                                            * account_currency_fx_
+                                            * sizing_fx
                                             * (margin_pct / 100.0);
                 const double one_lot_slack = qty_step_ * slipped_fill
                                              * syminfo_.pointvalue
-                                             * account_currency_fx_
+                                             * sizing_fx
                                              * (margin_pct / 100.0);
                 const double float_guard =
                     std::max(1e-9, std::abs(order.sizing_equity) * 1e-12);
@@ -2253,7 +2442,7 @@ void BacktestEngine::apply_filled_order_to_state(
             // specimen we have) the scaling is a no-op.
             double held = same_dir
                 ? std::abs(position_qty_) * order.sizing_mark
-                      * syminfo_.pointvalue * account_currency_fx_
+                      * syminfo_.pointvalue * sizing_fx
                       * (margin_pct / 100.0)
                 : 0.0;
             double free_funds = order.sizing_equity - held;
@@ -2269,7 +2458,7 @@ void BacktestEngine::apply_filled_order_to_state(
             double required_margin = std::abs(order.frozen_default_qty)
                                      * admit_price
                                      * syminfo_.pointvalue
-                                     * account_currency_fx_
+                                     * sizing_fx
                                      * (margin_pct / 100.0);
             // The epsilon absorbs double rounding AND one whole lot of
             // notional.
@@ -2289,7 +2478,7 @@ void BacktestEngine::apply_filled_order_to_state(
                 std::max(1e-9, std::abs(free_funds) * 1e-12);
             epsilon = std::max(epsilon, qty_step_ * admit_price
                                             * syminfo_.pointvalue
-                                            * account_currency_fx_
+                                            * sizing_fx
                                             * (margin_pct / 100.0));
             if (required_margin > free_funds + epsilon) {
                 // design-declined-reversal-close-leg: ONLY the reversal decline
@@ -2350,7 +2539,8 @@ void BacktestEngine::apply_filled_order_to_state(
         if (margin_pct > 0.0) {
             const double slipped_fill =
                 apply_fill_slippage(fill_price, order.is_long);
-            const double notional_k = syminfo_.pointvalue * account_currency_fx_
+            const double notional_k = syminfo_.pointvalue
+                                      * active_account_currency_fx()
                                       * (margin_pct / 100.0);
             // A finalized pair's first broker fill may be the later source
             // call and moves the frozen GROSS transaction. Cost that exact
@@ -2726,8 +2916,7 @@ void BacktestEngine::apply_filled_order_to_state(
             double new_opening_commission =
                 pyramid_entries_.empty()
                     ? std::numeric_limits<double>::quiet_NaN()
-                    : calc_commission(pyramid_entries_.back().price,
-                                      pyramid_entries_.back().qty);
+                    : open_entry_commission(pyramid_entries_.back());
             const bool frozen_all_in_true_flat_exemption =
                 successful_fresh_open
                 && order.opening_affordability_exemption_candidate
@@ -3337,6 +3526,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         pyramid_entries_.clear();
         id_unclosed_qty_.clear();
         pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
+        snapshot_entry_commission(pyramid_entries_.back());
         id_unclosed_qty_[order.id] += qty;
         if (!std::isnan(order.stop_price) || !std::isnan(order.limit_price)) {
             set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
@@ -3388,6 +3578,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             position_entry_count_++;
             trail_best_price_ = fill_price;
             pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+            snapshot_entry_commission(pyramid_entries_.back());
             // KI-62: flag same-direction MARKET adds (strategy.order path) so a
             // same-bar from_entry bracket exit can scratch them dur-0.
             pyramid_entries_.back().market_pyramid_add = !is_priced_entry;

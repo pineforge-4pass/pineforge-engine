@@ -54,7 +54,7 @@ Three layers:
 
 ## Symbol inventory
 
-A compiled strategy `.so` exports **exactly these 26 C symbols** and
+A compiled strategy `.so` exports **exactly these 27 C symbols** and
 zero internal C++ symbols:
 
 | Symbol | Group |
@@ -81,6 +81,7 @@ zero internal C++ symbols:
 | `strategy_set_syminfo_mintick` | @ref pf_config |
 | `strategy_set_syminfo_pointvalue` | @ref pf_config |
 | `strategy_set_syminfo_metadata` | @ref pf_config |
+| `strategy_set_account_currency_fx_series` | @ref pf_config |
 | `strategy_get_last_error` | Diagnostics |
 | `pf_version_get` | @ref pf_version |
 | `pf_abi_version` | @ref pf_version |

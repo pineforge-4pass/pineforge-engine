@@ -221,7 +221,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             // the account currency. Default 1.0 leaves the corpus untouched.
             double required_margin = std::abs(qty) * current_bar_.close
                                      * syminfo_.pointvalue
-                                     * account_currency_fx_
+                                     * active_account_currency_fx()
                                      * (margin_pct / 100.0);
             double available_equity = current_equity();
             double epsilon = std::max(1e-9, std::abs(available_equity) * 1e-12);
@@ -392,7 +392,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             order.paired_flat_market_signal_margin_pct =
                 is_long ? margin_long_ : margin_short_;
             order.paired_flat_market_signal_pointvalue = syminfo_.pointvalue;
-            order.paired_flat_market_signal_fx = account_currency_fx_;
+            order.paired_flat_market_signal_fx = active_account_currency_fx();
         }
         // TradingView freezes DEFAULT (qty=na) percent_of_equity / cash
         // market-order sizing at THIS (signal) bar's close — see
@@ -417,6 +417,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             order.sizing_equity =
                 current_equity() + open_profit(current_bar_.close);
             order.sizing_mark = current_bar_.close;
+            order.sizing_fx = active_account_currency_fx();
             // Direction-neutral: two fill-time consumers read this flag.
             //   1. KI-61 long entry-bar affordability trim
             //      (engine_fills.cpp): re-checks order.is_long and margin_long
@@ -440,7 +441,9 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                 && std::isfinite(order.frozen_default_qty)
                 && std::isfinite(order.sizing_equity)
                 && std::isfinite(order.sizing_price)
-                && std::isfinite(order.sizing_mark);
+                && std::isfinite(order.sizing_mark)
+                && std::isfinite(order.sizing_fx)
+                && order.sizing_fx > 0.0;
             order.default_flat_market_gross_candidate =
                 default_flat_market_gross_call
                 && order.opening_affordability_exemption_candidate
@@ -1579,6 +1582,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
             order.sizing_equity =
                 current_equity() + open_profit(current_bar_.close);
             order.sizing_mark = current_bar_.close;
+            order.sizing_fx = active_account_currency_fx();
         }
     } else {
         order.type = OrderType::RAW_ORDER;

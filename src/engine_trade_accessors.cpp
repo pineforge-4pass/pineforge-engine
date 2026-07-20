@@ -27,8 +27,8 @@ double BacktestEngine::open_trade_profit(int idx) const {
     // consistent with the realized-trade path in emit_close_trade
     // (pointvalue=1, fx=1.0 leaves the corpus unchanged).
     double pnl = (is_long ? (px - pe.price) * pe.qty : (pe.price - px) * pe.qty)
-                 * syminfo_.pointvalue * account_currency_fx_;
-    pnl -= calc_commission(pe.price, pe.qty);
+                 * syminfo_.pointvalue * active_account_currency_fx();
+    pnl -= open_entry_commission(pe);
     return pnl;
 }
 
@@ -44,7 +44,8 @@ double BacktestEngine::open_trade_profit_percent(int idx) const {
     // * pointvalue * account_currency_fx_, matching open_trade_profit's
     // fx-scaled pnl so the ratio is currency-invariant). No new commission
     // handling is invented here; the percent just mirrors open_trade_profit.
-    const double entry_cost = pe.price * pe.qty * syminfo_.pointvalue * account_currency_fx_;
+    const double entry_cost = pe.price * pe.qty * syminfo_.pointvalue
+                              * active_account_currency_fx();
     if (!(entry_cost > 0.0)) return na<double>();
     return open_trade_profit(idx) / entry_cost * 100.0;
 }
@@ -53,7 +54,7 @@ double BacktestEngine::open_trade_commission(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return na<double>();
     const PyramidEntry& pe = pyramid_entries_[(size_t)idx];
-    return calc_commission(pe.price, pe.qty);
+    return open_entry_commission(pe);
 }
 
 int BacktestEngine::open_trade_entry_bar_index(int idx) const {
@@ -101,7 +102,8 @@ double BacktestEngine::open_trade_size(int idx) const {
 double BacktestEngine::open_trade_max_drawdown(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return 0.0;
-    return pyramid_entries_[(size_t)idx].max_drawdown * syminfo_.pointvalue * account_currency_fx_;
+    return pyramid_entries_[(size_t)idx].max_drawdown * syminfo_.pointvalue
+           * active_account_currency_fx();
 }
 
 double BacktestEngine::open_trade_max_drawdown_percent(int idx) const {
@@ -115,7 +117,8 @@ double BacktestEngine::open_trade_max_drawdown_percent(int idx) const {
 double BacktestEngine::open_trade_max_runup(int idx) const {
     if (position_side_ == PositionSide::FLAT || idx < 0 || idx >= (int)pyramid_entries_.size())
         return 0.0;
-    return pyramid_entries_[(size_t)idx].max_runup * syminfo_.pointvalue * account_currency_fx_;
+    return pyramid_entries_[(size_t)idx].max_runup * syminfo_.pointvalue
+           * active_account_currency_fx();
 }
 
 double BacktestEngine::open_trade_max_runup_percent(int idx) const {

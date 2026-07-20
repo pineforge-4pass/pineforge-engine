@@ -734,6 +734,37 @@ static void test_fee_created_floor_zero_caps_sub_one_position() {
     CHECK(near(eng.position_size(), 0.0));
 }
 
+static void test_fee_created_sub_half_cent_deficit_respects_fx_ledger() {
+    std::printf("test_fee_created_sub_half_cent_deficit_respects_fx_ledger\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1500.0, 1500.0, 1500.0, 1500.0, 1.0),
+        mk_bar(2000, 1500.005, 1500.005, 1500.005, 1500.005, 1.0),
+    };
+    // q=0.666 leaves enough lot-floor headroom that the adverse fill creates
+    // only a $0.00233 post-fee deficit. A same-currency broker compares the
+    // raw amounts and applies the one-contract fallback (capped to the full
+    // sub-one position).
+    CommissionedDefaultPoeDustProbe same_currency(
+        /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
+    same_currency.run(bars.data(), (int)bars.size());
+    CHECK(same_currency.trade_count() == 1);
+    CHECK(near(same_currency.trade_size(0), 0.666));
+    CHECK(near(same_currency.position_size(), 0.0));
+
+    // A configured quote->account provider selects TV's converted cent ledger.
+    // Both bars use rate 1 so conversion lifecycle, not rate magnitude, is the
+    // sole factor. The sub-half-cent remainder stays affordable.
+    CommissionedDefaultPoeDustProbe converted_currency(
+        /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
+    const int64_t timestamps[] = {0};
+    const double rates[] = {1.0};
+    CHECK(converted_currency.set_account_currency_fx_series(
+        timestamps, rates, 1));
+    converted_currency.run(bars.data(), (int)bars.size());
+    CHECK(converted_currency.trade_count() == 0);
+    CHECK(near(converted_currency.position_size(), 0.666));
+}
+
 static void test_fee_created_nonzero_floor_keeps_four_x_quantity() {
     std::printf("test_fee_created_nonzero_floor_keeps_four_x_quantity\n");
     std::vector<Bar> bars = {
@@ -1882,6 +1913,7 @@ int main() {
     test_paired_short_close_default_long_gap_remains_eligible();
     test_fee_created_floor_zero_closes_one_contract();
     test_fee_created_floor_zero_caps_sub_one_position();
+    test_fee_created_sub_half_cent_deficit_respects_fx_ledger();
     test_fee_created_nonzero_floor_keeps_four_x_quantity();
     test_fee_created_floor_zero_rejects_off_grid_one_contract();
     test_cash_per_order_floor_zero_stays_outside_percent_fee_rule();

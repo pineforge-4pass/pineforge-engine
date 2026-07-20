@@ -25,6 +25,10 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& script_tf) {
     last_error_.clear();
     try {
+        if (!account_currency_fx_timestamps_.empty()) {
+            throw std::runtime_error(
+                "timestamped account-currency FX is not supported by streaming");
+        }
         if (stream_phase_ == StreamPhase::REALTIME) {
             throw std::runtime_error("stream is already realtime");
         }

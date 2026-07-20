@@ -41,11 +41,13 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
         // the quote-currency fill_price — same convention as calc_qty() in
         // engine.hpp. fx=1.0 is a no-op.
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? apply_qty_step((cash / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? apply_qty_step((cash / active_account_currency_fx())
+                             / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     if (qty_type == static_cast<int>(QtyType::CASH)) {
         return (std::isfinite(fill_price) && fill_price > 0.0)
-            ? apply_qty_step((qty_value / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
+            ? apply_qty_step((qty_value / active_account_currency_fx())
+                             / (fill_price * syminfo_.pointvalue)) : 0.0;
     }
     return apply_qty_step(qty_value);
 }
@@ -186,14 +188,18 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
             // remaining entry's extremes stay consistent with its reduced
             // qty (update_per_trade_extremes accumulates (diff) * pe.qty).
             double keep_scale = keep_qty / pe.qty;
-            remaining.push_back({pe.price, pe.time, keep_qty, pe.entry_id,
-                                 pe.entry_bar_index, pe.entry_comment,
-                                 pe.max_runup * keep_scale,
-                                 pe.max_drawdown * keep_scale,
-                                 pe.skip_entry_bar_high,
-                                 pe.skip_entry_bar_low,
-                                 pe.market_pyramid_add,
-                                 pe.entry_path_position});
+            PyramidEntry kept = pe;
+            kept.qty = keep_qty;
+            kept.max_runup *= keep_scale;
+            kept.max_drawdown *= keep_scale;
+            // Percent and per-contract fees follow the surviving quantity.
+            // CASH_PER_ORDER remains one fee for the accepted entry order,
+            // matching calc_commission's established qty-independent shape.
+            if (std::isfinite(kept.entry_commission_account)
+                && commission_type_ != CommissionType::CASH_PER_ORDER) {
+                kept.entry_commission_account *= keep_scale;
+            }
+            remaining.push_back(std::move(kept));
         }
     }
 
@@ -436,7 +442,7 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // is account-currency by construction), so it is NOT scaled again here.
     const double pv = syminfo_.pointvalue;
     double pnl = (was_long ? (fill_price - pe.price) : (pe.price - fill_price))
-                 * close_qty * pv * account_currency_fx_;
+                 * close_qty * pv * active_account_currency_fx();
     const double entry_commission = calc_commission(pe.price, close_qty);
     const double exit_commission  = calc_commission(fill_price, close_qty);
     pnl -= entry_commission + exit_commission;
@@ -448,7 +454,8 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // (exit/entry-1) form; shorts diverge on large moves ((entry/exit-1)
     // was wrong). Computed AFTER the commission subtraction above — order
     // matters.
-    const double entry_cost = pe.price * close_qty * pv * account_currency_fx_;
+    const double entry_cost = pe.price * close_qty * pv
+                              * active_account_currency_fx();
     double pnl_pct = (entry_cost > 0.0) ? (pnl / entry_cost) * 100.0 : 0.0;
 
     Trade trade;
@@ -530,8 +537,10 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     // account currency via account_currency_fx_ (default 1.0, no-op) before
     // combining with entry_commission, which is already account-currency
     // (see calc_commission) — same convention as pnl above.
-    trade.max_runup = std::max(0.0, runup * pv * account_currency_fx_ - entry_commission);
-    trade.max_drawdown = drawdown * pv * account_currency_fx_ + entry_commission;
+    trade.max_runup = std::max(
+        0.0, runup * pv * active_account_currency_fx() - entry_commission);
+    trade.max_drawdown = drawdown * pv * active_account_currency_fx()
+                         + entry_commission;
     const double trade_pnl = trade.pnl;
     trades_.push_back(std::move(trade));
     net_profit_sum_ += trade_pnl;
@@ -627,6 +636,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     close_two_call_first_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
+    snapshot_entry_commission(pyramid_entries_.back());
     id_unclosed_qty_[id] += qty;
 }
 
@@ -789,6 +799,7 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
     position_entry_count_++;
     trail_best_price_ = fill_price;
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id, bar_index_});
+    snapshot_entry_commission(pyramid_entries_.back());
     // KI-62: only a same-direction MARKET add is scratched by a same-bar
     // from_entry bracket exit; a priced pyramid add is not this collision.
     pyramid_entries_.back().market_pyramid_add = !is_priced_entry;

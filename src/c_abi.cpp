@@ -275,6 +275,16 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
         std::string(key), value);
 }
 
+PF_API int strategy_set_account_currency_fx_series(
+        pf_strategy_t s, const int64_t* effective_from_ms,
+        const double* account_per_quote, int n) {
+    if (!s) return -1;
+    return static_cast<pineforge::BacktestEngine*>(s)
+                   ->set_account_currency_fx_series(
+                       effective_from_ms, account_per_quote, n)
+        ? 0 : -1;
+}
+
 /* See PF_ABI_VERSION doc in pineforge.h. */
 PF_API int pf_abi_version(void) { return PF_ABI_VERSION; }
 

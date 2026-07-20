@@ -33,6 +33,7 @@ recompiling. "Compile-time" = baked into `generated.cpp` from the Pine
 | `strategy_set_syminfo_timezone(s, tz)` | `UTC` | Exchange TZ → feeds `session.ismarket` / `time(session)`. **Separate slot** from chart tz. |
 | `strategy_set_syminfo_session(s, str)` | `24x7` | Session string e.g. `0930-1600:23456` (days 1=Sun..7=Sat). |
 | `strategy_set_syminfo_metadata(s, key, double)` | reads `na` | Inject a fundamental field (`shares_outstanding_total`, `target_price_*`, …); engine only computes — data fed externally. |
+| `strategy_set_account_currency_fx_series(s, timestamps, rates, n)` | scalar metadata fallback | Copy a strictly increasing effective-time quote-to-account FX curve. Selection is inclusive as-of, carries forward, and uses the scalar fallback before the first point. Curve presence selects the converted-currency broker ledger even when the effective rate equals 1. Passing `n=0` clears it. Ordinary historical, non-COOF, non-magnifier runs only; a broker-open rate change on a margin-call-enabled carried position is supported for TV-pinned 1x longs, while carried shorts and leveraged positions fail closed. |
 
 Run entry points: `run_backtest(s,bars,n,out)` (auto-detect TF, no magnifier) /
 `run_backtest_full(s,bars,n,input_tf,script_tf,bar_magnifier,magnifier_samples,magnifier_dist,out)`.
@@ -94,7 +95,12 @@ Any non-meta key → `strategy_set_input`. Recognized: `ohlcv_csv`,
 `ohlcv_start_ms`, `script_tf`, `input_tf`, `chart_timezone`, and a
 `runtime_overrides` block: `bar_magnifier`, `magnifier_distribution`,
 `magnifier_samples`, `magnifier_volume_weighted`, `timezone`, `session`,
-`syminfo_metadata`. `tv_trades_csv` / `tv_trades_csv_tz` are verify-only.
+`syminfo_metadata`, `account_currency_fx_daily_close_json`.
+The FX JSON is a non-empty `{\"YYYY-MM-DD\": close}` object. The adapter sorts
+dates and makes day D's UTC close effective at D+1 00:00 UTC; the latest point
+whose effective timestamp is at or before the broker event carries forward.
+Duplicate dates and non-positive/non-finite rates fail closed. The Docker runner
+does not support this input. `tv_trades_csv` / `tv_trades_csv_tz` are verify-only.
 
 > `engine_chart_timezone` is **NOT** a `run_strategy.py` key — it's consumed
 > only by the private canonical validator. In this harness use `chart_timezone`.
