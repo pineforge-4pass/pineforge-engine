@@ -44,12 +44,13 @@ import csv
 import ctypes
 import hashlib
 import json
+import math
 import os
 import re
 import struct
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -317,8 +318,66 @@ def build_fingerprint(provenance: dict) -> dict:
 # <<< fingerprint helpers
 
 
+# Timestamped quote->account FX is fingerprinted from the exact values passed
+# through the C ABI, not merely from provider-file metadata.  The raw file hash
+# remains useful provenance, while this canonical digest proves the effective
+# broker input independently of JSON key order or whitespace.
+ACCOUNT_CURRENCY_FX_CANONICALIZATION = "pf-account-currency-fx-i64-f64-le-v1"
+_ACCOUNT_CURRENCY_FX_HASH_PREFIX = \
+    b"pineforge:account-currency-fx:i64-f64-le:v1\0"
+_ACCOUNT_CURRENCY_FX_RECORD = struct.Struct("<qd")
+
+
+def _account_currency_fx_values_sha256(timestamps, rates) -> str:
+    if len(timestamps) != len(rates) or not timestamps:
+        raise ValueError(
+            "account_currency_fx_series requires equal non-empty timestamp/rate arrays")
+    h = hashlib.sha256()
+    h.update(_ACCOUNT_CURRENCY_FX_HASH_PREFIX)
+    previous_timestamp = None
+    for raw_timestamp, raw_rate in zip(timestamps, rates):
+        timestamp = int(raw_timestamp)
+        rate = float(raw_rate)
+        if previous_timestamp is not None and timestamp <= previous_timestamp:
+            raise ValueError(
+                "account_currency_fx_series timestamps must be strictly increasing")
+        if not math.isfinite(rate) or rate <= 0.0:
+            raise ValueError(
+                "account_currency_fx_series rates must be positive and finite")
+        h.update(_ACCOUNT_CURRENCY_FX_RECORD.pack(timestamp, rate))
+        previous_timestamp = timestamp
+    return h.hexdigest()
+
+
+def _effective_account_currency_fx_scalar(run_kwargs: dict) -> float:
+    metadata = run_kwargs.get("syminfo_metadata")
+    raw_value = metadata.get("account_currency_fx", 1.0) \
+        if isinstance(metadata, dict) else 1.0
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return 1.0
+    return value if math.isfinite(value) and value > 0.0 else 1.0
+
+
 def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> dict:
     """Return the effective runtime settings that participate in a fingerprint."""
+    fx_scalar = _effective_account_currency_fx_scalar(run_kwargs)
+    fx_series = run_kwargs.get("account_currency_fx_series")
+    fx_summary = None
+    if fx_series:
+        timestamps, rates = fx_series
+        fx_summary = {
+            "canonicalization": ACCOUNT_CURRENCY_FX_CANONICALIZATION,
+            "effective_values_sha256":
+                _account_currency_fx_values_sha256(timestamps, rates),
+            "source_file_sha256": run_kwargs.get(
+                "account_currency_fx_source_sha256") or "",
+            "fallback_account_per_quote": fx_scalar,
+            "points": len(timestamps),
+            "first_effective_ms": int(timestamps[0]),
+            "last_effective_ms": int(timestamps[-1]),
+        }
     return {
         "input_tf": run_kwargs.get("input_tf") or "",
         "script_tf": run_kwargs.get("script_tf") or "",
@@ -327,6 +386,8 @@ def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> di
         "magnifier_distribution": run_kwargs.get("magnifier_distribution") or "ENDPOINTS",
         "chart_timezone": run_kwargs.get("chart_timezone") or "",
         "trade_start_ms": None if trade_start_ms is None else int(trade_start_ms),
+        "account_currency_fx_scalar": fx_scalar,
+        "account_currency_fx_series": fx_summary,
     }
 
 
@@ -534,6 +595,49 @@ def find_strategy_lib(strategy_dir: Path, so_name: str = "strategy.so") -> Path:
     return so_path
 
 
+def _load_account_currency_fx_daily_closes(path: Path):
+    """Load ``{"YYYY-MM-DD": close}`` and shift each close to D+1 00:00Z.
+
+    TradingView applies the previous UTC day's quote/account close. The C ABI
+    deliberately accepts effective timestamps instead of provider-specific
+    daily semantics; this harness adapter owns the one-day shift.
+    """
+    raw_bytes = path.read_bytes()
+
+    def reject_duplicate_keys(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(
+                    f"duplicate account-currency FX date {key!r}: {path}")
+            obj[key] = value
+        return obj
+
+    payload = json.loads(raw_bytes, object_pairs_hook=reject_duplicate_keys)
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError(
+            f"account_currency_fx_daily_close_json must contain a non-empty object: {path}")
+    points = []
+    for day, raw_rate in payload.items():
+        try:
+            date = datetime.strptime(str(day), "%Y-%m-%d").replace(
+                tzinfo=timezone.utc)
+            rate = float(raw_rate)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid account-currency FX point {day!r}: {raw_rate!r}") from exc
+        if isinstance(raw_rate, bool) or not math.isfinite(rate) or rate <= 0.0:
+            raise ValueError(f"invalid account-currency FX rate {day!r}: {raw_rate!r}")
+        effective_ms = int((date + timedelta(days=1)).timestamp() * 1000)
+        points.append((effective_ms, rate))
+    points.sort()
+    if any(points[i][0] <= points[i - 1][0] for i in range(1, len(points))):
+        raise ValueError(f"duplicate account-currency FX dates: {path}")
+    return (
+        ([point[0] for point in points], [point[1] for point in points]),
+        hashlib.sha256(raw_bytes).hexdigest(),
+    )
+
+
 def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
                       default_chart_tz: str = "") -> tuple[Path, dict]:
     """Resolve per-probe ``inputs.json`` metadata into the OHLCV path and the
@@ -601,6 +705,17 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         syminfo_metadata = dict(syminfo_metadata)
         syminfo_metadata["qty_step"] = qty_step
 
+    fx_series = None
+    fx_source_sha256 = None
+    fx_daily_json = runtime_overrides.get(
+        "account_currency_fx_daily_close_json")
+    if fx_daily_json:
+        fx_path = Path(str(fx_daily_json))
+        if not fx_path.is_absolute():
+            fx_path = (strategy_dir / fx_path).resolve()
+        fx_series, fx_source_sha256 = \
+            _load_account_currency_fx_daily_closes(fx_path)
+
     kwargs = dict(
         strategy_overrides=strategy_overrides or None,
         chart_timezone=chart_tz,
@@ -609,6 +724,8 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         syminfo_metadata=syminfo_metadata,
         syminfo_mintick=_num(runtime_overrides.get("mintick")),
         syminfo_pointvalue=_num(runtime_overrides.get("pointvalue")),
+        account_currency_fx_series=fx_series,
+        account_currency_fx_source_sha256=fx_source_sha256,
         input_tf=str(params.get("input_tf") or "") or None,
         script_tf=str(params.get("script_tf") or "") or None,
         ohlcv_start_ms=ohlcv_start_ms,
@@ -712,6 +829,11 @@ class Strategy:
             L.strategy_set_syminfo_metadata.argtypes = [
                 ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
             L.strategy_set_syminfo_metadata.restype = None
+        if hasattr(L, "strategy_set_account_currency_fx_series"):
+            L.strategy_set_account_currency_fx_series.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_int64),
+                ctypes.POINTER(ctypes.c_double), ctypes.c_int]
+            L.strategy_set_account_currency_fx_series.restype = ctypes.c_int
         if hasattr(L, "strategy_set_syminfo_mintick"):
             L.strategy_set_syminfo_mintick.argtypes = [ctypes.c_void_p, ctypes.c_double]
             L.strategy_set_syminfo_mintick.restype = None
@@ -732,6 +854,8 @@ class Strategy:
             syminfo_metadata: dict | None = None,
             syminfo_mintick: float | None = None,
             syminfo_pointvalue: float | None = None,
+            account_currency_fx_series: "tuple | None" = None,
+            account_currency_fx_source_sha256: str | None = None,
             input_tf: str | None = None, script_tf: str | None = None,
             ohlcv_start_ms: int | None = None,
             ohlcv_end_ms: int | None = None,
@@ -826,6 +950,23 @@ class Strategy:
                             state, str(mkey).encode(), float(mval))
                     except (TypeError, ValueError):
                         continue
+            if account_currency_fx_series is not None:
+                if not hasattr(self.lib, "strategy_set_account_currency_fx_series"):
+                    raise RuntimeError(
+                        "strategy library lacks timestamped account-currency FX support; rebuild it")
+                fx_timestamps, fx_rates = account_currency_fx_series
+                if len(fx_timestamps) != len(fx_rates) or not fx_timestamps:
+                    raise ValueError(
+                        "account_currency_fx_series requires equal non-empty timestamp/rate arrays")
+                fx_timestamps_c = (ctypes.c_int64 * len(fx_timestamps))(
+                    *[int(value) for value in fx_timestamps])
+                fx_rates_c = (ctypes.c_double * len(fx_rates))(
+                    *[float(value) for value in fx_rates])
+                rc = self.lib.strategy_set_account_currency_fx_series(
+                    state, fx_timestamps_c, fx_rates_c, len(fx_timestamps))
+                if rc != 0:
+                    raise ValueError(
+                        "engine rejected account_currency_fx_series")
             if syminfo_mintick is not None and hasattr(self.lib, "strategy_set_syminfo_mintick"):
                 self.lib.strategy_set_syminfo_mintick(state, float(syminfo_mintick))
             if syminfo_pointvalue is not None and hasattr(self.lib, "strategy_set_syminfo_pointvalue"):
@@ -1179,6 +1320,10 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     pre-trimming the CSV fed to the container (the ctypes path trims in _load_bars).
     NEVER re-transpiles .pine (uses the committed cpp, no codegen variance)."""
     import pf_release_run as _rel
+    if run_kwargs.get("account_currency_fx_series") is not None:
+        raise RuntimeError(
+            "--runner docker does not support timestamped account-currency FX; "
+            "use the ctypes runner with a freshly built strategy library")
     generated_cpp = strategy_dir / "generated.cpp"
     if not generated_cpp.exists():
         raise FileNotFoundError(f"generated.cpp not found for --runner docker: {generated_cpp}")
@@ -1357,6 +1502,11 @@ def main() -> int:
             sys.exit("error: --trace-json needs --emit-plots (deferred); not supported with --runner docker.")
         if args.fingerprint_json is not None:
             sys.exit("error: --fingerprint-json is not supported with --runner docker.")
+        if run_kwargs.get("account_currency_fx_series") is not None:
+            sys.exit(
+                "error: --runner docker does not support timestamped "
+                "account-currency FX; use --runner ctypes with a freshly "
+                "built strategy library.")
         strat = None
         report = _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
                                  trade_start_ms, args.image)

@@ -611,6 +611,28 @@ PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue);
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value);
 
+/** Install a timestamped quote-to-account currency conversion curve.
+ *
+ *  Each value is account-currency units per one unit of the symbol's quote
+ *  currency and becomes active, inclusively, at the corresponding Unix-ms
+ *  timestamp. The latest active value carries forward; broker events before
+ *  the first point use the scalar `account_currency_fx` metadata fallback.
+ *  Installing a curve also selects the converted account-currency broker
+ *  ledger, including during that pre-first fallback interval; it is not
+ *  equivalent to a same-currency run merely because a rate happens to be 1.
+ *  Arrays are copied. Timestamps must be strictly increasing and rates
+ *  positive and finite. Pass `n == 0` to clear the curve and restore scalar
+ *  behavior. Timestamped curves currently support ordinary historical runs.
+ *  Broker-open rate changes on margin-call-enabled carried positions are
+ *  TV-pinned for 1x longs; carried shorts and leveraged positions fail closed
+ *  at the crossing. Streaming, calc-on-order-fills, and bar-magnifier runs
+ *  also fail closed.
+ *
+ *  @return 0 on success, -1 for a null strategy or invalid arrays. */
+PF_API int strategy_set_account_currency_fx_series(
+    pf_strategy_t s, const int64_t* effective_from_ms,
+    const double* account_per_quote, int n);
+
 /** Returns the error message captured by the most recent #run_backtest /
  *  #run_backtest_full call on this strategy.
  *

@@ -180,6 +180,87 @@ def main() -> int:
     check("run_strategy: same effective gate has deterministic digest",
           gated_fp["digest"] == same_gate_fp["digest"])
 
+    # Timestamped FX provenance is pinned to the exact effective C-ABI values,
+    # not only to a provider-file hash, point count, or endpoints.  Changing an
+    # interior rate must therefore change both the value digest and the final
+    # run fingerprint even when every summary field is otherwise identical.
+    fx_timestamps = [1_000, 2_000, 3_000]
+    fx_kwargs_a = dict(runtime_kwargs,
+                       account_currency_fx_series=(fx_timestamps,
+                                                    [1.0, 1.001, 1.002]),
+                       account_currency_fx_source_sha256="a" * 64)
+    fx_kwargs_b = dict(runtime_kwargs,
+                       account_currency_fx_series=(fx_timestamps,
+                                                    [1.0, 1.0015, 1.002]),
+                       account_currency_fx_source_sha256="a" * 64)
+    fx_runtime_a = rs.build_runtime_provenance(fx_kwargs_a, gate_ms)
+    fx_runtime_b = rs.build_runtime_provenance(fx_kwargs_b, gate_ms)
+    fx_meta_a = fx_runtime_a["account_currency_fx_series"]
+    expected_fx_hasher = hashlib.sha256()
+    expected_fx_hasher.update(
+        b"pineforge:account-currency-fx:i64-f64-le:v1\0")
+    fx_record = struct.Struct("<qd")
+    for point in zip(fx_timestamps, [1.0, 1.001, 1.002]):
+        expected_fx_hasher.update(fx_record.pack(*point))
+    check("run_strategy: FX provenance names canonical packed-value contract",
+          fx_meta_a["canonicalization"]
+          == "pf-account-currency-fx-i64-f64-le-v1")
+    check("run_strategy: FX effective-value digest is independently reproducible",
+          fx_meta_a["effective_values_sha256"]
+          == expected_fx_hasher.hexdigest())
+    check("run_strategy: FX raw provider-file hash remains provenance",
+          fx_meta_a["source_file_sha256"] == "a" * 64)
+    check("run_strategy: FX series records its scalar pre-first fallback",
+          fx_meta_a["fallback_account_per_quote"] == 1.0
+          and fx_runtime_a["account_currency_fx_scalar"] == 1.0)
+    check("run_strategy: changed interior FX rate changes effective digest",
+          fx_meta_a["effective_values_sha256"]
+          != fx_runtime_b["account_currency_fx_series"]["effective_values_sha256"])
+    check("run_strategy: changed interior FX rate changes run fingerprint",
+          rs.build_fingerprint({"runtime": fx_runtime_a})["digest"]
+          != rs.build_fingerprint({"runtime": fx_runtime_b})["digest"])
+
+    fx_kwargs_fallback = dict(
+        fx_kwargs_a, syminfo_metadata={"account_currency_fx": 1.25})
+    fx_runtime_fallback = rs.build_runtime_provenance(
+        fx_kwargs_fallback, gate_ms)
+    check("run_strategy: changed pre-first FX fallback changes provenance",
+          fx_runtime_fallback["account_currency_fx_scalar"] == 1.25
+          and fx_runtime_fallback["account_currency_fx_series"]
+                  ["fallback_account_per_quote"] == 1.25
+          and rs.build_fingerprint({"runtime": fx_runtime_fallback})["digest"]
+              != rs.build_fingerprint({"runtime": fx_runtime_a})["digest"])
+
+    # Provider adapter contract: a UTC daily close becomes effective at the
+    # next day's 00:00Z boundary, key order is normalized, and duplicate dates
+    # fail closed before json.loads can silently overwrite either value.
+    with tempfile.TemporaryDirectory() as td:
+        td_path = Path(td)
+        valid_fx = td_path / "fx.json"
+        valid_fx.write_text(
+            '{"2026-01-02": 1.002, "2026-01-01": 1.001}',
+            encoding="utf-8")
+        (loaded_timestamps, loaded_rates), loaded_source_sha = \
+            rs._load_account_currency_fx_daily_closes(valid_fx)
+        check("run_strategy: daily FX closes sort and shift to D+1 00:00Z",
+              loaded_timestamps == [1767312000000, 1767398400000]
+              and loaded_rates == [1.001, 1.002])
+        check("run_strategy: daily FX loader records raw file SHA-256",
+              loaded_source_sha
+              == hashlib.sha256(valid_fx.read_bytes()).hexdigest())
+
+        duplicate_fx = td_path / "fx-duplicate.json"
+        duplicate_fx.write_text(
+            '{"2026-01-01": 1.0, "2026-01-01": 1.1}',
+            encoding="utf-8")
+        duplicate_rejected = False
+        try:
+            rs._load_account_currency_fx_daily_closes(duplicate_fx)
+        except ValueError:
+            duplicate_rejected = True
+        check("run_strategy: duplicate daily FX date fails closed",
+              duplicate_rejected)
+
     source_tree = ast.parse(RUN_STRATEGY.read_text(encoding="utf-8"))
     main_fn = next((node for node in source_tree.body
                     if isinstance(node, ast.FunctionDef) and node.name == "main"), None)

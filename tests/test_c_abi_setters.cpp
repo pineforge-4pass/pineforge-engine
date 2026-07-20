@@ -6,7 +6,7 @@
  *   strategy_set_trace_enabled, strategy_get_last_error,
  *   strategy_set_trade_start_time, strategy_set_chart_timezone,
  *   strategy_set_syminfo_timezone / _session / _mintick / _pointvalue /
- *   _metadata, and pf_version_string.
+ *   _metadata / _account_currency_fx_series, and pf_version_string.
  *
  * Each entry point begins with a null-guard (`if (!s) return;` — or
  * `if (!s || !arg) return;`) and then forwards to a BacktestEngine
@@ -73,6 +73,15 @@ public:
     const std::string& sym_session() const { return syminfo_.session; }
     double             sym_mintick() const { return syminfo_.mintick; }
     double             sym_pv()      const { return syminfo_.pointvalue; }
+    std::size_t        fx_points()   const {
+        return account_currency_fx_timestamps_.size();
+    }
+    int64_t fx_timestamp(std::size_t i) const {
+        return account_currency_fx_timestamps_.at(i);
+    }
+    double fx_rate(std::size_t i) const {
+        return account_currency_fx_rates_.at(i);
+    }
     // get_syminfo_metadata() is protected on BacktestEngine; expose it via
     // the subclass. It returns na<double>() (NaN) for keys never injected.
     double meta(const std::string& key) const { return get_syminfo_metadata(key); }
@@ -97,6 +106,8 @@ int main() {
     strategy_set_syminfo_mintick(nullptr, 0.25);
     strategy_set_syminfo_pointvalue(nullptr, 50.0);
     strategy_set_syminfo_metadata(nullptr, "shares_outstanding_total", 1.0);
+    CHECK(strategy_set_account_currency_fx_series(
+              nullptr, nullptr, nullptr, 0) == -1);
     CHECK(strategy_stream_begin(nullptr, nullptr, 0, "1", "1") == -1);
     CHECK(strategy_stream_push_tick(nullptr, nullptr) == -1);
     CHECK(strategy_stream_push_ticks(nullptr, nullptr, 0) == -1);
@@ -181,6 +192,69 @@ int main() {
     // A key that was never injected still reports na.
     CHECK(pineforge::is_na(eng.meta("never_injected")));
 
+    // Timestamped account-currency FX: the C ABI validates the complete input
+    // before replacing engine configuration, copies caller-owned arrays, and
+    // treats n=0 as an explicit clear. Every malformed shape fails atomically.
+    int64_t fx_ts[] = {1000, 2000};
+    double fx_rates[] = {1.001, 1.002};
+    CHECK(strategy_set_account_currency_fx_series(
+              h, fx_ts, fx_rates, 2) == 0);
+    CHECK(eng.fx_points() == 2);
+    CHECK(eng.fx_timestamp(0) == 1000);
+    CHECK(eng.fx_timestamp(1) == 2000);
+    CHECK(eng.fx_rate(0) == 1.001);
+    CHECK(eng.fx_rate(1) == 1.002);
+
+    // Caller mutation after the setter returns cannot alter the installed
+    // provider; the ABI owns a deep copy rather than retaining raw pointers.
+    fx_ts[0] = -1;
+    fx_rates[0] = 99.0;
+    CHECK(eng.fx_timestamp(0) == 1000);
+    CHECK(eng.fx_rate(0) == 1.001);
+
+    const int64_t one_ts[] = {3000};
+    const double one_rate[] = {1.003};
+    CHECK(strategy_set_account_currency_fx_series(
+              h, one_ts, one_rate, -1) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, nullptr, one_rate, 1) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, one_ts, nullptr, 1) == -1);
+
+    const int64_t duplicate_ts[] = {3000, 3000};
+    const int64_t unsorted_ts[] = {4000, 3000};
+    const int64_t sorted_ts[] = {3000, 4000};
+    const double two_rates[] = {1.003, 1.004};
+    const double nan_rates[] = {
+        1.003, std::numeric_limits<double>::quiet_NaN()};
+    const double inf_rates[] = {
+        1.003, std::numeric_limits<double>::infinity()};
+    const double zero_rates[] = {1.003, 0.0};
+    const double negative_rates[] = {1.003, -1.0};
+    CHECK(strategy_set_account_currency_fx_series(
+              h, duplicate_ts, two_rates, 2) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, unsorted_ts, two_rates, 2) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, sorted_ts, nan_rates, 2) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, sorted_ts, inf_rates, 2) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, sorted_ts, zero_rates, 2) == -1);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, sorted_ts, negative_rates, 2) == -1);
+
+    // Every rejected replacement above leaves the original copied provider
+    // intact. Clearing is the sole successful empty-provider transition.
+    CHECK(eng.fx_points() == 2);
+    CHECK(eng.fx_timestamp(0) == 1000);
+    CHECK(eng.fx_timestamp(1) == 2000);
+    CHECK(eng.fx_rate(0) == 1.001);
+    CHECK(eng.fx_rate(1) == 1.002);
+    CHECK(strategy_set_account_currency_fx_series(
+              h, nullptr, nullptr, 0) == 0);
+    CHECK(eng.fx_points() == 0);
+
     // ── Historical -> realtime lifecycle wrappers ─────────────────
     ProbeEngine stream_eng;
     pf_strategy_t sh = static_cast<pf_strategy_t>(&stream_eng);
@@ -189,6 +263,14 @@ int main() {
     warmup.volume = 2.0;
     warmup.timestamp = 0;
     CHECK(strategy_stream_begin(sh, &warmup, 1, "1", "1") == 0);
+
+    // Timestamped FX is not supported by the realtime scheduler. Installing a
+    // curve after stream_begin must fail atomically; otherwise callers could
+    // bypass the begin-time fail-closed check.
+    const int64_t stream_fx_ts[] = {0};
+    const double stream_fx_rates[] = {1.001};
+    CHECK(strategy_set_account_currency_fx_series(
+              sh, stream_fx_ts, stream_fx_rates, 1) == -1);
 
     pf_trade_tick_t tick{};
     tick.timestamp = 60010;

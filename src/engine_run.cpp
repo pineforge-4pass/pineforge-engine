@@ -15,6 +15,57 @@
 namespace pineforge {
 using namespace internal;
 
+bool BacktestEngine::set_account_currency_fx_series(
+        const int64_t* timestamps_ms, const double* rates, int n) {
+    // Timestamped FX is not route-complete for the realtime scheduler. Reject
+    // late installation as well as stream_begin-with-series so callers cannot
+    // bypass fail-closed behavior by changing configuration after warmup.
+    if (stream_phase_ == StreamPhase::REALTIME || stream_warmup_mode_) {
+        return false;
+    }
+    if (n < 0 || (n > 0 && (!timestamps_ms || !rates))) return false;
+    if (n == 0) {
+        account_currency_fx_timestamps_.clear();
+        account_currency_fx_rates_.clear();
+        return true;
+    }
+
+    std::vector<int64_t> next_timestamps;
+    std::vector<double> next_rates;
+    next_timestamps.reserve(static_cast<std::size_t>(n));
+    next_rates.reserve(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        if ((i > 0 && timestamps_ms[i] <= timestamps_ms[i - 1])
+            || !std::isfinite(rates[i]) || rates[i] <= 0.0) {
+            return false;
+        }
+        next_timestamps.push_back(timestamps_ms[i]);
+        next_rates.push_back(rates[i]);
+    }
+    account_currency_fx_timestamps_ = std::move(next_timestamps);
+    account_currency_fx_rates_ = std::move(next_rates);
+    return true;
+}
+
+double BacktestEngine::account_currency_fx_at(int64_t timestamp_ms) const {
+    if (account_currency_fx_timestamps_.empty()) {
+        return account_currency_fx_;
+    }
+    const auto it = std::upper_bound(
+        account_currency_fx_timestamps_.begin(),
+        account_currency_fx_timestamps_.end(), timestamp_ms);
+    if (it == account_currency_fx_timestamps_.begin()) {
+        return account_currency_fx_;
+    }
+    const std::size_t index = static_cast<std::size_t>(
+        std::distance(account_currency_fx_timestamps_.begin(), it) - 1);
+    return account_currency_fx_rates_[index];
+}
+
+double BacktestEngine::active_account_currency_fx() const {
+    return account_currency_fx_at(current_bar_.timestamp);
+}
+
 
 // open_trade_* accessors moved to engine_trade_accessors.cpp.
 
@@ -54,6 +105,24 @@ void BacktestEngine::dispatch_bar() {
     if (calc_on_order_fills_) {
         dispatch_bar_calc_on_order_fills();
         return;
+    }
+
+    // A confirmed timestamped FX point is consumed at the broker boundary,
+    // before any resting order or the close-time script body can observe the
+    // position.  Restrict current_bar_ to the opening point while the broker
+    // emits the forced exit so the trade cannot inherit future high/low state
+    // from the script bar.
+    {
+        const Bar script_bar = current_bar_;
+        current_bar_ = Bar{script_bar.open, script_bar.open, script_bar.open,
+                           script_bar.open, 0.0, script_bar.timestamp};
+        try {
+            process_carried_long_full_margin_fx_rollover(script_bar);
+        } catch (...) {
+            current_bar_ = script_bar;
+            throw;
+        }
+        current_bar_ = script_bar;
     }
 
     // A C-factor inheritance is same-ordinary-bar state. A candidate erased
@@ -573,6 +642,9 @@ void BacktestEngine::reset_run_state() {
     // Per-bar cursor + session-predicate state.
     bar_index_ = 0;
     prev_bar_timestamp_ = 0;
+    account_currency_fx_broker_epoch_initialized_ = false;
+    account_currency_fx_broker_epoch_ = 0;
+    account_currency_fx_broker_rate_ = account_currency_fx_;
     prev_in_session_ = false;
     session_ismarket_ = false;
     session_isfirstbar_ = false;
@@ -630,6 +702,10 @@ void BacktestEngine::run(const Bar* bars, int n) {
         last_bar_index_ = 0;
     }
     try {
+    if (!account_currency_fx_timestamps_.empty() && calc_on_order_fills_) {
+        throw std::runtime_error(
+            "timestamped account-currency FX does not support calc_on_order_fills");
+    }
     reset_run_state();
     equity_curve_.reserve((size_t)std::max(n, 0));
 
@@ -1059,6 +1135,12 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
         last_bar_time_ = 0;
     }
     try {
+    if (!account_currency_fx_timestamps_.empty()
+        && (calc_on_order_fills_ || bar_magnifier)) {
+        throw std::runtime_error(
+            "timestamped account-currency FX supports ordinary historical dispatch only; "
+            "calc_on_order_fills and bar magnifier are unsupported");
+    }
     // Auto-detect input_tf from bar timestamps if not provided
     std::string effective_input_tf = input_tf;
     if (effective_input_tf.empty() && n_input >= 2) {

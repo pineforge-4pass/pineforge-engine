@@ -125,6 +125,12 @@ add_test(
 )
 
 add_test(
+    NAME test_run_corpus
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/run_corpus_self_test.py
+)
+
+add_test(
     NAME test_verify_corpus_metrics
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_metrics.py

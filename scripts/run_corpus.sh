@@ -75,7 +75,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" && "$RUNNER" != "docker" ]]; then
         -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON \
         -Wno-dev
 
-    log "building runtime + 246 strategy targets ($JOBS jobs)"
+    log "building runtime + corpus strategy targets ($JOBS jobs)"
     cmake --build "$BUILD_DIR" --target corpus_strategies -j "$JOBS"
 fi
 
@@ -89,21 +89,42 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
     fi
     n_ok=0
     n_fail=0
+    n_selected=0
     failed=()
     started=$(date +%s)
 
-    for strat_dir in corpus/*/*/; do
+    for strat_dir in corpus/validation/*/; do
         strat_dir="${strat_dir%/}"
         if [[ -n "${ONLY:-}" && "$strat_dir" != *"$ONLY"* ]]; then
             continue
         fi
+        # Only source-marked strategy directories are runnable. Auxiliary
+        # corpus trees (derived feeds, symbol-specific fixtures, worktrees)
+        # intentionally share this two-level layout and are not strategies.
+        if [[ ! -f "$strat_dir/strategy.pine" && ! -f "$strat_dir/generated.cpp" ]]; then
+            continue
+        fi
+        n_selected=$((n_selected + 1))
+
+        if [[ ! -f "$strat_dir/generated.cpp" ]]; then
+            n_fail=$((n_fail + 1))
+            failed+=("$strat_dir")
+            warn "$strat_dir failed: missing generated.cpp"
+            continue
+        fi
 
         if [[ "$RUNNER" == "docker" ]]; then
-            [[ -f "$strat_dir/generated.cpp" ]] || continue
             run_cmd=("$PY" scripts/run_strategy.py "$strat_dir" --runner docker)
             [[ -n "${IMAGE:-}" ]] && run_cmd+=(--image "${IMAGE}")
         else
-            [[ -f "$strat_dir/strategy.so" || -f "$strat_dir/strategy.dylib" || -f "$strat_dir/strategy.dll" ]] || continue
+            if [[ ! -f "$strat_dir/strategy.so"
+                  && ! -f "$strat_dir/strategy.dylib"
+                  && ! -f "$strat_dir/strategy.dll" ]]; then
+                n_fail=$((n_fail + 1))
+                failed+=("$strat_dir")
+                warn "$strat_dir failed: missing compiled strategy library"
+                continue
+            fi
             # Pick whichever shared lib extension actually exists for this platform.
             if [[ -f "$strat_dir/strategy.dylib" ]]; then
                 so_name="strategy.dylib"
@@ -115,14 +136,22 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
             run_cmd=("$PY" scripts/run_strategy.py "$strat_dir" --so-name "$so_name")
         fi
 
-        if "${run_cmd[@]}" >/dev/null 2>&1; then
+        run_output=""
+        if run_output="$("${run_cmd[@]}" 2>&1)"; then
             n_ok=$((n_ok + 1))
         else
             n_fail=$((n_fail + 1))
             failed+=("$strat_dir")
+            warn "$strat_dir failed:"
+            while IFS= read -r line; do
+                warn "  $line"
+            done <<< "$run_output"
         fi
     done
 
+    if (( n_selected == 0 )); then
+        fail "no corpus strategies matched${ONLY:+ ONLY=$ONLY}; refusing to verify stale engine_trades.csv"
+    fi
     elapsed=$(( $(date +%s) - started ))
     log "ran $((n_ok + n_fail)) strategies in ${elapsed}s -- ok=$n_ok fail=$n_fail"
     if (( n_fail > 0 )); then
@@ -130,6 +159,7 @@ if [[ "${SKIP_RUN:-0}" != "1" ]]; then
         for f in "${failed[@]}"; do
             warn "  $f"
         done
+        fail "$n_fail strategy run(s) failed; refusing to verify stale engine_trades.csv"
     fi
 fi
 

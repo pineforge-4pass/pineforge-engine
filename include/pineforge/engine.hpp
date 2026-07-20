@@ -65,6 +65,15 @@ struct PyramidEntry {
     // path suffix at/after this cursor on the entry bar. NaN marks every
     // unrouted parent class (market, stop-limit, raw order).
     double entry_path_position = std::numeric_limits<double>::quiet_NaN();
+    // Entry-leg commission in account currency at this slice's actual fill
+    // boundary. Percentage commission depends on quote->account FX, so an
+    // effective-time provider must not retroactively reprice this already-paid
+    // fee when a later rate becomes active. Closed-trade reporting deliberately
+    // ignores this snapshot: TV converts the complete realized trade at the
+    // exit-time FX rate. NaN is reserved for legacy/synthetic test injection;
+    // every production entry path initializes the snapshot at fill time.
+    double entry_commission_account =
+        std::numeric_limits<double>::quiet_NaN();
 };
 
 struct Trade {
@@ -430,6 +439,12 @@ struct PendingOrder {
     // NaN = no snapshot, no re-check.
     double sizing_equity = std::numeric_limits<double>::quiet_NaN();
     double sizing_price = std::numeric_limits<double>::quiet_NaN();
+    // Quote->account FX observed at the same placement boundary as the
+    // frozen quantity/equity/price tuple. A daily provider can roll between
+    // the signal bar and next-bar fill; fill admission must adjudicate the
+    // frozen signal snapshot, then the post-fill affordability pass applies
+    // the fill-time rate and emits any required broker margin trim.
+    double sizing_fx = std::numeric_limits<double>::quiet_NaN();
     // The bar close sizing_equity was marked at. free_funds subtracts the
     // margin the OPEN position ties up, and that must be marked at the same
     // price the equity was, or the two sides of the comparison mix a
@@ -769,7 +784,7 @@ protected:
     double margin_long_ = 100.0;
     double margin_short_ = 100.0;
 
-    // Account-currency FX multiplier for the broker affordability gate. When a
+    // Account-currency FX multiplier for every quote->account money path. When a
     // strategy declares ``currency=currency.XXX`` differing from the symbol's
     // quote currency (e.g. currency.INR on a USDT-quoted perp), TradingView
     // denominates equity in the account currency but the position notional in
@@ -777,8 +792,20 @@ protected:
     // rate before the ``required_margin <= equity`` check. The engine otherwise
     // assumes account == quote (FX 1.0). Injected via the syminfo metadata
     // channel (key "account_currency_fx"); defaults to 1.0 so every corpus
-    // strategy (which never sets it) is byte-identical.
+    // strategy (which never sets it) is byte-identical. A timestamped provider
+    // may override it as bars advance; the configured scalar remains the
+    // fallback before the provider's first effective point and across reruns.
     double account_currency_fx_ = 1.0;
+    std::vector<int64_t> account_currency_fx_timestamps_;
+    std::vector<double> account_currency_fx_rates_;
+    // Per-run broker clock for timestamped FX.  The epoch is the number of
+    // provider points effective at the current script-bar open (0 means the
+    // scalar fallback).  Consuming an epoch even while flat prevents a later
+    // entry from being mistaken for a carried position when the rate has not
+    // changed again.
+    bool account_currency_fx_broker_epoch_initialized_ = false;
+    std::size_t account_currency_fx_broker_epoch_ = 0;
+    double account_currency_fx_broker_rate_ = 1.0;
 
     // TradingView force-liquidation (margin call) toggle. TV runs the broker
     // margin-call emulator by default, so this defaults ON to match TV. It is
@@ -1169,6 +1196,11 @@ protected:
     // adverse-price liquidation; only an eligible one-shot post-fill
     // affordability event can trim it.
     void process_margin_call(const Bar& bar);
+    // A timestamped FX rollover is a broker-open event, not an end-of-bar
+    // adverse-price check.  This narrow path applies only to a carried 1x long
+    // in ordinary historical dispatch and returns true when it emits a broker
+    // liquidation row.
+    bool process_carried_long_full_margin_fx_rollover(const Bar& bar);
 
     // --- Slippage helper ---
     double round_to_mintick(double price) const {
@@ -1262,7 +1294,8 @@ protected:
     double calc_commission(double fill_price, double qty) const {
         switch (commission_type_) {
             case CommissionType::PERCENT:
-                return fill_price * qty * syminfo_.pointvalue * account_currency_fx_
+                return fill_price * qty * syminfo_.pointvalue
+                       * active_account_currency_fx()
                        * (commission_value_ / 100.0);
             case CommissionType::CASH_PER_ORDER:
                 return commission_value_;
@@ -1270,6 +1303,20 @@ protected:
                 return commission_value_ * qty;
         }
         return 0.0;
+    }
+
+    // Read the paid entry fee for a still-open pyramid slice. Production entry
+    // paths always initialize the snapshot. The fallback keeps hand-constructed
+    // PyramidEntry fixtures source-compatible without weakening real lifecycle
+    // behavior.
+    double open_entry_commission(const PyramidEntry& pe) const {
+        return std::isfinite(pe.entry_commission_account)
+            ? pe.entry_commission_account
+            : calc_commission(pe.price, pe.qty);
+    }
+
+    void snapshot_entry_commission(PyramidEntry& pe) const {
+        pe.entry_commission_account = calc_commission(pe.price, pe.qty);
     }
 
     // --- Position sizing helper ---
@@ -1356,7 +1403,7 @@ protected:
                 // markedly worse, and it cut end-to-end coverage.  Settle it
                 // with a clean-room TV probe (the KI-52 method), not algebra.
                 double equity = current_equity() + open_profit(current_bar_.close);
-                double cash = reserve_percent_commission(equity * (default_qty_value_ / 100.0)) / account_currency_fx_;
+                double cash = reserve_percent_commission(equity * (default_qty_value_ / 100.0)) / active_account_currency_fx();
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
                 return (std::isfinite(fill_price) && fill_price > 0)
@@ -1364,7 +1411,7 @@ protected:
             }
             case QtyType::CASH:
                 return (std::isfinite(fill_price) && fill_price > 0)
-                    ? apply_qty_step((default_qty_value_ / account_currency_fx_) / (fill_price * syminfo_.pointvalue)) : 0.0;
+                    ? apply_qty_step((default_qty_value_ / active_account_currency_fx()) / (fill_price * syminfo_.pointvalue)) : 0.0;
         }
         return apply_qty_step(default_qty_value_);
     }
@@ -1441,6 +1488,7 @@ protected:
                 o.sizing_equity =
                     current_equity() + open_profit(current_bar_.close);
             }
+            o.sizing_fx = active_account_currency_fx();
         }
     }
 
@@ -1564,7 +1612,7 @@ protected:
         // compared against bar.high/low), so convert back via the same
         // account_currency_fx_ inverse used in calc_qty; default 1.0 is a
         // no-op for the corpus.
-        const double equity_basis = (initial_capital_ + net_profit_sum_) / account_currency_fx_;
+        const double equity_basis = (initial_capital_ + net_profit_sum_) / active_account_currency_fx();
         double liq = (equity_basis / (qty * pv) - direction * position_entry_price_)
                      / denom;
         if (syminfo_mintick_ > 0.0) {
@@ -1590,7 +1638,7 @@ protected:
         // Account-currency, matching emit_close_trade / open_trade_profit —
         // callers combine this with initial_capital_ + net_profit_sum_ (both
         // account-currency) to get total equity. fx=1.0 is a no-op.
-        return diff * position_qty_ * syminfo_.pointvalue * account_currency_fx_;
+        return diff * position_qty_ * syminfo_.pointvalue * active_account_currency_fx();
     }
 
     int count_wintrades() const { return win_trades_count_; }
@@ -2365,6 +2413,8 @@ private:
     // are set before run() and must survive it. Called at the top of every
     // run() loop entrypoint. See tests/test_handle_reuse_reset.cpp.
     void reset_run_state();
+    double account_currency_fx_at(int64_t timestamp_ms) const;
+    double active_account_currency_fx() const;
     void settle_position_after_partial_exit();
     void enter_market_from_flat(const std::string& id, bool is_long,
                                 double fill_price, double explicit_qty,
@@ -2470,6 +2520,14 @@ public:
     bool stream_advance_time(int64_t timestamp_ms);
     bool stream_end(bool finalize_partial_input_bar = false);
     bool stream_is_realtime() const { return stream_phase_ == StreamPhase::REALTIME; }
+
+    // Install an effective-time FX curve (account-currency units per one unit
+    // of symbol quote currency). Points are copied and must have strictly
+    // increasing epoch-ms timestamps plus positive finite rates. The latest
+    // point whose timestamp is <= the current broker event is active. Passing
+    // n=0 clears the curve and restores the scalar metadata fallback.
+    bool set_account_currency_fx_series(const int64_t* timestamps_ms,
+                                        const double* rates, int n);
 
     void run(const Bar* input_bars, int n_input,
              const std::string& input_tf,
