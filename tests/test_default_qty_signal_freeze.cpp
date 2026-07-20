@@ -24,6 +24,11 @@
  *      computation — POC sizing is unchanged.
  *   E. CASH default sizing freezes at close(S) too: qty = cash / close(S),
  *      not cash / open(S+1).
+ *   H. An ordinary true-flat omitted-qty MARKET dispatch preserves the
+ *      already-quantized frozen quantity.  It must not apply qty_step a
+ *      second time and lose one lot at an exact binary boundary.
+ *   I. The adjacent explicit-qty shape still receives its ordinary single
+ *      qty_step application; the frozen-quantity exception does not widen.
  */
 
 #include <cmath>
@@ -355,6 +360,99 @@ void test_reversal_bracket_binding_survives_freeze() {
     }
 }
 
+// H/I. Binary-boundary dispatch regression for the ordinary true-flat
+// omitted-qty MARKET path.
+//
+// The raw placement quantity is 6279.0000001 / 1000 = 6.2790000001.  Its
+// first qty_step floor is 6.2790.  In binary64, that result divided by 0.0001
+// is 62789.999999..., so applying the same floor a SECOND time produces
+// 6.2789.  frozen_default_qty is already exchange-quantized at placement;
+// dispatch must preserve it in the position, physical lot, and logical id
+// ledger.  Before the C fix, apply_market_order_fill handed the frozen value
+// to enter_market_from_flat as an ordinary FIXED quantity and it was floored
+// again.
+class FrozenDispatchBoundaryProbe : public BacktestEngine {
+public:
+    explicit FrozenDispatchBoundaryProbe(bool explicit_qty)
+        : explicit_qty_(explicit_qty) {
+        initial_capital_ = 6279.0000001;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_value_ = 0.0;
+        qty_step_ = 0.0001;
+        margin_call_enabled_ = false;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+        if (explicit_qty_) {
+            // Adjacent control: an explicit raw quantity is not frozen and
+            // must still receive exactly one ordinary qty_step floor.
+            strategy_entry("BOUNDARY", true, kNaN, kNaN, 6.2790000001);
+        } else {
+            strategy_entry("BOUNDARY", true);
+        }
+    }
+
+    double one_floor_qty() const { return apply_qty_step(6.2790000001); }
+    double two_floor_qty() const { return apply_qty_step(one_floor_qty()); }
+    PositionSide position_side() const { return position_side_; }
+    double position_qty() const { return position_qty_; }
+    int live_lot_count() const { return static_cast<int>(pyramid_entries_.size()); }
+    double live_lot_qty() const {
+        return pyramid_entries_.empty() ? 0.0 : pyramid_entries_.front().qty;
+    }
+    std::string live_lot_id() const {
+        return pyramid_entries_.empty() ? "" : pyramid_entries_.front().entry_id;
+    }
+    double id_ledger_qty(const std::string& id) const {
+        const auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+
+private:
+    bool explicit_qty_;
+};
+
+static std::vector<Bar> frozen_dispatch_boundary_bars() {
+    return {
+        mk_bar(1000, 1000.0, 1000.0, 1000.0, 1000.0),
+        mk_bar(2000, 1000.0, 1000.0, 1000.0, 1000.0),
+    };
+}
+
+void test_frozen_true_flat_market_dispatch_is_not_refloored() {
+    std::printf("-- H: frozen true-flat MARKET dispatch is not re-floored --\n");
+    FrozenDispatchBoundaryProbe eng(/*explicit_qty=*/false);
+    auto bars = frozen_dispatch_boundary_bars();
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    // Pin the test's binary boundary independently of the dispatch result.
+    CHECK_NEAR(eng.one_floor_qty(), 6.2790, 1e-12);
+    CHECK_NEAR(eng.two_floor_qty(), 6.2789, 1e-12);
+
+    CHECK(eng.position_side() == PositionSide::LONG);
+    CHECK_NEAR(eng.position_qty(), 6.2790, 1e-12);
+    CHECK(eng.live_lot_count() == 1);
+    CHECK_NEAR(eng.live_lot_qty(), 6.2790, 1e-12);
+    CHECK(eng.live_lot_id() == "BOUNDARY");
+    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2790, 1e-12);
+}
+
+void test_explicit_true_flat_market_keeps_single_floor() {
+    std::printf("-- I: explicit true-flat MARKET keeps one qty floor --\n");
+    FrozenDispatchBoundaryProbe eng(/*explicit_qty=*/true);
+    auto bars = frozen_dispatch_boundary_bars();
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(eng.position_side() == PositionSide::LONG);
+    CHECK_NEAR(eng.position_qty(), 6.2790, 1e-12);
+    CHECK(eng.live_lot_count() == 1);
+    CHECK_NEAR(eng.live_lot_qty(), 6.2790, 1e-12);
+    CHECK(eng.live_lot_id() == "BOUNDARY");
+    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2790, 1e-12);
+}
+
 }  // namespace
 
 int main() {
@@ -366,6 +464,8 @@ int main() {
     test_cash_freeze();
     test_oca_default_sibling_cancelled();
     test_reversal_bracket_binding_survives_freeze();
+    test_frozen_true_flat_market_dispatch_is_not_refloored();
+    test_explicit_true_flat_market_keeps_single_floor();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

@@ -563,6 +563,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_entry_price_ = 0.0;
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
+    opening_affordability_commissioned_default_flat_long_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = 0;
@@ -612,6 +613,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     // transiently.
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
+    opening_affordability_commissioned_default_flat_long_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = current_bar_.timestamp;
