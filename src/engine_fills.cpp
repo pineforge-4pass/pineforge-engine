@@ -489,10 +489,13 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // state that a later bar may reconstruct or reuse.
     const bool opening_event_pending = opening_affordability_pending_;
     const bool opening_event_eligible = opening_affordability_eligible_;
+    const bool opening_event_commissioned_default_flat_long =
+        opening_affordability_commissioned_default_flat_long_;
     const double opening_event_raw_fill_base =
         opening_affordability_raw_fill_base_;
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
+    opening_affordability_commissioned_default_flat_long_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
 
@@ -563,6 +566,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
 
     double q_min = 0.0;
     double raw_exit_fill_base = 0.0;
+    bool fee_created_floor_zero_candidate = false;
     if (opening_affordability) {
         // Post-fill affordability is evaluated from the current position's
         // actual, directionally snapped/slipped entry basis. Capital and
@@ -612,6 +616,24 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         const double required_margin = qty * margin_per_unit;
         if (opening_equity >= required_margin) return;
         q_min = qty - opening_equity / margin_per_unit;
+        // A source-faithful TV tape pins a discontinuous broker edge for the
+        // exact one-shot provenance above: margin remains affordable before a
+        // positive percentage opening fee, that fee alone creates a sub-step
+        // shortfall, and TV closes one whole contract instead of dust-nooping.
+        // Keep both comparisons directional and tolerance-aware.  An absolute
+        // difference alone would turn affordable headroom into a false call.
+        const double pre_fee_equity = opening_equity + entry_commission;
+        const double comparison_guard = std::max(
+            1e-9, std::abs(pre_fee_equity) * 1e-12);
+        const double pre_fee_headroom = pre_fee_equity - required_margin;
+        const double post_fee_deficit = required_margin - opening_equity;
+        fee_created_floor_zero_candidate =
+            opening_event_commissioned_default_flat_long
+            && commission_type_ == CommissionType::PERCENT
+            && commission_value_ > 0.0
+            && entry_commission > 0.0
+            && pre_fee_headroom > comparison_guard
+            && post_fee_deficit > comparison_guard;
         raw_exit_fill_base = opening_event_raw_fill_base;
     } else {
         // Shorts and leveraged longs without a fresh opening event keep the
@@ -644,6 +666,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // / 53.0532 / 59.69 / … ; floor-AFTER matched 0/19 and desynced by step 7).
     // qty_step_ == 0 (corpus default; the explicit-leverage p2/5x margin probes
     // never set it) leaves both q_min and qty_liq untouched -> byte-identical.
+    const double raw_q_min = q_min;
     if (qty_step_ > 0.0) {
         // The quotient can land microscopically below an exact integer because
         // of binary representation (for example, one mathematical lot can be
@@ -663,8 +686,29 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // not a reason to force the generic finite-price cascade's one-step
     // progress fallback. qty_step==0 intentionally retains continuous-qty
     // behavior because no exchange lot floor was configured.
-    if (opening_affordability && q_min <= kQtyEpsilon) return;
-    double qty_liq = 4.0 * q_min;
+    double opening_floor_zero_fallback =
+        std::numeric_limits<double>::quiet_NaN();
+    if (opening_affordability && q_min <= kQtyEpsilon) {
+        if (fee_created_floor_zero_candidate
+            && qty_step_ > 0.0
+            && qty_step_ <= 1.0
+            && raw_q_min > kQtyEpsilon
+            && raw_q_min < 1.0) {
+            const double candidate = std::min(1.0, qty);
+            const bool full_position_cap = candidate >= qty - kQtyEpsilon;
+            const double gridded = apply_exit_qty_step(candidate);
+            const double grid_guard = std::max(
+                1e-12, std::abs(candidate) * 1e-12);
+            if (full_position_cap
+                || std::abs(gridded - candidate) <= grid_guard) {
+                opening_floor_zero_fallback = candidate;
+            }
+        }
+        if (!std::isfinite(opening_floor_zero_fallback)) return;
+    }
+    double qty_liq = std::isfinite(opening_floor_zero_fallback)
+        ? opening_floor_zero_fallback
+        : 4.0 * q_min;
     if (qty_step_ > 0.0) {
         // q_min is already a multiple of qty_step_, so 4*q_min is mathematically
         // a multiple too — but binary float makes e.g. 4*5.7089 = 22.83559999…,
@@ -2665,6 +2709,7 @@ void BacktestEngine::apply_filled_order_to_state(
         if (successful_short_open_or_add && !scoped_short_opening_fill) {
             opening_affordability_pending_ = false;
             opening_affordability_eligible_ = false;
+            opening_affordability_commissioned_default_flat_long_ = false;
             opening_affordability_raw_fill_base_ =
                 std::numeric_limits<double>::quiet_NaN();
         }
@@ -2704,6 +2749,20 @@ void BacktestEngine::apply_filled_order_to_state(
             opening_affordability_eligible_ =
                 accepted_additional_entry
                 || !frozen_all_in_true_flat_exemption;
+            opening_affordability_commissioned_default_flat_long_ =
+                successful_fresh_open
+                && order.opening_affordability_exemption_candidate
+                && order.type == OrderType::MARKET
+                && order.is_long
+                && std::isnan(order.qty)
+                && order.created_position_side == PositionSide::FLAT
+                && !order.created_after_position_close_in_bar
+                && position_side_before_fill == PositionSide::FLAT
+                && admitted_flat_on_frozen_sizing_price
+                && commission_type_ == CommissionType::PERCENT
+                && commission_value_ > 0.0
+                && std::isfinite(new_opening_commission)
+                && new_opening_commission > 0.0;
             opening_affordability_raw_fill_base_ = fill_price;
         }
     }
@@ -2922,7 +2981,9 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                          /*close_only_opposite=*/paired_flat_market,
                          /*is_priced_entry=*/false, /*tv_carry_qty=*/0.0,
                          order.created_bar, later_same_tick_entry,
-                         paired_flat_market);
+                         /*paired_flat_market_transaction=*/paired_flat_market,
+                         /*explicit_qty_prequantized=*/
+                             (frozen || paired_flat_market));
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
     if (!pyramid_entries_.empty()
@@ -3265,6 +3326,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         // open_fresh_position.
         opening_affordability_pending_ = false;
         opening_affordability_eligible_ = false;
+        opening_affordability_commissioned_default_flat_long_ = false;
         opening_affordability_raw_fill_base_ =
             std::numeric_limits<double>::quiet_NaN();
         position_entry_time_ = current_bar_.timestamp;

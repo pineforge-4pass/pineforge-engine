@@ -668,6 +668,117 @@ private:
     double qty_;
 };
 
+// A commissioned, default-sized all-in long can remain margin-affordable
+// before its opening fee while that fee alone creates a sub-step shortfall.
+// TV's broker closes one whole contract for this exact true-flat MARKET shape
+// when floor_step(q_min)==0.  These probes pin the rule, its full-position cap,
+// the existing nonzero-floor 4x path, and two important scope exclusions.
+class CommissionedDefaultPoeDustProbe : public MCEngine {
+public:
+    CommissionedDefaultPoeDustProbe(
+            double initial_capital, double qty_step,
+            CommissionType commission_type = CommissionType::PERCENT,
+            double commission_value = 0.1,
+            double default_percent = 100.0) {
+        initial_capital_ = initial_capital;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = default_percent;
+        commission_type_ = commission_type;
+        commission_value_ = commission_value;
+        margin_long_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = qty_step;
+        syminfo_mintick_ = 0.0001;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("L", true, kNaN, kNaN, kNaN);
+        }
+    }
+};
+
+static void test_fee_created_floor_zero_closes_one_contract() {
+    std::printf("test_fee_created_floor_zero_closes_one_contract\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1801.33, 1801.33, 1801.33, 1801.33, 1.0),
+        mk_bar(2000, 1801.34, 1801.34, 1801.34, 1801.34, 1.0),
+    };
+    CommissionedDefaultPoeDustProbe eng(
+        /*initial_capital=*/10000.0, /*qty_step=*/0.0001);
+    eng.run(bars.data(), (int)bars.size());
+
+    // Frozen qty is 5.5459. Margin alone retains positive headroom, but the
+    // 0.1% opening fee creates raw q_min=0.00002307... < one step.
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 1801.34));
+    CHECK(near(eng.exit_price(0), 1801.34));
+    CHECK(near(eng.trade_size(0), 1.0));
+    CHECK(near(eng.position_size(), 4.5459));
+}
+
+static void test_fee_created_floor_zero_caps_sub_one_position() {
+    std::printf("test_fee_created_floor_zero_caps_sub_one_position\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1500.0, 1500.0, 1500.0, 1500.0, 1.0),
+        mk_bar(2000, 1500.01, 1500.01, 1500.01, 1500.01, 1.0),
+    };
+    CommissionedDefaultPoeDustProbe eng(
+        /*initial_capital=*/1000.0, /*qty_step=*/0.0001);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 0.666));
+    CHECK(near(eng.position_size(), 0.0));
+}
+
+static void test_fee_created_nonzero_floor_keeps_four_x_quantity() {
+    std::printf("test_fee_created_nonzero_floor_keeps_four_x_quantity\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1872.19, 1872.19, 1872.19, 1872.19, 1.0),
+        mk_bar(2000, 1872.27, 1872.27, 1872.27, 1872.27, 1.0),
+    };
+    CommissionedDefaultPoeDustProbe eng(
+        /*initial_capital=*/9949.545946, /*qty_step=*/0.0001);
+    eng.run(bars.data(), (int)bars.size());
+
+    // raw q_min=0.00014707... floors to 0.0001 before the established 4x.
+    CHECK(eng.trade_count() == 1);
+    CHECK(near(eng.trade_size(0), 0.0004));
+    CHECK(near(eng.position_size(), 5.3086));
+}
+
+static void test_fee_created_floor_zero_rejects_off_grid_one_contract() {
+    std::printf("test_fee_created_floor_zero_rejects_off_grid_one_contract\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
+        mk_bar(2000, 1800.01, 1800.01, 1800.01, 1800.01, 1.0),
+    };
+    CommissionedDefaultPoeDustProbe eng(
+        /*initial_capital=*/9009.02, /*qty_step=*/2.5);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 0);
+    CHECK(near(eng.position_size(), 5.0));
+}
+
+static void test_cash_per_order_floor_zero_stays_outside_percent_fee_rule() {
+    std::printf("test_cash_per_order_floor_zero_stays_outside_percent_fee_rule\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
+        mk_bar(2000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
+    };
+    CommissionedDefaultPoeDustProbe eng(
+        /*initial_capital=*/10000.0, /*qty_step=*/0.0001,
+        CommissionType::CASH_PER_ORDER, /*commission_value=*/0.2);
+    eng.run(bars.data(), (int)bars.size());
+
+    CHECK(eng.trade_count() == 0);
+    CHECK(near(eng.position_size(), 5.5555));
+}
+
 // Repurposed from the KI-61 "sublot overage held" fixture (design-explicit-qty-
 // fill-admission). This is an EXPLICIT-qty all-in true-flat MARKET entry
 // (strategy.entry with qty=10 == equity/close) whose next-bar fill gaps
@@ -1769,6 +1880,11 @@ int main() {
     test_zero_cost_frozen_all_in_true_flat_gap_is_rejected();
     test_commissioned_frozen_all_in_true_flat_gap_is_eligible();
     test_paired_short_close_default_long_gap_remains_eligible();
+    test_fee_created_floor_zero_closes_one_contract();
+    test_fee_created_floor_zero_caps_sub_one_position();
+    test_fee_created_nonzero_floor_keeps_four_x_quantity();
+    test_fee_created_floor_zero_rejects_off_grid_one_contract();
+    test_cash_per_order_floor_zero_stays_outside_percent_fee_rule();
     test_explicit_all_in_zero_comm_adverse_gap_declined();
     test_explicit_all_in_commissioned_adverse_gap_declined();
     test_explicit_all_in_zero_comm_no_qty_step_declined();

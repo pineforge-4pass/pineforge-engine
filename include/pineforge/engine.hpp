@@ -596,6 +596,13 @@ protected:
     // and FIFO can reduce a real pyramid back to one live lot.
     bool opening_affordability_pending_ = false;
     bool opening_affordability_eligible_ = false;
+    // The queued event came from a successful, commissioned, omitted-qty
+    // percent_of_equity=100 high-level MARKET long that was created and filled
+    // from true flat.  process_margin_call combines this one-shot provenance
+    // with the actual margin/commission arithmetic before applying TV's
+    // fee-created, floor-zero one-contract fallback.  Reversals, adds,
+    // explicit/priced/RAW orders and zero/CASH commission stay outside it.
+    bool opening_affordability_commissioned_default_flat_long_ = false;
     double opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     int64_t position_entry_time_ = 0;
