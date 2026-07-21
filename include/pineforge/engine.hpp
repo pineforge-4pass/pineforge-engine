@@ -658,39 +658,30 @@ protected:
     // under the ANY rule (which closes id-matched physical lots directly).
     std::unordered_map<std::string, double> id_unclosed_qty_;
 
-    // ── Same-bar strategy.close batching (TV one-fill-per-bar rule) ──
-    // TradingView's broker emulator admits at most ONE default-FIFO
-    // ``strategy.close(id)`` market fill per bar under
-    // process_orders_on_close: every later close() call on the same bar
-    // REPLACES the pending close order. Empirically (3commas grid-bot TV
-    // exports, xau/xlm/pol/xrp — see fix/same-bar-multi-close-single-fill):
+    // ── Same-bar strategy.close batching ──
+    // Within one syntactic strategy.close callsite, TradingView keeps one
+    // pending broker instruction: later runtime evaluations replace its
+    // payload in place. Existing generated consumers omit a compiler token and
+    // therefore keep one global compatibility batch; regenerated consumers
+    // give every source callsite a nonzero token and thus an independent batch.
+    // For each batch, the accepted replacement/ledger contract is:
     //   - the FIRST replaced call's id-ledger is provisionally consumed
     //     silently (no fill, no trade rows);
     //   - when both the prior and current batches contain exactly two calls,
-    //     the prior batch's first admitted target is restored to that ledger. This is
-    //     provenance from the broker replacement chain, not a physical-lot
-    //     recount or ledger-minus-reservation calculation;
+    //     the prior batch's first admitted target is restored to that ledger.
+    //     This is provenance from the broker replacement chain, not a physical-
+    //     lot recount or ledger-minus-reservation calculation;
     //   - 3+ call batches never restore or create two-call provenance;
     //   - intermediate replaced calls keep their ledgers intact;
-    //   - the SURVIVING (last nonzero-target) call fills min(ledger,
-    //     avail) at the bar close. Its new reservation is capped to the
-    //     post-fill position capacity left after older reservations and caps
-    //     other ids' later targets via avail = position_qty_ -
-    //     sum(reservations of other ids). A positive truncated reservation
-    //     keeps the established survivor ledger; zero backing clears it;
-    //   - exact-two provenance is created only when that survivor's actual
-    //     fill remains fully backed after the fill;
+    //   - the SURVIVING (last nonzero-target) call fills min(ledger, avail) at
+    //     the bar close. Its reservation is capped to the post-fill physical
+    //     capacity left after older reservations;
     //   - a nonzero logical ledger with zero unreserved physical capacity is
-    //     consumed without a broker fill, so a later same-id entry starts a
-    //     new logical close cycle instead of accumulating a stale slice;
-    //   - a bar with exactly one close call behaves as before: fill =
-    //     min(ledger, avail), ledger consumed, reservation released.
-    // Calls whose target resolves to zero cannot survive; a logically live
-    // but physically blocked id still consumes its stale logical cycle.
-    // The batched fill executes at the end-of-bar order-processing point
-    // (dispatch_bar step 4 / magnifier last tick) at the same bar-close
-    // price the immediate path used. Order cancels/purges tied to a
-    // full-position close still run at CALL time (unchanged timing).
+    //     consumed without a broker fill;
+    //   - a sole close call consumes its ledger and releases its reservation.
+    // Calls whose target resolves to zero cannot replace a live instruction.
+    // Fills execute at the end-of-bar order-processing point; full-close order
+    // cancels/purges retain their established CALL-time timing.
     bool sb_close_active_ = false;
     int sb_close_bar_ = -1;
     int sb_close_calls_ = 0;          // effective distinct nonzero-target calls
@@ -702,10 +693,54 @@ protected:
     std::string sb_close_comment_;    // surviving order's comment
     std::unordered_map<std::string, double> close_reserved_qty_;
     // Live exact-two-call replacement provenance. A survivor id maps to the
-    // prior batch's FIRST target and is valid only while its reservation is
-    // live. A later exact-two-call batch can restore precisely that slice if
-    // this id is its first replaced call (ENA's two-call replacement chain).
+    // prior batch's FIRST target and remains valid only while its reservation
+    // is live.
     std::unordered_map<std::string, double> close_two_call_first_qty_;
+
+    // Nonzero compiler-token path. Every syntactic strategy.close site owns an
+    // independent copy of the accepted replacement batch. Distinct sites all
+    // flush; repeated runtime evaluations of one site replace only that batch.
+    int callsite_close_bar_ = -1;
+    uint64_t callsite_close_queue_seq_ = 0;
+    struct SameBarCloseCallsite {
+        uint64_t token = 0;
+        bool active = false;
+        int calls = 0;
+        std::string first_id;
+        double first_target = 0.0;
+        bool first_ledger_consumed = false;
+        bool first_carry_valid = false;
+        double first_carry_qty = 0.0;
+        std::string id;
+        std::string comment;
+        // Quantity admitted at call time. Distinct callsites reserve physical
+        // capacity in source order; a later zero-capacity evaluation cannot
+        // replace this pending instruction.
+        double target = 0.0;
+        // Persistent-reservation-blocked calls retain token-0's stale-ledger
+        // cleanup, but only as a site-local overlay during Pine evaluation.
+        // Shared mutation is deferred until every site's broker flush.
+        std::vector<std::string> deferred_cleanup_ids;
+        uint64_t queue_seq = 0;
+    };
+    // Per-source-bar only. Cross-bar reservation/provenance is stored in the
+    // owner-aware maps below, so a one-callsite generated strategy remains
+    // behavior-identical to token 0 while distinct sites coexist.
+    std::unordered_map<uint64_t, SameBarCloseCallsite> callsite_close_callsites_;
+    // Net physical capacity claimed by the currently surviving nonzero-site
+    // instructions on this source bar. This is distinct from
+    // pending_close_qty_in_bar_, which records cumulative accepted logical
+    // evaluations for the established later-entry carry rule.
+    double callsite_close_admitted_total_ = 0.0;
+    // Cross-bar replacement reservations/provenance belong to the syntactic
+    // source site that created them. Token 0 continues to use the historical
+    // id-only maps above without any behavior change.
+    std::unordered_map<
+        uint64_t, std::unordered_map<std::string, double>>
+        callsite_close_reserved_qty_;
+    std::unordered_map<
+        uint64_t, std::unordered_map<std::string, double>>
+        callsite_close_two_call_first_qty_;
 
     // --- KI-64: POOC script-visible position freeze ---
     // Under process_orders_on_close, a strategy.close/close_all that fills
@@ -1159,6 +1194,14 @@ protected:
                         double qty = std::numeric_limits<double>::quiet_NaN(),
                         double qty_percent = std::numeric_limits<double>::quiet_NaN(),
                         bool immediately = false);
+    // Keep the historical five-argument symbol above; regenerated legacy
+    // sources continue to bind token 0. This does not promise that arbitrary
+    // objects compiled against an older BacktestEngine class layout can be
+    // relinked without rebuilding. New codegen supplies a stable nonzero token
+    // for the syntactic strategy.close source site.
+    void strategy_close(const std::string& id, const std::string& comment,
+                        double qty, double qty_percent, bool immediately,
+                        uint64_t callsite_token);
     void strategy_close_all();
     void strategy_exit(const std::string& id, const std::string& from_entry,
                        double limit_price, double stop_price,
@@ -2352,12 +2395,22 @@ private:
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
     void cancel_same_bar_market_reentries_after_full_close(
         bool closed_long, bool preserve_undercap_entries);
-    // Same-bar close batching (TV one-fill-per-bar; see the field-block
-    // comment at close_reserved_qty_). enqueue replaces the pending
-    // same-bar close; flush executes the surviving one at bar close.
-    void enqueue_same_bar_close(const std::string& id, const std::string& comment);
+    // Same-bar default-FIFO close routing. Token 0 uses the accepted global
+    // survivor; nonzero compiler tokens use source-callsite scoped orders.
+    void enqueue_same_bar_close(const std::string& id,
+                                const std::string& comment,
+                                uint64_t callsite_token);
     void flush_same_bar_close();
+    void flush_active_same_bar_close(
+        double admitted_target = std::numeric_limits<double>::quiet_NaN(),
+        double pending_later_qty = 0.0,
+        bool defer_first_ledger_consume = false,
+        uint64_t callsite_token = 0);
     double close_reserved_other_qty(const std::string& id) const;
+    double callsite_close_reserved_other_qty(
+        uint64_t callsite_token, const std::string& id) const;
+    double callsite_close_physical_reserved_other_qty(
+        uint64_t callsite_token, const std::string& id) const;
     double pending_same_bar_close_target() const;
     void execute_immediate_close(const std::string& id,
                                  const std::string& comment,

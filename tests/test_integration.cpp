@@ -1,4 +1,5 @@
 #include <cassert>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -1647,13 +1648,17 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
         pyramiding_ = 3;
+        process_orders_on_close_ = true;
         close_entries_rule_any_ = true;
     }
     void on_bar(const Bar& bar) override {
         if (bar_index_ == 1) strategy_entry("A", true);
         if (bar_index_ == 2) strategy_entry("B", true);
         if (bar_index_ == 3) strategy_entry("C", true);
-        if (bar_index_ == 5) strategy_close("B");
+        if (bar_index_ == 5) {
+            strategy_close("B", "", na<double>(), na<double>(), false,
+                           8'001);
+        }
         if (bar_index_ == 7) strategy_close_all();
     }
 };
@@ -1666,8 +1671,12 @@ static void test_close_entries_any() {
         bars[i] = {100.0 + i, 105.0 + i, 95.0 + i, 102.0 + i, 50, (int64_t)(i + 1) * 60000};
     strat.run(bars, 9);
 
-    // Trade for "B" closed at bar 5, trades for "A" and "C" closed at bar 7
-    CHECK(strat.trade_count() >= 2);
+    // ANY must select B itself even though A is the FIFO-oldest entry.
+    // A and C are closed later by close_all.
+    CHECK(strat.trade_count() == 3);
+    if (strat.trade_count() == 3) {
+        CHECK(strat.get_trade(0).entry_id == "B");
+    }
 }
 
 // ---- 25. Trailing stop mechanics -------------------------------------------
@@ -3108,6 +3117,1394 @@ static void test_positive_truncated_close_reservation_keeps_ledger_only() {
     CHECK(near(strat.first_b, 0.0));
     CHECK(near(strat.total_res, 2.0));
 }
+// ---- 38a2. Pine-v6 POOC default-FIFO close queue --------------------------
+
+class SameBarMultiCloseQueueStrategy : public BacktestEngine {
+public:
+    double visible_after_first = -1.0;
+    double visible_after_second = -1.0;
+    double ledger_a_after_call = -1.0;
+    double ledger_b_after_call = -1.0;
+    double final_pos = -1.0;
+
+    SameBarMultiCloseQueueStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double ledger(const std::string& id) const {
+        const auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 2.0);
+        if (bar_index_ == 2) {
+            strategy_close("A", "close-A", na, na, false, 101);
+            visible_after_first = signed_position_size();
+            ledger_a_after_call = ledger("A");
+            strategy_close("B", "close-B", na, na, false, 102);
+            visible_after_second = signed_position_size();
+            ledger_b_after_call = ledger("B");
+        }
+        if (bar_index_ == 3) final_pos = signed_position_size();
+    }
+};
+
+static void test_same_bar_multi_close_queues_all_in_source_order() {
+    std::printf("test_same_bar_multi_close_queues_all_in_source_order\n");
+    SameBarMultiCloseQueueStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 106, 99, 105, 50, 180000},
+        {105, 106, 99, 105, 50, 240000},
+    };
+    strat.run(bars, 4);
+
+    // Neither physical fill is visible to the Pine body that issued it. Each
+    // independent one-call batch consumes its ledger at broker flush, exactly
+    // like an accepted token-0 sole call.
+    CHECK(near(strat.visible_after_first, 3.0));
+    CHECK(near(strat.visible_after_second, 3.0));
+    CHECK(near(strat.ledger_a_after_call, 1.0));
+    CHECK(near(strat.ledger_b_after_call, 2.0));
+
+    // The broker queue then fills both commands at C in source order.
+    CHECK(strat.trade_count() == 2);
+    if (strat.trade_count() == 2) {
+        CHECK(near(strat.get_trade(0).qty, 1.0));
+        CHECK(strat.get_trade(0).exit_comment == "close-A");
+        CHECK(near(strat.get_trade(0).exit_price, 105.0));
+        CHECK(near(strat.get_trade(1).qty, 2.0));
+        CHECK(strat.get_trade(1).exit_comment == "close-B");
+        CHECK(near(strat.get_trade(1).exit_price, 105.0));
+    }
+    CHECK(near(strat.final_pos, 0.0));
+}
+
+class OverlappingIdCallsiteReservationStrategy : public BacktestEngine {
+public:
+    double ledger_a_after_calls = -1.0;
+    double ledger_b_after_calls = -1.0;
+    double admitted_qty_after_calls = -1.0;
+    double final_pos = -1.0;
+
+    OverlappingIdCallsiteReservationStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double ledger(const std::string& id) const {
+        const auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+
+    double admitted_qty() const {
+        double total = 0.0;
+        for (const auto& kv : callsite_close_callsites_) {
+            if (kv.second.active) total += kv.second.target;
+        }
+        return total;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ == 2) {
+            strategy_close("A", "SITE1_A", na, na, false, 401);
+            strategy_close("A", "SITE2_A_FIRST", na, na, false, 402);
+            strategy_close("B", "SITE2_B_LAST", na, na, false, 402);
+            ledger_a_after_calls = ledger("A");
+            ledger_b_after_calls = ledger("B");
+            admitted_qty_after_calls = admitted_qty();
+        }
+        if (bar_index_ == 3) final_pos = signed_position_size();
+    }
+};
+
+static void test_overlapping_id_callsites_reserve_before_replacement() {
+    std::printf(
+        "test_overlapping_id_callsites_reserve_before_replacement\n");
+    OverlappingIdCallsiteReservationStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 106, 99, 105, 50, 180000},
+        {105, 106, 99, 105, 50, 240000},
+    };
+    strat.run(bars, 4);
+
+    // Direct TV v6 oracle (BINANCE:ETHUSDT.P, 15m, 2026-07-18):
+    // site1/A and site2/A reserve the two live units. The later site2/B call
+    // has zero remaining admission capacity, so it cannot replace site2/A.
+    CHECK(near(strat.ledger_a_after_calls, 1.0));
+    CHECK(near(strat.ledger_b_after_calls, 1.0));
+    CHECK(near(strat.admitted_qty_after_calls, 2.0));
+    CHECK(strat.trade_count() == 2);
+    if (strat.trade_count() == 2) {
+        CHECK(strat.get_trade(0).exit_comment == "SITE1_A");
+        CHECK(near(strat.get_trade(0).qty, 1.0));
+        CHECK(strat.get_trade(1).exit_comment == "SITE2_A_FIRST");
+        CHECK(near(strat.get_trade(1).qty, 1.0));
+    }
+    CHECK(near(strat.final_pos, 0.0));
+}
+
+class SameIdDistinctCallsiteCapacityStrategy : public BacktestEngine {
+public:
+    int admitted_sites_after_calls = -1;
+    double admitted_qty_after_calls = -1.0;
+
+    SameIdDistinctCallsiteCapacityStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("C", true, na, na, 2.0);
+        if (bar_index_ == 1) {
+            strategy_close("C", "SITE1_C", na, na, false, 411);
+            strategy_close("C", "SITE2_C", na, na, false, 412);
+            admitted_sites_after_calls = 0;
+            admitted_qty_after_calls = 0.0;
+            for (const auto& kv : callsite_close_callsites_) {
+                if (!kv.second.active) continue;
+                ++admitted_sites_after_calls;
+                admitted_qty_after_calls += kv.second.target;
+            }
+        }
+    }
+};
+
+static void test_distinct_sites_same_id_share_physical_capacity() {
+    std::printf(
+        "test_distinct_sites_same_id_share_physical_capacity\n");
+    SameIdDistinctCallsiteCapacityStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 105, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    // Direct TV companion oracle: the first close(C) reserves/fills qty 2;
+    // the second distinct site has no capacity and remains a no-op.
+    CHECK(strat.admitted_sites_after_calls == 1);
+    CHECK(near(strat.admitted_qty_after_calls, 2.0));
+    CHECK(strat.trade_count() == 1);
+    if (strat.trade_count() == 1) {
+        CHECK(strat.get_trade(0).exit_comment == "SITE1_C");
+        CHECK(near(strat.get_trade(0).qty, 2.0));
+    }
+}
+
+class SameCallsiteLoopCloseStrategy : public BacktestEngine {
+public:
+    double visible_after_loop = -1.0;
+    double ledger_a_after_loop = -1.0;
+    double ledger_b_after_loop = -1.0;
+    double ledger_c_after_loop = -1.0;
+    double final_pos = -1.0;
+
+    SameCallsiteLoopCloseStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double ledger(const std::string& id) const {
+        const auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ == 2) strategy_entry("C", true, na, na, 1.0);
+        if (bar_index_ == 3) {
+            const std::array<std::string, 3> ids = {"A", "B", "C"};
+            for (const std::string& id : ids) {
+                // One syntactic close statement evaluated three times. The
+                // nonzero token is exactly what codegen will derive from its
+                // AST source location; only the last effective id survives.
+                strategy_close(id, "loop-" + id, na, na, false, 201);
+            }
+            visible_after_loop = signed_position_size();
+            ledger_a_after_loop = ledger("A");
+            ledger_b_after_loop = ledger("B");
+            ledger_c_after_loop = ledger("C");
+        }
+        if (bar_index_ == 4) {
+            strategy_close("A", "later-A", na, na, false, 202);
+            strategy_close("B", "later-B", na, na, false, 203);
+        }
+        if (bar_index_ == 5) {
+            strategy_close("C", "later-C", na, na, false, 204);
+        }
+        if (bar_index_ == 6) final_pos = signed_position_size();
+    }
+};
+
+static void test_same_callsite_loop_close_replaces_in_place() {
+    std::printf("test_same_callsite_loop_close_replaces_in_place\n");
+    SameCallsiteLoopCloseStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+        {100, 106, 99, 105, 50, 240000},
+        {105, 111, 99, 110, 50, 300000},
+        {110, 111, 99, 110, 50, 360000},
+        {110, 111, 99, 110, 50, 420000},
+    };
+    strat.run(bars, 7);
+
+    CHECK(near(strat.visible_after_loop, 3.0));
+    // Tokenized callsites defer provisional ledger consumption until broker
+    // flush so later sites can perform independent admission.
+    CHECK(near(strat.ledger_a_after_loop, 1.0));
+    CHECK(near(strat.ledger_b_after_loop, 1.0));
+    CHECK(near(strat.ledger_c_after_loop, 1.0));
+    CHECK(strat.trade_count() == 3);
+    if (strat.trade_count() == 3) {
+        CHECK(strat.get_trade(0).exit_comment == "loop-C");
+        CHECK(near(strat.get_trade(0).qty, 1.0));
+        CHECK(strat.get_trade(1).exit_comment == "later-B");
+        CHECK(near(strat.get_trade(1).qty, 1.0));
+        CHECK(strat.get_trade(2).exit_comment == "later-C");
+        CHECK(near(strat.get_trade(2).qty, 1.0));
+    }
+    CHECK(near(strat.final_pos, 0.0));
+}
+
+class SameCallsiteCarryCompatibilityStrategy : public BacktestEngine {
+public:
+    explicit SameCallsiteCarryCompatibilityStrategy(bool tokenized)
+        : tokenized_(tokenized) {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double pending_close_after_replacement = -1.0;
+    double admitted_total_after_replacement = -1.0;
+    double later_entry_carry = -1.0;
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ != 2) return;
+
+        if (tokenized_) {
+            strategy_close("A", "first", na, na, false, 301);
+            strategy_close("B", "survivor", na, na, false, 301);
+        } else {
+            // Exercise the real five-argument ABI-compatible overload.
+            strategy_close("A", "first", na, na, false);
+            strategy_close("B", "survivor", na, na, false);
+        }
+        pending_close_after_replacement = pending_close_qty_in_bar_;
+        admitted_total_after_replacement =
+            callsite_close_admitted_total_;
+
+        // This priced order stays out of range. Its placement snapshot exposes
+        // the source-order carry calculation without adding another fill.
+        strategy_entry("LATER", true, na, 1000.0, 1.0);
+        if (!pending_orders_.empty()
+            && pending_orders_.back().id == "LATER") {
+            later_entry_carry = pending_orders_.back().tv_carry_qty;
+        }
+    }
+
+private:
+    bool tokenized_;
+};
+
+static void test_callsite_replacement_separates_live_claim_from_entry_debt() {
+    std::printf(
+        "test_callsite_replacement_separates_live_claim_from_entry_debt\n");
+    SameCallsiteCarryCompatibilityStrategy legacy(/*tokenized=*/false);
+    SameCallsiteCarryCompatibilityStrategy tokenized(/*tokenized=*/true);
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 106, 99, 105, 50, 180000},
+    };
+    legacy.run(bars, 3);
+    tokenized.run(bars, 3);
+
+    // Accepted evaluations keep the established cumulative source-order debt
+    // used by later-entry carry. The tokenized broker queue separately owns
+    // one net-live physical claim after A is replaced by B.
+    CHECK(near(legacy.pending_close_after_replacement, 2.0));
+    CHECK(near(tokenized.pending_close_after_replacement, 2.0));
+    CHECK(near(legacy.admitted_total_after_replacement, 0.0));
+    CHECK(near(tokenized.admitted_total_after_replacement, 1.0));
+    CHECK(near(legacy.later_entry_carry, 0.0));
+    CHECK(near(tokenized.later_entry_carry, 0.0));
+}
+
+class SingleCallsiteReplacementCapacityStrategy : public BacktestEngine {
+public:
+    explicit SingleCallsiteReplacementCapacityStrategy(bool tokenized)
+        : tokenized_(tokenized) {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double debt_after_calls = -1.0;
+    double admitted_after_calls = -1.0;
+    double final_position = -1.0;
+
+    void close_site(const std::string& id, const std::string& comment) {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (tokenized_) {
+            strategy_close(id, comment, na, na, false, 715);
+        } else {
+            strategy_close(id, comment, na, na, false);
+        }
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 1.2542);
+        } else if (bar_index_ == 1) {
+            // Exact bounded shape from the ETH compatibility discriminator:
+            // two older reservations leave .356 physical capacity. Replacing
+            // L3(.2069) with L4(.4159) must reuse this site's own live claim,
+            // admitting the full .356 just like token 0.
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            callsite_close_reserved_qty_.clear();
+            callsite_close_two_call_first_qty_.clear();
+            id_unclosed_qty_["L3"] = 0.2069;
+            id_unclosed_qty_["L4"] = 0.4159;
+            if (tokenized_) {
+                callsite_close_reserved_qty_[715]["L7"] = 0.4310;
+                callsite_close_reserved_qty_[715]["L15"] = 0.4672;
+                callsite_close_two_call_first_qty_[715]["L7"] = 0.2133;
+                callsite_close_two_call_first_qty_[715]["L15"] = 0.2312;
+            } else {
+                close_reserved_qty_["L7"] = 0.4310;
+                close_reserved_qty_["L15"] = 0.4672;
+                close_two_call_first_qty_["L7"] = 0.2133;
+                close_two_call_first_qty_["L15"] = 0.2312;
+            }
+            close_site("L3", "FIRST_L3");
+            close_site("L4", "SURVIVOR_L4");
+            debt_after_calls = pending_close_qty_in_bar_;
+            admitted_after_calls = callsite_close_admitted_total_;
+        } else if (bar_index_ == 2) {
+            final_position = signed_position_size();
+        }
+    }
+
+private:
+    bool tokenized_;
+};
+
+static void test_single_site_replacement_reuses_own_live_claim() {
+    std::printf("test_single_site_replacement_reuses_own_live_claim\n");
+    SingleCallsiteReplacementCapacityStrategy legacy(/*tokenized=*/false);
+    SingleCallsiteReplacementCapacityStrategy tokenized(/*tokenized=*/true);
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 105, 50, 180000},
+    };
+    legacy.run(bars, 3);
+    tokenized.run(bars, 3);
+
+    for (BacktestEngine* base : std::array<BacktestEngine*, 2>{
+             &legacy, &tokenized}) {
+        CHECK(base->trade_count() == 1);
+        if (base->trade_count() == 1) {
+            CHECK(near(base->get_trade(0).qty, 0.3560));
+            CHECK(base->get_trade(0).exit_comment == "SURVIVOR_L4");
+        }
+    }
+    CHECK(near(legacy.debt_after_calls, 0.5629));
+    CHECK(near(tokenized.debt_after_calls, 0.5629));
+    CHECK(near(legacy.admitted_after_calls, 0.0));
+    CHECK(near(tokenized.admitted_after_calls, 0.3560));
+    CHECK(near(legacy.final_position, 0.8982));
+    CHECK(near(tokenized.final_position, 0.8982));
+}
+
+class RejectedCallsiteReplacementStrategy : public BacktestEngine {
+public:
+    int exits_before_rejected = -1;
+    int exits_after_rejected = -1;
+    double debt_before_rejected = -1.0;
+    double debt_after_rejected = -1.0;
+    double admitted_before_rejected = -1.0;
+    double admitted_after_rejected = -1.0;
+    int site_calls_after_rejected = -1;
+    std::string site_id_after_rejected;
+    std::string site_comment_after_rejected;
+    uint64_t site_queue_after_rejected = 0;
+
+    RejectedCallsiteReplacementStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    int pending_exit_count() const {
+        return static_cast<int>(std::count_if(
+            pending_orders_.begin(), pending_orders_.end(),
+            [](const PendingOrder& order) {
+                return order.type == OrderType::EXIT;
+            }));
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ != 2) return;
+
+        strategy_exit("protect-B", "B", 200.0, na);
+        // Make B look like a would-be full close if the two already-admitted
+        // A instructions were incorrectly ignored during replacement.
+        id_unclosed_qty_["B"] = 2.0;
+        strategy_close("A", "SITE1_A", na, na, false, 721);
+        strategy_close("A", "SITE2_A", na, na, false, 722);
+        exits_before_rejected = pending_exit_count();
+        debt_before_rejected = pending_close_qty_in_bar_;
+        admitted_before_rejected = callsite_close_admitted_total_;
+
+        strategy_close("B", "REJECTED_FULL_B", na, na, false, 722);
+        exits_after_rejected = pending_exit_count();
+        debt_after_rejected = pending_close_qty_in_bar_;
+        admitted_after_rejected = callsite_close_admitted_total_;
+        const auto site = callsite_close_callsites_.find(722);
+        if (site != callsite_close_callsites_.end()) {
+            site_calls_after_rejected = site->second.calls;
+            site_id_after_rejected = site->second.id;
+            site_comment_after_rejected = site->second.comment;
+            site_queue_after_rejected = site->second.queue_seq;
+        }
+    }
+};
+
+static void test_rejected_replacement_has_no_debt_or_order_side_effects() {
+    std::printf(
+        "test_rejected_replacement_has_no_debt_or_order_side_effects\n");
+    RejectedCallsiteReplacementStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 106, 99, 105, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(strat.exits_before_rejected == 1);
+    CHECK(strat.exits_after_rejected == 1);
+    CHECK(near(strat.debt_before_rejected, 2.0));
+    CHECK(near(strat.debt_after_rejected, 2.0));
+    CHECK(near(strat.admitted_before_rejected, 2.0));
+    CHECK(near(strat.admitted_after_rejected, 2.0));
+    CHECK(strat.site_calls_after_rejected == 1);
+    CHECK(strat.site_id_after_rejected == "A");
+    CHECK(strat.site_comment_after_rejected == "SITE2_A");
+    CHECK(strat.site_queue_after_rejected == 2);
+}
+
+class OwnerAwareCloseReservationStrategy : public BacktestEngine {
+public:
+    explicit OwnerAwareCloseReservationStrategy(bool cleanup_site_first)
+        : cleanup_site_first_(cleanup_site_first) {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double t2_claim = -1.0;
+    double t2_provenance = -1.0;
+    double shared_k_ledger = -1.0;
+    double total_claims = -1.0;
+    double live_position = -1.0;
+    bool t1_owns_k = true;
+    bool owner_maps_empty_after_flat = false;
+    bool ledger_empty_after_flat = false;
+
+    double owner_value(
+        const std::unordered_map<
+            uint64_t, std::unordered_map<std::string, double>>& owners,
+        uint64_t token, const std::string& id) const {
+        const auto owner = owners.find(token);
+        if (owner == owners.end()) return 0.0;
+        const auto value = owner->second.find(id);
+        return value == owner->second.end() ? 0.0 : value->second;
+    }
+
+    void cleanup_site() {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        strategy_close("K", "T1_FIRST_K", na, na, false, 731);
+        strategy_close("J", "T1_SURVIVOR_J", na, na, false, 731);
+    }
+
+    void t2_survivor_site() {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        strategy_close("A", "T2_FIRST_A", na, na, false, 732);
+        strategy_close("K", "T2_SURVIVOR_K", na, na, false, 732);
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 6.0);
+        } else if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            callsite_close_reserved_qty_.clear();
+            callsite_close_two_call_first_qty_.clear();
+            id_unclosed_qty_["A"] = 1.0;
+            id_unclosed_qty_["J"] = 1.0;
+            id_unclosed_qty_["K"] = 1.0;
+            if (cleanup_site_first_) {
+                cleanup_site();
+                t2_survivor_site();
+            } else {
+                t2_survivor_site();
+                cleanup_site();
+            }
+        } else if (bar_index_ == 2) {
+            t2_claim = owner_value(
+                callsite_close_reserved_qty_, 732, "K");
+            t2_provenance = owner_value(
+                callsite_close_two_call_first_qty_, 732, "K");
+            const auto ledger = id_unclosed_qty_.find("K");
+            shared_k_ledger = ledger == id_unclosed_qty_.end()
+                ? 0.0 : ledger->second;
+            total_claims = 0.0;
+            for (const auto& owner : callsite_close_reserved_qty_) {
+                for (const auto& claim : owner.second) {
+                    total_claims += claim.second;
+                }
+            }
+            live_position = position_qty_;
+            const auto t1 = callsite_close_reserved_qty_.find(731);
+            t1_owns_k = t1 != callsite_close_reserved_qty_.end()
+                && t1->second.find("K") != t1->second.end();
+            strategy_close("", "FLAT_RESET");
+        } else if (bar_index_ == 3) {
+            owner_maps_empty_after_flat =
+                callsite_close_reserved_qty_.empty()
+                && callsite_close_two_call_first_qty_.empty();
+            ledger_empty_after_flat = id_unclosed_qty_.empty();
+        }
+    }
+
+private:
+    bool cleanup_site_first_;
+};
+
+static void test_owner_reservation_survives_other_token_cleanup_permutations() {
+    std::printf(
+        "test_owner_reservation_survives_other_token_cleanup_permutations\n");
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98,  99, 50, 240000},
+    };
+    for (bool cleanup_first : {false, true}) {
+        OwnerAwareCloseReservationStrategy strat(cleanup_first);
+        strat.run(bars, 4);
+        CHECK(near(strat.t2_claim, 1.0));
+        CHECK(near(strat.t2_provenance, 1.0));
+        CHECK(strat.shared_k_ledger + 1e-9 >= strat.t2_claim);
+        CHECK(!strat.t1_owns_k);
+        CHECK(strat.total_claims <= strat.live_position + 1e-9);
+        CHECK(strat.owner_maps_empty_after_flat);
+        CHECK(strat.ledger_empty_after_flat);
+    }
+}
+
+class CrossOwnerReserveBackingStrategy : public BacktestEngine {
+public:
+    double t1_b_claim = -1.0;
+    double t1_b_provenance = -1.0;
+    double t2_c_claim = -1.0;
+    double t2_c_provenance = -1.0;
+    double total_claims = -1.0;
+    double live_position = -1.0;
+    double ledger_c = -1.0;
+
+    CrossOwnerReserveBackingStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double owner_value(
+        const std::unordered_map<
+            uint64_t, std::unordered_map<std::string, double>>& owners,
+        uint64_t token, const std::string& id) const {
+        const auto owner = owners.find(token);
+        if (owner == owners.end()) return 0.0;
+        const auto value = owner->second.find(id);
+        return value == owner->second.end() ? 0.0 : value->second;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 3.0);
+        } else if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            id_unclosed_qty_["A"] = 1.0;
+            id_unclosed_qty_["B"] = 1.0;
+            id_unclosed_qty_["C"] = 1.0;
+            strategy_close("A", "T1_FIRST_A", na, na, false, 741);
+            strategy_close("B", "T1_SURVIVOR_B", na, na, false, 741);
+            strategy_close("A", "T2_FIRST_A", na, na, false, 742);
+            strategy_close("C", "T2_SURVIVOR_C", na, na, false, 742);
+        } else if (bar_index_ == 2) {
+            t1_b_claim = owner_value(
+                callsite_close_reserved_qty_, 741, "B");
+            t1_b_provenance = owner_value(
+                callsite_close_two_call_first_qty_, 741, "B");
+            t2_c_claim = owner_value(
+                callsite_close_reserved_qty_, 742, "C");
+            t2_c_provenance = owner_value(
+                callsite_close_two_call_first_qty_, 742, "C");
+            total_claims = 0.0;
+            for (const auto& owner : callsite_close_reserved_qty_) {
+                for (const auto& claim : owner.second) {
+                    total_claims += claim.second;
+                }
+            }
+            live_position = position_qty_;
+            const auto c = id_unclosed_qty_.find("C");
+            ledger_c = c == id_unclosed_qty_.end() ? 0.0 : c->second;
+        }
+    }
+};
+
+static void test_cross_owner_post_fill_backing_is_physically_bounded() {
+    std::printf(
+        "test_cross_owner_post_fill_backing_is_physically_bounded\n");
+    CrossOwnerReserveBackingStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 105, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(strat.trade_count() == 2);
+    if (strat.trade_count() == 2) {
+        CHECK(strat.get_trade(0).exit_comment == "T1_SURVIVOR_B");
+        CHECK(strat.get_trade(1).exit_comment == "T2_SURVIVOR_C");
+        CHECK(near(strat.get_trade(0).qty, 1.0));
+        CHECK(near(strat.get_trade(1).qty, 1.0));
+    }
+    CHECK(near(strat.live_position, 1.0));
+    CHECK(near(strat.t1_b_claim, 1.0));
+    CHECK(near(strat.t1_b_provenance, 1.0));
+    CHECK(near(strat.t2_c_claim, 0.0));
+    CHECK(near(strat.t2_c_provenance, 0.0));
+    CHECK(near(strat.ledger_c, 0.0));
+    CHECK(strat.total_claims <= strat.live_position + 1e-9);
+}
+
+// Persistent claims owned by different source sites follow the same
+// different-id capacity rule as token 0. After B and C each retain one unit,
+// a fresh D close for three units can use only the two unclaimed units of the
+// four-unit live position.
+class CrossBarDifferentIdClaimCapacityStrategy : public BacktestEngine {
+public:
+    double position_before_d = -1.0;
+    double claims_before_d = -1.0;
+    double admitted_d = -1.0;
+    double position_after_d = -1.0;
+
+    CrossBarDifferentIdClaimCapacityStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 6.0);
+        } else if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            callsite_close_reserved_qty_.clear();
+            callsite_close_two_call_first_qty_.clear();
+            id_unclosed_qty_["A"] = 1.0;
+            id_unclosed_qty_["B"] = 1.0;
+            id_unclosed_qty_["C"] = 1.0;
+            strategy_close("A", "T1_FIRST_A", na, na, false, 751);
+            strategy_close("B", "T1_SURVIVOR_B", na, na, false, 751);
+            strategy_close("A", "T2_FIRST_A", na, na, false, 752);
+            strategy_close("C", "T2_SURVIVOR_C", na, na, false, 752);
+        } else if (bar_index_ == 2) {
+            position_before_d = position_qty_;
+            claims_before_d = 0.0;
+            for (const auto& owner : callsite_close_reserved_qty_) {
+                for (const auto& claim : owner.second) {
+                    claims_before_d += claim.second;
+                }
+            }
+            id_unclosed_qty_["D"] = 3.0;
+            strategy_close("D", "SECOND_BAR_D", na, na, false, 753);
+            admitted_d = callsite_close_admitted_total_;
+        } else if (bar_index_ == 3) {
+            position_after_d = position_qty_;
+        }
+    }
+};
+
+static void test_cross_bar_different_id_claims_cap_fresh_site() {
+    std::printf("test_cross_bar_different_id_claims_cap_fresh_site\n");
+    CrossBarDifferentIdClaimCapacityStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98,  99, 50, 240000},
+    };
+    strat.run(bars, 4);
+
+    CHECK(near(strat.position_before_d, 4.0));
+    CHECK(near(strat.claims_before_d, 2.0));
+    CHECK(near(strat.admitted_d, 2.0));
+    CHECK(near(strat.position_after_d, 2.0));
+    CHECK(strat.trade_count() == 3);
+    if (strat.trade_count() == 3) {
+        CHECK(strat.get_trade(0).exit_comment == "T1_SURVIVOR_B");
+        CHECK(strat.get_trade(1).exit_comment == "T2_SURVIVOR_C");
+        CHECK(strat.get_trade(2).exit_comment == "SECOND_BAR_D");
+        CHECK(near(strat.get_trade(2).qty, 2.0));
+    }
+}
+
+class SameIdOwnerClaimsShareBackingStrategy : public BacktestEngine {
+public:
+    double admitted_d = -1.0;
+    double final_position = -1.0;
+
+    SameIdOwnerClaimsShareBackingStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 4.0);
+        } else if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            callsite_close_reserved_qty_.clear();
+            callsite_close_two_call_first_qty_.clear();
+
+            // Two source sites alias one shared A ledger. Physical backing is
+            // max(0.6, 1.0), not their 1.6 sum.
+            id_unclosed_qty_["A"] = 1.0;
+            callsite_close_reserved_qty_[761]["A"] = 0.6;
+            callsite_close_reserved_qty_[762]["A"] = 1.0;
+            callsite_close_two_call_first_qty_[761]["A"] = 0.6;
+            callsite_close_two_call_first_qty_[762]["A"] = 1.0;
+            id_unclosed_qty_["D"] = 3.0;
+
+            strategy_close("D", "GROUPED_BACKING_D", na, na, false, 763);
+            admitted_d = callsite_close_admitted_total_;
+        } else if (bar_index_ == 2) {
+            final_position = position_qty_;
+        }
+    }
+};
+
+static void test_same_id_owner_claims_share_physical_backing() {
+    std::printf("test_same_id_owner_claims_share_physical_backing\n");
+    SameIdOwnerClaimsShareBackingStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(near(strat.admitted_d, 3.0));
+    CHECK(near(strat.final_position, 1.0));
+    CHECK(strat.trade_count() == 1);
+    if (strat.trade_count() == 1) {
+        CHECK(strat.get_trade(0).exit_comment == "GROUPED_BACKING_D");
+        CHECK(near(strat.get_trade(0).qty, 3.0));
+    }
+}
+
+class SameIdAliasesExcludedFromPostFillBackingStrategy
+    : public BacktestEngine {
+public:
+    double new_a_claim = -1.0;
+    double final_position = -1.0;
+
+    SameIdAliasesExcludedFromPostFillBackingStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 2.0);
+        } else if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            callsite_close_reserved_qty_.clear();
+            callsite_close_two_call_first_qty_.clear();
+            id_unclosed_qty_["A"] = 1.0;
+            id_unclosed_qty_["X"] = 1.0;
+            callsite_close_reserved_qty_[771]["A"] = 0.6;
+            callsite_close_reserved_qty_[772]["A"] = 1.0;
+            callsite_close_two_call_first_qty_[771]["A"] = 0.6;
+            callsite_close_two_call_first_qty_[772]["A"] = 1.0;
+
+            strategy_close("X", "FIRST_X", na, na, false, 773);
+            strategy_close("A", "SURVIVOR_A", na, na, false, 773);
+        } else if (bar_index_ == 2) {
+            final_position = position_qty_;
+            const auto owner = callsite_close_reserved_qty_.find(773);
+            if (owner != callsite_close_reserved_qty_.end()) {
+                const auto claim = owner->second.find("A");
+                if (claim != owner->second.end()) {
+                    new_a_claim = claim->second;
+                }
+            }
+        }
+    }
+};
+
+static void test_post_fill_backing_excludes_all_same_id_aliases() {
+    std::printf(
+        "test_post_fill_backing_excludes_all_same_id_aliases\n");
+    SameIdAliasesExcludedFromPostFillBackingStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+    };
+    strat.run(bars, 3);
+
+    CHECK(near(strat.final_position, 1.0));
+    CHECK(near(strat.new_a_claim, 1.0));
+    CHECK(strat.trade_count() == 1);
+    if (strat.trade_count() == 1) {
+        CHECK(strat.get_trade(0).exit_comment == "SURVIVOR_A");
+        CHECK(near(strat.get_trade(0).qty, 1.0));
+    }
+}
+
+class UnequalAliasLocalReleaseStrategy : public BacktestEngine {
+public:
+    UnequalAliasLocalReleaseStrategy(double current_claim,
+                                     double competing_claim)
+        : current_claim_(current_claim),
+          competing_claim_(competing_claim) {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double admitted_d = -1.0;
+    double final_position = -1.0;
+    double competing_claim_after = -1.0;
+    bool current_claim_erased = false;
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("seed", true, na, na, 4.0);
+        } else if (bar_index_ == 1) {
+            id_unclosed_qty_.clear();
+            close_reserved_qty_.clear();
+            close_two_call_first_qty_.clear();
+            callsite_close_reserved_qty_.clear();
+            callsite_close_two_call_first_qty_.clear();
+            id_unclosed_qty_["B"] = 1.0;
+            id_unclosed_qty_["C"] = 1.0;
+            id_unclosed_qty_["D"] = 4.0;
+            callsite_close_reserved_qty_[781]["B"] = current_claim_;
+            callsite_close_reserved_qty_[782]["B"] = competing_claim_;
+            callsite_close_two_call_first_qty_[781]["B"] = current_claim_;
+            callsite_close_two_call_first_qty_[782]["B"] = competing_claim_;
+
+            strategy_close("B", "FIRST_B", na, na, false, 781);
+            strategy_close("C", "MIDDLE_C", na, na, false, 781);
+            strategy_close("D", "SURVIVOR_D", na, na, false, 781);
+            admitted_d = callsite_close_admitted_total_;
+        } else if (bar_index_ == 2) {
+            final_position = position_qty_;
+            const auto current = callsite_close_reserved_qty_.find(781);
+            current_claim_erased = current == callsite_close_reserved_qty_.end()
+                || current->second.find("B") == current->second.end();
+            const auto competing = callsite_close_reserved_qty_.find(782);
+            if (competing != callsite_close_reserved_qty_.end()) {
+                const auto claim = competing->second.find("B");
+                if (claim != competing->second.end()) {
+                    competing_claim_after = claim->second;
+                }
+            }
+        }
+    }
+
+private:
+    double current_claim_;
+    double competing_claim_;
+};
+
+static void test_local_alias_release_frees_only_marginal_backing() {
+    std::printf(
+        "test_local_alias_release_frees_only_marginal_backing\n");
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+    };
+    struct Case {
+        double current;
+        double competing;
+        double expected_d;
+    };
+    const Case cases[] = {
+        {0.6, 1.0, 3.0},
+        {1.0, 0.6, 3.4},
+    };
+    for (const Case& test : cases) {
+        UnequalAliasLocalReleaseStrategy strat(
+            test.current, test.competing);
+        strat.run(bars, 3);
+        CHECK(near(strat.admitted_d, test.expected_d));
+        CHECK(near(strat.final_position, test.competing));
+        CHECK(strat.current_claim_erased);
+        CHECK(near(strat.competing_claim_after, test.competing));
+        CHECK(strat.final_position + 1e-9
+              >= strat.competing_claim_after);
+        CHECK(strat.trade_count() == 1);
+        if (strat.trade_count() == 1) {
+            CHECK(strat.get_trade(0).exit_comment == "SURVIVOR_D");
+            CHECK(near(strat.get_trade(0).qty, test.expected_d));
+        }
+    }
+}
+
+class InterleavedCallsiteCloseStrategy : public BacktestEngine {
+public:
+    double ledger_a_after_calls = -1.0;
+    double ledger_b_after_calls = -1.0;
+    double ledger_c_after_calls = -1.0;
+
+    InterleavedCallsiteCloseStrategy() {
+        initial_capital_ = 100000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 10;
+        process_orders_on_close_ = true;
+    }
+
+    double ledger(const std::string& id) const {
+        const auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
+        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ == 2) strategy_entry("C", true, na, na, 1.0);
+        if (bar_index_ == 3) {
+            strategy_close("A", "A_FIRST", na, na, false, 211);
+            strategy_close("B", "B_MIDDLE", na, na, false, 212);
+            strategy_close("C", "A_LAST", na, na, false, 211);
+            ledger_a_after_calls = ledger("A");
+            ledger_b_after_calls = ledger("B");
+            ledger_c_after_calls = ledger("C");
+        }
+        if (bar_index_ == 4) {
+            strategy_close("C", "later-C", na, na, false, 213);
+        }
+    }
+};
+
+static void test_interleaved_callsite_replacement_preserves_queue_position() {
+    std::printf(
+        "test_interleaved_callsite_replacement_preserves_queue_position\n");
+    InterleavedCallsiteCloseStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 101, 99, 100, 50, 120000},
+        {100, 101, 99, 100, 50, 180000},
+        {100, 106, 99, 105, 50, 240000},
+        {105, 111, 99, 110, 50, 300000},
+        {110, 111, 99, 110, 50, 360000},
+    };
+    strat.run(bars, 6);
+
+    CHECK(near(strat.ledger_a_after_calls, 1.0));
+    CHECK(near(strat.ledger_b_after_calls, 1.0));
+    CHECK(near(strat.ledger_c_after_calls, 1.0));
+    CHECK(strat.trade_count() == 3);
+    if (strat.trade_count() == 3) {
+        CHECK(strat.get_trade(0).exit_comment == "A_LAST");
+        CHECK(strat.get_trade(1).exit_comment == "B_MIDDLE");
+        CHECK(strat.get_trade(2).exit_comment == "later-C");
+    }
+}
+
+// Direct engine mirror of the authoritative Pine-v6 exported tape in
+// pf-probe-close-callsite-interleaving. The two loop branches are distinct
+// syntactic sites; reissuing site A after site B updates A in place without
+// moving its first-admission queue slot. The next bar's two distinct inner UDF
+// statements are new sites and must not be blocked by A's prior provenance.
+class ExportedCallsiteInterleavingOracleStrategy : public BacktestEngine {
+public:
+    ExportedCallsiteInterleavingOracleStrategy() {
+        initial_capital_ = 1000000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 20;
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("X", true, na, na, 1.0, "ENTRY_X");
+            strategy_entry("B", true, na, na, 1.0, "ENTRY_B");
+            strategy_entry("Y", true, na, na, 1.0, "ENTRY_Y");
+            strategy_entry("U1", true, na, na, 1.0, "ENTRY_U1");
+            strategy_entry("U2", true, na, na, 1.0, "ENTRY_U2");
+        } else if (bar_index_ == 1) {
+            strategy_close("X", "A_FIRST", na, na, false, 701);
+            strategy_close("B", "B_MIDDLE", na, na, false, 702);
+            strategy_close("Y", "A_LAST", na, na, false, 701);
+        } else if (bar_index_ == 2) {
+            strategy_close("U1", "UDF_INNER_1", na, na, false, 703);
+            strategy_close("U2", "UDF_INNER_2", na, na, false, 704);
+        } else if (bar_index_ == 3) {
+            strategy_close("", "CLEANUP");
+        }
+    }
+};
+
+static void test_exported_callsite_interleaving_tv_oracle() {
+    std::printf("test_exported_callsite_interleaving_tv_oracle\n");
+    ExportedCallsiteInterleavingOracleStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98,  99, 50, 240000},
+    };
+    strat.run(bars, 4);
+
+    const char* expected_comments[] = {
+        "A_LAST", "B_MIDDLE", "UDF_INNER_1", "UDF_INNER_2", "CLEANUP",
+    };
+    CHECK(strat.trade_count() == 5);
+    if (strat.trade_count() == 5) {
+        for (size_t i = 0; i < 5; ++i) {
+            CHECK(strat.get_trade(i).exit_comment == expected_comments[i]);
+            CHECK(near(strat.get_trade(i).qty, 1.0));
+        }
+    }
+}
+
+// Direct engine mirror of pf-probe-close-callsite-udf. All invocations route
+// through one shared inner strategy.close statement, so two written outer
+// calls replace each other and three loop evaluations retain only the last.
+class ExportedSharedInnerUdfOracleStrategy : public BacktestEngine {
+public:
+    ExportedSharedInnerUdfOracleStrategy() {
+        initial_capital_ = 1000000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 20;
+        process_orders_on_close_ = true;
+    }
+
+    void close_one(const std::string& id, const std::string& comment) {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        strategy_close(id, comment, na, na, false, 711);
+    }
+
+    void on_bar(const Bar&) override {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        if (bar_index_ == 0) {
+            strategy_entry("A", true, na, na, 1.0, "ENTRY_A");
+            strategy_entry("B", true, na, na, 1.0, "ENTRY_B");
+            strategy_entry("L0", true, na, na, 1.0, "ENTRY_L0");
+            strategy_entry("L1", true, na, na, 1.0, "ENTRY_L1");
+            strategy_entry("L2", true, na, na, 1.0, "ENTRY_L2");
+        } else if (bar_index_ == 1) {
+            close_one("A", "UDF_DISTINCT_A");
+            close_one("B", "UDF_DISTINCT_B");
+        } else if (bar_index_ == 2) {
+            close_one("L0", "UDF_LOOP_0");
+            close_one("L1", "UDF_LOOP_1");
+            close_one("L2", "UDF_LOOP_2");
+        } else if (bar_index_ == 3) {
+            strategy_close("", "CLEANUP");
+        }
+    }
+};
+
+static void test_exported_shared_inner_udf_tv_oracle() {
+    std::printf("test_exported_shared_inner_udf_tv_oracle\n");
+    ExportedSharedInnerUdfOracleStrategy strat;
+    Bar bars[] = {
+        {100, 101, 99, 100, 50,  60000},
+        {100, 106, 99, 105, 50, 120000},
+        {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98,  99, 50, 240000},
+    };
+    strat.run(bars, 4);
+
+    const char* expected_comments[] = {
+        "UDF_DISTINCT_B", "UDF_LOOP_2", "CLEANUP", "CLEANUP", "CLEANUP",
+    };
+    CHECK(strat.trade_count() == 5);
+    if (strat.trade_count() == 5) {
+        for (size_t i = 0; i < 5; ++i) {
+            CHECK(strat.get_trade(i).exit_comment == expected_comments[i]);
+            CHECK(near(strat.get_trade(i).qty, 1.0));
+        }
+    }
+}
+
+class XauCloseLedgerCubeStrategy : public BacktestEngine {
+public:
+    std::array<double, 8> visible_after_prior{};
+    int reset_violations = 0;
+
+    XauCloseLedgerCubeStrategy() {
+        visible_after_prior.fill(-1.0);
+        initial_capital_ = 1000000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        commission_value_ = 0;
+        slippage_ = 0;
+        pyramiding_ = 50;
+        process_orders_on_close_ = true;
+        close_entries_rule_any_ = false;
+    }
+
+    static std::string bits(int cell) {
+        std::string out;
+        out += ((cell / 4) % 2) ? '1' : '0';
+        out += ((cell / 2) % 2) ? '1' : '0';
+        out += (cell % 2) ? '1' : '0';
+        return out;
+    }
+
+    void close_site(const std::string& id,
+                    const std::string& comment,
+                    uint64_t token) {
+        const double na = std::numeric_limits<double>::quiet_NaN();
+        strategy_close(id, comment, na, na, false, token);
+    }
+
+    void on_bar(const Bar&) override {
+        constexpr int kCellBars = 20;
+        const int cell = bar_index_ / kCellBars;
+        const int step = bar_index_ % kCellBars;
+        if (cell < 0 || cell >= 8) return;
+
+        const bool prior_exact_two = ((cell / 4) % 2) == 1;
+        const bool target_survives_role = ((cell / 2) % 2) == 1;
+        const bool later_target_interaction = (cell % 2) == 1;
+        const std::string p = "C_" + bits(cell);
+        const std::string q = p + "_Q";
+        const std::string a = p + "_A";
+        const std::string x = p + "_X";
+        const std::string t = p + "_T";
+        const std::string c = p + "_C";
+        const std::string d = p + "_D";
+        const std::string e = p + "_E";
+        const double na = std::numeric_limits<double>::quiet_NaN();
+
+        if (step == 0) {
+            if (!near(signed_position_size(), 0.0)) ++reset_violations;
+            strategy_entry(q, true, na, na, 20.0, p + "_ENTRY_Q20");
+        } else if (step == 1) {
+            strategy_entry(a, true, na, na, 1.0, p + "_ENTRY_A1");
+        } else if (step == 2) {
+            strategy_entry(x, true, na, na, 1.0, p + "_ENTRY_X1");
+        } else if (step == 3) {
+            strategy_entry(t, true, na, na, 1.0, p + "_ENTRY_T1_0");
+        } else if (step == 4) {
+            strategy_entry(c, true, na, na, 2.0, p + "_ENTRY_C2");
+        } else if (step == 5) {
+            strategy_entry(d, true, na, na, 1.0, p + "_ENTRY_D1");
+        } else if (step == 6) {
+            strategy_entry(e, true, na, na, 1.0, p + "_ENTRY_E1");
+        } else if (step == 7) {
+            close_site(a, p + "_P_A_FIRST", 301);
+            if (!prior_exact_two) close_site(x, p + "_P_X_MIDDLE", 302);
+            close_site(t, p + "_P_T_LAST", 303);
+            visible_after_prior[cell] = signed_position_size();
+        } else if (step == 8) {
+            strategy_entry(t, true, na, na, 1.0, p + "_ENTRY_T1_1");
+        } else if (step == 9) {
+            if (target_survives_role) {
+                close_site(c, p + "_R_C_FIRST", 304);
+                close_site(t, p + "_R_T_LAST", 305);
+            } else {
+                close_site(t, p + "_R_T_FIRST", 306);
+                close_site(c, p + "_R_C_LAST", 307);
+            }
+        } else if (step == 10) {
+            strategy_entry(t, true, na, na, 1.0, p + "_ENTRY_T1_2");
+        } else if (step == 11) {
+            if (later_target_interaction) {
+                close_site(t, p + "_I_T_FIRST", 308);
+            } else {
+                close_site(e, p + "_I_E_FIRST", 309);
+            }
+            close_site(d, p + "_I_D_LAST", 310);
+        } else if (step == 12) {
+            strategy_entry(t, true, na, na, 1.0, p + "_ENTRY_T1_3");
+        } else if (step == 13) {
+            close_site(t, p + "_FINAL_T_SOLE", 311);
+        } else if (step == 15) {
+            strategy_close("", p + "_CLEANUP");
+        } else if (step == 16) {
+            strategy_cancel_all();
+        }
+    }
+};
+
+static void test_xau_close_ledger_cube_matches_authoritative_tv_tape() {
+    std::printf("test_xau_close_ledger_cube_matches_authoritative_tv_tape\n");
+    XauCloseLedgerCubeStrategy strat;
+    std::array<Bar, 160> bars{};
+    for (size_t i = 0; i < bars.size(); ++i) {
+        bars[i] = {100, 101, 99, 100, 50,
+                   static_cast<int64_t>((i + 1) * 900000)};
+    }
+    strat.run(bars.data(), bars.size());
+
+    auto qty_for = [&](const std::string& comment) {
+        double total = 0.0;
+        for (size_t i = 0; i < strat.trade_count(); ++i) {
+            if (strat.get_trade(i).exit_comment == comment) {
+                total += strat.get_trade(i).qty;
+            }
+        }
+        return total;
+    };
+
+    const double tv_final[] = {2, 1, 2, 1, 2, 1, 2, 1};
+    const double tv_cleanup[] = {20, 21, 20, 21, 21, 22, 21, 22};
+    for (int cell = 0; cell < 8; ++cell) {
+        const std::string bits = XauCloseLedgerCubeStrategy::bits(cell);
+        const std::string p = "C_" + bits;
+        const bool prior_exact_two = ((cell / 4) % 2) == 1;
+        const bool target_survives_role = ((cell / 2) % 2) == 1;
+        const bool later_target_interaction = (cell % 2) == 1;
+
+        CHECK(near(strat.visible_after_prior[cell], 27.0));
+        CHECK(near(qty_for(p + "_P_A_FIRST"), 1.0));
+        CHECK(near(qty_for(p + "_P_T_LAST"), 1.0));
+        CHECK(near(qty_for(p + "_P_X_MIDDLE"),
+                   prior_exact_two ? 0.0 : 1.0));
+        CHECK(near(qty_for(p + (target_survives_role
+                                    ? "_R_C_FIRST" : "_R_C_LAST")), 2.0));
+        CHECK(near(qty_for(p + (target_survives_role
+                                    ? "_R_T_LAST" : "_R_T_FIRST")), 1.0));
+        CHECK(near(qty_for(p + (later_target_interaction
+                                    ? "_I_T_FIRST" : "_I_E_FIRST")), 1.0));
+        CHECK(near(qty_for(p + "_I_D_LAST"), 1.0));
+        CHECK(near(qty_for(p + "_FINAL_T_SOLE"), tv_final[cell]));
+        CHECK(near(qty_for(p + "_CLEANUP"), tv_cleanup[cell]));
+    }
+    CHECK(strat.reset_violations == 0);
+}
 
 // ---- 38b. process_orders_on_close: an exit gated on position visibility must
 // NOT fire on the entry bar. TradingView does not expose a just-placed market
@@ -3649,7 +5046,8 @@ static void test_strategy_entry_qty_type_cash_overrides_default_sizing() {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, na<double>(), na<double>(), 1000.0, "", "", 0, 2);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_close("L");
+                strategy_close("L", "", na<double>(), na<double>(), false,
+                               8'002);
             }
         }
     };
@@ -3725,7 +5123,8 @@ static void test_market_close_fills_before_same_bar_opposite_stop_entry() {
                 // market close. TV still closes the existing position at next
                 // bar open before evaluating the opposite stop entry.
                 strategy_entry("S", false, na<double>(), 95.0);
-                strategy_close("L");
+                strategy_close("L", "", na<double>(), na<double>(), false,
+                               8'012);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -4302,6 +5701,9 @@ static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry(
 
     class Strat : public BacktestEngine {
     public:
+        double visible_after_close = -1.0;
+        bool callsite_queue_empty_after_close = false;
+
         Strat() {
             initial_capital_ = 100000;
             default_qty_type_ = QtyType::FIXED;
@@ -4316,7 +5718,11 @@ static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry(
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_entry("L_add", true);
-                strategy_close("L", "", na<double>(), na<double>(), true);
+                strategy_close("L", "", na<double>(), na<double>(), true,
+                               8'013);
+                visible_after_close = signed_position_size();
+                callsite_queue_empty_after_close =
+                    callsite_close_callsites_.empty();
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -4332,6 +5738,8 @@ static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry(
 
     CHECK(strat.trade_count() == 1);
     CHECK(near(strat.get_signed_position_size(), 0.0, 1e-9));
+    CHECK(near(strat.visible_after_close, 0.0, 1e-9));
+    CHECK(strat.callsite_queue_empty_after_close);
 }
 
 static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
@@ -4352,7 +5760,8 @@ static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
                 strategy_entry("L0", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_entry("L1", true, std::numeric_limits<double>::quiet_NaN(), 110.0);
-                strategy_close("L0");
+                strategy_close("L0", "", na<double>(), na<double>(), false,
+                               8'003);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -4385,7 +5794,6 @@ static void test_strategy_close_pooc_partial_close_keeps_other_exit_bracket() {
             commission_value_ = 0.0;
             slippage_ = 0;
             process_orders_on_close_ = true;
-            close_entries_rule_any_ = true;
             pyramiding_ = 2;
         }
         void on_bar(const Bar& bar) override {
@@ -4395,7 +5803,8 @@ static void test_strategy_close_pooc_partial_close_keeps_other_exit_bracket() {
                 strategy_entry("B", true);
                 strategy_exit("XB", "B", 115.0, std::numeric_limits<double>::quiet_NaN());
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
-                strategy_close("A");
+                strategy_close("A", "", na<double>(), na<double>(), false,
+                               8'004);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -4621,9 +6030,11 @@ static void test_strategy_close_qty_percent_reduces_position() {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_close("L", "half", na<double>(), 50.0, false);
+                strategy_close("L", "half", na<double>(), 50.0, false,
+                               8'005);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
-                strategy_close("L", "rest", na<double>(), na<double>(), false);
+                strategy_close("L", "rest", na<double>(), na<double>(),
+                               false, 8'006);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -4663,7 +6074,8 @@ static void test_strategy_close_qty_reduces_position() {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_close("L", "three", 3.0, na<double>(), false);
+                strategy_close("L", "three", 3.0, na<double>(), false,
+                               8'007);
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
@@ -4700,7 +6112,8 @@ static void test_strategy_close_immediately_fills_current_close() {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
-                strategy_close("L", "now", na<double>(), na<double>(), true);
+                strategy_close("L", "now", na<double>(), na<double>(), true,
+                               8'008);
             }
         }
     };
@@ -4853,6 +6266,23 @@ int main() {
     test_three_call_current_batch_invalidates_two_call_carry();
     test_zero_backed_close_reservation_clears_stale_cycle();
     test_positive_truncated_close_reservation_keeps_ledger_only();
+    test_same_bar_multi_close_queues_all_in_source_order();
+    test_overlapping_id_callsites_reserve_before_replacement();
+    test_distinct_sites_same_id_share_physical_capacity();
+    test_same_callsite_loop_close_replaces_in_place();
+    test_callsite_replacement_separates_live_claim_from_entry_debt();
+    test_single_site_replacement_reuses_own_live_claim();
+    test_rejected_replacement_has_no_debt_or_order_side_effects();
+    test_owner_reservation_survives_other_token_cleanup_permutations();
+    test_cross_owner_post_fill_backing_is_physically_bounded();
+    test_cross_bar_different_id_claims_cap_fresh_site();
+    test_same_id_owner_claims_share_physical_backing();
+    test_post_fill_backing_excludes_all_same_id_aliases();
+    test_local_alias_release_frees_only_marginal_backing();
+    test_interleaved_callsite_replacement_preserves_queue_position();
+    test_exported_callsite_interleaving_tv_oracle();
+    test_exported_shared_inner_udf_tv_oracle();
+    test_xau_close_ledger_cube_matches_authoritative_tv_tape();
     test_pooc_exit_not_triggered_on_entry_bar();
     test_commission_deducted();
     test_slippage_applied();
