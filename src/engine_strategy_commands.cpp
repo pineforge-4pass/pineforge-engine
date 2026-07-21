@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <utility>
 
 namespace pineforge {
@@ -555,22 +556,34 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     invalidate_unsafe_pooc_global_full_exit_dynamic_qty();
 }
 
-void BacktestEngine::strategy_close(const std::string& id, const std::string& comment,
-                                    double qty, double qty_percent, bool immediately) {
+void BacktestEngine::strategy_close(const std::string& id,
+                                    const std::string& comment,
+                                    double qty, double qty_percent,
+                                    bool immediately) {
+    strategy_close(id, comment, qty, qty_percent, immediately,
+                   /*callsite_token=*/0);
+}
+
+void BacktestEngine::strategy_close(const std::string& id,
+                                    const std::string& comment,
+                                    double qty, double qty_percent,
+                                    bool immediately,
+                                    uint64_t callsite_token) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
 
-    // TradingView one-close-fill-per-bar rule: under process_orders_on_close,
-    // default-FIFO ``strategy.close(id)`` calls (no explicit qty/qty_percent,
-    // FIFO close-entries rule) issued on the SAME bar collapse into a single
-    // surviving market close order that fills at the bar close. Route those
-    // calls through the same-bar batch; the fill executes at the end-of-bar
-    // order-processing point (dispatch_bar step 4 / magnifier last tick) via
-    // flush_same_bar_close(). Everything else (ANY rule, explicit qty,
-    // close_all, immediately=true, non-POC deferred closes) keeps the
-    // existing paths.
+    // TradingView same-callsite replacement rule: under
+    // process_orders_on_close, default-FIFO ``strategy.close(id)`` calls (no
+    // explicit qty/qty_percent, FIFO close-entries rule) issued by one
+    // syntactic callsite on the SAME bar collapse into one surviving market
+    // close. Distinct compiler-token callsites keep independent batches;
+    // token 0 retains the historical global compatibility batch. Their fills
+    // execute at the end-of-bar order-processing point (dispatch_bar step 4 /
+    // magnifier last tick) via flush_same_bar_close(). Everything else (ANY
+    // rule, explicit qty, close_all, immediately=true, non-POC deferred
+    // closes) keeps the existing paths.
     const bool pooc_can_fill_at_this_cursor =
         process_orders_on_close_
         && (!coof_scheduler_active_ || coof_cursor_is_bar_close_)
@@ -582,7 +595,7 @@ void BacktestEngine::strategy_close(const std::string& id, const std::string& co
     if (pooc_can_fill_at_this_cursor && !immediately
         && !close_entries_rule_any_ && !id.empty()
         && std::isnan(qty) && std::isnan(qty_percent)) {
-        enqueue_same_bar_close(id, comment);
+        enqueue_same_bar_close(id, comment, callsite_token);
         return;
     }
 
@@ -714,20 +727,26 @@ void BacktestEngine::strategy_close_all() {
     strategy_close("");
 }
 
-// Qty the pending same-bar close batch will fill at flush time (0 when no
-// batch is pending). Lets same-bar order sizing (strategy.exit) see the
-// post-close position before the flush actually executes.
+// Total qty committed by token-0 legacy replacement plus every nonzero
+// callsite survivor. Later strategy.exit sizing sees the aggregate post-close
+// capacity without making any broker fill visible to the Pine body.
 double BacktestEngine::pending_same_bar_close_target() const {
-    if (!sb_close_active_) return 0.0;
-    auto it = id_unclosed_qty_.find(sb_close_id_);
-    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
-    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(sb_close_id_));
-    return std::min(unclosed, avail);
+    double legacy = 0.0;
+    if (sb_close_active_) {
+        auto it = id_unclosed_qty_.find(sb_close_id_);
+        double unclosed =
+            (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+        double avail = std::max(
+            0.0, position_qty_ - close_reserved_other_qty(sb_close_id_));
+        legacy = std::min(unclosed, avail);
+    }
+    double callsite = 0.0;
+    if (callsite_close_bar_ == bar_index_) {
+        callsite = callsite_close_admitted_total_;
+    }
+    return std::min(position_qty_, legacy + callsite);
 }
 
-// Sum of same-bar-close reservations held by OTHER ids. A surviving
-// multi-close fill leaves its unconsumed ledger amount reserved against
-// the position; other ids' close targets are capped by what remains.
 double BacktestEngine::close_reserved_other_qty(const std::string& id) const {
     double sum = 0.0;
     for (const auto& kv : close_reserved_qty_) {
@@ -736,104 +755,424 @@ double BacktestEngine::close_reserved_other_qty(const std::string& id) const {
     return sum;
 }
 
-// Admit a default-FIFO strategy.close(id) call into the same-bar batch
-// (TV one-fill-per-bar rule — see the close_reserved_qty_ field block in
-// engine.hpp). Order cancels tied to a full-position close keep their
-// CALL-time timing (identical to the previous immediate path); only the
-// FILL is deferred to flush_same_bar_close().
-void BacktestEngine::enqueue_same_bar_close(const std::string& id,
-                                            const std::string& comment) {
-    const double eps = kQtyEpsilon;
-    auto it = id_unclosed_qty_.find(id);
-    double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
-    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
-    double target = std::min(unclosed, avail);
-    if (target <= eps) {
-        if (unclosed > eps && avail <= eps) {
-            // The logical slot was asked to close, but earlier surviving
-            // multi-close orders already reserve every physically available
-            // unit. TV emits no broker fill here, yet the close command still
-            // consumes this logical cycle: a later same-id entry must not be
-            // added to the stale ledger and double-close on its next signal.
-            id_unclosed_qty_.erase(id);
-            close_reserved_qty_.erase(id);
-            close_two_call_first_qty_.erase(id);
+double BacktestEngine::callsite_close_reserved_other_qty(
+        uint64_t /*callsite_token*/, const std::string& id) const {
+    // Persistent provenance is physically backed per logical entry id. Owner
+    // claims for the same id alias the shared id_unclosed_qty_ ledger, so only
+    // their maximum consumes capacity; claims for distinct ids remain
+    // additive. Token 0 participates in the same grouping.
+    // Ordered keys keep floating-point accumulation deterministic across
+    // standard-library hash implementations and platforms.
+    std::map<std::string, double> backing_by_id;
+    for (const auto& claim : close_reserved_qty_) {
+        backing_by_id[claim.first] = claim.second;
+    }
+    for (const auto& owner : callsite_close_reserved_qty_) {
+        for (const auto& claim : owner.second) {
+            double& backing = backing_by_id[claim.first];
+            backing = std::max(backing, claim.second);
         }
-        return;  // no order/fill; a zero-target call cannot survive
     }
-
-    // Same-bar source-order carry (see strategy_entry's tv_carry_qty): a
-    // subsequent strategy.entry on this on_bar sees the post-close size.
-    pending_close_qty_in_bar_ += target;
-
-    bool closes_full_position = target >= position_qty_ - eps;
-    if (closes_full_position) {
-        bool closing_long = (position_side_ == PositionSide::LONG);
-        cancel_orders_for_full_close(id, closing_long);
-        purge_exit_orders();
+    double sum = 0.0;
+    for (const auto& backing : backing_by_id) {
+        if (backing.first != id) sum += backing.second;
     }
+    return sum;
+}
 
-    if (!sb_close_active_ || sb_close_bar_ != bar_index_) {
-        sb_close_active_ = true;
-        sb_close_bar_ = bar_index_;
-        sb_close_calls_ = 1;
-        sb_close_first_id_ = id;
-        sb_close_first_target_ = target;
-        sb_close_first_carry_valid_ = false;
-        sb_close_first_carry_qty_ = 0.0;
+double BacktestEngine::callsite_close_physical_reserved_other_qty(
+        uint64_t callsite_token, const std::string& id) const {
+    // Post-fill reservation uses the identical per-id physical backing model
+    // as admission. The id being replaced is excluded across every owner.
+    return callsite_close_reserved_other_qty(callsite_token, id);
+}
+
+// Admit one default-FIFO strategy.close(id) call into the bar-close broker
+// queue. Token 0 retains the accepted global replacement batch. A nonzero
+// compiler token selects an independent copy of that same state machine:
+// runtime loop evaluations replace only their own syntactic site in place,
+// while distinct source sites all survive in first-admission queue order.
+void BacktestEngine::enqueue_same_bar_close(const std::string& id,
+                                            const std::string& comment,
+                                            uint64_t callsite_token) {
+    const double eps = kQtyEpsilon;
+    if (callsite_token == 0) {
+        auto it = id_unclosed_qty_.find(id);
+        double unclosed =
+            (it != id_unclosed_qty_.end()) ? it->second : 0.0;
+        double avail = std::max(
+            0.0, position_qty_ - close_reserved_other_qty(id));
+        double target = std::min(unclosed, avail);
+        if (target <= eps) {
+            if (unclosed > eps && avail <= eps) {
+                id_unclosed_qty_.erase(id);
+                close_reserved_qty_.erase(id);
+                close_two_call_first_qty_.erase(id);
+            }
+            return;
+        }
+
+        pending_close_qty_in_bar_ += target;
+        const bool closes_full_position = target >= position_qty_ - eps;
+        if (closes_full_position) {
+            const bool closing_long =
+                position_side_ == PositionSide::LONG;
+            cancel_orders_for_full_close(id, closing_long);
+            purge_exit_orders();
+        }
+
+        if (!sb_close_active_ || sb_close_bar_ != bar_index_) {
+            sb_close_active_ = true;
+            sb_close_bar_ = bar_index_;
+            sb_close_calls_ = 1;
+            sb_close_first_id_ = id;
+            sb_close_first_target_ = target;
+            sb_close_first_carry_valid_ = false;
+            sb_close_first_carry_qty_ = 0.0;
+            sb_close_id_ = id;
+            sb_close_comment_ = comment;
+            return;
+        }
+        if (id == sb_close_id_) {
+            sb_close_comment_ = comment;
+            return;
+        }
+        ++sb_close_calls_;
+        if (sb_close_calls_ == 2) {
+            const auto reserved =
+                close_reserved_qty_.find(sb_close_first_id_);
+            const auto provenance =
+                close_two_call_first_qty_.find(sb_close_first_id_);
+            if (reserved != close_reserved_qty_.end()
+                && provenance != close_two_call_first_qty_.end()) {
+                sb_close_first_carry_valid_ = true;
+                sb_close_first_carry_qty_ = provenance->second;
+            }
+            id_unclosed_qty_.erase(sb_close_first_id_);
+            close_reserved_qty_.erase(sb_close_first_id_);
+            close_two_call_first_qty_.erase(sb_close_first_id_);
+        } else if (sb_close_calls_ == 3) {
+            sb_close_first_carry_valid_ = false;
+            sb_close_first_carry_qty_ = 0.0;
+        }
         sb_close_id_ = id;
         sb_close_comment_ = comment;
         return;
     }
-    if (id == sb_close_id_) {
-        // Re-issued close for the id already pending: replaces the same
-        // order in place (comment refresh; not a new call).
-        sb_close_comment_ = comment;
+
+    if (callsite_close_bar_ != bar_index_) {
+        callsite_close_bar_ = bar_index_;
+        callsite_close_queue_seq_ = 0;
+        callsite_close_callsites_.clear();
+        callsite_close_admitted_total_ = 0.0;
+    }
+
+    auto existing = callsite_close_callsites_.find(callsite_token);
+    const SameBarCloseCallsite* prior_site =
+        existing == callsite_close_callsites_.end()
+            ? nullptr : &existing->second;
+    const auto locally_erased = [&](const std::string& key) {
+        if (prior_site == nullptr) return false;
+        if (prior_site->first_ledger_consumed
+            && key == prior_site->first_id) {
+            return true;
+        }
+        return std::find(prior_site->deferred_cleanup_ids.begin(),
+                         prior_site->deferred_cleanup_ids.end(), key)
+            != prior_site->deferred_cleanup_ids.end();
+    };
+    auto it = id_unclosed_qty_.find(id);
+    const double unclosed =
+        locally_erased(id) || it == id_unclosed_qty_.end()
+            ? 0.0 : it->second;
+    double pending_reserved = callsite_close_admitted_total_;
+    const bool same_id_reissue =
+        existing != callsite_close_callsites_.end()
+        && existing->second.active && existing->second.id == id;
+    bool replacement_can_reuse_own_claim = false;
+    if (existing != callsite_close_callsites_.end()
+        && existing->second.active && existing->second.id != id) {
+        const std::string& replaced_id = existing->second.id;
+        const bool another_site_targets_replaced_id = std::any_of(
+            callsite_close_callsites_.begin(),
+            callsite_close_callsites_.end(),
+            [&](const auto& candidate) {
+                return candidate.first != callsite_token
+                    && candidate.second.active
+                    && candidate.second.id == replaced_id;
+            });
+        replacement_can_reuse_own_claim =
+            !another_site_targets_replaced_id;
+    }
+    // A same-id reissue updates the already-admitted instruction in place.
+    // A different-id replacement can normally reuse its own in-place broker
+    // claim (single-site token-0 parity). But if another source site targets
+    // that same old id, the old claim remains load-bearing during admission:
+    // this is the direct TV site1/A + site2/A->B rejection oracle.
+    if (same_id_reissue || replacement_can_reuse_own_claim) {
+        pending_reserved -= existing->second.target;
+    }
+    double persistent_reserved_other =
+        callsite_close_reserved_other_qty(callsite_token, id);
+    if (prior_site != nullptr) {
+        const auto owner =
+            callsite_close_reserved_qty_.find(callsite_token);
+        if (owner != callsite_close_reserved_qty_.end()) {
+            for (const auto& kv : owner->second) {
+                if (kv.first != id && locally_erased(kv.first)) {
+                    // Releasing this site's locally-consumed slot frees only
+                    // its marginal contribution to the per-id maximum. A
+                    // legacy or different-site alias can keep part or all of
+                    // the same logical id physically backed.
+                    double competing_backing = 0.0;
+                    const auto legacy = close_reserved_qty_.find(kv.first);
+                    if (legacy != close_reserved_qty_.end()) {
+                        competing_backing = legacy->second;
+                    }
+                    for (const auto& candidate
+                         : callsite_close_reserved_qty_) {
+                        if (candidate.first == callsite_token) continue;
+                        const auto claim = candidate.second.find(kv.first);
+                        if (claim != candidate.second.end()) {
+                            competing_backing = std::max(
+                                competing_backing, claim->second);
+                        }
+                    }
+                    persistent_reserved_other -= std::max(
+                        0.0, kv.second - competing_backing);
+                }
+            }
+        }
+    }
+    persistent_reserved_other = std::max(0.0, persistent_reserved_other);
+    const double persistent_avail =
+        std::max(0.0, position_qty_ - persistent_reserved_other);
+    const double avail = std::max(
+        0.0, persistent_avail - pending_reserved);
+    const double target = std::min(unclosed, avail);
+    if (target <= eps) {
+        // Do not mutate shared ledgers here. Other source callsites may own
+        // earlier reservations against the same logical id. A zero-capacity
+        // evaluation is rejected and cannot replace its site's live order.
+        // A call blocked by a PRIOR-BAR persistent reservation still consumes
+        // the stale logical cycle under the accepted token-0 contract. Keep
+        // that cleanup site-local now and publish it only after all callsites
+        // have flushed. Capacity blocked solely by this bar's pending sites
+        // (the fresh A/A->B oracle) performs no cleanup.
+        if (unclosed > eps && persistent_avail <= eps) {
+            SameBarCloseCallsite& site =
+                callsite_close_callsites_[callsite_token];
+            if (std::find(site.deferred_cleanup_ids.begin(),
+                          site.deferred_cleanup_ids.end(), id)
+                == site.deferred_cleanup_ids.end()) {
+                site.deferred_cleanup_ids.push_back(id);
+            }
+        }
         return;
     }
-    sb_close_calls_ += 1;
-    if (sb_close_calls_ == 2) {
-        const auto reserved = close_reserved_qty_.find(sb_close_first_id_);
-        const auto provenance =
-            close_two_call_first_qty_.find(sb_close_first_id_);
-        if (reserved != close_reserved_qty_.end()
-            && provenance != close_two_call_first_qty_.end()) {
-            // Snapshot before releasing the old reservation. Restoration is
-            // deferred until flush proves the CURRENT batch also has exactly
-            // two calls; a later 3rd call invalidates this carry.
-            sb_close_first_carry_valid_ = true;
-            sb_close_first_carry_qty_ = provenance->second;
-        }
-        // Preserve the established provisional replacement rule immediately.
-        // Besides matching the broker lifecycle, this makes a later A,B,A
-        // source revisit observe A as zero-target while this batch is pending.
-        id_unclosed_qty_.erase(sb_close_first_id_);
-        close_reserved_qty_.erase(sb_close_first_id_);
-        close_two_call_first_qty_.erase(sb_close_first_id_);
-    } else if (sb_close_calls_ == 3) {
-        // The current batch is no longer exact-two. Keep the provisional
-        // ledger erase and discard the snapshotted two-call carry.
-        sb_close_first_carry_valid_ = false;
-        sb_close_first_carry_qty_ = 0.0;
+
+    const double replaced_target =
+        prior_site != nullptr && prior_site->active
+            ? prior_site->target : 0.0;
+    // The broker capacity claim is net-live, while the existing source-order
+    // entry-carry debt is cumulative across every accepted evaluation.
+    callsite_close_admitted_total_ += target - replaced_target;
+    pending_close_qty_in_bar_ += target;
+    const bool closes_full_position = target >= position_qty_ - eps;
+    if (closes_full_position) {
+        const bool closing_long = position_side_ == PositionSide::LONG;
+        cancel_orders_for_full_close(id, closing_long);
+        purge_exit_orders();
     }
-    // Intermediate replaced calls (3rd+) keep their ledgers as before.
-    sb_close_id_ = id;
-    sb_close_comment_ = comment;
+
+    SameBarCloseCallsite& site =
+        callsite_close_callsites_[callsite_token];
+    if (!site.active) {
+        site.active = true;
+        site.token = callsite_token;
+        site.calls = 1;
+        site.first_id = id;
+        site.first_target = target;
+        site.first_ledger_consumed = false;
+        site.first_carry_valid = false;
+        site.first_carry_qty = 0.0;
+        site.id = id;
+        site.comment = comment;
+        site.target = target;
+        site.queue_seq = ++callsite_close_queue_seq_;
+        return;
+    }
+    if (id == site.id) {
+        site.comment = comment;
+        site.target = target;
+        return;
+    }
+
+    ++site.calls;
+    if (site.calls == 2) {
+        const auto owner_reserved =
+            callsite_close_reserved_qty_.find(callsite_token);
+        const auto owner_provenance =
+            callsite_close_two_call_first_qty_.find(callsite_token);
+        if (owner_reserved != callsite_close_reserved_qty_.end()
+            && owner_provenance != callsite_close_two_call_first_qty_.end()) {
+            const auto reserved =
+                owner_reserved->second.find(site.first_id);
+            const auto provenance =
+                owner_provenance->second.find(site.first_id);
+            if (reserved != owner_reserved->second.end()
+                && provenance != owner_provenance->second.end()) {
+                site.first_carry_valid = true;
+                site.first_carry_qty = provenance->second;
+            }
+        }
+        site.first_ledger_consumed = true;
+    } else if (site.calls == 3) {
+        site.first_carry_valid = false;
+        site.first_carry_qty = 0.0;
+    }
+    site.id = id;
+    site.comment = comment;
+    site.target = target;
 }
 
-// Execute the surviving same-bar close at the bar's close price. Called
-// from the end-of-bar order-processing points (dispatch_bar step 4 and
-// the magnifier's last tick), i.e. the same bar and price the immediate
-// path used, after the strategy's on_bar has fully run.
+// End the script-evaluation phase. Distinct compiler callsites flush by the
+// order of their first effective admission. A same-site replacement changes
+// the payload in place without moving its queue slot (authoritative A,B,A =>
+// A_LAST,B_MIDDLE). Each flush reuses the exact accepted token-0 batch below.
 void BacktestEngine::flush_same_bar_close() {
-    // KI-64: on_bar has returned — release any POOC script-visible position
-    // freeze so the flush below, step-4 order processing, and post-run reads
-    // all observe the real (post-close) position. Runs on every POOC bar
-    // (flush is the first call after each POOC on_bar), before the early
-    // return so a bar with an in-line close but no enqueued survivor still
-    // clears. Broker reads here use position_side_/position_qty_ directly.
     clear_script_position_view();
+
+    SameBarCloseCallsite legacy;
+    legacy.active = sb_close_active_;
+    legacy.calls = sb_close_calls_;
+    legacy.first_id = sb_close_first_id_;
+    legacy.first_target = sb_close_first_target_;
+    legacy.first_carry_valid = sb_close_first_carry_valid_;
+    legacy.first_carry_qty = sb_close_first_carry_qty_;
+    legacy.id = sb_close_id_;
+    legacy.comment = sb_close_comment_;
+
+    std::vector<SameBarCloseCallsite> callsites;
+    std::vector<std::pair<uint64_t, std::string>> deferred_cleanup_ids;
+    std::vector<std::pair<uint64_t, std::string>> ledger_mutation_owners;
+    if (callsite_close_bar_ == bar_index_) {
+        callsites.reserve(callsite_close_callsites_.size());
+        for (const auto& kv : callsite_close_callsites_) {
+            if (kv.second.active) callsites.push_back(kv.second);
+            for (const std::string& id : kv.second.deferred_cleanup_ids) {
+                deferred_cleanup_ids.emplace_back(kv.first, id);
+            }
+        }
+        std::stable_sort(
+            callsites.begin(), callsites.end(),
+            [](const SameBarCloseCallsite& a,
+               const SameBarCloseCallsite& b) {
+                return a.queue_seq < b.queue_seq;
+            });
+        for (const SameBarCloseCallsite& site : callsites) {
+            // A sole call consumes its survivor ledger; a replacement batch
+            // may clear that ledger when its post-fill backing reaches zero.
+            // Track the owning site so a later reconciliation protects only
+            // a different token's still-live claim.
+            ledger_mutation_owners.emplace_back(site.token, site.id);
+            if (site.first_ledger_consumed) {
+                ledger_mutation_owners.emplace_back(
+                    site.token, site.first_id);
+            }
+        }
+    }
+    callsite_close_bar_ = -1;
+    callsite_close_queue_seq_ = 0;
+    callsite_close_callsites_.clear();
+    callsite_close_admitted_total_ = 0.0;
+
+    // Detach token 0 while each compiler-token batch borrows the accepted
+    // scalar batch fields. Generated programs are all-token-0 or all-tokenized;
+    // flushing token 0 last makes a mixed transitional program deterministic.
+    sb_close_active_ = false;
+    double callsite_qty_remaining = 0.0;
+    for (const SameBarCloseCallsite& site : callsites) {
+        callsite_qty_remaining += site.target;
+    }
+    for (const SameBarCloseCallsite& site : callsites) {
+        callsite_qty_remaining =
+            std::max(0.0, callsite_qty_remaining - site.target);
+        sb_close_active_ = site.active;
+        sb_close_bar_ = bar_index_;
+        sb_close_calls_ = site.calls;
+        sb_close_first_id_ = site.first_id;
+        sb_close_first_target_ = site.first_target;
+        sb_close_first_carry_valid_ = site.first_carry_valid;
+        sb_close_first_carry_qty_ = site.first_carry_qty;
+        sb_close_id_ = site.id;
+        sb_close_comment_ = site.comment;
+        flush_active_same_bar_close(
+            site.target, callsite_qty_remaining,
+            site.first_ledger_consumed, site.token);
+    }
+
+    for (const auto& cleanup : deferred_cleanup_ids) {
+        const uint64_t token = cleanup.first;
+        const std::string& id = cleanup.second;
+        ledger_mutation_owners.push_back(cleanup);
+        id_unclosed_qty_.erase(id);
+        auto reserved = callsite_close_reserved_qty_.find(token);
+        if (reserved != callsite_close_reserved_qty_.end()) {
+            reserved->second.erase(id);
+            if (reserved->second.empty()) {
+                callsite_close_reserved_qty_.erase(reserved);
+            }
+        }
+        auto provenance =
+            callsite_close_two_call_first_qty_.find(token);
+        if (provenance != callsite_close_two_call_first_qty_.end()) {
+            provenance->second.erase(id);
+            if (provenance->second.empty()) {
+                callsite_close_two_call_first_qty_.erase(provenance);
+            }
+        }
+    }
+
+    // Publish the owner-aware shared-ledger reduction after every site has
+    // flushed. A mutation by T1 may remove only (T1,id): if a DIFFERENT token
+    // T2 still owns a backed claim for that id, retain T2's ledger floor and
+    // exact-two provenance. Do not generally floor a site's own survivor;
+    // token-0/single-token corpus behavior includes accepted zero-backing
+    // ledger cleanup and must remain byte-identical.
+    for (const auto& mutation : ledger_mutation_owners) {
+        double other_owner_floor = 0.0;
+        for (const auto& owner : callsite_close_reserved_qty_) {
+            if (owner.first == mutation.first) continue;
+            const auto claim = owner.second.find(mutation.second);
+            if (claim != owner.second.end()) {
+                other_owner_floor =
+                    std::max(other_owner_floor, claim->second);
+            }
+        }
+        if (other_owner_floor > kQtyEpsilon) {
+            double& ledger = id_unclosed_qty_[mutation.second];
+            ledger = std::max(ledger, other_owner_floor);
+        }
+    }
+
+    sb_close_active_ = legacy.active;
+    sb_close_bar_ = legacy.active ? bar_index_ : -1;
+    sb_close_calls_ = legacy.calls;
+    sb_close_first_id_ = legacy.first_id;
+    sb_close_first_target_ = legacy.first_target;
+    sb_close_first_carry_valid_ = legacy.first_carry_valid;
+    sb_close_first_carry_qty_ = legacy.first_carry_qty;
+    sb_close_id_ = legacy.id;
+    sb_close_comment_ = legacy.comment;
+    flush_active_same_bar_close();
+}
+
+void BacktestEngine::flush_active_same_bar_close(
+    double admitted_target, double pending_later_qty,
+    bool defer_first_ledger_consume, uint64_t callsite_token) {
     if (!sb_close_active_) return;
+
     const std::string id = sb_close_id_;
     const std::string comment = sb_close_comment_;
     const int batch_calls = sb_close_calls_;
@@ -851,13 +1190,51 @@ void BacktestEngine::flush_same_bar_close() {
     sb_close_first_carry_qty_ = 0.0;
     sb_close_id_.clear();
     sb_close_comment_.clear();
+
+    if (defer_first_ledger_consume && batch_calls >= 2) {
+        // Tokenized sites must not mutate the shared logical ledger while the
+        // Pine body is still admitting later source callsites. Apply the
+        // accepted legacy first-call provisional consumption only when this
+        // site's queued broker instruction reaches the flush point.
+        id_unclosed_qty_.erase(first_id);
+        if (callsite_token == 0) {
+            close_reserved_qty_.erase(first_id);
+            close_two_call_first_qty_.erase(first_id);
+        } else {
+            auto reserved =
+                callsite_close_reserved_qty_.find(callsite_token);
+            if (reserved != callsite_close_reserved_qty_.end()) {
+                reserved->second.erase(first_id);
+                if (reserved->second.empty()) {
+                    callsite_close_reserved_qty_.erase(reserved);
+                }
+            }
+            auto provenance =
+                callsite_close_two_call_first_qty_.find(callsite_token);
+            if (provenance
+                != callsite_close_two_call_first_qty_.end()) {
+                provenance->second.erase(first_id);
+                if (provenance->second.empty()) {
+                    callsite_close_two_call_first_qty_.erase(provenance);
+                }
+            }
+        }
+    }
     if (position_side_ == PositionSide::FLAT) return;
 
     const double eps = kQtyEpsilon;
     auto it = id_unclosed_qty_.find(id);
     double unclosed = (it != id_unclosed_qty_.end()) ? it->second : 0.0;
-    double avail = std::max(0.0, position_qty_ - close_reserved_other_qty(id));
-    double target = std::min(unclosed, avail);
+    const bool has_admitted_target = std::isfinite(admitted_target);
+    double target = 0.0;
+    if (has_admitted_target) {
+        target = std::min(admitted_target, position_qty_);
+    } else {
+        double avail =
+            std::max(0.0,
+                     position_qty_ - close_reserved_other_qty(id));
+        target = std::min(unclosed, avail);
+    }
     if (target <= eps) return;
 
     bool closes_full_position = target >= position_qty_ - eps;
@@ -877,14 +1254,36 @@ void BacktestEngine::flush_same_bar_close() {
     }
 
     if (sole_call) {
-        // Single close call this bar: classic semantics — consume the
-        // ledger and release any prior reservation for this id.
-        it->second -= target;
-        if (it->second <= eps) {
-            id_unclosed_qty_.erase(it);
+        // Single close call for this source site: consume the ledger and
+        // release any prior reservation for this id.
+        if (it != id_unclosed_qty_.end()) {
+            it->second -= target;
+            if (it->second <= eps) {
+                id_unclosed_qty_.erase(it);
+            }
         }
-        close_reserved_qty_.erase(id);
-        close_two_call_first_qty_.erase(id);
+        if (callsite_token == 0) {
+            close_reserved_qty_.erase(id);
+            close_two_call_first_qty_.erase(id);
+        } else {
+            auto reserved =
+                callsite_close_reserved_qty_.find(callsite_token);
+            if (reserved != callsite_close_reserved_qty_.end()) {
+                reserved->second.erase(id);
+                if (reserved->second.empty()) {
+                    callsite_close_reserved_qty_.erase(reserved);
+                }
+            }
+            auto provenance =
+                callsite_close_two_call_first_qty_.find(callsite_token);
+            if (provenance
+                != callsite_close_two_call_first_qty_.end()) {
+                provenance->second.erase(id);
+                if (provenance->second.empty()) {
+                    callsite_close_two_call_first_qty_.erase(provenance);
+                }
+            }
+        }
     }
 
     size_t trades_before = trades_.size();
@@ -895,9 +1294,8 @@ void BacktestEngine::flush_same_bar_close() {
             ? coof_cursor_price_ : current_bar_.close;
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
-        // Exit-order cancel/purge already ran at CALL time in
-        // enqueue_same_bar_close — orders armed after the close call
-        // must survive exactly as they did under the immediate path.
+        // Exit-order cancel/purge already ran at CALL time in enqueue; orders
+        // armed after the close call must survive the established POOC path.
         execute_market_exit(broker_price);
         if (position_side_ == PositionSide::FLAT) {
             cancel_same_bar_market_reentries_after_full_close(
@@ -906,8 +1304,8 @@ void BacktestEngine::flush_same_bar_close() {
     } else {
         execute_partial_exit_qty(broker_price, target);
         if (position_side_ == PositionSide::FLAT) {
-            // Retain from_entry brackets whose parent entry is still a
-            // pending order (it fills right after this flush).
+            // Retain from_entry brackets whose parent entry is still pending;
+            // it fills immediately after this flush.
             purge_exit_orders(/*retain_for_pending_entries=*/true);
         }
     }
@@ -920,14 +1318,8 @@ void BacktestEngine::flush_same_bar_close() {
         || trades_.size() != trades_before;
     if (close_filled) {
         ++broker_fill_event_seq_;
-        // Default-off follow-up to the no-op MARKET candidate: this broker
-        // fill bypasses apply_filled_order_to_state, but TradingView's
-        // max_intraday_filled_orders counts filled close orders too.  Without
-        // this accounting, removing phantom no-op fills merely unmasks the
-        // opposite under-count and can admit an extra late-day trade cycle.
-        // Scope to the ordinary POOC same-bar batch exercised by Regime; other
-        // immediate/COOF close variants remain unchanged pending their own
-        // oracle.
+        // This custom broker fill bypasses apply_filled_order_to_state, but
+        // TradingView's max_intraday_filled_orders counts filled closes too.
         if (intraday_cap_count_pooc_full_close_fills_
             && process_orders_on_close_
             && !calc_on_order_fills_
@@ -938,12 +1330,8 @@ void BacktestEngine::flush_same_bar_close() {
             && !close_entries_rule_any_
             && closes_full_position
             && max_intraday_filled_orders_ > 0) {
-            // Count the close now, never from the mere presence of a queued
-            // opposite order. If one co-queued opposite MARKET survives to
-            // its fill-time admission point, the earliest broker-order
-            // incarnation inherits this already-spent slot. A rejection,
-            // cancellation, replacement, or later no-op therefore cannot
-            // erase the real close fill; the marker simply expires.
+            // Transfer the already-spent slot to the earliest co-queued
+            // opposite MARKET order if one survives to fill-time admission.
             const PendingOrder* inheritor = nullptr;
             for (const PendingOrder& pending : pending_orders_) {
                 if (pending.type != OrderType::MARKET
@@ -980,41 +1368,66 @@ void BacktestEngine::flush_same_bar_close() {
             --coof_direct_fill_events_remaining_;
         }
     }
+
     if (!sole_call && close_filled
         && position_side_ != PositionSide::FLAT) {
-        // A surviving multi-call close normally keeps its established ledger
-        // (TV leaves the id closable again later). The post-fill reservation
-        // below determines whether any physical backing remains; zero backing
-        // clears that ledger, while a positive truncated reservation keeps it.
+        // A surviving multi-evaluation close normally keeps its established
+        // ledger. Exact-two replacement chains may first restore the prior
+        // batch's recorded first target (never a physical-lot recount).
         if (batch_calls == 2 && first_carry_valid
             && std::isfinite(first_carry_qty) && first_carry_qty > eps) {
-            // Exact two-call -> two-call replacement chain: restore the PRIOR
-            // batch's first admitted target, never ledger-reservation and
-            // never +=. ENA's L59 chain carries 0.0991 here; a 5->2 XAU chain
-            // has no provenance. Restore only after a real broker fill so a
-            // zero/deferred batch cannot resurrect a replaced ledger.
             id_unclosed_qty_[first_id] = first_carry_qty;
         }
-        // A reservation is bounded by physical capacity AFTER this fill.
-        // Existing reservations for other ids have first claim on the
-        // remaining position; blindly reserving the just-filled target can
-        // make total reservations exceed position_qty_ and suppress valid
-        // closes after the next entry. Preserve only the capacity left after
-        // those older claims (ETH grid-bot replacement chain).
         const double actual_fill = std::max(0.0, qty_before - position_qty_);
+        // Bound the reservation by physical capacity after this fill; older
+        // reservations for other ids retain first claim on the position.
+        const double reserved_other = callsite_token == 0
+            ? close_reserved_other_qty(id)
+            : callsite_close_physical_reserved_other_qty(
+                  callsite_token, id);
         const double reserve_capacity =
-            std::max(0.0, position_qty_ - close_reserved_other_qty(id));
+            std::max(0.0, position_qty_ - reserved_other
+                              - pending_later_qty);
         const double reserve = std::min(actual_fill, reserve_capacity);
-        if (reserve > eps) {
-            close_reserved_qty_[id] = reserve;
+        if (callsite_token == 0) {
+            if (reserve > eps) {
+                close_reserved_qty_[id] = reserve;
+            } else {
+                id_unclosed_qty_.erase(id);
+                close_reserved_qty_.erase(id);
+            }
+            if (batch_calls == 2 && reserve >= actual_fill - eps) {
+                close_two_call_first_qty_[id] = first_target;
+            } else {
+                close_two_call_first_qty_.erase(id);
+            }
         } else {
-            id_unclosed_qty_.erase(id);
-            close_reserved_qty_.erase(id);
-        }
-        if (batch_calls == 2 && reserve >= actual_fill - eps) {
-            close_two_call_first_qty_[id] = first_target;
-        } else {
-            close_two_call_first_qty_.erase(id);
+            if (reserve > eps) {
+                callsite_close_reserved_qty_[callsite_token][id] = reserve;
+            } else {
+                id_unclosed_qty_.erase(id);
+                auto owner =
+                    callsite_close_reserved_qty_.find(callsite_token);
+                if (owner != callsite_close_reserved_qty_.end()) {
+                    owner->second.erase(id);
+                    if (owner->second.empty()) {
+                        callsite_close_reserved_qty_.erase(owner);
+                    }
+                }
+            }
+            if (batch_calls == 2 && reserve >= actual_fill - eps) {
+                callsite_close_two_call_first_qty_[callsite_token][id] =
+                    first_target;
+            } else {
+                auto owner =
+                    callsite_close_two_call_first_qty_.find(callsite_token);
+                if (owner != callsite_close_two_call_first_qty_.end()) {
+                    owner->second.erase(id);
+                    if (owner->second.empty()) {
+                        callsite_close_two_call_first_qty_.erase(owner);
+                    }
+                }
+            }
         }
     }
 }
@@ -1056,9 +1469,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     // exit sequence freezes the OLD side's size into the bracket's reserved
     // qty (wayward-bison: the Long SL stop filled only the stale short-sized
     // 3.9629 of an 8.0672 long, fragmenting one TV exit into two rows).
-    double sb_pending_close = (sb_close_active_ && sb_close_bar_ == bar_index_)
-                                  ? pending_same_bar_close_target()
-                                  : 0.0;
+    double sb_pending_close = pending_same_bar_close_target();
     double live_pos_qty = (position_side_ == PositionSide::FLAT)
                               ? 0.0
                               : std::max(0.0, position_qty_ - sb_pending_close);

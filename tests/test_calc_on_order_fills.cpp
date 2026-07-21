@@ -93,7 +93,7 @@ public:
             && trades_.empty()) {
             strategy_entry("L", true);
         } else if (position_side_ == PositionSide::LONG) {
-            strategy_close("L");
+            strategy_close("L", "", kNaN, kNaN, false, 8'009);
         }
     }
 };
@@ -861,6 +861,124 @@ void test_pooc_same_tick_requires_close_cursor_or_immediately() {
     }
 }
 
+// Six-argument codegen path at an intrabar COOF cursor. The nonzero callsite
+// token must not accidentally enable the POOC bar-close queue before C; the
+// existing id-scoped COOF close path remains in charge at this cursor.
+class PoocIdCursorTimingProbe final : public CoofBase {
+public:
+    PoocIdCursorTimingProbe() {
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
+            strategy_entry("A", true, kNaN, 100.0);
+            return;
+        }
+        if (bar_index_ == 1 && position_side_ == PositionSide::LONG
+            && trades_.empty()) {
+            if (coof_fill_recalc_active_) ++intrabar_close_calls;
+            strategy_close("A", "", kNaN, kNaN, false, 8'014);
+            queued_callsite_count =
+                static_cast<int>(callsite_close_callsites_.size());
+        }
+    }
+
+    int intrabar_close_calls = 0;
+    int queued_callsite_count = -1;
+};
+
+void test_tokenized_close_respects_coof_cursor_timing() {
+    std::printf("test_tokenized_close_respects_coof_cursor_timing\n");
+    Bar bars[] = {
+        {90.0, 95.0, 85.0, 90.0, 1000.0,   900'000},
+        {100.0, 105.0, 90.0, 95.0, 1000.0, 1'800'000},
+    };
+
+    PoocIdCursorTimingProbe tokenized;
+    tokenized.run(bars, 2);
+    CHECK(tokenized.last_error().empty());
+    CHECK(tokenized.intrabar_close_calls == 1);
+    CHECK(tokenized.queued_callsite_count == 0);
+    CHECK(tokenized.trade_count() == 1);
+    if (tokenized.trade_count() == 1) {
+        CHECK(near(tokenized.get_trade(0).exit_price, 100.0));
+    }
+}
+
+// A stop entry fills on L->H and its recalc creates both a market add and a
+// stop exit for the first lot. The add fills at H; the exit then reaches its
+// exact stop on H->C. Its fill-recalc cursor is therefore both active and at
+// bar close while the added lot remains open. That broker point is already
+// consumed, so an ordinary six-argument close must bypass the same-bar
+// callsite queue.
+class PoocCloseAtCRecalcProbe final : public CoofBase {
+public:
+    PoocCloseAtCRecalcProbe() {
+        process_orders_on_close_ = true;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
+            strategy_entry("A", true, kNaN, 105.0);
+            return;
+        }
+        if (bar_index_ != 1 || !coof_fill_recalc_active_) return;
+        if (!cascade_issued_ && !coof_cursor_is_bar_close_) {
+            cascade_issued_ = true;
+            strategy_entry("B", true);
+            strategy_exit("XA", "A", kNaN, 100.0);
+        } else if (coof_cursor_is_bar_close_ && !close_issued_) {
+            close_issued_ = true;
+            ++close_at_c_recalc_calls;
+            strategy_close("B", "", kNaN, kNaN, false, 8'015);
+            queued_callsite_count =
+                static_cast<int>(callsite_close_callsites_.size());
+            deferred_close_count = 0;
+            deferred_close_born_at_c = false;
+            for (const PendingOrder& order : pending_orders_) {
+                if (order.type == OrderType::EXIT
+                    && order.id == "__close__B") {
+                    ++deferred_close_count;
+                    deferred_close_born_at_c =
+                        order.created_during_coof_recalc
+                        && order.coof_born_at_close_recalc;
+                }
+            }
+            const auto ledger = id_unclosed_qty_.find("B");
+            ledger_after_close = ledger == id_unclosed_qty_.end()
+                ? 0.0 : ledger->second;
+        }
+    }
+
+    int close_at_c_recalc_calls = 0;
+    int queued_callsite_count = -1;
+    int deferred_close_count = -1;
+    bool deferred_close_born_at_c = false;
+    double ledger_after_close = -1.0;
+
+private:
+    bool cascade_issued_ = false;
+    bool close_issued_ = false;
+};
+
+void test_tokenized_close_bypasses_consumed_coof_c_cursor() {
+    std::printf("test_tokenized_close_bypasses_consumed_coof_c_cursor\n");
+    PoocCloseAtCRecalcProbe p;
+    Bar bars[] = {
+        {90.0, 95.0, 85.0, 90.0, 1000.0,   900'000},
+        {100.0, 110.0, 90.0, 100.0, 1000.0, 1'800'000},
+    };
+    p.run(bars, 2);
+
+    CHECK(p.last_error().empty());
+    CHECK(p.close_at_c_recalc_calls == 1);
+    CHECK(p.queued_callsite_count == 0);
+    CHECK(p.deferred_close_count == 1);
+    CHECK(p.deferred_close_born_at_c);
+    CHECK(near(p.ledger_after_close, 1.0));
+}
+
 // A priced bracket born in an INTRABAR fill recalc is a KI-67 cascade EXIT and
 // follows Model S ("R-cascade-gapjump"): held on its in-flight leg, then it
 // gap-fills at that leg-end waypoint if its level is in the in-flight remainder,
@@ -966,7 +1084,7 @@ public:
             && trades_.empty()) {
             strategy_entry("L", true);
         } else if (position_side_ == PositionSide::LONG) {
-            strategy_close("L");
+            strategy_close("L", "", kNaN, kNaN, false, 8'010);
         }
     }
 
@@ -1203,7 +1321,7 @@ public:
         if (position_side_ == PositionSide::FLAT) {
             strategy_entry("L", true);
         } else {
-            strategy_close("L");
+            strategy_close("L", "", kNaN, kNaN, false, 8'011);
         }
     }
 
@@ -1552,6 +1670,8 @@ int main() {
     test_recalc_wrong_limit_does_not_hide_valid_stop_leg();
     test_interior_fill_recalc_market_entry_waits_for_next_waypoint();
     test_pooc_same_tick_requires_close_cursor_or_immediately();
+    test_tokenized_close_respects_coof_cursor_timing();
+    test_tokenized_close_bypasses_consumed_coof_c_cursor();
     test_pooc_intrabar_recalc_priced_order_uses_remaining_path();
     test_historical_barstate_and_committed_state_rollback_hooks();
     test_pooc_terminal_close_fill_has_no_recalc_or_c_born_order();

@@ -595,6 +595,12 @@ void BacktestEngine::reset_run_state() {
     sb_close_comment_.clear();
     close_reserved_qty_.clear();
     close_two_call_first_qty_.clear();
+    callsite_close_bar_ = -1;
+    callsite_close_queue_seq_ = 0;
+    callsite_close_callsites_.clear();
+    callsite_close_admitted_total_ = 0.0;
+    callsite_close_reserved_qty_.clear();
+    callsite_close_two_call_first_qty_.clear();
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
     last_exit_fill_was_trail_ = false;
