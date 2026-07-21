@@ -7,6 +7,9 @@ namespace pineforge {
 
 class PineMatrix {
     Eigen::MatrixXd data_;
+    bool valid_{false};
+
+    void require_valid() const;
 
 public:
     // Construction
@@ -67,6 +70,10 @@ public:
     // Count
     int elements_count() const;
 
+    // Pine matrix ID state. A default-constructed value represents ``na``;
+    // matrix.new() returns a valid ID even when its dimensions are 0x0.
+    [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+
     // Properties
     bool is_square() const;
     bool is_identity() const;
@@ -80,8 +87,12 @@ public:
     bool is_zero() const;
 
     // Access to internal data for friend operations
-    const Eigen::MatrixXd& data() const { return data_; }
-    Eigen::MatrixXd& data() { return data_; }
+    const Eigen::MatrixXd& data() const { require_valid(); return data_; }
+    Eigen::MatrixXd& data() { require_valid(); return data_; }
 };
+
+inline bool is_na(const PineMatrix& matrix) noexcept {
+    return matrix.is_na();
+}
 
 } // namespace pineforge
