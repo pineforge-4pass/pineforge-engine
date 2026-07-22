@@ -667,11 +667,14 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     const bool opening_event_eligible = opening_affordability_eligible_;
     const bool opening_event_commissioned_default_flat_long =
         opening_affordability_commissioned_default_flat_long_;
+    const bool opening_event_default_long_reversal =
+        opening_affordability_default_long_reversal_;
     const double opening_event_raw_fill_base =
         opening_affordability_raw_fill_base_;
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
     opening_affordability_commissioned_default_flat_long_ = false;
+    opening_affordability_default_long_reversal_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
 
@@ -875,7 +878,8 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     double opening_floor_zero_fallback =
         std::numeric_limits<double>::quiet_NaN();
     if (opening_affordability && q_min <= kQtyEpsilon) {
-        if (fee_created_floor_zero_candidate
+        if ((fee_created_floor_zero_candidate
+             || opening_event_default_long_reversal)
             && qty_step_ > 0.0
             && qty_step_ <= 1.0
             && raw_q_min > kQtyEpsilon
@@ -3213,6 +3217,7 @@ void BacktestEngine::apply_filled_order_to_state(
             opening_affordability_pending_ = false;
             opening_affordability_eligible_ = false;
             opening_affordability_commissioned_default_flat_long_ = false;
+            opening_affordability_default_long_reversal_ = false;
             opening_affordability_raw_fill_base_ =
                 std::numeric_limits<double>::quiet_NaN();
         }
@@ -3265,6 +3270,26 @@ void BacktestEngine::apply_filled_order_to_state(
                 && commission_value_ > 0.0
                 && std::isfinite(new_opening_commission)
                 && new_opening_commission > 0.0;
+            opening_affordability_default_long_reversal_ =
+                successful_fresh_open
+                && position_side_before_fill == PositionSide::SHORT
+                && order.created_position_side == PositionSide::SHORT
+                && !order.created_after_position_close_in_bar
+                && order.type == OrderType::MARKET
+                && order.is_long
+                && std::isnan(order.qty)
+                && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+                && std::abs(default_qty_value_ - 100.0) < 1e-12
+                && std::isfinite(order.frozen_default_qty)
+                && order.frozen_default_qty > kQtyEpsilon
+                && std::isfinite(order.sizing_equity)
+                && order.sizing_equity > 0.0
+                && std::isfinite(order.sizing_price)
+                && order.sizing_price > 0.0
+                && std::isfinite(order.sizing_fx)
+                && order.sizing_fx > 0.0
+                && std::isfinite(new_opening_commission)
+                && new_opening_commission == 0.0;
             opening_affordability_raw_fill_base_ = fill_price;
         }
     }
@@ -3872,6 +3897,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         opening_affordability_pending_ = false;
         opening_affordability_eligible_ = false;
         opening_affordability_commissioned_default_flat_long_ = false;
+        opening_affordability_default_long_reversal_ = false;
         opening_affordability_raw_fill_base_ =
             std::numeric_limits<double>::quiet_NaN();
         position_entry_time_ = current_bar_.timestamp;

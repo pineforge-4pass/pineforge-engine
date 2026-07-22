@@ -453,6 +453,89 @@ void test_explicit_true_flat_market_keeps_single_floor() {
     CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2790, 1e-12);
 }
 
+// J/K. The same binary boundary must survive an ordinary in-position MARKET
+// reversal.  The default-sized long is quantized when it is placed; the later
+// short->long flip must consume that frozen contracts value directly.  The
+// adjacent explicit-qty reversal remains un-frozen and therefore still gets
+// exactly one ordinary fill-side floor.
+class FrozenReversalBoundaryProbe : public BacktestEngine {
+public:
+    explicit FrozenReversalBoundaryProbe(bool explicit_reversal)
+        : explicit_reversal_(explicit_reversal) {
+        initial_capital_ = 6279.0000001;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_value_ = 0.0;
+        qty_step_ = 0.0001;
+        margin_call_enabled_ = false;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("SEED", false, kNaN, kNaN, 1.0);
+        } else if (bar_index_ == 1) {
+            if (explicit_reversal_) {
+                strategy_entry("BOUNDARY", true, kNaN, kNaN,
+                               6.2790000001);
+            } else {
+                strategy_entry("BOUNDARY", true);
+            }
+        }
+    }
+
+    double one_floor_qty() const { return apply_qty_step(6.2790000001); }
+    double two_floor_qty() const { return apply_qty_step(one_floor_qty()); }
+    PositionSide position_side() const { return position_side_; }
+    double position_qty() const { return position_qty_; }
+    int live_lot_count() const { return static_cast<int>(pyramid_entries_.size()); }
+    double live_lot_qty() const {
+        return pyramid_entries_.empty() ? 0.0 : pyramid_entries_.front().qty;
+    }
+    double id_ledger_qty(const std::string& id) const {
+        const auto it = id_unclosed_qty_.find(id);
+        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+    }
+
+private:
+    bool explicit_reversal_;
+};
+
+static std::vector<Bar> frozen_reversal_boundary_bars() {
+    return {
+        mk_bar(1000, 1000.0, 1000.0, 1000.0, 1000.0),
+        mk_bar(2000, 1000.0, 1000.0, 1000.0, 1000.0),
+        mk_bar(3000, 1000.0, 1000.0, 1000.0, 1000.0),
+    };
+}
+
+void test_frozen_market_reversal_is_not_refloored() {
+    std::printf("-- J: frozen MARKET reversal is not re-floored --\n");
+    FrozenReversalBoundaryProbe eng(/*explicit_reversal=*/false);
+    auto bars = frozen_reversal_boundary_bars();
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK_NEAR(eng.one_floor_qty(), 6.2790, 1e-12);
+    CHECK_NEAR(eng.two_floor_qty(), 6.2789, 1e-12);
+    CHECK(eng.position_side() == PositionSide::LONG);
+    CHECK_NEAR(eng.position_qty(), 6.2790, 1e-12);
+    CHECK(eng.live_lot_count() == 1);
+    CHECK_NEAR(eng.live_lot_qty(), 6.2790, 1e-12);
+    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2790, 1e-12);
+}
+
+void test_explicit_market_reversal_keeps_single_floor() {
+    std::printf("-- K: explicit MARKET reversal keeps one qty floor --\n");
+    FrozenReversalBoundaryProbe eng(/*explicit_reversal=*/true);
+    auto bars = frozen_reversal_boundary_bars();
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(eng.position_side() == PositionSide::LONG);
+    CHECK_NEAR(eng.position_qty(), 6.2790, 1e-12);
+    CHECK(eng.live_lot_count() == 1);
+    CHECK_NEAR(eng.live_lot_qty(), 6.2790, 1e-12);
+    CHECK_NEAR(eng.id_ledger_qty("BOUNDARY"), 6.2790, 1e-12);
+}
+
 }  // namespace
 
 int main() {
@@ -466,6 +549,8 @@ int main() {
     test_reversal_bracket_binding_survives_freeze();
     test_frozen_true_flat_market_dispatch_is_not_refloored();
     test_explicit_true_flat_market_keeps_single_floor();
+    test_frozen_market_reversal_is_not_refloored();
+    test_explicit_market_reversal_keeps_single_floor();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

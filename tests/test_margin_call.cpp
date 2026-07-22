@@ -1789,6 +1789,98 @@ static void test_reversal_captures_fresh_opening_state() {
     CHECK(std::isnan(eng.opening_raw_base()));
 }
 
+// A frozen 100%-equity MARKET reversal can pass the signal-time admission
+// check yet become microscopically underfunded after the carried short is
+// realized at the next-open fill. TV restores this positive sub-step deficit
+// by closing exactly one whole contract, not by treating it as dust. The
+// numbers pin a source-faithful omitted-quantity reversal event and also
+// exercise the frozen-quantity no-refloor path: 5.2798 must survive placement
+// and flip.
+class DefaultLongReversalFloorZeroProbe : public MCEngine {
+public:
+    explicit DefaultLongReversalFloorZeroProbe(bool explicit_reversal)
+        : explicit_reversal_(explicit_reversal) {
+        initial_capital_ = 10000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        pyramiding_ = 1;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ != 0) return;
+
+        // Seed the already-partially-liquidated short immediately before the
+        // TV-pinned reversal signal. Its open mark at 1841.70 freezes the new
+        // long at 5.2798; filling at 1841.71 realizes the remaining short loss
+        // and leaves a positive restore amount below the 0.0001 lot step.
+        position_side_ = PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = 1821.96;
+        position_entry_time_ = current_bar_.timestamp - 1000;
+        position_qty_ = 5.2524;
+        position_entry_count_ = 1;
+        position_open_bar_ = -1;
+        trail_best_price_ = position_entry_price_;
+        net_profit_sum_ = -172.449012;
+        pyramid_entries_.clear();
+        id_unclosed_qty_.clear();
+        pyramid_entries_.push_back(
+            {position_entry_price_, position_entry_time_, position_qty_,
+             "SEED", -1});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["SEED"] = position_qty_;
+
+        if (explicit_reversal_) {
+            strategy_entry("L", true, kNaN, kNaN, 5.2798000001);
+        } else {
+            strategy_entry("L", true);
+        }
+    }
+
+private:
+    bool explicit_reversal_;
+};
+
+static std::vector<Bar> default_long_reversal_floor_zero_bars() {
+    return {
+        mk_bar(1000, 1841.70, 1841.70, 1841.70, 1841.70, 1.0),
+        mk_bar(2000, 1841.71, 1841.71, 1841.71, 1841.71, 1.0),
+    };
+}
+
+static void test_default_long_reversal_floor_zero_closes_one_contract() {
+    std::printf("test_default_long_reversal_floor_zero_closes_one_contract\n");
+    DefaultLongReversalFloorZeroProbe eng(/*explicit_reversal=*/false);
+    auto bars = default_long_reversal_floor_zero_bars();
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(eng.trade_count() == 2);  // seed close + same-fill long MC trim
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(eng.exit_comment(1) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(1), 1841.71));
+    CHECK(near(eng.exit_price(1), 1841.71));
+    CHECK(near(eng.trade_size(1), 1.0));
+    CHECK(near(eng.position_size(), 4.2798));
+}
+
+static void test_explicit_long_reversal_floor_zero_remains_dust() {
+    std::printf("test_explicit_long_reversal_floor_zero_remains_dust\n");
+    DefaultLongReversalFloorZeroProbe eng(/*explicit_reversal=*/true);
+    auto bars = default_long_reversal_floor_zero_bars();
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(eng.trade_count() == 1);  // seed close only; no broker trim
+    CHECK(margin_call_rows(eng) == 0);
+    CHECK(near(eng.position_size(), 5.2798));
+}
+
 // A reused engine handle must clear the per-position state before on_bar of
 // the next run. Run 1 deliberately ends with an open position whose one-shot
 // event was consumed; run 2 observes a clean state before opening a new RAW
@@ -1938,6 +2030,8 @@ int main() {
     test_zero_qty_add_does_not_duplicate_cash_per_order_fee();
     test_flat_clears_and_raw_fresh_reuses_state();
     test_reversal_captures_fresh_opening_state();
+    test_default_long_reversal_floor_zero_closes_one_contract();
+    test_explicit_long_reversal_floor_zero_remains_dust();
     test_run_reuse_clears_opening_state();
     test_long_leveraged_margin_call();
 
