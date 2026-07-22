@@ -126,7 +126,9 @@ inline void sort_impl(std::vector<Row>& data, int column, bool ascending) {
 
 template <typename T>
 class PineGenericMatrix {
-    std::vector<std::vector<T>> data_;
+    using Data = std::vector<std::vector<T>>;
+
+    Data data_;
     bool valid_{false};
 
     void require_valid() const {
@@ -134,6 +136,20 @@ class PineGenericMatrix {
     }
 
 public:
+    class Snapshot {
+        Data state_;
+
+        explicit Snapshot(const Data& state) : state_(state) {}
+
+        friend class PineGenericMatrix;
+
+    public:
+        Snapshot(const Snapshot&) = default;
+        Snapshot& operator=(const Snapshot&) = default;
+        Snapshot(Snapshot&&) = default;
+        Snapshot& operator=(Snapshot&&) = default;
+    };
+
     ~PineGenericMatrix() = default;
 
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, T init) {
@@ -347,6 +363,17 @@ public:
     }
 
     [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+
+    [[nodiscard]] Snapshot snapshot() const {
+        require_valid();
+        return Snapshot(data_);
+    }
+
+    void restore(const Snapshot& snapshot) {
+        Data replacement(snapshot.state_);
+        data_.swap(replacement);
+        valid_ = true;
+    }
 };
 
 // PineGenericMatrix<bool> uses std::vector<char> as the row container because
@@ -356,7 +383,9 @@ public:
 // to the same detail:: helpers used by the primary template.
 template <>
 class PineGenericMatrix<bool> {
-    std::vector<std::vector<char>> data_;
+    using Data = std::vector<std::vector<char>>;
+
+    Data data_;
     bool valid_{false};
 
     void require_valid() const {
@@ -364,6 +393,20 @@ class PineGenericMatrix<bool> {
     }
 
 public:
+    class Snapshot {
+        Data state_;
+
+        explicit Snapshot(const Data& state) : state_(state) {}
+
+        friend class PineGenericMatrix;
+
+    public:
+        Snapshot(const Snapshot&) = default;
+        Snapshot& operator=(const Snapshot&) = default;
+        Snapshot(Snapshot&&) = default;
+        Snapshot& operator=(Snapshot&&) = default;
+    };
+
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
@@ -562,6 +605,17 @@ public:
     }
 
     [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+
+    [[nodiscard]] Snapshot snapshot() const {
+        require_valid();
+        return Snapshot(data_);
+    }
+
+    void restore(const Snapshot& snapshot) {
+        Data replacement(snapshot.state_);
+        data_.swap(replacement);
+        valid_ = true;
+    }
 };
 
 template <typename T>
