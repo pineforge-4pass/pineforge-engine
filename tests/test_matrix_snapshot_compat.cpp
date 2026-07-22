@@ -82,12 +82,12 @@ int main() {
     PineMatrix matrix = PineMatrix::new_(1, 1, 7.0);
     PineMatrix assigned = matrix;
     assigned.set(0, 0, 13.0);
-    assert(matrix.get(0, 0) == 7.0);
+    assert(matrix.get(0, 0) == 13.0);
     assert(assigned.get(0, 0) == 13.0);
 
     PineMatrix explicit_copy = matrix.copy();
     explicit_copy.set(0, 0, 99.0);
-    assert(matrix.get(0, 0) == 7.0);
+    assert(matrix.get(0, 0) == 13.0);
     assert(explicit_copy.get(0, 0) == 99.0);
 
     Snapshot snapshot = matrix.snapshot();
@@ -95,21 +95,24 @@ int main() {
     Snapshot moved = std::move(copied);
     matrix.set(0, 0, 3.0);
     matrix.restore(snapshot);
-    assert(matrix.get(0, 0) == 7.0);
+    assert(matrix.get(0, 0) == 13.0);
+    assert(assigned.get(0, 0) == 13.0);
 
     matrix = PineMatrix::new_(2, 1, 5.0);
     matrix.restore(moved);
     assert(matrix.rows() == 1);
     assert(matrix.columns() == 1);
-    assert(matrix.get(0, 0) == 7.0);
+    assert(matrix.get(0, 0) == 13.0);
+    assert(assigned.get(0, 0) == 13.0);
 
     PineMatrix receiver;
     receiver.restore(snapshot);
     assert(!receiver.is_na());
-    assert(receiver.get(0, 0) == 7.0);
+    assert(receiver.get(0, 0) == 13.0);
     receiver.set(0, 0, 8.0);
     receiver.restore(snapshot);
-    assert(receiver.get(0, 0) == 7.0);
+    assert(receiver.get(0, 0) == 13.0);
+    assert(matrix.get(0, 0) == 13.0);
 
     PineMatrix empty = PineMatrix::new_(0, 0, 0.0);
     Snapshot empty_snapshot = empty.snapshot();
@@ -124,11 +127,11 @@ int main() {
     PineGenericMatrix<int> generic = PineGenericMatrix<int>::new_(1, 1, 7);
     PineGenericMatrix<int> generic_assigned = generic;
     generic_assigned.set(0, 0, 13);
-    assert(generic.get(0, 0) == 7);
+    assert(generic.get(0, 0) == 13);
     assert(generic_assigned.get(0, 0) == 13);
     PineGenericMatrix<int> generic_copy = generic.copy();
     generic_copy.set(0, 0, 99);
-    assert(generic.get(0, 0) == 7);
+    assert(generic.get(0, 0) == 13);
     assert(generic_copy.get(0, 0) == 99);
 
     check_generic_snapshot_round_trip<int>(7, 13);

@@ -1,24 +1,61 @@
 #pragma once
 #include <Eigen/Dense>
+#include <memory>
 #include <vector>
 #include <stdexcept>
+#include <utility>
 
 namespace pineforge {
 
 class PineMatrix {
-    Eigen::MatrixXd data_;
-    bool valid_{false};
+    struct Storage {
+        Eigen::MatrixXd data;
 
-    void require_valid() const;
+        Storage() = default;
+        explicit Storage(Eigen::MatrixXd value)
+            : data(std::move(value)) {}
+    };
+
+    static constexpr const char* kNaIdError =
+        "matrix operation on na ID";
+    static constexpr const char* kInvalidSnapshotError =
+        "matrix restore from invalid snapshot";
+
+    std::shared_ptr<Storage> storage_;
+
+    explicit PineMatrix(Eigen::MatrixXd data)
+        : storage_(std::make_shared<Storage>(std::move(data))) {}
+
+    [[nodiscard]] Storage& require_storage();
+    [[nodiscard]] const Storage& require_storage() const;
 
 public:
-    // Opaque value checkpoint used by generated rollback code. This API is
-    // intentionally identity-neutral: matrix assignment retains its existing
-    // value semantics until the separate Pine ID-semantics change lands.
+    // Pine matrices are reference IDs. Ordinary C++ copies and assignments
+    // therefore alias one backing store; matrix.copy() is the operation that
+    // allocates an independent outer ID.
+    PineMatrix() noexcept = default;
+    PineMatrix(const PineMatrix&) noexcept = default;
+    PineMatrix& operator=(const PineMatrix&) noexcept = default;
+
+    // Treat C++ moves like Pine assignment as well. A compiler-generated move
+    // must not turn the source handle into na.
+    PineMatrix(PineMatrix&& other) noexcept : storage_(other.storage_) {}
+    PineMatrix& operator=(PineMatrix&& other) noexcept {
+        if (this != &other) storage_ = other.storage_;
+        return *this;
+    }
+
+    // Opaque generated-checkpoint hook. The snapshot owns a detached value
+    // copy of the matrix contents and retains the original ID. restore()
+    // mutates that ID in place before reattaching the receiving handle, so all
+    // aliases observe rollback even if the receiver was rebound or set to na.
     class Snapshot {
+        std::shared_ptr<Storage> identity_;
         Eigen::MatrixXd state_;
 
-        explicit Snapshot(const Eigen::MatrixXd& state) : state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity,
+                 const Eigen::MatrixXd& state)
+            : identity_(std::move(identity)), state_(state) {}
 
         friend class PineMatrix;
 
@@ -89,7 +126,7 @@ public:
 
     // Pine matrix ID state. A default-constructed value represents ``na``;
     // matrix.new() returns a valid ID even when its dimensions are 0x0.
-    [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+    [[nodiscard]] bool is_na() const noexcept { return !storage_; }
 
     [[nodiscard]] Snapshot snapshot() const;
     void restore(const Snapshot& snapshot);
@@ -107,8 +144,8 @@ public:
     bool is_zero() const;
 
     // Access to internal data for friend operations
-    const Eigen::MatrixXd& data() const { require_valid(); return data_; }
-    Eigen::MatrixXd& data() { require_valid(); return data_; }
+    const Eigen::MatrixXd& data() const { return require_storage().data; }
+    Eigen::MatrixXd& data() { return require_storage().data; }
 };
 
 inline bool is_na(const PineMatrix& matrix) noexcept {
