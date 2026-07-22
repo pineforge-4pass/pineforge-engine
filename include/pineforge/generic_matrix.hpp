@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <utility>
 
 namespace pineforge {
 
@@ -128,18 +130,60 @@ template <typename T>
 class PineGenericMatrix {
     using Data = std::vector<std::vector<T>>;
 
-    Data data_;
-    bool valid_{false};
+    struct Storage {
+        Data data;
 
-    void require_valid() const {
-        if (!valid_) throw std::runtime_error("matrix operation on na ID");
+        Storage() = default;
+        explicit Storage(Data value) : data(std::move(value)) {}
+    };
+
+    static constexpr const char* kNaIdError =
+        "matrix operation on na ID";
+    static constexpr const char* kInvalidSnapshotError =
+        "matrix restore from invalid snapshot";
+
+    std::shared_ptr<Storage> storage_;
+
+    explicit PineGenericMatrix(Data data)
+        : storage_(std::make_shared<Storage>(std::move(data))) {}
+
+    Storage& require_storage() {
+        if (!storage_) throw std::runtime_error(kNaIdError);
+        return *storage_;
     }
 
+    const Storage& require_storage() const {
+        if (!storage_) throw std::runtime_error(kNaIdError);
+        return *storage_;
+    }
+
+    Data& data() { return require_storage().data; }
+    const Data& data() const { return require_storage().data; }
+
 public:
+    // Pine matrices are IDs. Copies and assignments alias their backing store;
+    // copy() is the explicit operation that creates an independent outer ID.
+    PineGenericMatrix() noexcept = default;
+    PineGenericMatrix(const PineGenericMatrix&) noexcept = default;
+    PineGenericMatrix& operator=(const PineGenericMatrix&) noexcept = default;
+
+    // Preserve the source handle across C++ moves, matching Pine assignment.
+    PineGenericMatrix(PineGenericMatrix&& other) noexcept
+        : storage_(other.storage_) {}
+    PineGenericMatrix& operator=(PineGenericMatrix&& other) noexcept {
+        if (this != &other) storage_ = other.storage_;
+        return *this;
+    }
+
+    // Snapshot copies the outer matrix state with ordinary T copy semantics.
+    // Primitive elements are detached values; UDT/collection handles remain
+    // shallow aliases so generated checkpoints can recurse through them.
     class Snapshot {
+        std::shared_ptr<Storage> identity_;
         Data state_;
 
-        explicit Snapshot(const Data& state) : state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity, const Data& state)
+            : identity_(std::move(identity)), state_(state) {}
 
         friend class PineGenericMatrix;
 
@@ -155,11 +199,9 @@ public:
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, T init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
-        PineGenericMatrix m;
-        m.data_.assign(static_cast<size_t>(rows),
-                       std::vector<T>(static_cast<size_t>(cols), init));
-        m.valid_ = true;
-        return m;
+        Data data(static_cast<size_t>(rows),
+                  std::vector<T>(static_cast<size_t>(cols), init));
+        return PineGenericMatrix(std::move(data));
     }
 
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols) {
@@ -167,139 +209,131 @@ public:
                       "matrix.new: no-init overload requires default-constructible T");
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
-        PineGenericMatrix m;
-        m.data_.assign(static_cast<size_t>(rows),
-                       std::vector<T>(static_cast<size_t>(cols), T{}));
-        m.valid_ = true;
-        return m;
+        Data data(static_cast<size_t>(rows),
+                  std::vector<T>(static_cast<size_t>(cols), T{}));
+        return PineGenericMatrix(std::move(data));
     }
 
     T get(int row, int col) const {
-        require_valid();
+        const Data& values = data();
         if (row < 0 || row >= rows())
             throw std::out_of_range("matrix.get: row index out of range");
         if (col < 0 || col >= columns())
             throw std::out_of_range("matrix.get: column index out of range");
-        return data_[static_cast<size_t>(row)][static_cast<size_t>(col)];
+        return values[static_cast<size_t>(row)][static_cast<size_t>(col)];
     }
 
     void set(int row, int col, T val) {
-        require_valid();
+        Data& values = data();
         if (row < 0 || row >= rows())
             throw std::out_of_range("matrix.set: row index out of range");
         if (col < 0 || col >= columns())
             throw std::out_of_range("matrix.set: column index out of range");
-        data_[static_cast<size_t>(row)][static_cast<size_t>(col)] = val;
+        values[static_cast<size_t>(row)][static_cast<size_t>(col)] = val;
     }
 
     void fill(T val) {
-        require_valid();
-        for (auto& r : data_) std::fill(r.begin(), r.end(), val);
+        for (auto& r : data()) std::fill(r.begin(), r.end(), val);
     }
 
     int rows() const {
-        require_valid();
-        return static_cast<int>(data_.size());
+        return static_cast<int>(data().size());
     }
     int columns() const {
-        require_valid();
-        return data_.empty() ? 0 : static_cast<int>(data_[0].size());
+        const Data& values = data();
+        return values.empty() ? 0 : static_cast<int>(values[0].size());
     }
 
     std::vector<T> row(int idx) const {
-        require_valid();
+        const Data& values = data();
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.row: row index out of range");
-        return data_[static_cast<size_t>(idx)];
+        return values[static_cast<size_t>(idx)];
     }
 
     std::vector<T> col(int idx) const {
-        require_valid();
+        const Data& values = data();
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.col: column index out of range");
         std::vector<T> out;
-        out.reserve(data_.size());
-        for (const auto& r : data_) out.push_back(r[static_cast<size_t>(idx)]);
+        out.reserve(values.size());
+        for (const auto& r : values) out.push_back(r[static_cast<size_t>(idx)]);
         return out;
     }
 
     template <typename U = T,
               typename = std::enable_if_t<!std::is_same_v<U, bool>>>
     const std::vector<T>& row_ref(int idx) const {
-        require_valid();
+        const Data& values = data();
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.row_ref: row index out of range");
-        return data_[static_cast<size_t>(idx)];
+        return values[static_cast<size_t>(idx)];
     }
 
     void add_row(int idx, const std::vector<T>& values) {
-        require_valid();
+        Data& matrix_data = data();
         if (idx < 0 || idx > rows())
             throw std::out_of_range("matrix.add_row: row index out of range");
-        if (!data_.empty() && values.size() != static_cast<size_t>(columns()))
+        if (!matrix_data.empty() && values.size() != static_cast<size_t>(columns()))
             throw std::runtime_error("matrix.add_row: values size must equal columns()");
-        data_.reserve(data_.size() + 1);
-        data_.insert(data_.begin() + idx, values);
+        matrix_data.reserve(matrix_data.size() + 1);
+        matrix_data.insert(matrix_data.begin() + idx, values);
     }
 
     void add_col(int idx, const std::vector<T>& values) {
-        require_valid();
-        if (data_.empty())
+        Data& matrix_data = data();
+        if (matrix_data.empty())
             throw std::logic_error("matrix.add_col on empty matrix: use add_row first");
         if (idx < 0 || idx > columns())
             throw std::out_of_range("matrix.add_col: column index out of range");
-        if (values.size() != data_.size())
+        if (values.size() != matrix_data.size())
             throw std::runtime_error("matrix.add_col: values size must equal rows()");
         // Strong guarantee: build a new buffer, swap on success.
-        std::vector<std::vector<T>> next;
-        next.reserve(data_.size());
-        for (size_t r = 0; r < data_.size(); ++r) {
-            std::vector<T> row = data_[r];
+        Data next;
+        next.reserve(matrix_data.size());
+        for (size_t r = 0; r < matrix_data.size(); ++r) {
+            std::vector<T> row = matrix_data[r];
             row.insert(row.begin() + idx, values[r]);
             next.push_back(std::move(row));
         }
-        data_.swap(next);
+        matrix_data.swap(next);
     }
 
     void remove_row(int idx) {
-        require_valid();
+        (void)data();
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.remove_row: row index out of range");
-        detail::erase_row(data_, idx);
+        detail::erase_row(data(), idx);
     }
 
     void remove_col(int idx) {
-        require_valid();
+        (void)data();
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.remove_col: column index out of range");
-        detail::erase_col(data_, idx);
+        detail::erase_col(data(), idx);
     }
 
     void swap_rows(int i, int j) {
-        require_valid();
+        (void)data();
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
             throw std::out_of_range("matrix.swap_rows: row index out of range");
-        detail::swap_rows_impl(data_, i, j);
+        detail::swap_rows_impl(data(), i, j);
     }
 
     void swap_columns(int i, int j) {
-        require_valid();
+        (void)data();
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             throw std::out_of_range("matrix.swap_columns: column index out of range");
-        detail::swap_cols_impl(data_, i, j);
+        detail::swap_cols_impl(data(), i, j);
     }
 
     [[nodiscard]] PineGenericMatrix copy() const {
-        require_valid();
-        PineGenericMatrix m;
-        m.data_ = data_;
-        m.valid_ = true;
-        return m;
+        return PineGenericMatrix(data());
     }
 
     [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
-        require_valid();
+        (void)data();
         if (from_row < 0 || to_row > rows())
             throw std::out_of_range("matrix.submatrix: row index out of range");
         if (from_col < 0 || to_col > columns())
@@ -308,25 +342,21 @@ public:
             throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
         if (from_col > to_col)
             throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
-        PineGenericMatrix m;
-        m.data_ = detail::copy_submatrix(data_, from_row, to_row, from_col, to_col);
-        m.valid_ = true;
-        return m;
+        return PineGenericMatrix(
+            detail::copy_submatrix(data(), from_row, to_row,
+                                   from_col, to_col));
     }
 
     [[nodiscard]] PineGenericMatrix transpose() const {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.transpose: requires default-constructible element type");
-        require_valid();
-        PineGenericMatrix m;
-        m.data_ = detail::transpose_impl(data_, rows(), columns(), T{});
-        m.valid_ = true;
-        return m;
+        return PineGenericMatrix(
+            detail::transpose_impl(data(), rows(), columns(), T{}));
     }
 
     [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
-        require_valid();
-        other.require_valid();
+        (void)data();
+        (void)other.data();
         if (horizontal) {
             if (rows() != other.rows())
                 throw std::invalid_argument("matrix.concat: row count mismatch");
@@ -335,44 +365,47 @@ public:
                 throw std::invalid_argument("matrix.concat: column count mismatch");
         }
         PineGenericMatrix m = copy();
-        detail::concat_impl(m.data_, other.data_, horizontal);
+        detail::concat_impl(m.data(), other.data(), horizontal);
         return m;
     }
 
     void reshape(int new_rows, int new_cols) {
         static_assert(std::is_default_constructible_v<T>,
                       "matrix.reshape: requires default-constructible element type");
-        require_valid();
-        detail::reshape_impl(data_, new_rows, new_cols, T{});
+        detail::reshape_impl(data(), new_rows, new_cols, T{});
     }
 
-    void reverse() { require_valid(); std::reverse(data_.begin(), data_.end()); }
+    void reverse() {
+        Data& values = data();
+        std::reverse(values.begin(), values.end());
+    }
 
     void sort(int column, bool ascending = true) {
         static_assert(std::is_same_v<T, int> ||
                       std::is_same_v<T, bool> ||
                       std::is_same_v<T, std::string>,
                       "matrix.sort: requires int, bool, or std::string element type");
-        require_valid();
-        detail::sort_impl(data_, column, ascending);
+        detail::sort_impl(data(), column, ascending);
     }
 
     int elements_count() const {
-        require_valid();
-        return detail::elements_count_impl(data_);
+        return detail::elements_count_impl(data());
     }
 
-    [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+    [[nodiscard]] bool is_na() const noexcept { return !storage_; }
 
     [[nodiscard]] Snapshot snapshot() const {
-        require_valid();
-        return Snapshot(data_);
+        const Storage& storage = require_storage();
+        return Snapshot(storage_, storage.data);
     }
 
     void restore(const Snapshot& snapshot) {
+        if (!snapshot.identity_) {
+            throw std::runtime_error(kInvalidSnapshotError);
+        }
         Data replacement(snapshot.state_);
-        data_.swap(replacement);
-        valid_ = true;
+        snapshot.identity_->data.swap(replacement);
+        storage_ = snapshot.identity_;
     }
 };
 
@@ -385,18 +418,54 @@ template <>
 class PineGenericMatrix<bool> {
     using Data = std::vector<std::vector<char>>;
 
-    Data data_;
-    bool valid_{false};
+    struct Storage {
+        Data data;
 
-    void require_valid() const {
-        if (!valid_) throw std::runtime_error("matrix operation on na ID");
+        Storage() = default;
+        explicit Storage(Data value) : data(std::move(value)) {}
+    };
+
+    static constexpr const char* kNaIdError =
+        "matrix operation on na ID";
+    static constexpr const char* kInvalidSnapshotError =
+        "matrix restore from invalid snapshot";
+
+    std::shared_ptr<Storage> storage_;
+
+    explicit PineGenericMatrix(Data data)
+        : storage_(std::make_shared<Storage>(std::move(data))) {}
+
+    Storage& require_storage() {
+        if (!storage_) throw std::runtime_error(kNaIdError);
+        return *storage_;
     }
 
+    const Storage& require_storage() const {
+        if (!storage_) throw std::runtime_error(kNaIdError);
+        return *storage_;
+    }
+
+    Data& data() { return require_storage().data; }
+    const Data& data() const { return require_storage().data; }
+
 public:
+    PineGenericMatrix() noexcept = default;
+    PineGenericMatrix(const PineGenericMatrix&) noexcept = default;
+    PineGenericMatrix& operator=(const PineGenericMatrix&) noexcept = default;
+
+    PineGenericMatrix(PineGenericMatrix&& other) noexcept
+        : storage_(other.storage_) {}
+    PineGenericMatrix& operator=(PineGenericMatrix&& other) noexcept {
+        if (this != &other) storage_ = other.storage_;
+        return *this;
+    }
+
     class Snapshot {
+        std::shared_ptr<Storage> identity_;
         Data state_;
 
-        explicit Snapshot(const Data& state) : state_(state) {}
+        Snapshot(std::shared_ptr<Storage> identity, const Data& state)
+            : identity_(std::move(identity)), state_(state) {}
 
         friend class PineGenericMatrix;
 
@@ -410,11 +479,9 @@ public:
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols, bool init) {
         if (rows < 0 || cols < 0)
             throw std::invalid_argument("matrix.new: negative dimensions");
-        PineGenericMatrix m;
-        m.data_.assign(static_cast<size_t>(rows),
-                       std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
-        m.valid_ = true;
-        return m;
+        Data data(static_cast<size_t>(rows),
+                  std::vector<char>(static_cast<size_t>(cols), init ? 1 : 0));
+        return PineGenericMatrix(std::move(data));
     }
 
     [[nodiscard]] static PineGenericMatrix new_(int rows, int cols) {
@@ -422,56 +489,54 @@ public:
     }
 
     bool get(int row, int col) const {
-        require_valid();
+        const Data& values = data();
         if (row < 0 || row >= rows())
             throw std::out_of_range("matrix.get: row index out of range");
         if (col < 0 || col >= columns())
             throw std::out_of_range("matrix.get: column index out of range");
-        return data_[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
+        return values[static_cast<size_t>(row)][static_cast<size_t>(col)] != 0;
     }
 
     void set(int row, int col, bool val) {
-        require_valid();
+        Data& values = data();
         if (row < 0 || row >= rows())
             throw std::out_of_range("matrix.set: row index out of range");
         if (col < 0 || col >= columns())
             throw std::out_of_range("matrix.set: column index out of range");
-        data_[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
+        values[static_cast<size_t>(row)][static_cast<size_t>(col)] = val ? 1 : 0;
     }
 
     void fill(bool val) {
-        require_valid();
         char c = val ? 1 : 0;
-        for (auto& r : data_) std::fill(r.begin(), r.end(), c);
+        for (auto& r : data()) std::fill(r.begin(), r.end(), c);
     }
 
     int rows() const {
-        require_valid();
-        return static_cast<int>(data_.size());
+        return static_cast<int>(data().size());
     }
     int columns() const {
-        require_valid();
-        return data_.empty() ? 0 : static_cast<int>(data_[0].size());
+        const Data& values = data();
+        return values.empty() ? 0 : static_cast<int>(values[0].size());
     }
 
     std::vector<bool> row(int idx) const {
-        require_valid();
+        const Data& values = data();
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.row: row index out of range");
         std::vector<bool> out;
-        const auto& src = data_[static_cast<size_t>(idx)];
+        const auto& src = values[static_cast<size_t>(idx)];
         out.reserve(src.size());
         for (char c : src) out.push_back(c != 0);
         return out;
     }
 
     std::vector<bool> col(int idx) const {
-        require_valid();
+        const Data& values = data();
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.col: column index out of range");
         std::vector<bool> out;
-        out.reserve(data_.size());
-        for (const auto& r : data_) out.push_back(r[static_cast<size_t>(idx)] != 0);
+        out.reserve(values.size());
+        for (const auto& r : values) out.push_back(r[static_cast<size_t>(idx)] != 0);
         return out;
     }
 
@@ -479,75 +544,71 @@ public:
     // returning const std::vector<bool>&.
 
     void add_row(int idx, const std::vector<bool>& values) {
-        require_valid();
+        Data& matrix_data = data();
         if (idx < 0 || idx > rows())
             throw std::out_of_range("matrix.add_row: row index out of range");
-        if (!data_.empty() && values.size() != static_cast<size_t>(columns()))
+        if (!matrix_data.empty() && values.size() != static_cast<size_t>(columns()))
             throw std::runtime_error("matrix.add_row: values size must equal columns()");
         std::vector<char> row;
         row.reserve(values.size());
         for (bool v : values) row.push_back(v ? 1 : 0);
-        data_.reserve(data_.size() + 1);
-        data_.insert(data_.begin() + idx, std::move(row));
+        matrix_data.reserve(matrix_data.size() + 1);
+        matrix_data.insert(matrix_data.begin() + idx, std::move(row));
     }
 
     void add_col(int idx, const std::vector<bool>& values) {
-        require_valid();
-        if (data_.empty())
+        Data& matrix_data = data();
+        if (matrix_data.empty())
             throw std::logic_error("matrix.add_col on empty matrix: use add_row first");
         if (idx < 0 || idx > columns())
             throw std::out_of_range("matrix.add_col: column index out of range");
-        if (values.size() != data_.size())
+        if (values.size() != matrix_data.size())
             throw std::runtime_error("matrix.add_col: values size must equal rows()");
-        std::vector<std::vector<char>> next;
-        next.reserve(data_.size());
-        for (size_t r = 0; r < data_.size(); ++r) {
-            std::vector<char> row = data_[r];
+        Data next;
+        next.reserve(matrix_data.size());
+        for (size_t r = 0; r < matrix_data.size(); ++r) {
+            std::vector<char> row = matrix_data[r];
             row.insert(row.begin() + idx, values[r] ? 1 : 0);
             next.push_back(std::move(row));
         }
-        data_.swap(next);
+        matrix_data.swap(next);
     }
 
     void remove_row(int idx) {
-        require_valid();
+        (void)data();
         if (idx < 0 || idx >= rows())
             throw std::out_of_range("matrix.remove_row: row index out of range");
-        detail::erase_row(data_, idx);
+        detail::erase_row(data(), idx);
     }
 
     void remove_col(int idx) {
-        require_valid();
+        (void)data();
         if (idx < 0 || idx >= columns())
             throw std::out_of_range("matrix.remove_col: column index out of range");
-        detail::erase_col(data_, idx);
+        detail::erase_col(data(), idx);
     }
 
     void swap_rows(int i, int j) {
-        require_valid();
+        (void)data();
         if (i < 0 || i >= rows() || j < 0 || j >= rows())
             throw std::out_of_range("matrix.swap_rows: row index out of range");
-        detail::swap_rows_impl(data_, i, j);
+        detail::swap_rows_impl(data(), i, j);
     }
 
     void swap_columns(int i, int j) {
-        require_valid();
+        (void)data();
         if (i < 0 || i >= columns() || j < 0 || j >= columns())
             throw std::out_of_range("matrix.swap_columns: column index out of range");
-        detail::swap_cols_impl(data_, i, j);
+        detail::swap_cols_impl(data(), i, j);
     }
 
     [[nodiscard]] PineGenericMatrix copy() const {
-        require_valid();
-        PineGenericMatrix m;
-        m.data_ = data_;
-        m.valid_ = true;
-        return m;
+        return PineGenericMatrix(data());
     }
 
     [[nodiscard]] PineGenericMatrix submatrix(int from_row, int to_row,
                                               int from_col, int to_col) const {
-        require_valid();
+        (void)data();
         if (from_row < 0 || to_row > rows())
             throw std::out_of_range("matrix.submatrix: row index out of range");
         if (from_col < 0 || to_col > columns())
@@ -556,30 +617,29 @@ public:
             throw std::invalid_argument("matrix.submatrix: from_row must be <= to_row");
         if (from_col > to_col)
             throw std::invalid_argument("matrix.submatrix: from_col must be <= to_col");
-        PineGenericMatrix m;
-        m.data_ = detail::copy_submatrix(data_, from_row, to_row, from_col, to_col);
-        m.valid_ = true;
-        return m;
+        return PineGenericMatrix(
+            detail::copy_submatrix(data(), from_row, to_row,
+                                   from_col, to_col));
     }
 
     void reshape(int new_rows, int new_cols) {
-        require_valid();
-        detail::reshape_impl(data_, new_rows, new_cols, static_cast<char>(0));
+        detail::reshape_impl(data(), new_rows, new_cols, static_cast<char>(0));
     }
 
-    void reverse() { require_valid(); std::reverse(data_.begin(), data_.end()); }
+    void reverse() {
+        Data& values = data();
+        std::reverse(values.begin(), values.end());
+    }
 
     [[nodiscard]] PineGenericMatrix transpose() const {
-        require_valid();
-        PineGenericMatrix m;
-        m.data_ = detail::transpose_impl(data_, rows(), columns(), static_cast<char>(0));
-        m.valid_ = true;
-        return m;
+        return PineGenericMatrix(
+            detail::transpose_impl(data(), rows(), columns(),
+                                   static_cast<char>(0)));
     }
 
     [[nodiscard]] PineGenericMatrix concat(const PineGenericMatrix& other, bool horizontal) const {
-        require_valid();
-        other.require_valid();
+        (void)data();
+        (void)other.data();
         if (horizontal) {
             if (rows() != other.rows())
                 throw std::invalid_argument("matrix.concat: row count mismatch");
@@ -588,33 +648,35 @@ public:
                 throw std::invalid_argument("matrix.concat: column count mismatch");
         }
         PineGenericMatrix m = copy();
-        detail::concat_impl(m.data_, other.data_, horizontal);
+        detail::concat_impl(m.data(), other.data(), horizontal);
         return m;
     }
 
     template <typename Dummy = void>
     void sort(int /*column*/, bool /*ascending*/ = true) {
-        require_valid();
+        (void)data();
         static_assert(!std::is_same_v<Dummy, void> && std::is_same_v<Dummy, void>,
                       "matrix.sort: not supported on bool element type");
     }
 
     int elements_count() const {
-        require_valid();
-        return detail::elements_count_impl(data_);
+        return detail::elements_count_impl(data());
     }
 
-    [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+    [[nodiscard]] bool is_na() const noexcept { return !storage_; }
 
     [[nodiscard]] Snapshot snapshot() const {
-        require_valid();
-        return Snapshot(data_);
+        const Storage& storage = require_storage();
+        return Snapshot(storage_, storage.data);
     }
 
     void restore(const Snapshot& snapshot) {
+        if (!snapshot.identity_) {
+            throw std::runtime_error(kInvalidSnapshotError);
+        }
         Data replacement(snapshot.state_);
-        data_.swap(replacement);
-        valid_ = true;
+        snapshot.identity_->data.swap(replacement);
+        storage_ = snapshot.identity_;
     }
 };
 

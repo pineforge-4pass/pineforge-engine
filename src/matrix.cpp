@@ -12,133 +12,127 @@ static constexpr double EPS = 1e-10;
 // ── Construction ────────────────────────────────────────────────────────────
 
 PineMatrix PineMatrix::new_(int rows, int cols, double init_val) {
-    PineMatrix m;
-    m.data_ = Eigen::MatrixXd::Constant(rows, cols, init_val);
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd::Constant(rows, cols, init_val));
 }
 
-void PineMatrix::require_valid() const {
-    if (!valid_) throw std::runtime_error("matrix operation on na ID");
+PineMatrix::Storage& PineMatrix::require_storage() {
+    if (!storage_) throw std::runtime_error(kNaIdError);
+    return *storage_;
+}
+
+const PineMatrix::Storage& PineMatrix::require_storage() const {
+    if (!storage_) throw std::runtime_error(kNaIdError);
+    return *storage_;
 }
 
 PineMatrix::Snapshot PineMatrix::snapshot() const {
-    require_valid();
-    return Snapshot(data_);
+    const Storage& storage = require_storage();
+    return Snapshot(storage_, storage.data);
 }
 
 void PineMatrix::restore(const Snapshot& snapshot) {
+    if (!snapshot.identity_) {
+        throw std::runtime_error(kInvalidSnapshotError);
+    }
+    // Clone before touching the live ID, then swap the fully-built state into
+    // the original backing store. Existing aliases keep that exact identity.
     Eigen::MatrixXd replacement(snapshot.state_);
-    data_.swap(replacement);
-    valid_ = true;
+    using std::swap;
+    swap(snapshot.identity_->data, replacement);
+    storage_ = snapshot.identity_;
 }
 
 // ── Access ──────────────────────────────────────────────────────────────────
 
 double PineMatrix::get(int row, int col) const {
-    require_valid();
-    return data_(row, col);
+    return data()(row, col);
 }
 
 void PineMatrix::set(int row, int col, double val) {
-    require_valid();
-    data_(row, col) = val;
+    data()(row, col) = val;
 }
 
 void PineMatrix::fill(double val) {
-    require_valid();
-    data_.setConstant(val);
+    data().setConstant(val);
 }
 
 std::vector<double> PineMatrix::row(int idx) const {
-    require_valid();
-    Eigen::VectorXd r = data_.row(idx);
+    Eigen::VectorXd r = data().row(idx);
     return std::vector<double>(r.data(), r.data() + r.size());
 }
 
 std::vector<double> PineMatrix::col(int idx) const {
-    require_valid();
-    Eigen::VectorXd c = data_.col(idx);
+    Eigen::VectorXd c = data().col(idx);
     return std::vector<double>(c.data(), c.data() + c.size());
 }
 
 // ── Row/Col ops ─────────────────────────────────────────────────────────────
 
 int PineMatrix::rows() const {
-    require_valid();
-    return static_cast<int>(data_.rows());
+    return static_cast<int>(data().rows());
 }
 
 int PineMatrix::columns() const {
-    require_valid();
-    return static_cast<int>(data_.cols());
+    return static_cast<int>(data().cols());
 }
 
 void PineMatrix::add_row(int idx, const std::vector<double>& values) {
     int r = rows(), c = columns();
     if (static_cast<int>(values.size()) != c)
         throw std::invalid_argument("add_row: values size mismatch");
-    data_.conservativeResize(r + 1, c);
+    data().conservativeResize(r + 1, c);
     // shift rows down from bottom to idx
     for (int i = r; i > idx; --i)
-        data_.row(i) = data_.row(i - 1);
+        data().row(i) = data().row(i - 1);
     for (int j = 0; j < c; ++j)
-        data_(idx, j) = values[j];
+        data()(idx, j) = values[j];
 }
 
 void PineMatrix::add_col(int idx, const std::vector<double>& values) {
     int r = rows(), c = columns();
     if (static_cast<int>(values.size()) != r)
         throw std::invalid_argument("add_col: values size mismatch");
-    data_.conservativeResize(r, c + 1);
+    data().conservativeResize(r, c + 1);
     for (int j = c; j > idx; --j)
-        data_.col(j) = data_.col(j - 1);
+        data().col(j) = data().col(j - 1);
     for (int i = 0; i < r; ++i)
-        data_(i, idx) = values[i];
+        data()(i, idx) = values[i];
 }
 
 void PineMatrix::remove_row(int idx) {
     int r = rows(), c = columns();
     for (int i = idx; i < r - 1; ++i)
-        data_.row(i) = data_.row(i + 1);
-    data_.conservativeResize(r - 1, c);
+        data().row(i) = data().row(i + 1);
+    data().conservativeResize(r - 1, c);
 }
 
 void PineMatrix::remove_col(int idx) {
     int r = rows(), c = columns();
     for (int j = idx; j < c - 1; ++j)
-        data_.col(j) = data_.col(j + 1);
-    data_.conservativeResize(r, c - 1);
+        data().col(j) = data().col(j + 1);
+    data().conservativeResize(r, c - 1);
 }
 
 // ── Swap ────────────────────────────────────────────────────────────────────
 
 void PineMatrix::swap_rows(int i, int j) {
-    require_valid();
-    data_.row(i).swap(data_.row(j));
+    data().row(i).swap(data().row(j));
 }
 
 void PineMatrix::swap_columns(int i, int j) {
-    require_valid();
-    data_.col(i).swap(data_.col(j));
+    data().col(i).swap(data().col(j));
 }
 
 // ── Transform ───────────────────────────────────────────────────────────────
 
 PineMatrix PineMatrix::copy() const {
-    require_valid();
-    PineMatrix m;
-    m.data_ = data_;
-    m.valid_ = true;
-    return m;
+    return PineMatrix(data());
 }
 
 PineMatrix PineMatrix::submatrix(int from_row, int to_row, int from_col, int to_col) const {
-    require_valid();
-    PineMatrix m;
-    m.data_ = data_.block(from_row, from_col, to_row - from_row, to_col - from_col);
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd(
+        data().block(from_row, from_col,
+                     to_row - from_row, to_col - from_col)));
 }
 
 void PineMatrix::reshape(int r, int c) {
@@ -149,26 +143,21 @@ void PineMatrix::reshape(int r, int c) {
     flat.reserve(r * c);
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
-            flat.push_back(data_(i, j));
-    data_.resize(r, c);
+            flat.push_back(data()(i, j));
+    data().resize(r, c);
     int k = 0;
     for (int i = 0; i < r; ++i)
         for (int j = 0; j < c; ++j)
-            data_(i, j) = flat[k++];
+            data()(i, j) = flat[k++];
 }
 
 void PineMatrix::reverse() {
-    require_valid();
-    Eigen::MatrixXd tmp = data_.colwise().reverse();
-    data_ = tmp.rowwise().reverse();
+    Eigen::MatrixXd tmp = data().colwise().reverse();
+    data() = tmp.rowwise().reverse();
 }
 
 PineMatrix PineMatrix::transpose() const {
-    require_valid();
-    PineMatrix m;
-    m.data_ = data_.transpose();
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd(data().transpose()));
 }
 
 void PineMatrix::sort(int column, bool ascending) {
@@ -177,43 +166,39 @@ void PineMatrix::sort(int column, bool ascending) {
     std::vector<int> indices(r);
     for (int i = 0; i < r; ++i) indices[i] = i;
     std::sort(indices.begin(), indices.end(), [&](int a, int b) {
-        return ascending ? data_(a, column) < data_(b, column)
-                         : data_(a, column) > data_(b, column);
+        return ascending ? data()(a, column) < data()(b, column)
+                         : data()(a, column) > data()(b, column);
     });
     Eigen::MatrixXd sorted(r, columns());
     for (int i = 0; i < r; ++i)
-        sorted.row(i) = data_.row(indices[i]);
-    data_ = sorted;
+        sorted.row(i) = data().row(indices[i]);
+    data() = sorted;
 }
 
 PineMatrix PineMatrix::concat(const PineMatrix& other, bool horizontal) const {
-    require_valid();
-    other.require_valid();
-    PineMatrix m;
+    Eigen::MatrixXd result;
     if (horizontal) {
-        m.data_.resize(rows(), columns() + other.columns());
-        m.data_ << data_, other.data_;
+        result.resize(rows(), columns() + other.columns());
+        result << data(), other.data();
     } else {
-        m.data_.resize(rows() + other.rows(), columns());
-        m.data_ << data_, other.data_;
+        result.resize(rows() + other.rows(), columns());
+        result << data(), other.data();
     }
-    m.valid_ = true;
-    return m;
+    return PineMatrix(std::move(result));
 }
 
 // ── Aggregation ─────────────────────────────────────────────────────────────
 
-double PineMatrix::avg() const { require_valid(); return data_.mean(); }
-double PineMatrix::min() const { require_valid(); return data_.minCoeff(); }
-double PineMatrix::max() const { require_valid(); return data_.maxCoeff(); }
-double PineMatrix::sum() const { require_valid(); return data_.sum(); }
+double PineMatrix::avg() const { return data().mean(); }
+double PineMatrix::min() const { return data().minCoeff(); }
+double PineMatrix::max() const { return data().maxCoeff(); }
+double PineMatrix::sum() const { return data().sum(); }
 
 double PineMatrix::mode() const {
-    require_valid();
     std::map<double, int> freq;
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
-            freq[data_(i, j)]++;
+            freq[data()(i, j)]++;
     int best = 0;
     double result = 0;
     for (auto& [val, cnt] : freq) {
@@ -236,88 +221,66 @@ bool all_coeffs_finite(const Eigen::MatrixXd& m) {
 // ── Arithmetic ──────────────────────────────────────────────────────────────
 
 PineMatrix PineMatrix::diff(const PineMatrix& other) const {
-    require_valid();
-    other.require_valid();
-    PineMatrix m;
-    m.data_ = data_ - other.data_;
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd(data() - other.data()));
 }
 
 PineMatrix PineMatrix::mult(const PineMatrix& other) const {
-    require_valid();
-    other.require_valid();
-    PineMatrix m;
-    m.data_ = data_ * other.data_;
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd(data() * other.data()));
 }
 
 PineMatrix PineMatrix::pow(int n) const {
     if (!is_square())
         return PineMatrix::new_(0, 0, 0.0);
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return PineMatrix::new_(0, 0, 0.0);
     // start with identity
-    PineMatrix result;
-    result.data_ = Eigen::MatrixXd::Identity(rows(), rows());
-    result.valid_ = true;
+    PineMatrix result(Eigen::MatrixXd::Identity(rows(), rows()));
     for (int i = 0; i < n; ++i)
-        result.data_ = result.data_ * data_;
+        result.data() = result.data() * data();
     return result;
 }
 
 // ── Linear algebra ──────────────────────────────────────────────────────────
 
 double PineMatrix::det() const {
-    require_valid();
     if (!is_square())
         return std::numeric_limits<double>::quiet_NaN();
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return std::numeric_limits<double>::quiet_NaN();
-    return data_.determinant();
+    return data().determinant();
 }
 
 PineMatrix PineMatrix::inv() const {
-    require_valid();
     if (!is_square())
         return PineMatrix::new_(0, 0, 0.0);
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return PineMatrix::new_(0, 0, 0.0);
-    PineMatrix m;
-    m.data_ = data_.inverse();
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd(data().inverse()));
 }
 
 PineMatrix PineMatrix::pinv() const {
-    require_valid();
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return PineMatrix::new_(0, 0, 0.0);
-    PineMatrix m;
-    m.data_ = data_.completeOrthogonalDecomposition().pseudoInverse();
-    m.valid_ = true;
-    return m;
+    return PineMatrix(Eigen::MatrixXd(
+        data().completeOrthogonalDecomposition().pseudoInverse()));
 }
 
 int PineMatrix::rank() const {
-    require_valid();
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return 0;
-    return static_cast<int>(Eigen::FullPivLU<Eigen::MatrixXd>(data_).rank());
+    return static_cast<int>(Eigen::FullPivLU<Eigen::MatrixXd>(data()).rank());
 }
 
-double PineMatrix::trace() const { require_valid(); return data_.trace(); }
+double PineMatrix::trace() const { return data().trace(); }
 
 std::vector<double> PineMatrix::eigenvalues() const {
-    require_valid();
     if (!is_square())
         return {};
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return {};
     if (is_symmetric()) {
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
-            data_, Eigen::EigenvaluesOnly);
+            data(), Eigen::EigenvaluesOnly);
         if (solver.info() != Eigen::Success)
             return {};
         auto ev = solver.eigenvalues();
@@ -327,7 +290,7 @@ std::vector<double> PineMatrix::eigenvalues() const {
         std::sort(result.begin(), result.end(), std::greater<double>());
         return result;
     }
-    Eigen::EigenSolver<Eigen::MatrixXd> solver(data_);
+    Eigen::EigenSolver<Eigen::MatrixXd> solver(data());
     if (solver.info() != Eigen::Success)
         return {};
     auto ev = solver.eigenvalues();
@@ -341,52 +304,43 @@ std::vector<double> PineMatrix::eigenvalues() const {
 PineMatrix PineMatrix::eigenvectors() const {
     if (!is_square())
         return PineMatrix::new_(0, 0, 0.0);
-    if (!all_coeffs_finite(data_))
+    if (!all_coeffs_finite(data()))
         return PineMatrix::new_(0, 0, 0.0);
     if (is_symmetric()) {
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(
-            data_, Eigen::ComputeEigenvectors);
+            data(), Eigen::ComputeEigenvectors);
         if (solver.info() != Eigen::Success)
             return PineMatrix::new_(0, 0, 0.0);
-        PineMatrix m;
-        m.data_ = solver.eigenvectors();
-        m.valid_ = true;
-        return m;
+        return PineMatrix(Eigen::MatrixXd(solver.eigenvectors()));
     }
-    Eigen::EigenSolver<Eigen::MatrixXd> solver(data_);
+    Eigen::EigenSolver<Eigen::MatrixXd> solver(data());
     if (solver.info() != Eigen::Success)
         return PineMatrix::new_(0, 0, 0.0);
     auto ev = solver.eigenvectors();
-    PineMatrix m;
-    m.data_.resize(ev.rows(), ev.cols());
-    m.valid_ = true;
+    Eigen::MatrixXd result(ev.rows(), ev.cols());
     for (Eigen::Index i = 0; i < ev.rows(); ++i)
         for (Eigen::Index j = 0; j < ev.cols(); ++j)
-            m.data_(i, j) = ev(i, j).real();
-    return m;
+            result(i, j) = ev(i, j).real();
+    return PineMatrix(std::move(result));
 }
 
 // ── Kronecker ───────────────────────────────────────────────────────────────
 
 PineMatrix PineMatrix::kron(const PineMatrix& other) const {
-    require_valid();
-    other.require_valid();
     int ar = rows(), ac = columns();
     int br = other.rows(), bc = other.columns();
-    PineMatrix m;
-    m.data_.resize(ar * br, ac * bc);
-    m.valid_ = true;
+    Eigen::MatrixXd result(ar * br, ac * bc);
     for (int i = 0; i < ar * br; ++i)
         for (int j = 0; j < ac * bc; ++j)
-            m.data_(i, j) = data_(i / br, j / bc) * other.data_(i % br, j % bc);
-    return m;
+            result(i, j) = data()(i / br, j / bc) *
+                           other.data()(i % br, j % bc);
+    return PineMatrix(std::move(result));
 }
 
 // ── Count ───────────────────────────────────────────────────────────────────
 
 int PineMatrix::elements_count() const {
-    require_valid();
-    return static_cast<int>(data_.size());
+    return static_cast<int>(data().size());
 }
 
 // ── Properties ──────────────────────────────────────────────────────────────
@@ -395,13 +349,13 @@ bool PineMatrix::is_square() const { return rows() == columns(); }
 
 bool PineMatrix::is_identity() const {
     if (!is_square()) return false;
-    return data_.isApprox(Eigen::MatrixXd::Identity(rows(), rows()), EPS);
+    return data().isApprox(Eigen::MatrixXd::Identity(rows(), rows()), EPS);
 }
 
 bool PineMatrix::is_diagonal() const {
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
-            if (i != j && std::abs(data_(i, j)) > EPS) return false;
+            if (i != j && std::abs(data()(i, j)) > EPS) return false;
     return true;
 }
 
@@ -410,26 +364,26 @@ bool PineMatrix::is_antidiagonal() const {
     int n = rows();
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j)
-            if (i + j != n - 1 && std::abs(data_(i, j)) > EPS) return false;
+            if (i + j != n - 1 && std::abs(data()(i, j)) > EPS) return false;
     return true;
 }
 
 bool PineMatrix::is_symmetric() const {
     if (!is_square()) return false;
-    return data_.isApprox(data_.transpose(), EPS);
+    return data().isApprox(data().transpose(), EPS);
 }
 
 bool PineMatrix::is_antisymmetric() const {
     if (!is_square()) return false;
-    return data_.isApprox(-data_.transpose(), EPS);
+    return data().isApprox(-data().transpose(), EPS);
 }
 
 bool PineMatrix::is_triangular() const {
     bool upper = true, lower = true;
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j) {
-            if (i > j && std::abs(data_(i, j)) > EPS) upper = false;
-            if (i < j && std::abs(data_(i, j)) > EPS) lower = false;
+            if (i > j && std::abs(data()(i, j)) > EPS) upper = false;
+            if (i < j && std::abs(data()(i, j)) > EPS) lower = false;
         }
     return upper || lower;
 }
@@ -438,8 +392,8 @@ bool PineMatrix::is_stochastic() const {
     for (int i = 0; i < rows(); ++i) {
         double s = 0;
         for (int j = 0; j < columns(); ++j) {
-            if (data_(i, j) < -EPS) return false;
-            s += data_(i, j);
+            if (data()(i, j) < -EPS) return false;
+            s += data()(i, j);
         }
         if (std::abs(s - 1.0) > EPS) return false;
     }
@@ -449,14 +403,14 @@ bool PineMatrix::is_stochastic() const {
 bool PineMatrix::is_binary() const {
     for (int i = 0; i < rows(); ++i)
         for (int j = 0; j < columns(); ++j)
-            if (std::abs(data_(i, j)) > EPS && std::abs(data_(i, j) - 1.0) > EPS)
+            if (std::abs(data()(i, j)) > EPS &&
+                std::abs(data()(i, j) - 1.0) > EPS)
                 return false;
     return true;
 }
 
 bool PineMatrix::is_zero() const {
-    require_valid();
-    return data_.isZero(EPS);
+    return data().isZero(EPS);
 }
 
 } // namespace pineforge

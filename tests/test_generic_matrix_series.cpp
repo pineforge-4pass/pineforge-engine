@@ -38,26 +38,30 @@ static void test_series_ring_buffer_wraparound() {
     assert(s[2].get(0, 0) == 3);
 }
 
-static void test_series_value_semantic_aliasing() {
+static void test_series_preserves_matrix_id_aliasing() {
     Series<PineGenericMatrix<int>> s;
     auto m1 = PineGenericMatrix<int>::new_(1, 1, 10);
     s.push(m1);
     auto m2 = PineGenericMatrix<int>::new_(1, 1, 20);
     s.push(m2);
-    // mutate the source m2 after push — series must hold its own copy.
+    // Series stores the matrix ID assigned on each bar. Mutating that ID after
+    // the push is visible through the current history slot.
     m2.set(0, 0, 999);
-    assert(s[0].get(0, 0) == 20);
-    // mutating s[0] copy must not bleed into s[1].
+    assert(s[0].get(0, 0) == 999);
+
+    // Reading a history slot returns another handle to the same ID.
     auto cur = s[0];
     cur.set(0, 0, 777);
+    assert(s[0].get(0, 0) == 777);
+
+    // The prior bar was assigned a different matrix ID and stays independent.
     assert(s[1].get(0, 0) == 10);
-    assert(s[0].get(0, 0) == 20);  // s itself unchanged by local mutation
 }
 
 int main() {
     test_series_of_generic_matrix();
     test_series_ring_buffer_wraparound();
-    test_series_value_semantic_aliasing();
+    test_series_preserves_matrix_id_aliasing();
     std::printf("All test_generic_matrix_series tests passed.\n");
     return 0;
 }

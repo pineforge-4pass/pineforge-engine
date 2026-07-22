@@ -15,6 +15,7 @@ set(TEST_SOURCES
     test_ta_rma_warmup
     test_ta_na_source_rules
     test_matrix
+    test_matrix_identity
     test_matrix_na
     test_matrix_snapshot_compat
     test_session_time
