@@ -641,6 +641,11 @@ protected:
     // fee-created, floor-zero one-contract fallback.  Reversals, adds,
     // explicit/priced/RAW orders and zero/CASH commission stay outside it.
     bool opening_affordability_commissioned_default_flat_long_ = false;
+    // The queued event came from a successful omitted-qty, 100%-of-equity
+    // MARKET reversal from SHORT to LONG at 100% long margin with zero opening
+    // commission. TV applies a one-contract post-fill affordability trim when
+    // this exact reversal has a positive but sub-lot restore amount.
+    bool opening_affordability_default_long_reversal_ = false;
     double opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     int64_t position_entry_time_ = 0;
@@ -2528,6 +2533,7 @@ private:
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
                                  int explicit_qty_type,
+                                 bool explicit_qty_prequantized,
                                  bool close_only,
                                  uint64_t entry_incarnation);
     void sequential_same_tick_reversal_fill(const std::string& id, bool is_long,

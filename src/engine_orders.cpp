@@ -142,6 +142,7 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     // transaction whose whole broker movement is consumed by the close. Both
     // close the live opposite position without opening their own leg.
     flip_market_position_to(id, is_long, fill_price, explicit_qty, explicit_qty_type,
+                            explicit_qty_prequantized,
                             /*close_only=*/close_only_opposite,
                             entry_incarnation);
 }
@@ -580,6 +581,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
     opening_affordability_commissioned_default_flat_long_ = false;
+    opening_affordability_default_long_reversal_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = 0;
@@ -633,6 +635,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
     opening_affordability_commissioned_default_flat_long_ = false;
+    opening_affordability_default_long_reversal_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = current_bar_.timestamp;
@@ -881,6 +884,7 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
 void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long,
                                              double fill_price, double explicit_qty,
                                              int explicit_qty_type,
+                                             bool explicit_qty_prequantized,
                                              bool close_only,
                                              uint64_t entry_incarnation) {
     // For the close we need exit slippage based on closing direction.
@@ -918,7 +922,14 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
         return;
     }
 
-    double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    // Default-sized MARKET quantities are frozen and exchange-quantized at
+    // signal time. Every sibling dispatch path preserves that provenance;
+    // ordinary flips must not feed the frozen contracts through qty_step a
+    // second time (binary64 can turn 1.3410 into 1.3409 on the second floor).
+    // Explicit/FIXED quantities keep their normal single fill-side floor.
+    double new_qty = explicit_qty_prequantized
+        ? explicit_qty
+        : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     open_fresh_position(requested, fill_price, new_qty, id, entry_incarnation);
 }
