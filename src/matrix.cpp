@@ -22,6 +22,17 @@ void PineMatrix::require_valid() const {
     if (!valid_) throw std::runtime_error("matrix operation on na ID");
 }
 
+PineMatrix::Snapshot PineMatrix::snapshot() const {
+    require_valid();
+    return Snapshot(data_);
+}
+
+void PineMatrix::restore(const Snapshot& snapshot) {
+    Eigen::MatrixXd replacement(snapshot.state_);
+    data_.swap(replacement);
+    valid_ = true;
+}
+
 // ── Access ──────────────────────────────────────────────────────────────────
 
 double PineMatrix::get(int row, int col) const {

@@ -12,6 +12,23 @@ class PineMatrix {
     void require_valid() const;
 
 public:
+    // Opaque value checkpoint used by generated rollback code. This API is
+    // intentionally identity-neutral: matrix assignment retains its existing
+    // value semantics until the separate Pine ID-semantics change lands.
+    class Snapshot {
+        Eigen::MatrixXd state_;
+
+        explicit Snapshot(const Eigen::MatrixXd& state) : state_(state) {}
+
+        friend class PineMatrix;
+
+    public:
+        Snapshot(const Snapshot&) = default;
+        Snapshot& operator=(const Snapshot&) = default;
+        Snapshot(Snapshot&&) = default;
+        Snapshot& operator=(Snapshot&&) = default;
+    };
+
     // Construction
     static PineMatrix new_(int rows, int cols, double init_val = 0.0);
 
@@ -73,6 +90,9 @@ public:
     // Pine matrix ID state. A default-constructed value represents ``na``;
     // matrix.new() returns a valid ID even when its dimensions are 0x0.
     [[nodiscard]] bool is_na() const noexcept { return !valid_; }
+
+    [[nodiscard]] Snapshot snapshot() const;
+    void restore(const Snapshot& snapshot);
 
     // Properties
     bool is_square() const;

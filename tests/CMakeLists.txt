@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_ta_na_source_rules
     test_matrix
     test_matrix_na
+    test_matrix_snapshot_compat
     test_session_time
     test_time_tradingday
     test_chart_timezone
