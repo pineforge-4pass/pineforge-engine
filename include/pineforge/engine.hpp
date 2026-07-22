@@ -74,6 +74,13 @@ struct PyramidEntry {
     // every production entry path initializes the snapshot at fill time.
     double entry_commission_account =
         std::numeric_limits<double>::quiet_NaN();
+    // Monotonic per-run identity of the PendingOrder object whose broker fill
+    // created this physical lot. Unlike Pine's user-visible entry_id, an
+    // incarnation is never reused by same-id replacements or later calls.
+    // Every partial-close fragment copied from this lot therefore retains the
+    // same physical-entry provenance. Zero is reserved for legacy/test-only
+    // synthetic lots that were not created by a PendingOrder.
+    uint64_t entry_incarnation = 0;
 };
 
 struct Trade {
@@ -94,6 +101,9 @@ struct Trade {
     double max_runup = 0.0;
     double max_drawdown = 0.0;
     double commission = 0.0;
+    // Physical-entry provenance copied from PyramidEntry. This is deliberately
+    // separate from entry_id: Pine permits user-visible IDs to be reused.
+    uint64_t entry_incarnation = 0;
 };
 
 struct TradeC {
@@ -173,6 +183,17 @@ struct ReportC {
 };
 
 enum class OrderType { MARKET, ENTRY, EXIT, RAW_ORDER };
+
+// Order-local provenance for the one empirically pinned default-FIFO
+// SHORT-seed collision. The broker book remains in its ordinary fill order;
+// these roles only change the two transaction kernels after the complete
+// prior-bar three-object shape has been proven.
+enum class ShortSeedCollisionRole : uint8_t {
+    NONE = 0,
+    LONG_ENTRY,
+    MATERIALIZE_LONG,
+    FINAL_SHORT,
+};
 
 struct PendingOrder {
     std::string id;
@@ -539,6 +560,8 @@ struct PendingOrder {
     // debit the id ledger).
     double suppressed_close_consumed_ledger_qty =
         std::numeric_limits<double>::quiet_NaN();
+    ShortSeedCollisionRole short_seed_collision_role =
+        ShortSeedCollisionRole::NONE;
 };
 
 // default_qty_type constants (matches TradingView)
@@ -1031,6 +1054,10 @@ protected:
 
     std::vector<Trade> trades_;
     std::vector<PendingOrder> pending_orders_;
+    // A rejected strategy.entry call leaves no PendingOrder behind. The exact
+    // collision gate can consume only the immediately preceding source bar, so
+    // one scalar tombstone is sufficient and cannot grow with feed length.
+    int last_rejected_strategy_entry_call_bar_ = -1;
     // Source bars whose otherwise eligible flat MARKET candidate set was
     // mutated (same-id replacement/cancel) or contained an extra rejected
     // call. Even if two orders survive, the original bar contained more or
@@ -2156,6 +2183,10 @@ protected:
         if (idx < 0 || idx >= (int)trades_.size()) return std::string();
         return trades_[idx].exit_id;
     }
+    uint64_t closed_trade_entry_incarnation(int idx) const {
+        if (idx < 0 || idx >= (int)trades_.size()) return 0;
+        return trades_[idx].entry_incarnation;
+    }
     double closed_trade_entry_price(int idx) const {
         if (idx < 0 || idx >= (int)trades_.size()) return std::numeric_limits<double>::quiet_NaN();
         return trades_[idx].entry_price;
@@ -2246,16 +2277,17 @@ protected:
 
 private:
     void execute_market_entry(const std::string& id, bool is_long, double fill_price,
-                              double explicit_qty = std::numeric_limits<double>::quiet_NaN(),
-                              int explicit_qty_type = -1,
-                              PositionSide created_position_side = PositionSide::FLAT,
-                              bool close_only_opposite = false,
-                              bool is_priced_entry = false,
-                              double tv_carry_qty = 0.0,
-                              int created_bar = -1,
-                              bool later_same_tick_entry = false,
-                              bool paired_flat_market_transaction = false,
-                              bool explicit_qty_prequantized = false);
+                              double explicit_qty,
+                              int explicit_qty_type,
+                              PositionSide created_position_side,
+                              bool close_only_opposite,
+                              bool is_priced_entry,
+                              double tv_carry_qty,
+                              int created_bar,
+                              bool later_same_tick_entry,
+                              bool paired_flat_market_transaction,
+                              bool explicit_qty_prequantized,
+                              uint64_t entry_incarnation);
     void execute_market_exit(double fill_price);
     void execute_partial_exit_qty(double fill_price, double qty_to_close);
     void execute_partial_exit(double fill_price, double qty_percent);
@@ -2288,6 +2320,10 @@ private:
     void apply_pooc_coof_explicit_flat_market_gross_admission();
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
+    bool short_seed_collision_materialization_is_live(
+        const PendingOrder& order) const;
+    bool short_seed_collision_final_short_is_live(
+        const PendingOrder& order) const;
     // TradingView binds a valid, single/full, non-trailing strategy.exit to a
     // co-queued high-level MARKET parent. If that parent fills at the next open
     // and its stop is already breached, the newborn lot scratches at that open.
@@ -2475,26 +2511,32 @@ private:
                                 PositionSide created_position_side,
                                 bool is_priced_entry, double tv_carry_qty,
                                 int created_bar,
-                                bool explicit_qty_prequantized = false);
+                                bool explicit_qty_prequantized,
+                                uint64_t entry_incarnation);
     void add_to_pyramid_market(const std::string& id, bool is_long,
                                double fill_price, double explicit_qty,
                                int explicit_qty_type,
                                PositionSide created_position_side,
-                               bool is_priced_entry);
+                               bool is_priced_entry,
+                               uint64_t entry_incarnation);
     void close_opposite_then_enter(const std::string& id, bool is_long,
                                    double fill_price, double explicit_qty,
                                    int explicit_qty_type,
-                                   bool purge_pending_exits = true,
-                                   bool explicit_qty_prequantized = false);
+                                   bool purge_pending_exits,
+                                   bool explicit_qty_prequantized,
+                                   uint64_t entry_incarnation);
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
                                  int explicit_qty_type,
-                                 bool close_only = false);
+                                 bool close_only,
+                                 uint64_t entry_incarnation);
     void sequential_same_tick_reversal_fill(const std::string& id, bool is_long,
                                             double fill_price, double explicit_qty,
-                                            int explicit_qty_type);
+                                            int explicit_qty_type,
+                                            uint64_t entry_incarnation);
     void open_fresh_position(PositionSide requested, double fill_price,
-                             double qty, const std::string& id);
+                             double qty, const std::string& id,
+                             uint64_t entry_incarnation);
     void consume_tv_carry_from_siblings(const std::string& id,
                                         PositionSide created_position_side,
                                         int created_bar);

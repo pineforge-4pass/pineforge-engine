@@ -41,7 +41,9 @@ Schema:
           "max_drawdown": float,
           "commission":      float,   # ABI v2
           "entry_bar_index": int,     # ABI v2: script-bar index of entry fill
-          "exit_bar_index":  int      # ABI v2: script-bar index of exit fill
+          "exit_bar_index":  int,     # ABI v2: script-bar index of exit fill
+          "entry_incarnation": int    # run-scoped physical-entry provenance;
+                                        # 0 when the strategy lacks the accessor
         },
         ...
       ],
@@ -552,6 +554,10 @@ def load_strategy(so_path: Path) -> ctypes.CDLL:
     if hasattr(lib, "strategy_get_last_error"):
         lib.strategy_get_last_error.argtypes = [ctypes.c_void_p]
         lib.strategy_get_last_error.restype  = ctypes.c_char_p
+    if hasattr(lib, "strategy_closed_trade_entry_incarnation"):
+        lib.strategy_closed_trade_entry_incarnation.argtypes = [
+            ctypes.c_void_p, ctypes.c_int]
+        lib.strategy_closed_trade_entry_incarnation.restype = ctypes.c_uint64
 
     # syminfo setters — declare argtypes so ctypes does not default the float
     # args to c_int (which would truncate mintick=0.5 to 0). Guarded with
@@ -624,7 +630,8 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
                       elapsed: float,
                       applied_inputs: dict[str, str],
                       applied_overrides: dict[str, str],
-                      applied_runtime: dict[str, object] | None = None) -> dict:
+                      applied_runtime: dict[str, object] | None = None,
+                      trade_entry_incarnations: list[int] | None = None) -> dict:
     trades = []
     pnls: list[float] = []
     for i in range(report.trades_len):
@@ -645,6 +652,11 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "commission":      float(t.commission),
             "entry_bar_index": int(t.entry_bar_index),
             "exit_bar_index":  int(t.exit_bar_index),
+            "entry_incarnation": (
+                int(trade_entry_incarnations[i])
+                if trade_entry_incarnations is not None
+                and i < len(trade_entry_incarnations) else 0
+            ),
         })
 
     n = len(pnls)
@@ -946,8 +958,17 @@ def main() -> int:
             "trade_start_ms":     args.trade_start_ms,
             "chart_tz":           args.chart_tz or "",
         }
-        out = build_report_dict(report, args.ohlcv, n, first_ts, last_ts,
-                                elapsed, inputs, overrides, applied_runtime)
+        incarnation_accessor = getattr(
+            lib, "strategy_closed_trade_entry_incarnation", None)
+        trade_entry_incarnations = (
+            [int(incarnation_accessor(state, i))
+             for i in range(report.trades_len)]
+            if incarnation_accessor is not None else None
+        )
+        out = build_report_dict(
+            report, args.ohlcv, n, first_ts, last_ts,
+            elapsed, inputs, overrides, applied_runtime,
+            trade_entry_incarnations)
         if timing is not None:
             out["diagnostics"]["timing"] = timing
             out["diagnostics"]["throughput"] = _throughput_block(

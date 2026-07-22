@@ -3,7 +3,8 @@
  * entry points in src/c_abi.cpp (lines ~119-205) that the existing
  * tests/test_c_abi.c does NOT touch:
  *
- *   strategy_set_trace_enabled, strategy_get_last_error,
+ *   strategy_closed_trade_entry_incarnation, strategy_set_trace_enabled,
+ *   strategy_get_last_error,
  *   strategy_set_trade_start_time, strategy_set_chart_timezone,
  *   strategy_set_syminfo_timezone / _session / _mintick / _pointvalue /
  *   _metadata / _account_currency_fx_series, and pf_version_string.
@@ -85,6 +86,11 @@ public:
     // get_syminfo_metadata() is protected on BacktestEngine; expose it via
     // the subclass. It returns na<double>() (NaN) for keys never injected.
     double meta(const std::string& key) const { return get_syminfo_metadata(key); }
+    void append_trade(uint64_t entry_incarnation) {
+        pineforge::Trade trade{};
+        trade.entry_incarnation = entry_incarnation;
+        trades_.push_back(trade);
+    }
 };
 }
 
@@ -115,6 +121,7 @@ int main() {
     CHECK(strategy_stream_end(nullptr, 0) == -1);
     CHECK(strategy_stream_fill_report(nullptr, nullptr) == -1);
     CHECK(strategy_get_last_error(nullptr) == nullptr);
+    CHECK(strategy_closed_trade_entry_incarnation(nullptr, 0) == 0);
 
     // Secondary `|| !arg` guard arms (valid handle, NULL arg) — these
     // must early-out too, leaving engine state untouched.
@@ -137,6 +144,17 @@ int main() {
     const char* err = strategy_get_last_error(h);
     CHECK(err != nullptr);
     CHECK(err[0] == '\0');
+
+    // Closed-trade physical identity is runtime-owned, bounds-checked, and
+    // preserves zero for legacy/synthetic rows without order provenance.
+    CHECK(strategy_closed_trade_entry_incarnation(h, -1) == 0);
+    CHECK(strategy_closed_trade_entry_incarnation(h, 0) == 0);
+    eng.append_trade(0);
+    eng.append_trade(UINT64_C(0x123456789abcdef0));
+    CHECK(strategy_closed_trade_entry_incarnation(h, 0) == 0);
+    CHECK(strategy_closed_trade_entry_incarnation(h, 1)
+          == UINT64_C(0x123456789abcdef0));
+    CHECK(strategy_closed_trade_entry_incarnation(h, 2) == 0);
 
     // trace_enabled: default false → 1/non-zero maps to true, 0 to false.
     CHECK(eng.trace_on() == false);

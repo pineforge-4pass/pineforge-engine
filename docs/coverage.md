@@ -60,7 +60,7 @@
 ## Public C ABI
 
 `<pineforge/pineforge.h>` is the **single canonical consumer header**.
-Every compiled PineForge strategy `.so` exports exactly the 27 symbols
+Every compiled PineForge strategy `.so` exports exactly the 28 symbols
 declared there:
 
 
@@ -71,6 +71,7 @@ declared there:
 | `run_backtest`                           | Run with auto-detected timeframe                                  |
 | `run_backtest_full`                      | Run with timeframe + magnifier configuration                      |
 | `report_free`                            | Free arrays inside a filled `pf_report_t`                         |
+| `strategy_closed_trade_entry_incarnation`| Read per-run physical entry provenance                            |
 | `strategy_set_input`                     | Override a Pine `input.*()` value                                 |
 | `strategy_set_override`                  | Override a `strategy(...)` declaration param                      |
 | `strategy_set_magnifier_volume_weighted` | Toggle volume-weighted magnifier                                  |
@@ -120,7 +121,7 @@ single `.hpp`):
 
 | Module             | Header                   | Source                                                                                                                                                                                                                                   | Pine-facing role                                                                                                                                              |
 | ------------------ | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | The 27 documented C symbols every compiled strategy `.so` exports.                                                                                                           |
+| Public C ABI       | `pineforge.h`            | `c_abi.cpp` (+ layout `static_assert`s)                                                                                                                                                                                                                       | The 28 documented C symbols every compiled strategy `.so` exports.                                                                                                           |
 | Engine             | `engine.hpp`             | `engine_run.cpp`, `engine_stream.cpp`, `engine_orders.cpp`, `engine_fills.cpp`, `engine_path_resolve.cpp`, `engine_strategy_commands.cpp`, `engine_trade_accessors.cpp`, `engine_security.cpp`, `engine_lower_tf.cpp`, `engine_risk.cpp`, `engine_report.cpp` | One-shot and continuous lifecycle, orders, raw-trade/bar fills, risk, reports, inputs / syminfo, magnifier, TF aggregation, and `request.security` plumbing.                  |
 | Engine internals   | `engine_internal.hpp`    | (private cross-TU header)                                                                                                                                                                                                                | `pineforge::internal::`* types and helpers shared between engine `.cpp` partitions; not part of the public ABI.                                               |
 | Technical analysis | `ta.hpp`                 | `ta_moving_averages.cpp`, `ta_oscillators.cpp`, `ta_volatility_trend.cpp`, `ta_extremes_volume.cpp`, `ta_misc.cpp`                                                                                                                       | Official `ta.`* functions and series variables backed by stateful runtime classes with `compute` / `recompute`, plus `pivot_point_levels(...)` free function. |

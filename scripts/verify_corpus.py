@@ -32,6 +32,8 @@ import argparse
 import csv
 import re
 import sys
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -261,6 +263,19 @@ class TradePair:
     qty: float
     pnl: float
     trade_num: int = 0
+    # TradingView's entry-side ``Signal`` identifies the broker instruction
+    # that opened this physical trade.  It is intentionally report/oracle
+    # provenance rather than an alignment key: engine CSVs historically omit
+    # it, but distinct non-empty TV signals prove that equal-time/equal-price
+    # rows are independent entries and must not be fragment-consolidated.
+    entry_signal: str = ""
+    # Engine-only physical-entry provenance. New PineForge runners export the
+    # unique PendingOrder incarnation that created the lot; every partial-close
+    # fragment of that lot retains the same value. This must not reuse Signal:
+    # TradingView's Signal column can contain a user-visible comment rather
+    # than the Pine entry ID. Empty means the engine artifact cannot prove
+    # physical multiplicity at a TV-proven collision key.
+    entry_identity: str = ""
     # Report-only fields (compared but NOT gated — see the field-coverage
     # disclosure). pnl_pct is in percent. mfe/mae are TOTAL USD excursions
     # ((price diff) * qty, summed over pyramid entries) in TV's export
@@ -314,6 +329,8 @@ class VerificationResult:
     exit_ok: bool = False
     pnl_ok: bool = False
     coverage_ok: bool = False
+    distinct_entry_identity_ok: bool = True
+    distinct_entry_mismatches: int = 0
     unmatched_in_window: int = 0
     entry_p100: float = 0.0
     exit_p100: float = 0.0
@@ -347,6 +364,8 @@ class VerificationResult:
             "entry_p90": self.entry_p90,
             "exit_p90": self.exit_p90,
             "pnl_p90": self.pnl_p90,
+            "distinct_entry_identity_ok": self.distinct_entry_identity_ok,
+            "distinct_entry_mismatches": self.distinct_entry_mismatches,
             "profile": self.profile,
             "notes": self.notes,
         }
@@ -468,6 +487,14 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             if kind.startswith("Entry"):
                 r["entry_time"] = parse_dt(time_field, tz)
                 r["entry_price"] = price
+                r["entry_signal"] = str(row.get("Signal") or "").strip()
+                raw_identity = str(
+                    row.get("Engine entry incarnation")
+                    or row.get("Engine entry ID")
+                    or ""
+                ).strip()
+                r["entry_identity"] = (
+                    raw_identity if raw_identity not in {"", "0"} else "")
             else:
                 r["exit_time"] = parse_dt(time_field, tz)
                 r["exit_price"] = price
@@ -486,6 +513,8 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
             qty=r["qty"],
             pnl=r["pnl"],
             trade_num=n,
+            entry_signal=r.get("entry_signal", ""),
+            entry_identity=r.get("entry_identity", ""),
             pnl_pct=r.get("pnl_pct", 0.0),
             mfe=r.get("mfe", 0.0),
             mae=r.get("mae", 0.0),
@@ -494,7 +523,144 @@ def parse_trades(csv_path: Path, *, tz) -> list[TradePair]:
     return pairs
 
 
-def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
+EntryFillKey = tuple[int, float, str]
+
+
+def distinct_entry_fill_keys(pairs: list[TradePair]) -> set[EntryFillKey]:
+    """Return entry keys proven to contain multiple physical broker entries.
+
+    TradingView can report independent trades at the same timestamp, price,
+    and direction.  The entry-side ``Signal`` is the only exported provenance
+    that separates those instructions.  Two or more distinct non-empty
+    signals therefore prove at least two physical entries even when one signal
+    also owns quantity/FIFO fragments. Callers project the TV-derived keys onto
+    the engine side, which must supply independent physical-incarnation
+    provenance rather than relying on raw row count.
+    """
+    signals_by_key: dict[EntryFillKey, list[str]] = {}
+    for trade in pairs:
+        key = (trade.entry_time, trade.entry_price, trade.direction)
+        signals_by_key.setdefault(key, []).append(trade.entry_signal)
+    return {
+        key
+        for key, signals in signals_by_key.items()
+        if len({signal for signal in signals if signal}) > 1
+    }
+
+
+def _project_entry_fill_keys(
+    observed_keys: Iterable[EntryFillKey],
+    proven_keys: set[EntryFillKey] | frozenset[EntryFillKey],
+) -> tuple[
+    dict[EntryFillKey, EntryFillKey],
+    dict[EntryFillKey, set[EntryFillKey]],
+]:
+    """Project observed entry-price keys onto unambiguous TV oracle keys.
+
+    Time and direction remain exact. Price alone may drift by less than the
+    strict entry-parity tolerance, using the same :func:`relative_max` metric as
+    the headline gate. Exact price equality wins. A non-exact observed key is
+    projected only when exactly one TV key in its time/direction scope is in
+    tolerance; overlapping tolerance neighborhoods are returned as ambiguous
+    so callers can fail closed instead of choosing a nearest key or allowing
+    one engine row to satisfy multiple distinct TV prices.
+    """
+    proven_by_scope: dict[tuple[int, str], list[EntryFillKey]] = {}
+    for key in proven_keys:
+        proven_by_scope.setdefault((key[0], key[2]), []).append(key)
+
+    projected: dict[EntryFillKey, EntryFillKey] = {}
+    ambiguous: dict[EntryFillKey, set[EntryFillKey]] = {}
+    for observed in set(observed_keys):
+        candidates = proven_by_scope.get((observed[0], observed[2]), [])
+        exact = next(
+            (candidate for candidate in candidates
+             if candidate[1] == observed[1]),
+            None,
+        )
+        if exact is not None:
+            projected[observed] = exact
+            continue
+        tolerant = {
+            candidate for candidate in candidates
+            if relative_max(candidate[1], observed[1]) < STRICT_ENTRY_DELTA
+        }
+        if len(tolerant) == 1:
+            projected[observed] = next(iter(tolerant))
+        elif len(tolerant) > 1:
+            ambiguous[observed] = tolerant
+    return projected, ambiguous
+
+
+def distinct_entry_fill_mismatches(
+    tv: list[TradePair],
+    eng: list[TradePair],
+    proven_keys: set[EntryFillKey] | frozenset[EntryFillKey],
+) -> int:
+    """Count physical-entry identity failures at TV-proven distinct keys.
+
+    TV's distinct non-empty Signals prove separate report buckets. Engine row
+    count is not evidence because one entry may fragment into several
+    closed-trade rows. Excellent certification therefore requires every engine
+    row projected to the key to carry a non-empty physical incarnation and
+    requires its distinct incarnation count to equal the oracle's provable
+    Signal buckets. Projection keeps time/direction exact and permits only an
+    unambiguous entry-price drift inside the strict parity tolerance.
+    This is intentionally conservative when repeated TV Signals are ambiguous:
+    it may refuse Excellent, but it cannot certify multiplicity from row count.
+    Missing identity or an engine price inside multiple TV-key tolerance
+    neighborhoods fails the affected keys closed even when raw row counts
+    happen to match.
+    """
+    tv_signals: dict[EntryFillKey, set[str]] = {}
+    engine_identities: dict[EntryFillKey, set[str]] = {}
+    engine_rows: dict[EntryFillKey, list[TradePair]] = {}
+    for trade in tv:
+        key = (trade.entry_time, trade.entry_price, trade.direction)
+        if trade.entry_signal:
+            tv_signals.setdefault(key, set()).add(trade.entry_signal)
+    observed_engine_rows: dict[EntryFillKey, list[TradePair]] = {}
+    for trade in eng:
+        key = (trade.entry_time, trade.entry_price, trade.direction)
+        observed_engine_rows.setdefault(key, []).append(trade)
+
+    projected, ambiguous = _project_entry_fill_keys(
+        observed_engine_rows, proven_keys)
+    ambiguous_proven_keys = {
+        candidate
+        for candidates in ambiguous.values()
+        for candidate in candidates
+    }
+    for observed, rows in observed_engine_rows.items():
+        key = projected.get(observed)
+        if key is None:
+            continue
+        engine_rows.setdefault(key, []).extend(rows)
+        engine_identities.setdefault(key, set()).update(
+            trade.entry_identity for trade in rows if trade.entry_identity)
+
+    mismatches = 0
+    for key in proven_keys:
+        expected = len(tv_signals.get(key, set()))
+        rows = engine_rows.get(key, [])
+        if expected < 2:
+            continue
+        if key in ambiguous_proven_keys:
+            mismatches += 1
+            continue
+        if not rows or any(not trade.entry_identity for trade in rows):
+            mismatches += 1
+            continue
+        mismatches += abs(expected - len(engine_identities.get(key, set())))
+    return mismatches
+
+
+def consolidate_fragments(
+    pairs: list[TradePair],
+    *,
+    preserve_entry_keys: set[EntryFillKey] | frozenset[EntryFillKey] = frozenset(),
+    identity_field: str = "entry_signal",
+) -> list[TradePair]:
     """Reunite the fragment rows that split a single logical fill into one trade.
 
     TradingView's "List of Trades" (and the engine, mirroring it) splits one
@@ -513,14 +679,20 @@ def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
     SYMMETRICALLY to the TV and engine lists, so a genuinely fragmented
     strategy still pairs 1:1.
 
-    Merge key = ``(entry_time, entry_price, direction)`` compared EXACTLY: two
-    rows merge iff they share the same bar, the same fill price (read from the
-    identical CSV cell, hence bit-identical within one file) and the same side
-    — i.e. they are the same fill event. Two *distinct* trades can never
-    collide, because a second independent entry must occur on a different bar
-    or at a different fill price (a different grid level), either of which
-    changes the key. For an un-fragmented strategy every group has size 1, so
-    this is a strict no-op and the reference corpus is left byte-identical.
+    Merge key = ``(entry_time, entry_price, direction)`` compared EXACTLY.
+    That key is sufficient only when every member has the same entry
+    provenance.  TradingView can execute independent instructions at one
+    broker tick and price; two or more distinct non-empty entry Signals prove
+    that the key contains multiple physical entries.  For TV rows, repeated
+    members of the same signal are consolidated within that signal only.
+    Engine rows use the separate ``entry_identity`` incarnation field for the
+    same operation. A row missing the appropriate identity cannot be assigned
+    safely to a bucket, so the TV-proven key stays raw and the identity gate
+    fails closed. Engine keys may project onto one TV key when time/direction
+    match exactly and price drift is unambiguously inside the strict entry
+    tolerance. Overlapping price neighborhoods remain identity-sensitive but
+    fail the gate as ambiguous. This can retain extra fragment detail, but it
+    cannot merge independent entries into a false Excellent result.
 
     The merged trade keeps the shared entry (time + price) and direction, sums
     the per-lot qty / pnl / excursions, and represents the exit by the lots'
@@ -546,8 +718,8 @@ def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
     >>> len(g), g[0].qty, g[0].exit_price, g[0].exit_time
     (1, 1.0, 13.0, 250)
     """
-    groups: dict[tuple[int, float, str], list[TradePair]] = {}
-    order: list[tuple[int, float, str]] = []
+    groups: dict[EntryFillKey, list[TradePair]] = {}
+    order: list[EntryFillKey] = []
     for t in pairs:
         key = (t.entry_time, t.entry_price, t.direction)
         if key not in groups:
@@ -555,9 +727,34 @@ def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
             order.append(key)
         groups[key].append(t)
 
+    preserved = set(preserve_entry_keys)
+    preserved.update(distinct_entry_fill_keys(pairs))
+    projected, ambiguous = _project_entry_fill_keys(groups, preserved)
+    identity_sensitive_keys = set(projected) | set(ambiguous)
     out: list[TradePair] = []
     for key in order:
         members = groups[key]
+        if key in identity_sensitive_keys:
+            identities = [
+                getattr(member, identity_field) for member in members]
+            if all(identities):
+                signal_groups: dict[str, list[TradePair]] = {}
+                signal_order: list[str] = []
+                for member, identity in zip(members, identities):
+                    if identity not in signal_groups:
+                        signal_groups[identity] = []
+                        signal_order.append(identity)
+                    signal_groups[identity].append(member)
+                for signal in signal_order:
+                    bucket = signal_groups[signal]
+                    if len(bucket) == 1:
+                        out.append(bucket[0])
+                    else:
+                        out.extend(consolidate_fragments(
+                            bucket, identity_field=identity_field))
+            else:
+                out.extend(members)
+            continue
         if len(members) == 1:
             out.append(members[0])
             continue
@@ -583,6 +780,8 @@ def consolidate_fragments(pairs: list[TradePair]) -> list[TradePair]:
             qty=qty,
             pnl=sum(m.pnl for m in members),
             trade_num=min(m.trade_num for m in members),
+            entry_signal=rep.entry_signal,
+            entry_identity=rep.entry_identity,
             pnl_pct=sum(m.pnl_pct * m.qty for m in members) / denom,
             mfe=sum(m.mfe for m in members),
             mae=sum(m.mae for m in members),
@@ -836,8 +1035,12 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # FIFO partial-close lots of one fill) into a single logical trade BEFORE
     # pairing, symmetrically on both sides, so the entry-time matcher does not
     # cross-pair same-entry lots. No-op for un-fragmented strategies.
-    tv = consolidate_fragments(tv)
-    eng = consolidate_fragments(eng)
+    distinct_tv_entry_keys = distinct_entry_fill_keys(tv_raw_all)
+    tv = consolidate_fragments(
+        tv, preserve_entry_keys=distinct_tv_entry_keys)
+    eng = consolidate_fragments(
+        eng, preserve_entry_keys=distinct_tv_entry_keys,
+        identity_field="entry_identity")
     matched = align_by_time(tv, eng)
     tv_cmp, eng_cmp = trim_to_common_match_window(tv, eng, matched)
     matched = align_by_time(tv_cmp, eng_cmp)
@@ -894,6 +1097,9 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
 
     count_abs_delta = abs(len(tv_gate) - len(eng_gate))
     count_delta = relative_max(len(tv_gate), len(eng_gate))
+    distinct_entry_mismatches = distinct_entry_fill_mismatches(
+        tv_gate, eng_gate, distinct_tv_entry_keys)
+    distinct_entry_identity_ok = distinct_entry_mismatches == 0
     entry_deltas = [relative_max(t.entry_price, e.entry_price) for t, e in gating_matched]
     exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
     # PnL p90 uses *relative-to-tv_pnl*, with near-zero trades excluded so
@@ -1028,7 +1234,14 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     cov_strong    = coverage >= COVERAGE_STRONG or unmatched_total <= 1
     cov_moderate  = coverage >= COVERAGE_MODERATE
 
-    all_ok   = count_ok and entry_ok and exit_ok and pnl_ok and cov_excellent
+    all_ok = (
+        count_ok
+        and entry_ok
+        and exit_ok
+        and pnl_ok
+        and cov_excellent
+        and distinct_entry_identity_ok
+    )
     if all_ok:
         label = "excellent"
     elif (
@@ -1066,6 +1279,10 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
                 failures.append(f"pnl p90 {pnl_p90*100:.4f}%")
             if not cov_excellent:
                 failures.append(f"coverage {coverage*100:.1f}%")
+            if not distinct_entry_identity_ok:
+                failures.append(
+                    "distinct-entry multiplicity Δ "
+                    f"{distinct_entry_mismatches}")
             notes = "; ".join(failures) if failures else "non-excellent"
 
     return VerificationResult(
@@ -1100,6 +1317,8 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         exit_ok=exit_ok,
         pnl_ok=pnl_ok,
         coverage_ok=cov_excellent,
+        distinct_entry_identity_ok=distinct_entry_identity_ok,
+        distinct_entry_mismatches=distinct_entry_mismatches,
         unmatched_in_window=unmatched_in_window,
         entry_p100=entry_p100,
         exit_p100=exit_p100,

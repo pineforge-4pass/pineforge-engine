@@ -110,6 +110,7 @@ set(TEST_SOURCES
     test_prearmed_exit_path_cursor
     test_prearmed_market_parent_gap_exit
     test_relative_exit_after_limit_parent
+    test_short_seed_close_collision
 )
 
 find_package(Threads REQUIRED)
@@ -137,6 +138,12 @@ add_test(
     NAME test_verify_corpus_metrics
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_metrics.py
+)
+
+add_test(
+    NAME test_run_strategy_identity
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_identity.py
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test

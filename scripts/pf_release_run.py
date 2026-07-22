@@ -155,5 +155,6 @@ def report_trades_to_runstrategy_shape(report: dict) -> list[dict]:
             "commission": float(t.get("commission", 0.0)),
             "entry_bar_index": int(t.get("entry_bar_index", -1)),
             "exit_bar_index": int(t.get("exit_bar_index", -1)),
+            "entry_incarnation": int(t.get("entry_incarnation", 0) or 0),
         })
     return out

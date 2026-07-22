@@ -69,6 +69,39 @@ def test_summary_bars_processed_unchanged():
     assert rep["summary"]["bars_processed"] == 525_600
 
 
+def test_trade_entry_incarnation_is_optional_and_positionally_aligned():
+    report = _FakeReport()
+    report.trades_len = 1
+    report.trades = (run_json.TradeC * 1)()
+
+    with_identity = run_json.build_report_dict(
+        report,
+        ohlcv_path="x.csv",
+        n_bars=0,
+        first_ts=0,
+        last_ts=0,
+        elapsed=0.0,
+        applied_inputs={},
+        applied_overrides={},
+        applied_runtime={},
+        trade_entry_incarnations=[41],
+    )
+    legacy = run_json.build_report_dict(
+        report,
+        ohlcv_path="x.csv",
+        n_bars=0,
+        first_ts=0,
+        last_ts=0,
+        elapsed=0.0,
+        applied_inputs={},
+        applied_overrides={},
+        applied_runtime={},
+    )
+
+    assert with_identity["trades"][0]["entry_incarnation"] == 41
+    assert legacy["trades"][0]["entry_incarnation"] == 0
+
+
 # --- --bench diagnostics contract (timing + throughput) ---------------------
 # These pure blocks back the raw-data benchmark drivers
 # (benchmarks/speed/time_pineforge_docker.py,

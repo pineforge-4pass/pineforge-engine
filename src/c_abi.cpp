@@ -7,8 +7,9 @@
  *     and the internal C++ types they mirror. If any of these trip,
  *     the C ABI has drifted from the internal representation — fix
  *     BEFORE shipping a .so that consumers depend on.
- *   - The runtime-library-side `extern "C"` symbols (the setters,
- *     strategy_get_last_error, the strategy_stream_* lifecycle,
+ *   - The runtime-library-side `extern "C"` symbols (the closed-trade
+ *     incarnation accessor, setters, strategy_get_last_error,
+ *     the strategy_stream_* lifecycle,
  *     pf_version_get/pf_version_string, pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
  *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
@@ -138,13 +139,21 @@ static_assert(static_cast<int>(pineforge::MagnifierDistribution::BACK_LOADED)  =
 /* ───────────────────────────────────────────────────────────────────
  * Runtime-library-side extern "C" implementations.
  *
- * These live in libruntime.a (statically linked into every compiled
+ * These live in libpineforge.a (statically linked into every compiled
  * strategy .so), so consumers find them via dlsym on any .so. The
  * other extern "C" symbols listed in pineforge.h are emitted PER
  * STRATEGY by the codegen (in emit_top.py::_emit_extern_c).
  * ─────────────────────────────────────────────────────────────────── */
 
 extern "C" {
+
+PF_API uint64_t strategy_closed_trade_entry_incarnation(
+        pf_strategy_t s, int trade_index) {
+    if (!s) return 0;
+    const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
+    if (trade_index < 0 || trade_index >= engine->trade_count()) return 0;
+    return engine->get_trade(trade_index).entry_incarnation;
+}
 
 /* Toggle per-bar trace recording on a live strategy. Default off; the
  * harness flips it on per-strategy via this entry point before running
