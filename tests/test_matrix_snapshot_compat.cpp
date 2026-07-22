@@ -1,6 +1,11 @@
 #include <pineforge/generic_matrix.hpp>
 #include <pineforge/matrix.hpp>
 
+// Keep this executable's assertions active in Release builds so the
+// compatibility gate cannot become vacuous under -DNDEBUG.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <stdexcept>
 #include <string>
