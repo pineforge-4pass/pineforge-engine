@@ -768,6 +768,10 @@ class Strategy:
 
         L.strategy_free.argtypes = [ctypes.c_void_p]
         L.report_free.argtypes = [ctypes.POINTER(ReportC)]
+        if hasattr(L, "strategy_closed_trade_entry_incarnation"):
+            L.strategy_closed_trade_entry_incarnation.argtypes = [
+                ctypes.c_void_p, ctypes.c_int]
+            L.strategy_closed_trade_entry_incarnation.restype = ctypes.c_uint64
         if hasattr(L, "strategy_get_last_error"):
             L.strategy_get_last_error.argtypes = [ctypes.c_void_p]
             L.strategy_get_last_error.restype = ctypes.c_char_p
@@ -1027,6 +1031,13 @@ class Strategy:
             if on_report is not None:
                 on_report(report)
             result = _report_to_dict(report)
+            incarnation_accessor = getattr(
+                self.lib, "strategy_closed_trade_entry_incarnation", None)
+            for i, trade in enumerate(result["trades"]):
+                trade["entry_incarnation"] = (
+                    int(incarnation_accessor(state, i))
+                    if incarnation_accessor is not None else 0
+                )
             if source_feed_sha256 is not None:
                 result["source_feed_sha256"] = source_feed_sha256
             return result
@@ -1230,7 +1241,7 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
             "Trade #", "Type", "Date and time", "Price", "Qty",
             "Net PnL", "Net PnL %",
             "Favorable excursion USD", "Adverse excursion USD",
-            "Cumulative PnL",
+            "Cumulative PnL", "Engine entry incarnation",
         ])
         for n, t in reversed(list(enumerate(trades, 1))):
             direction = "long" if t["is_long"] else "short"
@@ -1251,6 +1262,9 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
                     f"{t['max_runup']:.6f}",
                     f"{adverse:.6f}",
                     f"{cum:.6f}",
+                    str(int(t.get("entry_incarnation", 0)))
+                    if (side.startswith("Entry")
+                        and int(t.get("entry_incarnation", 0)) > 0) else "",
                 ])
 
 

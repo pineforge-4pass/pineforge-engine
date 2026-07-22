@@ -94,6 +94,7 @@ bool trades_equal(const BacktestEngine& a, const BacktestEngine& b) {
         if (x.qty != y.qty || x.pnl != y.pnl) return false;
         if (x.is_long != y.is_long) return false;
         if (x.entry_id != y.entry_id) return false;
+        if (x.entry_incarnation != y.entry_incarnation) return false;
     }
     return true;
 }

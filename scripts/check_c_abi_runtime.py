@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 EXPECTED_RUNTIME = frozenset({
+    "strategy_closed_trade_entry_incarnation",
     "strategy_set_trace_enabled",
     "strategy_set_trade_start_time",
     "strategy_set_chart_timezone",

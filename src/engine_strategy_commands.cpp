@@ -114,7 +114,10 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     // bar 04-06 23:45 with arm_long=true while the cap had already
     // latched on 04-06 07:00, then carrying to fire on the new chart-
     // day before the script's else-branch could cancel it).
-    if (_intraday_cap_currently_latched()) return;
+    if (_intraday_cap_currently_latched()) {
+        last_rejected_strategy_entry_call_bar_ = bar_index_;
+        return;
+    }
 
     // KI-65 MARKET/MARKET follow-up. Every explicit MARKET call first receives
     // the established OWN-qty admission below. Eligible own-admitted calls are
@@ -227,6 +230,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             double available_equity = current_equity();
             double epsilon = std::max(1e-9, std::abs(available_equity) * 1e-12);
             if (required_margin > available_equity + epsilon) {
+                last_rejected_strategy_entry_call_bar_ = bar_index_;
                 // A rejected third call leaves no PendingOrder or incarnation,
                 // but it still means the source body was not the clean exact
                 // two-call terminal-C shape. Preserve that invisible history.
@@ -303,7 +307,10 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         && position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT)
         && position_entry_count_ >= pyramiding_;
     bool is_priced_entry = !std::isnan(limit_price) || !std::isnan(stop_price);
-    if (is_priced_entry && !process_orders_on_close_ && over_pyramiding_cap) return;
+    if (is_priced_entry && !process_orders_on_close_ && over_pyramiding_cap) {
+        last_rejected_strategy_entry_call_bar_ = bar_index_;
+        return;
+    }
 
     PendingOrder order;
     order.id = id;

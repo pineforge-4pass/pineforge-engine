@@ -579,6 +579,11 @@ void BacktestEngine::reset_run_state() {
     reset_position_state_to_flat();   // position_side_/qty/price/time/count,
                                       // pyramid_entries_, trail, partial ids
     pending_orders_.clear();
+    // PendingOrder incarnations are report provenance scoped to one run.
+    // Resetting keeps a reused handle byte/identity-equivalent to a fresh
+    // handle while preserving the invariant that zero means unavailable.
+    next_order_incarnation_ = 1;
+    last_rejected_strategy_entry_call_bar_ = -1;
     pending_flat_market_pair_disqualified_bars_.clear();
     default_flat_market_gross_disqualified_bars_.clear();
     named_entry_cancelled_incarnation_in_current_eval_.clear();

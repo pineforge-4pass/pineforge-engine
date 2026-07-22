@@ -11,6 +11,14 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifndef PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG
+#define PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG 1
+#endif
+
+#ifndef PINEFORGE_SHORT_SEED_COLLISION_FINAL_SHORT_CLOSE_ONLY
+#define PINEFORGE_SHORT_SEED_COLLISION_FINAL_SHORT_CLOSE_ONLY 1
+#endif
+
 namespace pineforge {
 using namespace internal;
 
@@ -1488,6 +1496,11 @@ void BacktestEngine::finalize_pending_flat_market_pairs(const Bar& bar) {
 // share that same fill point; other priced orders evaluate later on the
 // synthetic OHLC path. This avoids broad type-based reordering.
 void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
+    // Roles are derived from the complete live book at each broker boundary;
+    // never let a partially surviving or carried object retain the transaction.
+    for (PendingOrder& order : pending_orders_) {
+        order.short_seed_collision_role = ShortSeedCollisionRole::NONE;
+    }
     if (pending_orders_.size() < 2) return;  // nothing to order; skips stable_sort's temp-buffer alloc
 
     // Validate pair links before stable_sort starts moving elements. Scanning
@@ -1621,6 +1634,195 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             if (exact_relative_child) {
                 relative_limit_child_incarnations.insert(order.incarnation);
             }
+        }
+    }
+
+    // Raw-TV-faithful SHORT-seed transaction. The ordinary comparator already
+    // produces the observed broker order:
+    //
+    //   Long -> __close__Short -> Short
+    //
+    // Do not reorder it. Tag only the exact authoritative three-object book so
+    // the close kernel can materialize TV's second LONG lot and the final Short
+    // kernel can close both LONG lots to flat. The long-seed mirror is
+    // deliberately unproven and remains ordinary.
+    if (!close_entries_rule_any_
+        && !process_orders_on_close_
+        && !calc_on_order_fills_
+        && !coof_scheduler_active_
+        && !bar_magnifier_enabled_
+        && !stream_warmup_mode_
+        && stream_phase_ == StreamPhase::IDLE
+        && risk_direction_ == RiskDirection::BOTH
+        && risk_max_cons_loss_days_ == 0
+        && risk_max_drawdown_ <= 0.0
+        && risk_max_intraday_loss_ <= 0.0
+        && risk_max_position_size_ <= 0.0
+        && max_intraday_filled_orders_ <= 0
+        && !risk_halted_
+        && default_qty_type_ == QtyType::FIXED
+        && pyramiding_ == 1
+        && pending_orders_.size() == 3
+        && position_side_ == PositionSide::SHORT
+        && position_entry_count_ == 1
+        && position_cycle_seq_ > 0
+        && pyramid_entries_.size() == 1) {
+        PendingOrder* source[3] = {
+            &pending_orders_[0], &pending_orders_[1], &pending_orders_[2]};
+        std::sort(
+            source, source + 3,
+            [](const PendingOrder* lhs, const PendingOrder* rhs) {
+                return lhs->created_seq < rhs->created_seq;
+            });
+
+        const int source_bar = source[0]->created_bar;
+        const auto fresh_plain_object = [&](const PendingOrder& order) {
+            return order.created_bar == source_bar
+                && source_bar + 1 == bar_index_
+                && order.created_position_side == PositionSide::SHORT
+                && !order.created_by_same_id_replacement
+                && order.replaced_exit_order_incarnation == 0
+                && order.recreated_after_named_cancelled_entry_incarnation == 0
+                && order.named_cancel_surviving_exit_incarnation == 0
+                && !order.created_during_coof_recalc
+                && !order.coof_born_at_close_recalc
+                && !order.coof_born_mid_bar
+                && order.oca_name.empty()
+                && order.oca_type == 0;
+        };
+        const auto pure_default_market_entry = [&](const PendingOrder& order) {
+            return order.type == OrderType::MARKET
+                && std::isnan(order.qty)
+                && order.qty_type == -1
+                && std::isnan(order.frozen_default_qty)
+                && std::isnan(order.limit_price)
+                && std::isnan(order.stop_price)
+                && std::isnan(order.trail_points)
+                && std::isnan(order.trail_price)
+                && std::isnan(order.trail_offset)
+                && std::isnan(order.profit_ticks)
+                && std::isnan(order.loss_ticks)
+                && !order.created_after_position_close_in_bar
+                && !order.created_while_in_position;
+        };
+        const auto exact_full_fifo_close_short =
+            [&](const PendingOrder& order, const std::string& held_id) {
+            return order.type == OrderType::EXIT
+                && order.id == "__close__" + held_id
+                && order.from_entry.empty()
+                && !order.is_long
+                && order.created_while_in_position
+                && !order.requested_partial
+                && std::isnan(order.qty)
+                && std::abs(order.qty_percent - 100.0) <= kFullPercentEps
+                && std::isnan(order.limit_price)
+                && std::isnan(order.stop_price)
+                && std::isnan(order.trail_points)
+                && std::isnan(order.trail_price)
+                && std::isnan(order.trail_offset)
+                && std::isnan(order.profit_ticks)
+                && std::isnan(order.loss_ticks)
+                && !order.pooc_global_full_exit_dynamic_qty
+                && !order.pooc_global_full_exit_tracks_bound_adds
+                && !order.suppress_as_declined_reversal_close
+                && std::isfinite(order.suppressed_close_consumed_ledger_qty)
+                && order.suppressed_close_consumed_ledger_qty > kQtyEpsilon;
+        };
+
+        const PyramidEntry& seed = pyramid_entries_.front();
+        const double default_qty = apply_qty_step(default_qty_value_);
+        // The middle EXIT materializes a second LONG before the final Short is
+        // processed.  That final order still traverses the ordinary fixed-
+        // default fill-time admission gate before its close-only kernel.  Do
+        // not tag the transaction unless the projected two-lot state makes
+        // that admission provably non-rejecting; otherwise the middle leg could
+        // create synthetic exposure and the final leg could be declined with
+        // no rollback.  At zero cost and 100% margins, marked equity is
+        // invariant across the two same-open predecessors, so this mirrors the
+        // later gate using the exact projected held and transaction quantities.
+        const auto projected_final_short_admission_is_safe = [&]() {
+            if (!std::isfinite(bar.open) || bar.open <= 0.0
+                || std::abs(margin_long_ - 100.0) >= 1e-12
+                || std::abs(margin_short_ - 100.0) >= 1e-12) {
+                return false;
+            }
+            const double admit_price =
+                apply_fill_slippage(bar.open, /*is_buy=*/false);
+            const double final_short_qty = std::abs(calc_qty_for_type(
+                admit_price, source[1]->qty, source[1]->qty_type));
+            const double marked_equity = current_equity() + open_profit(bar.open);
+            const double fx = active_account_currency_fx();
+            const double notional_k = syminfo_.pointvalue * fx;
+            const double projected_long_qty = 2.0 * seed.qty;
+            const double projected_held_margin =
+                projected_long_qty * bar.open * notional_k;
+            const double projected_free_funds =
+                marked_equity - projected_held_margin;
+            const double projected_transaction_qty =
+                projected_long_qty + final_short_qty;
+            const double projected_required_margin =
+                projected_transaction_qty * admit_price * notional_k;
+            const double epsilon =
+                std::max(1e-9, std::abs(marked_equity) * 1e-12);
+            return std::isfinite(admit_price) && admit_price > 0.0
+                && std::isfinite(final_short_qty)
+                && final_short_qty > kQtyEpsilon
+                && std::isfinite(marked_equity)
+                && std::isfinite(notional_k) && notional_k > 0.0
+                && std::isfinite(projected_free_funds)
+                && std::isfinite(projected_required_margin)
+                && projected_required_margin
+                    <= projected_free_funds + epsilon;
+        };
+        const bool exact_book =
+            source_bar >= 0
+            // The authoritative six-strategy cohort uses TradingView's
+            // zero-cost broker model.  The physical second-LONG transaction
+            // has not been established for slipped or commissioned fills, so
+            // keep those configurations on the ordinary broker path.
+            && slippage_ == 0
+            && commission_value_ == 0.0
+            && last_rejected_strategy_entry_call_bar_ != source_bar
+            && source[0]->created_seq + 1 == source[1]->created_seq
+            && source[1]->created_seq + 1 == source[2]->created_seq
+            && source[0]->incarnation + 1 == source[1]->incarnation
+            && source[1]->incarnation + 1 == source[2]->incarnation
+            && fresh_plain_object(*source[0])
+            && fresh_plain_object(*source[1])
+            && fresh_plain_object(*source[2])
+            && pure_default_market_entry(*source[0])
+            && pure_default_market_entry(*source[1])
+            && !source[0]->id.empty()
+            && source[0]->is_long
+            && !source[0]->over_pyramiding_cap_at_placement
+            && !source[1]->id.empty()
+            && source[0]->id != source[1]->id
+            && source[0]->id != source[2]->id
+            && !source[1]->is_long
+            && source[1]->over_pyramiding_cap_at_placement
+            && source[0]->created_position_cycle_seq == position_cycle_seq_
+            && source[1]->created_position_cycle_seq == position_cycle_seq_
+            && std::abs(source[0]->tv_carry_qty - seed.qty) <= kQtyEpsilon
+            && std::abs(source[1]->tv_carry_qty - seed.qty) <= kQtyEpsilon
+            && exact_full_fifo_close_short(*source[2], source[1]->id)
+            && seed.entry_id == source[1]->id
+            && seed.entry_bar_index < bar_index_
+            && seed.qty > kQtyEpsilon
+            && std::isfinite(default_qty)
+            && std::abs(default_qty - seed.qty) <= kQtyEpsilon
+            && std::abs(position_qty_ - seed.qty) <= kQtyEpsilon
+            && std::abs(source[2]->tv_carry_qty - seed.qty) <= kQtyEpsilon
+            && std::abs(
+                source[2]->suppressed_close_consumed_ledger_qty - seed.qty)
+                <= kQtyEpsilon
+            && projected_final_short_admission_is_safe();
+        if (exact_book) {
+            source[0]->short_seed_collision_role =
+                ShortSeedCollisionRole::LONG_ENTRY;
+            source[1]->short_seed_collision_role =
+                ShortSeedCollisionRole::FINAL_SHORT;
+            source[2]->short_seed_collision_role =
+                ShortSeedCollisionRole::MATERIALIZE_LONG;
         }
     }
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
@@ -1795,6 +1997,117 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             if (a_seq != b_seq) return a_seq < b_seq;
             return a.created_seq < b.created_seq;
         });
+}
+
+bool BacktestEngine::short_seed_collision_materialization_is_live(
+        const PendingOrder& order) const {
+    if (!PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG
+        || order.short_seed_collision_role
+            != ShortSeedCollisionRole::MATERIALIZE_LONG
+        || order.type != OrderType::EXIT
+        || order.created_bar + 1 != bar_index_
+        || position_side_ != PositionSide::LONG
+        || position_open_bar_ != bar_index_
+        || position_entry_count_ != 1
+        || pyramid_entries_.size() != 1
+        || !std::isfinite(order.suppressed_close_consumed_ledger_qty)) {
+        return false;
+    }
+
+    const PendingOrder* long_entry = nullptr;
+    const PendingOrder* final_short = nullptr;
+    int long_roles = 0;
+    int materialize_roles = 0;
+    int final_short_roles = 0;
+    for (const PendingOrder& pending : pending_orders_) {
+        switch (pending.short_seed_collision_role) {
+            case ShortSeedCollisionRole::LONG_ENTRY:
+                ++long_roles;
+                long_entry = &pending;
+                break;
+            case ShortSeedCollisionRole::MATERIALIZE_LONG:
+                ++materialize_roles;
+                break;
+            case ShortSeedCollisionRole::FINAL_SHORT:
+                ++final_short_roles;
+                final_short = &pending;
+                break;
+            case ShortSeedCollisionRole::NONE:
+                break;
+        }
+    }
+    if (long_roles != 1 || materialize_roles != 1 || final_short_roles != 1
+        || long_entry == nullptr || final_short == nullptr
+        || long_entry->id.empty() || final_short->id.empty()
+        || order.id != "__close__" + final_short->id) {
+        return false;
+    }
+
+    const PyramidEntry& long_lot = pyramid_entries_.front();
+    const double qty = order.suppressed_close_consumed_ledger_qty;
+    return long_lot.entry_id == long_entry->id
+        && long_lot.entry_bar_index == bar_index_
+        && long_lot.qty > kQtyEpsilon
+        && std::abs(long_lot.qty - qty) <= kQtyEpsilon
+        && std::abs(position_qty_ - qty) <= kQtyEpsilon;
+}
+
+bool BacktestEngine::short_seed_collision_final_short_is_live(
+        const PendingOrder& order) const {
+    if (!PINEFORGE_SHORT_SEED_COLLISION_FINAL_SHORT_CLOSE_ONLY
+        || order.short_seed_collision_role != ShortSeedCollisionRole::FINAL_SHORT
+        || order.type != OrderType::MARKET
+        || order.is_long
+        || order.created_bar + 1 != bar_index_
+        || position_side_ != PositionSide::LONG
+        || position_open_bar_ != bar_index_
+        || position_entry_count_ != 2
+        || pyramid_entries_.size() != 2
+        || order.tv_carry_qty <= kQtyEpsilon) {
+        return false;
+    }
+
+    const PendingOrder* long_entry = nullptr;
+    const PendingOrder* materialize_long = nullptr;
+    int long_roles = 0;
+    int materialize_roles = 0;
+    int final_short_roles = 0;
+    for (const PendingOrder& pending : pending_orders_) {
+        switch (pending.short_seed_collision_role) {
+            case ShortSeedCollisionRole::LONG_ENTRY:
+                ++long_roles;
+                long_entry = &pending;
+                break;
+            case ShortSeedCollisionRole::MATERIALIZE_LONG:
+                ++materialize_roles;
+                materialize_long = &pending;
+                break;
+            case ShortSeedCollisionRole::FINAL_SHORT:
+                ++final_short_roles;
+                break;
+            case ShortSeedCollisionRole::NONE:
+                break;
+        }
+    }
+    if (long_roles != 1 || materialize_roles != 1 || final_short_roles != 1
+        || long_entry == nullptr || materialize_long == nullptr
+        || order.id.empty() || long_entry->id.empty()
+        || materialize_long->id != "__close__" + order.id) {
+        return false;
+    }
+
+    const PyramidEntry& source_long = pyramid_entries_[0];
+    const PyramidEntry& close_short_long = pyramid_entries_[1];
+    const double qty = order.tv_carry_qty;
+    return source_long.entry_id == long_entry->id
+        && close_short_long.entry_id == materialize_long->id
+        && source_long.entry_bar_index == bar_index_
+        && close_short_long.entry_bar_index == bar_index_
+        && std::abs(source_long.qty - qty) <= kQtyEpsilon
+        && std::abs(close_short_long.qty - qty) <= kQtyEpsilon
+        && std::abs(position_qty_ - 2.0 * qty) <= kQtyEpsilon
+        && std::abs(source_long.price - close_short_long.price)
+            <= std::max(1e-12, std::abs(source_long.price) * 1e-12);
 }
 
 // A strategy.exit can be armed on the signal bar together with the MARKET
@@ -3151,6 +3464,17 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                                              const Bar& bar,
                                              double& trail_best_path_state,
                                              bool later_same_tick_entry) {
+    // The final Short in the exact SHORT-seed collision is the broker
+    // transaction that closes both physical LONG lots. It does not open a
+    // residual short. Re-prove the complete two-lot state here so any rejected,
+    // partial, or otherwise interrupted predecessor falls back to the ordinary
+    // strategy.entry kernel.
+    if (short_seed_collision_final_short_is_live(order)) {
+        execute_market_exit(fill_price);
+        trail_best_path_state = trail_best_price_;
+        return;
+    }
+
     // A default-sized market order carries a quantity frozen at the signal
     // bar's close; hand it through as fixed contracts (qty_type < 0) so the
     // fill does not re-derive it from the fill price. Explicit-qty and
@@ -3172,7 +3496,8 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                          order.created_bar, later_same_tick_entry,
                          /*paired_flat_market_transaction=*/paired_flat_market,
                          /*explicit_qty_prequantized=*/
-                             (frozen || paired_flat_market));
+                             (frozen || paired_flat_market),
+                         order.incarnation);
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
     if (!pyramid_entries_.empty()
@@ -3296,7 +3621,8 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
                          /*later_same_tick_entry=*/false,
                          /*paired_flat_market_transaction=*/false,
                          /*explicit_qty_prequantized=*/
-                             use_placement_open_qty);
+                             use_placement_open_qty,
+                         order.incarnation);
 
     bool did_execute =
         (position_side_ != side_before)
@@ -3366,6 +3692,36 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
                                            int& exit_closed_from_bar,
                                            uint64_t& exit_closed_from_incarnation,
                                            bool& exit_closed_was_long) {
+    // In the raw TV tape, the exact default-FIFO close-Short object between the
+    // Long and final Short transactions materializes a second physical LONG
+    // lot. It is not an exit from the freshly opened Long. This bypasses the
+    // pyramiding cap only for the pre-tagged, re-proven transaction.
+    if (short_seed_collision_materialization_is_live(order)) {
+        const double qty = order.suppressed_close_consumed_ledger_qty;
+        const double entry_fill = apply_fill_slippage(fill_price, /*is_buy=*/true);
+        if (!std::isfinite(entry_fill) || qty <= kQtyEpsilon) return;
+
+        const double total_qty = position_qty_ + qty;
+        position_entry_price_ =
+            (position_entry_price_ * position_qty_ + entry_fill * qty)
+            / total_qty;
+        position_qty_ = total_qty;
+        ++position_entry_count_;
+        trail_best_price_ = entry_fill;
+        PyramidEntry materialized{};
+        materialized.price = entry_fill;
+        materialized.time = current_bar_.timestamp;
+        materialized.qty = qty;
+        materialized.entry_id = order.id;
+        materialized.entry_bar_index = bar_index_;
+        materialized.entry_comment = order.comment;
+        materialized.entry_incarnation = order.incarnation;
+        snapshot_entry_commission(materialized);
+        pyramid_entries_.push_back(std::move(materialized));
+        id_unclosed_qty_[order.id] += qty;
+        return;
+    }
+
     double qp = std::isnan(order.qty_percent) ? 100.0 : std::clamp(order.qty_percent, 0.0, 100.0);
     const bool dynamic_full_live_qty =
         order.pooc_global_full_exit_dynamic_qty;
@@ -3526,6 +3882,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         pyramid_entries_.clear();
         id_unclosed_qty_.clear();
         pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
+        pyramid_entries_.back().entry_incarnation = order.incarnation;
         snapshot_entry_commission(pyramid_entries_.back());
         id_unclosed_qty_[order.id] += qty;
         if (!std::isnan(order.stop_price) || !std::isnan(order.limit_price)) {
@@ -3578,6 +3935,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             position_entry_count_++;
             trail_best_price_ = fill_price;
             pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
+            pyramid_entries_.back().entry_incarnation = order.incarnation;
             snapshot_entry_commission(pyramid_entries_.back());
             // KI-62: flag same-direction MARKET adds (strategy.order path) so a
             // same-bar from_entry bracket exit can scratch them dur-0.
@@ -3714,6 +4072,8 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     }
 
     bool exit_style = order_is_exit_style(order, position_side_);
+    const bool short_seed_materializes_long =
+        short_seed_collision_materialization_is_live(order);
 
     // The close cursor is a single broker point. A fill-triggered script
     // execution at C may create orders, but those orders cannot consume C a
@@ -3740,7 +4100,8 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         && order.created_while_in_position
         && order.id.rfind("__close__", 0) == 0
         && position_side_ != PositionSide::FLAT
-        && position_open_bar_ > order.created_bar;
+        && position_open_bar_ > order.created_bar
+        && !short_seed_materializes_long;
     if (stale_close_order_for_new_position) {
         return OrderEligibility::Remove;
     }
@@ -3975,7 +4336,8 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
             // close. Under calc_on_order_fills, a post-fill execution can
             // legitimately create this close and the monotonic scheduler owns
             // its same-bar eligibility.
-            if (!(calc_on_order_fills_ && coof_scheduler_active_)) {
+            if (!(calc_on_order_fills_ && coof_scheduler_active_)
+                && !short_seed_materializes_long) {
                 return OrderEligibility::Skip;
             }
         }

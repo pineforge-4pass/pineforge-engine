@@ -72,7 +72,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                           int created_bar,
                                           bool later_same_tick_entry,
                                           bool paired_flat_market_transaction,
-                                          bool explicit_qty_prequantized) {
+                                          bool explicit_qty_prequantized,
+                                          uint64_t entry_incarnation) {
     // Degenerate-bar guard: never open a position at a non-finite fill price
     // (e.g. a NaN/Inf print). Dropping the fill keeps trade output finite and
     // a single bad tick from poisoning the backtest. Clean feeds never hit this.
@@ -104,13 +105,15 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
                                created_bar,
                                /*explicit_qty_prequantized=*/
                                    (explicit_qty_prequantized
-                                    || paired_flat_market_transaction));
+                                    || paired_flat_market_transaction),
+                               entry_incarnation);
         return;
     }
 
     if (position_side_ == requested) {
         add_to_pyramid_market(id, is_long, fill_price, explicit_qty, explicit_qty_type,
-                              created_position_side, is_priced_entry);
+                              created_position_side, is_priced_entry,
+                              entry_incarnation);
         return;
     }
 
@@ -120,13 +123,15 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
             /*purge_pending_exits=*/!paired_flat_market_transaction,
             /*explicit_qty_prequantized=*/
                 (explicit_qty_prequantized
-                 || paired_flat_market_transaction));
+                 || paired_flat_market_transaction),
+            entry_incarnation);
         return;
     }
 
     if (later_same_tick_entry) {
         sequential_same_tick_reversal_fill(id, is_long, fill_price, explicit_qty,
-                                           explicit_qty_type);
+                                           explicit_qty_type,
+                                           entry_incarnation);
         return;
     }
 
@@ -137,7 +142,8 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     // transaction whose whole broker movement is consumed by the close. Both
     // close the live opposite position without opening their own leg.
     flip_market_position_to(id, is_long, fill_price, explicit_qty, explicit_qty_type,
-                            /*close_only=*/close_only_opposite);
+                            /*close_only=*/close_only_opposite,
+                            entry_incarnation);
 }
 
 
@@ -470,6 +476,7 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
     trade.entry_bar_index = pe.entry_bar_index;
     trade.exit_bar_index = bar_index_;
     trade.entry_id = pe.entry_id;
+    trade.entry_incarnation = pe.entry_incarnation;
     trade.entry_comment = pe.entry_comment;
     trade.commission = entry_commission + exit_commission;
     // Excursions: TV's per-trade excursion includes the exit fill itself —
@@ -615,7 +622,8 @@ void BacktestEngine::settle_position_after_partial_exit() {
 // pyramid entry. Used by every entry path that opens a brand-new position
 // (FLAT entry, close-only-opposite remainder, opposite flip).
 void BacktestEngine::open_fresh_position(PositionSide requested, double fill_price,
-                                         double qty, const std::string& id) {
+                                         double qty, const std::string& id,
+                                         uint64_t entry_incarnation) {
     position_side_ = requested;
     position_cycle_seq_ = next_position_cycle_seq_++;
     position_entry_price_ = fill_price;
@@ -640,6 +648,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     callsite_close_two_call_first_qty_.clear();
     consumed_partial_exit_ids_.clear();
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, id, bar_index_});
+    pyramid_entries_.back().entry_incarnation = entry_incarnation;
     snapshot_entry_commission(pyramid_entries_.back());
     id_unclosed_qty_[id] += qty;
 }
@@ -735,7 +744,8 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
                                             PositionSide created_position_side,
                                             bool is_priced_entry, double tv_carry_qty,
                                             int created_bar,
-                                            bool explicit_qty_prequantized) {
+                                            bool explicit_qty_prequantized,
+                                            uint64_t entry_incarnation) {
     bool carry_was_long = (created_position_side == PositionSide::LONG);
     bool tv_deferred_flip =
         script_has_strategy_close_
@@ -763,7 +773,7 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
     // the gap-reject gate in apply_filled_order_to_state, upstream of this
     // helper — a dropped order never reaches enter_market_from_flat.
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-    open_fresh_position(requested, fill_price, qty, id);
+    open_fresh_position(requested, fill_price, qty, id, entry_incarnation);
 }
 
 
@@ -784,7 +794,8 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
                                            double fill_price, double explicit_qty,
                                            int explicit_qty_type,
                                            PositionSide created_position_side,
-                                           bool is_priced_entry) {
+                                           bool is_priced_entry,
+                                           uint64_t entry_incarnation) {
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     bool flat_armed_priced =
         is_priced_entry && created_position_side == PositionSide::FLAT;
@@ -803,6 +814,7 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
     position_entry_count_++;
     trail_best_price_ = fill_price;
     pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id, bar_index_});
+    pyramid_entries_.back().entry_incarnation = entry_incarnation;
     snapshot_entry_commission(pyramid_entries_.back());
     // KI-62: only a same-direction MARKET add is scratched by a same-bar
     // from_entry bracket exit; a priced pyramid add is not this collision.
@@ -819,7 +831,8 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
                                                double fill_price, double explicit_qty,
                                                int explicit_qty_type,
                                                bool purge_pending_exits,
-                                               bool explicit_qty_prequantized) {
+                                               bool explicit_qty_prequantized,
+                                               uint64_t entry_incarnation) {
     double tx_qty = explicit_qty_prequantized
         ? explicit_qty
         : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
@@ -840,7 +853,8 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
     }
     fill_price = apply_fill_slippage(fill_price, is_long);
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-    open_fresh_position(requested, fill_price, remainder, id);
+    open_fresh_position(
+        requested, fill_price, remainder, id, entry_incarnation);
 }
 
 
@@ -867,7 +881,8 @@ void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_lo
 void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long,
                                              double fill_price, double explicit_qty,
                                              int explicit_qty_type,
-                                             bool close_only) {
+                                             bool close_only,
+                                             uint64_t entry_incarnation) {
     // For the close we need exit slippage based on closing direction.
     // Closing a long = sell (price - slip); closing a short = buy (price + slip).
     // fill_price already has entry slippage applied; un-slip it before
@@ -905,7 +920,7 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
 
     double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-    open_fresh_position(requested, fill_price, new_qty, id);
+    open_fresh_position(requested, fill_price, new_qty, id, entry_incarnation);
 }
 
 
@@ -955,7 +970,8 @@ void BacktestEngine::sequential_same_tick_reversal_fill(const std::string& id,
                                                         bool is_long,
                                                         double fill_price,
                                                         double explicit_qty,
-                                                        int explicit_qty_type) {
+                                                        int explicit_qty_type,
+                                                        uint64_t entry_incarnation) {
     // fill_price arrives entry-slipped (execute_market_entry applied entry
     // slippage). The close leg needs EXIT slippage for the closing
     // direction — un-slip, then re-apply, mirroring flip_market_position_to.
@@ -986,7 +1002,8 @@ void BacktestEngine::sequential_same_tick_reversal_fill(const std::string& id,
     double remainder = tx_qty - old_qty;
     if (remainder > kQtyEpsilon) {
         PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-        open_fresh_position(requested, fill_price, remainder, id);
+        open_fresh_position(
+            requested, fill_price, remainder, id, entry_incarnation);
     }
 }
 

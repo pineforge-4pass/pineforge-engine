@@ -488,7 +488,7 @@ PF_API void strategy_set_magnifier_volume_weighted(pf_strategy_t s,
 #endif /* PINEFORGE_NO_STRATEGY_DECLS */
 
 /* ───────────────────────────────────────────────────────────────────
- * RUNTIME LIBRARY EXPORTS — implemented in libruntime
+ * RUNTIME LIBRARY EXPORTS — implemented in libpineforge
  * ─────────────────────────────────────────────────────────────────── */
 
 /** Toggle per-bar trace recording. Default off (zero-cost when off).
@@ -505,6 +505,27 @@ PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on);
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms);
 
 /** @} */ /* end of pf_config */
+
+/** @addtogroup pf_lifecycle
+ *  @{
+ */
+
+/** Return the physical entry incarnation for one closed-trade row.
+ *
+ *  Partial-close/FIFO fragments emitted from the same physical entry share
+ *  this value. Distinct broker entry objects receive distinct monotonically
+ *  increasing values even when Pine reuses the same user-visible entry ID.
+ *  The value is scoped to one strategy run and is intended as report
+ *  provenance, not as a stable cross-run identifier.
+ *
+ *  @param s            Strategy handle whose most recent run filled a report.
+ *  @param trade_index  Zero-based closed-trade index in that report.
+ *  @return Non-zero physical-entry identity, or 0 for an invalid index or a
+ *          legacy/synthetic trade without PendingOrder provenance. */
+PF_API uint64_t strategy_closed_trade_entry_incarnation(
+    pf_strategy_t s, int trade_index);
+
+/** @} */ /* end of pf_lifecycle */
 
 /** @defgroup pf_streaming Historical to realtime streaming
  *  @brief Warm on confirmed OHLCV and continue the same strategy instance on

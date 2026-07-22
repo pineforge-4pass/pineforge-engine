@@ -54,7 +54,7 @@ Three layers:
 
 ## Symbol inventory
 
-A compiled strategy `.so` exports **exactly these 27 C symbols** and
+A compiled strategy `.so` exports **exactly these 28 C symbols** and
 zero internal C++ symbols:
 
 | Symbol | Group |
@@ -64,6 +64,7 @@ zero internal C++ symbols:
 | `run_backtest` | @ref pf_lifecycle |
 | `run_backtest_full` | @ref pf_lifecycle |
 | `report_free` | @ref pf_lifecycle |
+| `strategy_closed_trade_entry_incarnation` | @ref pf_lifecycle |
 | `strategy_set_input` | @ref pf_config |
 | `strategy_set_override` | @ref pf_config |
 | `strategy_set_magnifier_volume_weighted` | @ref pf_config |
@@ -87,10 +88,11 @@ zero internal C++ symbols:
 | `pf_abi_version` | @ref pf_version |
 | `pf_version_string` | @ref pf_version |
 
-The five strategy-lifecycle functions are emitted by codegen. Runtime exports
-are force-linked into each strategy library, so consumers resolve the same
-complete ABI from the strategy `.so`. All additions remain covered by the
-minor-version append-only guarantee.
+The five create/run/free lifecycle functions are emitted by codegen. The
+closed-trade incarnation accessor and other runtime exports are force-linked
+into each strategy library, so consumers resolve the same complete ABI from the
+strategy `.so`. All additions remain covered by the minor-version append-only
+guarantee.
 
 You can verify this against any strategy `.so`:
 
