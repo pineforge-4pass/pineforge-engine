@@ -931,7 +931,8 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         if ((fee_created_floor_zero_candidate
              || opening_event_default_long_reversal
              || (opening_event_default_short_reversal
-                 && commissioned_all_in_market_short_lifecycle_))
+                 && (commissioned_all_in_market_short_lifecycle_
+                     || default_market_direct_short_reversal_lifecycle_)))
             && qty_step_ > 0.0
             && qty_step_ <= 1.0
             && raw_q_min > kQtyEpsilon
@@ -968,7 +969,10 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
                 return;
             }
             bool used_one_contract_fallback = false;
-            if (commissioned_all_in_market_short_lifecycle_
+            const bool one_contract_short_lifecycle =
+                commissioned_all_in_market_short_lifecycle_
+                || default_market_direct_short_reversal_lifecycle_;
+            if (one_contract_short_lifecycle
                 && !margin_zero_cover_full_liquidation_
                 && position_side_ == PositionSide::SHORT
                 && qty_step_ <= 1.0
@@ -3344,6 +3348,43 @@ void BacktestEngine::apply_filled_order_to_state(
             default_market_short_shape_after_fill
             && order.created_position_side == PositionSide::FLAT
             && !order.created_after_position_close_in_bar;
+        // A direct, default-sized strategy.entry auto-reversal has the same
+        // broker opening checkpoints as the already-pinned close-then-short
+        // shape. Re-prove the generic order/runtime topology at the fill.
+        const bool default_market_direct_short_reversal_after_fill =
+            successful_fresh_open
+            && position_side_before_fill == PositionSide::LONG
+            && position_side_ == PositionSide::SHORT
+            && order.type == OrderType::MARKET
+            && !order.is_long
+            && std::isnan(order.qty)
+            && order.created_position_side == PositionSide::LONG
+            && !order.created_after_position_close_in_bar
+            && order.tv_carry_qty > kQtyEpsilon
+            && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+            && std::abs(default_qty_value_ - 100.0) < 1e-12
+            && std::isfinite(margin_short_)
+            && std::abs(margin_short_ / 100.0 - 1.0) < 1e-12
+            && std::isfinite(order.frozen_default_qty)
+            && order.frozen_default_qty > kQtyEpsilon
+            && std::isfinite(order.sizing_equity)
+            && order.sizing_equity > 0.0
+            && std::isfinite(order.sizing_price)
+            && order.sizing_price > 0.0
+            && std::isfinite(order.sizing_mark)
+            && order.sizing_mark > 0.0
+            && std::isfinite(order.sizing_fx)
+            && order.sizing_fx > 0.0
+            && slippage_ == 0
+            && !process_orders_on_close_
+            && !calc_on_order_fills_
+            && !bar_magnifier_enabled_
+            && !stream_warmup_mode_
+            && stream_phase_ == StreamPhase::IDLE
+            && !order.created_during_coof_recalc
+            && order.created_bar < bar_index_
+            && order.oca_name.empty()
+            && order.oca_type == 0;
         const bool default_market_long_close_then_open_after_fill =
             successful_fresh_open
             && position_side_before_fill == PositionSide::FLAT
@@ -3388,11 +3429,14 @@ void BacktestEngine::apply_filled_order_to_state(
             commissioned_all_in_market_short_lifecycle_ =
                 default_market_short_close_then_open_after_fill
                 || default_market_flat_short_after_fill;
+            default_market_direct_short_reversal_lifecycle_ =
+                default_market_direct_short_reversal_after_fill;
         } else if (accepted_additional_entry) {
             // A later add changes the exact position lifecycle whose TV
             // zero-cover behavior is pinned by the source tape. Fail closed
             // rather than lending the original provenance to the new shape.
             commissioned_all_in_market_short_lifecycle_ = false;
+            default_market_direct_short_reversal_lifecycle_ = false;
         }
         const bool positive_raw_base =
             std::isfinite(fill_price) && fill_price > 0.0;
@@ -3401,7 +3445,8 @@ void BacktestEngine::apply_filled_order_to_state(
             && (successful_fresh_open || accepted_additional_entry);
         const bool scoped_short_opening_fill =
             (explicit_market_short_full_margin_after_fill
-             || default_market_short_close_then_open_after_fill)
+             || default_market_short_close_then_open_after_fill
+             || default_market_direct_short_reversal_after_fill)
             && positive_raw_base;
         if (successful_short_open_or_add && !scoped_short_opening_fill) {
             opening_affordability_pending_ = false;
@@ -3414,7 +3459,8 @@ void BacktestEngine::apply_filled_order_to_state(
         }
         if ((long_full_margin_after_fill
              || explicit_market_short_full_margin_after_fill
-             || default_market_short_close_then_open_after_fill)
+             || default_market_short_close_then_open_after_fill
+             || default_market_direct_short_reversal_after_fill)
             && positive_raw_base
             && (successful_fresh_open || accepted_additional_entry)) {
             // The only exemption requires every item of provenance to agree:
@@ -3482,7 +3528,8 @@ void BacktestEngine::apply_filled_order_to_state(
                 && std::isfinite(new_opening_commission)
                 && new_opening_commission == 0.0;
             close_then_short_opening_requires_adverse_retry_ =
-                default_market_short_close_then_open_after_fill;
+                default_market_short_close_then_open_after_fill
+                || default_market_direct_short_reversal_after_fill;
             opening_affordability_raw_fill_base_ = fill_price;
         }
     }
@@ -4093,6 +4140,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         opening_affordability_default_long_reversal_ = false;
         close_then_short_opening_requires_adverse_retry_ = false;
         commissioned_all_in_market_short_lifecycle_ = false;
+        default_market_direct_short_reversal_lifecycle_ = false;
         opening_affordability_raw_fill_base_ =
             std::numeric_limits<double>::quiet_NaN();
         position_entry_time_ = current_bar_.timestamp;
