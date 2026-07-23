@@ -74,6 +74,7 @@ set(TEST_SOURCES
     test_fills_edge
     test_default_qty_signal_freeze
     test_margin_admission_gate
+    test_direct_short_reversal_affordability
     test_short_reversal_emission
     test_margin_stop_admission
     test_stop_entry_placement_open_qty

@@ -594,6 +594,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     opening_affordability_default_long_reversal_ = false;
     close_then_short_opening_requires_adverse_retry_ = false;
     commissioned_all_in_market_short_lifecycle_ = false;
+    default_market_direct_short_reversal_lifecycle_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = 0;
@@ -636,6 +637,7 @@ void BacktestEngine::settle_position_after_partial_exit(
             && position_side_ == PositionSide::SHORT
             && position_qty_ + kQtyEpsilon < qty_before) {
             commissioned_all_in_market_short_lifecycle_ = false;
+            default_market_direct_short_reversal_lifecycle_ = false;
         }
     }
 }
@@ -660,6 +662,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     opening_affordability_default_long_reversal_ = false;
     close_then_short_opening_requires_adverse_retry_ = false;
     commissioned_all_in_market_short_lifecycle_ = false;
+    default_market_direct_short_reversal_lifecycle_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = current_bar_.timestamp;

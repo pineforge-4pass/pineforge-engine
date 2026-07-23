@@ -648,12 +648,11 @@ protected:
     // commission. TV applies a one-contract post-fill affordability trim when
     // this exact reversal has a positive but sub-lot restore amount.
     bool opening_affordability_default_long_reversal_ = false;
-    // A close-then-open SHORT whose omitted 100%-of-equity MARKET order was
-    // placed while LONG after a full strategy.close in the same Pine
-    // evaluation, and therefore reaches the fill from FLAT with zero
-    // deferred-flip carry. The one-shot bit queues the fill-price affordability
-    // pass and then one ordinary adverse-price pass on that same bar, even when
-    // the opening check itself is a no-op.
+    // An eligible omitted 100%-of-equity MARKET short opening. This covers
+    // both the close-then-open shape that reaches the fill from FLAT and the
+    // direct LONG-to-SHORT auto-reversal shape. The one-shot bit queues the
+    // fill-price affordability pass and then one ordinary adverse-price pass
+    // on that same bar, even when the opening check itself is a no-op.
     bool close_then_short_opening_requires_adverse_retry_ = false;
     // Position-lifecycle provenance for a commissioned, omitted-qty,
     // percent-of-equity=100 MARKET short that fills from flat at 100% short
@@ -661,6 +660,15 @@ protected:
     // live across partial margin trims and clears when the position lifecycle
     // ends or a later add changes its shape.
     bool commissioned_all_in_market_short_lifecycle_ = false;
+    // Position-lifecycle provenance for an omitted-qty,
+    // percent-of-equity=100 MARKET short opened by a direct LONG-to-SHORT
+    // auto-reversal at 100% short margin. It carries no commission or
+    // flat-admission requirement. Broker margin-call reductions preserve the
+    // lifecycle; a script-driven reduction, add, full close, or fresh position
+    // clears it. At a later finite-price floor-zero margin call, this lifecycle
+    // selects the one-contract fallback only when the configured full-residual
+    // interpretation is off.
+    bool default_market_direct_short_reversal_lifecycle_ = false;
     double opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     int64_t position_entry_time_ = 0;
