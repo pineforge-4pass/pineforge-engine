@@ -102,6 +102,7 @@ set(TEST_SOURCES
     test_metrics
     test_drawing
     test_margin_call
+    test_percent_equity_open_entry_fee
     test_streaming
     test_calc_on_order_fills
     test_coof_cascade_eligibility

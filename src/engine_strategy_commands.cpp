@@ -423,7 +423,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             // engine.hpp and the gate in apply_filled_order_to_state).
             order.sizing_price = frozen_sizing_price(/*is_buy=*/is_long);
             order.sizing_equity =
-                current_equity() + open_profit(current_bar_.close);
+                percent_commission_live_equity(current_bar_.close);
             order.sizing_mark = current_bar_.close;
             order.sizing_fx = active_account_currency_fx();
             // Direction-neutral: two fill-time consumers read this flag.
@@ -1998,7 +1998,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
             // apply_filled_order_to_state.
             order.sizing_price = frozen_sizing_price(/*is_buy=*/is_long);
             order.sizing_equity =
-                current_equity() + open_profit(current_bar_.close);
+                percent_commission_live_equity(current_bar_.close);
             order.sizing_mark = current_bar_.close;
             order.sizing_fx = active_account_currency_fx();
         }

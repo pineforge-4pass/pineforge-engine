@@ -30,7 +30,9 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
         return apply_qty_step(qty_value);
     }
     if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-        double equity = current_equity() + open_profit(current_bar_.close);
+        const double equity =
+            percent_commission_live_equity(current_bar_.close);
+        if (!std::isfinite(equity)) return 0.0;
         double cash = reserve_percent_commission(equity * (qty_value / 100.0));
         // Reject (qty 0) on a non-finite / non-positive fill price — a degenerate
         // $0/NaN print must NOT size as the raw % number (silent wrong-qty bug).
@@ -218,8 +220,10 @@ double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limi
 
 // Internal helper: execute a partial exit (reduce position by qty, create trade records)
 // TradingView creates individual trade records for each partial exit.
-void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_close) {
+void BacktestEngine::execute_partial_exit_qty(
+        double fill_price, double qty_to_close, PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
+    const double qty_before = position_qty_;
     qty_to_close = std::clamp(qty_to_close, 0.0, position_qty_);
     if (qty_to_close <= kQtyEpsilon) return;
 
@@ -229,7 +233,7 @@ void BacktestEngine::execute_partial_exit_qty(double fill_price, double qty_to_c
 
     // Close FIFO across all pyramid entries, creating trade records.
     fifo_drain(/*from_entry=*/nullptr, qty_to_close, fill_price, was_long);
-    settle_position_after_partial_exit();
+    settle_position_after_partial_exit(qty_before, cause);
 }
 
 
@@ -253,6 +257,7 @@ void BacktestEngine::execute_partial_exit(double fill_price, double qty_percent)
 // Internal helper: close only entries matching from_entry (close_entries_rule="ANY")
 void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std::string& from_entry) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
+    const double qty_before = position_qty_;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
     fill_price = apply_fill_slippage(fill_price, is_buy);
@@ -269,7 +274,8 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std:
     }
 
     pyramid_entries_ = std::move(remaining);
-    settle_position_after_partial_exit();
+    settle_position_after_partial_exit(
+        qty_before, PositionReductionCause::SCRIPT_ORDER);
 }
 
 
@@ -281,13 +287,15 @@ void BacktestEngine::execute_partial_exit_by_entry_qty(
         double fill_price, const std::string& from_entry, double qty_to_close) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
     if (!std::isfinite(qty_to_close) || qty_to_close <= kQtyEpsilon) return;
+    const double qty_before = position_qty_;
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
     fill_price = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
 
     fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
-    settle_position_after_partial_exit();
+    settle_position_after_partial_exit(
+        qty_before, PositionReductionCause::SCRIPT_ORDER);
 }
 
 
@@ -335,6 +343,7 @@ double BacktestEngine::cover_samebar_market_adds_on_exit(const PendingOrder& ord
         || !std::isnan(order.trail_price);
     if (!priced_bracket) return 0.0;
 
+    const double qty_before = position_qty_;
     bool is_buy = (position_side_ == PositionSide::SHORT);
     double slipped = apply_fill_slippage(fill_price, is_buy);
     bool was_long = (position_side_ == PositionSide::LONG);
@@ -355,7 +364,8 @@ double BacktestEngine::cover_samebar_market_adds_on_exit(const PendingOrder& ord
     if (closed <= kQtyEpsilon) return 0.0;   // nothing covered
     pyramid_entries_ = std::move(remaining);
     position_qty_ -= closed;
-    settle_position_after_partial_exit();
+    settle_position_after_partial_exit(
+        qty_before, PositionReductionCause::SCRIPT_ORDER);
     return closed;
 }
 
@@ -580,8 +590,10 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_entry_price_ = 0.0;
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
-    opening_affordability_commissioned_default_flat_long_ = false;
+    commissioned_all_in_market_long_opening_affordability_ = false;
     opening_affordability_default_long_reversal_ = false;
+    close_then_short_opening_requires_adverse_retry_ = false;
+    commissioned_all_in_market_short_lifecycle_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = 0;
@@ -604,7 +616,8 @@ void BacktestEngine::reset_position_state_to_flat() {
 // recompute volume-weighted average entry price across surviving entries.
 // Body was previously inlined identically at the end of every partial-exit
 // path.
-void BacktestEngine::settle_position_after_partial_exit() {
+void BacktestEngine::settle_position_after_partial_exit(
+        double qty_before, PositionReductionCause cause) {
     if (position_qty_ <= kQtyEpsilon || pyramid_entries_.empty()) {
         reset_position_state_to_flat();
     } else {
@@ -615,6 +628,15 @@ void BacktestEngine::settle_position_after_partial_exit() {
         }
         position_entry_price_ = weighted_sum / total_qty;
         position_entry_count_ = (int)pyramid_entries_.size();
+        // The one-contract floor-zero rule belongs to an otherwise unmodified
+        // commissioned all-in short lifecycle. Any script-driven surviving
+        // reduction changes that shape. Broker margin-call reductions are the
+        // sole exception: TV preserves the lifecycle across its own cascade.
+        if (cause != PositionReductionCause::MARGIN_CALL
+            && position_side_ == PositionSide::SHORT
+            && position_qty_ + kQtyEpsilon < qty_before) {
+            commissioned_all_in_market_short_lifecycle_ = false;
+        }
     }
 }
 
@@ -634,8 +656,10 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     // transiently.
     opening_affordability_pending_ = false;
     opening_affordability_eligible_ = false;
-    opening_affordability_commissioned_default_flat_long_ = false;
+    commissioned_all_in_market_long_opening_affordability_ = false;
     opening_affordability_default_long_reversal_ = false;
+    close_then_short_opening_requires_adverse_retry_ = false;
+    commissioned_all_in_market_short_lifecycle_ = false;
     opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     position_entry_time_ = current_bar_.timestamp;
@@ -912,13 +936,18 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
         emit_close_trade(pe, pe.qty, exit_fill, was_long);
     }
 
+    // The old lots are fully realized above. Clear their live position/PnL
+    // and entry-fee snapshots before sizing the incoming leg; otherwise a
+    // percent-typed reversal adds stale open PnL and debits the already-
+    // realized entry commission a second time.
+    reset_position_state_to_flat();
+
     if (close_only) {
         // Priced-entry reduce-only cases: either this order was armed during a
         // prior cycle and flips a later opposite position, or its same-cycle
         // frozen transaction exactly equals the grown live opposite position.
         // In both cases close the whole position and stay flat; do NOT open.
         // See apply_entry_order_fill's close_only_opposite predicates.
-        reset_position_state_to_flat();
         return;
     }
 

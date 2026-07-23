@@ -435,7 +435,8 @@ struct PendingOrder {
         std::numeric_limits<double>::quiet_NaN();
     // TV margin-admission snapshot for a FROZEN default-sized market order
     // (KI-54). Captured at the same placement point as frozen_default_qty:
-    //   sizing_equity = current_equity() + open_profit(close(S))   [account ccy]
+    //   sizing_equity = current_equity() + open_profit(close(S))
+    //                   - paid commission on surviving open lots [account ccy]
     //   sizing_price  = close(S) + slippage*mintick*(+1 buy/-1 sell)
     // At fill time the broker re-checks (see the gate in
     // apply_filled_order_to_state for the full evidence trail)
@@ -506,7 +507,7 @@ struct PendingOrder {
     // 99.94%); mdfe3757 306/306.
     bool explicit_flat_admission_candidate = false;
     // Placement-time equity snapshot (account ccy) for the explicit-qty gate:
-    //   current_equity() + open_profit(close(S))   == realized equity when flat
+    //   percent_commission_live_equity(close(S)) == realized equity when flat
     // Captured at the explicit-qty MARKET placement point. NaN = no snapshot.
     double explicit_placement_equity = std::numeric_limits<double>::quiet_NaN();
     // Slipped signal close at placement (frozen_sizing_price convention:
@@ -635,17 +636,31 @@ protected:
     bool opening_affordability_pending_ = false;
     bool opening_affordability_eligible_ = false;
     // The queued event came from a successful, commissioned, omitted-qty
-    // percent_of_equity=100 high-level MARKET long that was created and filled
-    // from true flat.  process_margin_call combines this one-shot provenance
-    // with the actual margin/commission arithmetic before applying TV's
-    // fee-created, floor-zero one-contract fallback.  Reversals, adds,
+    // percent_of_equity=100 high-level MARKET long that filled from flat.
+    // It covers the proven true-flat form and the separately proven
+    // close-then-open form. process_margin_call combines this one-shot
+    // provenance with the actual margin/commission arithmetic before applying
+    // TV's fee-created, floor-zero one-contract fallback. Adds,
     // explicit/priced/RAW orders and zero/CASH commission stay outside it.
-    bool opening_affordability_commissioned_default_flat_long_ = false;
+    bool commissioned_all_in_market_long_opening_affordability_ = false;
     // The queued event came from a successful omitted-qty, 100%-of-equity
     // MARKET reversal from SHORT to LONG at 100% long margin with zero opening
     // commission. TV applies a one-contract post-fill affordability trim when
     // this exact reversal has a positive but sub-lot restore amount.
     bool opening_affordability_default_long_reversal_ = false;
+    // A close-then-open SHORT whose omitted 100%-of-equity MARKET order was
+    // placed while LONG after a full strategy.close in the same Pine
+    // evaluation, and therefore reaches the fill from FLAT with zero
+    // deferred-flip carry. The one-shot bit queues the fill-price affordability
+    // pass and then one ordinary adverse-price pass on that same bar, even when
+    // the opening check itself is a no-op.
+    bool close_then_short_opening_requires_adverse_retry_ = false;
+    // Position-lifecycle provenance for a commissioned, omitted-qty,
+    // percent-of-equity=100 MARKET short that fills from flat at 100% short
+    // margin. Unlike the one-shot close-then-short opening event, this remains
+    // live across partial margin trims and clears when the position lifecycle
+    // ends or a later add changes its shape.
+    bool commissioned_all_in_market_short_lifecycle_ = false;
     double opening_affordability_raw_fill_base_ =
         std::numeric_limits<double>::quiet_NaN();
     int64_t position_entry_time_ = 0;
@@ -1394,6 +1409,16 @@ protected:
         pe.entry_commission_account = calc_commission(pe.price, pe.qty);
     }
 
+    // Sum the already-paid percent entry commission attributable to the
+    // still-open pyramid slices. FIFO partial exits scale each surviving
+    // snapshot. Cash commission types remain outside this TV-pinned rule.
+    double surviving_open_percent_commission_account() const;
+
+    // TradingView debits percent entry commission at fill, while PineForge
+    // realizes both commission legs in net_profit_sum_ when the lot closes.
+    // Use this fee-net ledger for percent-of-equity sizing and broker margin.
+    double percent_commission_live_equity(double mark_price) const;
+
     // --- Position sizing helper ---
     // PERCENT_OF_EQUITY / CASH size a budget that is denominated in ACCOUNT
     // currency (equity, and a strategy.cash default_qty_value are both
@@ -1461,23 +1486,14 @@ protected:
             case QtyType::FIXED:
                 return apply_qty_step(default_qty_value_);
             case QtyType::PERCENT_OF_EQUITY: {
-                // TradingView's percent-of-equity default sizing uses
-                // strategy.equity, i.e. initial capital + closed PnL +
-                // mark-to-market open PnL.  Keep current_equity() as the
-                // closed-equity accessor used elsewhere, but size new default
-                // percent orders from the live equity snapshot so pyramid adds
-                // and same-bar/re-entry sizing see unrealized PnL.
-                //
-                // KNOWN RESIDUAL (unresolved, do not "fix" without a probe):
-                // for an entry sized while a position is open AND commission_
-                // type=percent, TV appears to also deduct the entry fee already
-                // charged on the open lot (it debits at fill; we book both legs
-                // at close).  Three independent reconstructions of TV's equity
-                // chain disagreed on whether that term belongs here — adding it
-                // made one strategy's predicted quantities exact and two others
-                // markedly worse, and it cut end-to-end coverage.  Settle it
-                // with a clean-room TV probe (the KI-52 method), not algebra.
-                double equity = current_equity() + open_profit(current_bar_.close);
+                // KI-56's clean-room v6 flat/holding pair proves that an
+                // omitted percent-of-equity add sizes from mark-to-market
+                // equity AFTER the paid percent commission on surviving lots.
+                // This is a ledger rule, independent of pct=100, margin, or
+                // how the already-open position was sized.
+                const double equity =
+                    percent_commission_live_equity(current_bar_.close);
+                if (!std::isfinite(equity)) return 0.0;
                 double cash = reserve_percent_commission(equity * (default_qty_value_ / 100.0)) / active_account_currency_fx();
                 // Reject (qty 0) on a non-finite / non-positive fill price — a
                 // degenerate $0/NaN print must NOT size as the raw % number.
@@ -1561,7 +1577,7 @@ protected:
             o.frozen_default_qty = calc_qty(o.sizing_price);
             if (!std::isnan(o.sizing_equity)) {
                 o.sizing_equity =
-                    current_equity() + open_profit(current_bar_.close);
+                    percent_commission_live_equity(current_bar_.close);
             }
             o.sizing_fx = active_account_currency_fx();
         }
@@ -2281,6 +2297,11 @@ protected:
     double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
 
 private:
+    enum class PositionReductionCause {
+        SCRIPT_ORDER,
+        MARGIN_CALL,
+    };
+
     void execute_market_entry(const std::string& id, bool is_long, double fill_price,
                               double explicit_qty,
                               int explicit_qty_type,
@@ -2294,7 +2315,9 @@ private:
                               bool explicit_qty_prequantized,
                               uint64_t entry_incarnation);
     void execute_market_exit(double fill_price);
-    void execute_partial_exit_qty(double fill_price, double qty_to_close);
+    void execute_partial_exit_qty(
+        double fill_price, double qty_to_close,
+        PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
     void execute_partial_exit(double fill_price, double qty_percent);
     void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
     void execute_partial_exit_by_entry_qty(double fill_price,
@@ -2509,7 +2532,8 @@ private:
     void reset_run_state();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
-    void settle_position_after_partial_exit();
+    void settle_position_after_partial_exit(
+        double qty_before, PositionReductionCause cause);
     void enter_market_from_flat(const std::string& id, bool is_long,
                                 double fill_price, double explicit_qty,
                                 int explicit_qty_type,

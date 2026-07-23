@@ -79,6 +79,9 @@ public:
     double liq_price() const { return margin_liquidation_price(); }
     bool opening_pending() const { return opening_affordability_pending_; }
     bool opening_eligible() const { return opening_affordability_eligible_; }
+    bool opening_default_short_reversal() const {
+        return close_then_short_opening_requires_adverse_retry_;
+    }
     double opening_raw_base() const {
         return opening_affordability_raw_fill_base_;
     }
@@ -1362,6 +1365,654 @@ static void test_short_opening_event_scope_is_explicit_market_margin100_only() {
     }
 }
 
+// Literal first reversal from a source-bound TV tape. The script closes Long
+// and then emits an omitted-qty Short in the same evaluation. Paid entry fees
+// reduce broker equity, and the close-then-short fill receives both the
+// fill-price affordability checkpoint and one bounded adverse-high retry.
+class CommissionedDefaultShortCheckpointProbe : public MCEngine {
+public:
+    CommissionedDefaultShortCheckpointProbe() {
+        initial_capital_ = 10000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        calc_on_order_fills_ = false;
+        bar_magnifier_enabled_ = false;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0) {
+            strategy_entry("Long", true, kNaN, kNaN, kNaN);
+        } else if (bar_index_ == 1) {
+            strategy_close("Long");
+            strategy_entry("Short", false, kNaN, kNaN, kNaN);
+        } else if (bar_index_ == 2) {
+            captured_short_event = opening_affordability_pending_
+                && opening_affordability_eligible_
+                && close_then_short_opening_requires_adverse_retry_
+                && commissioned_all_in_market_short_lifecycle_
+                && near(opening_affordability_raw_fill_base_, 1798.09);
+        }
+    }
+
+    bool captured_short_event = false;
+};
+
+struct DefaultShortCheckpointResult {
+    int margin_rows = 0;
+    int trade_rows = 0;
+    double position = 0.0;
+    bool captured = false;
+    std::vector<double> margin_qty;
+    std::vector<double> margin_exit;
+};
+
+static DefaultShortCheckpointResult run_commissioned_default_short_checkpoint() {
+    std::vector<Bar> bars = {
+        mk_bar(1000, 1801.48, 1801.48, 1801.48, 1801.48, 1.0),
+        mk_bar(2000, 1801.48, 1801.48, 1798.09, 1798.09, 1.0),
+        mk_bar(3000, 1798.09, 1806.33, 1798.09, 1804.62, 1.0),
+    };
+    CommissionedDefaultShortCheckpointProbe eng;
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    DefaultShortCheckpointResult result;
+    result.margin_rows = margin_call_rows(eng);
+    result.trade_rows = eng.trade_count();
+    result.position = eng.position_size();
+    result.captured = eng.captured_short_event;
+    for (int i = 0; i < eng.trade_count(); ++i) {
+        if (eng.exit_comment(i) != std::string("Margin call")) continue;
+        result.margin_qty.push_back(eng.trade_size(i));
+        result.margin_exit.push_back(eng.exit_price(i));
+    }
+    return result;
+}
+
+static void test_commissioned_close_then_short_exact_checkpoints() {
+    std::printf(
+        "test_commissioned_close_then_short_exact_checkpoints\n");
+    const DefaultShortCheckpointResult result =
+        run_commissioned_default_short_checkpoint();
+
+    CHECK(result.captured);
+    CHECK(result.margin_rows == 2);
+    CHECK(result.margin_qty.size() == 2);
+    CHECK(near(result.margin_qty[0], 0.0108, 1e-9));
+    CHECK(near(result.margin_exit[0], 1798.09, 1e-9));
+    CHECK(near(result.margin_qty[1], 0.1696, 1e-9));
+    CHECK(near(result.margin_exit[1], 1806.33, 1e-9));
+    CHECK(near(result.position, -5.3650, 1e-9));
+}
+
+// Mirror a separate close-then-entry order pair on the LONG side. A
+// commissioned omitted-qty LONG created while SHORT after the close command
+// retains the opening-affordability provenance needed by the broker trim.
+class CommissionedCloseThenLongProbe : public MCEngine {
+public:
+    explicit CommissionedCloseThenLongProbe(bool explicit_qty)
+        : explicit_qty_(explicit_qty) {
+        initial_capital_ = 10000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0) {
+            strategy_entry("Short", false, kNaN, kNaN, kNaN);
+        } else if (bar_index_ == 1) {
+            strategy_close("Short");
+            const double qty = explicit_qty_
+                ? frozen_default_market_qty(/*is_buy=*/true) : kNaN;
+            strategy_entry("Long", true, kNaN, kNaN, qty);
+        } else if (bar_index_ == 2) {
+            captured = opening_affordability_pending_
+                && opening_affordability_eligible_
+                && commissioned_all_in_market_long_opening_affordability_
+                && position_side_ == PositionSide::LONG;
+        }
+    }
+
+    bool captured = false;
+
+private:
+    bool explicit_qty_;
+};
+
+static void test_commissioned_close_then_long_floor_zero_scope() {
+    std::printf("test_commissioned_close_then_long_floor_zero_scope\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 2968.50, 2968.50, 2968.50, 2968.50, 1.0),
+        mk_bar(2000, 2968.50, 2968.50, 2968.50, 2968.50, 1.0),
+        mk_bar(3000, 2967.80, 2967.80, 2967.80, 2967.80, 1.0),
+    };
+    CommissionedCloseThenLongProbe omitted(/*explicit_qty=*/false);
+    omitted.run(bars.data(), static_cast<int>(bars.size()));
+    CommissionedCloseThenLongProbe explicit_control(/*explicit_qty=*/true);
+    explicit_control.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(omitted.captured);
+    CHECK(!explicit_control.captured);
+    CHECK(omitted.trade_count() == 2);  // short close + long margin trim
+    CHECK(margin_call_rows(omitted) == 1);
+    CHECK(omitted.exit_comment(1) == std::string("Margin call"));
+    CHECK(near(omitted.entry_price(1), 2967.80));
+    CHECK(near(omitted.exit_price(1), 2967.80));
+    CHECK(near(omitted.trade_size(1), 1.0, 1e-9));
+    CHECK(explicit_control.trade_count() == 1);  // short close only
+    CHECK(margin_call_rows(explicit_control) == 0);
+}
+
+// After the close-then-short fill-price trim, its bounded ordinary adverse
+// retry can
+// require a positive restore quantity smaller than one configured lot. TV's
+// source-bound tape closes one whole contract at that exact discontinuity; the
+// established generic finite-price behavior closes one qty_step instead.
+class DefaultShortLaterFloorZeroProbe : public MCEngine {
+public:
+    explicit DefaultShortLaterFloorZeroProbe(bool full_residual = false) {
+        initial_capital_ = 10000.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_short_ = 100.0;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+        set_syminfo_metadata(
+            "margin_zero_cover_full_liquidation",
+            full_residual ? 1.0 : 0.0);
+
+        constexpr double qty = 3.6930;
+        constexpr double entry = 1799.94;
+        constexpr double adverse = 1801.26;
+        constexpr double raw_q_min = 0.00005;
+        position_side_ = PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = entry;
+        position_entry_time_ = 1000;
+        position_qty_ = qty;
+        position_entry_count_ = 1;
+        position_open_bar_ = 0;
+        trail_best_price_ = entry;
+        net_profit_sum_ =
+            (qty - raw_q_min) * adverse - initial_capital_
+            + (adverse - entry) * qty;
+        pyramid_entries_.push_back(
+            {entry, position_entry_time_, qty, "S", 0});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["S"] = qty;
+    }
+
+    void on_bar(const Bar&) override {}
+
+    void trigger(bool carry_s_provenance) {
+        current_bar_ = mk_bar(
+            2000, 1800.00, 1801.26, 1799.50, 1800.50, 1.0);
+        bar_index_ = 1;
+        commissioned_all_in_market_short_lifecycle_ = carry_s_provenance;
+        process_margin_call(current_bar_);
+    }
+
+    bool lifecycle_active() const {
+        return commissioned_all_in_market_short_lifecycle_;
+    }
+};
+
+static void test_default_short_lifecycle_floor_zero_one_contract() {
+    std::printf("test_default_short_lifecycle_floor_zero_one_contract\n");
+    DefaultShortLaterFloorZeroProbe top_level;
+    top_level.trigger(/*carry_s_provenance=*/false);
+    DefaultShortLaterFloorZeroProbe one_contract;
+    one_contract.trigger(/*carry_s_provenance=*/true);
+    DefaultShortLaterFloorZeroProbe full_residual(/*full_residual=*/true);
+    full_residual.trigger(/*carry_s_provenance=*/true);
+
+    // A normal short without default-opening lifecycle provenance retains the
+    // established one-step progress fallback.
+    CHECK(top_level.trade_count() == 1);
+    CHECK(near(top_level.trade_size(0), 0.0001, 1e-9));
+    CHECK(near(top_level.position_size(), -3.6929, 1e-9));
+
+    CHECK(one_contract.trade_count() == 1);
+    CHECK(one_contract.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(one_contract.exit_price(0), 1801.26));
+    CHECK(near(one_contract.trade_size(0), 1.0, 1e-9));
+    CHECK(near(one_contract.position_size(), -2.6930, 1e-9));
+    CHECK(one_contract.lifecycle_active());
+
+    // The existing opt-in whole-residual interpretation retains precedence
+    // when a verifier deliberately combines both candidates.
+    CHECK(full_residual.trade_count() == 1);
+    CHECK(near(full_residual.trade_size(0), 3.6930, 1e-9));
+    CHECK(near(full_residual.position_size(), 0.0, 1e-9));
+}
+
+// The commissioned lifecycle covers the opening checkpoint too. The positive
+// restore quantity below is half one lot: without lifecycle provenance the
+// event is a dust no-op; with it TV closes one contract at the raw fill base.
+class DefaultShortOpeningFloorZeroProbe : public MCEngine {
+public:
+    explicit DefaultShortOpeningFloorZeroProbe(bool carry_lifecycle) {
+        initial_capital_ = 1000.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_short_ = 100.0;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+
+        constexpr double qty = 10.0;
+        constexpr double entry = 100.0;
+        position_side_ = PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = entry;
+        position_entry_time_ = 1000;
+        position_qty_ = qty;
+        position_entry_count_ = 1;
+        position_open_bar_ = 0;
+        net_profit_sum_ = 0.495;  // entry fee 0.5 => q_min = 0.00005
+        pyramid_entries_.push_back(
+            {entry, position_entry_time_, qty, "S", 0});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["S"] = qty;
+        opening_affordability_pending_ = true;
+        opening_affordability_eligible_ = true;
+        close_then_short_opening_requires_adverse_retry_ = true;
+        opening_affordability_raw_fill_base_ = entry;
+        commissioned_all_in_market_short_lifecycle_ = carry_lifecycle;
+    }
+
+    void on_bar(const Bar&) override {}
+
+    void trigger() {
+        current_bar_ = mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0);
+        bar_index_ = 1;
+        process_margin_call(current_bar_);
+    }
+};
+
+static void test_default_short_opening_floor_zero_one_contract() {
+    std::printf("test_default_short_opening_floor_zero_one_contract\n");
+    DefaultShortOpeningFloorZeroProbe baseline(/*carry_lifecycle=*/false);
+    baseline.trigger();
+    DefaultShortOpeningFloorZeroProbe enabled(/*carry_lifecycle=*/true);
+    enabled.trigger();
+
+    // Without the scoped one-contract lifecycle, the opening checkpoint
+    // dust-noops and its adverse retry follows the generic finite-price rule:
+    // fee-net equity is 1000 + .495 - .5 = 999.995, so the positive 0.00005
+    // restore amount floors below one 0.0001 lot and closes one qty_step.
+    CHECK(baseline.trade_count() == 1);
+    CHECK(baseline.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(baseline.trade_size(0), 0.0001, 1e-9));
+    CHECK(near(baseline.position_size(), -9.9999, 1e-9));
+    CHECK(enabled.trade_count() == 1);
+    CHECK(enabled.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(enabled.entry_price(0), 100.0));
+    CHECK(near(enabled.exit_price(0), 100.0));
+    CHECK(near(enabled.trade_size(0), 1.0, 1e-9));
+    CHECK(near(enabled.position_size(), -9.0, 1e-9));
+}
+
+// A close-then-short fill-price opening check can be affordable while the same
+// bar's high is
+// already adverse enough to require an ordinary margin call. The opening event
+// must schedule that second checkpoint even though it emitted no trade, and it
+// must be consumed before recursion so the retry occurs exactly once.
+class DefaultShortAffordableOpeningAdverseProbe : public MCEngine {
+public:
+    DefaultShortAffordableOpeningAdverseProbe() {
+        initial_capital_ = 1000.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_short_ = 100.0;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+
+        constexpr double qty = 9.99;
+        constexpr double entry = 100.0;
+        position_side_ = PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = entry;
+        position_entry_time_ = 1000;
+        position_qty_ = qty;
+        position_entry_count_ = 1;
+        position_open_bar_ = 0;
+        trail_best_price_ = entry;
+        pyramid_entries_.push_back(
+            {entry, position_entry_time_, qty, "S", 0});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["S"] = qty;
+        opening_affordability_pending_ = true;
+        opening_affordability_eligible_ = true;
+        close_then_short_opening_requires_adverse_retry_ = true;
+        opening_affordability_raw_fill_base_ = entry;
+        commissioned_all_in_market_short_lifecycle_ = true;
+    }
+
+    void on_bar(const Bar&) override {}
+
+    void trigger() {
+        current_bar_ = mk_bar(2000, 100.0, 105.0, 99.0, 100.0, 1.0);
+        bar_index_ = 1;
+        process_margin_call(current_bar_);
+        event_cleared = !opening_affordability_pending_
+            && !opening_affordability_eligible_
+            && !close_then_short_opening_requires_adverse_retry_
+            && std::isnan(opening_affordability_raw_fill_base_);
+    }
+
+    bool event_cleared = false;
+};
+
+static void test_default_short_affordable_opening_retries_adverse_once() {
+    std::printf(
+        "test_default_short_affordable_opening_retries_adverse_once\n");
+    DefaultShortAffordableOpeningAdverseProbe probe;
+    probe.trigger();
+
+    CHECK(probe.trade_count() == 1);
+    CHECK(probe.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(probe.entry_price(0), 100.0));
+    CHECK(near(probe.exit_price(0), 105.0));
+    // TV's adverse-margin ledger debits the surviving opening commission:
+    // equity = 1000 + (100 - 105) * 9.99 - .4995 = 949.5505;
+    // q_min = 9.99 - 949.5505 / 105 = 0.9466619..., which floors to
+    // 0.9466 before TV's 4x liquidation multiplier.
+    CHECK(near(probe.trade_size(0), 3.7864, 1e-9));
+    CHECK(near(probe.position_size(), -6.2036, 1e-9));
+    CHECK(probe.event_cleared);
+}
+
+// A default-sized commissioned short opened from true flat has its own
+// lifecycle provenance. It must not inherit the prior close-then-short token,
+// and an ordinary add or fresh position will clear it through the shared
+// lifecycle reset sites.
+class CommissionedDefaultFlatShortLifecycleProbe : public MCEngine {
+public:
+    explicit CommissionedDefaultFlatShortLifecycleProbe(bool commissioned) {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = commissioned ? 0.05 : 0.0;
+        margin_short_ = 100.0;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0) {
+            strategy_entry("Short", false, kNaN, kNaN, kNaN);
+        } else if (bar_index_ == 1) {
+            captured = position_side_ == PositionSide::SHORT
+                && commissioned_all_in_market_short_lifecycle_;
+        }
+    }
+
+    bool captured = false;
+};
+
+static void test_commissioned_default_flat_short_lifecycle_tag() {
+    std::printf("test_commissioned_default_flat_short_lifecycle_tag\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(3000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    CommissionedDefaultFlatShortLifecycleProbe uncommissioned(
+        /*commissioned=*/false);
+    uncommissioned.run(bars.data(), static_cast<int>(bars.size()));
+    CommissionedDefaultFlatShortLifecycleProbe commissioned(
+        /*commissioned=*/true);
+    commissioned.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(!uncommissioned.captured);
+    CHECK(commissioned.captured);
+    CHECK(uncommissioned.trade_count() == 0);
+    CHECK(commissioned.trade_count() == 0);
+    CHECK(uncommissioned.position_size() < -1e-9);
+    CHECK(commissioned.position_size() < -1e-9);
+}
+
+// After a prior LONG has already been fully liquidated, the next default SHORT
+// is a true-flat open rather than a close-then-open reversal. Its adverse
+// restore amount is positive but below one lot; TV caps the one-contract
+// fallback to the entire 0.3383-contract residual.
+class DefaultFlatShortFloorZeroProbe : public MCEngine {
+public:
+    explicit DefaultFlatShortFloorZeroProbe(bool carry_flat_lifecycle) {
+        initial_capital_ = 10000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_short_ = 100.0;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+
+        constexpr double qty = 0.3383;
+        constexpr double entry = 3734.88;
+        position_side_ = PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = entry;
+        position_entry_time_ = 1000;
+        position_qty_ = qty;
+        position_entry_count_ = 1;
+        position_open_bar_ = 0;
+        trail_best_price_ = entry;
+        net_profit_sum_ = -8735.542085;
+        pyramid_entries_.push_back(
+            {entry, position_entry_time_, qty, "Short", 0});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["Short"] = qty;
+        commissioned_all_in_market_short_lifecycle_ = carry_flat_lifecycle;
+    }
+
+    void on_bar(const Bar&) override {}
+
+    void trigger() {
+        current_bar_ = mk_bar(
+            2000, 3734.88, 3735.52, 3734.00, 3735.00, 1.0);
+        bar_index_ = 1;
+        process_margin_call(current_bar_);
+    }
+};
+
+static void test_default_flat_short_floor_zero_caps_to_residual() {
+    std::printf("test_default_flat_short_floor_zero_caps_to_residual\n");
+    DefaultFlatShortFloorZeroProbe baseline(
+        /*carry_flat_lifecycle=*/false);
+    baseline.trigger();
+    DefaultFlatShortFloorZeroProbe enabled(
+        /*carry_flat_lifecycle=*/true);
+    enabled.trigger();
+
+    CHECK(baseline.trade_count() == 1);
+    CHECK(near(baseline.exit_price(0), 3735.52));
+    CHECK(near(baseline.trade_size(0), 0.0001, 1e-9));
+    CHECK(near(baseline.position_size(), -0.3382, 1e-9));
+
+    CHECK(enabled.trade_count() == 1);
+    CHECK(enabled.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(enabled.entry_price(0), 3734.88));
+    CHECK(near(enabled.exit_price(0), 3735.52));
+    CHECK(near(enabled.trade_size(0), 0.3383, 1e-9));
+    CHECK(near(enabled.position_size(), 0.0, 1e-9));
+}
+
+// A commissioned omitted-qty 100%-equity SHORT acquires lifecycle provenance
+// from its real entry shape. A user-requested partial exit changes that shape
+// and must invalidate the one-contract floor-zero provenance. Broker margin
+// reductions are covered separately above and intentionally preserve it.
+class CommissionedDefaultShortPartialLifecycleProbe : public MCEngine {
+public:
+    CommissionedDefaultShortPartialLifecycleProbe() {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0) {
+            strategy_entry("Short", false, kNaN, kNaN, kNaN);
+        } else if (bar_index_ == 1) {
+            lifecycle_after_open =
+                commissioned_all_in_market_short_lifecycle_;
+            strategy_close(
+                "Short", "partial lifecycle close", /*qty=*/1.0,
+                /*qty_percent=*/kNaN, /*immediately=*/true);
+            qty_after_partial = position_qty_;
+            lifecycle_after_partial =
+                position_side_ == PositionSide::SHORT
+                && position_qty_ > 1.0
+                && commissioned_all_in_market_short_lifecycle_;
+        }
+    }
+
+    void trigger_later_floor_zero() {
+        constexpr double adverse = 105.0;
+        constexpr double raw_q_min = 0.00005;
+        const double open_fee = surviving_open_percent_commission_account();
+        net_profit_sum_ =
+            (position_qty_ - raw_q_min) * adverse - initial_capital_
+            + open_fee
+            + (adverse - position_entry_price_) * position_qty_;
+        current_bar_ = mk_bar(
+            3000, 100.0, adverse, 99.0, 100.0, 1.0);
+        bar_index_ = 2;
+        process_margin_call(current_bar_);
+        lifecycle_after_margin_partial =
+            commissioned_all_in_market_short_lifecycle_;
+    }
+
+    bool lifecycle_after_open = false;
+    bool lifecycle_after_partial = false;
+    bool lifecycle_after_margin_partial = false;
+    double qty_after_partial = 0.0;
+};
+
+static void test_user_partial_invalidates_commissioned_short_lifecycle() {
+    std::printf(
+        "test_user_partial_invalidates_commissioned_short_lifecycle\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    CommissionedDefaultShortPartialLifecycleProbe probe;
+    probe.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(probe.lifecycle_after_open);
+    CHECK(!probe.lifecycle_after_partial);
+    CHECK(probe.trade_count() == 1);
+    CHECK(near(probe.trade_size(0), 1.0, 1e-9));
+    const double qty_before_margin = probe.qty_after_partial;
+
+    probe.trigger_later_floor_zero();
+    CHECK(probe.trade_count() == 2);
+    CHECK(probe.exit_comment(1) == std::string("Margin call"));
+    CHECK(near(probe.exit_price(1), 105.0));
+    CHECK(near(probe.trade_size(1), 0.0001, 1e-9));
+    CHECK(near(probe.position_size(), -(qty_before_margin - 0.0001), 1e-9));
+    CHECK(!probe.lifecycle_after_margin_partial);
+}
+
+// The scoped lifecycle belongs to one unmodified position cycle. A genuine
+// accepted add invalidates it, while a full close clears it through the shared
+// flat-position reset path.
+class CommissionedDefaultShortLifecycleMutationProbe : public MCEngine {
+public:
+    enum class Mutation { AcceptedAdd, FullClose };
+
+    explicit CommissionedDefaultShortLifecycleMutationProbe(Mutation mutation)
+        : mutation_(mutation) {
+        initial_capital_ = 1000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.05;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        pyramiding_ = 2;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0) {
+            strategy_entry("Short", false, kNaN, kNaN, kNaN);
+        } else if (bar_index_ == 1) {
+            lifecycle_after_open =
+                commissioned_all_in_market_short_lifecycle_;
+            if (mutation_ == Mutation::AcceptedAdd) {
+                strategy_entry("Add", false, kNaN, kNaN, /*qty=*/1.0);
+            } else {
+                strategy_close(
+                    "Short", "full lifecycle close", /*qty=*/kNaN,
+                    /*qty_percent=*/kNaN, /*immediately=*/true);
+                full_close_cleared = position_side_ == PositionSide::FLAT
+                    && !commissioned_all_in_market_short_lifecycle_;
+            }
+        } else if (bar_index_ == 2
+                   && mutation_ == Mutation::AcceptedAdd) {
+            add_filled = position_side_ == PositionSide::SHORT
+                && position_entry_count_ == 2;
+            accepted_add_cleared = add_filled
+                && !commissioned_all_in_market_short_lifecycle_;
+        }
+    }
+
+    bool lifecycle_after_open = false;
+    bool add_filled = false;
+    bool accepted_add_cleared = false;
+    bool full_close_cleared = false;
+
+private:
+    Mutation mutation_;
+};
+
+static void test_commissioned_default_short_lifecycle_mutations() {
+    std::printf("test_commissioned_default_short_lifecycle_mutations\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0),
+        mk_bar(3000, 100.0, 100.0, 100.0, 100.0, 1.0),
+    };
+    CommissionedDefaultShortLifecycleMutationProbe add(
+        CommissionedDefaultShortLifecycleMutationProbe::Mutation::AcceptedAdd);
+    add.run(bars.data(), static_cast<int>(bars.size()));
+    CommissionedDefaultShortLifecycleMutationProbe close(
+        CommissionedDefaultShortLifecycleMutationProbe::Mutation::FullClose);
+    close.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(add.lifecycle_after_open);
+    CHECK(add.add_filled);
+    CHECK(add.accepted_add_cleared);
+    CHECK(close.lifecycle_after_open);
+    CHECK(close.full_close_cleared);
+}
+
 // A scoped explicit MARKET short event is only provenance for that exact
 // fill. If a later successful same-direction short fill in the same dispatch
 // cycle has a non-scoped shape, the earlier event must not survive to the
@@ -2022,6 +2673,15 @@ int main() {
     test_short_add_opening_margin_marks_latest_raw_fill();
     test_thula_next_open_short_pair_exact_margin_rows();
     test_short_opening_event_scope_is_explicit_market_margin100_only();
+    test_commissioned_close_then_short_exact_checkpoints();
+    test_commissioned_close_then_long_floor_zero_scope();
+    test_default_short_lifecycle_floor_zero_one_contract();
+    test_default_short_opening_floor_zero_one_contract();
+    test_default_short_affordable_opening_retries_adverse_once();
+    test_commissioned_default_flat_short_lifecycle_tag();
+    test_default_flat_short_floor_zero_caps_to_residual();
+    test_user_partial_invalidates_commissioned_short_lifecycle();
+    test_commissioned_default_short_lifecycle_mutations();
     test_priced_short_add_invalidates_scoped_opening_event();
     test_raw_short_add_invalidates_scoped_opening_event();
     test_accepted_add_fifo_keeps_add_affordability_event();
