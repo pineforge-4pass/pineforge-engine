@@ -233,14 +233,62 @@ as little-endian `<5dq>` records (`open`, `high`, `low`, `close`, `volume`,
 slicing, so slice bounds remain a separate runtime concern. Paths, CSV newline
 style, header order, and equivalent numeric spellings do not affect the hash.
 
-Decode the token to recover the provenance:
+### Canonical fingerprint JSON
+
+`token` is base64 of the **canonical provenance JSON bytes**; `digest` is
+`sha256:` plus the hex SHA-256 of those same bytes. Encoding is a direct
+RFC 8785 / JCS-style canonical writer over the accepted value tree (not plain
+`JSON.stringify`, which does not sort keys or implement full JCS). Over values
+parsed under a JavaScript / IEEE-754 binary64 number model, the token bytes
+match a JCS direct encoder for the types we accept:
+
+| Rule | Behavior |
+| --- | --- |
+| Objects | Keys sorted by **UTF-16 code unit** order (JCS / ECMAScript), not Unicode code point; no whitespace. Each key is normalized once via base `str.__str__` to a plain built-in `str`; **duplicate normalized names fail closed** (`ValueError`) so distinct str-subclass keys that coexist only via custom `__eq__`/`__hash__` cannot emit the same JSON name twice (JS would silently drop one). Non-str keys raise `TypeError`. Own keys such as `"10"`, `"2"`, and `"__proto__"` are retained in lexical order (a naive object-rebuild + `JSON.stringify` reorders array-index keys and can drop `__proto__`). |
+| Arrays | Element order preserved; no whitespace |
+| Floats | ECMAScript `NumberToString` form for every **finite** IEEE-754 value (no trailing `.0` on integral floats, `±0` → `0`, scientific notation at ES thresholds: exponent &lt; -6 or ≥ 21). Float subclasses are normalized via base `float.__float__` first so hostile `__float__`/`__abs__`/comparison/`__repr__` hooks cannot alter math or emission. |
+| Integers | Decimal digits only for exact integers inside the product safe-integer domain `[-(2⁵³-1), 2⁵³-1]` (= `Number.MIN/MAX_SAFE_INTEGER`). This is a **strict accepted-type policy** guaranteeing unique lossless integer identity across generic ECMAScript consumers — not a claim that every larger individual value must round as binary64. Exact integers outside the domain (e.g. int `2⁵³`) are **rejected** (`ValueError`); isolated binary64 values such as float `2⁵³` remain legal on the float path. Int subclasses (e.g. `IntEnum`) are normalized via base `int.__index__` to a plain built-in int before domain checks and digit emission, so hostile/`Enum.NAME` `__index__`/`__int__`/comparison/`__str__`/`__repr__`/`__format__` hooks cannot change the value or bypass rejection. Booleans are not integers. |
+| Non-finite numbers | Rejected (`ValueError`) — not encoded as `null` |
+| Strings | JSON control escapes + `"`/`\`; **raw valid Unicode** (no `ensure_ascii` `\uXXXX` for non-ASCII); U+2028/U+2029 and non-BMP stay as UTF-8 code points. Unpaired UTF-16 surrogates: **rejected**. Str subclasses are normalized via base `str.__str__` first so hostile `__str__`/`__iter__`/`encode` hooks cannot change emission, key order, or bypass surrogate rejection. |
+| Bools / null | `true` / `false` / `null` |
+
+Semantic provenance values and the `{token,digest,provenance}` object shape
+are unchanged; only the hashed byte form is language-stable.
+
+**Verification (authoritative path):** base64-decode `token` to the canonical
+UTF-8 JSON bytes and hash those bytes. `digest` is exactly `sha256:` plus the
+hex SHA-256 of that same byte string — no re-serialization is required.
+Decoded canonical token bytes are authoritative; the inlined
+`fingerprint.provenance` is a convenience view of the same data.
+
+**Re-canonicalization is not free-form `json.loads` / plain
+`JSON.stringify`:** if a verifier rebuilds canonical JSON from a decoded
+value tree, it must use an RFC 8785 / JCS **direct** encoder whose JSON
+number model is IEEE-754 binary64 (ECMAScript `Number`). Default Python
+`json.loads` is **not** sufficient for that path: canonical tokens such as
+float `1e20` serialize as `100000000000000000000`, and plain `json.loads`
+yields a Python `int` outside the product integer domain, which this helper
+correctly **rejects** rather than rounding. Project tests that exercise
+verifier reconstruction use `json.loads(text, parse_int=float)` so
+integral-looking tokens re-enter as binary64 floats before re-encoding.
+
+**Out-of-domain provenance yields no fingerprint** under existing callers:
+`build_fingerprint` raises, `docker/run_json.py` sets `fingerprint` to
+`null`, and `scripts/run_strategy.py` skips writing a fingerprint file.
+
+**Residual intentional fail-closed cases:** non-finite numbers, exact
+integers outside the product safe-integer domain, unpaired surrogates
+(invalid I-JSON / UTF-8), and object keys that collide after `str.__str__`
+normalization (duplicate normalized JSON names).
+
+Decode the token to inspect the canonical provenance JSON:
 
 ```bash
 jq -r '.fingerprint.token' report.json | base64 -d | jq .
 ```
 
-The provenance is also inlined under `fingerprint.provenance`, so decoding is
-only needed to verify the token round-trips.
+To verify `digest` without rebuilding JSON, hash the decoded token bytes
+directly (for example `base64 -d | shasum -a 256`).
 
 ## Exit codes
 

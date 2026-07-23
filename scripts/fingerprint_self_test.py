@@ -15,10 +15,14 @@ from __future__ import annotations
 
 import ast
 import base64
+import enum
 import hashlib
 import importlib.util
 import json
+import math
+import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -26,6 +30,234 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 RUN_JSON = REPO / "docker" / "run_json.py"
 RUN_STRATEGY = REPO / "scripts" / "run_strategy.py"
+
+# Deterministic numeric vectors: (python_value, expected_canonical_text).
+# Expected forms match ECMAScript NumberToString (RFC 8785 numeric form).
+CANONICAL_NUMBER_VECTORS = [
+    (12345.0, "12345"),
+    (0.0, "0"),
+    (-0.0, "0"),
+    (1.5, "1.5"),
+    (-1.5, "-1.5"),
+    (0.1, "0.1"),
+    (1e-7, "1e-7"),
+    (1e-6, "0.000001"),
+    (1e20, "100000000000000000000"),
+    (1e21, "1e+21"),
+    (-12345.0, "-12345"),
+    (-1e-7, "-1e-7"),
+    (-1e20, "-100000000000000000000"),
+    (1, "1"),  # int path
+    (0, "0"),
+    # Product safe-integer edges (Number.MAX/MIN_SAFE_INTEGER = ±(2**53-1)).
+    (9007199254740991, "9007199254740991"),
+    (-9007199254740991, "-9007199254740991"),
+]
+
+# String forms match RFC 8785 / JCS (raw Unicode, not ensure_ascii escapes).
+# Control chars / quotes / backslash stay escaped.
+CANONICAL_STRING_VECTORS = [
+    ("", '""'),
+    ("ascii", '"ascii"'),
+    ("中文键", '"中文键"'),
+    ("中文值", '"中文值"'),
+    ("😀", '"😀"'),
+    ("a😀b", '"a😀b"'),
+    ("\u2028", '"\u2028"'),  # LINE SEPARATOR — raw, not \u2028 escape
+    ("\u2029", '"\u2029"'),  # PARAGRAPH SEPARATOR
+    ("\u2028\u2029", '"\u2028\u2029"'),
+    ('say "hi"\\ok', '"say \\"hi\\"\\\\ok"'),
+    ("\n\t\r\b\f", '"\\n\\t\\r\\b\\f"'),
+    ("\x00\x1f", '"\\u0000\\u001f"'),
+]
+
+# Exact integers outside the product safe-integer domain — rejected by policy
+# (unique lossless integer identity for generic ECMAScript consumers). This is
+# intentional domain rejection, not a claim that every magnitude must round
+# under binary64 (see float(2**53) vectors below, which remain legal).
+UNSAFE_INTEGERS = [
+    9007199254740992,   # exact int 2**53 — outside product int domain
+    9007199254740993,   # not uniquely representable as binary64 integer
+    9223372036854775807,
+    -9007199254740992,
+    -9007199254740993,
+    -9223372036854775808,
+]
+
+
+class _WeirdStrInt(int):
+    """int subclass whose dunder hooks deliberately lie about the value."""
+
+    def __index__(self) -> int:
+        return 99
+
+    def __int__(self) -> int:
+        return 99
+
+    def __lt__(self, other) -> bool:
+        return False
+
+    def __gt__(self, other) -> bool:
+        return False
+
+    def __le__(self, other) -> bool:
+        return False
+
+    def __ge__(self, other) -> bool:
+        return False
+
+    def __eq__(self, other) -> bool:
+        return False
+
+    def __str__(self) -> str:
+        return "not-a-json-number"
+
+    def __repr__(self) -> str:
+        return "not-a-json-number"
+
+    def __format__(self, format_spec: str) -> str:
+        return "99"
+
+
+class _WeirdFloat(float):
+    """float subclass whose dunder hooks deliberately lie about the value."""
+
+    def __float__(self) -> float:
+        return -88.0
+
+    def __abs__(self):
+        return 88.0
+
+    def __lt__(self, other) -> bool:
+        return True
+
+    def __eq__(self, other) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "-88"
+
+    def __format__(self, format_spec: str) -> str:
+        return "-88"
+
+
+class _WeirdStr(str):
+    """str subclass whose dunder hooks deliberately lie about the value.
+
+    Without base ``str.__str__`` normalization, ``__iter__`` can hide
+    unpaired surrogates from the rejection scan and ``encode`` can corrupt
+    JCS UTF-16 object-key order (e.g. flip ``"10"`` / ``"2"``).
+    """
+
+    def __str__(self) -> str:
+        return "hostile"
+
+    def __iter__(self):
+        # Hide underlying content (including unpaired surrogates).
+        return iter("")
+
+    def encode(self, encoding: str = "utf-8", errors: str = "strict") -> bytes:
+        # Flip UTF-16 code-unit order of keys "10" and "2" if consulted.
+        underlying = str.__str__(self)
+        if encoding == "utf-16-be":
+            if underlying == "10":
+                return "9".encode("utf-16-be")
+            if underlying == "2":
+                return "1".encode("utf-16-be")
+            return ("z" * max(1, len(underlying))).encode("utf-16-be")
+        return "hostile".encode(encoding, errors)
+
+
+class _TaggedStr(str):
+    """Adversarial str subclass: tag/identity hash/eq allow coexistence.
+
+    Two instances can share the same underlying text (so base
+    ``str.__str__`` normalizes both to one plain key) while tag-based
+    ``__eq__``/``__hash__`` let them both live in one Python dict. A
+    naive writer would emit duplicate JSON names; the fingerprint
+    helpers must fail closed with ValueError.
+    """
+
+    def __new__(cls, text: str, tag: object):
+        obj = str.__new__(cls, text)
+        obj.tag = tag
+        return obj
+
+    def __eq__(self, other):
+        if isinstance(other, _TaggedStr):
+            return (self.tag == other.tag
+                    and str.__str__(self) == str.__str__(other))
+        return NotImplemented
+
+    def __hash__(self):
+        return hash((_TaggedStr, str.__str__(self), self.tag))
+
+    def __str__(self) -> str:
+        return "hostile"
+
+
+class _SampleIntEnum(enum.IntEnum):
+    """IntEnum-style int subclass regression (Py3.9 str was Enum.NAME)."""
+
+    ALPHA = 7
+    EDGE = 9007199254740991
+
+# Unpaired UTF-16 surrogates — invalid I-JSON / UTF-8; fail closed.
+UNPAIRED_SURROGATES = [
+    "\ud800",
+    "\udfff",
+    "a\ud800b",
+    "\ud800\ud800",
+]
+
+# Compact representative set from RFC 8785 Appendix B (ES6 Number samples):
+# (big-endian IEEE-754 binary64 hex, expected JCS / NumberToString text).
+RFC8785_APPENDIX_B_BINARY64 = [
+    ("0000000000000000", "0"),                         # +0
+    ("8000000000000000", "0"),                         # -0
+    ("0000000000000001", "5e-324"),                    # min subnormal
+    ("000FFFFFFFFFFFFF", "2.225073858507201e-308"),    # max subnormal
+    ("0010000000000000", "2.2250738585072014e-308"),   # min normal
+    ("7FEFFFFFFFFFFFFF", "1.7976931348623157e+308"),   # max finite
+    ("4340000000000000", "9007199254740992"),          # 2**53
+    ("4430000000000000", "295147905179352830000"),
+    ("44B52D02C7E14AF5", "9.999999999999997e+22"),
+    ("44B52D02C7E14AF6", "1e+23"),
+    ("44B52D02C7E14AF7", "1.0000000000000001e+23"),
+    ("444B1AE4D6E2EF4E", "999999999999999700000"),
+    ("444B1AE4D6E2EF4F", "999999999999999900000"),
+    ("444B1AE4D6E2EF50", "1e+21"),
+]
+
+# Float sources whose canonical tokens look like large integers — plain
+# json.loads yields Python int outside the product int domain; IEEE-754 parse
+# is required for re-canonicalization tests. Exact-int forms of these
+# magnitudes remain rejected (product integer domain), but the binary64
+# values themselves are deliberately legal.
+IEEE754_TOKEN_ROUNDTRIP_VECTORS = [
+    (1e20, "100000000000000000000"),
+    (9007199254740992.0, "9007199254740992"),  # float 2**53 legal; int 2**53 not
+]
+
+
+def _helper_block(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    start = text.index("# >>> fingerprint helpers")
+    end = text.index("# <<< fingerprint helpers") + len("# <<< fingerprint helpers")
+    return text[start:end]
+
+
+def _ieee754_json_loads(text: str):
+    """Decode JSON with a binary64 number model (RFC 8785 / ES Number).
+
+    Default json.loads promotes integral tokens to unbounded Python int, which
+    is the wrong model for JCS re-canonicalization tests (e.g. 1e20).
+    """
+    return json.loads(text, parse_int=float)
+
+
+def _f64_from_be_hex(hex64: str) -> float:
+    return struct.unpack(">d", bytes.fromhex(hex64))[0]
 
 # Fixture: a ctor that sets a SUBSET of strategy() fields (process_orders_on_close
 # and close_entries_rule are intentionally absent — they default in the engine
@@ -143,11 +375,317 @@ def main() -> int:
         decoded = json.loads(base64.b64decode(fp["token"]))
         check(f"{label}: token decodes to provenance", decoded == prov)
         check(f"{label}: digest prefixed sha256:", fp["digest"].startswith("sha256:"))
-        canonical = json.dumps(prov, sort_keys=True, separators=(",", ":"))
+        canonical = m._canonical_fingerprint_json(prov)
         check(f"{label}: digest matches canonical sha256",
               fp["digest"] == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest())
         fp2 = m.build_fingerprint(prov)
         check(f"{label}: deterministic token", fp["token"] == fp2["token"])
+
+        # --- canonical number / nest vectors (language-independent) ------
+        for value, expected in CANONICAL_NUMBER_VECTORS:
+            got = m._canonical_fingerprint_json(value)
+            check(f"{label}: number vector {value!r} -> {expected!r}",
+                  got == expected)
+
+        # RFC 8785 Appendix B binary64 samples via exact bit patterns.
+        for hex64, expected in RFC8785_APPENDIX_B_BINARY64:
+            value = _f64_from_be_hex(hex64)
+            got = m._canonical_fingerprint_json(value)
+            check(f"{label}: RFC8785 App.B {hex64} -> {expected!r}",
+                  got == expected)
+
+        # Canonical-token round trips that require IEEE-754 number parsing:
+        # token bytes are authoritative for digest; re-canonicalization uses
+        # parse_int=float. Source Python ints outside the safe range still fail.
+        for value, expected in IEEE754_TOKEN_ROUNDTRIP_VECTORS:
+            canon = m._canonical_fingerprint_json(value)
+            check(f"{label}: ieee token form {value!r} -> {expected!r}",
+                  canon == expected)
+            fp_n = m.build_fingerprint({"n": value})
+            token_bytes = base64.b64decode(fp_n["token"])
+            token_text = token_bytes.decode("utf-8")
+            check(f"{label}: ieee digest from token bytes {value!r}",
+                  fp_n["digest"]
+                  == "sha256:" + hashlib.sha256(token_bytes).hexdigest())
+            # Plain json.loads yields a Python int outside the safe range.
+            plain = json.loads(token_text)["n"]
+            check(f"{label}: plain loads of {expected!r} is int (not float)",
+                  isinstance(plain, int) and not isinstance(plain, bool))
+            plain_rejected = False
+            try:
+                m._canonical_fingerprint_json(plain)
+            except ValueError:
+                plain_rejected = True
+            check(f"{label}: plain-loaded int of {expected!r} rejected",
+                  plain_rejected)
+            # Verifier reconstruction: binary64 number model + re-encode.
+            rebuilt = m._canonical_fingerprint_json(
+                _ieee754_json_loads(token_text))
+            check(f"{label}: ieee re-canon round-trip {value!r}",
+                  rebuilt == token_text)
+            rebuilt_fp = m.build_fingerprint(_ieee754_json_loads(token_text))
+            check(f"{label}: ieee re-canon digest matches {value!r}",
+                  rebuilt_fp["digest"] == fp_n["digest"]
+                  and rebuilt_fp["token"] == fp_n["token"])
+
+        for value, expected in CANONICAL_STRING_VECTORS:
+            got = m._canonical_fingerprint_json(value)
+            check(f"{label}: string vector {value!r} -> {expected!r}",
+                  got == expected)
+            # Raw Unicode must not be ensure_ascii-escaped.
+            if any(ord(ch) >= 0x80 for ch in value):
+                check(f"{label}: string {value!r} is raw Unicode (no \\u)",
+                      "\\u" not in got)
+
+        # Chinese object + value: JCS string form (raw Unicode).
+        chinese = {"中文键": "中文值"}
+        chinese_canon = m._canonical_fingerprint_json(chinese)
+        check(f"{label}: Chinese object is raw Unicode JSON",
+              chinese_canon == '{"中文键":"中文值"}')
+
+        # U+10000 sorts *before* U+E000 under UTF-16 code units (JCS/JS),
+        # but *after* under Unicode code-point order (Python sorted()).
+        key_order = {"\U00010000": 1, "\uE000": 2}
+        key_order_canon = m._canonical_fingerprint_json(key_order)
+        check(f"{label}: UTF-16 key order U+10000 before U+E000",
+              key_order_canon == '{"\U00010000":1,"\uE000":2}')
+        # Sanity: code-point sort would reverse these two keys.
+        check(f"{label}: UTF-16 order differs from code-point order",
+              sorted(["\U00010000", "\uE000"])
+              == ["\uE000", "\U00010000"])
+
+        # Array-index-looking keys + "__proto__" must all be retained in
+        # lexical UTF-16 order. A naive JS object-rebuild + JSON.stringify
+        # reorders integer-index keys and drops assignment to __proto__.
+        special_keys = {
+            "2": 2,
+            "10": 10,
+            "__proto__": "own",
+        }
+        special_keys_canon = m._canonical_fingerprint_json(special_keys)
+        check(f"{label}: special keys retained in lexical UTF-16 order",
+              special_keys_canon == '{"10":10,"2":2,"__proto__":"own"}')
+        check(f"{label}: special keys all present (no __proto__ drop)",
+              '"10":10' in special_keys_canon
+              and '"2":2' in special_keys_canon
+              and '"__proto__":"own"' in special_keys_canon
+              and special_keys_canon.index('"10"')
+              < special_keys_canon.index('"2"')
+              < special_keys_canon.index('"__proto__"'))
+        special_nested = {
+            "z": [{"2": 1, "10": 2, "__proto__": 3}],
+            "2": 0,
+            "10": -1,
+            "__proto__": {"nested": True},
+        }
+        special_nested_canon = m._canonical_fingerprint_json(special_nested)
+        check(f"{label}: nested special keys lexical UTF-16 + array recurse",
+              special_nested_canon == (
+                  '{"10":-1,"2":0,"__proto__":{"nested":true},'
+                  '"z":[{"10":2,"2":1,"__proto__":3}]}'))
+
+        nested = {
+            "z": [0.0, -0.0, 12345.0, {"inner": 1e-6}],
+            "a": {"initial_capital": 12345.0, "qty": 1.5},
+            "emoji": "😀",
+            "sep": "\u2028\u2029",
+            "中文键": "中文值",
+            "\U00010000": "supplementary",
+            "\uE000": "pua",
+        }
+        nested_canon = m._canonical_fingerprint_json(nested)
+        # UTF-16 key order: a, emoji, sep, z, 中文键, U+10000, U+E000
+        check(f"{label}: nested keys UTF-16-sorted + numbers/strings canonical",
+              nested_canon == (
+                  '{"a":{"initial_capital":12345,"qty":1.5},'
+                  '"emoji":"😀",'
+                  '"sep":"\u2028\u2029",'
+                  '"z":[0,0,12345,{"inner":0.000001}],'
+                  '"中文键":"中文值",'
+                  '"\U00010000":"supplementary",'
+                  '"\uE000":"pua"}'))
+
+        nonfinite_rejected = True
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            try:
+                m._canonical_fingerprint_json({"x": bad})
+                nonfinite_rejected = False
+            except ValueError:
+                pass
+        check(f"{label}: non-finite numbers rejected", nonfinite_rejected)
+
+        unsafe_int_rejected = True
+        for bad in UNSAFE_INTEGERS:
+            try:
+                m._canonical_fingerprint_json(bad)
+                unsafe_int_rejected = False
+            except ValueError:
+                pass
+            try:
+                m._canonical_fingerprint_json({"n": bad})
+                unsafe_int_rejected = False
+            except ValueError:
+                pass
+        check(f"{label}: out-of-domain exact integers rejected",
+              unsafe_int_rejected)
+
+        # Product policy: exact int 2**53 is outside the integer domain, while
+        # isolated binary64 float(2**53) remains legal NumberToString output.
+        # This is intentional accepted-type policy, not "every such value
+        # must round."
+        check(f"{label}: float 2**53 is legal binary64 token",
+              m._canonical_fingerprint_json(9007199254740992.0)
+              == "9007199254740992")
+        int_2_53_rejected = False
+        try:
+            m._canonical_fingerprint_json(9007199254740992)
+        except ValueError:
+            int_2_53_rejected = True
+        check(f"{label}: exact int 2**53 rejected (product int domain)",
+              int_2_53_rejected)
+        # Out-of-domain provenance yields no fingerprint under callers:
+        # build_fingerprint raises before emitting token/digest.
+        no_fp = False
+        try:
+            m.build_fingerprint({"n": 9007199254740992})
+        except ValueError:
+            no_fp = True
+        check(f"{label}: out-of-domain provenance yields no fingerprint",
+              no_fp)
+
+        # Int subclasses must emit underlying decimal digits even when
+        # __index__/__int__/comparisons/__str__/__repr__/__format__ are
+        # hostile (custom int) or Enum-style (IntEnum on Python 3.9; str
+        # was Enum.NAME). Domain checks use the normalized plain int.
+        check(f"{label}: custom int subclass ignores hostile int hooks",
+              m._canonical_fingerprint_json(_WeirdStrInt(42)) == "42"
+              and m._canonical_fingerprint_json(_WeirdStrInt(0)) == "0"
+              and m._canonical_fingerprint_json(_WeirdStrInt(-7)) == "-7"
+              and m._canonical_fingerprint_json(_WeirdStrInt(3)) == "3")
+        check(f"{label}: IntEnum emits decimal digits not Enum.NAME",
+              m._canonical_fingerprint_json(_SampleIntEnum.ALPHA) == "7"
+              and m._canonical_fingerprint_json(_SampleIntEnum.EDGE)
+              == "9007199254740991")
+        weird_oob_rejected = False
+        try:
+            m._canonical_fingerprint_json(_WeirdStrInt(9007199254740992))
+        except ValueError:
+            weird_oob_rejected = True
+        check(f"{label}: custom int subclass still enforces safe-int domain",
+              weird_oob_rejected)
+
+        # Float subclasses: normalize via float.__float__ so hostile
+        # __float__/__abs__/comparisons/repr cannot rewrite NumberToString.
+        check(f"{label}: custom float subclass ignores hostile float hooks",
+              m._canonical_fingerprint_json(_WeirdFloat(1.5)) == "1.5"
+              and m._canonical_fingerprint_json(_WeirdFloat(-0.0)) == "0"
+              and m._canonical_fingerprint_json(_WeirdFloat(0.0)) == "0")
+        weird_float_nonfinite_rejected = True
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            try:
+                m._canonical_fingerprint_json(_WeirdFloat(bad))
+                weird_float_nonfinite_rejected = False
+            except ValueError:
+                pass
+        check(f"{label}: custom float subclass still rejects nonfinite",
+              weird_float_nonfinite_rejected)
+
+        # Str subclasses: normalize via str.__str__ so hostile
+        # __str__/__iter__/encode cannot rewrite emission, key order, or
+        # hide unpaired surrogates from the rejection scan.
+        check(f"{label}: custom str subclass ignores hostile str hooks",
+              m._canonical_fingerprint_json(_WeirdStr("good")) == '"good"'
+              and m._canonical_fingerprint_json({
+                  _WeirdStr("10"): 1,
+                  _WeirdStr("2"): 2,
+              }) == '{"10":1,"2":2}')
+        weird_str_surrogate_rejected = False
+        try:
+            m._canonical_fingerprint_json(_WeirdStr("\ud800"))
+        except ValueError:
+            weird_str_surrogate_rejected = True
+        try:
+            m._canonical_fingerprint_json({_WeirdStr("\ud800"): "x"})
+            weird_str_surrogate_rejected = False
+        except ValueError:
+            pass
+        check(f"{label}: custom str subclass still rejects unpaired surrogates",
+              weird_str_surrogate_rejected)
+
+        # Distinct str-subclass keys can override __eq__/__hash__ so both
+        # coexist in a Python dict while str.__str__ yields the same plain
+        # text. Emitting both would produce duplicate JSON names (JS drops
+        # one); helpers must fail closed on the collision.
+        tagged_a = _TaggedStr("same", "a")
+        tagged_b = _TaggedStr("same", "b")
+        tagged_dup = {tagged_a: 1, tagged_b: 2}
+        check(f"{label}: tagged str keys coexist pre-normalization",
+              len(tagged_dup) == 2
+              and str.__str__(tagged_a) == str.__str__(tagged_b) == "same")
+        tagged_dup_rejected = False
+        try:
+            m._canonical_fingerprint_json(tagged_dup)
+        except ValueError:
+            tagged_dup_rejected = True
+        check(f"{label}: duplicate normalized object keys rejected",
+              tagged_dup_rejected)
+
+        # Booleans must remain distinct from the int path (bool subclasses int).
+        check(f"{label}: bool true/false stay boolean tokens",
+              m._canonical_fingerprint_json(True) == "true"
+              and m._canonical_fingerprint_json(False) == "false"
+              and m._canonical_fingerprint_json([True, False, 0, 1])
+              == "[true,false,0,1]")
+
+        surrogate_rejected = True
+        for bad in UNPAIRED_SURROGATES:
+            try:
+                m._canonical_fingerprint_json(bad)
+                surrogate_rejected = False
+            except ValueError:
+                pass
+            try:
+                m._canonical_fingerprint_json({bad: "x"})
+                surrogate_rejected = False
+            except ValueError:
+                pass
+            try:
+                m._canonical_fingerprint_json({"k": bad})
+                surrogate_rejected = False
+            except ValueError:
+                pass
+        check(f"{label}: unpaired surrogates rejected", surrogate_rejected)
+
+        # Live bug: integral float must not produce a trailing ".0" that a
+        # JS NumberToString path would drop, breaking token/digest verification.
+        live = {"strategy": {"initial_capital": 12345.0}}
+        live_fp = m.build_fingerprint(live)
+        live_token_json = base64.b64decode(live_fp["token"]).decode("utf-8")
+        check(f"{label}: live integral-float token has no trailing .0",
+              '"initial_capital":12345' in live_token_json
+              and "12345.0" not in live_token_json)
+        # Safe integral tokens re-parse under either model; prefer binary64
+        # for verifier reconstruction consistency with large-number vectors.
+        recomputed = m.build_fingerprint(_ieee754_json_loads(live_token_json))
+        check(f"{label}: digest stable after token JSON re-parse",
+              recomputed["digest"] == live_fp["digest"]
+              and recomputed["token"] == live_fp["token"])
+        # Authoritative path: hash decoded token bytes (no re-serialization).
+        live_token_bytes = live_token_json.encode("utf-8")
+        check(f"{label}: digest equals sha256 of token bytes",
+              live_fp["digest"]
+              == "sha256:" + hashlib.sha256(live_token_bytes).hexdigest())
+
+        # Unicode provenance survives token base64 + UTF-8 round-trip.
+        uni_live = {"中文键": "中文值", "emoji": "😀\u2028"}
+        uni_fp = m.build_fingerprint(uni_live)
+        uni_token_json = base64.b64decode(uni_fp["token"]).decode("utf-8")
+        check(f"{label}: Unicode token is raw UTF-8 (no ensure_ascii)",
+              "中文键" in uni_token_json and "\\u" not in uni_token_json)
+        uni_recomputed = m.build_fingerprint(_ieee754_json_loads(uni_token_json))
+        check(f"{label}: Unicode digest stable after token re-parse",
+              uni_recomputed["digest"] == uni_fp["digest"]
+              and uni_recomputed["token"] == uni_fp["token"])
 
     # --- the effective execution gate must participate in the fingerprint
     runtime_kwargs = {
@@ -426,9 +964,187 @@ def main() -> int:
     check("copies agree: effective_inputs",
           rj.effective_inputs(FIXTURE_CPP, {"Fast EMA": "8"})
           == rs.effective_inputs(FIXTURE_CPP, {"Fast EMA": "8"}))
+    check("copies agree: helper source is byte-identical",
+          _helper_block(RUN_JSON) == _helper_block(RUN_STRATEGY))
+
+    # --- JS RFC 8785/JCS direct-writer boundary (Node optional) ----------
+    # Deterministic core vectors above are always mandatory. Node is optional:
+    # when present, this bridge checks a JS direct JCS writer (not plain
+    # JSON.stringify) against the Python encoder; when absent, print a skip
+    # note and do NOT count the bridge as a pass (pure-Python CI still
+    # enforces all core vectors). Token bytes remain authoritative.
+    node = shutil.which("node")
+    bridge_payload = {
+        "strategy": {
+            "initial_capital": 12345.0,
+            "commission_value": 0.0,
+            "default_qty_value": 1.5,
+            "safe_int": 9007199254740991,
+        },
+        "nested": {"arr": [0.0, -0.0, 1e-6, 1e20, 1e21, -1e-7]},
+        "flags": {"on": True, "off": False, "empty": None},
+        # Array-index keys + __proto__: object-rebuild+stringify is wrong.
+        "10": 10,
+        "2": 2,
+        "__proto__": "own",
+        "indexish": {"2": 20, "10": 10, "__proto__": {"x": 1}},
+        "arr_special": [{"10": 1, "2": 2, "__proto__": 3}],
+        # Unicode / JCS coverage beyond ASCII+numbers:
+        "中文键": "中文值",
+        "emoji": "😀",
+        "sep": "\u2028\u2029",
+        "ctrl": "\n\t\x00",
+        "\U00010000": "supplementary",
+        "\uE000": "pua",
+    }
+    py_canon = rs._canonical_fingerprint_json(bridge_payload)
+    py_digest = "sha256:" + hashlib.sha256(py_canon.encode("utf-8")).hexdigest()
+    # Pin expected UTF-16 key order on the bridge payload itself (always).
+    check("bridge payload: UTF-16 key order (U+10000 before U+E000)",
+          '"\U00010000":"supplementary","\uE000":"pua"' in py_canon
+          and py_canon.index('"\U00010000"') < py_canon.index('"\uE000"'))
+    check("bridge payload: Chinese/emoji/U+2028 raw (no ensure_ascii)",
+          "中文键" in py_canon and "😀" in py_canon
+          and "\u2028" in py_canon and "\\u4e2d" not in py_canon
+          and "\\ud83d" not in py_canon and "\\u2028" not in py_canon)
+    # Lexical UTF-16: "10" < "2" < "__proto__" — all retained as own keys.
+    check("bridge payload: special keys 10/2/__proto__ lexical order",
+          '"10":10' in py_canon
+          and '"2":2' in py_canon
+          and '"__proto__":"own"' in py_canon
+          and py_canon.index('"10":10') < py_canon.index('"2":2')
+          < py_canon.index('"__proto__":"own"')
+          and '"indexish":{"10":10,"2":20,"__proto__":{"x":1}}' in py_canon
+          and '"arr_special":[{"10":1,"2":2,"__proto__":3}]' in py_canon)
+    if node is None:
+        # Not a check() pass — optional bridge simply not exercised.
+        print("  SKIP JS bridge: node not available "
+              "(optional; core deterministic vectors remain mandatory)")
+    else:
+        # Emit non-canonical Python JSON that a Worker would re-canonicalize
+        # with a JCS direct writer (not plain JSON.stringify). ensure_ascii
+        # mangles non-ASCII; sort_keys uses code-point order so the JS path
+        # must re-sort U+10000 vs U+E000 into UTF-16 order.
+        py_legacy = json.dumps(bridge_payload, sort_keys=True,
+                               separators=(",", ":"), ensure_ascii=True)
+        check("bridge: legacy Python JSON uses ensure_ascii + code-point sort",
+              "\\u4e2d" in py_legacy
+              and py_legacy.index("\\ue000") < py_legacy.index("\\ud800\\udc00"))
+        special_payload = {
+            "10": 10,
+            "2": 2,
+            "__proto__": "own",
+            "nested": [{"10": 1, "2": 2, "__proto__": 3}],
+        }
+        py_special = rs._canonical_fingerprint_json(special_payload)
+        script = r"""
+const fs = require('fs');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+// RFC 8785/JCS direct canonical writer over JS-parsed values.
+// Do NOT rebuild a plain object (array-index key reorder; __proto__ drop).
+function canonical(v) {
+  if (Array.isArray(v)) {
+    let s = '[';
+    for (let i = 0; i < v.length; i++) {
+      if (i) s += ',';
+      s += canonical(v[i]);
+    }
+    return s + ']';
+  }
+  if (v !== null && typeof v === 'object') {
+    const keys = Object.keys(v).sort();
+    let s = '{';
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (i) s += ',';
+      s += JSON.stringify(k) + ':' + canonical(v[k]);
+    }
+    return s + '}';
+  }
+  return JSON.stringify(v);
+}
+const fromLegacy = canonical(JSON.parse(input.legacy));
+const fromCanon = canonical(JSON.parse(input.canonical));
+const specialKeys = canonical(JSON.parse(input.special));
+// Direct Unicode/key vectors independent of the payload shape.
+const direct = {
+  chinese: canonical({"中文键": "中文值"}),
+  emoji: canonical("😀"),
+  seps: canonical("\u2028\u2029"),
+  keyOrder: canonical(
+    Object.fromEntries(
+      ["\u{10000}", "\uE000"].sort().map((k, i) => [k, i + 1])
+    )
+  ),
+};
+process.stdout.write(JSON.stringify({fromLegacy, fromCanon, specialKeys, direct}));
+"""
+        proc = subprocess.run(
+            [node, "-e", script],
+            input=json.dumps({
+                "legacy": py_legacy,
+                "canonical": py_canon,
+                "special": json.dumps(
+                    special_payload, separators=(",", ":"),
+                    ensure_ascii=False),
+            }, ensure_ascii=False),
+            text=True, capture_output=True, check=False)
+        if proc.returncode != 0:
+            check("JS bridge: node execution", False)
+            print(proc.stderr)
+        else:
+            out = json.loads(proc.stdout)
+            check("JS bridge: direct JCS writer matches Python canonical",
+                  out["fromLegacy"] == py_canon
+                  and out["fromCanon"] == py_canon)
+            # Digest recomputed from the JS-emitted text must match.
+            js_digest = "sha256:" + hashlib.sha256(
+                out["fromLegacy"].encode("utf-8")).hexdigest()
+            check("JS bridge: digest stable across JS boundary",
+                  js_digest == py_digest
+                  and rs.build_fingerprint(bridge_payload)["digest"]
+                  == py_digest)
+            check("JS bridge: special keys 10/2/__proto__ match Python",
+                  out["specialKeys"] == py_special
+                  and out["specialKeys"]
+                  == ('{"10":10,"2":2,"__proto__":"own",'
+                      '"nested":[{"10":1,"2":2,"__proto__":3}]}')
+                  and '"__proto__"' in out["specialKeys"]
+                  and out["specialKeys"].index('"10"')
+                  < out["specialKeys"].index('"2"')
+                  < out["specialKeys"].index('"__proto__"'))
+            check("JS bridge: direct Chinese object matches",
+                  out["direct"]["chinese"]
+                  == rs._canonical_fingerprint_json({"中文键": "中文值"}))
+            check("JS bridge: direct emoji matches",
+                  out["direct"]["emoji"]
+                  == rs._canonical_fingerprint_json("😀"))
+            check("JS bridge: direct U+2028/U+2029 matches",
+                  out["direct"]["seps"]
+                  == rs._canonical_fingerprint_json("\u2028\u2029"))
+            check("JS bridge: direct UTF-16 key order matches",
+                  out["direct"]["keyOrder"]
+                  == rs._canonical_fingerprint_json(
+                      {"\U00010000": 1, "\uE000": 2}))
+            # Fail-closed companions (out-of-domain / invalid I-JSON).
+            check("JS bridge companion: NaN rejected in Python contract",
+                  all(_raises_value_error(rs, x)
+                      for x in (math.nan, math.inf, -math.inf)))
+            check("JS bridge companion: out-of-domain ints rejected",
+                  all(_raises_value_error(rs, x) for x in UNSAFE_INTEGERS))
+            check("JS bridge companion: unpaired surrogates rejected",
+                  all(_raises_value_error(rs, x) for x in UNPAIRED_SURROGATES))
 
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0
+
+
+def _raises_value_error(module, value) -> bool:
+    try:
+        module._canonical_fingerprint_json(value)
+    except ValueError:
+        return True
+    return False
 
 
 if __name__ == "__main__":

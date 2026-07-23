@@ -58,8 +58,8 @@ Schema:
         ...
       ],
       "fingerprint": {                 # decode-able backtest provenance
-        "token":  "<base64(canonical provenance JSON)>",  # b64decode -> JSON
-        "digest": "sha256:<hex>",      # stable run id over canonical JSON
+        "token":  "<base64(canonical provenance JSON)>",  # b64decode -> authoritative UTF-8 bytes
+        "digest": "sha256:<hex of those bytes>",  # hash token bytes; do not assume json.loads round-trip
         "provenance": {
           "engine":   { version_string, major, minor, patch, commit_sha },
           "feed":     { canonicalization, source_values_sha256 },
@@ -319,8 +319,225 @@ def build_provenance(engine: dict, cpp_path, transpiled: bool,
     }
 
 
+# Product accepted-type domain for exact Python integers: JavaScript
+# Number.MAX/MIN_SAFE_INTEGER (= ±(2**53 - 1)). Rejecting larger exact ints
+# guarantees unique lossless integer identity across generic ECMAScript
+# consumers. This is not a claim that every such magnitude must round as
+# binary64 — e.g. float(2**53) is exactly representable and remains legal
+# on the float path, while exact int(2**53) is deliberately outside the
+# product integer domain. Out-of-domain provenance yields no fingerprint
+# under existing callers (exception → fingerprint None / skipped).
+# Booleans are handled separately (bool subclasses int).
+_JS_MAX_SAFE_INTEGER = 9007199254740991
+_JS_MIN_SAFE_INTEGER = -9007199254740991
+
+
+def _canonical_json_number(num: float) -> str:
+    """Serialize a finite IEEE-754 float via ECMAScript NumberToString.
+
+    Matches ECMAScript NumberToString (RFC 8785 / JCS numeric form):
+    integral values have no trailing ``.0``, ``±0`` is ``0``, and
+    scientific notation uses ES exponent thresholds (``e`` when the
+    exponent is < -6 or >= 21). Non-finite values raise ValueError.
+    Float subclasses are normalized via base ``float.__float__`` first so
+    hooks such as ``__float__``/``__abs__``/comparisons/``__repr__`` cannot
+    alter the underlying binary64 value used for math and emission.
+    """
+    # Plain built-in float: ignore subclass __float__/__abs__/__lt__/...
+    num = float.__float__(num)
+    if not math.isfinite(num):
+        raise ValueError(
+            "non-finite numbers are not permitted in fingerprint JSON")
+    if num == 0.0:
+        return "0"
+    negative = num < 0
+    r = repr(abs(num))
+    if "e" in r or "E" in r:
+        mant, exp_s = r.lower().split("e")
+        exp = int(exp_s)
+        if "." in mant:
+            whole, frac = mant.split(".")
+            digits_raw = whole + frac
+            n = exp + len(whole)
+        else:
+            digits_raw = mant
+            n = exp + len(digits_raw)
+    else:
+        if "." in r:
+            whole, frac = r.split(".")
+            digits_raw = whole + frac
+            n = len(whole)
+        else:
+            digits_raw = r
+            n = len(digits_raw)
+    # Leading-zero strip adjusts n so value = int(digits)*10^(n-k) holds.
+    lead = len(digits_raw) - len(digits_raw.lstrip("0"))
+    digits = digits_raw.lstrip("0") or "0"
+    if digits != "0":
+        n -= lead
+    while len(digits) > 1 and digits[-1] == "0":
+        digits = digits[:-1]
+    k = len(digits)
+    sign = "-" if negative else ""
+    if 0 < n <= 21:
+        if k <= n:
+            return sign + digits + ("0" * (n - k))
+        return sign + digits[:n] + "." + digits[n:]
+    if -6 < n <= 0:
+        return sign + "0." + ("0" * (-n)) + digits
+    exp = n - 1
+    exp_s = f"+{exp}" if exp >= 0 else str(exp)
+    if k == 1:
+        return sign + digits + "e" + exp_s
+    return sign + digits[0] + "." + digits[1:] + "e" + exp_s
+
+
+def _reject_unpaired_surrogates(s: str, *, what: str) -> None:
+    """Fail closed on unpaired UTF-16 surrogates (invalid I-JSON / UTF-8)."""
+    for ch in s:
+        cp = ord(ch)
+        if 0xD800 <= cp <= 0xDFFF:
+            raise ValueError(
+                f"unpaired UTF-16 surrogate in fingerprint JSON {what}")
+
+
+def _canonical_json_string(s: str) -> str:
+    """Serialize a string in RFC 8785 / JCS string form.
+
+    JSON control characters, quotes, and backslashes are escaped; valid
+    Unicode (including non-ASCII, emoji, and U+2028/U+2029) is emitted as
+    raw code points (not ``ensure_ascii`` ``\\uXXXX`` escapes). Unpaired
+    surrogates raise ValueError rather than producing invalid I-JSON.
+    Str subclasses are normalized via base ``str.__str__`` first so
+    ``__str__``/``__iter__`` hooks cannot redirect iteration or emission.
+    """
+    # Plain built-in str: ignore subclass __str__/__iter__/...
+    s = str.__str__(s)
+    _reject_unpaired_surrogates(s, what="string")
+    return json.dumps(s, ensure_ascii=False)
+
+
+def _utf16_code_unit_key(s: str) -> bytes:
+    """Object-key sort key matching JCS / ECMAScript UTF-16 code unit order.
+
+    Str subclasses are normalized via base ``str.__str__`` first so
+    ``__str__``/``__iter__``/``encode`` hooks cannot corrupt key order or
+    hide unpaired surrogates.
+    """
+    # Plain built-in str: ignore subclass __str__/__iter__/encode hooks.
+    s = str.__str__(s)
+    _reject_unpaired_surrogates(s, what="object key")
+    return s.encode("utf-16-be")
+
+
+def _canonical_fingerprint_json(value) -> str:
+    """Canonical JSON text for fingerprint token/digest bytes.
+
+    Direct RFC 8785 / JCS-style canonical writer over the accepted Python
+    value tree. The resulting UTF-8 token bytes are authoritative for
+    ``digest``; verifiers should hash those bytes rather than assuming plain
+    ``JSON.stringify`` is itself JCS (it does not sort keys or implement
+    full JCS). Over values parsed under a JavaScript / IEEE-754 binary64
+    number model, this matches a JCS direct encoder for the accepted types:
+    - objects: each key is normalized once via base ``str.__str__`` to a
+      plain built-in str; keys sorted by UTF-16 code unit order on those
+      normalized names; no whitespace. Duplicate normalized names raise
+      ValueError (fail closed — distinct str-subclass keys can override
+      ``__eq__``/``__hash__`` so both coexist in a Python dict while
+      ``str.__str__`` yields the same text; emitting both would produce
+      duplicate JSON names that JS silently drops). Non-str keys raise
+      TypeError. The retained original key is used only for value lookup.
+    - arrays: element order preserved; no whitespace
+    - numbers (float): ECMAScript NumberToString for every finite IEEE-754
+      value after base ``float.__float__`` normalization (subclass hooks
+      ignored); non-finite numbers raise ValueError
+    - numbers (int): decimal digits only for exact integers inside the
+      product safe-integer domain [-(2**53-1), 2**53-1]. This is a strict
+      accepted-type policy guaranteeing unique lossless integer identity
+      across generic ECMAScript consumers — not a claim that every larger
+      individual value is unrepresentable as binary64. Exact integers
+      outside the domain raise ValueError (e.g. int 2**53); isolated
+      binary64 floats such as float(2**53) remain legal via the float path.
+      Int subclasses (e.g. IntEnum) are normalized via base ``int.__index__``
+      to a plain built-in int before domain checks and digit emission, so
+      ``__index__``/``__int__``/comparison/``__str__``/``__repr__``/
+      ``__format__`` hooks cannot change the value or bypass rejection.
+      Booleans are not integers.
+    - strings: JCS form — control/quote/backslash escapes, raw valid
+      Unicode; unpaired surrogates raise ValueError. Str subclasses are
+      normalized via base ``str.__str__`` so ``__str__``/``__iter__``/
+      ``encode`` hooks cannot change emission, key order, or bypass
+      surrogate rejection.
+    - bools/null: ``true`` / ``false`` / ``null``
+    """
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return _canonical_json_string(value)
+    if isinstance(value, int) and not isinstance(value, bool):
+        # Plain built-in int via base slot: subclass __index__/__int__/
+        # comparison hooks must not bypass domain checks or alter digits
+        # (Python 3.9 IntEnum str was "Enum.NAME").
+        value = int.__index__(value)
+        if value < _JS_MIN_SAFE_INTEGER or value > _JS_MAX_SAFE_INTEGER:
+            raise ValueError(
+                "integers outside the JavaScript safe-integer range "
+                f"[{_JS_MIN_SAFE_INTEGER}, {_JS_MAX_SAFE_INTEGER}] "
+                "are not permitted in fingerprint JSON")
+        return int.__repr__(value)
+    if isinstance(value, float):
+        return _canonical_json_number(value)
+    if isinstance(value, list):
+        return "[" + ",".join(
+            _canonical_fingerprint_json(v) for v in value) + "]"
+    if isinstance(value, dict):
+        # Normalize each original key exactly once to a plain built-in str.
+        # Distinct str subclasses can override __eq__/__hash__ so two keys
+        # coexist while str.__str__ yields the same text; emit the
+        # normalized name, look up values via the retained original key,
+        # and fail closed on duplicate normalized names.
+        items = []  # (normalized_key, original_key)
+        seen_normalized = set()
+        for k in value.keys():
+            if not isinstance(k, str):
+                raise TypeError(
+                    "fingerprint JSON object keys must be str, "
+                    f"got {type(k).__name__}")
+            nk = str.__str__(k)
+            if nk in seen_normalized:
+                raise ValueError(
+                    "duplicate fingerprint JSON object key after "
+                    f"str normalization: {nk!r}")
+            seen_normalized.add(nk)
+            items.append((nk, k))
+        parts = []
+        for nk, orig in sorted(items, key=lambda ik: _utf16_code_unit_key(ik[0])):
+            parts.append(
+                _canonical_json_string(nk) + ":"
+                + _canonical_fingerprint_json(value[orig]))
+        return "{" + ",".join(parts) + "}"
+    raise TypeError(
+        f"fingerprint JSON cannot encode {type(value).__name__}")
+
+
 def build_fingerprint(provenance: dict) -> dict:
-    canonical = json.dumps(provenance, sort_keys=True, separators=(",", ":"))
+    """Build ``{token, digest, provenance}`` for a provenance dict.
+
+    ``token`` is base64 of the canonical UTF-8 JSON bytes; ``digest`` is
+    ``sha256:`` + hex of those same bytes. Verifiers should treat the decoded
+    token bytes as authoritative and hash them directly. Re-canonicalizing a
+    decoded value tree requires an RFC 8785/JCS direct encoder with an
+    IEEE-754 binary64 number model — default Python ``json.loads`` may yield
+    ints outside the product integer domain for tokens such as ``1e20``
+    (``100000000000000000000``). Project tests that rebuild from token text
+    use ``json.loads(text, parse_int=float)``. Out-of-domain inputs raise
+    here; existing callers yield no fingerprint (``None`` / skip).
+    """
+    canonical = _canonical_fingerprint_json(provenance)
     raw = canonical.encode("utf-8")
     return {
         "token": base64.b64encode(raw).decode("ascii"),
