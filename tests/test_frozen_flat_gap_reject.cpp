@@ -226,9 +226,11 @@ void test_commissioned_all_in_gap_fills_then_trims() {
 }
 
 // GREEN-D. pct=99 twin of RED-3's arithmetic — the flag is set ONLY at exactly
-// 100%, so pct=99 is never gap-rejected. frozen floor(1000*0.99/100)=9; the
-// 120 fill is over budget but the restore floors sub-lot (qty_step 1), so no
-// trim: the position simply holds 9.
+// 100%, so pct=99 is never gap-rejected: the entry FILLS. frozen
+// floor(1000*0.99/100)=9; the 120 fill is over budget by restore 0.6667, which
+// floors sub-lot (qty_step 1), so the broker closes one whole contract and the
+// position holds 8. That floor-zero lot is the generic TV rule and carries no
+// side or commission conditioning — this is the commission-free LONG shape.
 void test_pct99_twin_fills() {
     std::printf("-- GREEN-D: pct=99 twin fills (rule requires exactly 100) --\n");
     Probe eng(/*pct=*/99.0, /*capital=*/1000.0, /*qty_step=*/1.0,
@@ -236,12 +238,13 @@ void test_pct99_twin_fills() {
     eng.script = "L.";
     std::vector<Bar> bars = {
         mk_bar(1000, 100, 100, 100, 100),   // frozen floor(9.9)=9
-        mk_bar(2000, 120, 125,  80, 110),   // over budget but restore sub-lot
+        mk_bar(2000, 120, 125,  80, 110),   // over budget, sub-lot restore
     };
     eng.run(bars.data(), (int)bars.size());
-    CHECK(eng.position_side_ == PositionSide::LONG);
-    CHECK_NEAR(eng.position_size(), 9.0, 1e-9);
-    CHECK(eng.trade_count() == 0);
+    CHECK(eng.position_side_ == PositionSide::LONG);   // NOT gap-rejected
+    CHECK_NEAR(eng.position_size(), 8.0, 1e-9);
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
 }
 
 // GREEN-E. Gap-DOWN true-flat all-in: notional 100*98 = 9800 < equity 10000,

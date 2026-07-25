@@ -696,10 +696,6 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // state that a later bar may reconstruct or reuse.
     const bool opening_event_pending = opening_affordability_pending_;
     const bool opening_event_eligible = opening_affordability_eligible_;
-    const bool opening_event_commissioned_default_long =
-        commissioned_all_in_market_long_opening_affordability_;
-    const bool opening_event_default_long_reversal =
-        opening_affordability_default_long_reversal_;
     const bool opening_event_default_short_reversal =
         close_then_short_opening_requires_adverse_retry_;
     const double opening_event_raw_fill_base =
@@ -786,7 +782,6 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
 
     double q_min = 0.0;
     double raw_exit_fill_base = 0.0;
-    bool fee_created_floor_zero_candidate = false;
     if (opening_affordability) {
         // Post-fill affordability is evaluated from the current position's
         // actual, directionally snapped/slipped entry basis. Capital and
@@ -834,39 +829,27 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
             return;
         }
         const double required_margin = qty * margin_per_unit;
-        if (opening_equity >= required_margin) {
+        // TV's converted account-currency broker ledger is cent-rounded, so a
+        // post-fee deficit below half a cent is not a real deficit there: an
+        // exported converted-USD tape does not act on a ~$0.0025 conversion
+        // remainder, while a same-currency tape does act on a ~$0.0026 one.
+        // This is an AFFORDABILITY (trigger) tolerance and is deliberately kept
+        // separate from the lot rule below. The forced-liquidation lot fit that
+        // removed the lot rule's lifecycle conditioning covers USDT-account
+        // tapes only — it excluded every FX-converted account (those score 3.9%
+        // because q_min needs ~1e-7 relative precision through the daily
+        // conversion series) — so it carries no evidence about this edge and
+        // must not be read as deleting it. Same-currency strategies keep the
+        // exact comparison: the tolerance is identically zero for them.
+        const double converted_ledger_guard =
+            account_currency_fx_timestamps_.empty()
+                ? 0.0
+                : std::max(0.005, std::abs(opening_equity) * 1e-12);
+        if (opening_equity >= required_margin - converted_ledger_guard) {
             run_default_short_adverse_retry();
             return;
         }
         q_min = qty - opening_equity / margin_per_unit;
-        // A source-faithful TV tape pins a discontinuous broker edge for the
-        // exact one-shot provenance above: margin remains affordable before a
-        // positive percentage opening fee, that fee alone creates a sub-step
-        // shortfall, and TV closes one whole contract instead of dust-nooping.
-        // Keep both comparisons directional and tolerance-aware.  An absolute
-        // difference alone would turn affordable headroom into a false call.
-        const double pre_fee_equity = opening_equity + entry_commission;
-        // TV's converted account-currency broker ledger is cent-rounded at
-        // this discontinuity. A sub-half-cent post-fee deficit is therefore
-        // still affordable only when a quote->account conversion provider is
-        // active. Same-currency strategies retain the raw directional test:
-        // z8830's tape proves that a ~$0.0026 deficit still receives the
-        // one-contract fallback, while crypt0graf's converted USD ledger does
-        // not act on the corresponding ~$0.0025 conversion remainder.
-        // Keep the comparison directional so positive headroom cannot be
-        // mistaken for a deficit merely because its absolute magnitude matches.
-        const double comparison_guard = std::max(
-            account_currency_fx_timestamps_.empty() ? 1e-9 : 0.005,
-            std::abs(pre_fee_equity) * 1e-12);
-        const double pre_fee_headroom = pre_fee_equity - required_margin;
-        const double post_fee_deficit = required_margin - opening_equity;
-        fee_created_floor_zero_candidate =
-            opening_event_commissioned_default_long
-            && commission_type_ == CommissionType::PERCENT
-            && commission_value_ > 0.0
-            && entry_commission > 0.0
-            && pre_fee_headroom > comparison_guard
-            && post_fee_deficit > comparison_guard;
         raw_exit_fill_base = opening_event_raw_fill_base;
     } else {
         // Shorts and leveraged longs without a fresh opening event keep the
@@ -921,19 +904,18 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         }
         q_min = std::floor(step_count) * qty_step_;
     }
-    // A sub-lot 1x-long opening shortfall is untradeable dust. It is a no-op,
-    // not a reason to force the generic finite-price cascade's one-step
-    // progress fallback. qty_step==0 intentionally retains continuous-qty
-    // behavior because no exchange lot floor was configured.
+    // A sub-lot opening shortfall reaches the SAME broker discontinuity as the
+    // finite-price cascade below: a real positive restore quantity that floors
+    // below the instrument lot step is covered by closing one whole contract,
+    // not by treating it as untradeable dust. This check carries no side,
+    // commission-model, or entry-lifecycle conditioning — see the evidence
+    // recorded at the cascade's own floor-zero branch. qty_step==0
+    // intentionally retains continuous-qty behavior because no exchange lot
+    // floor was configured.
     double opening_floor_zero_fallback =
         std::numeric_limits<double>::quiet_NaN();
     if (opening_affordability && q_min <= kQtyEpsilon) {
-        if ((fee_created_floor_zero_candidate
-             || opening_event_default_long_reversal
-             || (opening_event_default_short_reversal
-                 && (commissioned_all_in_market_short_lifecycle_
-                     || default_market_direct_short_reversal_lifecycle_)))
-            && qty_step_ > 0.0
+        if (qty_step_ > 0.0
             && qty_step_ <= 1.0
             && raw_q_min > kQtyEpsilon
             && raw_q_min < 1.0) {
@@ -968,14 +950,29 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
                 run_default_short_adverse_retry();
                 return;
             }
-            bool used_one_contract_fallback = false;
-            const bool one_contract_short_lifecycle =
-                commissioned_all_in_market_short_lifecycle_
-                || default_market_direct_short_reversal_lifecycle_;
-            if (one_contract_short_lifecycle
-                && !margin_zero_cover_full_liquidation_
-                && position_side_ == PositionSide::SHORT
-                && qty_step_ <= 1.0
+            // A finite-price liquidation IS required, but the documented
+            // minimum-restore quantity truncates to zero at the instrument lot
+            // precision. TradingView closes ONE WHOLE CONTRACT there, and that
+            // fallback carries no side, commission-model, or entry-lifecycle
+            // conditioning. Fitted against every `Signal == "Margin call"`
+            // fragment in the campaign's TV exports (58,737 USDT-account
+            // fragments over 89 slugs, 99.956% exact): on the 974 events where
+            // the fallback value is unconstrained TV closed exactly 1.0000
+            // contracts 971 times. 950 of those lie OUTSIDE any short/
+            // commissioned lifecycle scope and 464 of them are LONG *and*
+            // commission-free. Competing fallbacks scored 0/974 each: one
+            // qty_step, 4 qty_step, the whole residual, 1% of the position.
+            //
+            // Only the opt-in whole-residual interpretation keeps precedence.
+            // The structural guards are the same ones the converted-currency
+            // carried-rollover helper above uses: the restore quantity must be
+            // real and sub-contract, and the instrument's lot grid must be able
+            // to express one whole contract. When they do not hold, fail closed
+            // rather than fabricate a lot — the previous `min(qty_step_, qty)`
+            // default is contradicted 962 times and supported 0 times.
+            double one_contract_fallback =
+                std::numeric_limits<double>::quiet_NaN();
+            if (qty_step_ <= 1.0
                 && raw_q_min > kQtyEpsilon
                 && raw_q_min < 1.0) {
                 const double candidate = std::min(1.0, qty);
@@ -986,22 +983,15 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
                     1e-12, std::abs(candidate) * 1e-12);
                 if (full_position_cap
                     || std::abs(gridded - candidate) <= grid_guard) {
-                    floored = candidate;
-                    used_one_contract_fallback = true;
+                    one_contract_fallback = candidate;
                 }
             }
-            // A finite-price liquidation IS required, but the documented
-            // minimum-restore quantity truncates to zero at the instrument lot
-            // precision. Exports disagree on this edge: some close the whole
-            // residual, the commissioned all-in short lifecycle closes one
-            // whole contract, and others continue with a bounded nibble.
-            // Preserve the existing full-residual candidate's precedence,
-            // then the lifecycle interpretation, then the established
-            // one-step default.
-            if (!used_one_contract_fallback) {
-                floored = margin_zero_cover_full_liquidation_
-                    ? qty
-                    : std::min(qty_step_, qty);
+            if (margin_zero_cover_full_liquidation_) {
+                floored = qty;
+            } else if (std::isfinite(one_contract_fallback)) {
+                floored = one_contract_fallback;
+            } else {
+                return;
             }
         }
         qty_liq = floored;

@@ -291,8 +291,12 @@ static void test_short_margin_call_zero_cover_closes_full_residual() {
     CHECK(near(eng.position_size(), 0.0));
 }
 
-static void test_short_margin_call_zero_cover_defaults_to_one_step() {
-    std::printf("test_short_margin_call_zero_cover_defaults_to_one_step\n");
+// Without the opt-in metadata the generic one-contract fallback applies. The
+// position here is 0.0265 contracts, far below one, so the min(1.0, qty) cap
+// closes the whole residual anyway — TV's own tapes contain 1,007 such capped
+// floor-zero events and match this 1,007/1,007.
+static void test_short_margin_call_zero_cover_closes_sub_one_residual() {
+    std::printf("test_short_margin_call_zero_cover_closes_sub_one_residual\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 3788.00, 3788.00, 3788.00, 3788.00, 1.0),
         mk_bar(2000, 3788.00, 3788.48, 3766.62, 3775.78, 1.0),
@@ -303,8 +307,8 @@ static void test_short_margin_call_zero_cover_defaults_to_one_step() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.trade_size(0), 0.0001));
-    CHECK(near(eng.position_size(), -0.0264));
+    CHECK(near(eng.trade_size(0), 0.0265));
+    CHECK(near(eng.position_size(), 0.0));
 }
 
 static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble() {
@@ -326,12 +330,15 @@ static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble()
         mk_bar(2000, 100.0, adverse, 99.0, 100.0, 1.0),
     };
 
+    // Without the opt-in metadata the representation jitter is NOT rounded
+    // away, so this lands on the generic floor-zero discontinuity and closes
+    // one whole contract.
     ShortLiqProbe default_eng(/*disable_mc=*/false, /*qty_step=*/step);
     default_eng.run(bars.data(), (int)bars.size());
     CHECK(default_eng.trade_count() == 1);
     CHECK(default_eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(default_eng.trade_size(0), step, 1e-12));
-    CHECK(near(default_eng.position_size(), -(10.0 - step), 1e-12));
+    CHECK(near(default_eng.trade_size(0), 1.0, 1e-12));
+    CHECK(near(default_eng.position_size(), -9.0, 1e-12));
 
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/step);
     eng.set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
@@ -417,8 +424,9 @@ static void test_short_margin_call_nonzero_cover_keeps_four_x_nibble() {
 }
 
 // Opening-affordability uses a separate, one-shot budget check. Its sub-lot
-// shortfall is intentionally untradeable dust and must remain a no-op when the
-// finite-price zero-cover fallback changes.
+// shortfall reaches the same broker discontinuity as the finite-price cascade
+// and is covered by closing one whole contract, independent of the opt-in
+// zero-cover metadata.
 class ShortOpeningDustProbe : public MCEngine {
 public:
     bool saw_actionable_opening_event = false;
@@ -447,8 +455,9 @@ public:
     }
 };
 
-static void test_short_opening_affordability_zero_cover_remains_dust_noop() {
-    std::printf("test_short_opening_affordability_zero_cover_remains_dust_noop\n");
+static void test_short_opening_affordability_zero_cover_closes_one_contract() {
+    std::printf(
+        "test_short_opening_affordability_zero_cover_closes_one_contract\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 99.99, 99.99, 99.99, 99.99, 1.0),
         // Required margin is 999.90. The 0.015% opening fee leaves equity
@@ -461,8 +470,10 @@ static void test_short_opening_affordability_zero_cover_remains_dust_noop() {
     eng.run(bars.data(), (int)bars.size());
 
     CHECK(eng.saw_actionable_opening_event);
-    CHECK(eng.trade_count() == 0);
-    CHECK(near(eng.position_size(), -10.0));
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 1.0));
+    CHECK(near(eng.position_size(), -9.0));
     CHECK(!eng.opening_pending());
     CHECK(!eng.opening_eligible());
     CHECK(std::isnan(eng.opening_raw_base()));
@@ -798,8 +809,10 @@ static void test_fee_created_floor_zero_rejects_off_grid_one_contract() {
     CHECK(near(eng.position_size(), 5.0));
 }
 
-static void test_cash_per_order_floor_zero_stays_outside_percent_fee_rule() {
-    std::printf("test_cash_per_order_floor_zero_stays_outside_percent_fee_rule\n");
+// The floor-zero fallback is commission-MODEL independent: a fixed per-order
+// fee that creates the same sub-step shortfall gets the same one contract.
+static void test_cash_per_order_floor_zero_closes_one_contract() {
+    std::printf("test_cash_per_order_floor_zero_closes_one_contract\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
         mk_bar(2000, 1800.0, 1800.0, 1800.0, 1800.0, 1.0),
@@ -809,8 +822,10 @@ static void test_cash_per_order_floor_zero_stays_outside_percent_fee_rule() {
         CommissionType::CASH_PER_ORDER, /*commission_value=*/0.2);
     eng.run(bars.data(), (int)bars.size());
 
-    CHECK(eng.trade_count() == 0);
-    CHECK(near(eng.position_size(), 5.5555));
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 1.0));
+    CHECK(near(eng.position_size(), 4.5555));
 }
 
 // Repurposed from the KI-61 "sublot overage held" fixture (design-explicit-qty-
@@ -1492,6 +1507,9 @@ private:
     bool explicit_qty_;
 };
 
+// The commissioned-default-long PROVENANCE BIT is still scoped to an
+// omitted-quantity entry, but it no longer gates the floor-zero lot: both
+// shapes reach the same broker discontinuity and both close one contract.
 static void test_commissioned_close_then_long_floor_zero_scope() {
     std::printf("test_commissioned_close_then_long_floor_zero_scope\n");
     std::vector<Bar> bars = {
@@ -1512,15 +1530,17 @@ static void test_commissioned_close_then_long_floor_zero_scope() {
     CHECK(near(omitted.entry_price(1), 2967.80));
     CHECK(near(omitted.exit_price(1), 2967.80));
     CHECK(near(omitted.trade_size(1), 1.0, 1e-9));
-    CHECK(explicit_control.trade_count() == 1);  // short close only
-    CHECK(margin_call_rows(explicit_control) == 0);
+    // Same discontinuity, same lot: only the provenance bit differs.
+    CHECK(explicit_control.trade_count() == 2);
+    CHECK(margin_call_rows(explicit_control) == 1);
+    CHECK(near(explicit_control.trade_size(1), 1.0, 1e-9));
 }
 
 // After the close-then-short fill-price trim, its bounded ordinary adverse
-// retry can
-// require a positive restore quantity smaller than one configured lot. TV's
-// source-bound tape closes one whole contract at that exact discontinuity; the
-// established generic finite-price behavior closes one qty_step instead.
+// retry can require a positive restore quantity smaller than one configured
+// lot. TV's source-bound tape closes one whole contract at that exact
+// discontinuity, whether or not the position carries entry-lifecycle
+// provenance — the two arms below are now expected to agree.
 class DefaultShortLaterFloorZeroProbe : public MCEngine {
 public:
     explicit DefaultShortLaterFloorZeroProbe(bool full_residual = false) {
@@ -1580,11 +1600,11 @@ static void test_default_short_lifecycle_floor_zero_one_contract() {
     DefaultShortLaterFloorZeroProbe full_residual(/*full_residual=*/true);
     full_residual.trigger(/*carry_s_provenance=*/true);
 
-    // A normal short without default-opening lifecycle provenance retains the
-    // established one-step progress fallback.
+    // A normal short without default-opening lifecycle provenance gets the
+    // SAME one whole contract: the fallback is not lifecycle-conditioned.
     CHECK(top_level.trade_count() == 1);
-    CHECK(near(top_level.trade_size(0), 0.0001, 1e-9));
-    CHECK(near(top_level.position_size(), -3.6929, 1e-9));
+    CHECK(near(top_level.trade_size(0), 1.0, 1e-9));
+    CHECK(near(top_level.position_size(), -2.6930, 1e-9));
 
     CHECK(one_contract.trade_count() == 1);
     CHECK(one_contract.exit_comment(0) == std::string("Margin call"));
@@ -1651,14 +1671,13 @@ static void test_default_short_opening_floor_zero_one_contract() {
     DefaultShortOpeningFloorZeroProbe enabled(/*carry_lifecycle=*/true);
     enabled.trigger();
 
-    // Without the scoped one-contract lifecycle, the opening checkpoint
-    // dust-noops and its adverse retry follows the generic finite-price rule:
-    // fee-net equity is 1000 + .495 - .5 = 999.995, so the positive 0.00005
-    // restore amount floors below one 0.0001 lot and closes one qty_step.
+    // Fee-net equity is 1000 + .495 - .5 = 999.995, so the positive 0.00005
+    // restore amount floors below one 0.0001 lot. The opening checkpoint acts
+    // on it identically with or without lifecycle provenance.
     CHECK(baseline.trade_count() == 1);
     CHECK(baseline.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(baseline.trade_size(0), 0.0001, 1e-9));
-    CHECK(near(baseline.position_size(), -9.9999, 1e-9));
+    CHECK(near(baseline.trade_size(0), 1.0, 1e-9));
+    CHECK(near(baseline.position_size(), -9.0, 1e-9));
     CHECK(enabled.trade_count() == 1);
     CHECK(enabled.exit_comment(0) == std::string("Margin call"));
     CHECK(near(enabled.entry_price(0), 100.0));
@@ -1843,10 +1862,12 @@ static void test_default_flat_short_floor_zero_caps_to_residual() {
         /*carry_flat_lifecycle=*/true);
     enabled.trigger();
 
+    // 0.3383 contracts is below one, so the min(1.0, qty) cap closes the whole
+    // residual on both arms.
     CHECK(baseline.trade_count() == 1);
     CHECK(near(baseline.exit_price(0), 3735.52));
-    CHECK(near(baseline.trade_size(0), 0.0001, 1e-9));
-    CHECK(near(baseline.position_size(), -0.3382, 1e-9));
+    CHECK(near(baseline.trade_size(0), 0.3383, 1e-9));
+    CHECK(near(baseline.position_size(), 0.0, 1e-9));
 
     CHECK(enabled.trade_count() == 1);
     CHECK(enabled.exit_comment(0) == std::string("Margin call"));
@@ -1933,8 +1954,10 @@ static void test_user_partial_invalidates_commissioned_short_lifecycle() {
     CHECK(probe.trade_count() == 2);
     CHECK(probe.exit_comment(1) == std::string("Margin call"));
     CHECK(near(probe.exit_price(1), 105.0));
-    CHECK(near(probe.trade_size(1), 0.0001, 1e-9));
-    CHECK(near(probe.position_size(), -(qty_before_margin - 0.0001), 1e-9));
+    // The invalidated lifecycle no longer changes the LOT (the fallback is
+    // unconditional); it is still asserted below as provenance state.
+    CHECK(near(probe.trade_size(1), 1.0, 1e-9));
+    CHECK(near(probe.position_size(), -(qty_before_margin - 1.0), 1e-9));
     CHECK(!probe.lifecycle_after_margin_partial);
 }
 
@@ -2317,12 +2340,16 @@ static void test_zero_qty_add_does_not_duplicate_cash_per_order_fee() {
     ZeroQtyCashPerOrderAddProbe eng;
     eng.run(bars.data(), (int)bars.size());
 
-    // One real $60 fee: q_min=(1000-(1000-60))/100=.6, floors to zero.
-    // Charging the zero-qty row adds a phantom second fee: q_min=1.2,
-    // floors to one, then the 4x rule incorrectly trims four contracts.
+    // One real $60 fee: q_min=(1000-(1000-60))/100=.6, floors to zero, so the
+    // broker closes one whole contract. Charging the zero-qty row adds a
+    // phantom second fee: q_min=1.2, floors to ONE, and the 4x rule then trims
+    // FOUR contracts — that is the regression this fixture exists to catch, and
+    // 1 vs 4 still discriminates it.
     CHECK(eng.preserved_after_zero_add);
-    CHECK(eng.trade_count() == 0);
-    CHECK(near(eng.position_size(), 10.0));
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 1.0));
+    CHECK(near(eng.position_size(), 9.0));
     CHECK(!eng.opening_pending());
     CHECK(!eng.opening_eligible());
     CHECK(std::isnan(eng.opening_raw_base()));
@@ -2521,15 +2548,273 @@ static void test_default_long_reversal_floor_zero_closes_one_contract() {
     CHECK(near(eng.position_size(), 4.2798));
 }
 
-static void test_explicit_long_reversal_floor_zero_remains_dust() {
-    std::printf("test_explicit_long_reversal_floor_zero_remains_dust\n");
+// The explicit-quantity twin reaches the identical broker discontinuity, and
+// the lot rule does not read the entry's quantity provenance.
+static void test_explicit_long_reversal_floor_zero_closes_one_contract() {
+    std::printf(
+        "test_explicit_long_reversal_floor_zero_closes_one_contract\n");
     DefaultLongReversalFloorZeroProbe eng(/*explicit_reversal=*/true);
     auto bars = default_long_reversal_floor_zero_bars();
     eng.run(bars.data(), static_cast<int>(bars.size()));
 
-    CHECK(eng.trade_count() == 1);  // seed close only; no broker trim
-    CHECK(margin_call_rows(eng) == 0);
-    CHECK(near(eng.position_size(), 5.2798));
+    CHECK(eng.trade_count() == 2);  // seed close + same-fill long MC trim
+    CHECK(margin_call_rows(eng) == 1);
+    CHECK(near(eng.trade_size(1), 1.0));
+    CHECK(near(eng.position_size(), 4.2798));
+}
+
+// ── Generic floor-zero forced-liquidation lot (unconditional one contract) ──
+//
+// TradingView's forced-liquidation quantity rule is
+//
+//     q_min   = position_qty - equity(adverse) / (adverse*pv*fx*margin/100)
+//     q_min   = floor_step(q_min)                    // floor BEFORE the 4x
+//     qty_liq = floor_step(4 * q_min)
+//     if qty_liq == 0: qty_liq = 1.0                 // ONE WHOLE CONTRACT
+//     qty_liq = min(qty_liq, position_qty)
+//
+// and the floor-zero fallback is UNCONDITIONAL: it is not scoped to a side, a
+// commission model, or an entry lifecycle. Forensic fit against every
+// `Signal == "Margin call"` fragment in the campaign's TV exports (58,737
+// USDT-account fragments over 89 slugs) matches 58,711 = 99.956% exactly, and
+// on the 974 events where the fallback value is unconstrained TV closed exactly
+// 1.0000 contracts 971 times. 950 of those lie OUTSIDE any short/commission
+// lifecycle scope and 464 are LONG *and* commission-free. No alternative
+// fallback value (one qty_step, 4 qty_step, the whole residual, 1% of the
+// position) matched a single one of them.
+//
+// The fixtures below pin the two configurations the previous lifecycle gate
+// could not reach by construction, plus the structural guards that survive and
+// the full-position cap.
+
+// Commission-free all-in short, sized and filled through the ordinary entry
+// path, driven to a positive restore quantity smaller than one lot step.
+class CommissionFreeShortFloorZeroProbe : public MCEngine {
+public:
+    CommissionFreeShortFloorZeroProbe(double initial_capital, double qty_step) {
+        initial_capital_ = initial_capital;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;             // commission-free
+        margin_short_ = 100.0;               // 1x, Pine default
+        process_orders_on_close_ = true;     // market entry fills at bar0 close
+        qty_step_ = qty_step;
+        syminfo_mintick_ = 0.01;
+    }
+
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, kNaN);
+        }
+    }
+};
+
+// RED-1 class (805 TV events): a LONG at margin_long=100 has no adverse-price
+// liquidation, so its only broker action is the opening affordability event.
+// Commission is zero, so no fee-created provenance exists — the previous gate
+// could not emit anything here at all.
+class CommissionFreeLongOpeningFloorZeroProbe : public MCEngine {
+public:
+    CommissionFreeLongOpeningFloorZeroProbe() {
+        initial_capital_ = 1000.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;             // commission-free
+        margin_long_ = 100.0;                // 1x -> no finite liquidation price
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+
+        constexpr double qty = 10.0;
+        constexpr double entry = 100.0;
+        position_side_ = PositionSide::LONG;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = entry;
+        position_entry_time_ = 1000;
+        position_qty_ = qty;
+        position_entry_count_ = 1;
+        position_open_bar_ = 0;
+        trail_best_price_ = entry;
+        // required margin 1000.0 vs equity 999.995 => raw q_min = 0.00005,
+        // exactly half of one 0.0001 lot, so floor_step(q_min) == 0.
+        net_profit_sum_ = -0.005;
+        pyramid_entries_.push_back(
+            {entry, position_entry_time_, qty, "L", 0});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["L"] = qty;
+        opening_affordability_pending_ = true;
+        opening_affordability_eligible_ = true;
+        opening_affordability_raw_fill_base_ = entry;
+    }
+
+    void on_bar(const Bar&) override {}
+
+    void trigger() {
+        current_bar_ = mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0);
+        bar_index_ = 1;
+        process_margin_call(current_bar_);
+    }
+};
+
+// RED-3 class: a directly seeded SHORT at an exact finite-price floor-zero
+// discontinuity. entry / adverse / qty / raw_q_min are explicit so the guard
+// cases differ in exactly one structural input.
+class SeededShortFloorZeroProbe : public MCEngine {
+public:
+    SeededShortFloorZeroProbe(double qty_step, double qty, double raw_q_min) {
+        initial_capital_ = 10000.0;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_short_ = 100.0;
+        qty_step_ = qty_step;
+        syminfo_mintick_ = 0.01;
+
+        constexpr double entry = 1799.94;
+        position_side_ = PositionSide::SHORT;
+        position_cycle_seq_ = next_position_cycle_seq_++;
+        position_entry_price_ = entry;
+        position_entry_time_ = 1000;
+        position_qty_ = qty;
+        position_entry_count_ = 1;
+        position_open_bar_ = 0;
+        trail_best_price_ = entry;
+        // Solve net_profit_sum_ so that equity(adverse) == (qty - raw_q_min) *
+        // adverse, i.e. the engine's q_min is exactly raw_q_min.
+        net_profit_sum_ =
+            (qty - raw_q_min) * kAdverse - initial_capital_
+            + (kAdverse - entry) * qty;
+        pyramid_entries_.push_back(
+            {entry, position_entry_time_, qty, "S", 0});
+        pyramid_entries_.back().entry_incarnation = 1;
+        snapshot_entry_commission(pyramid_entries_.back());
+        id_unclosed_qty_["S"] = qty;
+    }
+
+    void on_bar(const Bar&) override {}
+
+    void trigger() {
+        current_bar_ = mk_bar(
+            2000, 1800.00, kAdverse, 1799.50, 1800.50, 1.0);
+        bar_index_ = 1;
+        process_margin_call(current_bar_);
+    }
+
+    static constexpr double kAdverse = 1801.26;
+};
+
+// RED-1 — the 805-event class. LONG at margin_long=100, commission 0, positive
+// restore quantity below one lot step. TV closes ONE WHOLE CONTRACT; the
+// lifecycle-gated engine emitted nothing at all (the gate required a
+// commissioned default-long / reversal provenance this shape cannot have).
+static void test_commission_free_long_floor_zero_closes_one_contract() {
+    std::printf("test_commission_free_long_floor_zero_closes_one_contract\n");
+    CommissionFreeLongOpeningFloorZeroProbe eng;
+    eng.trigger();
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 100.0));
+    CHECK(near(eng.exit_price(0), 100.0));
+    CHECK(near(eng.trade_size(0), 1.0, 1e-9));
+    CHECK(near(eng.position_size(), 9.0, 1e-9));
+}
+
+// RED-2 — the 166-event class. Commission-free SHORT on the ordinary
+// finite-price cascade, no lifecycle provenance of any kind. TV closes ONE
+// WHOLE CONTRACT; the engine closed one 0.0001 qty_step.
+static void test_commission_free_short_floor_zero_closes_one_contract() {
+    std::printf("test_commission_free_short_floor_zero_closes_one_contract\n");
+    constexpr double step = 0.0001;
+    constexpr double target_q_min = 0.5 * step;   // half a lot -> floors to zero
+    // All-in short of 10 @ 100 from 1000 of equity:
+    //   equity(adverse) = 1000 - (adverse - 100) * 10
+    //   q_min           = 10 - equity(adverse) / adverse = 20 - 2000 / adverse
+    const double adverse = 2000.0 / (20.0 - target_q_min);
+    const double equity_at_high = 1000.0 - (adverse - 100.0) * 10.0;
+    const double q_min = 10.0 - equity_at_high / adverse;
+    CHECK(q_min > 0.0);
+    CHECK(q_min < step);
+
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),   // short 10 fills @100
+        mk_bar(2000, 100.0, adverse, 99.0, 100.0, 1.0),  // adverse high
+    };
+
+    CommissionFreeShortFloorZeroProbe eng(
+        /*initial_capital=*/1000.0, /*qty_step=*/step);
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.entry_price(0), 100.0));
+    CHECK(near(eng.exit_price(0), 100.01, 1e-12));
+    CHECK(near(eng.trade_size(0), 1.0, 1e-9));
+    CHECK(near(eng.position_size(), -9.0, 1e-9));
+}
+
+// RED-3 — the relaxation must NOT become unconditional in the wrong way. The
+// structural guards that survive are exactly the ones the already-generic
+// carried-rollover helper uses: the instrument lot grid must be able to express
+// one whole contract. Neither case may fall back to a fabricated one-step
+// nibble either — the one-qty_step default is contradicted by every decidable
+// TV event, so a suppressed fallback is a no-op, not a smaller fill.
+static void test_floor_zero_one_contract_respects_structural_guards() {
+    std::printf("test_floor_zero_one_contract_respects_structural_guards\n");
+
+    // (a) qty_step 0.3 divides 1.0 off-grid (floor_step(1.0) == 0.9) and the
+    //     position is far above one contract, so no full-position cap applies.
+    SeededShortFloorZeroProbe off_grid(
+        /*qty_step=*/0.3, /*qty=*/6.0, /*raw_q_min=*/0.15);
+    off_grid.trigger();
+    CHECK(off_grid.trade_count() == 0);
+    CHECK(near(off_grid.position_size(), -6.0, 1e-9));
+
+    // (b) qty_step 2.5 is coarser than one whole contract, so "one contract"
+    //     is not a tradeable quantity on this instrument at all.
+    SeededShortFloorZeroProbe coarse_step(
+        /*qty_step=*/2.5, /*qty=*/7.5, /*raw_q_min=*/0.5);
+    coarse_step.trigger();
+    CHECK(coarse_step.trade_count() == 0);
+    CHECK(near(coarse_step.position_size(), -7.5, 1e-9));
+
+    // Teeth: the same shape on a lot grid that CAN express one contract does
+    // liquidate exactly 1.0, proving the two assertions above can fail.
+    SeededShortFloorZeroProbe on_grid(
+        /*qty_step=*/0.25, /*qty=*/6.0, /*raw_q_min=*/0.125);
+    on_grid.trigger();
+    CHECK(on_grid.trade_count() == 1);
+    CHECK(near(on_grid.trade_size(0), 1.0, 1e-9));
+    CHECK(near(on_grid.position_size(), -5.0, 1e-9));
+}
+
+// RED-4 — the one-contract fallback is still capped at the whole position, so a
+// sub-one-contract position is closed out entirely rather than over-liquidated.
+static void test_floor_zero_one_contract_caps_at_sub_one_position() {
+    std::printf("test_floor_zero_one_contract_caps_at_sub_one_position\n");
+    constexpr double step = 0.0001;
+    constexpr double target_q_min = 0.5 * step;
+    // All-in short of 0.5 @ 100 from 50 of equity:
+    //   equity(adverse) = 50 - (adverse - 100) * 0.5
+    //   q_min           = 0.5 - equity(adverse) / adverse = 1 - 100 / adverse
+    const double adverse = 100.0 / (1.0 - target_q_min);
+    const double equity_at_high = 50.0 - (adverse - 100.0) * 0.5;
+    const double q_min = 0.5 - equity_at_high / adverse;
+    CHECK(q_min > 0.0);
+    CHECK(q_min < step);
+
+    std::vector<Bar> bars = {
+        mk_bar(1000, 100.0, 100.0, 99.0, 100.0, 1.0),   // short 0.5 fills @100
+        mk_bar(2000, 100.0, adverse, 99.0, 100.0, 1.0),
+    };
+
+    CommissionFreeShortFloorZeroProbe eng(
+        /*initial_capital=*/50.0, /*qty_step=*/step);
+    eng.run(bars.data(), static_cast<int>(bars.size()));
+
+    CHECK(eng.trade_count() == 1);
+    CHECK(eng.exit_comment(0) == std::string("Margin call"));
+    CHECK(near(eng.trade_size(0), 0.5, 1e-9));   // NOT 1.0
+    CHECK(near(eng.position_size(), 0.0, 1e-9));
 }
 
 // A reused engine handle must clear the per-position state before on_bar of
@@ -2641,12 +2926,12 @@ int main() {
     test_short_margin_call();
     test_short_margin_call_qty_step();
     test_short_margin_call_zero_cover_closes_full_residual();
-    test_short_margin_call_zero_cover_defaults_to_one_step();
+    test_short_margin_call_zero_cover_closes_sub_one_residual();
     test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble();
     test_short_margin_call_just_below_step_still_zero_covers();
     test_short_margin_call_zero_cover_without_qty_step_stays_continuous();
     test_short_margin_call_nonzero_cover_keeps_four_x_nibble();
-    test_short_opening_affordability_zero_cover_remains_dust_noop();
+    test_short_opening_affordability_zero_cover_closes_one_contract();
     test_short_margin_call_account_fx();
     test_margin_liquidation_price_formula();
     test_short_margin_call_disabled();
@@ -2659,7 +2944,7 @@ int main() {
     test_fee_created_sub_half_cent_deficit_respects_fx_ledger();
     test_fee_created_nonzero_floor_keeps_four_x_quantity();
     test_fee_created_floor_zero_rejects_off_grid_one_contract();
-    test_cash_per_order_floor_zero_stays_outside_percent_fee_rule();
+    test_cash_per_order_floor_zero_closes_one_contract();
     test_explicit_all_in_zero_comm_adverse_gap_declined();
     test_explicit_all_in_commissioned_adverse_gap_declined();
     test_explicit_all_in_zero_comm_no_qty_step_declined();
@@ -2691,7 +2976,11 @@ int main() {
     test_flat_clears_and_raw_fresh_reuses_state();
     test_reversal_captures_fresh_opening_state();
     test_default_long_reversal_floor_zero_closes_one_contract();
-    test_explicit_long_reversal_floor_zero_remains_dust();
+    test_explicit_long_reversal_floor_zero_closes_one_contract();
+    test_commission_free_long_floor_zero_closes_one_contract();
+    test_commission_free_short_floor_zero_closes_one_contract();
+    test_floor_zero_one_contract_respects_structural_guards();
+    test_floor_zero_one_contract_caps_at_sub_one_position();
     test_run_reuse_clears_opening_state();
     test_long_leveraged_margin_call();
 
