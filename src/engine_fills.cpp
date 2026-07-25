@@ -2981,26 +2981,54 @@ void BacktestEngine::apply_filled_order_to_state(
                                      * syminfo_.pointvalue
                                      * sizing_fx
                                      * (margin_pct / 100.0);
-            // The epsilon absorbs double rounding AND one whole lot of
-            // notional.
+            // The epsilon absorbs double rounding. On the NON-reversal arms it
+            // additionally absorbs one whole lot of notional.
             //
-            // The quantity was floored to the lot step, so the budget it left
-            // unspent is an unobservable remainder anywhere in
+            // The original rationale, kept because it still holds where it was
+            // measured: the quantity was floored to the lot step, so the budget
+            // it left unspent is an unobservable remainder anywhere in
             // [0, qty_step * price). A decline whose margin is smaller than
-            // that remainder is not a decision about affordability at all —
-            // it is a coin flip on where the floor happened to land. On a
-            // continuous feed nearly half of all bars gap by exactly one
-            // mintick, so without this term the reversal branch resolves such
-            // bars by lot-floor luck: deterministic at large equity, arbitrary
-            // at small. Widening by one lot keeps every decline that TV's
-            // exports actually confirm (their margins exceed a lot of
-            // notional) and drops the ones no ground truth supports.
+            // that remainder looks like a coin flip on where the floor happened
+            // to land, and on a continuous feed nearly half of all bars gap by
+            // exactly one mintick. Widening by one lot was adopted because it
+            // "keeps every decline that TV's exports actually confirm (their
+            // margins exceed a lot of notional) and drops the ones no ground
+            // truth supports" — i.e. it was predicated on the ABSENCE of ground
+            // truth for sub-lot reversal declines.
+            //
+            // design-reversal-admission-float-guard: that premise is falsified
+            // ON THE REVERSAL ARM ONLY, by ground truth that did not exist when
+            // it was written. A pinned 13-month ETHUSDT.P parity dossier
+            // (percent_of_equity=100, margin 100) supplies 94
+            // TradingView-confirmed reversal declines against 2,325
+            // admits; 92 of the 94 have margins BELOW one lot of notional. The
+            // widening therefore does not blunt this arm's gate, it makes it
+            // inert: 81/81 reproducible declines AND 2,325/2,325 admits both sit
+            // inside [0, qty_step * admit_price), because an all-in reversal
+            // spends the whole equity by construction and its entire decision
+            // lives inside one lot-floor remainder. Measured on that tape:
+            // one-lot epsilon 2/94 declines caught (balanced accuracy 51.1 %);
+            // float-guard epsilon 86/94 caught with 6/2,325 wrongly cancelled
+            // (balanced accuracy 95.6 %). Board-wide the tightened arm would
+            // cancel 18 of 23,785 TradingView-admitted all-in reversals (0.08 %,
+            // only 1 of them above one lot).
+            //
+            // The lot-floor "coin flip" argument does not transfer to the
+            // reversal arm the way it does to the others, because there the
+            // frozen quantity was floored against the PREVIOUS bar's close while
+            // the order fills at THIS bar's open: the overshoot is an observable
+            // gap, not floor luck. The flat-open and same-direction-add arms
+            // keep the one-lot term — each is separately TV-pinned, nothing has
+            // falsified their premise, and the flat-open arm is undeclinable by
+            // the floor invariant anyway (it prices at the sizing notional).
             double epsilon =
                 std::max(1e-9, std::abs(free_funds) * 1e-12);
-            epsilon = std::max(epsilon, qty_step_ * admit_price
-                                            * syminfo_.pointvalue
-                                            * sizing_fx
-                                            * (margin_pct / 100.0));
+            if (!reversal) {
+                epsilon = std::max(epsilon, qty_step_ * admit_price
+                                                * syminfo_.pointvalue
+                                                * sizing_fx
+                                                * (margin_pct / 100.0));
+            }
             if (required_margin > free_funds + epsilon) {
                 // design-declined-reversal-close-leg: ONLY the reversal decline
                 // triggers close-leg suppression (admit_price == slipped fill,

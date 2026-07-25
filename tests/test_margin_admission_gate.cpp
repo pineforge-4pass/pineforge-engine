@@ -282,13 +282,34 @@ void test_slipped_short_reversal_zero_gap_admitted() {
     CHECK(eng.position_side_ == PositionSide::SHORT);   // the flip happened
 }
 
-// H. Lot-step slack: with a real qty_step the frozen qty leaves an unspent
-//    remainder in [0, qty_step*price). A reversal whose adverse gap costs
-//    LESS than one lot of notional must be ADMITTED — the decline would be
-//    decided by where the floor landed, not by affordability. A gap that
-//    costs far more than one lot is still DECLINED.
+// H. Lot-step slack on the REVERSAL arm — CORRECTED 2026-07-26
+//    (design-reversal-admission-float-guard).
+//
+//    This pin used to assert the opposite of H.1 below: that a reversal whose
+//    adverse gap costs LESS than one lot of notional must be ADMITTED, because
+//    the frozen qty leaves an unspent remainder in [0, qty_step*price) and the
+//    decline would be "decided by where the floor landed, not by
+//    affordability". That rationale rested on an empirical claim — that every
+//    decline TradingView's exports confirm has a margin exceeding one lot —
+//    which held only while no sub-lot ground truth existed.
+//
+//    It does now. chartprime-power-order-blocks-chartprime (percent_of_equity
+//    100, margin 100, qty_step 0.0001, 13 months of ETHUSDT.P) carries 2,419
+//    TradingView reversal decisions: 94 declines, and 92 of those 94 have
+//    margins BELOW one lot. On an all-in reversal the entire decision lives
+//    inside one lot-floor remainder by construction, so the widening made this
+//    arm's gate inert rather than merely conservative (2/94 declines caught,
+//    balanced accuracy 51.1 %; float guard: 86/94 with 6/2,325 false cancels,
+//    95.6 %). The one-lot term is therefore gone from the reversal arm and
+//    retained on the flat-open and same-direction-add arms, whose premise
+//    nothing has falsified — see test_reversal_admission_float_guard.cpp for
+//    the full pin set including the scope controls.
+//
+//    H.1 now asserts the corrected behaviour on the ORIGINAL fixture (1-tick
+//    adverse gap, shortfall $1.00 against a $1.0001 lot): DECLINED. H.2 is
+//    unchanged — a gap far above one lot was and still is DECLINED.
 void test_reversal_lot_step_slack() {
-    std::printf("-- H: reversal within one lot of notional admitted --\n");
+    std::printf("-- H: reversal sub-lot gap declined (float guard) --\n");
     {
         Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
         eng.qty_step_ = 0.01;                 // one lot @ ~100 = ~$1.00 notional
@@ -300,7 +321,8 @@ void test_reversal_lot_step_slack() {
             mk_bar(4000, 100.01, 100.01, 100.01, 100.01),
         };
         eng.run(bars.data(), (int)bars.size());
-        CHECK(eng.position_side_ == PositionSide::SHORT);   // admitted
+        CHECK(eng.position_side_ == PositionSide::LONG);    // declined (was SHORT)
+        CHECK(eng.trade_count() == 0);                      // close leg suppressed
     }
     {
         Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
