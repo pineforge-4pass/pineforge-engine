@@ -1133,7 +1133,15 @@ bool BacktestEngine::default_flat_market_gross_scope_is_live()
         && !calc_on_order_fills_
         && !bar_magnifier_enabled_
         && !coof_fill_recalc_active_
-        && position_side_ == PositionSide::FLAT
+        // The account may be FLAT or already holding a position. The
+        // pending-aware gross-movement rule is a property of the two queued
+        // calls, not of the broker state they were queued from: chartprime /
+        // fluxchart / market-logic-india all queue the pair while a live
+        // position is held, and TradingView declines the later call there on
+        // exactly the same arithmetic as from flat (255/255 controlled real-row
+        // events, 0 counterexamples; see the widened rule below). Which of the
+        // two calls actually MOVES the broker is decided at the boundary from
+        // over_pyramiding_cap_at_placement, not by excluding the whole class.
         // Pine's default pyramiding=0 is represented by one admitted entry.
         // Keep this scope away from KI-65's independently pinned pyramiding=2
         // transaction model.
@@ -1153,13 +1161,34 @@ bool BacktestEngine::default_flat_market_gross_scope_is_live()
         && !risk_halted_;
 }
 
-// Two omitted-qty MARKET strategy.entry calls from true flat each freeze one
-// account-equity lot at the same signal close. The later opposite call is a
-// gross reversal transaction (first frozen qty + later frozen qty); at 1x and
-// PoE=100 that exceeds placement equity and is declined. Wait until the next
-// ordinary broker boundary so the complete source-bar book is known. Only an
-// exact two-object book of fresh, consecutive, distinct-id opposite entries
-// reaches this arithmetic; the first order follows existing fill rules.
+// Two omitted-qty MARKET strategy.entry calls placed on one source bar each
+// freeze one account-equity lot at the same signal close. The later opposite
+// call is costed as a GROSS movement (the earlier call's frozen qty plus its
+// own); at 1x and PoE=100 that exceeds placement equity and is declined. Wait
+// until the next ordinary broker boundary so the complete source-bar book is
+// known. Only a book of fresh, consecutive, distinct-id opposite entries plus
+// their own same-bar unpriced close legs reaches this arithmetic; the first
+// order follows existing fill rules.
+//
+// WIDENED (2026-07-25) past two of the controls the KI-65 pending-MARKET oracle
+// carved out: the pair may be queued while a LIVE position is held, and the
+// same-bar deferred market close legs the specimen idiom queues alongside the
+// entries no longer disqualify the book. Still excluded, unchanged: priced
+// entries, explicit qty (that path has its own signal-time + fill-time gates),
+// raw strategy.order, same-direction pairs, cross-bar pairs, OCA siblings,
+// pyramiding != 0, POOC/COOF, magnifier, non-zero commission or slippage,
+// percent_of_equity != 100, margin != 100, and any active risk policy.
+//
+// Relationship to the fill-time margin admission gate (48363a1, still live in
+// apply_filled_order_to_state): that gate is a per-order NET test -- budget
+// = sizing_equity minus the margin a SAME-DIRECTION open position ties up, cost
+// = the order's OWN frozen notional at the price the fill books. On a reversal
+// it charges nothing for the position being closed, so it has no term for a
+// sibling order queued on the same bar and cannot see this class at all. The
+// two gates are complementary and cannot double-count: this one runs at the
+// broker boundary and ERASES the rejected order, so the fill-time gate never
+// sees it; anything this one admits reaches the fill-time gate with its own
+// unmodified quantity.
 void BacktestEngine::finalize_default_flat_market_gross_admission() {
     std::vector<size_t> group;
     group.reserve(2);
@@ -1201,7 +1230,6 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
     };
 
     if (!default_flat_market_gross_scope_is_live()
-        || pending_orders_.size() != 2
         || group.size() != 2
         || candidate_source_bars.size() != 1) {
         consume_source_tombstones();
@@ -1213,12 +1241,66 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
     if (second->incarnation < first->incarnation) std::swap(first, second);
     const int source_bar = first->created_bar;
 
+    // Book shape. The pinned oracle book is the two candidate calls and nothing
+    // else; the live-position widening additionally admits the unpriced
+    // deferred MARKET close legs the same source bar queued alongside them,
+    // because that is how every real specimen is written:
+    //
+    //   if bull                       if bull
+    //       entry("Long", long)           entry("Long", long)
+    //       close("Short")            if bear
+    //   if bear                           entry("Short", short)
+    //       entry("Short", short)     if bear or breakdown
+    //       close("Long")                 close("Long")
+    //
+    // A close leg cannot change the admission arithmetic: it transacts no new
+    // margin, and the qty/equity/mark triple both candidates carry was frozen
+    // before it existed. Anything else in the book -- a priced order, a raw
+    // order, a bracket, an OCA sibling, or ANY order carried in from an earlier
+    // bar -- leaves the pinned shape and the whole adjudication is abandoned.
+    std::unordered_set<size_t> group_indices(group.begin(), group.end());
+    int intervening_close_legs = 0;
+    for (size_t i = 0; i < pending_orders_.size(); ++i) {
+        if (group_indices.count(i) != 0) continue;
+        const PendingOrder& other = pending_orders_[i];
+        const bool same_bar_market_close =
+            other.type == OrderType::EXIT
+            && other.created_bar == source_bar
+            && other.id.rfind("__close__", 0) == 0
+            && other.oca_name.empty()
+            && std::isnan(other.limit_price)
+            && std::isnan(other.stop_price)
+            && std::isnan(other.trail_points)
+            && std::isnan(other.trail_price)
+            && std::isnan(other.trail_offset)
+            && !other.created_during_coof_recalc
+            && !other.coof_born_at_close_recalc
+            && !other.coof_born_mid_bar;
+        if (!same_bar_market_close) {
+            consume_source_tombstones();
+            return;
+        }
+        if (other.incarnation > first->incarnation
+            && other.incarnation < second->incarnation) {
+            ++intervening_close_legs;
+        }
+    }
+
     auto eligible = [&](const PendingOrder& order) {
         return order.type == OrderType::MARKET
             && std::isnan(order.qty)
             && std::isfinite(order.frozen_default_qty)
             && order.frozen_default_qty > kQtyEpsilon
-            && order.opening_affordability_exemption_candidate
+            // The position-state-independent half of
+            // opening_affordability_exemption_candidate. percent_of_equity at
+            // exactly 100 and both margins at exactly 100 are already asserted
+            // by default_flat_market_gross_scope_is_live(); what remains is a
+            // complete finite freeze. Deliberately NOT the exemption flag
+            // itself: that flag also requires true-flat creation, which is
+            // exactly the control this rule now widens past.
+            && std::isfinite(order.sizing_price)
+            && std::isfinite(order.sizing_fx)
+            && order.sizing_fx > 0.0
             && !order.explicit_flat_admission_candidate
             && !order.paired_flat_market_candidate
             && order.paired_flat_market_peer_seq == 0
@@ -1227,8 +1309,6 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
             && order.incarnation > 0
             && order.created_seq > 0
             && !order.created_by_same_id_replacement
-            && order.created_position_side == PositionSide::FLAT
-            && !order.created_after_position_close_in_bar
             && !order.created_during_coof_recalc
             && !order.coof_born_at_close_recalc
             && !order.coof_born_mid_bar
@@ -1246,8 +1326,21 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
         || !eligible(*second)
         || first->id == second->id
         || first->is_long == second->is_long
-        || second->incarnation != first->incarnation + 1
-        || second->created_seq != first->created_seq + 1) {
+        // Both calls must have been queued from the SAME broker state. Nothing
+        // on the ordinary non-POOC path can fill between two calls of one
+        // on_bar, so a disagreement here is provenance the rule has no oracle
+        // for.
+        || first->created_position_side != second->created_position_side
+        || first->created_position_cycle_seq
+               != second->created_position_cycle_seq
+        // No order object other than the intervening close legs counted above
+        // may have been created between the two calls. Together with the
+        // mutation tombstones this still excludes three-call books reduced
+        // back to two by replacement/cancel-rearm.
+        || second->incarnation
+               != first->incarnation + 1 + intervening_close_legs
+        || second->created_seq
+               != first->created_seq + 1 + intervening_close_legs) {
         return;
     }
 
@@ -1262,9 +1355,9 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
         return;
     }
 
-    const double first_qty = std::abs(first->frozen_default_qty);
+    const double first_own_qty = std::abs(first->frozen_default_qty);
     const double second_qty = std::abs(second->frozen_default_qty);
-    if (calc_commission(signal_close, first_qty) != 0.0
+    if (calc_commission(signal_close, first_own_qty) != 0.0
         || calc_commission(signal_close, second_qty) != 0.0) {
         return;
     }
@@ -1272,8 +1365,37 @@ void BacktestEngine::finalize_default_flat_market_gross_admission() {
                               * active_account_currency_fx();
     if (!std::isfinite(notional_k) || !(notional_k > 0.0)) return;
 
+    // The later call is costed as its OWN requested position plus the movement
+    // the earlier pending opposite call will make. An earlier call that was
+    // already over the pyramiding cap when it was placed moves nothing -- TV
+    // never queues broker movement for it -- so it contributes ZERO to the
+    // later call's budget. That term is not cosmetic: it is the whole
+    // difference between the two live-position cases, and both are measured.
+    //
+    //   live side at placement | earlier "Long"   | later "Short"  | TV
+    //   -----------------------|------------------|----------------|----------
+    //   FLAT                   | opens  (counts)  | 100+100 > 100  | declined
+    //   SHORT                  | reverses (counts)| 100+100 > 100  | declined
+    //   LONG                   | over cap (zero)  | 100 + 0 <= 100 | ADMITTED
+    //
+    // Measured on the four real all-in rows whose two opposite default-sized
+    // entries can fire on one bar (fluxchart-supply-and-demand-zones,
+    // market-logic-india-low-lag-strength-oscillator, chartprime-power-order-
+    // blocks, cntvxiao-smc-vsa-oi), over every bar where the engine printed
+    // both sides and both tapes agreed on the side held entering the bar:
+    // 84/84 flat, 159/159 short, 12/12 long -- 255/255, zero counterexamples.
+    // Dropping the over-cap term would turn those 12 admissions into declines.
+    //
+    // Negative control for the ARITHMETIC (not just "reject the later call"):
+    // twelve further board rows do print both sides on one bar and TradingView
+    // prints both too -- every one of them sizes at percent_of_equity <= 10 or
+    // default FIXED, where own + earlier <= equity. They are out of scope
+    // anyway (default_qty_value == 100 is required above), but they are the
+    // reason the gate is an inequality rather than a shape match.
+    const double first_movement_qty =
+        first->over_pyramiding_cap_at_placement ? 0.0 : first_own_qty;
     const double gross_required =
-        (first_qty + second_qty) * signal_close * notional_k;
+        (first_movement_qty + second_qty) * signal_close * notional_k;
     if (!(gross_required > equity + equity_guard)) return;
 
     const uint64_t rejected_incarnation = second->incarnation;

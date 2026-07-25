@@ -93,6 +93,7 @@ set(TEST_SOURCES
     test_declined_reversal_close_leg
     test_dual_entry_placement_sizing
     test_default_flat_market_gross_admission
+    test_live_position_market_gross_admission
     test_lower_tf_parse_extra
     test_ta_ma_warmup_extra
     test_ta_osc_edge

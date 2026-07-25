@@ -439,10 +439,15 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
             // margin_short==100 qualifies exactly as a long at margin_long==100.
             const double affordability_margin =
                 is_long ? margin_long_ : margin_short_;
-            order.opening_affordability_exemption_candidate =
-                order.created_position_side == PositionSide::FLAT
-                && !order.created_after_position_close_in_bar
-                && default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+            // The position-state-INDEPENDENT half of the all-in snapshot:
+            // percent_of_equity at exactly 100, direction-appropriate margin at
+            // exactly 100, and a complete finite freeze. Extracted so the
+            // pending-aware gross-admission candidate can share it without
+            // inheriting the true-flat creation requirement the fill-time
+            // exemption flag needs (see the widened scope in
+            // finalize_default_flat_market_gross_admission).
+            const bool default_all_in_sizing_snapshot =
+                default_qty_type_ == QtyType::PERCENT_OF_EQUITY
                 && std::abs(default_qty_value_ - 100.0) < 1e-12
                 && std::isfinite(affordability_margin)
                 && std::abs(affordability_margin / 100.0 - 1.0) < 1e-12
@@ -452,9 +457,19 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                 && std::isfinite(order.sizing_mark)
                 && std::isfinite(order.sizing_fx)
                 && order.sizing_fx > 0.0;
+            order.opening_affordability_exemption_candidate =
+                order.created_position_side == PositionSide::FLAT
+                && !order.created_after_position_close_in_bar
+                && default_all_in_sizing_snapshot;
+            // KI-65 pending-aware gross admission. The placement equity /
+            // signal-mark / frozen-qty triple is all the arithmetic needs, and
+            // it is identical whether the account was flat or already holding a
+            // position when the pair was queued. The creation position side is
+            // preserved on the order and consulted at the broker boundary, so
+            // the live-position case is decided there rather than excluded here.
             order.default_flat_market_gross_candidate =
                 default_flat_market_gross_call
-                && order.opening_affordability_exemption_candidate
+                && default_all_in_sizing_snapshot
                 && std::isfinite(order.frozen_default_qty)
                 && order.frozen_default_qty > kQtyEpsilon
                 && std::isfinite(order.sizing_equity)

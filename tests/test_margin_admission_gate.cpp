@@ -452,7 +452,21 @@ void test_same_side_market_becomes_reversal_free_margin_gate() {
 //   - explicit qty remains owned by strategy_entry's signal-time admission;
 //   - both the held side and requested side must independently be 100% margin;
 //   - an ordinary same-direction FIXED add never became a reversal;
-//   - PERCENT_OF_EQUITY=100 remains owned by KI-54's frozen-sizing gate.
+//   - PERCENT_OF_EQUITY=100 is not owned by THIS gate.
+//
+// M.5 CORRECTED 2026-07-25 (pending-aware gross admission widened to live
+// positions). The all-in `B` fixture is a same-source-bar opposite default-sized
+// MARKET pair queued while a SHORT is held, which is now adjudicated by
+// finalize_default_flat_market_gross_admission: the earlier "L" reverses the
+// short so it costs 3 lots, the later "S" costs 3 more, and 600 > 300 equity, so
+// "S" is declined and "L" is the sole fill. The old expectation (both fill,
+// account ends back SHORT) was the pre-widening behavior, not an independent TV
+// pin -- the sub-case exists to prove the GB2 fixed/explicit gate does not reach
+// percent-of-equity, and it still proves exactly that. The new expectation is
+// what TradingView does: pinned by data/probes/pf-probe-ki65-pending-market-
+// affordability (3,128 trades, 100%) and by 159/159 live-short real-row events
+// on chartprime-power-order-blocks / fluxchart-supply-and-demand-zones /
+// market-logic-india-low-lag-strength-oscillator.
 void test_same_side_role_change_scope_controls() {
     std::printf("-- M: same-side role-change scope controls --\n");
     {
@@ -496,12 +510,12 @@ void test_same_side_role_change_scope_controls() {
         CHECK_NEAR(eng.position_qty_, 2.0, 1e-9);
     }
     {
-        std::printf("   M.5 percent-of-equity role change stays in KI-54\n");
+        std::printf("   M.5 percent-of-equity pair goes to gross admission\n");
         Probe eng(QtyType::PERCENT_OF_EQUITY, 100.0, 1);
         eng.initial_capital_ = 300.0;
         run_constant_100_script(eng, "S.B..");
-        CHECK(eng.trade_count() == 2);
-        CHECK(eng.position_side_ == PositionSide::SHORT);
+        CHECK(eng.trade_count() == 1);
+        CHECK(eng.position_side_ == PositionSide::LONG);
         CHECK_NEAR(eng.position_qty_, 3.0, 1e-9);
     }
 }
