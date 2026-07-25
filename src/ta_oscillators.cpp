@@ -480,7 +480,13 @@ double CMO::compute(double src) {
     for (auto v : up_buffer_) up_sum += v;
     for (auto v : down_buffer_) down_sum += v;
     double denom = up_sum + down_sum;
-    if (denom == 0) return 0.0;
+    // Degenerate window (no price movement at all): TradingView does NOT guard
+    // this arm — it evaluates the published formula, so 0/0 surfaces as na.
+    // Pinned by the 2026-07-25 clean-room oracle (CMO_NUM 0/21). The previous
+    // 0.0 was an invented constant, not a derivation. See the status block in
+    // tests/test_ta_osc_edge.cpp for the evidence and for why the sibling arms
+    // (stoch / cci / mfi) are deliberately NOT changed.
+    if (denom == 0) return na<double>();
     return 100.0 * (up_sum - down_sum) / denom;
 }
 
@@ -509,7 +515,12 @@ double TSI::compute(double src) {
     prev_src_ = src;
     double ds = ema_short_.compute(ema_long_.compute(pc));
     double ads = ema_abs_short_.compute(ema_abs_long_.compute(std::abs(pc)));
-    if (ads == 0) return 0.0;
+    // Degenerate denominator: the double-smoothed EMA of |change| reaches
+    // exactly 0.0 only when the source is flat from bar 0, so the oracle's
+    // all-constant construction is not a special case — it is the ONLY
+    // reachable one for this arm. TradingView returns na there (TSI_NUM 0/21,
+    // 2026-07-25 clean-room oracle). The previous 0.0 was invented.
+    if (ads == 0) return na<double>();
     // Pine v6 ta.tsi returns the True Strength Index normalised to [-1, 1]
     // (per the official reference manual). Classical TSI literature uses
     // [-100, 100] (i.e. ×100), but Pine deliberately drops the percentage
@@ -557,7 +568,12 @@ double COG::compute(double src) {
         num += buffer_[n - 1 - i] * (i + 1);
         den += buffer_[i];
     }
-    if (den == 0) return 0.0;
+    // Degenerate denominator: the window sum is exactly 0. Structurally
+    // unreachable for positive prices, so the oracle's zero-sum construction
+    // is the only case this arm ever sees, and TradingView returns na there
+    // (COG_NUM 0/21, 2026-07-25 clean-room oracle). The previous 0.0 was
+    // invented — note it is not even the formula's limit, which diverges.
+    if (den == 0) return na<double>();
     return -num / den;
 }
 
@@ -781,7 +797,10 @@ double COG::recompute(double src) {
         num += buffer_[n - 1 - i] * (i + 1);
         den += buffer_[i];
     }
-    if (den == 0) return 0.0;
+    // Mirror of compute()'s degenerate arm — see that function for the oracle
+    // citation. Kept in lock-step deliberately: this is an independent copy of
+    // the guard, not a delegation.
+    if (den == 0) return na<double>();
     return -num / den;
 }
 

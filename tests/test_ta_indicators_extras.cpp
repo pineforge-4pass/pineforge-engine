@@ -262,10 +262,14 @@ static void test_cmo() {
     for (double p : {10.0, 11.0, 12.0, 13.0}) v = cmo.compute(p);
     CHECK(near(v, 100.0));
 
-    // Constant series → both sums 0 → return 0.0
+    // Degenerate window: a constant series makes up_sum + down_sum bitwise 0.
+    // TradingView does not guard this arm — it evaluates the formula, so the
+    // result is na. Pinned by the 2026-07-25 clean-room oracle (CMO_NUM 0/21);
+    // this assertion previously required the engine's invented 0.0. See the
+    // status block in tests/test_ta_osc_edge.cpp for the full evidence trail.
     ta::CMO flat(3);
     for (int i = 0; i < 4; ++i) flat.compute(5.0);
-    CHECK(near(flat.compute(5.0), 0.0));
+    CHECK(is_na(flat.compute(5.0)));
 
     // recompute equals compute on same bar
     CHECK(near(cmo.recompute(13.0), 100.0));
@@ -286,11 +290,15 @@ static void test_tsi() {
     CHECK(v > 0.5);  // monotone-up series should drive TSI well above zero
     CHECK(v <= 1.0);
 
-    // Zero divisor branch: constant series → ds == 0, ads == 0 → returns 0
+    // Degenerate denominator: a constant series drives ads to bitwise 0, which
+    // is only reachable when the source is flat from bar 0. TradingView returns
+    // na there (TSI_NUM 0/21, 2026-07-25 clean-room oracle); this assertion
+    // previously required the engine's invented 0.0. See the status block in
+    // tests/test_ta_osc_edge.cpp for the full evidence trail.
     ta::TSI flat(3, 5);
     double last = std::numeric_limits<double>::quiet_NaN();
     for (int i = 0; i < 25; ++i) last = flat.compute(7.0);
-    CHECK(near(last, 0.0));
+    CHECK(is_na(last));
 
     // recompute returns same value as the most recent compute on same input
     double r = tsi.recompute(125.0);
@@ -334,10 +342,14 @@ static void test_cog() {
     // correctness sweep against TV.)
     CHECK(near(v, -10.0 / 6.0));
 
-    // den == 0 branch
+    // Degenerate denominator: a zero window sum, structurally unreachable for
+    // positive prices, so this construction is the only case the arm ever sees.
+    // TradingView returns na there (COG_NUM 0/21, 2026-07-25 clean-room
+    // oracle); this assertion previously required the engine's invented 0.0.
+    // See the status block in tests/test_ta_osc_edge.cpp for the evidence.
     ta::COG zero(3);
     zero.compute(0); zero.compute(0);
-    CHECK(near(zero.compute(0), 0.0));
+    CHECK(is_na(zero.compute(0)));
 
     // recompute consistency
     CHECK(near(cog.recompute(3.0), -10.0 / 6.0));

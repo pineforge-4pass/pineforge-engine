@@ -16,12 +16,70 @@
  *   ROC    : na-input early return (227-229).
  *   CCI    : na-input early return (308-309).
  *   RCI    : na-input early return (346-348).
+ *   CMO    : degenerate up_sum+down_sum == 0 -> na.
+ *   TSI    : degenerate ads == 0 -> na.
+ *   COG    : degenerate window sum == 0 -> na (compute AND recompute).
  *
  * NDEBUG-PROOF: every assertion goes through CHECK(), which increments a
  * file-scope failure counter and is reported by main()'s nonzero return.
  * It does NOT use bare assert(), so it fires identically under -DNDEBUG.
- * Expected numeric values are Pine-correct, derived by hand from the
- * documented behaviour of ta_oscillators.cpp and pinned here.
+ *
+ * ---------------------------------------------------------------------------
+ * STATUS OF THE DEGENERATE-DENOMINATOR CONSTANTS (READ BEFORE "FINISHING THE
+ * JOB" ON THE REMAINING ARMS)
+ *
+ * An earlier revision of this header claimed the expected numeric values were
+ * "Pine-correct, derived by hand from the documented behaviour". For the
+ * degenerate (zero-denominator) arms of the oscillators that claim is FALSE
+ * and has been retracted: those constants were never derived, they were the
+ * original author's convenience values (see the in-code comment on the Stoch
+ * arm, "Avoid division by zero; midpoint when flat"). The Pine v6 reference
+ * publishes the formulas but is silent at the singularity.
+ *
+ * A clean-room TradingView oracle was exported and independently adjudicated
+ * on 2026-07-25 to settle them. Evidence (private campaign repo):
+ *   data/probes/pf-probe-degenerate-oscillator-denominator/   (tape + source)
+ *   .codex-evidence/degenerate-oscillator-oracle-20260725/    (frozen copy)
+ *   data/progress/degenerate-arm-reachability-20260725.md     (reachability)
+ *   scratchpad/degenerate-oracle-adjudication-20260725.md     (adjudication)
+ *
+ * What that oracle actually established, arm by arm:
+ *
+ *   ta.tsi  -> na    ESTABLISHED, FIXED HERE. The all-constant construction is
+ *                    not a special case for this arm, it is the only reachable
+ *                    one (the denominator is an EMA of |change|, which reaches
+ *                    exactly 0 only when the source is flat from bar 0).
+ *   ta.cog  -> na    ESTABLISHED, FIXED HERE. Same argument: a zero window sum
+ *                    is structurally unreachable for positive prices, so the
+ *                    zero-sum construction is the case.
+ *   ta.cmo  -> na    ESTABLISHED, FIXED HERE. TradingView does not guard this
+ *                    arm at all; it evaluates the formula and yields na.
+ *
+ *   ta.stoch = 50.0  KNOWN-WRONG, CORRECT VALUE UNRESOLVED — DO NOT "FIX".
+ *                    The oracle refutes 50.0 in both probe families, but it
+ *                    refutes na as well: on a flat window of a *varying*
+ *                    source TradingView returned a number that is neither na
+ *                    nor 50. The only mechanism consistent with both families
+ *                    is carry-forward, which is INFERRED, not observed.
+ *                    Shipping an inferred mechanism is the failure mode that
+ *                    got a previous fix reverted. The 50.0 assertion below is
+ *                    therefore retained deliberately: it pins current
+ *                    behaviour, it does NOT assert correctness.
+ *   ta.cci   = 0.0   SPLIT / UNDECIDED — DO NOT "FIX". Exactly 0.0 on an
+ *                    all-constant source (21/21) but measurably not 0 on a
+ *                    flat window of a varying source (0/17). The two surviving
+ *                    hypotheses demand OPPOSITE fixes, so na would be wrong
+ *                    under both.
+ *   ta.mfi   = 100.0 UNVERIFIED — DO NOT "FIX". Agrees with TradingView in the
+ *                    all-constant construction, but is untested at a real flat
+ *                    window; ta.cci is the standing proof that this exact
+ *                    construction can mislead.
+ *   ta.wpr   -> na   already na; no pending change.
+ *
+ * test_degenerate_arms_negative_control() below pins stoch/cci/mfi at their
+ * current constants ON PURPOSE, so a well-meaning edit that extends the na fix
+ * to them fails loudly instead of silently shipping an unlicensed change.
+ * ---------------------------------------------------------------------------
  */
 
 #include <cmath>
@@ -237,6 +295,144 @@ static void test_cci_rci_na() {
     CHECK(is_na(rci.compute(na<double>())));
 }
 
+// ----------------------------------------------------------------------------
+// DEGENERATE-DENOMINATOR ARMS THAT THE 2026-07-25 TRADINGVIEW ORACLE SETTLED.
+//
+// TradingView returns `na` for all three; the engine used to return an invented
+// constant (0.0). See the status block at the top of this file for the evidence
+// paths and for why the *other* three arms are deliberately not touched.
+//
+// Each arm is asserted on compute() AND on recompute(). CMO::recompute and
+// TSI::recompute restore their saved state and delegate to compute(), so the
+// recompute assertion pins the delegation; COG::recompute carries its own
+// independent copy of the guard, so its assertion pins a genuinely separate
+// code path.
+// ----------------------------------------------------------------------------
+static void test_cmo_degenerate_is_na() {
+    std::printf("test_cmo_degenerate_is_na\n");
+
+    // A source that never changes makes every up/down move exactly 0, so
+    // up_sum + down_sum is bitwise 0.0 and the degenerate arm fires.
+    // CMO(9) needs length+1 = 10 bars before it emits anything at all.
+    ta::CMO cmo(9);
+    double v = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 9; ++i) {
+        CHECK(is_na(cmo.compute(42.0)));   // warmup: bar_count < length+1
+    }
+    v = cmo.compute(42.0);                 // 10th bar: window full, denom == 0
+    CHECK(is_na(v));
+    // recompute() of the same degenerate bar must agree.
+    CHECK(is_na(cmo.recompute(42.0)));
+
+    // Non-vacuous control: a genuinely one-sided window is NOT na and is NOT
+    // the degenerate constant. A strictly rising source gives down_sum == 0,
+    // so CMO == +100.
+    ta::CMO rising(9);
+    double r = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 10; ++i) r = rising.compute(100.0 + i);
+    CHECK(!is_na(r));
+    CHECK(near(r, 100.0));
+}
+
+static void test_tsi_degenerate_is_na() {
+    std::printf("test_tsi_degenerate_is_na\n");
+
+    // ta.tsi's denominator is an EMA of |change|. It reaches exactly 0.0 only
+    // when the source is flat from bar 0 — which is precisely why the oracle's
+    // all-constant construction is the ONLY reachable case for this arm, not a
+    // special case. Feed well past both EMA warmups (long 25, then short 13).
+    ta::TSI tsi(13, 25);
+    double v = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 60; ++i) v = tsi.compute(1234.5);
+    CHECK(is_na(v));
+    CHECK(is_na(tsi.recompute(1234.5)));
+
+    // Non-vacuous control: a varying source produces a finite, non-degenerate
+    // TSI, so the assertion above is testing the guard and not warmup.
+    ta::TSI live(13, 25);
+    double w = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 60; ++i) w = live.compute(1000.0 + i * 3.0);
+    CHECK(!is_na(w));
+}
+
+static void test_cog_degenerate_is_na() {
+    std::printf("test_cog_degenerate_is_na\n");
+
+    // COG's denominator is the plain window sum. For positive prices it can
+    // never be 0, so the zero-sum window is the only case this arm ever sees.
+    // Signed window summing to bitwise 0.0 while the NUMERATOR stays non-zero,
+    // so this pins the guard specifically rather than a 0/0 coincidence:
+    // 1 + (-1) + 2 + (-2) == 0.0 exactly in IEEE-754.
+    ta::COG cog(4);
+    CHECK(is_na(cog.compute(1.0)));    // warmup, buffer < length
+    CHECK(is_na(cog.compute(-1.0)));
+    CHECK(is_na(cog.compute(2.0)));
+    CHECK(is_na(cog.compute(-2.0)));   // window full -> den == 0
+    // COG::recompute carries its own copy of the guard (separate code path).
+    CHECK(is_na(cog.recompute(-2.0)));
+
+    // All-zero window (the oracle's literal construction) also degenerates.
+    ta::COG zeros(10);
+    double z = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 10; ++i) z = zeros.compute(0.0);
+    CHECK(is_na(z));
+    CHECK(is_na(zeros.recompute(0.0)));
+
+    // Non-vacuous control: an ordinary positive window is finite, so the
+    // assertions above are testing the guard and not the warmup path.
+    // buffer [10,20,30]; Pine weights the NEWEST bar by 1 and the OLDEST by
+    // length -> num = 30*1 + 20*2 + 10*3 = 100, den = 60 -> -100/60.
+    ta::COG live(3);
+    live.compute(10.0);
+    live.compute(20.0);
+    double c = live.compute(30.0);
+    CHECK(!is_na(c));
+    CHECK(near(c, -100.0 / 60.0));
+    CHECK(near(live.recompute(30.0), -100.0 / 60.0));
+}
+
+// ----------------------------------------------------------------------------
+// NEGATIVE CONTROL — the three arms the oracle did NOT license a change for.
+//
+// These assertions pin CURRENT ENGINE BEHAVIOUR, not correctness. stoch's 50.0
+// is known-wrong with an unresolved correct value; cci's 0.0 is split between
+// two hypotheses that demand opposite fixes; mfi's 100.0 is unverified at a
+// real flat window. See the status block at the top of this file.
+//
+// If you are here because you extended the tsi/cog/cmo -> na fix to these arms
+// and this test now fails: that is the test doing its job. Do not "fix" the
+// test. Get an oracle first.
+// ----------------------------------------------------------------------------
+static void test_degenerate_arms_negative_control() {
+    std::printf("test_degenerate_arms_negative_control\n");
+
+    // ta.stoch on a flat window -> 50.0 (NOT na). Known-wrong, unresolved.
+    ta::Stoch stoch(3);
+    stoch.compute(5.0, 5.0, 5.0);
+    stoch.compute(5.0, 5.0, 5.0);
+    CHECK(near(stoch.compute(5.0, 5.0, 5.0), 50.0));
+    CHECK(near(stoch.recompute(5.0, 5.0, 5.0), 50.0));
+
+    // ta.cci on a constant source -> exactly 0.0 (NOT na). SPLIT/undecided:
+    // TradingView really does return bitwise 0.0 in this construction.
+    ta::CCI cci(3);
+    cci.compute(7.0);
+    cci.compute(7.0);
+    double c = cci.compute(7.0);
+    CHECK(!is_na(c));
+    CHECK(near(c, 0.0));
+    CHECK(near(cci.recompute(7.0), 0.0));
+
+    // ta.mfi with no negative money flow -> exactly 100.0 (NOT na).
+    // UNVERIFIED at a real flat window. MFI(5) needs length+1 = 6 bars.
+    ta::MFI mfi(5);
+    double m = std::numeric_limits<double>::quiet_NaN();
+    for (int i = 0; i < 6; ++i) m = mfi.compute(9.0, 100.0);
+    CHECK(!is_na(m));
+    CHECK(near(m, 100.0));
+    CHECK(near(mfi.recompute(9.0, 100.0), 100.0));
+}
+
 int main() {
     test_rsi_na_input();
     test_stoch_flat_and_na();
@@ -244,6 +440,10 @@ int main() {
     test_cross_na_and_false_branch();
     test_mom_roc_na();
     test_cci_rci_na();
+    test_cmo_degenerate_is_na();
+    test_tsi_degenerate_is_na();
+    test_cog_degenerate_is_na();
+    test_degenerate_arms_negative_control();
 
     if (g_fail) {
         std::fprintf(stderr, "\nta_osc_edge: %d CHECK(s) FAILED\n", g_fail);
