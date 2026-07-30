@@ -117,7 +117,7 @@ void BacktestEngine::dispatch_bar() {
         current_bar_ = Bar{script_bar.open, script_bar.open, script_bar.open,
                            script_bar.open, 0.0, script_bar.timestamp};
         try {
-            process_carried_long_full_margin_fx_rollover(script_bar);
+            process_carried_position_fx_rollover(script_bar);
         } catch (...) {
             current_bar_ = script_bar;
             throw;

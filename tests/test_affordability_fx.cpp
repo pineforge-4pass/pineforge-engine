@@ -145,9 +145,10 @@ private:
     double observed_qty_ = kNaN;
 };
 
-// Rate changes on carried shorts and leveraged longs do not yet have a
-// TV-pinned broker-open liquidation rule. They must reject before on_bar
-// instead of silently falling through to the end-of-bar adverse-price pass.
+// Leveraged carried shapes do not yet have a TV-pinned broker-open
+// liquidation rule. They must reject before on_bar instead of silently
+// falling through to the end-of-bar adverse-price pass.  (1x short is
+// supported by cell A1; keep this probe for leveraged-only fail-closed.)
 class UnsupportedCarriedFxRolloverProbe : public BacktestEngine {
 public:
     UnsupportedCarriedFxRolloverProbe(bool is_long, double margin_pct)
@@ -171,6 +172,48 @@ public:
 private:
     bool is_long_;
     int on_bar_calls_ = 0;
+};
+
+// Cell A1 dual of CarriedFxRolloverOrderingProbe: carried 1x short under a
+// timestamped FX epoch change.  Mirrors long sizing (qty=100, capital=10000).
+class CarriedShortFxRolloverProbe : public BacktestEngine {
+public:
+    CarriedShortFxRolloverProbe() {
+        initial_capital_ = 10000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 100.0;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        qty_step_ = 0.0001;
+        process_orders_on_close_ = true;
+    }
+    void on_bar(const Bar& /*bar*/) override {
+        ++on_bar_calls_;
+        if (bar_index_ == 0) {
+            strategy_entry("S", /*is_long=*/false, kNaN, kNaN, 100.0);
+        } else if (bar_index_ == 2) {
+            observed_qty_ = position_side_ == PositionSide::SHORT
+                ? position_qty_ : 0.0;
+            observed_trades_ = trade_count();
+            observed_side_short_ = position_side_ == PositionSide::SHORT;
+        }
+    }
+    int on_bar_calls() const { return on_bar_calls_; }
+    int observed_trades() const { return observed_trades_; }
+    double observed_qty() const { return observed_qty_; }
+    bool observed_side_short() const { return observed_side_short_; }
+    int trades() const { return trade_count(); }
+    double open_qty() const {
+        return position_side_ == PositionSide::SHORT ? position_qty_ : 0.0;
+    }
+    const Trade& trade(int i) const { return get_trade(i); }
+
+private:
+    int on_bar_calls_ = 0;
+    int observed_trades_ = -1;
+    double observed_qty_ = kNaN;
+    bool observed_side_short_ = false;
 };
 
 // A pending entry is born before an FX epoch, then fills after the broker has
@@ -665,9 +708,10 @@ int main() {
         CHECK(std::abs(eng.observed_qty() - 2.5) < 1e-12);
     }
 
-    // G6. Unsupported carried-position rate changes fail before the script
-    // body. A duplicate provider epoch with the same numeric rate is harmless
-    // and is consumed without inventing a broker event.
+    // G6. Leveraged carried-position rate changes still fail before the
+    // script body (cells L/R off).  1x short is now supported (cell A1) and
+    // must not throw.  A duplicate provider epoch with the same numeric rate
+    // is harmless and is consumed without inventing a broker event.
     {
         std::vector<Bar> bars = {
             mk_bar(1000, 100.0), mk_bar(2000, 100.0),
@@ -677,21 +721,23 @@ int main() {
         const double changed_rates[] = {1.0, 1.001};
         const double unchanged_rates[] = {1.0, 1.0};
 
+        // G6-short: carried 1x short + rate change — no throw (qty=1 stays
+        // affordable against 10000 equity).
         UnsupportedCarriedFxRolloverProbe short_position(
             /*is_long=*/false, /*margin_pct=*/100.0);
         CHECK(short_position.set_account_currency_fx_series(
             timestamps, changed_rates, 2));
         short_position.run(bars.data(), (int)bars.size());
-        CHECK(short_position.last_error().find("carried 1x long")
-              != std::string::npos);
-        CHECK(short_position.on_bar_calls() == 2);
+        CHECK(short_position.last_error().empty());
+        CHECK(short_position.on_bar_calls() == 3);
 
+        // G6-lev-long: leveraged long remains fail-closed.
         UnsupportedCarriedFxRolloverProbe leveraged_long(
             /*is_long=*/true, /*margin_pct=*/50.0);
         CHECK(leveraged_long.set_account_currency_fx_series(
             timestamps, changed_rates, 2));
         leveraged_long.run(bars.data(), (int)bars.size());
-        CHECK(leveraged_long.last_error().find("carried 1x long")
+        CHECK(leveraged_long.last_error().find("1x full-margin")
               != std::string::npos);
         CHECK(leveraged_long.on_bar_calls() == 2);
 
@@ -702,6 +748,132 @@ int main() {
         same_rate_short.run(bars.data(), (int)bars.size());
         CHECK(same_rate_short.last_error().empty());
         CHECK(same_rate_short.on_bar_calls() == 3);
+    }
+
+    // NEW-S1. Carried 1x short under a rate shock that forces a deficit:
+    // dual of G — required 10010 vs equity 10000 → floor q_min=0.0999 →
+    // 4x rule closes 0.3996 before on_bar on bar 2.
+    {
+        std::vector<Bar> bars = {
+            mk_bar(1000, 100.0),
+            mk_bar(2000, 100.0),
+            mk_bar(3000, 100.0),
+        };
+        const int64_t timestamps[] = {1000, 3000};
+        const double rates[] = {1.0, 1.001};
+        CarriedShortFxRolloverProbe eng;
+        CHECK(eng.set_account_currency_fx_series(timestamps, rates, 2));
+        eng.run(bars.data(), (int)bars.size());
+        CHECK(eng.last_error().empty());
+        CHECK(eng.observed_trades() == 1);
+        CHECK(std::abs(eng.observed_qty() - 99.6004) < 1e-12);
+        CHECK(eng.observed_side_short());
+        CHECK(eng.trades() == 1);
+        CHECK(eng.trade(0).exit_comment == std::string("Margin call"));
+        CHECK(eng.trade(0).exit_id == std::string("__margin_call__"));
+        CHECK(std::abs(eng.trade(0).qty - 0.3996) < 1e-12);
+        CHECK(std::abs(eng.trade(0).exit_price - 100.0) < 1e-12);
+        CHECK(eng.trade(0).exit_time == 3000);
+        CHECK(std::abs(eng.open_qty() - 99.6004) < 1e-12);
+    }
+
+    // NEW-S2. Carried 1x short under a rate change that stays affordable
+    // (rate falls → required margin shrinks at flat price): no broker trade.
+    {
+        std::vector<Bar> bars = {
+            mk_bar(1000, 100.0),
+            mk_bar(2000, 100.0),
+            mk_bar(3000, 100.0),
+        };
+        const int64_t timestamps[] = {1000, 3000};
+        const double rates[] = {1.0, 0.999};
+        CarriedShortFxRolloverProbe eng;
+        CHECK(eng.set_account_currency_fx_series(timestamps, rates, 2));
+        eng.run(bars.data(), (int)bars.size());
+        CHECK(eng.last_error().empty());
+        CHECK(eng.observed_trades() == 0);
+        CHECK(std::abs(eng.observed_qty() - 100.0) < 1e-12);
+        CHECK(eng.observed_side_short());
+        CHECK(eng.trades() == 0);
+        CHECK(std::abs(eng.open_qty() - 100.0) < 1e-12);
+    }
+
+    // NEW-S3. Flat-epoch consumption still holds for a subsequent short
+    // open: an FX point crossed while flat must not replay against the new
+    // short on a later bar.  Mirrors G3 (FlatEpochConsumptionProbe) on the
+    // short side — signal bar0 under rate 1.0, fill next open after the
+    // broker consumed rate 1.001 while still flat.
+    {
+        std::vector<Bar> bars = {
+            mk_bar(1000, 100.0),
+            mk_bar(2000, 100.0),
+            mk_bar(3000, 100.0),
+        };
+        const int64_t timestamps[] = {1000, 2000};
+        const double rates[] = {1.0, 1.001};
+        class FlatEpochShortProbe : public BacktestEngine {
+        public:
+            FlatEpochShortProbe() {
+                initial_capital_ = 10000.0;
+                default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+                default_qty_value_ = 100.0;
+                commission_type_ = CommissionType::PERCENT;
+                commission_value_ = 0.0;
+                margin_long_ = 100.0;
+                margin_short_ = 100.0;
+                qty_step_ = 0.1;
+                process_orders_on_close_ = false;
+            }
+            void on_bar(const Bar& /*bar*/) override {
+                if (bar_index_ == 0) {
+                    strategy_entry("S", /*is_long=*/false);
+                } else if (bar_index_ == 1) {
+                    // Observed mid-bar after the open fill; end-of-bar
+                    // post-fill affordability may still nibble once (long
+                    // zero-fee frozen all-in is exempt; short is not).
+                    qty_after_fill_ = position_side_ == PositionSide::SHORT
+                        ? position_qty_ : 0.0;
+                    trades_after_fill_ = trade_count();
+                } else if (bar_index_ == 2) {
+                    observed_qty_ = position_side_ == PositionSide::SHORT
+                        ? position_qty_ : 0.0;
+                    observed_trades_ = trade_count();
+                    still_short_ = position_side_ == PositionSide::SHORT;
+                }
+            }
+            double qty_after_fill() const { return qty_after_fill_; }
+            int trades_after_fill() const { return trades_after_fill_; }
+            double observed_qty() const { return observed_qty_; }
+            int observed_trades() const { return observed_trades_; }
+            bool still_short() const { return still_short_; }
+            int trades() const { return trade_count(); }
+            const Trade& trade(int i) const { return get_trade(i); }
+        private:
+            double qty_after_fill_ = kNaN;
+            int trades_after_fill_ = -1;
+            double observed_qty_ = kNaN;
+            int observed_trades_ = -1;
+            bool still_short_ = false;
+        };
+        FlatEpochShortProbe eng;
+        CHECK(eng.set_account_currency_fx_series(timestamps, rates, 2));
+        eng.run(bars.data(), (int)bars.size());
+        CHECK(eng.last_error().empty());
+        // Flat epoch was consumed while flat: fill lands full size.
+        CHECK(eng.trades_after_fill() == 0);
+        CHECK(std::abs(eng.qty_after_fill() - 100.0) < 1e-12);
+        // No stale FX broker-open liquidation on bar 2 (ts=3000). Any
+        // post-fill affordability nibble is on the fill bar (ts=2000).
+        bool stale_epoch_trim = false;
+        for (int i = 0; i < eng.trades(); ++i) {
+            if (eng.trade(i).exit_time == 3000
+                && eng.trade(i).exit_comment == std::string("Margin call")) {
+                stale_epoch_trim = true;
+            }
+        }
+        CHECK(!stale_epoch_trim);
+        CHECK(eng.still_short());
+        CHECK(eng.observed_qty() > 0.0);
     }
 
     // H. Timestamped FX is currently authoritative only on ordinary

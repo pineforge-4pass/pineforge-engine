@@ -501,11 +501,18 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
     return result;
 }
 
-// Timestamped quote->account FX rollover for a carried 1x long.  Unlike the
-// ordinary adverse-price pass below, this is consumed at the first broker open
-// under the newly effective provider epoch, before pending orders and on_bar.
-bool BacktestEngine::process_carried_long_full_margin_fx_rollover(
-        const Bar& bar) {
+// Timestamped quote->account FX rollover for a carried full-margin position.
+// Unlike the ordinary adverse-price pass below, this is consumed at the first
+// broker open under the newly effective provider epoch, before pending orders
+// and on_bar.  Cell A1: 1x long (bit-stable) + 1x short.  Leveraged long/short
+// stay fail-closed until a TV pin (cells L/R).
+bool BacktestEngine::process_carried_position_fx_rollover(const Bar& bar) {
+    // Capability flags for the broker-open FX rollover matrix.  Short 1x is
+    // the dual of the TV-pinned long path; leveraged cells remain off.
+    static constexpr bool kEnableShortFxRollover = true;
+    static constexpr bool kEnableLeveragedLongFxRollover = false;
+    static constexpr bool kEnableLeveragedShortFxRollover = false;
+
     if (account_currency_fx_timestamps_.empty()) return false;
 
     const auto effective_end = std::upper_bound(
@@ -536,30 +543,34 @@ bool BacktestEngine::process_carried_long_full_margin_fx_rollover(
     const bool carried_position =
         position_side_ != PositionSide::FLAT
         && position_open_bar_ < bar_index_;
-    const double carried_margin = position_side_ == PositionSide::LONG
-        ? margin_long_ : margin_short_;
+    const bool is_long = position_side_ == PositionSide::LONG;
+    const double margin_pct = is_long ? margin_long_ : margin_short_;
+    const bool full_margin = std::isfinite(margin_pct)
+        && std::abs(margin_pct / 100.0 - 1.0) < 1e-12;
+    const bool leveraged = std::isfinite(margin_pct)
+        && margin_pct > 0.0
+        && !full_margin;
     const bool supported_carried_rollover =
-        position_side_ == PositionSide::LONG
-        && std::isfinite(margin_long_)
-        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+        margin_call_enabled_
+        && carried_position
+        && ((is_long
+             && (full_margin || (leveraged && kEnableLeveragedLongFxRollover)))
+            || (!is_long
+                && kEnableShortFxRollover
+                && (full_margin
+                    || (leveraged && kEnableLeveragedShortFxRollover))));
     if (effective_rate != previous_rate
         && margin_call_enabled_
         && carried_position
-        && std::isfinite(carried_margin)
-        && carried_margin > 0.0
+        && std::isfinite(margin_pct)
+        && margin_pct > 0.0
         && !supported_carried_rollover) {
         throw std::runtime_error(
             "timestamped account-currency FX broker-open rollover supports "
-            "only carried 1x long positions");
+            "only carried 1x full-margin positions");
     }
 
-    const bool carried_long_full_margin =
-        margin_call_enabled_
-        && position_side_ == PositionSide::LONG
-        && position_open_bar_ < bar_index_
-        && std::isfinite(margin_long_)
-        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
-    if (!carried_long_full_margin
+    if (!supported_carried_rollover
         || !std::isfinite(previous_rate) || !(previous_rate > 0.0)
         || !std::isfinite(effective_rate) || !(effective_rate > 0.0)
         || effective_rate == previous_rate
@@ -569,18 +580,23 @@ bool BacktestEngine::process_carried_long_full_margin_fx_rollover(
 
     const double qty = position_qty_;
     const double pv = syminfo_.pointvalue;
+    const double side = is_long ? 1.0 : -1.0;
+    const double m = margin_pct / 100.0;
     if (!std::isfinite(qty) || !(qty > 0.0)
         || !std::isfinite(position_entry_price_)
         || !std::isfinite(pv)
+        || !std::isfinite(m) || !(m > 0.0)
         || !std::isfinite(initial_capital_)
         || !std::isfinite(net_profit_sum_)) {
         return false;
     }
 
-    // TV revalues a carried 1x long at the first broker open under the newly
-    // confirmed rate.  Entry fees are immediate account-currency costs; this
-    // engine otherwise realizes both fee legs when a trade closes, so include
-    // the still-open entry fees explicitly in the affordability ledger.
+    // TV revalues a carried full-margin position at the first broker open
+    // under the newly confirmed rate.  Entry fees are immediate
+    // account-currency costs; this engine otherwise realizes both fee legs
+    // when a trade closes, so include the still-open entry fees explicitly
+    // in the affordability ledger.  MTM uses side (+1 long / -1 short);
+    // margin_unit scales by m (1.0 for full margin).
     double entry_commission = 0.0;
     for (const auto& pe : pyramid_entries_) {
         if (pe.qty <= kQtyEpsilon) continue;
@@ -588,12 +604,14 @@ bool BacktestEngine::process_carried_long_full_margin_fx_rollover(
         if (!std::isfinite(lot_commission)) return false;
         entry_commission += lot_commission;
     }
-    const double margin_per_unit = bar.open * pv * effective_rate;
+    const double margin_per_unit = bar.open * pv * effective_rate * m;
+    const double mtm = side * (bar.open - position_entry_price_)
+        * qty * pv * effective_rate;
     const double opening_equity = initial_capital_ + net_profit_sum_
-        - entry_commission
-        + (bar.open - position_entry_price_) * qty * pv * effective_rate;
+        - entry_commission + mtm;
     if (!std::isfinite(entry_commission)
         || !std::isfinite(margin_per_unit) || !(margin_per_unit > 0.0)
+        || !std::isfinite(mtm)
         || !std::isfinite(opening_equity)) {
         return false;
     }

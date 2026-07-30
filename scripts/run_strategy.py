@@ -812,6 +812,72 @@ def find_strategy_lib(strategy_dir: Path, so_name: str = "strategy.so") -> Path:
     return so_path
 
 
+def _load_account_currency_fx_series_json(path: Path):
+    """Load a bar-grain effective-time FX series JSON.
+
+    Accepted shapes (effective timestamps already resolved by the producer):
+      {"timestamps_ms": [int, ...], "rates": [float, ...], ...}
+      {"points": [{"t"|"timestamp_ms"|"timestamp": int, "rate"|"c2a1": float}, ...]}
+
+    Unlike the daily-close loader, this path does **not** apply a D+1 shift —
+    the file is the production as-of curve copied straight into the C ABI.
+    """
+    raw_bytes = path.read_bytes()
+    payload = json.loads(raw_bytes)
+    points = []
+    if isinstance(payload, dict) and isinstance(payload.get("timestamps_ms"), list)             and isinstance(payload.get("rates"), list):
+        timestamps = payload["timestamps_ms"]
+        rates = payload["rates"]
+        if len(timestamps) != len(rates) or not timestamps:
+            raise ValueError(
+                f"account_currency_fx_series_json timestamps/rates mismatch: {path}")
+        for ts, rate in zip(timestamps, rates):
+            try:
+                t_ms = int(ts)
+                r = float(rate)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid account-currency FX series point {ts!r}: {rate!r}"
+                ) from exc
+            if isinstance(rate, bool) or not math.isfinite(r) or r <= 0.0:
+                raise ValueError(
+                    f"invalid account-currency FX series rate {ts!r}: {rate!r}")
+            points.append((t_ms, r))
+    elif isinstance(payload, dict) and isinstance(payload.get("points"), list):
+        if not payload["points"]:
+            raise ValueError(
+                f"account_currency_fx_series_json points must be non-empty: {path}")
+        for item in payload["points"]:
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"invalid account-currency FX series point {item!r}: {path}")
+            raw_t = item.get("t", item.get("timestamp_ms", item.get("timestamp")))
+            raw_r = item.get("rate", item.get("c2a1"))
+            try:
+                t_ms = int(raw_t)
+                r = float(raw_r)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"invalid account-currency FX series point {item!r}"
+                ) from exc
+            if isinstance(raw_r, bool) or not math.isfinite(r) or r <= 0.0:
+                raise ValueError(
+                    f"invalid account-currency FX series rate {item!r}")
+            points.append((t_ms, r))
+    else:
+        raise ValueError(
+            "account_currency_fx_series_json must contain timestamps_ms+rates "
+            f"or points[]: {path}")
+    points.sort()
+    if any(points[i][0] <= points[i - 1][0] for i in range(1, len(points))):
+        raise ValueError(
+            f"account_currency_fx_series_json timestamps must be strictly increasing: {path}")
+    return (
+        ([point[0] for point in points], [point[1] for point in points]),
+        hashlib.sha256(raw_bytes).hexdigest(),
+    )
+
+
 def _load_account_currency_fx_daily_closes(path: Path):
     """Load ``{"YYYY-MM-DD": close}`` and shift each close to D+1 00:00Z.
 
@@ -924,9 +990,22 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
 
     fx_series = None
     fx_source_sha256 = None
+    fx_series_json = runtime_overrides.get(
+        "account_currency_fx_series_json")
     fx_daily_json = runtime_overrides.get(
         "account_currency_fx_daily_close_json")
-    if fx_daily_json:
+    if fx_series_json and fx_daily_json:
+        raise ValueError(
+            "runtime_overrides may set only one of "
+            "account_currency_fx_series_json or "
+            "account_currency_fx_daily_close_json")
+    if fx_series_json:
+        fx_path = Path(str(fx_series_json))
+        if not fx_path.is_absolute():
+            fx_path = (strategy_dir / fx_path).resolve()
+        fx_series, fx_source_sha256 = \
+            _load_account_currency_fx_series_json(fx_path)
+    elif fx_daily_json:
         fx_path = Path(str(fx_daily_json))
         if not fx_path.is_absolute():
             fx_path = (strategy_dir / fx_path).resolve()

@@ -1295,10 +1295,10 @@ protected:
     // affordability event can trim it.
     void process_margin_call(const Bar& bar);
     // A timestamped FX rollover is a broker-open event, not an end-of-bar
-    // adverse-price check.  This narrow path applies only to a carried 1x long
-    // in ordinary historical dispatch and returns true when it emits a broker
-    // liquidation row.
-    bool process_carried_long_full_margin_fx_rollover(const Bar& bar);
+    // adverse-price check.  Cell A1 supports carried 1x full-margin long and
+    // short in ordinary historical dispatch; leveraged shapes stay fail-closed.
+    // Returns true when it emits a broker liquidation row.
+    bool process_carried_position_fx_rollover(const Bar& bar);
 
     // --- Slippage helper ---
     double round_to_mintick(double price) const {
