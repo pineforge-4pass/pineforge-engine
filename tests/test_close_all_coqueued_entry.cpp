@@ -409,22 +409,28 @@ static void test_G_carry_priorbar_still_cancelled() {
 // G-opposite (KI-64 untouched — characterization). An opposite-direction entry
 // co-queued with close_all is never a target of the same-direction wipe
 // (is_long != exit_closed_was_long); its behavior is IDENTICAL before and after
-// this fix. Pins the current engine behavior: the opposite short stop survives
-// and fills when touched.
+// this fix. Pins the generated-script behavior: the opposite short stop
+// survives and fills with its placement-time reversal transaction. Because
+// this source contains close_all, legacy codegen set
+// script_has_strategy_close_=true even before issue #141 removed that AST bit
+// from the runtime predicate.
 //
 //   bar0: entry("L0", mkt)
 //   bar1: L0 fills @100 → LONG 1. arm OPPOSITE short stop "SOPP"@90 + close_all()
 //   bar2: close_all fills @100 → FLAT (1 trade). SOPP opposite dir → untouched;
 //         low 99 > 90 stays pending.
-//   bar3: low 88 ≤ 90 → SOPP fires → SHORT 1.
+//   bar3: low 88 ≤ 90 → SOPP fires from flat with carry 1 + own 1 → SHORT 2.
 //
-// EXPECTED (pre- and post-fix, characterization): position ends SHORT 1.
+// EXPECTED (pre- and post-fix, generated-source characterization): SHORT 2.
 // ─────────────────────────────────────────────────────────────────────
 static void test_G_opposite_unchanged_ki64() {
     std::printf("G-opposite (KI-64 opposite-direction unchanged)\n");
     class Probe : public ProbeBase {
     public:
-        Probe() : ProbeBase(2) {}
+        Probe() : ProbeBase(2) {
+            // Match what codegen emits for the reachable close_all below.
+            script_has_strategy_close_ = true;
+        }
         void on_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L0", true);
             if (bar_index_ == 1) {
@@ -443,7 +449,7 @@ static void test_G_opposite_unchanged_ki64() {
     };
     p.run(bars, 5);
     CHECK(p.trade_count() == 1);
-    CHECK(near(p.pos_size(), -1.0));          // opposite entry survives (unchanged pre/post)
+    CHECK(near(p.pos_size(), -2.0));          // carry + own qty (unchanged pre/post)
 }
 
 // ─────────────────────────────────────────────────────────────────────

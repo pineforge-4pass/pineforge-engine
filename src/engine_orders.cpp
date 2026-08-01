@@ -745,16 +745,16 @@ void BacktestEngine::consume_tv_carry_from_siblings(const std::string& id,
 // transient state.
 //
 // Conditions:
-//   (a) script_has_strategy_close_   -- compile-time AST scan (gates the
-//                                       rule to strategies that can
-//                                       actually trigger the deferred-flip
-//                                       pattern)
-//   (b) is_priced_entry              -- stop/limit, not market
-//   (c) tv_carry_qty > 0             -- order was placed while a position
+//   (a) is_priced_entry              -- stop/limit, not market
+//   (b) tv_carry_qty > 0             -- order was placed while a position
 //                                       was open
-//   (d) requested != created direction
+//   (c) requested != created direction
 //                                    -- new entry is opposite to the carry
 //                                       position
+//
+// Do not gate this on the compile-time ``script_has_strategy_close_`` AST
+// scan. A bracket from ``strategy.exit`` can close the source position too,
+// and adding an unreachable ``strategy.close`` must be semantically inert.
 //
 // After applying the carry, ``consume_tv_carry_from_siblings`` zeroes the
 // same-source-cycle siblings so probe 93 doesn't double-grow.
@@ -776,10 +776,10 @@ void BacktestEngine::enter_market_from_flat(const std::string& id, bool is_long,
                                             int created_bar,
                                             bool explicit_qty_prequantized,
                                             uint64_t entry_incarnation) {
-    bool carry_was_long = (created_position_side == PositionSide::LONG);
-    bool tv_deferred_flip =
-        script_has_strategy_close_
-        && is_priced_entry
+    const bool carry_was_long =
+        created_position_side == PositionSide::LONG;
+    const bool tv_deferred_flip =
+        is_priced_entry
         && tv_carry_qty > 0.0
         && (carry_was_long ? !is_long : is_long);
     double base_qty = explicit_qty_prequantized

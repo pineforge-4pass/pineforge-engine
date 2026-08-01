@@ -81,11 +81,6 @@ public:
         slippage_ = 0;
         commission_value_ = 0;
         pyramiding_ = 1;
-        // The deferred-flip carry rule is gated on the script having a
-        // ``strategy.close`` call — set it true so the carry-leak
-        // regression (default position_qty_ before any fill) would
-        // surface as qty=2 rather than being silently masked.
-        script_has_strategy_close_ = true;
     }
 
     void snapshot() {
@@ -307,9 +302,9 @@ static void test_new_entry_after_same_bar_fill_defers_to_next_bar() {
 // strategy.entry placed BEFORE the first fill of any session must
 // capture tv_carry_qty=0, not the engine's default
 // ``position_qty_=1.0`` value. Pre-fix, the LE order's tv_carry_qty
-// was 1, which combined with ``script_has_strategy_close_=true`` and
-// the order firing from FLAT in the LONG direction produced
-// tv_deferred_flip = (true && true && carry=1>0 && (false?:true=true))
+// was 1, which combined with the priced order firing from FLAT in the
+// LONG direction produced
+// tv_deferred_flip = (priced && carry=1>0 && (false?:true=true))
 // → qty = 1 + 1 = 2 instead of 1. Probe 62's first in-window trade
 // fired qty=2 with double the expected PnL (-18.22 vs TV's -9.11),
 // breaking parity even before the warmup-gate buffer fix exposed the

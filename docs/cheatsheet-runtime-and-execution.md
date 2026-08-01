@@ -61,7 +61,8 @@ Sentinels for "not overridden": `NaN` (doubles), `-1` (ints).
 | `close_entries_rule` | FIFO | `ANY`/`any`/`1` = ANY, else FIFO |
 
 **Compile-time only (no override path):** `margin_long` / `margin_short`
-(default 100 = 1x), `script_has_strategy_close_` (gates the deferred-flip rule).
+(default 100 = 1x). `script_has_strategy_close_` is retained only as a legacy
+generated-code compatibility bit and does not affect runtime behavior.
 
 ## 1.3 `strategy.risk.*` — compile-time only
 
@@ -210,8 +211,9 @@ mintick directionally (buys ceil, sells floor).
 
 **Deferred-flip carry (`tv_carry_qty`, `|old|+qty`):** a **priced** entry firing
 **from flat** opposite to its `created_position_side` opens at `carry + base_qty`
-**iff** all hold: `script_has_strategy_close_`, priced entry, `carry > 0`,
-opposite direction. Carry snapshot taken **at `strategy.entry` call time** =
+**iff** all hold: priced entry, `carry > 0`, opposite direction. This also
+applies when a `strategy.exit` bracket closed the source position. Carry
+snapshot taken **at `strategy.entry` call time** =
 `max(0, position_qty_ − pending_close_qty_in_bar_)`. Same-id replacement
 re-snaps carry; siblings in the same cycle get carry zeroed on fire.
 

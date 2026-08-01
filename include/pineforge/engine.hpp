@@ -902,11 +902,12 @@ protected:
     // callers that want the legacy hold-to-infinity behaviour.
     bool margin_call_enabled_ = true;
 
-    // True iff the user's strategy.pine contains at least one
-    // ``strategy.close`` or ``strategy.close_all`` call (compile-time
-    // determined by the codegen, set in the generated class's
-    // constructor). Gates the TradingView deferred-flip growth rule
-    // applied in ``execute_market_entry``'s FLAT branch.
+    // Legacy codegen compatibility bit. Older and current generated classes
+    // set this when the Pine source contains ``strategy.close`` or
+    // ``strategy.close_all``. Runtime behavior must not depend on it: a
+    // bracket exit can also close a carry source, and unreachable source code
+    // cannot be allowed to change fills. Keep the member until generated
+    // classes no longer write it.
     bool script_has_strategy_close_ = false;
     int64_t trade_start_time_ = std::numeric_limits<int64_t>::min();
 

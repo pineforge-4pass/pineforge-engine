@@ -76,10 +76,6 @@ public:
         slippage_ = 0;
         commission_value_ = 0;
         pyramiding_ = 1;
-        // The deferred-flip rule is gated on the script having a
-        // ``strategy.close`` call at compile time. The codegen would
-        // set this flag from an AST scan; here we set it directly.
-        script_has_strategy_close_ = true;
     }
 
     void on_bar(const Bar& bar) override {
@@ -126,6 +122,50 @@ public:
     int last_bar_index_seen = -1;
 };
 
+// Metamorphic probe for issue #141. Both instances execute exactly the same
+// broker commands: a bracket closes the source long, then a pre-armed priced
+// short entry fires from flat. The only difference is the legacy codegen AST
+// bit that says whether the Pine source contains any strategy.close call.
+// An unreachable call can change that bit but cannot change runtime behavior.
+class BracketExitDeferredFlipProbe : public BacktestEngine {
+public:
+    explicit BracketExitDeferredFlipProbe(bool ast_has_strategy_close) {
+        initial_capital_ = 1'000'000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        slippage_ = 0;
+        commission_value_ = 0;
+        pyramiding_ = 1;
+        syminfo_mintick_ = 0.01;
+        script_has_strategy_close_ = ast_has_strategy_close;
+    }
+
+    void on_bar(const Bar&) override {
+        if (bar_index_ == 0) {
+            strategy_entry("L", true,
+                           std::numeric_limits<double>::quiet_NaN(),
+                           std::numeric_limits<double>::quiet_NaN(), 1.0);
+        }
+        if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
+            strategy_entry("S", false,
+                           /*limit=*/105.0,
+                           std::numeric_limits<double>::quiet_NaN(), 1.0);
+            strategy_exit("XL", "L",
+                          std::numeric_limits<double>::quiet_NaN(),
+                          /*stop=*/95.0);
+        }
+        if (bar_index_ == 3) {
+            final_side = position_side_;
+            final_qty = position_qty_;
+            closed_trade_count = trade_count();
+        }
+    }
+
+    PositionSide final_side = PositionSide::FLAT;
+    double final_qty = 0.0;
+    int closed_trade_count = -1;
+};
+
 }  // namespace
 
 // Scenario 1: deferred-flip oracle (probe 95-style). Cycle qty grows
@@ -170,6 +210,36 @@ static void test_deferred_flip_chain_grows() {
     CHECK(max_qty >= 2);
 }
 
+// Scenario 1b: a strategy.exit bracket is itself sufficient to close the
+// source position before a priced opposite entry fires. The global AST scan
+// for strategy.close must not decide whether the captured carry applies.
+static void test_unreachable_strategy_close_is_semantically_inert() {
+    std::printf("test_unreachable_strategy_close_is_semantically_inert\n");
+    Bar bars[4] = {
+        {100, 101,  99, 100, 1000,  60'000},
+        {100, 101,  99, 100, 1000, 120'000},  // L fills; arm S + XL
+        {100, 101,  94,  95, 1000, 180'000},  // XL closes L; S untouched
+        {100, 106,  99, 105, 1000, 240'000},  // S limit fires from flat
+    };
+
+    BracketExitDeferredFlipProbe without_dead_close(false);
+    BracketExitDeferredFlipProbe with_dead_close(true);
+    without_dead_close.run(bars, 4);
+    with_dead_close.run(bars, 4);
+
+    CHECK(without_dead_close.last_error().empty());
+    CHECK(with_dead_close.last_error().empty());
+    CHECK(without_dead_close.final_side == PositionSide::SHORT);
+    CHECK(with_dead_close.final_side == PositionSide::SHORT);
+    CHECK(near(without_dead_close.final_qty, 2.0));
+    CHECK(near(with_dead_close.final_qty, 2.0));
+    CHECK(near(without_dead_close.final_qty, with_dead_close.final_qty));
+    CHECK(without_dead_close.closed_trade_count == 1);
+    CHECK(with_dead_close.closed_trade_count == 1);
+    CHECK(without_dead_close.closed_trade_count ==
+          with_dead_close.closed_trade_count);
+}
+
 // Scenario 2: deferred-flip is gated on opposite direction. A
 // pre-armed SAME-direction priced entry (long stop placed during a
 // long, position closes, long stop later fires from flat) should NOT
@@ -191,7 +261,6 @@ static void test_same_direction_no_carry() {
             slippage_ = 0;
             commission_value_ = 0;
             pyramiding_ = 1;
-            script_has_strategy_close_ = true;
         }
         void on_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
@@ -323,7 +392,6 @@ static void test_two_cycle_siblings_independent_carry() {
             slippage_ = 0;
             commission_value_ = 0;
             pyramiding_ = 5;
-            script_has_strategy_close_ = true;
         }
         void on_bar(const Bar& bar) override {
             (void)bar;
@@ -487,7 +555,6 @@ static void test_per_leg_fifo_pnl_three_legs() {
             slippage_ = 0;
             commission_value_ = 0;
             pyramiding_ = 3;
-            script_has_strategy_close_ = true;
         }
         void on_bar(const Bar& bar) override {
             (void)bar;
@@ -689,6 +756,7 @@ static void test_overcap_same_id_reissue_removes_old_pending_order() {
 
 int main() {
     test_deferred_flip_chain_grows();
+    test_unreachable_strategy_close_is_semantically_inert();
     test_same_direction_no_carry();
     test_two_cycle_siblings_independent_carry();
     test_per_bar_pending_close_resets_in_script_tf_run();
