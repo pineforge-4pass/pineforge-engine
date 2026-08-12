@@ -1060,11 +1060,74 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         trades_[ti].exit_comment = "Margin call";
         trades_[ti].exit_id = "__margin_call__";
     }
+    // finding-311 REVIVE-B: a margin-call partial re-registers the surviving
+    // position's dormant brackets (original prices). If the margin-call event
+    // price already makes a revived bracket marketable, the WHOLE remaining
+    // position closes at that event price through the bracket's id — TV books
+    // the slice ("Margin call") and the residual full close ("Exit …") at the
+    // same adverse-extreme price on the same bar.
+    if (trades_.size() != trades_before
+        && position_side_ != PositionSide::FLAT) {
+        revive_position_brackets_after_margin_call_partial(raw_exit_fill_base);
+    }
     // A commissioned all-in close-then-short has two broker checkpoints on its
     // fill bar: fill-price opening affordability (which may be a no-op), then
     // the ordinary adverse-high check over the surviving short. The one-shot
     // provenance bit was consumed above, so recursion is bounded to one retry.
     run_default_short_adverse_retry();
+}
+
+void BacktestEngine::revive_position_brackets_after_margin_call_partial(
+        double margin_call_event_price) {
+    const double mc_price = margin_call_event_price;
+    if (position_side_ == PositionSide::FLAT) return;
+    static const std::string kClosePrefix = "__close__";
+    PendingOrder* marketable = nullptr;
+    for (PendingOrder& o : pending_orders_) {
+        if (o.type != OrderType::EXIT) continue;
+        if (o.suppress_as_declined_reversal_close) continue;
+        if (o.id.size() >= kClosePrefix.size()
+            && o.id.compare(0, kClosePrefix.size(), kClosePrefix) == 0) continue;
+        if (!o.dormant_bracket) continue;
+        bool bound = o.from_entry.empty();
+        if (!bound) {
+            for (const auto& pe : pyramid_entries_) {
+                if (pe.entry_id == o.from_entry) { bound = true; break; }
+            }
+        }
+        if (!bound) continue;
+        o.dormant_bracket = false;
+        // Marketable at the margin-call event price? (Full-percent default
+        // brackets only — the TV-pinned shape.)
+        const bool full_pct = std::isnan(o.qty)
+            && o.qty_percent >= 100.0 - internal::kFullPercentEps;
+        if (!full_pct || std::isnan(o.stop_price)
+            || !std::isfinite(mc_price)) continue;
+        const bool mk = (position_side_ == PositionSide::SHORT)
+            ? (o.stop_price <= mc_price)
+            : (o.stop_price >= mc_price);
+        if (mk && marketable == nullptr) marketable = &o;
+    }
+    if (marketable == nullptr) return;
+    const std::string exit_id = marketable->id;
+    const std::string exit_comment = marketable->comment;
+    const uint64_t exit_incarnation = marketable->incarnation;
+    const size_t trades_before = trades_.size();
+    execute_market_exit(mc_price);
+    if (trades_.size() != trades_before) {
+        ++broker_fill_event_seq_;
+        for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+            trades_[ti].exit_comment = exit_comment;
+            trades_[ti].exit_id = exit_id;
+        }
+        // The bracket filled: consume the pending order object.
+        pending_orders_.erase(
+            std::remove_if(pending_orders_.begin(), pending_orders_.end(),
+                [&](const PendingOrder& o) {
+                    return o.incarnation == exit_incarnation;
+                }),
+            pending_orders_.end());
+    }
 }
 
 // finding-308 (margin-call intrabar chronology). TradingView places the
@@ -2955,6 +3018,16 @@ void BacktestEngine::apply_filled_order_to_state(
         decline_and_cancel();
         return;
     }
+    // finding-311 (KI-60 COOF kernel mirror of classify's dormant Skip): the
+    // COOF kernel pre-classifies its whole candidate set BEFORE any candidate
+    // is applied, so a bracket marked dormant mid-segment by an earlier
+    // candidate's declined reversal still reaches apply. No-op the fill
+    // WITHOUT consuming the order — unlike the suppressed close leg above, a
+    // dormant bracket must SURVIVE in the book (a later margin-call partial
+    // revives it; a fresh same-(id,from_entry) strategy.exit replaces it).
+    if (order.dormant_bracket) {
+        return;
+    }
     // Fill-local proof that KI-54 admitted this order as a flat open on its
     // frozen sizing price. Merely carrying a snapshot is insufficient: true
     // reversals are admitted on their actual fill, and paired reentries may
@@ -3157,6 +3230,7 @@ void BacktestEngine::apply_filled_order_to_state(
         const bool reversal = position_side_ != PositionSide::FLAT && !same_dir;
         if (reversal && order.type == OrderType::MARKET) {
             suppress_declined_reversal_close_legs(order);
+            mark_position_brackets_dormant_on_declined_reversal();
         }
         decline_and_cancel();
         return;
@@ -3361,6 +3435,7 @@ void BacktestEngine::apply_filled_order_to_state(
                 // excluded — see suppress_declined_reversal_close_legs.
                 if (reversal && order.type == OrderType::MARKET) {
                     suppress_declined_reversal_close_legs(order);
+                    mark_position_brackets_dormant_on_declined_reversal();
                 }
                 decline_and_cancel();
                 return;
@@ -4801,6 +4876,38 @@ void BacktestEngine::suppress_declined_reversal_close_legs(
     }
 }
 
+void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal() {
+    static const std::string kClosePrefix = "__close__";
+    if (position_side_ == PositionSide::FLAT) return;
+    // The live position's entry ids (pyramid lots) — a bracket is "standing"
+    // when its from_entry names one of them, or when it is a global
+    // (from_entry-less) exit. Stale exits bound to a not-yet-filled entry id
+    // (e.g. the declined reversal's own strategy.exit) are NOT standing
+    // brackets and stay untouched (the #147 stale-exit family).
+    for (PendingOrder& o : pending_orders_) {
+        if (o.type != OrderType::EXIT) continue;
+        if (o.suppress_as_declined_reversal_close) continue;
+        // strategy.close instructions (targeted "__close__X" AND the bare
+        // "__close__" close_all) are NOT brackets — never dormant.
+        if (o.id.size() >= kClosePrefix.size()
+            && o.id.compare(0, kClosePrefix.size(), kClosePrefix) == 0) continue;
+        // Only priced strategy.exit brackets (stop/limit/trail legs) die.
+        const bool priced = !std::isnan(o.stop_price)
+            || !std::isnan(o.limit_price)
+            || !std::isnan(o.trail_points)
+            || !std::isnan(o.trail_price);
+        if (!priced) continue;
+        bool bound = o.from_entry.empty();
+        if (!bound) {
+            for (const auto& pe : pyramid_entries_) {
+                if (pe.entry_id == o.from_entry) { bound = true; break; }
+            }
+        }
+        if (!bound) continue;
+        o.dormant_bracket = true;
+    }
+}
+
 // ── Inner-loop phase 1: order eligibility ─────────────────────────────
 // Returns whether the given pending order should be processed this
 // iteration. Walks the chain of TV-empirical "skip" / "cancel" rules
@@ -4818,6 +4925,12 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     // both opposing passes): a flagged order is never eligible.
     if (order.suppress_as_declined_reversal_close) {
         return OrderEligibility::Remove;
+    }
+    // finding-311: a dormant bracket stays in the book (a later margin-call
+    // partial revives it; a fresh same-id strategy.exit replaces it) but
+    // never matches a fill while dormant.
+    if (order.dormant_bracket) {
+        return OrderEligibility::Skip;
     }
     if (opposing_pass == 1) {
         if (!pass0_opposing_skip_ids.count(order.id)) {
