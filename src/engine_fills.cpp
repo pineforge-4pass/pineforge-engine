@@ -2450,18 +2450,37 @@ bool BacktestEngine::short_seed_collision_final_short_is_live(
 // A strategy.exit can be armed on the signal bar together with the MARKET
 // strategy.entry named by from_entry. The child is valid before the parent
 // fills: TradingView binds it to the eventual lot, and if the next open has
-// already breached its stop, it fills both parent and child at that same open.
-// Clean-room probe order-market-reversal-resting-bracket-gap-01 pins this for
-// both directions and for parents placed from true flat or as reversals.
+// already breached its stop OR reached its limit, it fills both parent and
+// child at that same open. Clean-room probe
+// order-market-reversal-resting-bracket-gap-01 pins the stop leg for both
+// directions and for parents placed from true flat or as reversals. The
+// LIMIT leg is pinned by finding 278 seed (b) on
+// rhyme17-trendline-and-horizontal-breakout: on a reversal fill bar TV
+// honors the STANDING prior-bar strategy.exit whose levels were computed
+// from the OLD (reversed-away) position's avg price — a marketable-at-open
+// limit fills AT THE OPEN, producing a duration-0 PnL-0 trade for the new
+// position (six tape events: 2025-04-07/04-27/07-23/10-21/12-08/2026-01-09,
+// each with entry px == exit px == bar open). The re-priced bracket the
+// script issues at this bar's close then governs subsequent bars.
+//
+// SCOPE NOTE (ycelestine ledger): this helper changes exit ORDER lifecycle
+// only — when a standing strategy.exit order is allowed to fill on the
+// parent's fill bar. It does NOT touch the (reverted, off-limits) same-bar
+// position_size VISIBILITY class: what the script observes as
+// strategy.position_size mid-bar is unchanged, as are the #146 same-tick
+// close+reverse sequencing kernel and ordinary non-reversal exit re-issues
+// (those fail the position_open_bar_ / fresh-lot provenance below).
 //
 // Do not turn this into a general entry-bar wrong-side bypass. The exact
 // provenance below keeps freshly emitted/stale exits, priced parents, MARKET
 // pyramid adds, partial/sibling groups, POOC, COOF, and magnifier on their
 // existing paths. Generated Pine already lowers flat
 // strategy.position_avg_price to na, so an avg-derived flat bracket never
-// reaches this helper with a finite stop.
-bool BacktestEngine::prearmed_market_parent_stop_gaps_at_open(
-        const PendingOrder& order, const Bar& bar) const {
+// reaches this helper with a finite leg.
+bool BacktestEngine::prearmed_market_parent_bracket_gaps_at_open(
+        const PendingOrder& order, const Bar& bar,
+        bool* limit_leg) const {
+    if (limit_leg != nullptr) *limit_leg = false;
     if (process_orders_on_close_ || calc_on_order_fills_ || bar_magnifier_enabled_) {
         return false;
     }
@@ -2473,27 +2492,28 @@ bool BacktestEngine::prearmed_market_parent_stop_gaps_at_open(
         || order.created_during_coof_recalc
         || order.requested_partial
         || order.qty_percent < 100.0 - kFullPercentEps
-        || !std::isfinite(order.stop_price)
+        || (!std::isfinite(order.stop_price)
+            && !std::isfinite(order.limit_price))
         || !std::isnan(order.trail_points)
         || !std::isnan(order.trail_price)) {
         return false;
     }
 
+    // Exactly ONE marketable leg at the open. Test the actual W0 broker
+    // predicate: equality is marketable, and slippage can make the booked
+    // entry price differ from the bar open. Dual-marketable brackets stay
+    // out until a dedicated priority oracle exists (no tape exemplar); a
+    // bracket with neither leg marketable keeps the ordinary entry-bar
+    // path walk / wrong-side gating.
     const bool live_long = position_side_ == PositionSide::LONG;
-    const bool stop_gapped = live_long ? bar.open <= order.stop_price
-                                       : bar.open >= order.stop_price;
-    if (!stop_gapped) return false;
-
-    // The oracle has a correctly-sided, nonmarketable limit sibling inside the
-    // same bracket, not a second open-gap leg. Keep dual-marketable brackets
-    // out until a dedicated priority oracle exists. Test the actual W0 broker
-    // predicate: equality is marketable, and slippage can make the booked entry
-    // price differ from the bar open.
-    if (!std::isnan(order.limit_price)) {
-        const bool limit_gapped = live_long ? bar.open >= order.limit_price
-                                             : bar.open <= order.limit_price;
-        if (limit_gapped) return false;
-    }
+    const bool stop_gapped = std::isfinite(order.stop_price)
+        && (live_long ? bar.open <= order.stop_price
+                      : bar.open >= order.stop_price);
+    const bool limit_marketable = std::isfinite(order.limit_price)
+        && (live_long ? bar.open >= order.limit_price
+                      : bar.open <= order.limit_price);
+    if (stop_gapped == limit_marketable) return false;
+    if (limit_leg != nullptr) *limit_leg = limit_marketable;
 
     int matching_children = 0;
     for (const PendingOrder& pending : pending_orders_) {
@@ -4909,7 +4929,7 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
             }
         }
         const bool prearmed_market_gap =
-            prearmed_market_parent_stop_gaps_at_open(order, bar);
+            prearmed_market_parent_bracket_gaps_at_open(order, bar);
         if (!prearmed_market_gap && !bar_magnifier_enabled_
             && !(calc_on_order_fills_ && coof_scheduler_active_
                  && order.created_during_coof_recalc)) {
@@ -4961,12 +4981,18 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool is_limit_fill = false;
 
     // A valid child that was armed with its pending MARKET parent and whose
-    // stop is already breached at the parent's fill open scratches there.
-    // Route it directly: the generic entry-bar resolver intentionally blocks
-    // wrong-side levels and remains unchanged for every other provenance.
-    if (exit_style && prearmed_market_parent_stop_gaps_at_open(order, bar)) {
+    // stop is already breached — or whose limit is already marketable — at
+    // the parent's fill open scratches there. Route it directly: the generic
+    // entry-bar resolver intentionally blocks wrong-side levels and remains
+    // unchanged for every other provenance. A limit-leg scratch books at the
+    // open on the unslipped limit-or-better path (TV does not slip limit
+    // fills); the stop leg keeps its established slipped-stop booking.
+    bool prearmed_bracket_limit_leg = false;
+    if (exit_style && prearmed_market_parent_bracket_gaps_at_open(
+            order, bar, &prearmed_bracket_limit_leg)) {
         fill_price = bar.open;
         should_fill = true;
+        is_limit_fill = prearmed_bracket_limit_leg;
     }
 
     // If every non-trailing priced leg is suppressed on the entry bar, the

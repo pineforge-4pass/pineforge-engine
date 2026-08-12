@@ -2363,12 +2363,21 @@ private:
         const PendingOrder& order) const;
     // TradingView binds a valid, single/full, non-trailing strategy.exit to a
     // co-queued high-level MARKET parent. If that parent fills at the next open
-    // and its stop is already breached, the newborn lot scratches at that open.
+    // and exactly one bracket leg is already marketable there — the stop
+    // breached, or the limit at-or-through the open — the newborn lot
+    // scratches at that open (duration-0, PnL-0). On a market REVERSAL parent
+    // this is the standing prior-bar strategy.exit whose levels were computed
+    // from the reversed-away position's avg price: TV honors that stale order
+    // at the fill bar's open instead of waiting for the re-priced bracket
+    // (rhyme17 finding 278 seed (b), six tape-proven limit-leg events).
     // The helper proves the parent/child/fresh-lot provenance; it deliberately
-    // excludes POOC, COOF, magnifier, same-direction adds, priced parents, and
-    // multi-child groups.
-    bool prearmed_market_parent_stop_gaps_at_open(
-        const PendingOrder& order, const Bar& bar) const;
+    // excludes POOC, COOF, magnifier, same-direction adds, priced parents,
+    // multi-child groups, and dual-marketable brackets.
+    // limit_leg (optional out): set true iff the LIMIT leg is the marketable
+    // one, so the fill site can take the unslipped limit-or-better path.
+    bool prearmed_market_parent_bracket_gaps_at_open(
+        const PendingOrder& order, const Bar& bar,
+        bool* limit_leg = nullptr) const;
     bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
     void invalidate_pending_flat_market_pair(int64_t created_seq);
     void compact_filled_pending_orders(const std::vector<size_t>& filled_indices,
