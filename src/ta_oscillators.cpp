@@ -143,7 +143,13 @@ double Stoch::compute(double src, double high, double low) {
 
     double range = hi - lo;
     if (range == 0.0) {
-        return 50.0;  // Avoid division by zero; midpoint when flat
+        // Pine: 100 * (src - lowest) / (highest - lowest) divides by zero on a
+        // flat window; division by zero is na in Pine, and the finding-331 TV
+        // oracle pins exactly this at the first live stochRSI bar of a
+        // range-local security context (single-value window -> hi == lo -> na,
+        // NOT a 50 midpoint: a midpoint would wake %D one bar early and flip
+        // the 2025-04-19 readout).
+        return na<double>();
     }
 
     return (src - lo) / range * 100.0;
@@ -618,7 +624,7 @@ double Stoch::recompute(double src, double high, double low) {
     }
 
     double range = hi - lo;
-    if (range == 0.0) return 50.0;
+    if (range == 0.0) return na<double>();  // Pine division by zero (see compute)
     return (src - lo) / range * 100.0;
 }
 

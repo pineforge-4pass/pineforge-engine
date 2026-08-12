@@ -28,10 +28,12 @@ Highest::Highest(int length)
     : length(length) {}
 
 double Highest::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
+    // TV positional-window semantics (findings 331/332 oracle, KI-55 family):
+    // the lookback window covers the last `length` BARS — an na input advances
+    // the window as a gap instead of being dropped, the extremum is taken over
+    // the non-na members, and the result is na only while the bar window has
+    // not fully formed or contains no non-na member. On gap-free series this
+    // is byte-identical to the previous last-N-non-na buffer.
     buffer.push_back(src);
     while ((int)buffer.size() > length) {
         buffer.pop_front();
@@ -41,9 +43,9 @@ double Highest::compute(double src) {
         return na<double>();
     }
 
-    double hi = buffer[0];
-    for (int i = 1; i < (int)buffer.size(); i++) {
-        if (buffer[i] > hi) hi = buffer[i];
+    double hi = na<double>();
+    for (int i = 0; i < (int)buffer.size(); i++) {
+        if (!is_na(buffer[i]) && (is_na(hi) || buffer[i] > hi)) hi = buffer[i];
     }
     return hi;
 }
@@ -54,10 +56,7 @@ Lowest::Lowest(int length)
     : length(length) {}
 
 double Lowest::compute(double src) {
-    if (is_na(src)) {
-        return na<double>();
-    }
-
+    // TV positional-window semantics — see Highest::compute above.
     buffer.push_back(src);
     while ((int)buffer.size() > length) {
         buffer.pop_front();
@@ -67,9 +66,9 @@ double Lowest::compute(double src) {
         return na<double>();
     }
 
-    double lo = buffer[0];
-    for (int i = 1; i < (int)buffer.size(); i++) {
-        if (buffer[i] < lo) lo = buffer[i];
+    double lo = na<double>();
+    for (int i = 0; i < (int)buffer.size(); i++) {
+        if (!is_na(buffer[i]) && (is_na(lo) || buffer[i] < lo)) lo = buffer[i];
     }
     return lo;
 }
@@ -533,12 +532,12 @@ double Highest::recompute(double src) {
     if (buffer.empty()) return compute(src);
     buffer.back() = src;
 
-    if (is_na(src)) return na<double>();
     if ((int)buffer.size() < length) return na<double>();
 
-    double hi = buffer[0];
-    for (int i = 1; i < (int)buffer.size(); i++) {
-        if (buffer[i] > hi) hi = buffer[i];
+    // Mirrors Highest::compute — positional window, na members skipped.
+    double hi = na<double>();
+    for (int i = 0; i < (int)buffer.size(); i++) {
+        if (!is_na(buffer[i]) && (is_na(hi) || buffer[i] > hi)) hi = buffer[i];
     }
     return hi;
 }
@@ -548,12 +547,12 @@ double Lowest::recompute(double src) {
     if (buffer.empty()) return compute(src);
     buffer.back() = src;
 
-    if (is_na(src)) return na<double>();
     if ((int)buffer.size() < length) return na<double>();
 
-    double lo = buffer[0];
-    for (int i = 1; i < (int)buffer.size(); i++) {
-        if (buffer[i] < lo) lo = buffer[i];
+    // Mirrors Lowest::compute — positional window, na members skipped.
+    double lo = na<double>();
+    for (int i = 0; i < (int)buffer.size(); i++) {
+        if (!is_na(buffer[i]) && (is_na(lo) || buffer[i] < lo)) lo = buffer[i];
     }
     return lo;
 }

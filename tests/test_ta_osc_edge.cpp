@@ -143,14 +143,15 @@ static void test_stoch_flat_and_na() {
     CHECK(is_na(stoch.compute(10.0, 11.0, 9.0)));
     CHECK(is_na(stoch.compute(10.0, 12.0, 8.0)));
 
-    // Flat high/low across the whole window -> hi == lo -> range 0 -> 50.0
-    // midpoint. Feed a constant high/low (range zero) for `length` bars.
+    // Flat high/low across the whole window -> hi == lo -> range 0 -> na
+    // (Pine division by zero; pinned by the finding-331 TV deep-backtest
+    // oracle at the first live stochRSI bar of a range-local D context).
     ta::Stoch flat(3);
     flat.compute(5.0, 5.0, 5.0);
     flat.compute(5.0, 5.0, 5.0);
-    CHECK(near(flat.compute(5.0, 5.0, 5.0), 50.0));
-    // recompute on the same flat bar also takes the range==0 -> 50.0 arm.
-    CHECK(near(flat.recompute(5.0, 5.0, 5.0), 50.0));
+    CHECK(is_na(flat.compute(5.0, 5.0, 5.0)));
+    // recompute on the same flat bar also takes the range==0 -> na arm.
+    CHECK(is_na(flat.recompute(5.0, 5.0, 5.0)));
 
     // na source with a valid window -> na (the is_na(src) guard).
     ta::Stoch s2(2);
@@ -406,12 +407,14 @@ static void test_cog_degenerate_is_na() {
 static void test_degenerate_arms_negative_control() {
     std::printf("test_degenerate_arms_negative_control\n");
 
-    // ta.stoch on a flat window -> 50.0 (NOT na). Known-wrong, unresolved.
+    // ta.stoch on a flat window -> na (Pine division by zero). RESOLVED by the
+    // finding-331 TV oracle: a 50.0 midpoint wakes %D one D bar early and
+    // flips the 2025-04-19 range-local readout; TV reads na.
     ta::Stoch stoch(3);
     stoch.compute(5.0, 5.0, 5.0);
     stoch.compute(5.0, 5.0, 5.0);
-    CHECK(near(stoch.compute(5.0, 5.0, 5.0), 50.0));
-    CHECK(near(stoch.recompute(5.0, 5.0, 5.0), 50.0));
+    CHECK(is_na(stoch.compute(5.0, 5.0, 5.0)));
+    CHECK(is_na(stoch.recompute(5.0, 5.0, 5.0)));
 
     // ta.cci on a constant source -> exactly 0.0 (NOT na). SPLIT/undecided:
     // TradingView really does return bitwise 0.0 in this construction.

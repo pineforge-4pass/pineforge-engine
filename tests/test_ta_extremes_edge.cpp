@@ -64,9 +64,10 @@ static void test_highest_warmup_evict_na() {
     CHECK(near(hi.compute(1.0), 2.0));  // window {2,1,1} -> 9 evicted, max 2
     CHECK(near(hi.compute(1.0), 1.0));  // window {1,1,1} -> all evicted, max 1
 
-    // na input -> na out (covers is_na(src) guard) and must not perturb window.
-    CHECK(is_na(hi.compute(na<double>())));
-    CHECK(near(hi.compute(0.5), 1.0));  // window still {1,1,0.5} -> max 1
+    // na input advances the positional window as a gap (TV semantics, pinned
+    // by the finding-331 oracle: extrema stay live over the non-na members).
+    CHECK(near(hi.compute(na<double>()), 1.0));  // window {1,1,na} -> max 1
+    CHECK(near(hi.compute(0.5), 1.0));           // window {1,na,0.5} -> max 1
 }
 
 // --- Lowest: warmup na, full-window value, eviction, na-input ---
@@ -86,8 +87,8 @@ static void test_lowest_warmup_evict_na() {
     CHECK(near(lo.compute(7.0), 7.0));   // {9,8,7} -> 1 evicted, min 7
     CHECK(near(lo.compute(6.0), 6.0));   // {8,7,6} -> min 6
 
-    CHECK(is_na(lo.compute(na<double>())));  // na in -> na out
-    CHECK(near(lo.compute(10.0), 6.0));      // {7,6,10} -> min 6
+    CHECK(near(lo.compute(na<double>()), 6.0));  // {7,6,na} -> min 6 (gap)
+    CHECK(near(lo.compute(10.0), 6.0));          // {6,na,10} -> min 6
 }
 
 // --- HighestBars: warmup na, offset semantics, eviction ---
