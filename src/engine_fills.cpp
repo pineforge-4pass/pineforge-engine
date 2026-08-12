@@ -1081,7 +1081,6 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
         double margin_call_event_price) {
     const double mc_price = margin_call_event_price;
     if (position_side_ == PositionSide::FLAT) return;
-    static const std::string kClosePrefix = "__close__";
     PendingOrder* marketable = nullptr;
     for (PendingOrder& o : pending_orders_) {
         if (o.type != OrderType::EXIT) continue;
@@ -1089,12 +1088,11 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
         if (o.id.size() >= kClosePrefix.size()
             && o.id.compare(0, kClosePrefix.size(), kClosePrefix) == 0) continue;
         if (!o.dormant_bracket) continue;
-        bool bound = o.from_entry.empty();
-        if (!bound) {
-            for (const auto& pe : pyramid_entries_) {
-                if (pe.entry_id == o.from_entry) { bound = true; break; }
-            }
-        }
+        // finding-347: mirror the dormancy predicate — position-cycle
+        // provenance, not bucket residency, so a leg orphaned by a sibling's
+        // FIFO drain revives with its siblings.
+        const bool bound = o.from_entry.empty()
+            || cycle_filled_entry_ids_.count(o.from_entry) != 0;
         if (!bound) continue;
         o.dormant_bracket = false;
         // Marketable at the margin-call event price? (Full-percent default
@@ -4710,6 +4708,7 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
         snapshot_entry_commission(materialized);
         pyramid_entries_.push_back(std::move(materialized));
         id_unclosed_qty_[order.id] += qty;
+        cycle_filled_entry_ids_.insert(order.id);
         return;
     }
 
@@ -4727,6 +4726,18 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     size_t trades_before_exit = trades_.size();
     PositionSide side_before_exit = position_side_;
 
+    // finding-348: the pyramiding slot released by this reduction depends on
+    // WHICH exit retired the units. strategy.close / close_all materialise as
+    // EXIT orders carrying the kClosePrefix id stamp; every other EXIT order
+    // reaching this kernel is a strategy.exit bracket leg. That prefix is the
+    // only structural discriminator available here, and it is exact.
+    const bool is_bracket_exit =
+        order.type == OrderType::EXIT
+        && !(order.id.size() >= kClosePrefix.size()
+             && order.id.compare(0, kClosePrefix.size(), kClosePrefix) == 0);
+    const auto cause = is_bracket_exit ? PositionReductionCause::BRACKET_EXIT
+                                       : PositionReductionCause::SCRIPT_ORDER;
+
     if (close_entries_rule_any_ && !order.from_entry.empty()) {
         // close_entries_rule="ANY": close only matching entries
         if (is_partial) {
@@ -4738,28 +4749,43 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
             // their percentage at fill time.
             if (has_explicit_qty_to_close) {
                 execute_partial_exit_by_entry_qty(
-                    fill_price, order.from_entry, order.qty);
+                    fill_price, order.from_entry, order.qty, cause);
             } else {
                 execute_partial_exit_by_entry_percent(
-                    fill_price, order.from_entry, qp);
+                    fill_price, order.from_entry, qp, cause);
             }
         } else {
-            execute_partial_exit_by_entry(fill_price, order.from_entry);
+            execute_partial_exit_by_entry(fill_price, order.from_entry, cause);
         }
     } else {
         if (dynamic_full_live_qty) {
             execute_market_exit(fill_price);
         } else if (has_explicit_qty_to_close) {
-            execute_partial_exit_qty(fill_price, order.qty);
+            execute_partial_exit_qty(fill_price, order.qty, cause);
         } else if (is_partial) {
-            execute_partial_exit(fill_price, qp);
+            execute_partial_exit(fill_price, qp, cause);
         } else {
             execute_market_exit(fill_price);
         }
     }
 
+    // The one-shot guard belongs to the exit ID, but an id can carry more than
+    // one bracket leg (strategy_exit's per-entry-instance leg multiplicity: one
+    // binding for the already-open fills, one for a pending same-id entry).
+    // Consuming the id on the FIRST leg's fill would make the surviving sibling
+    // unre-issuable while the position is still open. Mark the id consumed only
+    // when the last leg carrying it is gone.
     if (order.requested_partial && trades_.size() > trades_before_exit) {
-        consumed_partial_exit_ids_.insert(order.id);
+        bool sibling_leg_still_live = false;
+        for (const PendingOrder& sibling : pending_orders_) {
+            if (sibling.type != OrderType::EXIT) continue;
+            if (sibling.incarnation == order.incarnation) continue;  // self
+            if (sibling.id != order.id) continue;
+            if (sibling.from_entry != order.from_entry) continue;
+            sibling_leg_still_live = true;
+            break;
+        }
+        if (!sibling_leg_still_live) consumed_partial_exit_ids_.insert(order.id);
     }
 
     // KI-62: the normal close above drained only the frozen pre-add reserve
@@ -4768,7 +4794,7 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     // covers it — scratch it dur-0 at the exit's fill price. A strict no-op
     // when no such add filled (the KEEP cell: the exit fills first, so the add
     // is not yet open here; and non-collision shapes flag no add slice).
-    double scratched = cover_samebar_market_adds_on_exit(order, fill_price);
+    double scratched = cover_samebar_market_adds_on_exit(order, fill_price, cause);
 
     // Full exit that closed the position: pending SAME-direction entries
     // placed on a different on_bar are cancelled for the rest of this
@@ -4876,10 +4902,12 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         trail_best_price_ = fill_price;
         pyramid_entries_.clear();
         id_unclosed_qty_.clear();
+        cycle_filled_entry_ids_.clear();
         pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
         pyramid_entries_.back().entry_incarnation = order.incarnation;
         snapshot_entry_commission(pyramid_entries_.back());
         id_unclosed_qty_[order.id] += qty;
+        cycle_filled_entry_ids_.insert(order.id);
         if (!std::isnan(order.stop_price) || !std::isnan(order.limit_price)) {
             set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
         }
@@ -4936,6 +4964,7 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             // same-bar from_entry bracket exit can scratch them dur-0.
             pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
             id_unclosed_qty_[order.id] += new_qty;
+            cycle_filled_entry_ids_.insert(order.id);
             if (is_priced_entry) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
             }
@@ -4956,15 +4985,12 @@ void BacktestEngine::materialize_relative_exit_prices_for_live_position() {
     const double dir = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
     for (auto& order : pending_orders_) {
         if (order.type != OrderType::EXIT) continue;
-        if (!order.from_entry.empty()) {
-            bool has_parent_entry = false;
-            for (const auto& pe : pyramid_entries_) {
-                if (pe.entry_id == order.from_entry) {
-                    has_parent_entry = true;
-                    break;
-                }
-            }
-            if (!has_parent_entry) continue;
+        // finding-347: position-cycle provenance, mirroring the eligibility
+        // gate — a leg whose bucket has been FIFO-drained is still live and
+        // still needs its ticks resolved against the position entry price.
+        if (!order.from_entry.empty()
+            && cycle_filled_entry_ids_.count(order.from_entry) == 0) {
+            continue;
         }
         if (std::isnan(order.limit_price) && !std::isnan(order.profit_ticks)) {
             order.limit_price = position_entry_price_ + dir * order.profit_ticks * syminfo_mintick_;
@@ -5009,7 +5035,6 @@ void BacktestEngine::materialize_relative_exit_prices_for_live_position() {
 // re-credit).
 void BacktestEngine::suppress_declined_reversal_close_legs(
         const PendingOrder& declined_entry) {
-    static const std::string kClosePrefix = "__close__";
     for (PendingOrder& co : pending_orders_) {
         if (co.suppress_as_declined_reversal_close) continue;   // idempotent
         if (co.type != OrderType::EXIT) continue;
@@ -5031,7 +5056,6 @@ void BacktestEngine::suppress_declined_reversal_close_legs(
 }
 
 void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal() {
-    static const std::string kClosePrefix = "__close__";
     if (position_side_ == PositionSide::FLAT) return;
     // The live position's entry ids (pyramid lots) — a bracket is "standing"
     // when its from_entry names one of them, or when it is a global
@@ -5051,12 +5075,12 @@ void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal() {
             || !std::isnan(o.trail_points)
             || !std::isnan(o.trail_price);
         if (!priced) continue;
-        bool bound = o.from_entry.empty();
-        if (!bound) {
-            for (const auto& pe : pyramid_entries_) {
-                if (pe.entry_id == o.from_entry) { bound = true; break; }
-            }
-        }
+        // finding-347: a standing bracket is one whose from_entry filled in
+        // THIS position cycle (or a global from_entry-less exit) — not one
+        // whose bucket still holds units. A leg orphaned by a sibling's FIFO
+        // drain is still standing and must go dormant with its siblings.
+        const bool bound = o.from_entry.empty()
+            || cycle_filled_entry_ids_.count(o.from_entry) != 0;
         if (!bound) continue;
         o.dormant_bracket = true;
     }
@@ -5324,20 +5348,30 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
         }
     }
 
-    // Skip exit orders whose from_entry doesn't match any active entry id.
-    if (order.type == OrderType::EXIT && !order.from_entry.empty()) {
-        bool has_match = false;
-        for (const auto& pe : pyramid_entries_) {
-            if (pe.entry_id == order.from_entry) {
-                has_match = true;
-                break;
-            }
-        }
-        if (!has_match) {
-            // Cancel stale from_entry-bound exits so they cannot fire later
-            // against future positions with the same id.
-            return OrderEligibility::Remove;
-        }
+    // Cancel exit orders whose from_entry never filled in THIS position cycle.
+    //
+    // finding-347: liveness is POSITION-scoped, not entry-bucket-scoped. TV
+    // keeps a from_entry bracket alive for as long as the position lives; once
+    // a sibling bracket FIFO-consumes the leg's own units, the leg still fires
+    // and draws from the position-level queue. The direct proof is TV's
+    // cross-assigned exit labels at 2025-06-17 / 2025-10-14 / 2026-01-14, where
+    // `Short` + `ShortAdd` fill 2u each on one bar and the T1 pair drains both
+    // `Short` units: TV still fires BOTH T2 legs (`T2 Exit` closes a ShortAdd
+    // unit, `Add T1` closed a Short unit). Testing pyramid_entries_ residency
+    // instead Removed the orphaned `ShortT2` permanently, so the engine fired
+    // only 3 of 4 units, carried a phantom unit, and was never flat — which is
+    // also what made the 06-18 entry look like a pyramiding-cap case when it is
+    // a flat-reset case. from_entry decides only whether a leg is ALLOWED TO
+    // EXIST (its parent entry must have filled in this position), never which
+    // units it may take; the fill path already draws FIFO across buckets.
+    //
+    // The Remove path's original purpose — stale exits must not fire later
+    // against a FUTURE position reusing the id — is preserved exactly, because
+    // cycle_filled_entry_ids_ is cleared the moment the position goes flat
+    // (reset_position_state_to_flat / open_fresh_position / the RAW_ORDER open).
+    if (order.type == OrderType::EXIT && !order.from_entry.empty()
+        && cycle_filled_entry_ids_.count(order.from_entry) == 0) {
+        return OrderEligibility::Remove;
     }
 
     // Same-bar exit handling: TradingView evaluates priced exits (stop/limit/

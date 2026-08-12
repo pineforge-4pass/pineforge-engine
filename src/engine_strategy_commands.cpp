@@ -1476,9 +1476,10 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         int64_t discarded_seq = 0;
         uint64_t discarded_incarnation = 0;
         double discarded_reserved_qty = std::numeric_limits<double>::quiet_NaN();
+        int discarded_leg_count = 0;
         clear_existing_exit_order(id, from_entry, /*has_trail_request=*/false,
                                   discarded_seq, discarded_incarnation,
-                                  discarded_reserved_qty);
+                                  discarded_reserved_qty, discarded_leg_count);
         return;
     }
     bool has_explicit_qty = !std::isnan(qty);
@@ -1517,13 +1518,17 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     int64_t preserved_seq = 0;
     uint64_t replaced_incarnation = 0;
     double preserved_reserved_qty = std::numeric_limits<double>::quiet_NaN();
+    int cleared_leg_count = 0;
     clear_existing_exit_order(id, from_entry, has_trail_request,
                               preserved_seq, replaced_incarnation,
-                              preserved_reserved_qty);
+                              preserved_reserved_qty, cleared_leg_count);
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
     bool bind_global_full_exit_dynamic_qty = false;
     std::vector<std::size_t> pooc_global_full_exit_bound_add_indices;
+    // Additional bracket legs beyond the primary one (see the leg-multiplicity
+    // block in the explicit-qty branch below). Empty on every other path.
+    std::vector<double> extra_leg_qtys;
     if (has_explicit_qty) {
         // Honour the explicit qty literally (clamped to the live position
         // and subject to the same already-reserved accounting). This is
@@ -1561,6 +1566,28 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
             // Capacity then = open fills already tagged from_entry (same-id
             // pyramiding remainder) + the pending entry's qty (unbounded
             // when the entry's qty only resolves at fill time).
+            //
+            // A pending entry the pyramiding cap will REFUSE at fill opens no
+            // fills for a bracket to bind to. TV refuses such an entry at
+            // order-generation time, so the re-issue sees no pending entry at
+            // all. Mirror add_to_pyramid_market's fill-time gate (including
+            // its flat-armed / pre-armed-opposite priced exemptions) so the
+            // bracket sizes against the live position instead.
+            auto blocked_by_pyramiding_cap = [&](const PendingOrder& o) {
+                const PositionSide requested =
+                    o.is_long ? PositionSide::LONG : PositionSide::SHORT;
+                if (position_side_ != requested) return false;  // flip/reversal
+                const bool o_priced = !std::isnan(o.limit_price)
+                                      || !std::isnan(o.stop_price);
+                const bool flat_armed_priced =
+                    o_priced && o.created_position_side == PositionSide::FLAT;
+                const bool pre_armed_opposite_priced =
+                    o_priced
+                    && o.created_position_side != PositionSide::FLAT
+                    && o.created_position_side != requested;
+                if (flat_armed_priced || pre_armed_opposite_priced) return false;
+                return position_entry_count_ >= pyramiding_;
+            };
             double capacity = live_pos_qty;
             bool entry_pending = false;
             double pending_entry_qty = 0.0;
@@ -1568,6 +1595,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                 if (o.id != from_entry) continue;
                 if (o.type != OrderType::MARKET && o.type != OrderType::ENTRY
                     && o.type != OrderType::RAW_ORDER) continue;
+                if (blocked_by_pyramiding_cap(o)) continue;
                 entry_pending = true;
                 if (std::isnan(o.qty)) {
                     pending_entry_qty = std::numeric_limits<double>::infinity();
@@ -1583,8 +1611,50 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                 capacity = open_from_entry + pending_entry_qty;
             }
             double available = std::max(0.0, capacity - already_reserved);
-            reserved_qty = std::min(qty, available);
+            // LEG MULTIPLICITY. TV binds exit brackets to ENTRY INSTANCES via
+            // from_entry, not to the net position. A re-issue therefore
+            // MODIFIES every live leg carrying this exit id (each keeping its
+            // own binding) and ADDITIONALLY arms one new leg bound to the
+            // pending entry whose id == from_entry, when one exists. So an
+            // id can carry at most two bindings — the already-open fills and
+            // the pending entry — which also bounds a resting priced entry
+            // from growing a fresh leg on every bar's re-issue.
+            //
+            // thulashimohanr-prev-day-week-levels (ETH-USDT 15m, UTC), the
+            // three shapes this must reproduce simultaneously:
+            //
+            //   2025-06-29 09:30  carried 2u long (LongT1+LongT2 both live) +
+            //                     a pending same-id 2u entry -> 2 legs each ->
+            //                     the 14:30 stop @2441.78 closes FOUR units,
+            //                     tagged T1/T2/T1/T2. (Engine pre-fix: one leg
+            //                     per id, so the added entry stayed unhedged
+            //                     and survived to the next day's reversal.)
+            //   2026-03-27 09:30  ShortT1 was already consumed on 03-26, so it
+            //                     arms ONE leg (pending-entry binding only) and
+            //                     the 10:30 limit @2003.30 closes exactly 1u;
+            //                     ShortT2 still has a live leg -> 2 legs. This
+            //                     is the locus a blanket `qty * legs` multiply
+            //                     regresses, which is why the count is derived
+            //                     from live legs + pending entry, not from a
+            //                     multiplier.
+            //   2026-03-29 09:30  the third short is over pyramiding=2, so no
+            //                     admissible pending entry: ShortT1 (no live
+            //                     leg) finds available == 0 against the two
+            //                     live ShortT2 legs and arms nothing, while
+            //                     ShortT2 re-arms BOTH legs -> the 11:00 stop
+            //                     @2003.61 closes 2u, both tagged T2.
+            int leg_count = cleared_leg_count + (entry_pending ? 1 : 0);
+            leg_count = std::min(2, std::max(1, leg_count));
+            const double total_reserved =
+                std::min(qty * (double)leg_count, available);
+            reserved_qty = std::min(qty, total_reserved);
             if (reserved_qty <= kQtyEpsilon) return;
+            double leg_remainder = total_reserved - reserved_qty;
+            while (leg_remainder > kQtyEpsilon) {
+                const double leg = std::min(qty, leg_remainder);
+                extra_leg_qtys.push_back(leg);
+                leg_remainder -= leg;
+            }
         }
         is_partial = reserved_qty < live_pos_qty - kFullQtyEps;
     } else {
@@ -1820,7 +1890,33 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.comment = comment;
     order.created_while_in_position = !effectively_flat;
 
-    pending_orders_.push_back(std::move(order));
+    if (extra_leg_qtys.empty()) {
+        pending_orders_.push_back(std::move(order));
+        return;
+    }
+
+    // Materialise the additional per-entry-instance bindings as real
+    // PendingOrders so each fires independently (and so BOTH the explicit-qty
+    // tally above and compute_exit_reserved_qty's already_reserved sweep count
+    // them, keeping sibling brackets correctly sized). The primary leg keeps
+    // the preserved queue position and replacement provenance; each extra leg
+    // is a genuinely new order with its own seq/incarnation, so the dispatch
+    // order stays deterministic and the KI-54 bracket-lifecycle bookkeeping
+    // never sees two orders claiming the same replaced incarnation.
+    pending_orders_.push_back(order);
+    for (double leg_qty : extra_leg_qtys) {
+        PendingOrder extra = order;
+        extra.qty = leg_qty;
+        extra.qty_percent = (live_pos_qty > kQtyEpsilon)
+            ? (leg_qty / live_pos_qty) * 100.0
+            : order.qty_percent;
+        extra.requested_partial = leg_qty < live_pos_qty - kFullQtyEps;
+        extra.created_seq = next_order_seq_++;
+        extra.incarnation = next_order_incarnation_++;
+        extra.created_by_same_id_replacement = false;
+        extra.replaced_exit_order_incarnation = 0;
+        pending_orders_.push_back(std::move(extra));
+    }
 }
 
 void BacktestEngine::strategy_cancel(const std::string& id) {
@@ -2314,20 +2410,26 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
                                                bool has_trail_request,
                                                int64_t& preserved_seq_out,
                                                uint64_t& replaced_incarnation_out,
-                                               double& preserved_reserved_qty_out) {
+                                               double& preserved_reserved_qty_out,
+                                               int& cleared_leg_count_out) {
     bool had_existing_order = false;
     preserved_seq_out = 0;
     replaced_incarnation_out = 0;
     preserved_reserved_qty_out = std::numeric_limits<double>::quiet_NaN();
+    cleared_leg_count_out = 0;
     for (const auto& o : pending_orders_) {
         if (o.type == OrderType::EXIT && o.id == id && o.from_entry == from_entry) {
+            ++cleared_leg_count_out;
+            if (had_existing_order) continue;
+            // The FIRST leg owns the queue position and the frozen
+            // reservation the caller carries forward; later legs are the
+            // additional per-entry-instance bindings (see strategy_exit).
             had_existing_order = true;
             preserved_seq_out = o.created_seq;
             replaced_incarnation_out = o.incarnation;
             if (!std::isnan(o.qty)) {
                 preserved_reserved_qty_out = o.qty;
             }
-            break;
         }
     }
 

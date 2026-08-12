@@ -56,6 +56,14 @@ inline constexpr double kPathPosEps      = 1e-12;
 inline constexpr double kSegmentDenomEps = 1e-15;
 inline constexpr double kPathTimeEps     = 1e-12;
 
+// The id prefix the engine stamps on every EXIT order materialised from a
+// strategy.close / strategy.close_all instruction ("__close__" + target id,
+// bare "__close__" for close_all). It is the ONLY structural marker that
+// separates a close-path reduction from a strategy.exit bracket leg fill at
+// the exit-fill site, and three call sites previously each carried their own
+// function-local copy. One definition, so the predicate cannot drift.
+inline const std::string kClosePrefix = "__close__";
+
 struct RetainedChildFreshParentOrderContext {
     bool enabled = false;
     bool broker_flat = false;

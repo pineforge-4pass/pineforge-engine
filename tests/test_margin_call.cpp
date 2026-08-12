@@ -2124,15 +2124,16 @@ static void test_raw_short_add_invalidates_scoped_opening_event() {
 }
 
 // A genuine accepted same-direction add is itself a post-fill affordability
-// event. FIFO then drains the original lot and makes the mutable entry count
-// equal one again; the event must survive because it came from the accepted
-// add directly, not from reconstructing provenance from the remaining count.
+// event. FIFO then drains the original lot, leaving a single surviving pyramid
+// leg; the event must survive because it came from the accepted add directly,
+// not from reconstructing provenance from the remaining count or leg census.
 class AcceptedAddFifoProbe : public MCEngine {
 public:
     bool captured_after_open = false;
     bool eligible_after_add = false;
     bool eligible_after_fifo = false;
     int count_after_fifo = -1;
+    int legs_after_fifo = -1;
 
     AcceptedAddFifoProbe() {
         initial_capital_ = 1000.0;
@@ -2163,11 +2164,15 @@ public:
             && opening_affordability_eligible_
             && near(opening_affordability_raw_fill_base_, 100.0);
 
-        // FIFO removes the opening lot, leaving only ADD and restoring the
-        // mutable position_entry_count_ to one. The add event must stay live.
+        // FIFO removes the opening lot, leaving only ADD as a live pyramid
+        // leg. This drain is a CLOSE-PATH retirement (strategy.close), so TV
+        // hands the pyramid slot back and position_entry_count_ falls to one
+        // (a strategy.exit bracket drain would NOT release it — finding-348).
+        // The add event's liveness must not depend on either reading.
         strategy_close("OPEN", "fifo drain", /*qty=*/10.0,
                        /*qty_percent=*/kNaN, /*immediately=*/true);
         count_after_fifo = position_entry_count_;
+        legs_after_fifo = (int)pyramid_entries_.size();
         eligible_after_fifo = opening_affordability_pending_
             && opening_affordability_eligible_
             && near(opening_affordability_raw_fill_base_, 100.0);
@@ -2184,6 +2189,10 @@ static void test_accepted_add_fifo_keeps_add_affordability_event() {
 
     CHECK(eng.captured_after_open);
     CHECK(eng.eligible_after_add);
+    // The close-path drain leaves ONE live pyramid leg AND returns the pyramid
+    // slot, so both readings are one. Neither is a usable provenance source
+    // for the affordability event — that is what this probe pins.
+    CHECK(eng.legs_after_fifo == 1);
     CHECK(eng.count_after_fifo == 1);  // cannot reconstruct from this count
     CHECK(eng.eligible_after_fifo);
     // The one-shot event is consumed at the end-of-bar margin pass.

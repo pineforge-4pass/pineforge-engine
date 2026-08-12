@@ -40,6 +40,7 @@ set(TEST_SOURCES
     test_strategy_oca
     test_oca_raw_pyramid_add
     test_strategy_pyramiding
+    test_pyramiding_count_partial_drain
     test_same_id_stop_replace
     test_exit_id_scoped_erase
     test_max_contracts_held
@@ -94,6 +95,7 @@ set(TEST_SOURCES
     test_same_bar_add_exit_coverage
     test_declined_reversal_close_leg
     test_bracket_lifecycle_declined_reversal
+    test_exit_bracket_pending_entry_leg
     test_dual_entry_placement_sizing
     test_default_flat_market_gross_admission
     test_live_position_market_gross_admission
@@ -120,6 +122,7 @@ set(TEST_SOURCES
     test_relative_exit_after_limit_parent
     test_short_seed_close_collision
     test_short_seed_collision_percent
+    test_exit_bracket_position_cycle_lifetime
 )
 
 find_package(Threads REQUIRED)

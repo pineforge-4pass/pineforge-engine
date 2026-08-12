@@ -237,7 +237,8 @@ void BacktestEngine::execute_partial_exit_qty(
 }
 
 
-void BacktestEngine::execute_partial_exit(double fill_price, double qty_percent) {
+void BacktestEngine::execute_partial_exit(double fill_price, double qty_percent,
+                                          PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     double pct = std::clamp(qty_percent, 0.0, 100.0);
@@ -250,12 +251,14 @@ void BacktestEngine::execute_partial_exit(double fill_price, double qty_percent)
     if (pct < 100.0 - kFullPercentEps) {
         qty_to_close = apply_exit_qty_step(qty_to_close);
     }
-    execute_partial_exit_qty(fill_price, qty_to_close);
+    execute_partial_exit_qty(fill_price, qty_to_close, cause);
 }
 
 
 // Internal helper: close only entries matching from_entry (close_entries_rule="ANY")
-void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std::string& from_entry) {
+void BacktestEngine::execute_partial_exit_by_entry(double fill_price,
+                                                   const std::string& from_entry,
+                                                   PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
     const double qty_before = position_qty_;
 
@@ -274,8 +277,7 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std:
     }
 
     pyramid_entries_ = std::move(remaining);
-    settle_position_after_partial_exit(
-        qty_before, PositionReductionCause::SCRIPT_ORDER);
+    settle_position_after_partial_exit(qty_before, cause);
 }
 
 
@@ -284,7 +286,8 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price, const std:
 // reservations into PendingOrder::qty; when layered siblings fill on one bar,
 // that absolute reservation must survive earlier reductions of the position.
 void BacktestEngine::execute_partial_exit_by_entry_qty(
-        double fill_price, const std::string& from_entry, double qty_to_close) {
+        double fill_price, const std::string& from_entry, double qty_to_close,
+        PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
     if (!std::isfinite(qty_to_close) || qty_to_close <= kQtyEpsilon) return;
     const double qty_before = position_qty_;
@@ -294,8 +297,7 @@ void BacktestEngine::execute_partial_exit_by_entry_qty(
     bool was_long = (position_side_ == PositionSide::LONG);
 
     fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
-    settle_position_after_partial_exit(
-        qty_before, PositionReductionCause::SCRIPT_ORDER);
+    settle_position_after_partial_exit(qty_before, cause);
 }
 
 
@@ -303,7 +305,8 @@ void BacktestEngine::execute_partial_exit_by_entry_qty(
 // close that quantity only from entries matching from_entry.
 void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
                                                            const std::string& from_entry,
-                                                           double qty_percent) {
+                                                           double qty_percent,
+                                                           PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
     double matched_qty = 0.0;
@@ -316,7 +319,7 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
     double qty_to_close = matched_qty * (pct / 100.0);
     if (qty_to_close <= kQtyEpsilon) return;
 
-    execute_partial_exit_by_entry_qty(fill_price, from_entry, qty_to_close);
+    execute_partial_exit_by_entry_qty(fill_price, from_entry, qty_to_close, cause);
 }
 
 
@@ -332,7 +335,8 @@ void BacktestEngine::execute_partial_exit_by_entry_percent(double fill_price,
 // covered slice as its own dur-0 trade (entry at the add's fill price, exit at
 // this exit's fill price), matching TV's per-pyramid scratch reporting.
 double BacktestEngine::cover_samebar_market_adds_on_exit(const PendingOrder& order,
-                                                         double fill_price) {
+                                                         double fill_price,
+                                                         PositionReductionCause cause) {
     if (order.from_entry.empty()) return 0.0;
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return 0.0;
     // Scope to a PRICED bracket (stop/limit/trail). A plain market close /
@@ -364,8 +368,7 @@ double BacktestEngine::cover_samebar_market_adds_on_exit(const PendingOrder& ord
     if (closed <= kQtyEpsilon) return 0.0;   // nothing covered
     pyramid_entries_ = std::move(remaining);
     position_qty_ -= closed;
-    settle_position_after_partial_exit(
-        qty_before, PositionReductionCause::SCRIPT_ORDER);
+    settle_position_after_partial_exit(qty_before, cause);
     return closed;
 }
 
@@ -604,6 +607,10 @@ void BacktestEngine::reset_position_state_to_flat() {
     trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
+    // Bracket legs live for the POSITION cycle, so the provenance that keeps
+    // them alive dies exactly here — going flat is what makes a from_entry
+    // bracket stale and un-fireable against a future same-id position.
+    cycle_filled_entry_ids_.clear();
     close_reserved_qty_.clear();
     close_two_call_first_qty_.clear();
     callsite_close_reserved_qty_.clear();
@@ -628,7 +635,19 @@ void BacktestEngine::settle_position_after_partial_exit(
             total_qty += pe.qty;
         }
         position_entry_price_ = weighted_sum / total_qty;
-        position_entry_count_ = (int)pyramid_entries_.size();
+        // TV returns a pyramid slot when the entry is retired by a close-path
+        // order — the grid-bot family depends on it (3commas-ena: 1021 fills
+        // over 64 reused ids, 776 entries between flats under a cap of 200,
+        // never more than 50 CONCURRENT entries). TV does NOT return the slot
+        // when the entry is drained by strategy.exit bracket fills
+        // (thulashimohanr 2026-03-29: the 03-26 entry was fully retired by two
+        // T1 fills and TV still refused the third entry).
+        if (cause == PositionReductionCause::BRACKET_EXIT) {
+            position_entry_count_ =
+                std::max(position_entry_count_, (int)pyramid_entries_.size());
+        } else {
+            position_entry_count_ = (int)pyramid_entries_.size();
+        }
         // The one-contract floor-zero rule belongs to an otherwise unmodified
         // commissioned all-in short lifecycle. Any script-driven surviving
         // reduction changes that shape. Broker margin-call reductions are the
@@ -672,6 +691,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     trail_best_price_ = fill_price;
     pyramid_entries_.clear();
     id_unclosed_qty_.clear();
+    cycle_filled_entry_ids_.clear();
     close_reserved_qty_.clear();
     close_two_call_first_qty_.clear();
     callsite_close_reserved_qty_.clear();
@@ -681,6 +701,7 @@ void BacktestEngine::open_fresh_position(PositionSide requested, double fill_pri
     pyramid_entries_.back().entry_incarnation = entry_incarnation;
     snapshot_entry_commission(pyramid_entries_.back());
     id_unclosed_qty_[id] += qty;
+    cycle_filled_entry_ids_.insert(id);
 }
 
 
@@ -850,6 +871,7 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
     // from_entry bracket exit; a priced pyramid add is not this collision.
     pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
     id_unclosed_qty_[id] += new_qty;
+    cycle_filled_entry_ids_.insert(id);
 }
 
 

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <ctime>
 #include <limits>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include "na.hpp"
@@ -699,6 +700,12 @@ protected:
     int64_t position_cycle_seq_ = 0;
     int64_t next_position_cycle_seq_ = 1;
     std::vector<PyramidEntry> pyramid_entries_;  // individual entries for trade reporting
+    // Entry ids that have filled at least once in the CURRENT position cycle.
+    // TV keeps a from_entry bracket live for the life of the POSITION, not the
+    // life of its own entry leg: once the leg's units are FIFO-consumed by a
+    // sibling bracket, the leg still fires against the remaining position
+    // (thulashimohanr 06-17/10-14/01-14: Short's T2 closes a ShortAdd unit).
+    std::set<std::string> cycle_filled_entry_ids_;
     // Per-entry-id UNCLOSED quantity ledger, used ONLY by strategy.close(id)
     // under the default FIFO close-entries rule to decide how much to close.
     //
@@ -2355,7 +2362,8 @@ protected:
 
 private:
     enum class PositionReductionCause {
-        SCRIPT_ORDER,
+        SCRIPT_ORDER,   // strategy.close / close_all / market exit / reversal
+        BRACKET_EXIT,   // a strategy.exit bracket leg fill
         MARGIN_CALL,
     };
 
@@ -2375,18 +2383,28 @@ private:
     void execute_partial_exit_qty(
         double fill_price, double qty_to_close,
         PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
-    void execute_partial_exit(double fill_price, double qty_percent);
-    void execute_partial_exit_by_entry(double fill_price, const std::string& from_entry);
-    void execute_partial_exit_by_entry_qty(double fill_price,
-                                           const std::string& from_entry,
-                                           double qty_to_close);
-    void execute_partial_exit_by_entry_percent(double fill_price, const std::string& from_entry, double qty_percent);
+    void execute_partial_exit(
+        double fill_price, double qty_percent,
+        PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
+    void execute_partial_exit_by_entry(
+        double fill_price, const std::string& from_entry,
+        PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
+    void execute_partial_exit_by_entry_qty(
+        double fill_price,
+        const std::string& from_entry,
+        double qty_to_close,
+        PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
+    void execute_partial_exit_by_entry_percent(
+        double fill_price, const std::string& from_entry, double qty_percent,
+        PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
     // KI-62: scratch (close dur-0) any same-bar same-id MARKET pyramid-add
     // slices still open after a from_entry priced bracket exit fills — TV's
     // open-tick fill sequence covered them. Targets only flagged same-bar add
     // slices (never the frozen pre-add lot, never a prior-bar slice). Returns
     // the qty scratched (0 = no collision → strict no-op).
-    double cover_samebar_market_adds_on_exit(const PendingOrder& order, double fill_price);
+    double cover_samebar_market_adds_on_exit(
+        const PendingOrder& order, double fill_price,
+        PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
     void cancel_oca_group(const std::string& oca_name, const std::string& exclude_id);
     // Pine v6 oca.reduce: when one sibling fills qty Q, reduce remaining
     // siblings' qty by Q. Siblings whose qty becomes <= 0 are cancelled.
@@ -2574,12 +2592,17 @@ private:
         bool closes_any_qty,
         double consumed_ledger_qty =
             std::numeric_limits<double>::quiet_NaN());
+    // cleared_leg_count_out: how many live EXIT legs carried this
+    // (id, from_entry) before the erase. TV re-issues MODIFY every live leg
+    // (each keeping its own entry binding) rather than collapsing them into
+    // one, so strategy_exit needs the census to re-arm the same multiplicity.
     void clear_existing_exit_order(const std::string& id,
                                    const std::string& from_entry,
                                    bool has_trail_request,
                                    int64_t& preserved_seq_out,
                                    uint64_t& replaced_incarnation_out,
-                                   double& preserved_reserved_qty_out);
+                                   double& preserved_reserved_qty_out,
+                                   int& cleared_leg_count_out);
     bool compute_exit_reserved_qty(const std::string& from_entry,
                                    double preserved_reserved_qty,
                                    double live_pos_qty,
