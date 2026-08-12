@@ -218,6 +218,18 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
             continue;
         }
 
+        // finding-308: TV books forced liquidation chronologically on the
+        // intrabar path. If this priced exit fills strictly AFTER the bar's
+        // adverse extreme and the pre-fill position is already in deficit
+        // there, the margin-call slice happens first and the exit below
+        // closes the reduced remainder. The slice is a broker fill on
+        // pre-on_bar equity, so re-freeze default-sized market orders
+        // exactly like the end-of-bar call sites do.
+        if (fill.exit_path_fill
+            && margin_call_slice_before_priced_exit(bar, fill.fill_price)) {
+            refresh_frozen_default_sizing_after_margin_call();
+        }
+
         const bool path_winner_stop_margin_decline =
             continue_after_stop_margin_decline_scope
             && ((dual_entry_path_ == DualEntryStopPathWinner::LongFirst
@@ -681,6 +693,7 @@ bool BacktestEngine::process_carried_position_fx_rollover(const Bar& bar) {
     if (trades_.size() == trades_before) return false;
 
     ++broker_fill_event_seq_;
+    last_margin_call_event_bar_ = bar_index_;  // finding-308: one MC event/bar
     for (std::size_t ti = trades_before; ti < trades_.size(); ++ti) {
         trades_[ti].exit_comment = "Margin call";
         trades_[ti].exit_id = "__margin_call__";
@@ -870,6 +883,12 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         q_min = qty - opening_equity / margin_per_unit;
         raw_exit_fill_base = opening_event_raw_fill_base;
     } else {
+        // finding-308: a chronological pre-exit slice already consumed this
+        // bar's adverse-extreme forced-liquidation event (the exit that
+        // triggered it fills the reduced remainder inside the order loop).
+        // The surviving position is re-checked from the next bar on — TV's
+        // one-nibble-per-bar cascade.
+        if (intrabar_exit_margin_call_bar_ == bar_index_) return;
         // Shorts and leveraged longs without a fresh opening event keep the
         // established adverse-extreme cascade. Equity and required margin are
         // account-currency values, so quote-currency price PnL/notional must
@@ -1034,6 +1053,7 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     }
     if (trades_.size() != trades_before) {
         ++broker_fill_event_seq_;
+        last_margin_call_event_bar_ = bar_index_;  // finding-308: one MC/bar
     }
     // Tag every trade row this liquidation produced with TV's "Margin call".
     for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
@@ -1045,6 +1065,165 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
     // the ordinary adverse-high check over the surviving short. The one-shot
     // provenance bit was consumed above, so recursion is bounded to one retry.
     run_default_short_adverse_retry();
+}
+
+// finding-308 (margin-call intrabar chronology). TradingView places the
+// forced-liquidation event chronologically on the synthesized intrabar path.
+// When a priced exit of the live position fills on a bar whose adverse
+// extreme comes STRICTLY earlier on that path than the exit's fill, and the
+// position is already in margin deficit at the extreme, TV slices FIRST (the
+// ordinary floor-before-4x nibble, filled at the extreme, tagged
+// "Margin call") and the exit then closes the reduced remainder. The
+// engine's once-per-bar check at the end of dispatch_bar ran AFTER all order
+// processing, so a same-bar full exit hid the deficit (the FLAT early-return
+// above) and the event was lost.
+//
+// The trigger and slice arithmetic below mirror process_margin_call's
+// adverse-extreme (non-opening) branch byte-for-byte — the confirmed
+// trigger/slice rules themselves are untouched. The derivation (Lab finding
+// 308, rhyme17 whole-tape per-position replay) confirmed 3/3 TP-exit
+// adverse-first deficit bars produce TV's slices bit-exact through this
+// arithmetic (0.0084 / 0.0044 / 0.0384), while both LOW-first large-deficit
+// bars (extreme AFTER the exit fill on the path) and 157/158 SL-stop deficit
+// bars (stop fills at-or-before the extreme -> tie or earlier -> exit first)
+// stay quiet under the chronology condition.
+//
+// One margin-call event per bar: a prior event this bar (FX broker-open
+// rollover, an earlier hook firing, or a stream-tick cascade) blocks the
+// hook, and a hook firing marks the bar so the end-of-bar
+// process_margin_call does not double-liquidate the survivor. The magnifier
+// and the COOF scheduler own finer-grained tick/recalc chronology models and
+// keep the established once-per-script-bar placement (no exemplar there).
+bool BacktestEngine::margin_call_slice_before_priced_exit(
+        const Bar& bar, double exit_fill_price) {
+    if (!margin_call_enabled_) return false;
+    if (position_side_ == PositionSide::FLAT) return false;
+    if (last_margin_call_event_bar_ == bar_index_) return false;
+    if (bar_magnifier_enabled_ || coof_scheduler_active_) return false;
+
+    // Eligibility gates, mirroring process_margin_call's finite-price path.
+    // A 1x long has no adverse-price liquidation (its only broker action is
+    // the one-shot post-fill affordability event, which stays end-of-bar);
+    // a POOC position filled at this bar's close has no post-fill adverse
+    // path on the bar.
+    const bool opened_this_bar = position_open_bar_ == bar_index_;
+    const bool long_full_margin =
+        (position_side_ == PositionSide::LONG)
+        && std::isfinite(margin_long_)
+        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+    if (long_full_margin) return false;
+    if (process_orders_on_close_ && opened_this_bar) return false;
+    const double liq = compute_liquidation_price();
+    if (std::isnan(liq)) return false;
+
+    const double pv = syminfo_.pointvalue;
+    const double qty = position_qty_;
+    const double margin_pct = (position_side_ == PositionSide::LONG)
+                                  ? margin_long_ : margin_short_;
+    const double m = margin_pct / 100.0;
+    if (!(m > 0.0)) return false;
+    if (!std::isfinite(qty) || !(qty > 0.0)
+        || !std::isfinite(position_entry_price_)
+        || !std::isfinite(pv) || !std::isfinite(initial_capital_)
+        || !std::isfinite(net_profit_sum_)) {
+        return false;
+    }
+
+    // (b) Chronology: the adverse extreme must come STRICTLY earlier on the
+    // engine's own synthesized OHLC path (bar_path_uses_high_first proximity
+    // rule) than the exit's fill. An off-path level fails closed. A tie —
+    // the exit filling exactly at the extreme, e.g. a stop-loss riding the
+    // adverse leg — keeps the exit first.
+    const double adverse =
+        (position_side_ == PositionSide::LONG) ? bar.low : bar.high;
+    if (!std::isfinite(adverse) || !(adverse > 0.0)) return false;
+    double adverse_pos = 0.0;
+    double exit_pos = 0.0;
+    if (!internal::first_touch_position(bar, adverse, &adverse_pos)) {
+        return false;
+    }
+    if (!internal::first_touch_position(bar, exit_fill_price, &exit_pos)) {
+        return false;
+    }
+    if (!(adverse_pos < exit_pos - kPathPosEps)) return false;
+
+    // (c) Pre-fill deficit at the extreme: the same fee-net eq/req
+    // arithmetic as the adverse cascade (the position state is pre-fill
+    // because the triggering exit has not been applied yet).
+    const double fx = active_account_currency_fx();
+    if (!std::isfinite(fx) || !(fx > 0.0)) return false;
+    const double equity_adv = percent_commission_live_equity(adverse);
+    if (!std::isfinite(equity_adv)) return false;
+    const double margin_per_unit_adv = adverse * pv * fx * m;
+    const double req_margin_adv = qty * margin_per_unit_adv;
+    if (equity_adv >= req_margin_adv) return false;
+    double q_min = qty - equity_adv / margin_per_unit_adv;
+    if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return false;
+
+    // Slice quantity: floor-before-4x, representation guards, and the
+    // floor-zero fallbacks — identical to the cascade (see
+    // process_margin_call for the fitted evidence on each rule).
+    const double raw_q_min = q_min;
+    if (qty_step_ > 0.0) {
+        double step_count = q_min / qty_step_;
+        if (margin_zero_cover_full_liquidation_) {
+            const double nearest_step = std::round(step_count);
+            if (std::abs(step_count - nearest_step) < 1e-6) {
+                step_count = nearest_step;
+            }
+        }
+        q_min = std::floor(step_count) * qty_step_;
+    }
+    double qty_liq = 4.0 * q_min;
+    if (qty_step_ > 0.0) {
+        double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
+        if (floored <= kQtyEpsilon) {
+            double one_contract_fallback =
+                std::numeric_limits<double>::quiet_NaN();
+            if (qty_step_ <= 1.0
+                && raw_q_min > kQtyEpsilon
+                && raw_q_min < 1.0) {
+                const double candidate = std::min(1.0, qty);
+                const bool full_position_cap =
+                    candidate >= qty - kQtyEpsilon;
+                const double gridded = apply_exit_qty_step(candidate);
+                const double grid_guard = std::max(
+                    1e-12, std::abs(candidate) * 1e-12);
+                if (full_position_cap
+                    || std::abs(gridded - candidate) <= grid_guard) {
+                    one_contract_fallback = candidate;
+                }
+            }
+            if (margin_zero_cover_full_liquidation_) {
+                floored = qty;
+            } else if (std::isfinite(one_contract_fallback)) {
+                floored = one_contract_fallback;
+            } else {
+                return false;
+            }
+        }
+        qty_liq = floored;
+    }
+    if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;
+    if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
+
+    const size_t trades_before = trades_.size();
+    if (qty_liq >= qty - kQtyEpsilon) {
+        execute_market_exit(adverse);
+    } else {
+        execute_partial_exit_qty(
+            adverse, qty_liq, PositionReductionCause::MARGIN_CALL);
+    }
+    if (trades_.size() == trades_before) return false;
+
+    ++broker_fill_event_seq_;
+    for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = "Margin call";
+        trades_[ti].exit_id = "__margin_call__";
+    }
+    last_margin_call_event_bar_ = bar_index_;
+    intrabar_exit_margin_call_bar_ = bar_index_;
+    return true;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -4979,6 +5158,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     double fill_price = 0.0;
     bool should_fill = false;
     bool is_limit_fill = false;
+    bool exit_path_fill = false;
 
     // A valid child that was armed with its pending MARKET parent and whose
     // stop is already breached — or whose limit is already marketable — at
@@ -5103,6 +5283,12 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             should_fill = true;
             last_exit_fill_was_trail_ = exit_fill.is_trail;
             is_limit_fill = exit_fill.is_limit;
+            // finding-308: only a stop/limit fill resolved on the intrabar
+            // path carries a chronological position the pre-exit margin-call
+            // slice can compare against the adverse extreme. A TRAIL fill
+            // price is not a resting level (its first path touch is not its
+            // fill moment), so it stays outside the hook — fail closed.
+            exit_path_fill = !exit_fill.is_trail;
         }
     } else if (!should_fill && (order.type == OrderType::MARKET ||
                (!has_stop && !has_limit && !has_trail))) {
@@ -5189,7 +5375,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     }
 
     return {should_fill ? FillEvaluation::Kind::Fill : FillEvaluation::Kind::NoFill,
-            fill_price, is_limit_fill};
+            fill_price, is_limit_fill, exit_path_fill};
 }
 
 }  // namespace pineforge

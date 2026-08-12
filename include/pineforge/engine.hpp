@@ -902,6 +902,22 @@ protected:
     // callers that want the legacy hold-to-infinity behaviour.
     bool margin_call_enabled_ = true;
 
+    // finding-308 margin-call intrabar chronology state. TV places the
+    // forced-liquidation event chronologically on the synthesized intrabar
+    // path, so a priced exit that fills strictly AFTER the bar's adverse
+    // extreme (on the engine's own OHLC path) must let a pre-fill deficit
+    // slice first. ``last_margin_call_event_bar_`` records the last
+    // bar_index_ on which ANY margin-call trade row was booked (FX broker-
+    // open rollover, end-of-bar cascade, or the pre-exit slice); the
+    // pre-exit hook consults it so at most one forced-liquidation event
+    // fires per bar. ``intrabar_exit_margin_call_bar_`` is set ONLY by the
+    // pre-exit slice and tells the end-of-bar process_margin_call that this
+    // bar's adverse-extreme event was already consumed chronologically (the
+    // surviving remainder is re-checked from the next bar on, preserving
+    // TV's one-nibble-per-bar cascade).
+    int last_margin_call_event_bar_ = -1;
+    int intrabar_exit_margin_call_bar_ = -1;
+
     // Legacy codegen compatibility bit. Older and current generated classes
     // set this when the Pine source contains ``strategy.close`` or
     // ``strategy.close_all``. Runtime behavior must not depend on it: a
@@ -1295,6 +1311,19 @@ protected:
     // adverse-price liquidation; only an eligible one-shot post-fill
     // affordability event can trim it.
     void process_margin_call(const Bar& bar);
+    // finding-308: chronological pre-exit forced-liquidation slice. Called
+    // from the process_pending_orders fill loop immediately BEFORE a priced
+    // exit of the live position is applied. Fires only when (a) no margin
+    // call was booked on this bar yet, (b) the bar's adverse extreme comes
+    // STRICTLY earlier on the synthesized intrabar path than the exit's
+    // fill (a tie — the exit filling exactly at the extreme — keeps the
+    // exit first), and (c) the pre-fill position is already in margin
+    // deficit at that extreme. The slice mirrors the adverse-cascade
+    // trigger/slice arithmetic of process_margin_call byte-for-byte.
+    // Returns true when a "Margin call" row was booked; the triggering exit
+    // then fills the reduced remainder.
+    bool margin_call_slice_before_priced_exit(const Bar& bar,
+                                              double exit_fill_price);
     // A timestamped FX rollover is a broker-open event, not an end-of-bar
     // adverse-price check.  Cell A1 supports carried 1x full-margin long and
     // short in ordinary historical dispatch; leveraged shapes stay fail-closed.
@@ -2460,6 +2489,12 @@ private:
         // limit, or the limit leg of an entry stop-limit) — routes the
         // fill onto the unslipped limit-or-better price path.
         bool is_limit_fill = false;
+        // True when the fill came from resolve_exit_path_fill's stop/limit
+        // walk of the intrabar path for an exit-style order (not a TRAIL
+        // fill, and not a market / same-bar-close-priced exit). Only such
+        // fills carry a meaningful chronological path position, which the
+        // finding-308 pre-exit margin-call slice requires.
+        bool exit_path_fill = false;
     };
     FillEvaluation evaluate_fill_price(
         PendingOrder& order, size_t order_index, const Bar& bar,

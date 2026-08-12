@@ -634,6 +634,8 @@ void BacktestEngine::reset_run_state() {
     intraday_cap_deferred_close_pending_ = false;
     intraday_cap_pooc_close_inheritor_incarnation_ = 0;
     broker_fill_event_seq_ = 0;
+    last_margin_call_event_bar_ = -1;        // finding-308: bar-keyed one-shot
+    intrabar_exit_margin_call_bar_ = -1;     // markers must not survive a rerun
     coof_scheduler_active_ = false;
     coof_fill_recalc_active_ = false;
     coof_recalc_at_bar_open_ = false;
