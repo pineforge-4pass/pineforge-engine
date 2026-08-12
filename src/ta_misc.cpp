@@ -79,8 +79,12 @@ double Linreg::compute(double src, double offset) {
 PercentRank::PercentRank(int length) : length_(length) {}
 
 double PercentRank::compute(double src) {
-    // Pine parity: keep one slot per bar (na advances the window). Rank uses only non-na
-    // values in the lookback; denominator is that count, not length (PineTS ta.percentrank).
+    // Pine parity: keep one slot per bar (na advances the window). Rank counts only
+    // non-na values in the lookback, but the denominator is always LENGTH, never the
+    // non-na count — even in the partial (na-lead) warmup window. TV tapes prove
+    // ta.percentrank emits count/length there (Lab finding 315; trendmatrix pair
+    // verified byte-exact 100.0/0/0). Dividing by the valid count (the PineTS model)
+    // mismatches TV as soon as count > 0.
     buffer_.push_back(src);
     while ((int)buffer_.size() > length_ + 1) {
         buffer_.pop_front();
@@ -109,7 +113,7 @@ double PercentRank::compute(double src) {
     if (valid == 0) {
         return na<double>();
     }
-    return ((double)count / (double)valid) * 100.0;
+    return ((double)count / (double)length_) * 100.0;
 }
 
 // ============================================================================
@@ -258,7 +262,9 @@ double PercentRank::recompute(double src) {
         if (percentrank_less_equal(v, current)) count++;
     }
     if (valid == 0) return na<double>();
-    return ((double)count / (double)valid) * 100.0;
+    // Denominator is LENGTH, not the non-na count — same TV rule as compute()
+    // (Lab finding 315).
+    return ((double)count / (double)length_) * 100.0;
 }
 
 // --- BarsSince ---

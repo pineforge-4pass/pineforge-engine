@@ -146,7 +146,8 @@ static int test_percentrank_pine_semantics() {
         }
     }
     {
-        // Two na in lookback: valid priors 20 and 30; current 40; both <= 40 -> 100%
+        // Two na in lookback: valid priors 20 and 30; current 40; both <= 40.
+        // TV divides by LENGTH (4), not the valid count (2) -> 50% (finding 315).
         ta::PercentRank pr(4);
         double nanv = std::numeric_limits<double>::quiet_NaN();
         double seq[] = {10, 20, nanv, nanv, 30, 40};
@@ -154,8 +155,25 @@ static int test_percentrank_pine_semantics() {
         for (double v : seq) {
             last = pr.compute(v);
         }
-        if (!near(last, 100.0)) {
-            std::printf("FAIL percentrank na history: got %g want 100\n", last);
+        if (!near(last, 50.0)) {
+            std::printf("FAIL percentrank na history: got %g want 50\n", last);
+            fails++;
+        }
+    }
+    {
+        // Pin the partial (na-lead) warmup window rule: the denominator stays LENGTH
+        // even when only one lookback value is non-na (finding 315). Lookback for the
+        // final bar is {na, na, na, 10}: count = 1, valid = 1, but TV emits
+        // 1/4 * 100 = 25 — never 1/1 * 100.
+        ta::PercentRank pr(4);
+        double nanv = std::numeric_limits<double>::quiet_NaN();
+        double seq[] = {nanv, nanv, nanv, 10, 20};
+        double last = na<double>();
+        for (double v : seq) {
+            last = pr.compute(v);
+        }
+        if (!near(last, 25.0)) {
+            std::printf("FAIL percentrank partial-window denominator: got %g want 25\n", last);
             fails++;
         }
     }
