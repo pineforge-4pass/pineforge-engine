@@ -1332,6 +1332,17 @@ protected:
     // then fills the reduced remainder.
     bool margin_call_slice_before_priced_exit(const Bar& bar,
                                               double exit_fill_price);
+    // finding-325 (1x-long entry-fill affordability chronology): TV runs the
+    // 1x-long (margin_long=100) opening-affordability check AT THE ENTRY
+    // FILL, chronologically before the same bar's intrabar exits. When a
+    // priced exit of a just-opened 1x long is about to fill on the entry's
+    // own bar and the floor-sized opening cost exceeds post-close equity,
+    // the one-shot opening event books its trim FIRST — the ordinary
+    // floor-before-4x quantity (including the sub-lot one-contract
+    // fallback), filled at the RAW matched entry base, tagged "Margin call"
+    // — and the exit then closes the reduced remainder. Consumes the
+    // pending opening event; returns true when a slice was booked.
+    bool margin_call_1x_long_opening_slice_before_priced_exit(const Bar& bar);
     // A timestamped FX rollover is a broker-open event, not an end-of-bar
     // adverse-price check.  Cell A1 supports carried 1x full-margin long and
     // short in ordinary historical dispatch; leveraged shapes stay fail-closed.

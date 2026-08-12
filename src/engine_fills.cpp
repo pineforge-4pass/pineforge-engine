@@ -1165,16 +1165,19 @@ bool BacktestEngine::margin_call_slice_before_priced_exit(
     if (bar_magnifier_enabled_ || coof_scheduler_active_) return false;
 
     // Eligibility gates, mirroring process_margin_call's finite-price path.
-    // A 1x long has no adverse-price liquidation (its only broker action is
-    // the one-shot post-fill affordability event, which stays end-of-bar);
-    // a POOC position filled at this bar's close has no post-fill adverse
-    // path on the bar.
+    // A 1x long has no adverse-price liquidation; its only broker action is
+    // the one-shot post-fill affordability event, whose TV placement is the
+    // ENTRY FILL itself (finding-325) — route it to the opening-slice hook
+    // below instead of the adverse-extreme arithmetic. A POOC position
+    // filled at this bar's close has no post-fill adverse path on the bar.
     const bool opened_this_bar = position_open_bar_ == bar_index_;
     const bool long_full_margin =
         (position_side_ == PositionSide::LONG)
         && std::isfinite(margin_long_)
         && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
-    if (long_full_margin) return false;
+    if (long_full_margin) {
+        return margin_call_1x_long_opening_slice_before_priced_exit(bar);
+    }
     if (process_orders_on_close_ && opened_this_bar) return false;
     const double liq = compute_liquidation_price();
     if (std::isnan(liq)) return false;
@@ -1286,6 +1289,157 @@ bool BacktestEngine::margin_call_slice_before_priced_exit(
     }
     last_margin_call_event_bar_ = bar_index_;
     intrabar_exit_margin_call_bar_ = bar_index_;
+    return true;
+}
+
+// finding-325 (1x-long entry-fill affordability chronology). The hook above
+// deliberately excluded 1x longs: compute_liquidation_price() is na there and
+// the only broker action is the one-shot opening-affordability event, which
+// used to stay end-of-bar (process_margin_call). The rhyme17 exemplar
+// (2026-01-09 14:30) pins the TV chronology: the opening check runs AT THE
+// ENTRY FILL — a same-bar priced exit closes only the remainder left after
+// the trim, and the trim itself fills at the RAW matched entry base (the
+// pnl-0 "Margin call" row), never at an adverse extreme. The arithmetic below
+// is process_margin_call's opening-affordability LONG branch verbatim
+// (opening budget on the position's snapped entry basis, floor-before-4x,
+// the sub-lot one-contract fallback); only its PLACEMENT moves, and only
+// when a priced exit would otherwise fill first on the entry's own bar.
+// Bars where no same-bar priced exit fills keep the established end-of-bar
+// event untouched, as do POOC close fills (no intrabar chronology exists
+// there) and the scoped SHORT opening event (its end-of-bar placement plus
+// adverse-retry pass is separately pinned).
+//
+// The event is consumed ONLY when a slice is actually booked: a no-deficit
+// evaluation leaves the pending event for process_margin_call exactly as
+// before (where the post-exit state decides, as it always did).
+bool BacktestEngine::margin_call_1x_long_opening_slice_before_priced_exit(
+        const Bar& bar) {
+    (void)bar;
+    if (position_side_ != PositionSide::LONG) return false;
+    // POOC fills at the close carry no later same-bar intrabar exit
+    // chronology; the opening check keeps its end-of-bar placement there.
+    if (process_orders_on_close_) return false;
+    // The one-shot event queued by this bar's successful opening/add fill.
+    if (!opening_affordability_pending_ || !opening_affordability_eligible_) {
+        return false;
+    }
+    const double raw_fill_base = opening_affordability_raw_fill_base_;
+    if (!std::isfinite(raw_fill_base) || !(raw_fill_base > 0.0)) return false;
+
+    const double pv = syminfo_.pointvalue;
+    const double qty = position_qty_;
+    const double m = margin_long_ / 100.0;
+    if (!(m > 0.0)) return false;
+    if (!std::isfinite(qty) || !(qty > 0.0)
+        || !std::isfinite(position_entry_price_)
+        || !std::isfinite(pv) || !std::isfinite(initial_capital_)
+        || !std::isfinite(net_profit_sum_)) {
+        return false;
+    }
+    const double fx = active_account_currency_fx();
+    if (!std::isfinite(fx) || !(fx > 0.0)) return false;
+    const double margin_per_unit = position_entry_price_ * pv * fx * m;
+    double entry_commission = 0.0;
+    for (const auto& pe : pyramid_entries_) {
+        // A requested add can floor to zero yet leave a bookkeeping row —
+        // not an accepted fill, so no CASH_PER_ORDER fixed fee (same rule
+        // as the end-of-bar opening branch).
+        if (pe.qty <= kQtyEpsilon) continue;
+        const double lot_commission = open_entry_commission(pe);
+        if (!std::isfinite(lot_commission)) return false;
+        entry_commission += lot_commission;
+    }
+    const double opening_equity =
+        initial_capital_ + net_profit_sum_ - entry_commission;
+    if (!std::isfinite(margin_per_unit) || !(margin_per_unit > 0.0)
+        || !std::isfinite(entry_commission)
+        || !std::isfinite(opening_equity)) {
+        return false;
+    }
+    const double required_margin = qty * margin_per_unit;
+    // Cent-rounded converted-ledger affordability tolerance — identical to
+    // the end-of-bar opening branch (identically zero for same-currency
+    // strategies).
+    const double converted_ledger_guard =
+        account_currency_fx_timestamps_.empty()
+            ? 0.0
+            : std::max(0.005, std::abs(opening_equity) * 1e-12);
+    if (opening_equity >= required_margin - converted_ledger_guard) {
+        return false;
+    }
+    double q_min = qty - opening_equity / margin_per_unit;
+    if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return false;
+
+    // Slice quantity: floor-before-4x plus the opening-event sub-lot
+    // one-contract fallback — process_margin_call's opening path verbatim
+    // (see the fitted evidence recorded there).
+    const double raw_q_min = q_min;
+    if (qty_step_ > 0.0) {
+        double step_count = q_min / qty_step_;
+        if (margin_zero_cover_full_liquidation_) {
+            const double nearest_step = std::round(step_count);
+            if (std::abs(step_count - nearest_step) < 1e-6) {
+                step_count = nearest_step;
+            }
+        }
+        q_min = std::floor(step_count) * qty_step_;
+    }
+    double opening_floor_zero_fallback =
+        std::numeric_limits<double>::quiet_NaN();
+    if (q_min <= kQtyEpsilon) {
+        if (qty_step_ > 0.0
+            && qty_step_ <= 1.0
+            && raw_q_min > kQtyEpsilon
+            && raw_q_min < 1.0) {
+            const double candidate = std::min(1.0, qty);
+            const bool full_position_cap = candidate >= qty - kQtyEpsilon;
+            const double gridded = apply_exit_qty_step(candidate);
+            const double grid_guard = std::max(
+                1e-12, std::abs(candidate) * 1e-12);
+            if (full_position_cap
+                || std::abs(gridded - candidate) <= grid_guard) {
+                opening_floor_zero_fallback = candidate;
+            }
+        }
+        if (!std::isfinite(opening_floor_zero_fallback)) return false;
+    }
+    double qty_liq = std::isfinite(opening_floor_zero_fallback)
+        ? opening_floor_zero_fallback
+        : 4.0 * q_min;
+    if (qty_step_ > 0.0) {
+        const double floored =
+            std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
+        if (floored <= kQtyEpsilon) return false;
+        qty_liq = floored;
+    }
+    if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;
+    if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
+
+    const size_t trades_before = trades_.size();
+    if (qty_liq >= qty - kQtyEpsilon) {
+        execute_market_exit(raw_fill_base);
+    } else {
+        execute_partial_exit_qty(
+            raw_fill_base, qty_liq, PositionReductionCause::MARGIN_CALL);
+    }
+    if (trades_.size() == trades_before) return false;
+
+    ++broker_fill_event_seq_;
+    for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = "Margin call";
+        trades_[ti].exit_id = "__margin_call__";
+    }
+    last_margin_call_event_bar_ = bar_index_;
+    intrabar_exit_margin_call_bar_ = bar_index_;
+    // The one-shot event is consumed by this chronological slice; the
+    // end-of-bar process_margin_call must not replay it.
+    opening_affordability_pending_ = false;
+    opening_affordability_eligible_ = false;
+    commissioned_all_in_market_long_opening_affordability_ = false;
+    opening_affordability_default_long_reversal_ = false;
+    close_then_short_opening_requires_adverse_retry_ = false;
+    opening_affordability_raw_fill_base_ =
+        std::numeric_limits<double>::quiet_NaN();
     return true;
 }
 

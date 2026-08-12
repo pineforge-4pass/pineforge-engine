@@ -108,6 +108,7 @@ set(TEST_SOURCES
     test_drawing
     test_margin_call
     test_margin_call_intrabar_chronology
+    test_margin_call_1x_long_entry_fill
     test_percent_equity_open_entry_fee
     test_streaming
     test_calc_on_order_fills
