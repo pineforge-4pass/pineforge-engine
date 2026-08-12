@@ -567,11 +567,42 @@ ExitTrailState compute_exit_trail_state(bool is_long, double trail_points,
     if (!std::isnan(trail_offset) && trail_offset != 0.0) {
         s.trail_offset_price = std::ceil(trail_offset) * syminfo_mintick;
     }
-    if (!std::isnan(s.best_price)) {
+    s.exits_at_activation = std::isnan(s.trail_offset_price);
+    // An EXPLICIT trail_offset=0 is TV's one-shot exit-at-activation trail:
+    // it FILLS at the activation crossing itself, so it can never survive
+    // into a later bar in the armed state — an armed zero-offset trail is an
+    // executed one. Deriving "armed" for it from the running post-entry
+    // extreme RETRO-ARMED the stop whenever an activation level refreshed
+    // from a newer close (strategy.exit re-issued per bar, e.g.
+    // trail_points = close * perc / syminfo.mintick, trail_offset = 0)
+    // dropped under a peak set beneath an older, higher level; the phantom
+    // stop then exited at the next bar's open (or at the stale level on an
+    // against-direction segment) — an exit TradingView never prints. TV rule
+    // (fitted 219/219 + 147/147 clean trailing exits on the boztilkiserhan
+    // WMA scalp/ADX tapes, both of which pass trail_offset=0 explicitly):
+    // level_t = entry +- prevBarClose*perc, live from the bar after entry,
+    // intrabar cross fills AT the level, at the open when the bar already
+    // opens past it. Both fill routes stay reachable below without any
+    // pre-arming (open-gap shortcut + with-direction segment cross), so
+    // only the retro-arming path is removed for this shape.
+    //
+    // An OMITTED trail_offset keeps the carried-best arming even though it
+    // shares the exit-at-activation FILL rule: TV treats its activation as
+    // durable order state measured against the position's running extreme.
+    // Discriminator (corpus bracket-exit-stop-limit-trail-same-bar-01,
+    // 2025-08-30 08:45): entry 4392.08, activation 4392.26 from
+    // trail_points=atr with NO offset argument, entry-bar high 4396.01
+    // crossed the level before the order's first live bar, whose open
+    // 4392.25 sits one tick BELOW the level — TV fills at that open, which
+    // only a carried armed state can produce. Offset>0 trails likewise keep
+    // the reconstruction: activation is durable for every trail that keeps
+    // running after it activates.
+    const bool one_shot_zero_offset_trail =
+        !std::isnan(trail_offset) && trail_offset == 0.0;
+    if (!one_shot_zero_offset_trail && !std::isnan(s.best_price)) {
         s.trail_active = is_long ? (s.best_price >= s.activation_level)
                                  : (s.best_price <= s.activation_level);
     }
-    s.exits_at_activation = std::isnan(s.trail_offset_price);
     return s;
 }
 

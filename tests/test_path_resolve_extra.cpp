@@ -313,9 +313,10 @@ static void test_resolve_exit_trail_fills() {
     CHECK(boz_long_zero.should_fill == true);
     CHECK(near(boz_long_zero.fill_price, 1918.59));
 
-    // LONG trail no-offset, ALREADY armed via best_start, bar opens past the
-    // activation level -> gap-fill at the open (exits-at-activation gap arm).
-    //   activation=101; best_start=101.5 (>=activation so armed); open=102>=101.
+    // LONG trail no-offset, bar opens PAST the activation level -> gap-fill
+    // at the open (exits-at-activation gap rule; no pre-arming involved —
+    // an exit-at-activation trail is never carried across bars armed).
+    //   activation=101; open=102>=101.
     Bar gap_nooff = mk(102, 103, 101, 102);
     ExitPathFill g_nooff = resolve_exit_path_fill(
         gap_nooff, PositionSide::LONG, kNaN, kNaN,
@@ -358,6 +359,115 @@ static void test_resolve_exit_trail_fills() {
         /*best_start=*/kNaN, false, false, kMintick);
     CHECK(fl_tp.should_fill == true);
     CHECK(near(fl_tp.fill_price, 101.0));
+}
+
+// ── explicit-zero-offset trails never retro-arm from the carried best ──
+//
+// An EXPLICIT trail_offset=0 trail FILLS at its activation crossing, so in
+// TV it can never be carried into a later bar already armed. When the exit is
+// re-issued each bar with trail_points derived from close (level_t =
+// entry ± prevBarClose*perc), a refreshed activation can drop UNDER a peak
+// that was set beneath an older, higher level; deriving "armed" from that
+// carried peak retro-armed a phantom stop that gap-filled at the next bar's
+// open. An OMITTED trail_offset keeps the carried arming (see the omitted
+// control below — TV fills those at the open off the carried peak).
+// Real discriminating bars from the boztilkiserhan-serhan1 WMA+RSI
+// scalp tape (long entered 2025-04-09 00:15 @1478.84, trailPerc 1.5%,
+// trail_offset passed as literal 0):
+//
+//   14:00 bar peaks at 1501.03 under that bar's level 1501.15
+//     (trail_points = 1486.70*1.5/0.01 = 2230.05 -> ceil 2231t) — no cross.
+//   14:15 order refreshes from close 1475.99 -> 2213.985 -> ceil 2214t
+//     -> activation 1500.98 < carried peak 1501.03.
+//   TV HOLDS through 16:30 (level from close 1489.89 -> 2235t -> 1501.19,
+//     crossed by high 1509.00, TV row px 1501.19). The engine used to
+//     retro-arm at the peak and exit at the 14:15 open 1475.99.
+static void test_zero_offset_trail_never_retro_arms() {
+    std::printf("test_zero_offset_trail_never_retro_arms\n");
+
+    // 14:15 bar: nothing crosses 1500.98 intrabar and the open is BELOW the
+    // activation — the position must HOLD (previously: gap-fill at open).
+    Bar serhan_hold = mk(1475.99, 1491.82, 1475.89, 1486.23);
+    ExitPathFill retro = resolve_exit_path_fill(
+        serhan_hold, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/2213.985, /*trail_price=*/kNaN,
+        /*trail_offset=*/0.0, /*entry=*/1478.84,
+        /*best_start=*/1501.03, false, false, kMintick);
+    CHECK(retro.should_fill == false);
+
+    // OMITTED offset control: the same bars with trail_offset = na keep the
+    // carried arming — the pre-armed level gap-fills at the open. This is
+    // the TV-pinned omitted-offset behavior (see the probe pin below); only
+    // the explicit literal 0 is the one-shot activation exit.
+    ExitPathFill retro_nan_off = resolve_exit_path_fill(
+        serhan_hold, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/2213.985, /*trail_price=*/kNaN,
+        /*trail_offset=*/kNaN, /*entry=*/1478.84,
+        /*best_start=*/1501.03, false, false, kMintick);
+    CHECK(retro_nan_off.should_fill == true);
+    CHECK(near(retro_nan_off.fill_price, 1475.99));
+
+    // TV pin for the OMITTED-offset carried arming, real corpus bars
+    // (bracket-exit-stop-limit-trail-same-bar-01, 2025-08-30 08:45 UTC):
+    // entry 4392.08, trail_points = atr(08:30) = 17.6225 -> ceil 18t ->
+    // activation 4392.26; the ENTRY bar's high 4396.01 crossed it before
+    // this first live bar, whose open 4392.25 is one tick BELOW the level.
+    // TV fills at that open — only a carried armed state produces this.
+    Bar probe_bar = mk(4392.25, 4399.90, 4385.55, 4393.34);
+    ExitPathFill probe_omitted = resolve_exit_path_fill(
+        probe_bar, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/17.6225, /*trail_price=*/kNaN,
+        /*trail_offset=*/kNaN, /*entry=*/4392.08,
+        /*best_start=*/4396.01, false, false, kMintick);
+    CHECK(probe_omitted.should_fill == true);
+    CHECK(near(probe_omitted.fill_price, 4392.25));
+
+    // ... and the TV exit: the 16:30 bar's refreshed level 1501.19 is crossed
+    // on the rising leg -> fill AT the level (the TV row price).
+    Bar serhan_tv_exit = mk(1489.88, 1509.00, 1488.10, 1497.10);
+    ExitPathFill tvx = resolve_exit_path_fill(
+        serhan_tv_exit, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/2234.835, /*trail_price=*/kNaN,
+        /*trail_offset=*/0.0, /*entry=*/1478.84,
+        /*best_start=*/1501.03, false, false, kMintick);
+    CHECK(tvx.should_fill == true);
+    CHECK(near(tvx.fill_price, 1501.19));
+
+    // SHORT dual: refreshed activation 99.02 rises ABOVE the carried trough
+    // 99.00; the bar opens above it and never falls to it -> HOLD
+    // (previously: retro-armed and gap-filled at the open 100.50).
+    Bar short_hold = mk(100.50, 100.80, 99.60, 100.10);
+    ExitPathFill s_retro = resolve_exit_path_fill(
+        short_hold, PositionSide::SHORT, kNaN, kNaN,
+        /*trail_points=*/98, /*trail_price=*/kNaN,
+        /*trail_offset=*/0.0, /*entry=*/100,
+        /*best_start=*/99.00, false, false, kMintick);
+    CHECK(s_retro.should_fill == false);
+
+    // Control: the "open gapped past the activation" TV rule is untouched —
+    // no pre-arming is needed for it. activation 101, open 102 -> open fill.
+    Bar gap_past = mk(102, 103, 101.2, 102);
+    ExitPathFill gap = resolve_exit_path_fill(
+        gap_past, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN,
+        /*trail_offset=*/0.0, /*entry=*/100,
+        /*best_start=*/101.03, false, false, kMintick);
+    CHECK(gap.should_fill == true);
+    CHECK(near(gap.fill_price, 102.0));
+
+    // Control: an OFFSET trail keeps the carried-best arming — activation is
+    // durable order state for a trail that keeps running after activation.
+    // best_start=102 >= activation 101, offset 50t=0.5 -> level 101.5;
+    // open 101 <= 101.5 -> gap-fill at the open (same as the established
+    // gap_off pin inside test_resolve_exit_trail_fills).
+    Bar off_gap = mk(101, 101.5, 100, 100.5);
+    ExitPathFill off_armed = resolve_exit_path_fill(
+        off_gap, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN,
+        /*trail_offset=*/50, /*entry=*/100,
+        /*best_start=*/102, false, false, kMintick);
+    CHECK(off_armed.should_fill == true);
+    CHECK(near(off_armed.fill_price, 101.0));
 }
 
 // ── exit_order_earliest_path_metric_no_trail: entry-bar wrong-side block ──
@@ -432,6 +542,7 @@ int main() {
     test_exit_order_touch_gap_arms();
     test_path_cross_kind_priority_order();
     test_resolve_exit_trail_fills();
+    test_zero_offset_trail_never_retro_arms();
     test_entry_bar_blocks_no_trail_exit();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;

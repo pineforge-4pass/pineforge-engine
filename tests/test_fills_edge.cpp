@@ -783,6 +783,66 @@ static void test_trailing_activation_is_actionable_but_offset_only_is_inert() {
     CHECK(pending_exits_for(ExitActionForm::InfiniteTrailPoints) == 1);
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// A per-bar re-issued exit-at-activation trail (trail_points refreshed from
+// close, trail_offset = 0 — the boztilkiserhan serhan1 WMA scalp shape) must
+// NOT retro-arm off the carried post-entry peak when a refreshed (lower)
+// activation undercuts it. TV rule, fitted 219/219 + 147/147 clean trailing
+// exits on those tapes: level_t = entry ± prevBarClose*perc, live from the
+// bar after entry, fill AT the level on the intrabar cross (open if gapped).
+// Bars below are the real 2025-04-09 discriminating tape: the engine used to
+// exit at the 14:15 open 1475.99 while TV holds to 16:30 @1501.19.
+// ─────────────────────────────────────────────────────────────────────
+class ReissuedTrailRetroArmProbe : public BacktestEngine {
+public:
+    ReissuedTrailRetroArmProbe() {
+        initial_capital_ = 1'000'000;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
+        syminfo_mintick_ = 0.01;
+    }
+    double exit_px(int i) const { return closed_trade_exit_price(i); }
+    int exit_bar_index(int i) const { return closed_trade_exit_bar_index(i); }
+    void on_bar(const Bar& bar) override {
+        if (bar_index_ == 0)
+            strategy_entry("Long", true, kNaN, kNaN, 1.0, "L");
+        // Pine: if strategy.position_size > 0 -> strategy.exit(trail_points =
+        // close * trailPerc / syminfo.mintick, trail_offset = 0), every bar.
+        if (position_side_ == PositionSide::LONG) {
+            strategy_exit("Exit Long", "Long", kNaN, kNaN,
+                          /*trail_points=*/bar.close * 0.015 / 0.01,
+                          /*trail_offset=*/0.0);
+        }
+    }
+};
+
+static void test_reissued_trail_holds_to_tv_exit_no_retro_arm() {
+    std::printf("test_reissued_trail_holds_to_tv_exit_no_retro_arm\n");
+    ReissuedTrailRetroArmProbe p;
+    Bar bars[5] = {
+        // signal bar; entry fills next open @1478.84
+        {1478.84, 1478.84, 1478.84, 1478.84, 1000, kT0_UTC + 0 * k15m_ms},
+        // entry bar; close 1486.70 -> next level ceil(2230.05)t = 1501.15
+        {1478.84, 1487.00, 1475.00, 1486.70, 1000, kT0_UTC + 1 * k15m_ms},
+        // "14:00": peak 1501.03 < level 1501.15 -> hold. close 1475.99
+        // refreshes the level to ceil(2213.985)t = 1500.98 < carried peak.
+        {1486.69, 1501.03, 1473.27, 1475.99, 1000, kT0_UTC + 2 * k15m_ms},
+        // "14:15": retro-arm bar. Nothing crosses 1500.98; the old code
+        // pre-armed off the 1501.03 peak and gap-filled at the open 1475.99.
+        // close 1489.89 -> level ceil(2234.835)t = 1501.19.
+        {1475.99, 1491.82, 1475.89, 1489.89, 1000, kT0_UTC + 3 * k15m_ms},
+        // "16:30": high 1509.00 crosses 1501.19 -> TV exit AT the level.
+        {1489.88, 1509.00, 1488.10, 1497.10, 1000, kT0_UTC + 4 * k15m_ms},
+    };
+    p.run(bars, 5);
+    CHECK(p.trade_count() == 1);
+    if (p.trade_count() == 1) {
+        CHECK(near(p.exit_px(0), 1501.19));
+        CHECK(p.exit_bar_index(0) == 4);
+    }
+}
+
 // strategy.close is still an ordinary deferred market close when POOC is off.
 class ExplicitMarketClose : public BacktestEngine {
 public:
@@ -834,6 +894,7 @@ int main() {
     test_inert_exit_has_no_qty_or_oca_reservation();
     test_absolute_and_relative_exit_forms_are_actionable();
     test_trailing_activation_is_actionable_but_offset_only_is_inert();
+    test_reissued_trail_holds_to_tv_exit_no_retro_arm();
     test_strategy_close_market_behavior_remains();
 
     std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
