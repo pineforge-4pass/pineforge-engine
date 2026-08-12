@@ -116,6 +116,7 @@ set(TEST_SOURCES
     test_prearmed_market_parent_gap_exit
     test_relative_exit_after_limit_parent
     test_short_seed_close_collision
+    test_short_seed_collision_percent
 )
 
 find_package(Threads REQUIRED)

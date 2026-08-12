@@ -1870,8 +1870,22 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
     //
     // Do not reorder it. Tag only the exact authoritative three-object book so
     // the close kernel can materialize TV's second LONG lot and the final Short
-    // kernel can close both LONG lots to flat. The long-seed mirror is
-    // deliberately unproven and remains ordinary.
+    // kernel can close both LONG lots. The long-seed mirror is deliberately
+    // unproven and remains ordinary.
+    //
+    // Two independently pinned sizing regimes share this book:
+    //   - FIXED default sizing (the cntvxiao six-strategy cohort): seed qty
+    //     S == default qty L, both zero trades are qty S, and the final Short
+    //     ends flat.
+    //   - PERCENT_OF_EQUITY / CASH default sizing (finding 272, 25/25 exact
+    //     on the alpha-forge-liquidity-matrix-v2 tape): the entries carry
+    //     their placement-frozen default qty L which need not equal the seed
+    //     S. TV materializes the close's frozen target CAPPED at the live
+    //     long, min(S, L), and the final Short closes both LONG lots then
+    //     re-opens SHORT with exactly the unconsumed surplus max(0, L - S)
+    //     (flat when L <= S). There is no constant to pin the seed qty
+    //     against — it varies with equity — so the FIXED seed-equality gate
+    //     is replaced by the frozen-snapshot shape checks below.
     if (!close_entries_rule_any_
         && !process_orders_on_close_
         && !calc_on_order_fills_
@@ -1886,7 +1900,9 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
         && risk_max_position_size_ <= 0.0
         && max_intraday_filled_orders_ <= 0
         && !risk_halted_
-        && default_qty_type_ == QtyType::FIXED
+        && (default_qty_type_ == QtyType::FIXED
+            || default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+            || default_qty_type_ == QtyType::CASH)
         && pyramiding_ == 1
         && pending_orders_.size() == 3
         && position_side_ == PositionSide::SHORT
@@ -1916,11 +1932,30 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 && order.oca_name.empty()
                 && order.oca_type == 0;
         };
+        const bool fixed_default_sizing =
+            default_qty_type_ == QtyType::FIXED;
         const auto pure_default_market_entry = [&](const PendingOrder& order) {
+            // FIXED default sizing keeps qty NaN end to end (no freeze).
+            // PERCENT_OF_EQUITY / CASH default sizing must carry the complete
+            // placement-frozen snapshot the fill-time consumers (dispatch qty,
+            // KI-54 / KI-72 admission) will read; a partial snapshot means
+            // some other placement path built this order — stay ordinary.
+            const bool default_sizing_shape = fixed_default_sizing
+                ? std::isnan(order.frozen_default_qty)
+                : (std::isfinite(order.frozen_default_qty)
+                   && order.frozen_default_qty > kQtyEpsilon
+                   && std::isfinite(order.sizing_equity)
+                   && order.sizing_equity > 0.0
+                   && std::isfinite(order.sizing_price)
+                   && order.sizing_price > 0.0
+                   && std::isfinite(order.sizing_mark)
+                   && order.sizing_mark > 0.0
+                   && std::isfinite(order.sizing_fx)
+                   && order.sizing_fx > 0.0);
             return order.type == OrderType::MARKET
                 && std::isnan(order.qty)
                 && order.qty_type == -1
-                && std::isnan(order.frozen_default_qty)
+                && default_sizing_shape
                 && std::isnan(order.limit_price)
                 && std::isnan(order.stop_price)
                 && std::isnan(order.trail_points)
@@ -1974,12 +2009,28 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             }
             const double admit_price =
                 apply_fill_slippage(bar.open, /*is_buy=*/false);
-            const double final_short_qty = std::abs(calc_qty_for_type(
-                admit_price, source[1]->qty, source[1]->qty_type));
+            // The quantity each entry will actually dispatch at its fill:
+            // FIXED re-derives from the default at the admit price; frozen
+            // PERCENT/CASH orders carry their placement-frozen qty (L).
+            const double entry_qty = fixed_default_sizing
+                ? std::abs(calc_qty_for_type(
+                      admit_price, source[0]->qty, source[0]->qty_type))
+                : source[0]->frozen_default_qty;
+            const double final_short_qty = fixed_default_sizing
+                ? std::abs(calc_qty_for_type(
+                      admit_price, source[1]->qty, source[1]->qty_type))
+                : source[1]->frozen_default_qty;
             const double marked_equity = current_equity() + open_profit(bar.open);
             const double fx = active_account_currency_fx();
             const double notional_k = syminfo_.pointvalue * fx;
-            const double projected_long_qty = 2.0 * seed.qty;
+            // Projected long book after the entry (L) and the capped
+            // materialized lot (min(S, L)); the final-short transaction
+            // closes both lots and re-opens the surplus, so its admission
+            // sees projected_long + its own default qty. For the FIXED
+            // cohort (L pinned == S below) this collapses to the original
+            // 2*seed.qty forms exactly.
+            const double projected_long_qty =
+                entry_qty + std::min(seed.qty, entry_qty);
             const double projected_held_margin =
                 projected_long_qty * bar.open * notional_k;
             const double projected_free_funds =
@@ -1990,7 +2041,10 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 projected_transaction_qty * admit_price * notional_k;
             const double epsilon =
                 std::max(1e-9, std::abs(marked_equity) * 1e-12);
-            return std::isfinite(admit_price) && admit_price > 0.0
+            const bool projected_safe =
+                std::isfinite(admit_price) && admit_price > 0.0
+                && std::isfinite(entry_qty)
+                && entry_qty > kQtyEpsilon
                 && std::isfinite(final_short_qty)
                 && final_short_qty > kQtyEpsilon
                 && std::isfinite(marked_equity)
@@ -1999,6 +2053,38 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 && std::isfinite(projected_required_margin)
                 && projected_required_margin
                     <= projected_free_funds + epsilon;
+            if (!projected_safe) {
+                return false;
+            }
+            // PERCENT default sizing (pct <= 100) additionally faces the
+            // KI-54 frozen reversal re-check at BOTH reversal fills: the
+            // opposite entry reversing the seed short, then the final short
+            // reversing the projected long. Mirror that gate exactly, WITHOUT
+            // its fill-time epsilon, so a tagged book can never be
+            // half-declined mid-transaction (the middle leg would have
+            // created synthetic exposure with no rollback). CASH and
+            // pct > 100 books are admitted unconditionally by that gate and
+            // need no mirror.
+            if (default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+                && default_qty_value_ <= 100.0) {
+                for (const PendingOrder* entry : {source[0], source[1]}) {
+                    const double leg_admit_price =
+                        apply_fill_slippage(bar.open, entry->is_long);
+                    const double leg_fx =
+                        std::isfinite(entry->sizing_fx) && entry->sizing_fx > 0.0
+                            ? entry->sizing_fx
+                            : fx;
+                    const double leg_required = entry->frozen_default_qty
+                        * leg_admit_price * syminfo_.pointvalue * leg_fx;
+                    if (!(std::isfinite(leg_admit_price)
+                          && leg_admit_price > 0.0
+                          && std::isfinite(leg_required)
+                          && leg_required <= entry->sizing_equity)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         };
         const bool exact_book =
             source_bar >= 0
@@ -2034,8 +2120,17 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
             && seed.entry_id == source[1]->id
             && seed.entry_bar_index < bar_index_
             && seed.qty > kQtyEpsilon
-            && std::isfinite(default_qty)
-            && std::abs(default_qty - seed.qty) <= kQtyEpsilon
+            // FIXED default sizing pins the seed against the constant default
+            // (the authoritative cohort's L == S regime). Frozen PERCENT/CASH
+            // sizing has no constant to pin — the seed was sized on an earlier
+            // bar's equity — so instead require the two entries to carry the
+            // SAME placement-frozen default qty (one L; both froze on this
+            // signal bar's close with zero slippage).
+            && (fixed_default_sizing
+                ? (std::isfinite(default_qty)
+                   && std::abs(default_qty - seed.qty) <= kQtyEpsilon)
+                : std::abs(source[0]->frozen_default_qty
+                           - source[1]->frozen_default_qty) <= kQtyEpsilon)
             && std::abs(position_qty_ - seed.qty) <= kQtyEpsilon
             && std::abs(source[2]->tv_carry_qty - seed.qty) <= kQtyEpsilon
             && std::abs(
@@ -2270,12 +2365,18 @@ bool BacktestEngine::short_seed_collision_materialization_is_live(
     }
 
     const PyramidEntry& long_lot = pyramid_entries_.front();
-    const double qty = order.suppressed_close_consumed_ledger_qty;
+    // The close order's placement-frozen target is the seed qty S; the lot the
+    // opposite entry just opened is the default qty L. TV materializes the
+    // frozen target CAPPED at the live position: min(S, L) (finding 272,
+    // 25/25). Under the FIXED cohort's pinned L == S this is exactly the old
+    // strict equality; the live-position invariant is that the fresh long book
+    // is the single entry lot.
+    const double frozen_target = order.suppressed_close_consumed_ledger_qty;
     return long_lot.entry_id == long_entry->id
         && long_lot.entry_bar_index == bar_index_
         && long_lot.qty > kQtyEpsilon
-        && std::abs(long_lot.qty - qty) <= kQtyEpsilon
-        && std::abs(position_qty_ - qty) <= kQtyEpsilon;
+        && frozen_target > kQtyEpsilon
+        && std::abs(position_qty_ - long_lot.qty) <= kQtyEpsilon;
 }
 
 bool BacktestEngine::short_seed_collision_final_short_is_live(
@@ -2324,14 +2425,24 @@ bool BacktestEngine::short_seed_collision_final_short_is_live(
 
     const PyramidEntry& source_long = pyramid_entries_[0];
     const PyramidEntry& close_short_long = pyramid_entries_[1];
-    const double qty = order.tv_carry_qty;
+    // order.tv_carry_qty is the seed short S (snapshotted at placement); the
+    // entry lot is the default qty L. The materialized second lot must be the
+    // close's frozen target capped at the entry lot, min(S, L) — the FIXED
+    // cohort's L == S makes this the old strict double equality, while the
+    // frozen PERCENT/CASH regime (finding 272) leaves a residual max(0, L - S)
+    // for the fill kernel to re-open SHORT.
+    const double seed_qty = order.tv_carry_qty;
+    const double expected_materialized =
+        std::min(seed_qty, source_long.qty);
     return source_long.entry_id == long_entry->id
         && close_short_long.entry_id == materialize_long->id
         && source_long.entry_bar_index == bar_index_
         && close_short_long.entry_bar_index == bar_index_
-        && std::abs(source_long.qty - qty) <= kQtyEpsilon
-        && std::abs(close_short_long.qty - qty) <= kQtyEpsilon
-        && std::abs(position_qty_ - 2.0 * qty) <= kQtyEpsilon
+        && source_long.qty > kQtyEpsilon
+        && std::abs(close_short_long.qty - expected_materialized)
+            <= kQtyEpsilon
+        && std::abs(position_qty_ - (source_long.qty + close_short_long.qty))
+            <= kQtyEpsilon
         && std::abs(source_long.price - close_short_long.price)
             <= std::max(1e-12, std::abs(source_long.price) * 1e-12);
 }
@@ -3884,12 +3995,40 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                                              double& trail_best_path_state,
                                              bool later_same_tick_entry) {
     // The final Short in the exact SHORT-seed collision is the broker
-    // transaction that closes both physical LONG lots. It does not open a
-    // residual short. Re-prove the complete two-lot state here so any rejected,
+    // transaction that closes both physical LONG lots (the entry lot L and
+    // the materialized min(S, L) lot) and re-opens the direction with exactly
+    // the unconsumed surplus max(0, L - S) — TV holds that remnant SHORT under
+    // the final short's id through the gap (finding 272: 14/14 remnant
+    // episodes qty L - S exact, 11/11 flat when L <= S; the FIXED cohort's
+    // pinned L == S always ends flat, byte-identical to the pre-remnant
+    // kernel). Re-prove the complete two-lot state here so any rejected,
     // partial, or otherwise interrupted predecessor falls back to the ordinary
     // strategy.entry kernel.
     if (short_seed_collision_final_short_is_live(order)) {
+        const double residual =
+            pyramid_entries_[0].qty - pyramid_entries_[1].qty;
         execute_market_exit(fill_price);
+        if (residual > kQtyEpsilon) {
+            // Slippage is gated to 0 by the exact-book tagging, so the
+            // remnant re-opens at the same broker point the exit filled at.
+            open_fresh_position(
+                order.is_long ? PositionSide::LONG : PositionSide::SHORT,
+                fill_price, residual, order.id, order.incarnation);
+            pyramid_entries_.back().entry_comment = order.comment;
+            // Mirror the ordinary market-entry kernel's trail handling: the
+            // path state keeps the at-fill value, then the bar's remaining
+            // extreme folds into trail_best_price_ for same-bar exit
+            // evaluation (POOC same-bar close fills are excluded by the
+            // exact-book gate).
+            const double trail_best_after_fill = trail_best_price_;
+            if (position_side_ == PositionSide::LONG) {
+                trail_best_price_ = std::max(trail_best_price_, bar.high);
+            } else if (position_side_ == PositionSide::SHORT) {
+                trail_best_price_ = std::min(trail_best_price_, bar.low);
+            }
+            trail_best_path_state = trail_best_after_fill;
+            return;
+        }
         trail_best_path_state = trail_best_price_;
         return;
     }
@@ -4116,7 +4255,12 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     // lot. It is not an exit from the freshly opened Long. This bypasses the
     // pyramiding cap only for the pre-tagged, re-proven transaction.
     if (short_seed_collision_materialization_is_live(order)) {
-        const double qty = order.suppressed_close_consumed_ledger_qty;
+        // The close order fills against the same-tick re-opened same-id
+        // position at its placement-frozen target S, capped by the live long
+        // book L (finding 272: zero#2 qty == min(S, L) exact, 25/25). The
+        // FIXED cohort's pinned L == S keeps the historical full-target qty.
+        const double qty = std::min(order.suppressed_close_consumed_ledger_qty,
+                                    pyramid_entries_.front().qty);
         const double entry_fill = apply_fill_slippage(fill_price, /*is_buy=*/true);
         if (!std::isfinite(entry_fill) || qty <= kQtyEpsilon) return;
 
