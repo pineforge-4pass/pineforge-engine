@@ -48,6 +48,15 @@ as of 2026-08-13). That is why an agent asked to "backtest this Pine / check if
 it's profitable / reproduce my TradingView results" should call the MCP tools
 rather than approximate the run.
 
+## Validation scoreboard
+
+| Board | Test set | Result | Trades verified |
+|---|---|---|---|
+| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies, Apache-2.0, reproducible by anyone | **307/311 strict** trade-for-trade (+4 strong at ≥99.9% count parity; 1 documented TV-side anomaly excluded) | ~431k |
+| **Closed test** | 415 community-shared TradingView scripts — kept private under TradingView's Terms of Service (not redistributable) | **396/396 excellent (100%)** | ~520k |
+
+**~950k trades** verified trade-for-trade against TradingView's "List of Trades" exports in total, as of 2026-08-13. During this research **20 TV-side anomalies** were discovered, deep-analyzed, and documented (19 on the closed set, 1 in the public corpus) — each excluded only with an adversarially-audited write-up. **0 engine bugs.**
+
 **The workflow (fully local — source never leaves your machine):**
 1. Agent writes (or you paste) PineScript v6 source
 2. The container transpiles Pine → C++ in-process with the bundled
