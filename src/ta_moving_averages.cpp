@@ -71,6 +71,31 @@ double RMA::compute(double src) {
 
 // --- SMA ---
 
+// Windows at or below this length re-sum the whole buffer every bar instead of
+// carrying an incremental running sum.
+//
+// A running sum (`running_sum += src - popped`) makes ta.sma HISTORY-DEPENDENT
+// to the last ULP: the emitted value at bar N is a function of every value ever
+// accumulated, and the periodic exact re-summation below only re-PHASES that
+// drift rather than removing it. For short chained windows the difference is
+// observable at the signal layer. The stochRSI shape
+//   k = ta.sma(stoch, 3);  d = ta.sma(k, 3)
+// sits on EXACT algebraic ties whenever the source plateaus: with
+// stoch = [a, b, x, a, b] the three k-windows are rotations of one multiset, so
+//   9*(k_t - d_t) = 2*s_t + s_{t-1} - 2*s_{t-3} - s_{t-4} = 0
+// EXACTLY, in infinite precision. ta.crossover/ta.crossunder are strict
+// inequalities, so no correct implementation at any precision may fire there.
+// Running-sum drift breaks those ties at +-1 ULP and manufactures crossings the
+// mathematics forbids, with a sign that depends on the resync phase rather than
+// on the data.
+//
+// Direct re-summation of the window is exact-order deterministic and
+// history-independent: identical windows always produce identical sums, so
+// algebraic ties survive as ties. Bounded to short windows so the per-bar cost
+// stays <= 16 additions instead of O(length); long windows keep the amortised
+// incremental path, where chained-tie geometry does not arise.
+static constexpr int kSmaDirectSumMaxLength = 16;
+
 SMA::SMA(int length)
     : buffer(length), length(length), bar_count(0), running_sum(0.0) {}
 
@@ -113,6 +138,14 @@ double SMA::compute(double src) {
         if (!is_na(src)) {
             running_sum += src;
         }
+        running_sum = recalculate_exact_sum();
+        return running_sum / length;
+    }
+
+    if (length <= kSmaDirectSumMaxLength) {
+        // Exact-order, history-independent window sum (see the note above
+        // kSmaDirectSumMaxLength): equal windows must produce equal sums so
+        // algebraic ties in chained short SMAs survive as ties.
         running_sum = recalculate_exact_sum();
         return running_sum / length;
     }
@@ -373,11 +406,17 @@ double SMA::recompute(double src) {
     double old_val = buffer[0];
     buffer.update_front(src);
 
-    if (!is_na(old_val)) {
-        running_sum -= old_val;
-    }
-    if (!is_na(src)) {
-        running_sum += src;
+    if (length <= kSmaDirectSumMaxLength) {
+        // Same exact-order window sum compute() uses, so a recompute()d bar and
+        // a freshly computed one with an identical window agree bit-for-bit.
+        running_sum = recalculate_exact_sum();
+    } else {
+        if (!is_na(old_val)) {
+            running_sum -= old_val;
+        }
+        if (!is_na(src)) {
+            running_sum += src;
+        }
     }
 
     if (bar_count < length) {
