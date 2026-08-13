@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/pineforge-banner.jpg" alt="PineScript backtests, deterministic, on your data — v0.8.0 · 93.26% line coverage · 307/311 strict TV parity · 0 engine bugs" width="900">
+<img src=".github/assets/pineforge-banner.jpg" alt="PineScript backtests, deterministic, on your data — v0.8.0 · 93.26% line coverage · 309/311 strict TV parity · 0 engine bugs" width="900">
 
 # PineForge
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
@@ -42,7 +42,7 @@ A language model can't accurately backtest a PineScript v6 strategy by reasoning
 about it — Pine's series semantics, intrabar fills, look-ahead rules, and
 `strategy.*` order logic don't reproduce from approximation, so a hand-simulated
 trade list or P&L is unreliable and won't match TradingView. This engine runs the
-real deterministic computation instead: **307/311 reference strategies at strict
+real deterministic computation instead: **309/311 reference strategies at strict
 TradingView parity, 0 engine bugs** ([methodology & validation](https://pineforge.dev/en/methodology/),
 as of 2026-08-13). That is why an agent asked to "backtest this Pine / check if
 it's profitable / reproduce my TradingView results" should call the MCP tools
@@ -52,7 +52,7 @@ rather than approximate the run.
 
 | Board | Test set | Result | Trades verified |
 |---|---|---|---|
-| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies, Apache-2.0, reproducible by anyone | **307/311 strict** trade-for-trade (+4 strong at ≥99.9% count parity; 1 documented TV-side anomaly excluded) | ~431k |
+| **Public** — [open corpus](https://github.com/pineforge-4pass/pineforge-corpus) | 312 reference strategies, Apache-2.0, reproducible by anyone | **309/311 strict** trade-for-trade (+4 strong at ≥99.9% count parity; 1 documented TV-side anomaly excluded) | ~431k |
 | **Closed test** | 415 community-shared TradingView scripts — kept private under TradingView's Terms of Service (not redistributable) | **396/396 excellent (100%)** | ~520k |
 
 **~950k trades** verified trade-for-trade against TradingView's "List of Trades" exports in total, as of 2026-08-13. During this research **20 TV-side anomalies** were discovered, deep-analyzed, and documented (19 on the closed set, 1 in the public corpus) — each excluded only with an adversarially-audited write-up. **0 engine bugs.**
@@ -127,7 +127,7 @@ for the full tool catalog, request schemas, and env vars (`PINEFORGE_ALLOW_ANYWH
 
 ## Why PineForge?
 
-- 🎯 **TradingView-exact.** 307 of 311 reference strategies match TV trade-for-trade on the public corpus (the other 4 hold ≥99.9% count parity; 1 further probe is a documented TV-side anomaly at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct, and it is excluded from the headline). On a **closed test set** of 415 community-shared TradingView scripts (kept private under TradingView’s Terms of Service — not redistributable), the engine validates **396/396 excellent (100%)** across **~520k trades** — with **19 TV-side anomalies discovered and documented** during that research. **100 of 100** PineForge excellent vs PyneCore + PineTS on the public three-way benchmark (~167,000 TV trades; PyneCore: 85 of 100; PineTS indicator-only).
+- 🎯 **TradingView-exact.** 309 of 311 reference strategies match TV trade-for-trade on the public corpus (the other 2 are documented data-resolution / TV-tie residuals; 1 further probe is a documented TV-side anomaly at the 1× margin boundary where TV's broker emulator is non-deterministic — engine is correct, and it is excluded from the headline). On a **closed test set** of 415 community-shared TradingView scripts (kept private under TradingView’s Terms of Service — not redistributable), the engine validates **396/396 excellent (100%)** across **~520k trades** — with **19 TV-side anomalies discovered and documented** during that research. **100 of 100** PineForge excellent vs PyneCore + PineTS on the public three-way benchmark (~167,000 TV trades; PyneCore: 85 of 100; PineTS indicator-only).
 - ⚡ **Microsecond-class.** Median **162× faster than PyneCore** across 99 commonly-timed strategies (full 41,307-bar OHLCV, magnifier-on hot loop; see [benchmarks/results/speed.md](benchmarks/results/speed.md)). Parameter sweeps load one `.so` and re-run with new inputs — no recompile, no fork, no IPC.
 - 🔒 **Stable C ABI.** 28 functions, one header (`<pineforge/pineforge.h>`). Append-only across minor versions, `static_assert`-pinned struct layouts, hidden-visibility hygiene. Drop a strategy `.so` in any harness; it just runs.
 - 🧪 **Reproducible to the bit.** Deterministic float ordering, deterministic bar magnifier, no internal RNG seeded from time. Two runs with the same inputs produce bit-identical trade lists.
@@ -194,7 +194,7 @@ The site auto-rebuilds on every push to `main` and every release tag.
 
 PineForge is the **C++ runtime** that PineForge-compiled strategies link against. It implements PineScript v6 strategy semantics — order matching, fills, the magnifier, technical indicators, time/session math — as a static C++ library with a stable C ABI.
 
-The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on a reference corpus: **307 excellent + 4 strong of 311 graded** under the canonical verifier (**+1 documented TV-side anomaly**, excluded from the headline). The corpus ships as a **public Apache-2.0 submodule**.
+The runtime is parity-tested **trade-for-trade against TradingView's "List of Trades" CSV exports** on a reference corpus: **309 excellent + 2 strong of 311 graded** under the canonical verifier (**+1 documented TV-side anomaly**, excluded from the headline). The corpus ships as a **public Apache-2.0 submodule**.
 
 This repository ships:
 
@@ -228,7 +228,7 @@ If you encounter day-boundary alignment issues or want to force the engine to pr
 
 **This is a backtest engine, not a charting library.** PineScript drawing primitives (`plot`, `bgcolor`, `label`, …) compile cleanly but do nothing at runtime. The runtime computes trade execution and reports — it does not render.
 
-**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the reference corpus (`307/311` excellent + 4 strong; 1 documented TV-side anomaly excluded. Init the public `corpus` submodule per `[CONTRIBUTING.md](CONTRIBUTING.md)`). Where it diverges, it documents the divergence.
+**This is not a TradingView clone.** PineForge intentionally diverges from TradingView in a handful of places where TV's behaviour is undocumented or platform-specific (the bar magnifier, deterministic float ordering). Where it converges, it converges **exactly** on the reference corpus (`309/311` excellent + 4 strong; 1 documented TV-side anomaly excluded. Init the public `corpus` submodule per `[CONTRIBUTING.md](CONTRIBUTING.md)`). Where it diverges, it documents the divergence.
 
 ## Quickstart
 
@@ -458,7 +458,7 @@ python3 scripts/regen_validation_report.py
 That builds `libpineforge.a` plus one `strategy.so` per probe, runs each
 against the reference OHLCV feed, rewrites each `engine_trades.csv`,
 and prints the canonical corpus summary described in
-`corpus/README.md`. Headline result: **307 excellent + 4 strong of 311 graded** — the 1 remaining probe is a documented TV-side anomaly, excluded from the headline (`anomaly-equity-mirror-strategy-equity-01`, TV broker non-deterministic at 1× equity boundary). Total trades: TV 431,202, engine 431,343 (`+141` ≈ 0.033 % over TV).
+`corpus/README.md`. Headline result: **309 excellent + 2 strong of 311 graded** — the 1 remaining probe is a documented TV-side anomaly, excluded from the headline (`anomaly-equity-mirror-strategy-equity-01`, TV broker non-deterministic at 1× equity boundary). Total trades: TV 431,202, engine 431,208 (`+6` ≈ 0.001 % over TV).
 
 ## Cross-engine comparison
 
