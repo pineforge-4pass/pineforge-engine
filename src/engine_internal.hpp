@@ -210,6 +210,14 @@ struct ExitPathFill {
     // engine.hpp); the fill-application code needs to know which leg fired
     // because price equality cannot distinguish a gap fill at the open.
     bool is_limit = false;
+    // Where the fill happened on the bar's 4-waypoint synthesized path, in
+    // first_touch_position units (0 = open, 1/2 = the extremes, 3 = close;
+    // fractional inside a segment). This is the fill's ACTUAL chronology,
+    // which for a TRAIL leg is not recoverable from the fill price alone —
+    // a trail's level is not a resting one, so its first path touch can
+    // precede the moment it arms and fires. finding-308's pre-exit
+    // margin-call slice compares this against the adverse extreme.
+    double path_position = std::numeric_limits<double>::quiet_NaN();
 };
 
 

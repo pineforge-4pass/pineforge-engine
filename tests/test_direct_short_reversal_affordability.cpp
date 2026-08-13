@@ -4,8 +4,10 @@
  * An omitted-qty, percent-of-equity=100 MARKET LONG-to-SHORT reversal at
  * margin_short=100 receives a fill-price affordability pass followed by one
  * bounded adverse-high retry. Its position-lifecycle bit also participates in
- * the established one-contract finite-price floor-zero fallback, while the
- * optional full-residual interpretation keeps precedence.
+ * the established one-contract finite-price floor-zero fallback; the optional
+ * full-residual interpretation yields to that settled slice whenever the
+ * one-contract fallback is expressible (finding 279: TV slices and holds at
+ * eps-scale deficits, it never full-liquidates there).
  */
 
 #include <array>
@@ -195,9 +197,9 @@ public:
     }
 };
 
-void test_direct_lifecycle_floor_zero_and_full_residual_precedence() {
+void test_direct_lifecycle_floor_zero_full_residual_yields_to_slice() {
     std::printf(
-        "test_direct_lifecycle_floor_zero_and_full_residual_precedence\n");
+        "test_direct_lifecycle_floor_zero_full_residual_yields_to_slice\n");
     const std::vector<Bar> bars = {
         bar(1000, 4506.71, 4506.71, 4506.71, 4506.71),
         bar(2000, 4506.70, 4514.70, 4500.00, 4506.70),
@@ -222,6 +224,10 @@ void test_direct_lifecycle_floor_zero_and_full_residual_precedence() {
     CHECK_NEAR(one_contract.position_size(), -1.7346, 1e-9);
     CHECK(one_contract.direct_lifecycle_active());
 
+    // The full-residual opt-in yields to the settled one-contract slice at
+    // the floor-zero discontinuity: both cells now take the identical lots
+    // and HOLD the remainder (TV never full-liquidates at these eps-scale
+    // deficits — finding 279, serhan ADX).
     FloorZeroPrecedenceProbe full_residual(/*full_residual=*/true);
     full_residual.run(bars.data(), static_cast<int>(bars.size()));
     const std::vector<double> full_residual_qty =
@@ -234,11 +240,11 @@ void test_direct_lifecycle_floor_zero_and_full_residual_precedence() {
         && full_residual_price.size() == 2U) {
         CHECK_NEAR(full_residual_qty[0], 0.0392, 1e-9);
         CHECK_NEAR(full_residual_price[0], 4514.70, 1e-9);
-        CHECK_NEAR(full_residual_qty[1], 2.7346, 1e-9);
+        CHECK_NEAR(full_residual_qty[1], 1.0, 1e-9);
         CHECK_NEAR(full_residual_price[1], 4539.00, 1e-9);
     }
-    CHECK_NEAR(full_residual.position_size(), 0.0, 1e-9);
-    CHECK(!full_residual.direct_lifecycle_active());
+    CHECK_NEAR(full_residual.position_size(), -1.7346, 1e-9);
+    CHECK(full_residual.direct_lifecycle_active());
 }
 
 class TrueFlatFullResidualControlProbe final
@@ -280,16 +286,19 @@ public:
     }
 };
 
-void test_true_flat_full_residual_control_is_unchanged() {
-    std::printf("test_true_flat_full_residual_control_is_unchanged\n");
+// Control: the commissioned true-flat lifecycle bit does not alter the
+// floor-zero outcome — with the full-residual opt-in set, the settled
+// one-contract slice still applies and the remainder is HELD.
+void test_true_flat_floor_zero_control_slices_one_contract() {
+    std::printf("test_true_flat_floor_zero_control_slices_one_contract\n");
     TrueFlatFullResidualControlProbe probe;
     probe.trigger();
     const std::vector<double> qty = probe.margin_quantities();
     CHECK(qty.size() == 1U);
     if (qty.size() == 1U) {
-        CHECK_NEAR(qty[0], 3.6930, 1e-9);
+        CHECK_NEAR(qty[0], 1.0, 1e-9);
     }
-    CHECK_NEAR(probe.position_size(), 0.0, 1e-9);
+    CHECK_NEAR(probe.position_size(), -2.6930, 1e-9);
     CHECK(!probe.direct_lifecycle_active());
 }
 
@@ -683,8 +692,8 @@ void test_run_reset_clears_direct_lifecycle() {
 int main() {
     std::printf("--- direct short reversal affordability ---\n");
     test_direct_reversal_runs_opening_check_and_one_adverse_retry();
-    test_direct_lifecycle_floor_zero_and_full_residual_precedence();
-    test_true_flat_full_residual_control_is_unchanged();
+    test_direct_lifecycle_floor_zero_full_residual_yields_to_slice();
+    test_true_flat_floor_zero_control_slices_one_contract();
     test_direct_path_exclusion_matrix();
     test_no_effect_same_side_add_preserves_direct_provenance();
     test_fresh_entry_and_raw_order_clear_direct_provenance();

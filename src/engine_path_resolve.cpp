@@ -864,6 +864,8 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
         && (!is_entry_bar || magnifier_active || cascade_wp_gap)) {
         if (try_exit_open_gap_fill(bar, is_long, has_stop, stop_price,
                                    has_limit, limit_price, trail, &fill)) {
+            // A gap fill happens at the bar's open — path position 0.
+            fill.path_position = 0.0;
             return fill;
         }
     }
@@ -904,6 +906,17 @@ ExitPathFill resolve_exit_path_fill(const Bar& bar,
             fill.fill_price = events.ev[0].price;
             fill.is_trail = (events.ev[0].kind == PathCrossKind::TRAIL);
             fill.is_limit = (events.ev[0].kind == PathCrossKind::LIMIT);
+            // Chronology of the fill itself, in first_touch_position units.
+            // Interpolate against the FULL segment (path[seg_idx-1] ->
+            // path[seg_idx]) even when a mid-path cursor truncated it, so
+            // the scale matches first_touch_position's exactly.
+            const double seg_origin = path[seg_idx - 1];
+            const double seg_denom = to_price - seg_origin;
+            double fill_pos = seg_start;
+            if (std::abs(seg_denom) > kSegmentDenomEps) {
+                fill_pos += (fill.fill_price - seg_origin) / seg_denom;
+            }
+            fill.path_position = fill_pos;
             return fill;
         }
 

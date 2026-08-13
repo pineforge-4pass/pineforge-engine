@@ -1338,7 +1338,8 @@ protected:
     // Returns true when a "Margin call" row was booked; the triggering exit
     // then fills the reduced remainder.
     bool margin_call_slice_before_priced_exit(const Bar& bar,
-                                              double exit_fill_price);
+                                              double exit_fill_price,
+                                              double exit_path_position);
     // finding-325 (1x-long entry-fill affordability chronology): TV runs the
     // 1x-long (margin_long=100) opening-affordability check AT THE ENTRY
     // FILL, chronologically before the same bar's intrabar exits. When a
@@ -2535,12 +2536,15 @@ private:
         // limit, or the limit leg of an entry stop-limit) — routes the
         // fill onto the unslipped limit-or-better price path.
         bool is_limit_fill = false;
-        // True when the fill came from resolve_exit_path_fill's stop/limit
-        // walk of the intrabar path for an exit-style order (not a TRAIL
-        // fill, and not a market / same-bar-close-priced exit). Only such
-        // fills carry a meaningful chronological path position, which the
+        // True when the fill came from resolve_exit_path_fill's walk of the
+        // intrabar path for an exit-style order (stop, limit, gap-open or
+        // TRAIL leg — but not a market / same-bar-close-priced exit). Only
+        // such fills carry a chronological path position, which the
         // finding-308 pre-exit margin-call slice requires.
         bool exit_path_fill = false;
+        // The fill's position on the bar's 4-waypoint path, in
+        // first_touch_position units. Set whenever exit_path_fill is true.
+        double exit_path_position = std::numeric_limits<double>::quiet_NaN();
     };
     FillEvaluation evaluate_fill_price(
         PendingOrder& order, size_t order_index, const Bar& bar,

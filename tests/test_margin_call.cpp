@@ -351,12 +351,16 @@ static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble()
     CHECK(near(eng.position_size(), -(10.0 - 4.0 * step), 1e-12));
 }
 
-static void test_short_margin_call_just_below_step_still_zero_covers() {
-    std::printf("test_short_margin_call_just_below_step_still_zero_covers\n");
+static void test_short_margin_call_just_below_step_slices_one_contract() {
+    std::printf("test_short_margin_call_just_below_step_slices_one_contract\n");
     constexpr double step = 0.0001;
     constexpr double below_guard_ratio = 1.0 - 2e-6;
     // This is genuinely below one step by more than the 1e-6 representation
-    // guard. It must still quantize to zero and close the full residual.
+    // guard. It must quantize to zero and land on the settled floor-zero
+    // discontinuity: TV closes ONE whole contract and HOLDS the remainder.
+    // The full-residual opt-in no longer overrides that settled slice —
+    // at an eps-scale deficit it used to liquidate the whole ten-contract
+    // position here, an exit TV never prints (finding 279, serhan ADX).
     const double adverse = 2000.0 / (20.0 - step * below_guard_ratio);
     const double equity_at_high = 1000.0 - (adverse - 100.0) * 10.0;
     const double q_min = 10.0 - equity_at_high / adverse;
@@ -376,8 +380,135 @@ static void test_short_margin_call_just_below_step_still_zero_covers() {
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
     CHECK(near(eng.exit_price(0), 100.01, 1e-12));
-    CHECK(near(eng.trade_size(0), 10.0, 1e-12));
-    CHECK(near(eng.position_size(), 0.0, 1e-12));
+    CHECK(near(eng.trade_size(0), 1.0, 1e-12));
+    CHECK(near(eng.position_size(), -9.0, 1e-12));
+
+    // Control: the flag-off engine takes the identical settled slice.
+    ShortLiqProbe default_eng(/*disable_mc=*/false, /*qty_step=*/step);
+    default_eng.run(bars.data(), (int)bars.size());
+    CHECK(default_eng.trade_count() == 1);
+    CHECK(near(default_eng.trade_size(0), 1.0, 1e-12));
+    CHECK(near(default_eng.position_size(), -9.0, 1e-12));
+}
+
+// ETH-scale eps-deficit shape (finding 279, boztilkiserhan serhan ADX
+// 2025-06-08 / 2026-01-17 / 2026-03-22): an all-in multi-contract short whose
+// entry bar prints an adverse extreme a tick or two past the frozen sizing
+// close leaves a free-margin deficit of a few tenths of a USD. The restore
+// quantity floors to zero at the 0.0001 lot step and TV closes exactly ONE
+// contract at the adverse extreme, HOLDING the remainder — under the
+// full-residual opt-in exactly as without it. The engine used to liquidate
+// the ENTIRE position at that extreme when the opt-in was set.
+class ShortEpsDeficitProbe : public MCEngine {
+public:
+    explicit ShortEpsDeficitProbe(bool full_residual) {
+        initial_capital_ = 10000.0;
+        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
+        default_qty_value_ = 100.0;          // freeze 10000/2500 = 4.0 short
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;    // fill at next bar OPEN
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+        set_syminfo_metadata("margin_zero_cover_full_liquidation",
+                             full_residual ? 1.0 : 0.0);
+    }
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, kNaN);
+        }
+    }
+};
+
+static void test_short_margin_call_eps_deficit_slices_one_contract_and_holds() {
+    std::printf(
+        "test_short_margin_call_eps_deficit_slices_one_contract_and_holds\n");
+    std::vector<Bar> bars = {
+        // Signal close 2500 freezes qty = 4.0 exactly.
+        mk_bar(1000, 2500.00, 2500.00, 2500.00, 2500.00, 1.0),
+        // Entry @ open 2499.99 (notional 9999.96 < equity, admitted). The
+        // bar's HIGH 2500.01 is two ticks adverse: equity there 9999.92 vs
+        // required 10000.04 -> deficit 0.12 USD, q_min = 4.8e-5 < one lot.
+        mk_bar(2000, 2499.99, 2500.01, 2495.00, 2496.00, 1.0),
+        // No further breach: the remaining 3.0 contracts are HELD.
+        mk_bar(3000, 2496.00, 2499.00, 2490.00, 2492.00, 1.0),
+    };
+
+    for (int full_residual = 0; full_residual <= 1; ++full_residual) {
+        ShortEpsDeficitProbe eng(full_residual != 0);
+        eng.run(bars.data(), (int)bars.size());
+
+        CHECK(eng.trade_count() == 1);
+        CHECK(eng.exit_comment(0) == std::string("Margin call"));
+        CHECK(near(eng.entry_price(0), 2499.99, 1e-9));
+        CHECK(near(eng.exit_price(0), 2500.01, 1e-9));
+        CHECK(near(eng.trade_size(0), 1.0, 1e-9));
+        CHECK(near(eng.position_size(), -3.0, 1e-9));
+    }
+}
+
+// finding-308's chronological pre-exit hook carries its own copy of the
+// floor-zero arithmetic (the deficit is discovered at the adverse extreme,
+// before a same-bar priced exit fills). The settled slice must win there
+// too — an eps-deficit found on that route is still an eps-deficit.
+//
+// Tape geometry: boztilkiserhan serhan1 scalp, ETHUSDT.P 15m 2025-10-19
+// 08:15 UTC (O 3886.31 / H 3960 / L 3810), carrying short 2.119 @ 3879.36.
+// initial_capital 8561.92 puts equity at the adverse high 3960 at
+// 8391.04384 against required margin 8391.24 — a 0.196 USD deficit, so
+// q_min = 4.95e-5 and floors to zero at the 0.0001 lot.
+class ShortEpsDeficitChronologyProbe : public MCEngine {
+public:
+    explicit ShortEpsDeficitChronologyProbe(bool full_residual) {
+        initial_capital_ = 8561.92;
+        default_qty_type_ = QtyType::FIXED;
+        commission_type_ = CommissionType::PERCENT;
+        commission_value_ = 0.0;
+        margin_long_ = 100.0;
+        margin_short_ = 100.0;
+        process_orders_on_close_ = false;
+        qty_step_ = 0.0001;
+        syminfo_mintick_ = 0.01;
+        set_syminfo_metadata("margin_zero_cover_full_liquidation",
+                             full_residual ? 1.0 : 0.0);
+    }
+    void on_bar(const Bar& /*bar*/) override {
+        if (bar_index_ == 0) {
+            strategy_entry("S", false, kNaN, kNaN, /*qty=*/2.119);
+        } else if (bar_index_ == 1) {
+            // A resting take-profit limit on the H->L leg, i.e. strictly
+            // after the adverse high on the O -> H -> L -> C path.
+            strategy_exit("X", "S", /*limit=*/3821.06, /*stop=*/kNaN);
+        }
+    }
+};
+
+static void test_eps_deficit_chronology_slice_is_one_contract() {
+    std::printf("test_eps_deficit_chronology_slice_is_one_contract\n");
+    std::vector<Bar> bars = {
+        mk_bar(1000, 3879.36, 3879.36, 3879.36, 3879.36, 1.0),
+        mk_bar(2000, 3879.36, 3879.36, 3879.36, 3879.36, 1.0),
+        mk_bar(3000, 3886.31, 3960.00, 3810.00, 3873.57, 1.0),
+    };
+
+    for (int full_residual = 0; full_residual <= 1; ++full_residual) {
+        ShortEpsDeficitChronologyProbe eng(full_residual != 0);
+        eng.run(bars.data(), (int)bars.size());
+
+        // One contract at the adverse high, then the limit closes the
+        // remainder. The opt-in used to liquidate the whole 2.119 here.
+        CHECK(eng.trade_count() == 2);
+        if (eng.trade_count() == 2) {
+            CHECK(eng.exit_comment(0) == std::string("Margin call"));
+            CHECK(near(eng.trade_size(0), 1.0, 1e-9));
+            CHECK(near(eng.exit_price(0), 3960.0, 1e-9));
+            CHECK(eng.exit_comment(1) != std::string("Margin call"));
+            CHECK(near(eng.trade_size(1), 1.119, 1e-9));
+            CHECK(near(eng.exit_price(1), 3821.06, 1e-9));
+        }
+        CHECK(near(eng.position_size(), 0.0, 1e-9));
+    }
 }
 
 static void test_short_margin_call_zero_cover_without_qty_step_stays_continuous() {
@@ -1613,11 +1744,16 @@ static void test_default_short_lifecycle_floor_zero_one_contract() {
     CHECK(near(one_contract.position_size(), -2.6930, 1e-9));
     CHECK(one_contract.lifecycle_active());
 
-    // The existing opt-in whole-residual interpretation retains precedence
-    // when a verifier deliberately combines both candidates.
+    // The opt-in whole-residual interpretation no longer overrides the
+    // settled floor-zero slice: when the one-contract fallback is
+    // expressible, a verifier combining both candidates gets the SAME one
+    // whole contract and HOLDS the remainder (TV never prints a full
+    // liquidation at these eps-scale deficits — finding 279, serhan ADX).
     CHECK(full_residual.trade_count() == 1);
-    CHECK(near(full_residual.trade_size(0), 3.6930, 1e-9));
-    CHECK(near(full_residual.position_size(), 0.0, 1e-9));
+    CHECK(near(full_residual.exit_price(0), 1801.26));
+    CHECK(near(full_residual.trade_size(0), 1.0, 1e-9));
+    CHECK(near(full_residual.position_size(), -2.6930, 1e-9));
+    CHECK(full_residual.lifecycle_active());
 }
 
 // The commissioned lifecycle covers the opening checkpoint too. The positive
@@ -2937,7 +3073,9 @@ int main() {
     test_short_margin_call_zero_cover_closes_full_residual();
     test_short_margin_call_zero_cover_closes_sub_one_residual();
     test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble();
-    test_short_margin_call_just_below_step_still_zero_covers();
+    test_short_margin_call_just_below_step_slices_one_contract();
+    test_short_margin_call_eps_deficit_slices_one_contract_and_holds();
+    test_eps_deficit_chronology_slice_is_one_contract();
     test_short_margin_call_zero_cover_without_qty_step_stays_continuous();
     test_short_margin_call_nonzero_cover_keeps_four_x_nibble();
     test_short_opening_affordability_zero_cover_closes_one_contract();

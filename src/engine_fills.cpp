@@ -226,7 +226,8 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
         // pre-on_bar equity, so re-freeze default-sized market orders
         // exactly like the end-of-bar call sites do.
         if (fill.exit_path_fill
-            && margin_call_slice_before_priced_exit(bar, fill.fill_price)) {
+            && margin_call_slice_before_priced_exit(
+                   bar, fill.fill_price, fill.exit_path_position)) {
             refresh_frozen_default_sizing_after_margin_call();
         }
 
@@ -1000,7 +1001,6 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
             // commission-free. Competing fallbacks scored 0/974 each: one
             // qty_step, 4 qty_step, the whole residual, 1% of the position.
             //
-            // Only the opt-in whole-residual interpretation keeps precedence.
             // The structural guards are the same ones the converted-currency
             // carried-rollover helper above uses: the restore quantity must be
             // real and sub-contract, and the instrument's lot grid must be able
@@ -1023,10 +1023,26 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
                     one_contract_fallback = candidate;
                 }
             }
-            if (margin_zero_cover_full_liquidation_) {
-                floored = qty;
-            } else if (std::isfinite(one_contract_fallback)) {
+            // The settled slice rule stays authoritative wherever it can
+            // express a fill, INCLUDING under the opt-in whole-residual
+            // interpretation. At eps-scale free-margin deficits (~0.05-0.5
+            // USD on the ETH tapes) a multi-contract position's restore
+            // quantity floors to zero and TV closes exactly ONE contract —
+            // or, one lot richer, tiny 4x nibbles — and HOLDS the remainder
+            // (boztilkiserhan-serhan-1 ADX 2025-06-08 / 2026-01-17 six
+            // partials 0.0004-0.0804 / 2026-01-26; finding 279). Letting the
+            // full-residual opt-in take precedence here liquidated the
+            // ENTIRE position at the adverse extreme, an exit TV never
+            // prints. The opt-in now covers the whole residual only when the
+            // one-contract fallback cannot express a fill at all (raw
+            // restore not real/sub-contract, lot grid unable to carry one
+            // contract); for a sub-one-contract position both readings
+            // coincide (min(1.0, qty) == qty), so the opt-in's original
+            // oracle (sub-lot $100-scale shorts) is untouched.
+            if (std::isfinite(one_contract_fallback)) {
                 floored = one_contract_fallback;
+            } else if (margin_zero_cover_full_liquidation_) {
+                floored = qty;
             } else {
                 return;
             }
@@ -1156,7 +1172,7 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
 // and the COOF scheduler own finer-grained tick/recalc chronology models and
 // keep the established once-per-script-bar placement (no exemplar there).
 bool BacktestEngine::margin_call_slice_before_priced_exit(
-        const Bar& bar, double exit_fill_price) {
+        const Bar& bar, double exit_fill_price, double exit_path_position) {
     if (!margin_call_enabled_) return false;
     if (position_side_ == PositionSide::FLAT) return false;
     if (last_margin_call_event_bar_ == bar_index_) return false;
@@ -1198,6 +1214,13 @@ bool BacktestEngine::margin_call_slice_before_priced_exit(
     // rule) than the exit's fill. An off-path level fails closed. A tie —
     // the exit filling exactly at the extreme, e.g. a stop-loss riding the
     // adverse leg — keeps the exit first.
+    //
+    // exit_path_position is the walk's OWN answer for where the exit filled,
+    // in the same units first_touch_position produces. Prefer it: it is the
+    // only correct reading for a TRAIL leg, whose level is not a resting one
+    // (the trail must arm before it fires, so the fill price's first path
+    // touch can precede the fill). A caller with no resolved position falls
+    // back to the price's first touch.
     const double adverse =
         (position_side_ == PositionSide::LONG) ? bar.low : bar.high;
     if (!std::isfinite(adverse) || !(adverse > 0.0)) return false;
@@ -1206,7 +1229,10 @@ bool BacktestEngine::margin_call_slice_before_priced_exit(
     if (!internal::first_touch_position(bar, adverse, &adverse_pos)) {
         return false;
     }
-    if (!internal::first_touch_position(bar, exit_fill_price, &exit_pos)) {
+    if (std::isfinite(exit_path_position)) {
+        exit_pos = exit_path_position;
+    } else if (!internal::first_touch_position(bar, exit_fill_price,
+                                               &exit_pos)) {
         return false;
     }
     if (!(adverse_pos < exit_pos - kPathPosEps)) return false;
@@ -1258,10 +1284,16 @@ bool BacktestEngine::margin_call_slice_before_priced_exit(
                     one_contract_fallback = candidate;
                 }
             }
-            if (margin_zero_cover_full_liquidation_) {
-                floored = qty;
-            } else if (std::isfinite(one_contract_fallback)) {
+            // Same precedence as the cascade above: the settled slice rule
+            // stays authoritative wherever it can express a fill, including
+            // under the full-residual opt-in. This copy of the arithmetic is
+            // reached when the deficit is discovered chronologically, before
+            // a same-bar priced exit — the eps-deficit shape does not stop
+            // being an eps-deficit because it was found there.
+            if (std::isfinite(one_contract_fallback)) {
                 floored = one_contract_fallback;
+            } else if (margin_zero_cover_full_liquidation_) {
+                floored = qty;
             } else {
                 return false;
             }
@@ -5460,6 +5492,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool should_fill = false;
     bool is_limit_fill = false;
     bool exit_path_fill = false;
+    double exit_path_position = std::numeric_limits<double>::quiet_NaN();
 
     // A valid child that was armed with its pending MARKET parent and whose
     // stop is already breached — or whose limit is already marketable — at
@@ -5584,12 +5617,16 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             should_fill = true;
             last_exit_fill_was_trail_ = exit_fill.is_trail;
             is_limit_fill = exit_fill.is_limit;
-            // finding-308: only a stop/limit fill resolved on the intrabar
-            // path carries a chronological position the pre-exit margin-call
-            // slice can compare against the adverse extreme. A TRAIL fill
-            // price is not a resting level (its first path touch is not its
-            // fill moment), so it stays outside the hook — fail closed.
-            exit_path_fill = !exit_fill.is_trail;
+            // finding-308: a fill resolved on the intrabar path carries the
+            // chronological position the pre-exit margin-call slice compares
+            // against the adverse extreme. resolve_exit_path_fill reports it
+            // directly, so the TRAIL leg participates too — its fill price
+            // is not a resting level (its first path touch is not its fill
+            // moment), which is exactly why the position must come from the
+            // walk rather than from first_touch_position(fill price). A
+            // fill without a resolved position still fails closed.
+            exit_path_position = exit_fill.path_position;
+            exit_path_fill = std::isfinite(exit_path_position);
         }
     } else if (!should_fill && (order.type == OrderType::MARKET ||
                (!has_stop && !has_limit && !has_trail))) {
@@ -5676,7 +5713,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     }
 
     return {should_fill ? FillEvaluation::Kind::Fill : FillEvaluation::Kind::NoFill,
-            fill_price, is_limit_fill, exit_path_fill};
+            fill_price, is_limit_fill, exit_path_fill, exit_path_position};
 }
 
 }  // namespace pineforge
