@@ -200,6 +200,36 @@ static int64_t intraday_clock_ms(int64_t ts, const std::string& tz,
                - static_cast<int64_t>(session_open_offset_minutes(session)) * 60000;
 }
 
+/// Minutes from symbol-local midnight to the first session window's CLOSE
+/// ("0930-1600..." -> 960). Returns -1 when the session is none/24x7/wrapped
+/// (end<=start), in which case eager session-close completion is unavailable
+/// and callers fall back to the next-bar-crossing rule.
+static int session_close_offset_minutes(const std::string& session) {
+    if (session.empty() || session == "24x7") return -1;
+    int values[2] = {-1, -1};
+    int idx = 0, digits = 0, value = 0;
+    for (char c : session) {
+        if (c >= '0' && c <= '9') {
+            value = value * 10 + (c - '0');
+            if (++digits == 4) {
+                if (idx < 2) values[idx] = value;
+                ++idx;
+                digits = 0;
+                value = 0;
+                if (idx > 2) break;
+            }
+        } else if (digits > 0) {
+            digits = 0; value = 0;
+        }
+        if (idx >= 2) break;
+    }
+    if (values[0] < 0 || values[1] < 0) return -1;
+    int start = (values[0] / 100) * 60 + (values[0] % 100);
+    int end = (values[1] / 100) * 60 + (values[1] % 100);
+    if (end <= start) return -1;  // wrapped/overnight window: no eager rule
+    return end;
+}
+
 static const std::string& anchor_utc() {
     static const std::string s = "UTC";
     return s;
@@ -496,6 +526,13 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
     // completes the daily bar). This matches request.security HTF behavior used
     // in validation; "complete only on the next period's first bar" shifts all HTF
     // series and breaks TV parity.
+    //
+    // Session symbols never reach that crossing inside the session (an RTH day
+    // ends at 16:00 local, far from midnight), so on such feeds the rule above
+    // always defers completion to the NEXT session's first bar — exposing the
+    // finished daily bucket a full session after TV does. When the run declares
+    // a same-day session window, complete eagerly on the bar whose close
+    // reaches the session end: that is TV's own bucket-final bar.
     feed_merge_into_current(s, input_bar);
     bool complete = false;
     if (input_seconds > 0) {
@@ -504,6 +541,17 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
         complete = crosses_boundary(input_bar.timestamp, next_ms, cal_period,
                                     atz, asess);
+        if (!complete && cal_period != CalendarPeriod::NONE) {
+            const int end_min = session_close_offset_minutes(asess);
+            if (end_min > 0) {
+                const int64_t local = calendar_clock_ms(input_bar.timestamp, atz);
+                const int64_t pos_ms = local - (local / kMsPerDay) * kMsPerDay
+                                     + input_seconds * 1000;
+                if (pos_ms >= static_cast<int64_t>(end_min) * 60000) {
+                    complete = true;
+                }
+            }
+        }
     }
     if (complete) {
         s.last_completed_bar = s.current_bar;
