@@ -542,8 +542,14 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         complete = crosses_boundary(input_bar.timestamp, next_ms, cal_period,
                                     atz, asess);
         if (!complete && cal_period != CalendarPeriod::NONE) {
+            // Eager session-close completion applies only to the period's
+            // FINAL session: today's session must be the last one in this
+            // day/week/month (same-wall-clock-tomorrow starts a new period).
             const int end_min = session_close_offset_minutes(asess);
-            if (end_min > 0) {
+            if (end_min > 0
+                && crosses_boundary(input_bar.timestamp,
+                                    input_bar.timestamp + kMsPerDay,
+                                    cal_period, atz, asess)) {
                 const int64_t local = calendar_clock_ms(input_bar.timestamp, atz);
                 const int64_t pos_ms = local - (local / kMsPerDay) * kMsPerDay
                                      + input_seconds * 1000;
