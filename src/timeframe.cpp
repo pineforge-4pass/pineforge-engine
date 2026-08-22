@@ -182,12 +182,21 @@ static int session_open_offset_minutes(const std::string& session) {
     return (value / 100) * 60 + (value % 100);
 }
 
-/// Timestamp moved onto the symbol clock: exchange-tz seconds since
-/// (local-midnight + session open), expressed in ms so that integer division
-/// by a bucket width reproduces TV's anchored grouping.
-static int64_t anchored_ms(int64_t ts, const std::string& tz,
-                           const std::string& session) {
-    return ts - tz_offset_ms(ts, tz)
+/// Timestamp moved onto the exchange clock (tz offset only). This is the
+/// clock for CALENDAR periods: TV splits D/W/M at symbol-local midnight.
+/// Subtracting the session open here too would SHIFT each session wholesale
+/// instead of anchoring it — daily grouping became tz-invariant, which is
+/// exactly the bug this split fixes.
+static int64_t calendar_clock_ms(int64_t ts, const std::string& tz) {
+    return ts - tz_offset_ms(ts, tz);
+}
+
+/// Intraday grid clock: exchange-tz seconds since (local-midnight + session
+/// open), so integer division by the bucket width reproduces TV's
+/// session-open-anchored grouping (09:30/13:30 on equities).
+static int64_t intraday_clock_ms(int64_t ts, const std::string& tz,
+                                 const std::string& session) {
+    return calendar_clock_ms(ts, tz)
                - static_cast<int64_t>(session_open_offset_minutes(session)) * 60000;
 }
 
@@ -206,9 +215,10 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period) {
 
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
                       const std::string& tz, const std::string& session) {
+    (void)session;  // calendar periods ignore the session: local-midnight split
     struct tm prev_tm, curr_tm;
-    decompose_utc(anchored_ms(prev_ms, tz, session), prev_tm);
-    decompose_utc(anchored_ms(curr_ms, tz, session), curr_tm);
+    decompose_utc(calendar_clock_ms(prev_ms, tz), prev_tm);
+    decompose_utc(calendar_clock_ms(curr_ms, tz), curr_tm);
 
     switch (period) {
         case CalendarPeriod::DAY:
@@ -261,8 +271,8 @@ bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
     int secs = tf_to_seconds(tf);
     if (secs <= 0) return false;
     int64_t bucket_ms = static_cast<int64_t>(secs) * 1000;
-    return (anchored_ms(prev_ms, tz, session) / bucket_ms) !=
-           (anchored_ms(curr_ms, tz, session) / bucket_ms);
+    return (intraday_clock_ms(prev_ms, tz, session) / bucket_ms) !=
+           (intraday_clock_ms(curr_ms, tz, session) / bucket_ms);
 }
 
 // ─── TimeframeAggregator ───────────────────────────────────────────────────────
@@ -382,8 +392,8 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         int64_t bucket_ms = static_cast<int64_t>(target_seconds) * 1000;
         const std::string& atz = s.anchor_tz ? *s.anchor_tz : anchor_utc();
         const std::string& asess = s.anchor_session ? *s.anchor_session : empty_session();
-        int64_t curr_bucket = anchored_ms(s.current_bar.timestamp, atz, asess) / bucket_ms;
-        int64_t next_bucket = anchored_ms(input_bar.timestamp, atz, asess) / bucket_ms;
+        int64_t curr_bucket = intraday_clock_ms(s.current_bar.timestamp, atz, asess) / bucket_ms;
+        int64_t next_bucket = intraday_clock_ms(input_bar.timestamp, atz, asess) / bucket_ms;
         bool boundary = next_bucket != curr_bucket;
 
         if (boundary) {

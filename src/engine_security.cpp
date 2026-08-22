@@ -16,9 +16,9 @@
 
 namespace pineforge {
 namespace {
-// Mirror of the aggregator anchor in timeframe.cpp: ms that the symbol clock
-// has removed from the epoch grid at `ts`. Must stay arithmetic-identical to
-// TimeframeAggregator's anchored_ms().
+// Mirror of the aggregator's intraday clock in timeframe.cpp: ms that the
+// symbol clock (tz + session open) has removed from the epoch grid at `ts`.
+// Must stay arithmetic-identical to TimeframeAggregator's intraday_clock_ms().
 int64_t syminfo_clock_shift_ms(int64_t ts, const std::string& tz,
                                const std::string& session) {
     if ((tz.empty() || tz == "UTC" || tz == "Etc/UTC")
