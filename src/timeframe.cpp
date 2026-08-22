@@ -156,13 +156,16 @@ static int64_t utc_floor_day_ms(int64_t ms) {
 /// its own UTC integer fast path, so the hot loop never enters ScopedTimezone.
 static int64_t tz_offset_ms(int64_t ms, const std::string& tz) {
     if (tz.empty() || tz == "UTC" || tz == "Etc/UTC") return 0;
-    int64_t day_open = calendar_day_open_local_ms(ms, tz);
+    // Cache BEFORE the slow ScopedTimezone/mktime path: the offset is stable
+    // within any UTC hour (DST transitions land on wall-clock hour bounds),
+    // so an hour-keyed memo keeps hot loops at integer math and still
+    // refreshes within an hour of every transition.
     thread_local int64_t cache_key = -1, cache_val = 0;
-    int64_t key = utc_floor_day_ms(day_open);
-    if (key != cache_key) {
-        cache_val = day_open - key;
-        cache_key = key;
-    }
+    const int64_t hour_key = ms / 3600000;
+    if (hour_key == cache_key) return cache_val;
+    int64_t day_open = calendar_day_open_local_ms(ms, tz);
+    cache_val = day_open - utc_floor_day_ms(day_open);
+    cache_key = hour_key;
     return cache_val;
 }
 
