@@ -1196,7 +1196,8 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     if (needs_aggregation) {
         // Use a single timeframe-constructor path so script timeframe boundaries
         // follow the same wall-clock/calendar semantics as request.security.
-        script_tf_agg_ = TimeframeAggregator(effective_script_tf, effective_input_tf);
+        script_tf_agg_ = TimeframeAggregator(effective_script_tf, effective_input_tf,
+                                             syminfo_.timezone, syminfo_.session);
     } else {
         script_tf_agg_ = TimeframeAggregator();  // passthrough
     }
@@ -1274,9 +1275,11 @@ void BacktestEngine::init_security_eval_states_for_run(
         }
         int req_ratio = tf_ratio(effective_input_tf, state.tf);
         if (req_ratio > 1) {
-            state.aggregator = TimeframeAggregator(state.tf, effective_input_tf);
+            state.aggregator = TimeframeAggregator(state.tf, effective_input_tf,
+                syminfo_.timezone, syminfo_.session);
         } else if (req_ratio == -1) {
-            state.aggregator = TimeframeAggregator(state.tf, effective_input_tf);
+            state.aggregator = TimeframeAggregator(state.tf, effective_input_tf,
+                syminfo_.timezone, syminfo_.session);
         }
     }
 }
@@ -1358,7 +1361,8 @@ void BacktestEngine::prepare_historical_security_lookahead_projections(
             // tests/synthetic feeds beginning at zero correct via the fixed-TF
             // bucket fallback; real feeds take the calendar-aware path.
             if (from_ms != 0 && to_ms != 0) {
-                return tf_change(from_ms, to_ms, state.tf);
+                return tf_change(from_ms, to_ms, state.tf,
+                                 syminfo_.timezone, syminfo_.session);
             }
             const int64_t requested_ms =
                 static_cast<int64_t>(requested_seconds) * 1000;

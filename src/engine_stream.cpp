@@ -299,7 +299,8 @@ void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
 
     AggregatedBar ab = script_tf_agg_.feed(bar);
     const bool completed_on_boundary = ab.is_complete
-        && tf_change(ab.bar.timestamp, bar.timestamp, script_tf_);
+        && tf_change(ab.bar.timestamp, bar.timestamp, script_tf_,
+                     syminfo_.timezone, syminfo_.session);
     if (completed_on_boundary) {
         // The current input bar opened the next bucket; the aggregator emitted
         // the preceding partial bucket before retaining this bar as its new

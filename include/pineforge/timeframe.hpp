@@ -85,6 +85,18 @@ CalendarPeriod calendar_period_for(const std::string& tf);
 /// Check if two timestamps (Unix milliseconds) fall in different calendar periods.
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period);
 
+/// Timezone/session-aware variants. The tz-less forms above evaluate the
+/// calendar in UTC and intraday buckets on the epoch grid — exactly TV's
+/// behavior for 24x7 symbols (the corpus regime). Session symbols
+/// (equities RTH, forex) anchor HTF buckets on the exchange clock instead:
+/// daily boundaries at symbol-local midnight, intraday buckets offset by the
+/// session-open minutes. With tz="UTC" and session ""/"24x7" these are
+/// bit-identical to the UTC forms, so existing callers are unaffected.
+bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
+                      const std::string& tz, const std::string& session);
+bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
+               const std::string& tz, const std::string& session);
+
 // ─── TimeframeAggregator ───────────────────────────────────────────────────────
 
 class TimeframeAggregator {
@@ -98,6 +110,15 @@ public:
     /// Calendar-based: aggregate until day/week/month boundary.
     TimeframeAggregator(const std::string& target_tf,
                         const std::string& input_tf);
+
+    /// Calendar/ratio aggregation anchored on a symbol clock. tz is the Pine
+    /// syminfo.timezone (exchange tz); session the Pine session string
+    /// ("0930-1600", "24x7", ...). Defaults reproduce the UTC/24x7 forms
+    /// bit-for-bit, so every existing construction site compiles unchanged.
+    TimeframeAggregator(const std::string& target_tf,
+                        const std::string& input_tf,
+                        const std::string& tz,
+                        const std::string& session = "");
 
     /// Feed one input bar. Returns aggregation state.
     AggregatedBar feed(const Bar& input_bar);
@@ -119,6 +140,8 @@ private:
     CalendarPeriod cal_period_ = CalendarPeriod::NONE; // for CALENDAR mode
     int64_t target_seconds_ = 0;       // wall-clock seconds for RATIO boundary detection
     int64_t input_seconds_ = 0;        // input bar duration (seconds), when known
+    std::string anchor_tz_ = "UTC";    // syminfo.timezone (exchange clock)
+    std::string anchor_session_;       // syminfo.session ("" or "24x7" = none)
 
     Bar current_bar_{};
     Bar last_completed_bar_{};

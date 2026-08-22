@@ -4,7 +4,9 @@
 
 #include "engine_internal.hpp"
 
+#include <pineforge/session_time.hpp>
 #include <pineforge/ta.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -13,6 +15,30 @@
 #include <unordered_set>
 
 namespace pineforge {
+namespace {
+// Mirror of the aggregator anchor in timeframe.cpp: ms that the symbol clock
+// has removed from the epoch grid at `ts`. Must stay arithmetic-identical to
+// TimeframeAggregator's anchored_ms().
+int64_t syminfo_clock_shift_ms(int64_t ts, const std::string& tz,
+                               const std::string& session) {
+    if ((tz.empty() || tz == "UTC" || tz == "Etc/UTC")
+        && (session.empty() || session == "24x7")) return 0;
+    int64_t day_open = calendar_day_open_local_ms(ts, tz);
+    int64_t shift = day_open - (day_open / kMsPerDay) * kMsPerDay;
+    if (!(session.empty() || session == "24x7")) {
+        int digits = 0, value = 0;
+        for (char c : session) {
+            if (c >= '0' && c <= '9') {
+                value = value * 10 + (c - '0');
+                if (++digits >= 4) break;
+            } else if (digits > 0) break;
+        }
+        shift -= static_cast<int64_t>((value / 100) * 60 + (value % 100)) * 60000;
+    }
+    return shift;
+}
+}  // namespace
+
 using namespace internal;
 
 
@@ -40,9 +66,11 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
         } else {
             int ratio = tf_ratio(input_tf, requested_tf);
             if (ratio > 1) {
-                state.aggregator = TimeframeAggregator(requested_tf, input_tf);
+                state.aggregator = TimeframeAggregator(requested_tf, input_tf,
+                    syminfo_.timezone, syminfo_.session);
             } else if (ratio == -1) {
-                state.aggregator = TimeframeAggregator(requested_tf, input_tf);
+                state.aggregator = TimeframeAggregator(requested_tf, input_tf,
+                    syminfo_.timezone, syminfo_.session);
             }
             // ratio <= 0: passthrough (same or unsupported lower TF)
         }
@@ -512,8 +540,14 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         // bookkeeping above stays driven by the real completion.
         bool publish = true;
         if (state.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
+            // Anchor on the symbol clock (the same clock as the aggregators):
+            // exchange-tz seconds since local-midnight+session-open. With
+            // tz=UTC and no session the shift is zero, reducing to the
+            // previous epoch math bit-for-bit.
+            int64_t shifted = ab.bar.timestamp - syminfo_clock_shift_ms(
+                ab.bar.timestamp, syminfo_.timezone, syminfo_.session);
             int64_t bucket_end_sec =
-                ab.bar.timestamp / 1000 + state.publish_gate_tf_seconds;
+                shifted / 1000 + state.publish_gate_tf_seconds;
             publish = (bucket_end_sec % script_tf_seconds_) == 0;
         }
         evaluate_security(state.sec_id, ab.bar, publish);
