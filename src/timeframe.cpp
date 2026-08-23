@@ -6,6 +6,8 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace pineforge {
 
@@ -164,7 +166,13 @@ static int64_t tz_offset_ms(int64_t ms, const std::string& tz) {
     thread_local int64_t cache_key = -1, cache_val = 0;
     const int64_t dayk = utc_floor_day_ms(ms);
     if (dayk == cache_key) return cache_val;
-    int64_t day_open = calendar_day_open_local_ms(ms, tz);
+    // Sample at MID-UTC-day: pairing the LOCAL midnight with the query
+    // instant's UTC floor is wrong whenever the local date straddles UTC
+    // midnight (FX evening bars are still the previous local date), which
+    // seeded whole UTC days with a negative offset and split every HTF
+    // candle in two. Midday always belongs to the local date whose true
+    // zone offset this cache stores.
+    int64_t day_open = calendar_day_open_local_ms(dayk + kMsPerDay / 2, tz);
     cache_val = day_open - dayk;
     cache_key = dayk;
     return cache_val;
@@ -249,10 +257,22 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period) {
 
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
                       const std::string& tz, const std::string& session) {
-    (void)session;  // calendar periods ignore the session: local-midnight split
+    // Calendar periods split on the SESSION-DAY clock: TradingView's forex
+    // daily candle runs 17:00-ET -> 17:00-ET, so the day key must advance at
+    // the session open, not at symbol-local midnight (equities coincide,
+    // which is why an AAPL-only probe cannot discriminate this).
     struct tm prev_tm, curr_tm;
-    decompose_utc(calendar_clock_ms(prev_ms, tz), prev_tm);
-    decompose_utc(calendar_clock_ms(curr_ms, tz), curr_tm);
+    const int64_t pf_prev_clock = intraday_clock_ms(prev_ms, tz, session);
+    const int64_t pf_curr_clock = intraday_clock_ms(curr_ms, tz, session);
+    if (getenv("PF_SEC_TRACE") && curr_ms - prev_ms <= 3600000
+        && (curr_ms - prev_ms != 0)) {
+        std::fprintf(stderr,
+            "[xsb] prev=%lld clock=%lld | curr=%lld clock=%lld\n",
+            (long long)prev_ms, (long long)pf_prev_clock,
+            (long long)curr_ms, (long long)pf_curr_clock);
+    }
+    decompose_utc(pf_prev_clock, prev_tm);
+    decompose_utc(pf_curr_clock, curr_tm);
 
     switch (period) {
         case CalendarPeriod::DAY:
@@ -487,6 +507,15 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                                   CalendarPeriod cal_period,
                                   int64_t input_seconds) {
     AggregatedBar result;
+    const bool pf_tr = getenv("PF_SEC_TRACE") != nullptr;
+    if (pf_tr) {
+        std::fprintf(stderr,
+            "[calmode] ts=%lld first=%lld subs=%d emitted=%d tz='%s' sess='%s'\n",
+            (long long)input_bar.timestamp, (long long)s.current_bar.timestamp,
+            s.sub_bar_count, s.current_emitted_complete ? 1 : 0,
+            s.anchor_tz ? s.anchor_tz->c_str() : "<null>",
+            s.anchor_session ? s.anchor_session->c_str() : "<null>");
+    }
     if (s.sub_bar_count == 0) {
         // Very first bar
         feed_reset_current(s, input_bar);
@@ -521,6 +550,13 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         result.bar = s.last_completed_bar;
         result.is_complete = true;
         result.sub_bar_count = completed_subs;
+        if (pf_tr) {
+            std::fprintf(stderr,
+                "[calmode] BOUNDARY-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
+                (long long)input_bar.timestamp,
+                (long long)s.last_completed_bar.timestamp,
+                s.last_completed_bar.close, completed_subs);
+        }
         return result;
     }
 
@@ -570,6 +606,13 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
         result.bar = s.last_completed_bar;
         result.is_complete = true;
         result.sub_bar_count = s.sub_bar_count;
+        if (pf_tr) {
+            std::fprintf(stderr,
+                "[calmode] PROJECTION/EAGER-COMPLETE trigger_ts=%lld bucket_first=%lld close=%.6f subs=%d\n",
+                (long long)input_bar.timestamp,
+                (long long)s.last_completed_bar.timestamp,
+                s.last_completed_bar.close, s.sub_bar_count);
+        }
         return result;
     }
     result.bar = s.current_bar;
