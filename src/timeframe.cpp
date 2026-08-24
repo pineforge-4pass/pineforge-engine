@@ -664,7 +664,8 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         const std::string& atz = s.anchor_tz ? *s.anchor_tz : anchor_utc();
         const std::string& asess = s.anchor_session ? *s.anchor_session : empty_session();
         int64_t curr_bucket = intraday_clock_ms(s.current_bar.timestamp, atz, asess) / bucket_ms;
-        int64_t next_bucket = intraday_clock_ms(input_bar.timestamp, atz, asess) / bucket_ms;
+        const int64_t in_clock = intraday_clock_ms(input_bar.timestamp, atz, asess);
+        int64_t next_bucket = in_clock / bucket_ms;
         bool boundary = next_bucket != curr_bucket;
 
         if (boundary) {
@@ -685,22 +686,57 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         }
 
         feed_merge_into_current(s, input_bar);
-        bool complete = (s.sub_bar_count == ratio);
-        // Session-close completion: an intraday bucket that straddles the
-        // session close (RTH '240' 13:30-17:30 holds 10 of 16 sub-bars,
-        // '60' 15:30-16:30 two of four) never reaches its count. TradingView
-        // clips the bucket at the session close and finalizes it on the
-        // session's LAST chart bar (15:45 ET), not on the next session's
-        // first bar where the boundary test above would catch it a session
-        // late. Declared sessions only: ""/"24x7" feeds keep the count/
-        // boundary rules bit-for-bit, and multi-day ratio targets ("2D")
-        // are calendar-sized, not session-sized.
-        if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
-            && has_trading_session(asess)) {
-            const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
-            if (next_ms >= session_period_last_traded_close_ms(
-                    input_bar.timestamp, atz, asess, CalendarPeriod::DAY)) {
-                complete = true;
+        // A bucket finalizes exactly once. The count rule is the gap-free
+        // fast path; the two rules below catch buckets the count never
+        // reaches. Guarding all of them on !current_emitted_complete keeps a
+        // bucket that was finalized early (real end / session close) from
+        // being emitted a second time should its count still be reached by
+        // later same-bucket bars (feeds with after-close bars, a DST
+        // fall-back hour on a 24x7 non-UTC clock); for a count-finalized
+        // bucket the count is never matched again, so the gap-free path is
+        // bit-identical.
+        bool complete = false;
+        if (!s.current_emitted_complete) {
+            complete = (s.sub_bar_count == ratio);
+            // Real-end completion (finding 467): TradingView finalizes an
+            // intraday HTF bucket on the chart bar whose close reaches the
+            // bucket's end, whether or not every sub-bar traded. A thin
+            // bucket — the 60m 17:00-18:00 ET bucket on Dec 25 with
+            // 22:00-22:03Z missing holds 56 of 60 minutes — never hits its
+            // count, and waiting for the NEXT bucket's first bar (the
+            // boundary test above) exposes it one chart bar late: 23:00:00Z
+            // lies inside the 23:00 chart bar, not the 22:45 one whose close
+            // IS the bucket end. Complete on the input bar whose end
+            // (timestamp + input duration, on the same anchor clock the
+            // bucket key uses) reaches the bucket end. For a full bucket the
+            // last sub-bar's end is the bucket end, so this fires on exactly
+            // the bar the count rule fires on — 24x7/UTC gap-free feeds stay
+            // bit-identical. A bucket whose LAST sub-bar is missing still
+            // completes on the boundary bar; the engine feeds every
+            // request.security aggregator before the chart aggregator on
+            // each input bar, so the chart bar whose close reaches the
+            // bucket end still sees it (see run_aggregation_bar_loop).
+            if (!complete && input_seconds > 0) {
+                const int64_t end_clock = (next_bucket + 1) * bucket_ms;
+                complete = in_clock + input_seconds * 1000 >= end_clock;
+            }
+            // Session-close completion: an intraday bucket that straddles
+            // the session close (RTH '240' 13:30-17:30 holds 10 of 16
+            // sub-bars, '60' 15:30-16:30 two of four) never reaches its count
+            // NOR its real end inside the session. TradingView clips the
+            // bucket at the session close and finalizes it on the session's
+            // LAST chart bar (15:45 ET), not on the next session's first bar
+            // where the boundary test above would catch it a session late.
+            // Declared sessions only: ""/"24x7" feeds keep the count/
+            // real-end/boundary rules bit-for-bit, and multi-day ratio
+            // targets ("2D") are calendar-sized, not session-sized.
+            if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
+                && has_trading_session(asess)) {
+                const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
+                if (next_ms >= session_period_last_traded_close_ms(
+                        input_bar.timestamp, atz, asess, CalendarPeriod::DAY)) {
+                    complete = true;
+                }
             }
         }
         if (complete) {
