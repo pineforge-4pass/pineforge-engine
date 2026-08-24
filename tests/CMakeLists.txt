@@ -69,6 +69,7 @@ set(TEST_SOURCES
     test_calendar_aggregation_wm
     test_calendar_wm_open_utc_fastpath
     test_htf_session_close_completion
+    test_chart_bar_bucket_label
     test_htf_bucket_real_end
     test_adversarial_ohlcv
     test_report_trace

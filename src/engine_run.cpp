@@ -1551,7 +1551,8 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
 
         if (ab.is_complete) {
             // Script-bar label for the equity curve: ab.bar.timestamp — the
-            // aggregator's first-present sub-bar ts of the COMPLETED bucket.
+            // aggregator's bucket label of the COMPLETED bucket (its grid /
+            // session-day open, see TimeframeAggregator::bar_label_ms).
             // The aggregator is fed identically with magnifier on and off, so
             // this label is magnifier-invariant by construction. Captured
             // here because run_magnified_bar overwrites
@@ -1588,23 +1589,17 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
             } else {
                 // No magnifier: use aggregated bar directly.
                 //
-                // ab.bar.timestamp is the FIRST-PRESENT sub-bar's timestamp
-                // (TimeframeAggregator keeps the opening sub-bar's ts through
-                // the merge). When a feed gap eats the bucket-opening sub-bar(s)
-                // — e.g. an exchange outage at HH:00 — this label drifts forward
-                // (09:00 bucket whose first surviving bar is 09:03 → ts=09:03,
-                // where TV would label it 09:00).
-                //
-                // We intentionally do NOT floor to the bucket boundary
-                // ((ts/bucket_ms)*bucket_ms). That floor assumes UTC-epoch-aligned
-                // buckets, which is only true for 24/7 instruments. Session-anchored
-                // TFs (e.g. US-equity 4h anchored to the 09:30 session open) are
-                // NOT UTC-aligned, so flooring would mislabel every bar there —
-                // worse than the rare gap-at-open drift. First-present is also the
-                // truthful timestamp: it is the real first bar that traded in the
-                // bucket. The drift never moves PnL (cosmetic entry/exit time +
-                // time-gated logic only); the sole risk is a strategy gating on an
-                // exact bucket-open instant, which is not a pattern TV scripts use.
+                // ab.bar.timestamp is the bucket's LABEL — its open on the
+                // symbol-clock grid (TimeframeAggregator::bar_label_ms), not
+                // the first-present sub-bar's ts. When a feed gap eats the
+                // bucket-opening sub-bar(s) — OANDA's 1m tape prints nothing
+                // for the first minutes of every 17:00 ET forex session — the
+                // first-present label drifted forward (17:04 where TV dates
+                // the chart bar 17:00) and every trade booked on that bar
+                // missed exact closed-trade identity by four minutes even
+                // though price and PnL matched (finding 473). The label is
+                // the session-anchored grid open, so US-equity 4h buckets
+                // (09:30-anchored, not UTC-aligned) label correctly too.
                 current_bar_ = ab.bar;
                 // Update session predicates.
                 session_ismarket_  = pine_session_ismarket(syminfo_.session, syminfo_.timezone,

@@ -590,6 +590,7 @@ TimeframeAggregator::TimeframeAggregator(const std::string& target_tf,
 
 void TimeframeAggregator::reset_current(const Bar& bar) {
     current_bar_ = bar;
+    current_bar_.timestamp = bar_label_ms(bar.timestamp);
     sub_bar_count_ = 1;
     current_emitted_complete_ = false;
 }
@@ -623,10 +624,21 @@ struct FeedState {
     bool& has_completed;
     const std::string* anchor_tz = nullptr;
     const std::string* anchor_session = nullptr;
+    // Owner, for bar_label_ms(): the bucket a sub-bar opens is stamped with
+    // its grid / session-day open, never with the sub-bar's own timestamp.
+    const TimeframeAggregator* agg = nullptr;
 };
 
 void feed_reset_current(FeedState s, const Bar& bar) {
     s.current_bar = bar;
+    // Bucket label (finding 473): TradingView dates an aggregated bar by the
+    // bucket it occupies on the symbol-clock grid, not by the first sub-bar
+    // that happened to trade in it. A 1m tape whose forex session opens at
+    // 17:04 ET (OANDA prints nothing for the first minutes) still yields a
+    // 17:00 chart bar on TV; keeping 17:04 here moved every entry / exit
+    // booked on that bar four minutes late and broke trade identity.
+    // Gap-free feeds are untouched: their first sub-bar IS the bucket open.
+    if (s.agg) s.current_bar.timestamp = s.agg->bar_label_ms(bar.timestamp);
     s.sub_bar_count = 1;
     s.current_emitted_complete = false;
 }
@@ -920,7 +932,7 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
 AggregatedBar TimeframeAggregator::feed(const Bar& input_bar) {
     FeedState s{current_bar_, sub_bar_count_, current_emitted_complete_,
                 last_completed_bar_, has_completed_,
-                &anchor_tz_, &anchor_session_};
+                &anchor_tz_, &anchor_session_, this};
     switch (mode_) {
         case Mode::PASSTHROUGH:
             return feed_passthrough_mode(input_bar, s);
@@ -968,6 +980,26 @@ int64_t TimeframeAggregator::bucket_open_ms(int64_t ms) const {
             if (clock < 0 && clock % bucket_ms != 0) open_clock -= bucket_ms;
             return ms - (clock - open_clock);
         }
+        case Mode::PASSTHROUGH:
+            return ms;
+    }
+    return ms;
+}
+
+int64_t TimeframeAggregator::bar_label_ms(int64_t ms) const {
+    switch (mode_) {
+        case Mode::RATIO:
+            // The session-anchored intraday grid open (bucket_open_ms), which
+            // is `ms` itself whenever the grid-opening sub-bar traded.
+            return bucket_open_ms(ms);
+        case Mode::CALENDAR:
+            // The D/W/M bar is dated by its first TRADED session-day (a
+            // holiday-Monday equity week is Tuesday's bar, exactly as the
+            // first-present sub-bar already implied), but within that
+            // session-day by the session OPEN: the forex daily / weekly bar
+            // whose tape starts at 17:04 ET is still the 17:00 ET bar.
+            return session_period_open_ms(ms, anchor_tz_, anchor_session_,
+                                          CalendarPeriod::DAY);
         case Mode::PASSTHROUGH:
             return ms;
     }

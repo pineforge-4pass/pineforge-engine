@@ -196,6 +196,18 @@ public:
     /// aggregation state, so callers may query it before feeding the bar.
     int64_t bucket_open_ms(int64_t ms) const;
 
+    /// Timestamp of the target-TF bar OPENED by an input bar stamped `ms`
+    /// — what TradingView dates the aggregated bar, and what feed() stamps
+    /// on every bucket it starts (finding 473). RATIO -> bucket_open_ms
+    /// (the session-anchored grid open, whether or not the grid-opening
+    /// sub-bar traded: a forex 1m tape that starts at 17:04 ET still yields
+    /// the 17:00 chart bar); CALENDAR -> the open of the session-day holding
+    /// `ms` (the D/W/M bar is dated by its first TRADED session-day, so a
+    /// holiday-Monday week stays Tuesday's bar, but never by a thin-open
+    /// sub-bar inside that day); PASSTHROUGH -> `ms`. Gap-free feeds are
+    /// bit-identical: there the first sub-bar IS the bucket open.
+    int64_t bar_label_ms(int64_t ms) const;
+
 private:
     enum class Mode { PASSTHROUGH, RATIO, CALENDAR };
 

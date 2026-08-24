@@ -138,10 +138,11 @@ static void test_fx_thin_60_completes_on_last_present_minute() {
     CHECK(full != nullptr);
     if (full) { CHECK(full->subs == 60); CHECK_EQ_I64(full->bucket_ts, utc_ms(2025, 12, 25, 21, 0)); }
     // The thin bucket completes on 22:59Z — its last present minute, whose
-    // end is the bucket end — not on the 23:00Z boundary bar.
+    // end is the bucket end — not on the 23:00Z boundary bar. It is dated by
+    // its grid open (22:00Z), not by its first present minute (finding 473).
     const Completion* thin = completion_at(c, utc_ms(2025, 12, 25, 22, 59));
     CHECK(thin != nullptr);
-    if (thin) { CHECK(thin->subs == 56); CHECK_EQ_I64(thin->bucket_ts, utc_ms(2025, 12, 25, 22, 4)); }
+    if (thin) { CHECK(thin->subs == 56); CHECK_EQ_I64(thin->bucket_ts, utc_ms(2025, 12, 25, 22, 0)); }
     CHECK(!has_completion_at(c, utc_ms(2025, 12, 25, 23, 0)));
     CHECK(has_completion_at(c, utc_ms(2025, 12, 25, 23, 59)));
     // 20:59, 21:59, 22:59, 23:59, 00:59, 01:59 — one completion per bucket.
@@ -149,17 +150,18 @@ static void test_fx_thin_60_completes_on_last_present_minute() {
     CHECK(distinct_buckets(c));
 
     // '240' on the same feed: buckets anchor on the 17:00 ET session open
-    // (22:00Z). The partial leading bucket (13:00-17:00 ET, fed from 20:00Z)
-    // completes on 21:59Z with 120 sub-bars; the thin 17:00-21:00 ET bucket
-    // (236 of 240) completes on 01:59Z, not on 02:00Z.
+    // (22:00Z). The partial leading bucket (13:00-17:00 ET, fed from 20:00Z,
+    // dated by its 18:00Z grid open) completes on 21:59Z with 120 sub-bars;
+    // the thin 17:00-21:00 ET bucket (236 of 240, dated 22:00Z) completes on
+    // 01:59Z, not on 02:00Z.
     TimeframeAggregator agg4("240", "1", NY, FX);
     auto c4 = drive(agg4, ts);
     const Completion* lead = completion_at(c4, utc_ms(2025, 12, 25, 21, 59));
     CHECK(lead != nullptr);
-    if (lead) { CHECK(lead->subs == 120); CHECK_EQ_I64(lead->bucket_ts, utc_ms(2025, 12, 25, 20, 0)); }
+    if (lead) { CHECK(lead->subs == 120); CHECK_EQ_I64(lead->bucket_ts, utc_ms(2025, 12, 25, 18, 0)); }
     const Completion* thin4 = completion_at(c4, utc_ms(2025, 12, 26, 1, 59));
     CHECK(thin4 != nullptr);
-    if (thin4) { CHECK(thin4->subs == 236); CHECK_EQ_I64(thin4->bucket_ts, utc_ms(2025, 12, 25, 22, 4)); }
+    if (thin4) { CHECK(thin4->subs == 236); CHECK_EQ_I64(thin4->bucket_ts, utc_ms(2025, 12, 25, 22, 0)); }
     CHECK(!has_completion_at(c4, utc_ms(2025, 12, 25, 23, 0)));
     CHECK(!has_completion_at(c4, utc_ms(2025, 12, 26, 2, 0)));
     CHECK(c4.size() == 2);
@@ -266,10 +268,10 @@ static void test_last_minute_missing_completes_on_boundary_before_chart_close() 
         auto v = drive_engine_order(sec, chart, ts2);
         const ChartView* cv = chart_view(v, utc_ms(2025, 12, 25, 22, 45));
         CHECK(cv != nullptr);
-        if (cv) CHECK_EQ_I64(cv->sec_last_completed_bucket_ts, utc_ms(2025, 12, 25, 22, 4));
+        if (cv) CHECK_EQ_I64(cv->sec_last_completed_bucket_ts, utc_ms(2025, 12, 25, 22, 0));
         const ChartView* next = chart_view(v, utc_ms(2025, 12, 25, 23, 0));
         CHECK(next != nullptr);
-        if (next) CHECK_EQ_I64(next->sec_last_completed_bucket_ts, utc_ms(2025, 12, 25, 22, 4));
+        if (next) CHECK_EQ_I64(next->sec_last_completed_bucket_ts, utc_ms(2025, 12, 25, 22, 0));
     }
 }
 
