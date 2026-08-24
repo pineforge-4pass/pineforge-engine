@@ -146,7 +146,7 @@ void BacktestEngine::dispatch_bar() {
             const size_t trades_before = trades_.size();
             const PositionSide side_before = position_side_;
             const double qty_before = position_qty_;
-            execute_market_exit(current_bar_.open);
+            execute_market_exit(bar_fill_price(current_bar_.open));
             if (position_side_ != side_before
                 || std::abs(position_qty_ - qty_before) > kQtyEpsilon
                 || trades_.size() != trades_before) {
@@ -245,6 +245,7 @@ void BacktestEngine::commit_coof_script_state() {
 uint64_t BacktestEngine::execute_coof_script_body(
         const Bar& script_bar,
         double broker_cursor_price,
+        bool cursor_is_bar_point,
         bool is_fill_recalc,
         bool cursor_is_bar_close,
         bool recalc_at_bar_open,
@@ -271,6 +272,7 @@ uint64_t BacktestEngine::execute_coof_script_body(
     // segment/extreme/close point, is mid-bar and places cascade orders.
     coof_recalc_at_bar_open_ = is_fill_recalc && recalc_at_bar_open;
     coof_cursor_price_ = broker_cursor_price;
+    coof_cursor_is_bar_point_ = cursor_is_bar_point;
     coof_direct_fill_events_remaining_ = direct_fill_event_budget;
     const uint64_t before = broker_fill_event_seq_;
     invoke_chart_on_bar(current_bar_);
@@ -290,6 +292,7 @@ uint64_t BacktestEngine::execute_coof_script_body(
 uint64_t BacktestEngine::run_coof_recalc_chain(
         const Bar& script_bar,
         double broker_cursor_price,
+        bool cursor_is_bar_point,
         bool cursor_is_bar_close,
         bool recalc_at_bar_open,
         uint64_t triggering_events,
@@ -312,7 +315,8 @@ uint64_t BacktestEngine::run_coof_recalc_chain(
         coof_recalc_after_first_open_fill_ =
             recalc_at_bar_open && !first_open_fill_recalc;
         const uint64_t direct = execute_coof_script_body(
-            script_bar, broker_cursor_price, /*is_fill_recalc=*/true,
+            script_bar, broker_cursor_price, cursor_is_bar_point,
+            /*is_fill_recalc=*/true,
             cursor_is_bar_close, first_open_fill_recalc,
             direct_budget);
         total_events += direct;
@@ -376,6 +380,10 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     double path[4];
     fill_bar_path_points(script_bar, path);
     double cursor = path[0];
+    // finding-446: a strategy.close booked at the cursor is a raw-bar-price
+    // fill only while the cursor sits on an OHLC path point; a fill-price
+    // cursor is already in its booked shape (see coof_cursor_is_bar_point_).
+    bool cursor_is_bar_point = true;
     int next_waypoint = 1;
     bool evaluate_current_point = true;
 
@@ -384,11 +392,13 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
                             bool filled_at_bar_open_point) {
         const uint64_t before = fill_events;
         cursor = fill.fill_price;
+        cursor_is_bar_point = false;
         // The recalc chain receives O-point provenance, but only its first fill
         // event is classified as bar-open. A later fill at the same O is a
         // leg-0 cascade (PendingOrder::coof_born_mid_bar).
         fill_events += run_coof_recalc_chain(
-            script_bar, cursor, cursor_is_close, filled_at_bar_open_point,
+            script_bar, cursor, cursor_is_bar_point, cursor_is_close,
+            filled_at_bar_open_point,
             fill.fill_events, kNoFillEventBudget, fill_events);
         // The carried order's open fill triggers one execution at O, and the
         // order born in that first execution may also fill at O. Every later
@@ -470,6 +480,7 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
         }
 
         cursor = target;
+        cursor_is_bar_point = true;
         ++next_waypoint;
         evaluate_current_point = true;
     }
@@ -489,8 +500,9 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     // fill-triggered executions. It starts from the prior committed checkpoint
     // and becomes this bar's committed Pine state.
     cursor = path[3];
+    cursor_is_bar_point = true;
     uint64_t direct = execute_coof_script_body(
-        script_bar, cursor, /*is_fill_recalc=*/false,
+        script_bar, cursor, cursor_is_bar_point, /*is_fill_recalc=*/false,
         /*cursor_is_bar_close=*/true, /*recalc_at_bar_open=*/false,
         kNoFillEventBudget);
     // C is the terminal historical tick. Direct fills produced by this
@@ -535,7 +547,8 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     const uint64_t margin_events = broker_fill_event_seq_ - fill_seq_before_mc;
     if (margin_events > 0) {
         fill_events += run_coof_recalc_chain(
-            script_bar, cursor, /*cursor_is_bar_close=*/true,
+            script_bar, cursor, cursor_is_bar_point,
+            /*cursor_is_bar_close=*/true,
             /*recalc_at_bar_open=*/false, margin_events,
             kNoFillEventBudget, fill_events);
     }
@@ -1005,6 +1018,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     coof_recalc_after_first_open_fill_ = false;
 
     double cursor = ticks.front().price;
+    bool cursor_is_bar_point = true;  // finding-446, see the simple loop
     int64_t cursor_ts = ticks.front().timestamp;
     std::size_t next_tick = 1;
     bool evaluate_current_point = true;
@@ -1014,11 +1028,13 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
                             bool filled_at_first_tick) {
         const uint64_t before = fill_events;
         cursor = fill.fill_price;
+        cursor_is_bar_point = false;
         // Magnifier path: coof_born_mid_bar is inert here (the cascade gate is
         // guarded by !bar_magnifier_enabled_), but keep provenance consistent —
         // a first-tick fill is the magnifier analogue of a bar-open recalc.
         fill_events += run_coof_recalc_chain(
-            script_bar, cursor, cursor_is_close, filled_at_first_tick,
+            script_bar, cursor, cursor_is_bar_point, cursor_is_close,
+            filled_at_first_tick,
             fill.fill_events, max_fill_events, fill_events);
         evaluate_current_point = filled_at_first_tick
             && before == 0 && fill_events == 1;
@@ -1052,6 +1068,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
             // pricing); they must never interpolate a touch through the
             // previous close -> new open discontinuity.
             cursor = target.price;
+            cursor_is_bar_point = true;
             cursor_ts = target.timestamp;
             ++next_tick;
             evaluate_current_point = true;
@@ -1083,14 +1100,16 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
         }
 
         cursor = target.price;
+        cursor_is_bar_point = true;
         cursor_ts = target.timestamp;
         ++next_tick;
         evaluate_current_point = true;
     }
 
     cursor = ticks.back().price;
+    cursor_is_bar_point = true;
     uint64_t direct = execute_coof_script_body(
-        script_bar, cursor, /*is_fill_recalc=*/false,
+        script_bar, cursor, cursor_is_bar_point, /*is_fill_recalc=*/false,
         /*cursor_is_bar_close=*/true, /*recalc_at_bar_open=*/false,
         fill_events < max_fill_events ? max_fill_events - fill_events : 0);
     commit_coof_script_state();
@@ -1122,7 +1141,8 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     const uint64_t margin_events = broker_fill_event_seq_ - fill_seq_before_mc;
     if (margin_events > 0 && fill_events < max_fill_events) {
         fill_events += run_coof_recalc_chain(
-            script_bar, cursor, /*cursor_is_bar_close=*/true,
+            script_bar, cursor, cursor_is_bar_point,
+            /*cursor_is_bar_close=*/true,
             /*recalc_at_bar_open=*/false, margin_events,
             max_fill_events, fill_events);
     }

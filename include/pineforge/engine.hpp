@@ -1365,10 +1365,44 @@ protected:
     // are untouched. Returns true when a "Margin call" row was booked.
     bool margin_call_slice_at_bar_open(const Bar& bar);
 
-    // --- Slippage helper ---
+    // --- Fill rounding helpers ---
+    // Nearest-tick rounding: TradingView's exact double-precision function
+    // floor(price / mintick + 0.5) * mintick, with NO epsilon.
+    //
+    // finding-446: TV's own NASDAQ:AAPL and OANDA:EURUSD series carry
+    // sub-tick prints (x.xx5 and a few 4-dp values). Every TV fill taken at
+    // one of those RAW BAR PRICES is exactly this function of it: 24,582 /
+    // 24,582 half-cent AAPL closes (22,122 rounded up, 2,460 rounded DOWN
+    // because the binary quotient lands just under the midpoint —
+    // 228.765 / 0.01 = 22876.499999999996 -> 228.76, while
+    // 214.385 / 0.01 = 21438.5 -> 214.39) and 142,938 / 142,938 EURUSD
+    // fills at tick 1e-5. Any epsilon nudge (floor(r + 0.5 + 1e-6)) or a
+    // decimal half-up rule forces every binary midpoint up and breaks the
+    // 2,460 down cases. For r >= 1 the form below is bit-identical to
+    // std::round(r) (adding 0.5 is exact inside one binade), so the legacy
+    // std::round shape was already the right function; it is spelled out so
+    // the code reads as the census formula it was fitted to.
     double round_to_mintick(double price) const {
         if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
-        return std::round(price / syminfo_mintick_) * syminfo_mintick_;
+        return std::floor(price / syminfo_mintick_ + 0.5) * syminfo_mintick_;
+    }
+
+    // A fill taken AT A RAW BAR PRICE — a market order at the bar close
+    // (process_orders_on_close) or at the next open, a resting stop/limit
+    // the open gapped through, a stop-limit whose limit is already
+    // marketable at an OHLC path point, a margin-call slice at the open or
+    // adverse extreme, a strategy.close at the close / COOF bar-point
+    // cursor — books the raw print rounded to the NEAREST tick and only then
+    // carries slippage ticks. The FEED is never quantized (indicators consume
+    // the raw sub-tick values); only the fill is on-tick. The directional
+    // snap (round_to_mintick_directional) is reserved for COMPUTED stop /
+    // limit LEVELS that fall between ticks; applying it to a raw bar price
+    // was the finding-432/446 defect (sells floored, buys ceiled — 43 AAPL
+    // slugs off by one tick). The result is on-tick, so the directional snap
+    // downstream in apply_slippage / apply_limit_fill is an identity on it
+    // (the 1e-9 boundary guard absorbs the n*tick/tick FP residue).
+    double bar_fill_price(double raw_bar_price) const {
+        return round_to_mintick(raw_bar_price);
     }
 
     // TradingView fills stop entries directionally to mintick rather than
@@ -1376,6 +1410,10 @@ protected:
     // (floor). Verified against basic/parabolic-asr where the 2,513
     // non-gap stop entry fills show a perfectly one-sided +/-0.01 bias.
     // See investigation report at /tmp/pf_investigation_parabolic_asr.md.
+    // This applies to COMPUTED LEVELS only (a stop at (open+high)/2, a
+    // user_close + 0.5 level, ...). A fill at a RAW BAR PRICE goes through
+    // bar_fill_price (nearest tick, finding-446) before it reaches the
+    // slippage path, where this snap is then an identity.
     //
     // The 1e-9 epsilon nudge guards against FP slop: a price computed as
     // ``user_close + 0.5`` may land at ``1803.1199999998`` (just below the
@@ -1395,9 +1433,11 @@ protected:
 
     double apply_slippage(double price, bool is_buy) const {
         if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
-        // TradingView snaps fills to mintick directionally even when slippage
-        // is zero: a buy fills at the next-higher mintick, a sell at the
-        // next-lower mintick. The legacy nearest-mintick rounding biased
+        // TradingView snaps LEVEL fills to mintick directionally even when
+        // slippage is zero: a buy fills at the next-higher mintick, a sell
+        // at the next-lower mintick. (A raw bar price arrives here already
+        // nearest-rounded by bar_fill_price, finding-446, so the snap below
+        // is an identity on it.) The legacy nearest-mintick rounding biased
         // sub-mintick stop levels (e.g. (open+high)/2 for an odd-mintick
         // bar) up by one tick for sells, producing a deterministic +0.01
         // exit-price drift on the magnifier-dist corpus (≈ 180 trades per
@@ -1899,6 +1939,11 @@ protected:
     bool coof_scheduler_active_ = false;
     bool coof_fill_recalc_active_ = false;
     bool coof_cursor_is_bar_close_ = false;
+    // finding-446: true when coof_cursor_price_ is a RAW OHLC path point /
+    // magnifier tick (a broker-price fill there is nearest-tick rounded via
+    // bar_fill_price); false when it is a resolved fill price (a bar-point
+    // fill is already rounded, a level fill keeps its directional snap).
+    bool coof_cursor_is_bar_point_ = false;
     bool coof_evaluating_path_segment_ = false;
     // KI-67: true only while the active fill recalc owns the FIRST fill event
     // at the bar-open tick (O). Orders placed while this holds keep STANDARD
@@ -2710,12 +2755,14 @@ private:
     void commit_coof_script_state();
     uint64_t execute_coof_script_body(const Bar& script_bar,
                                       double broker_cursor_price,
+                                      bool cursor_is_bar_point,
                                       bool is_fill_recalc,
                                       bool cursor_is_bar_close,
                                       bool recalc_at_bar_open,
                                       uint64_t direct_fill_event_budget);
     uint64_t run_coof_recalc_chain(const Bar& script_bar,
                                    double broker_cursor_price,
+                                   bool cursor_is_bar_point,
                                    bool cursor_is_bar_close,
                                    bool recalc_at_bar_open,
                                    uint64_t triggering_events,

@@ -210,6 +210,12 @@ struct ExitPathFill {
     // engine.hpp); the fill-application code needs to know which leg fired
     // because price equality cannot distinguish a gap fill at the open.
     bool is_limit = false;
+    // True when the fill is the RAW BAR OPEN (open-gap shortcut through a
+    // trail / stop / limit level) rather than a level. finding-446: the
+    // consumer nearest-tick rounds a bar-price fill (bar_fill_price) while a
+    // level fill keeps its directional snap; price equality cannot tell the
+    // two apart when a sub-tick open coincides with a level.
+    bool at_bar_open = false;
     // Where the fill happened on the bar's 4-waypoint synthesized path, in
     // first_touch_position units (0 = open, 1/2 = the extremes, 3 = close;
     // fractional inside a segment). This is the fill's ACTUAL chronology,
@@ -313,12 +319,17 @@ CrossEventList collect_cross_events(double from_price,
                                                         double trail_level);
 
 
+// fill_at_bar_point (optional) reports whether the returned fill price is a
+// RAW OHLC path point (the limit was already marketable there) rather than
+// the stop or limit level itself — the caller nearest-tick rounds bar-point
+// fills (finding-446) while level fills keep their limit-or-better snap.
 bool resolve_entry_stop_limit_fill(const Bar& bar,
                                           bool is_long,
                                           double stop_price,
                                           double limit_price,
                                           double* fill_price,
-                                          bool* activated);
+                                          bool* activated,
+                                          bool* fill_at_bar_point = nullptr);
 
 
 // Earliest intra-bar path coordinate [0, 3) where this EXIT's stop/limit would

@@ -1311,9 +1311,14 @@ void BacktestEngine::flush_active_same_bar_close(
     size_t trades_before = trades_.size();
     PositionSide side_before = position_side_;
     double qty_before = position_qty_;
+    // finding-446: a close booked at a raw bar price (the bar close, or a
+    // COOF cursor sitting on an OHLC path point) is nearest-tick rounded; a
+    // fill-price cursor is already in its booked shape.
     const double broker_price =
         coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
-            ? coof_cursor_price_ : current_bar_.close;
+            ? (coof_cursor_is_bar_point_ ? bar_fill_price(coof_cursor_price_)
+                                         : coof_cursor_price_)
+            : bar_fill_price(current_bar_.close);
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
         // Exit-order cancel/purge already ran at CALL time in enqueue; orders
@@ -2302,9 +2307,14 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
     size_t trades_before = trades_.size();
     PositionSide side_before = position_side_;
     double qty_before = position_qty_;
+    // finding-446: a close booked at a raw bar price (the bar close, or a
+    // COOF cursor sitting on an OHLC path point) is nearest-tick rounded; a
+    // fill-price cursor is already in its booked shape.
     const double broker_price =
         coof_scheduler_active_ && std::isfinite(coof_cursor_price_)
-            ? coof_cursor_price_ : current_bar_.close;
+            ? (coof_cursor_is_bar_point_ ? bar_fill_price(coof_cursor_price_)
+                                         : coof_cursor_price_)
+            : bar_fill_price(current_bar_.close);
     if (closes_full_position) {
         const bool closed_long = (position_side_ == PositionSide::LONG);
         execute_market_exit(broker_price);

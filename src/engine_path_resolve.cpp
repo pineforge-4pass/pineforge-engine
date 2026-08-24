@@ -445,11 +445,18 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
                                           double stop_price,
                                           double limit_price,
                                           double* fill_price,
-                                          bool* activated) {
+                                          bool* activated,
+                                          bool* fill_at_bar_point) {
+    if (fill_at_bar_point != nullptr) *fill_at_bar_point = false;
     if (fill_price == nullptr || activated == nullptr
         || std::isnan(stop_price) || std::isnan(limit_price)) {
         return false;
     }
+    auto fill_at = [&](double price, bool is_bar_point) {
+        *fill_price = price;
+        if (fill_at_bar_point != nullptr) *fill_at_bar_point = is_bar_point;
+        return true;
+    };
 
     double path[4];
     fill_bar_path_points(bar, path);
@@ -463,12 +470,12 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
     };
 
     if (active && limit_is_marketable(path[0])) {
-        *fill_price = path[0];
-        return true;
+        return fill_at(path[0], /*is_bar_point=*/true);
     }
 
     for (int seg_idx = 1; seg_idx < 4; ++seg_idx) {
         double from_price = path[seg_idx - 1];
+        bool from_is_bar_point = true;
         double to_price = path[seg_idx];
 
         if (!active) {
@@ -482,29 +489,25 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
             active = true;
             *activated = true;
             from_price = stop_price;
+            from_is_bar_point = false;
             if (limit_is_marketable(from_price)) {
-                *fill_price = from_price;
-                return true;
+                return fill_at(from_price, /*is_bar_point=*/false);
             }
         }
 
         if (is_long) {
             if (from_price <= limit_price) {
-                *fill_price = from_price;
-                return true;
+                return fill_at(from_price, from_is_bar_point);
             }
             if (to_price <= limit_price) {
-                *fill_price = limit_price;
-                return true;
+                return fill_at(limit_price, /*is_bar_point=*/false);
             }
         } else {
             if (from_price >= limit_price) {
-                *fill_price = from_price;
-                return true;
+                return fill_at(from_price, from_is_bar_point);
             }
             if (to_price >= limit_price) {
-                *fill_price = limit_price;
-                return true;
+                return fill_at(limit_price, /*is_bar_point=*/false);
             }
         }
     }
@@ -632,6 +635,7 @@ bool try_exit_open_gap_fill(const Bar& bar, bool is_long,
         out_fill->should_fill = true;
         out_fill->fill_price = bar.open;
         out_fill->is_limit = is_limit;
+        out_fill->at_bar_open = true;
         return true;
     };
     if (is_long) {

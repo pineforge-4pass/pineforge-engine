@@ -685,11 +685,12 @@ bool BacktestEngine::process_carried_position_fx_rollover(const Bar& bar) {
     if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
 
     const std::size_t trades_before = trades_.size();
+    const double open_fill = bar_fill_price(bar.open);  // finding-446
     if (qty_liq >= qty - kQtyEpsilon) {
-        execute_market_exit(bar.open);
+        execute_market_exit(open_fill);
     } else {
         execute_partial_exit_qty(
-            bar.open, qty_liq, PositionReductionCause::MARGIN_CALL);
+            open_fill, qty_liq, PositionReductionCause::MARGIN_CALL);
     }
     if (trades_.size() == trades_before) return false;
 
@@ -909,7 +910,8 @@ void BacktestEngine::process_margin_call(const Bar& bar) {
         const double req_margin_adv = qty * margin_per_unit_adv;
         if (equity_adv >= req_margin_adv) return;
         q_min = qty - equity_adv / margin_per_unit_adv;
-        raw_exit_fill_base = adverse;
+        // finding-446: the adverse extreme is a raw bar price.
+        raw_exit_fill_base = bar_fill_price(adverse);
     }
 
     if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) {
@@ -1304,11 +1306,12 @@ bool BacktestEngine::margin_call_slice_before_priced_exit(
     if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
 
     const size_t trades_before = trades_.size();
+    const double adverse_fill = bar_fill_price(adverse);  // finding-446
     if (qty_liq >= qty - kQtyEpsilon) {
-        execute_market_exit(adverse);
+        execute_market_exit(adverse_fill);
     } else {
         execute_partial_exit_qty(
-            adverse, qty_liq, PositionReductionCause::MARGIN_CALL);
+            adverse_fill, qty_liq, PositionReductionCause::MARGIN_CALL);
     }
     if (trades_.size() == trades_before) return false;
 
@@ -1613,14 +1616,16 @@ bool BacktestEngine::margin_call_slice_at_bar_open(const Bar& bar) {
     if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;
     if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
 
-    // The raw open is the fill base; the close helper applies the exit
-    // side's own snap/slippage exactly as the adverse-extreme path does.
+    // The nearest-tick rounded open (finding-446) is the fill base; the
+    // close helper applies the exit side's own slippage exactly as the
+    // adverse-extreme path does.
     const size_t trades_before = trades_.size();
+    const double open_fill = bar_fill_price(open);
     if (qty_liq >= qty - kQtyEpsilon) {
-        execute_market_exit(open);
+        execute_market_exit(open_fill);
     } else {
         execute_partial_exit_qty(
-            open, qty_liq, PositionReductionCause::MARGIN_CALL);
+            open_fill, qty_liq, PositionReductionCause::MARGIN_CALL);
     }
     if (trades_.size() == trades_before) return false;
 
@@ -2257,7 +2262,7 @@ void BacktestEngine::finalize_pending_flat_market_pairs(const Bar& bar) {
             && buy->paired_flat_market_signal_fx > 0.0;
         if (valid_buy_snapshot && std::isfinite(bar.open) && bar.open > 0.0) {
             const double buy_fill = apply_slippage(
-                bar.open, /*is_buy=*/buy->is_long);
+                bar_fill_price(bar.open), /*is_buy=*/buy->is_long);
             const double notional_k =
                 buy->paired_flat_market_signal_pointvalue
                 * buy->paired_flat_market_signal_fx
@@ -2599,7 +2604,7 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 return false;
             }
             const double admit_price =
-                apply_fill_slippage(bar.open, /*is_buy=*/false);
+                apply_fill_slippage(bar_fill_price(bar.open), /*is_buy=*/false);
             // The quantity each entry will actually dispatch at its fill:
             // FIXED re-derives from the default at the admit price; frozen
             // PERCENT/CASH orders carry their placement-frozen qty (L).
@@ -2660,7 +2665,8 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
                 && default_qty_value_ <= 100.0) {
                 for (const PendingOrder* entry : {source[0], source[1]}) {
                     const double leg_admit_price =
-                        apply_fill_slippage(bar.open, entry->is_long);
+                        apply_fill_slippage(bar_fill_price(bar.open),
+                                            entry->is_long);
                     const double leg_fx =
                         std::isfinite(entry->sizing_fx) && entry->sizing_fx > 0.0
                             ? entry->sizing_fx
@@ -3294,7 +3300,7 @@ bool BacktestEngine::use_stop_placement_open_qty(
         && std::abs(margin_pct - 100.0) < 1e-12
         && slippage_ == 0
         && gap_open_marketable
-        && fill_price == bar.open
+        && fill_price == bar_fill_price(bar.open)
         && std::abs(current_equity() - placement_equity) <= equity_guard
         && calc_commission(
                fill_price, order.stop_placement_open_qty) == 0.0;
@@ -5748,7 +5754,7 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
     bool prearmed_bracket_limit_leg = false;
     if (exit_style && prearmed_market_parent_bracket_gaps_at_open(
             order, bar, &prearmed_bracket_limit_leg)) {
-        fill_price = bar.open;
+        fill_price = bar_fill_price(bar.open);
         should_fill = true;
         is_limit_fill = prearmed_bracket_limit_leg;
     }
@@ -5783,12 +5789,13 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             // Exit stop for a LONG is a SELL (worse execution = lower
             // price); for a SHORT it's a BUY (worse = higher price) --
             // opposite direction from an ENTRY stop on the same side.
-            fill_price = is_long ? std::min(bar.close, stop_price)
-                                  : std::max(bar.close, stop_price);
+            // The marketability test above already places the close on the
+            // firing side of the level, so the fill IS the close: a raw bar
+            // price, nearest-tick rounded (finding-446).
+            fill_price = bar_fill_price(bar.close);
             should_fill = true;
         } else if (limit_marketable) {
-            fill_price = is_long ? std::max(bar.close, limit_price)
-                                  : std::min(bar.close, limit_price);
+            fill_price = bar_fill_price(bar.close);
             should_fill = true;
             is_limit_fill = true;
         }
@@ -5857,7 +5864,11 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             coof_cascade_force_wp_gap_,
             path_start_position);
         if (exit_fill.should_fill) {
-            fill_price = exit_fill.fill_price;
+            // finding-446: an open-gap fill is the raw bar open; a level
+            // fill keeps its directional / limit-or-better snap downstream.
+            fill_price = exit_fill.at_bar_open
+                ? bar_fill_price(exit_fill.fill_price)
+                : exit_fill.fill_price;
             should_fill = true;
             last_exit_fill_was_trail_ = exit_fill.is_trail;
             is_limit_fill = exit_fill.is_limit;
@@ -5874,7 +5885,10 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         }
     } else if (!should_fill && (order.type == OrderType::MARKET ||
                (!has_stop && !has_limit && !has_trail))) {
-        fill_price = process_orders_on_close_ ? bar.close : bar.open;
+        // finding-446: a market fill is the raw bar close / open rounded to
+        // the nearest tick (TV: floor(price / mintick + 0.5) * mintick).
+        fill_price = bar_fill_price(
+            process_orders_on_close_ ? bar.close : bar.open);
         should_fill = true;
     } else if (!should_fill && has_stop && has_limit) {
         // Entry stop-limit semantics: the stop activates the limit order,
@@ -5883,13 +5897,20 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         // so it takes the unslipped limit-or-better price path.
         bool activated = calc_on_order_fills_ && coof_scheduler_active_
             ? order.stop_limit_activated : false;
+        bool fill_at_bar_point = false;
         should_fill = resolve_entry_stop_limit_fill(
             bar,
             order.is_long,
             stop_price,
             limit_price,
             &fill_price,
-            &activated);
+            &activated,
+            &fill_at_bar_point);
+        // finding-446: a limit already marketable at an OHLC path point
+        // fills at that raw bar price, nearest-tick rounded.
+        if (should_fill && fill_at_bar_point) {
+            fill_price = bar_fill_price(fill_price);
+        }
         is_limit_fill = should_fill;
     } else if (!should_fill && has_stop) {
         // Entry stop order
@@ -5901,20 +5922,20 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
         }
         if (order.is_long) {
             if (bar.high >= stop_price) {
-                fill_price = std::max(bar.open, stop_price);
-                // TradingView snaps stop entry fills to mintick in the
-                // conservative direction (long stop -> ceil).
-                if (fill_price > bar.open) {
-                    fill_price = round_to_mintick_directional(fill_price, true);
-                }
+                // A stop the open already gapped through fills at the raw
+                // open, nearest-tick rounded (finding-446). Otherwise TV
+                // snaps the stop LEVEL to mintick in the conservative
+                // direction (long stop -> ceil).
+                fill_price = bar.open >= stop_price
+                    ? bar_fill_price(bar.open)
+                    : round_to_mintick_directional(stop_price, true);
                 should_fill = true;
             }
         } else {
             if (bar.low <= stop_price) {
-                fill_price = std::min(bar.open, stop_price);
-                if (fill_price < bar.open) {
-                    fill_price = round_to_mintick_directional(fill_price, false);
-                }
+                fill_price = bar.open <= stop_price
+                    ? bar_fill_price(bar.open)
+                    : round_to_mintick_directional(stop_price, false);
                 should_fill = true;
             }
         }
@@ -5936,20 +5957,27 @@ BacktestEngine::FillEvaluation BacktestEngine::evaluate_fill_price(
             // limit.
             if (order.is_long ? (bar.close <= limit_price)
                                : (bar.close >= limit_price)) {
-                fill_price = order.is_long ? std::min(bar.close, limit_price)
-                                            : std::max(bar.close, limit_price);
+                // The test above puts the close on the marketable side of
+                // the limit, so the better price IS the close — a raw bar
+                // price, nearest-tick rounded (finding-446).
+                fill_price = bar_fill_price(bar.close);
                 should_fill = true;
                 is_limit_fill = true;
             }
         } else if (order.is_long) {
             if (bar.low <= limit_price) {
-                fill_price = std::min(bar.open, limit_price);
+                // Gap through the limit at the open: raw open, nearest tick
+                // (finding-446); otherwise the limit level (limit-or-better
+                // snap downstream in apply_limit_fill).
+                fill_price = bar.open <= limit_price
+                    ? bar_fill_price(bar.open) : limit_price;
                 should_fill = true;
                 is_limit_fill = true;
             }
         } else {
             if (bar.high >= limit_price) {
-                fill_price = std::max(bar.open, limit_price);
+                fill_price = bar.open >= limit_price
+                    ? bar_fill_price(bar.open) : limit_price;
                 should_fill = true;
                 is_limit_fill = true;
             }

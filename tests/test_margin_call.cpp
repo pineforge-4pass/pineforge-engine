@@ -348,7 +348,10 @@ static void test_short_margin_call_exact_one_step_roundoff_keeps_four_x_nibble()
 
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.exit_price(0), 100.01, 1e-12));
+    // finding-446: the adverse extreme (100.0005..., a sub-tick synthetic
+    // high) is a RAW BAR PRICE and books at the nearest tick, 100.00 —
+    // no longer the buy-side ceil to 100.01.
+    CHECK(near(eng.exit_price(0), 100.00, 1e-12));
     CHECK(near(eng.trade_size(0), 4.0 * step, 1e-12));
     CHECK(near(eng.position_size(), -(10.0 - 4.0 * step), 1e-12));
 }
@@ -381,7 +384,10 @@ static void test_short_margin_call_just_below_step_slices_one_contract() {
 
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
-    CHECK(near(eng.exit_price(0), 100.01, 1e-12));
+    // finding-446: the adverse extreme (100.0005..., a sub-tick synthetic
+    // high) is a RAW BAR PRICE and books at the nearest tick, 100.00 —
+    // no longer the buy-side ceil to 100.01.
+    CHECK(near(eng.exit_price(0), 100.00, 1e-12));
     CHECK(near(eng.trade_size(0), 1.0, 1e-12));
     CHECK(near(eng.position_size(), -9.0, 1e-12));
 
@@ -2894,7 +2900,10 @@ static void test_commission_free_short_floor_zero_closes_one_contract() {
     CHECK(eng.trade_count() == 1);
     CHECK(eng.exit_comment(0) == std::string("Margin call"));
     CHECK(near(eng.entry_price(0), 100.0));
-    CHECK(near(eng.exit_price(0), 100.01, 1e-12));
+    // finding-446: the adverse extreme (100.0005..., a sub-tick synthetic
+    // high) is a RAW BAR PRICE and books at the nearest tick, 100.00 —
+    // no longer the buy-side ceil to 100.01.
+    CHECK(near(eng.exit_price(0), 100.00, 1e-12));
     CHECK(near(eng.trade_size(0), 1.0, 1e-9));
     CHECK(near(eng.position_size(), -9.0, 1e-9));
 }
