@@ -947,11 +947,14 @@ class VWAP {
     // Sum of (price^2 * volume) for running variance computation used by
     // compute_bands(). Variance = cum_pv_sq_ / cum_vol_ - mean^2.
     double cum_pv_sq_ = 0.0;
-    // Anchor day index (Unix-day = timestamp_ms / 86_400_000). On the
-    // first compute() call we record this from the bar timestamp; on
-    // every subsequent compute() the cumulator is reset whenever the
-    // day index advances. Pine v6 `ta.vwap(source)` defaults to a Daily
-    // anchor (`anchor = timeframe.change("1D")`); engine matches that.
+    // Anchor day index: the SESSION day of the bar (session_day_index —
+    // timestamp_ms / 86_400_000 on a UTC/24x7 symbol, the 17:00-ET-keyed
+    // trading day on forex, the 09:30 RTH day on equities). On the first
+    // compute() call we record this from the bar timestamp; on every
+    // subsequent compute() the cumulator is reset whenever the day index
+    // advances. Pine v6 `ta.vwap(source)` defaults to a Daily anchor
+    // (`anchor = timeframe.change("1D")` on the SYMBOL's daily bar); the
+    // engine matches that when the codegen threads syminfo tz + session.
     int64_t anchor_day_ = std::numeric_limits<int64_t>::min();
 
     // Mirror the initial committed state (see RMA::RMA) so a recompute()
@@ -959,13 +962,32 @@ class VWAP {
     double saved_cum_pv_ = 0.0, saved_cum_vol_ = 0.0, saved_cum_pv_sq_ = 0.0;
     int64_t saved_anchor_day_ = std::numeric_limits<int64_t>::min();
 
+    void roll_anchor(int64_t day);
+
 public:
     VWAP() = default;
+    // tz-less forms key the anchor on the UTC day (the 24x7 corpus regime);
+    // the tz/session forms key it on the symbol's session day and reduce to
+    // the same integer math for tz="UTC" + empty/"24x7" session.
+    // Feature macro PF_VWAP_HAS_SESSION_ANCHOR (below the class) lets
+    // generated code compile the (tz, session) tail out on older engines.
     double compute(double src, double volume, int64_t timestamp_ms);
     double recompute(double src, double volume, int64_t timestamp_ms);
+    double compute(double src, double volume, int64_t timestamp_ms,
+                   const std::string& tz, const std::string& session);
+    double recompute(double src, double volume, int64_t timestamp_ms,
+                     const std::string& tz, const std::string& session);
     VWAPBandsResult compute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult);
     VWAPBandsResult recompute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult);
+    VWAPBandsResult compute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult,
+                                  const std::string& tz, const std::string& session);
+    VWAPBandsResult recompute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult,
+                                    const std::string& tz, const std::string& session);
 };
+
+// Feature macro: the emitted prelude's PF_VWAP_SESSION_ANCHOR_ARGS(tz, s)
+// expands to `, tz, s` only when this is defined (see VWAP overloads above).
+#define PF_VWAP_HAS_SESSION_ANCHOR 1
 
 // --- VWAP Bands wrapper class (3-tuple form: ta.vwap(src, anchor, stdev_mult)) ---
 // Wraps VWAP and routes compute/recompute to compute_bands/recompute_bands with
@@ -981,6 +1003,14 @@ public:
     }
     VWAPBandsResult recompute(double src, double volume, int64_t timestamp_ms) {
         return vwap_.recompute_bands(src, volume, timestamp_ms, stdev_mult_);
+    }
+    VWAPBandsResult compute(double src, double volume, int64_t timestamp_ms,
+                            const std::string& tz, const std::string& session) {
+        return vwap_.compute_bands(src, volume, timestamp_ms, stdev_mult_, tz, session);
+    }
+    VWAPBandsResult recompute(double src, double volume, int64_t timestamp_ms,
+                              const std::string& tz, const std::string& session) {
+        return vwap_.recompute_bands(src, volume, timestamp_ms, stdev_mult_, tz, session);
     }
 };
 

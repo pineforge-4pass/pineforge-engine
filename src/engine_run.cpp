@@ -118,6 +118,12 @@ void BacktestEngine::dispatch_bar() {
                            script_bar.open, 0.0, script_bar.timestamp};
         try {
             process_carried_position_fx_rollover(script_bar);
+            // finding-430: a carried leveraged position already in margin
+            // deficit at the open is sliced here, at the open price, before
+            // any resting order sees the bar. The survivor's adverse-extreme
+            // check (pre-exit hook / end-of-bar process_margin_call) is
+            // unchanged and may book TV's second same-bar slice.
+            margin_call_slice_at_bar_open(script_bar);
         } catch (...) {
             current_bar_ = script_bar;
             throw;
@@ -813,6 +819,16 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
         double sum_vol = 0.0;
         for (const Bar& sb : sub_bars) sum_vol += sb.volume;
         mean_vol = sum_vol / total_sub;
+    }
+
+    // finding-430: the script bar's open is the first point of every
+    // sub-bar path. A carried leveraged position already in deficit there is
+    // sliced at the open before the first sub-bar's samples are walked.
+    {
+        const Bar open_point{bar_open, bar_open, bar_open, bar_open, 0.0,
+                             timestamp};
+        current_bar_ = open_point;
+        margin_call_slice_at_bar_open(open_point);
     }
 
     for (int si = 0; si < total_sub; ++si) {

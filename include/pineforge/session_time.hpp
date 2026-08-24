@@ -14,19 +14,72 @@ std::string normalize_timezone_for_posix(const std::string& tz);
 // Pine time(timeframe, session?, timezone?) and time_close(...).
 // Returns Unix milliseconds, or na<int64_t>() when the bar is outside the
 // requested session (TradingView semantics for filtered sessions).
+//
+// `syminfo_tz` is the symbol's exchange timezone (Pine `syminfo.timezone`;
+// codegen passes `syminfo_.timezone`). It is the DEFAULT zone the `session`
+// window is interpreted in when `tz` is empty — Pine reads a tz-less session
+// in the exchange timezone, not UTC. An explicit `tz` always wins. It does
+// NOT influence the timeframe open/close computation (explicit `tz`, else
+// UTC, exactly as before); an empty `syminfo_tz` reproduces the historical
+// UTC session default byte-for-byte.
+//
+// Feature macro: generated code tests this to decide whether the trailing
+// `syminfo_tz` argument exists, so one transpiler output compiles against
+// both this header and older ones (`PF_PINE_TIME_SYMINFO_TZ_ARG(x)` in the
+// emitted prelude expands to `, (x)` only when it is defined).
 // ---------------------------------------------------------------------------
+
+#define PF_PINE_TIME_HAS_SYMINFO_TZ 1
 
 int64_t pine_time(int64_t bar_ms,
                   const std::string& tf,
                   const std::string& session,
                   const std::string& tz,
-                  const std::string& chart_tf);
+                  const std::string& chart_tf,
+                  const std::string& syminfo_tz = std::string());
 
 int64_t pine_time_close(int64_t bar_ms,
                         const std::string& tf,
                         const std::string& session,
                         const std::string& tz,
-                        const std::string& chart_tf);
+                        const std::string& chart_tf,
+                        const std::string& syminfo_tz = std::string());
+
+// Symbol-clock forms. `sym_tz` / `sym_session` are Pine's syminfo.timezone
+// and syminfo.session (the engine's runtime overrides). For a D/W/M `tf`
+// called WITHOUT a valid session argument the returned open / close is the
+// SYMBOL's daily/weekly/monthly bar (17:00 ET on OANDA forex, 09:30 ET RTH
+// on NASDAQ equities, 00:00 UTC on a 24x7 UTC symbol — see
+// session_period_open_ms in timeframe.hpp). A valid `session` argument
+// defines the day in its own `tz` exactly as the forms above do
+// (TradingView rolls `time("D", "0000-2359", "America/New_York")` at New
+// York midnight on a UTC symbol — measured), and its window is read in the
+// explicit `tz`, else `sym_tz` (the syminfo default above), else UTC.
+// Intraday tfs are unchanged.
+// With sym_tz="UTC" and an empty / "24x7" sym_session these are
+// bit-identical to the five-argument forms above.
+//
+// Feature macro: generated code tests this to decide whether the trailing
+// (sym_tz, sym_session) pair exists (`PF_PINE_TIME_SESSION_DAY_ARGS(tz, s)`
+// in the emitted prelude expands to `, tz, s` only when it is defined, so
+// the same generated.cpp collapses to the 5-arg call on older engines).
+#define PF_PINE_TIME_HAS_SESSION_DAY 1
+
+int64_t pine_time(int64_t bar_ms,
+                  const std::string& tf,
+                  const std::string& session,
+                  const std::string& tz,
+                  const std::string& chart_tf,
+                  const std::string& sym_tz,
+                  const std::string& sym_session);
+
+int64_t pine_time_close(int64_t bar_ms,
+                        const std::string& tf,
+                        const std::string& session,
+                        const std::string& tz,
+                        const std::string& chart_tf,
+                        const std::string& sym_tz,
+                        const std::string& sym_session);
 
 // ---------------------------------------------------------------------------
 // Low-level session helpers (exposed for engine_run.cpp, unit tests,

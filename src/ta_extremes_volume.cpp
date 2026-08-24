@@ -446,18 +446,17 @@ double III::compute(double high, double low, double close, double volume) {
 
 // --- VWAP ---
 // Pine v6 `ta.vwap(source)` defaults to a Daily anchor — the cumulator
-// resets at the start of every UTC day. Earlier the engine treated VWAP
-// as a single chart-wide cumulator, which produced values that drifted
-// from TV by ~30% on intra-day bars (and progressively further as the
-// day advanced). Resetting on UTC-day boundaries restores parity. The
-// `anchor_day_` member is initialised lazily on the first non-NA bar.
-double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
-    saved_cum_pv_ = cum_pv_;
-    saved_cum_vol_ = cum_vol_;
-    saved_cum_pv_sq_ = cum_pv_sq_;
-    saved_anchor_day_ = anchor_day_;
-    if (is_na(src) || is_na(volume)) return na<double>();
-    int64_t day = timestamp_ms / kMsPerDay;
+// resets at the start of every SESSION day of the symbol (the UTC day on
+// a 24x7 UTC symbol; 17:00 ET on OANDA forex; 09:30 ET RTH on NASDAQ
+// equities — `anchor = timeframe.change("1D")` evaluates on the symbol's
+// own daily bar). Earlier the engine treated VWAP as a single chart-wide
+// cumulator, which produced values that drifted from TV by ~30% on
+// intra-day bars; then it reset on UTC-day boundaries, which is right for
+// the crypto corpus only. The tz-less overloads keep that UTC keying; the
+// tz/session overloads key on session_day_index, which is the identical
+// integer division for tz="UTC" + no session. `anchor_day_` is initialised
+// lazily on the first non-NA bar.
+void VWAP::roll_anchor(int64_t day) {
     if (anchor_day_ == std::numeric_limits<int64_t>::min()) {
         anchor_day_ = day;
     } else if (day != anchor_day_) {
@@ -466,11 +465,55 @@ double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
         cum_pv_sq_ = 0.0;
         anchor_day_ = day;
     }
+}
+
+double VWAP::compute(double src, double volume, int64_t timestamp_ms) {
+    saved_cum_pv_ = cum_pv_;
+    saved_cum_vol_ = cum_vol_;
+    saved_cum_pv_sq_ = cum_pv_sq_;
+    saved_anchor_day_ = anchor_day_;
+    if (is_na(src) || is_na(volume)) return na<double>();
+    roll_anchor(timestamp_ms / kMsPerDay);
     cum_pv_ += src * volume;
     cum_pv_sq_ += src * src * volume;
     cum_vol_ += volume;
     if (cum_vol_ == 0.0) return na<double>();
     return cum_pv_ / cum_vol_;
+}
+
+double VWAP::compute(double src, double volume, int64_t timestamp_ms,
+                     const std::string& tz, const std::string& session) {
+    saved_cum_pv_ = cum_pv_;
+    saved_cum_vol_ = cum_vol_;
+    saved_cum_pv_sq_ = cum_pv_sq_;
+    saved_anchor_day_ = anchor_day_;
+    if (is_na(src) || is_na(volume)) return na<double>();
+    roll_anchor(session_day_index(timestamp_ms, tz, session));
+    cum_pv_ += src * volume;
+    cum_pv_sq_ += src * src * volume;
+    cum_vol_ += volume;
+    if (cum_vol_ == 0.0) return na<double>();
+    return cum_pv_ / cum_vol_;
+}
+
+VWAPBandsResult VWAP::compute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult,
+                                    const std::string& tz, const std::string& session) {
+    saved_cum_pv_ = cum_pv_;
+    saved_cum_vol_ = cum_vol_;
+    saved_cum_pv_sq_ = cum_pv_sq_;
+    saved_anchor_day_ = anchor_day_;
+    if (is_na(src) || is_na(volume)) return {na<double>(), na<double>(), na<double>()};
+    roll_anchor(session_day_index(timestamp_ms, tz, session));
+    cum_pv_ += src * volume;
+    cum_pv_sq_ += src * src * volume;
+    cum_vol_ += volume;
+    if (cum_vol_ == 0.0) return {na<double>(), na<double>(), na<double>()};
+    double mean = cum_pv_ / cum_vol_;
+    double variance = cum_pv_sq_ / cum_vol_ - mean * mean;
+    if (variance < 0.0) variance = 0.0;  // guard against floating-point underflow
+    double stdev = std::sqrt(variance);
+    double band_offset = stdev_mult * stdev;
+    return {mean, mean + band_offset, mean - band_offset};
 }
 
 VWAPBandsResult VWAP::compute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult) {
@@ -479,15 +522,7 @@ VWAPBandsResult VWAP::compute_bands(double src, double volume, int64_t timestamp
     saved_cum_pv_sq_ = cum_pv_sq_;
     saved_anchor_day_ = anchor_day_;
     if (is_na(src) || is_na(volume)) return {na<double>(), na<double>(), na<double>()};
-    int64_t day = timestamp_ms / kMsPerDay;
-    if (anchor_day_ == std::numeric_limits<int64_t>::min()) {
-        anchor_day_ = day;
-    } else if (day != anchor_day_) {
-        cum_pv_ = 0.0;
-        cum_vol_ = 0.0;
-        cum_pv_sq_ = 0.0;
-        anchor_day_ = day;
-    }
+    roll_anchor(timestamp_ms / kMsPerDay);
     cum_pv_ += src * volume;
     cum_pv_sq_ += src * src * volume;
     cum_vol_ += volume;
@@ -741,6 +776,24 @@ VWAPBandsResult VWAP::recompute_bands(double src, double volume, int64_t timesta
     cum_pv_sq_ = saved_cum_pv_sq_;
     anchor_day_ = saved_anchor_day_;
     return compute_bands(src, volume, timestamp_ms, stdev_mult);
+}
+
+double VWAP::recompute(double src, double volume, int64_t timestamp_ms,
+                       const std::string& tz, const std::string& session) {
+    cum_pv_ = saved_cum_pv_;
+    cum_vol_ = saved_cum_vol_;
+    cum_pv_sq_ = saved_cum_pv_sq_;
+    anchor_day_ = saved_anchor_day_;
+    return compute(src, volume, timestamp_ms, tz, session);
+}
+
+VWAPBandsResult VWAP::recompute_bands(double src, double volume, int64_t timestamp_ms, double stdev_mult,
+                                      const std::string& tz, const std::string& session) {
+    cum_pv_ = saved_cum_pv_;
+    cum_vol_ = saved_cum_vol_;
+    cum_pv_sq_ = saved_cum_pv_sq_;
+    anchor_day_ = saved_anchor_day_;
+    return compute_bands(src, volume, timestamp_ms, stdev_mult, tz, session);
 }
 
 // --- Mode ---

@@ -1356,6 +1356,14 @@ protected:
     // short in ordinary historical dispatch; leveraged shapes stay fail-closed.
     // Returns true when it emits a broker liquidation row.
     bool process_carried_position_fx_rollover(const Bar& bar);
+    // finding-430: forced liquidation at the bar OPEN. A carried position
+    // with a finite liquidation price that already breaches the margin
+    // requirement at the open is sliced AT THE OPEN (quantity computed at
+    // the open price), before any resting order is evaluated there; the
+    // survivor keeps its ordinary adverse-extreme check, so one bar can book
+    // an open slice AND an extreme slice. Bars whose open does not breach
+    // are untouched. Returns true when a "Margin call" row was booked.
+    bool margin_call_slice_at_bar_open(const Bar& bar);
 
     // --- Slippage helper ---
     double round_to_mintick(double price) const {

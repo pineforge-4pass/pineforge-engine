@@ -859,6 +859,11 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
         return;
     }
     double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    // Zero-lot add safety net. The fill kernel (apply_filled_order_to_state's
+    // zero-lot decline) consumes such an order before it reaches here; should
+    // any path bypass that gate, never materialize a qty-0 pyramid lot nor
+    // spend a pyramiding slot on it — TV does not place the order at all.
+    if (!(new_qty > kQtyEpsilon)) return;
     double total_qty = position_qty_ + new_qty;
     position_entry_price_ = (position_entry_price_ * position_qty_ + fill_price * new_qty) / total_qty;
     position_qty_ = total_qty;

@@ -163,9 +163,21 @@ static int64_t tz_offset_ms(int64_t ms, const std::string& tz) {
     // transitions land on wall-clock hours while session markets are closed
     // (02:00 local Sunday), so the first bar seen on each UTC date carries
     // the offset every traded bar of that date uses.
-    thread_local int64_t cache_key = -1, cache_val = 0;
+    //
+    // A few direct-mapped slots instead of one: the session-day anchors
+    // below resolve the offset of the period OPEN's UTC day as well as the
+    // query bar's (a Tuesday 03:00 ET bar belongs to the session that opened
+    // Monday 17:00 ET, a different UTC date), and a single slot would thrash
+    // between the two on every call. Pure cache — values are identical.
+    // Slots are keyed by (UTC day, tz): a process that touches two zones
+    // (unit tests; multi-symbol hosts) must not read one zone's offset for
+    // the other.
+    struct Slot { int64_t key = -1, val = 0; std::string tz; };
+    constexpr int kSlots = 8;
+    thread_local Slot cache[kSlots];
     const int64_t dayk = utc_floor_day_ms(ms);
-    if (dayk == cache_key) return cache_val;
+    Slot& slot = cache[static_cast<size_t>(((dayk / kMsPerDay) % kSlots + kSlots) % kSlots)];
+    if (dayk == slot.key && slot.tz == tz) return slot.val;
     // Sample at MID-UTC-day: pairing the LOCAL midnight with the query
     // instant's UTC floor is wrong whenever the local date straddles UTC
     // midnight (FX evening bars are still the previous local date), which
@@ -173,9 +185,10 @@ static int64_t tz_offset_ms(int64_t ms, const std::string& tz) {
     // candle in two. Midday always belongs to the local date whose true
     // zone offset this cache stores.
     int64_t day_open = calendar_day_open_local_ms(dayk + kMsPerDay / 2, tz);
-    cache_val = day_open - dayk;
-    cache_key = dayk;
-    return cache_val;
+    slot.val = day_open - dayk;
+    slot.key = dayk;
+    slot.tz = tz;
+    return slot.val;
 }
 
 /// Minutes from symbol-local midnight to the first session window's open
@@ -251,50 +264,173 @@ static const std::string& empty_session() {
     return s;
 }
 
-/// Monday that starts the ISO week of a wall-clock decomposition
-/// (continuous across year boundaries; see the historical note below).
-static long monday_epoch_day_of(const struct tm& t) {
-    int y = t.tm_year + 1900, m = t.tm_mon + 1, d = t.tm_mday;
+/// Epoch day (days since 1970-01-01) of a proleptic-Gregorian civil date
+/// (Howard Hinnant's days_from_civil; m is 1-based).
+static long days_from_civil(int y, int m, int d) {
     y -= (m <= 2);
     long era = (y >= 0 ? y : y - 399) / 400;
     unsigned yoe = (unsigned)(y - era * 400);
     unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
     unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    long day = era * 146097L + (long)doe - 719468L;
+    return era * 146097L + (long)doe - 719468L;
+}
+
+/// Monday that starts the ISO week of a wall-clock decomposition
+/// (continuous across year boundaries; see the historical note below).
+static long monday_epoch_day_of(const struct tm& t) {
+    long day = days_from_civil(t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
     int dow = (t.tm_wday + 6) % 7;   // Mon=0..Sun=6
     return day - dow;
 }
 
+// ─── Session-day anchors (shared by security keys, VWAP, tf_change, time()) ──
+
+static int64_t floor_div_day(int64_t ms) {
+    int64_t d = ms / kMsPerDay;
+    if (ms < 0 && ms % kMsPerDay != 0) --d;
+    return d;
+}
+
+static bool is_utc_tz(const std::string& tz) {
+    return tz.empty() || tz == "UTC" || tz == "Etc/UTC";
+}
+
+/// Length of the (first) session window in minutes: 0930-1600 -> 390,
+/// 1700-1700 -> 1440 (wraps midnight), 24x7/empty -> 1440.
+static int session_length_minutes(const std::string& session) {
+    if (session.empty() || session == "24x7") return 1440;
+    int values[2] = {-1, -1};
+    int idx = 0, digits = 0, value = 0;
+    for (char c : session) {
+        if (c >= '0' && c <= '9') {
+            value = value * 10 + (c - '0');
+            if (++digits == 4) {
+                if (idx < 2) values[idx] = value;
+                ++idx;
+                digits = 0;
+                value = 0;
+            }
+        } else if (digits > 0) {
+            digits = 0; value = 0;
+        }
+        if (idx >= 2) break;
+    }
+    if (values[0] < 0 || values[1] < 0) return 1440;
+    int start = (values[0] / 100) * 60 + (values[0] % 100);
+    int end = (values[1] / 100) * 60 + (values[1] % 100);
+    int len = end - start;
+    if (len <= 0) len += 1440;   // wraps midnight (1700-1700, 1800-1700)
+    return len;
+}
+
+/// Days from a session-day's nominal OPEN date to its TradingView trading
+/// date: the local date the session closes on (last instant before the
+/// close). 1700-1700 -> +1 (the Sunday-17:00 open is Monday's bar);
+/// 0930-1600, 0000-0000 and 24x7 -> 0.
+static int session_trading_date_shift_days(const std::string& session) {
+    const int start = session_open_offset_minutes(session);
+    const int len = session_length_minutes(session);
+    return (start + len - 1) / 1440;
+}
+
+/// Wall-clock instant (UTC-encoded local time) at which session-day `d`
+/// opens: d * day + session open. Pure integer math on the exchange clock.
+static int64_t session_day_open_nominal_ms(int64_t d, const std::string& session) {
+    return d * kMsPerDay
+         + static_cast<int64_t>(session_open_offset_minutes(session)) * 60000;
+}
+
+/// Real epoch of session-day `d`'s open: the nominal wall-clock instant
+/// mapped back through the zone offset in force on THAT date (resolved
+/// twice so an east-of-UTC zone whose local open lands on the previous UTC
+/// date reads its own offset, not the nominal date's).
+static int64_t session_day_open_real_ms(int64_t d, const std::string& tz,
+                                        const std::string& session) {
+    const int64_t nominal = session_day_open_nominal_ms(d, session);
+    if (is_utc_tz(tz)) return nominal;
+    int64_t real = nominal + tz_offset_ms(nominal, tz);
+    real = nominal + tz_offset_ms(real, tz);
+    return real;
+}
+
+int64_t session_day_index(int64_t ms, const std::string& tz,
+                          const std::string& session) {
+    return floor_div_day(intraday_clock_ms(ms, tz, session));
+}
+
+/// Epoch day (days since 1970-01-01) of the first session-day of the
+/// D/W/M period containing session-day `d`.
+static int64_t session_period_first_day(int64_t d, const std::string& session,
+                                        CalendarPeriod period) {
+    if (period == CalendarPeriod::DAY || period == CalendarPeriod::NONE) return d;
+    const int shift = session_trading_date_shift_days(session);
+    const int64_t td = d + shift;                       // trading date (epoch day)
+    if (period == CalendarPeriod::WEEK) {
+        // 1970-01-01 (day 0) was a Thursday: tm_wday 4. Monday-start weeks
+        // over trading dates: forex Sun-17:00 opens are Monday's trading
+        // date and start the week; equities / 24x7 start Monday 09:30 / 00:00.
+        const int wday = static_cast<int>(((td + 4) % 7 + 7) % 7);   // 0=Sun
+        const int days_from_mon = (wday + 6) % 7;
+        return td - days_from_mon - shift;
+    }
+    // MONTH: first-of-month of the trading date.
+    time_t secs = static_cast<time_t>(td * kSecPerDay);
+    struct tm g {};
+    gmtime_r(&secs, &g);
+    return td - (g.tm_mday - 1) - shift;
+}
+
+int64_t session_period_open_ms(int64_t ms, const std::string& tz,
+                               const std::string& session,
+                               CalendarPeriod period) {
+    if (period == CalendarPeriod::NONE) return ms;
+    const int64_t d = session_day_index(ms, tz, session);
+    return session_day_open_real_ms(session_period_first_day(d, session, period),
+                                    tz, session);
+}
+
+int64_t session_period_close_ms(int64_t ms, const std::string& tz,
+                                const std::string& session,
+                                CalendarPeriod period) {
+    if (period == CalendarPeriod::NONE) return ms;
+    const int64_t d = session_day_index(ms, tz, session);
+    if (period == CalendarPeriod::DAY) {
+        // Session close on the same wall clock as the open (a DST step
+        // inside a session never happens while a market is open).
+        return session_day_open_real_ms(d, tz, session)
+             + static_cast<int64_t>(session_length_minutes(session)) * 60000;
+    }
+    const int64_t first = session_period_first_day(d, session, period);
+    int64_t next_first;
+    if (period == CalendarPeriod::WEEK) {
+        next_first = first + 7;
+    } else {
+        // First session-day of the NEXT month: step a trading date into the
+        // following month and re-anchor.
+        const int shift = session_trading_date_shift_days(session);
+        const int64_t td = first + shift;
+        time_t secs = static_cast<time_t>(td * kSecPerDay);
+        struct tm g {};
+        gmtime_r(&secs, &g);
+        int y = g.tm_year + 1900, m = g.tm_mon + 2;   // next month, 1-based
+        if (m > 12) { m = 1; ++y; }
+        next_first = days_from_civil(y, m, 1) - shift;
+    }
+    return session_day_open_real_ms(next_first, tz, session);
+}
+
 /// Period key for D/W/M attribution by SESSION-DAY: every bar belongs to the
 /// session that contains it, and that session belongs to the calendar period
-/// of its OPENING date. Forex weeks therefore start at the weekend-open
-/// session (TV's Sun-17:00-ET week), while equity/24x7 feeds — whose sessions
-/// open and close on one local date — resolve exactly as before (weeks stay
-/// Monday-partitioned over traded days; months unchanged).
+/// of its TRADING date (see session_trading_date_shift_days). Forex weeks
+/// therefore start at the weekend-open session (TV's Sun-17:00-ET week) and
+/// forex months at the session closing on the 1st, while equity/24x7 feeds —
+/// whose sessions open and close on one local date — resolve exactly as
+/// before (weeks stay Monday-partitioned over traded days; months unchanged).
 static long session_period_key(int64_t ms, const std::string& tz,
                                const std::string& session,
                                CalendarPeriod period) {
-    int64_t ic = intraday_clock_ms(ms, tz, session);
-    long day_idx = ic / kMsPerDay;
-    if (ic < 0 && ic % kMsPerDay != 0) --day_idx;   // floor division
-    // Real epoch of this session's open: shifted day start, mapped back
-    // through the zone offset (the session's bars share one offset).
-    const int64_t open_real = day_idx * kMsPerDay
-        + tz_offset_ms(ms, tz)
-        + static_cast<int64_t>(session_open_offset_minutes(session)) * 60000;
-    // Local calendar date of the open:
-    const int64_t lmid = calendar_day_open_local_ms(open_real, tz);
-    time_t secs = static_cast<time_t>(lmid / 1000);
-    struct tm g {};
-    gmtime_r(&secs, &g);
-    if (period == CalendarPeriod::MONTH) {
-        return static_cast<long>(g.tm_year) * 12 + g.tm_mon;
-    }
-    // WEEK: Sunday-start keys. A session opening Sunday begins the week;
-    // Mon..Fri sessions subtract their weekday back to the same Sunday.
-    // Equity/24x7 feeds trade Mon..Fri only, so the partition equals the
-    // previous Monday-start grouping bit-for-bit.
-    return day_idx - g.tm_wday;
+    const int64_t day_idx = session_day_index(ms, tz, session);
+    return static_cast<long>(session_period_first_day(day_idx, session, period));
 }
 
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period) {

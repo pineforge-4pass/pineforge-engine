@@ -543,60 +543,158 @@ static bool session_arg_is_timezone(const std::string& s) {
     return false;
 }
 
-// Resolve the (session, tz) pair for a time()/time_close() call. When a 2-arg
-// call passes a timezone-looking string in the session slot (and no explicit
-// tz), TV treats it as an invalid session and ignores it: drop the session
-// (no filter) but leave tz at the chart/UTC default — do NOT adopt the string
-// as the timezone. The daily boundary then rolls at the chart/exchange (UTC)
-// timezone, matching TradingView.
+// Resolve the session / timezone triple for a time()/time_close() call.
+//
+// Two distinct timezones come out of this:
+//
+//   session_tz_out — the zone the SESSION window ("0930-1600") is read in.
+//     Pine: "To interpret the time zone of the specified session, time() and
+//     time_close() use the time zone of the exchange by default, unless a
+//     timezone argument is specified" (i.e. the default is syminfo.timezone).
+//     So an explicit tz argument wins; otherwise the caller-supplied
+//     syminfo_tz (codegen passes ``syminfo_.timezone``); otherwise UTC (the
+//     historical engine default, still what an unknown/empty syminfo yields).
+//
+//   tf_tz_out — the zone the TIMEFRAME open/close is computed in. This is
+//     deliberately left exactly as before: explicit tz argument, else UTC.
+//     The D/W/M calendar path of compute_tf_open_ms is owned elsewhere and
+//     must not silently start rolling at syminfo.timezone just because a
+//     session was supplied; intraday timeframes are UTC-bucketed and never
+//     depended on tz anyway.
+//
+// When a 2-arg call passes a timezone-looking string in the session slot (and
+// no explicit tz), TV treats it as an invalid session and ignores it: drop the
+// session (no filter) but leave tz at the chart/UTC default — do NOT adopt the
+// string as the timezone. The daily boundary then rolls at the chart/exchange
+// (UTC) timezone, matching TradingView.
 static void resolve_session_tz(const std::string& session,
                                const std::string& tz_in,
+                               const std::string& syminfo_tz,
                                std::string& sess_out,
-                               std::string& tz_out) {
+                               std::string& session_tz_out,
+                               std::string& tf_tz_out) {
     sess_out = session;
-    tz_out = tz_in;
-    if (tz_out.empty() && session_arg_is_timezone(sess_out)) {
+    tf_tz_out = tz_in;
+    if (tf_tz_out.empty() && session_arg_is_timezone(sess_out)) {
         sess_out.clear();
     }
-    if (tz_out.empty())
-        tz_out = "UTC";
+    if (tf_tz_out.empty())
+        tf_tz_out = "UTC";
+    session_tz_out = tz_in;
+    if (session_tz_out.empty())
+        session_tz_out = syminfo_tz;
+    if (session_tz_out.empty())
+        session_tz_out = "UTC";
 }
 
 int64_t pine_time(int64_t bar_ms,
                   const std::string& tf_in,
                   const std::string& session,
                   const std::string& tz_in,
-                  const std::string& chart_tf) {
+                  const std::string& chart_tf,
+                  const std::string& syminfo_tz) {
     std::string tf = tf_in.empty() ? chart_tf : tf_in;
     if (tf.empty())
         tf = "1";
 
-    std::string sess, tz;
-    resolve_session_tz(session, tz_in, sess, tz);
+    std::string sess, session_tz, tf_tz;
+    resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
 
-    if (!sess.empty() && !passes_session_filter(sess, tz, bar_ms))
+    if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
-    return compute_tf_open_ms(bar_ms, tf, tz);
+    return compute_tf_open_ms(bar_ms, tf, tf_tz);
 }
 
 int64_t pine_time_close(int64_t bar_ms,
                         const std::string& tf_in,
                         const std::string& session,
                         const std::string& tz_in,
-                        const std::string& chart_tf) {
+                        const std::string& chart_tf,
+                        const std::string& syminfo_tz) {
     std::string tf = tf_in.empty() ? chart_tf : tf_in;
     if (tf.empty())
         tf = "1";
 
-    std::string sess, tz;
-    resolve_session_tz(session, tz_in, sess, tz);
+    std::string sess, session_tz, tf_tz;
+    resolve_session_tz(session, tz_in, syminfo_tz, sess, session_tz, tf_tz);
 
-    if (!sess.empty() && !passes_session_filter(sess, tz, bar_ms))
+    if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
         return na<int64_t>();
 
-    int64_t t_open = compute_tf_open_ms(bar_ms, tf, tz);
-    return compute_tf_close_ms(t_open, tf, tz);
+    int64_t t_open = compute_tf_open_ms(bar_ms, tf, tf_tz);
+    return compute_tf_close_ms(t_open, tf, tf_tz);
+}
+
+// Symbol-clock forms. Without a session argument the D/W/M bar open is the
+// SYMBOL's bar (session-day keyed — 17:00 ET on OANDA forex, 09:30 ET RTH on
+// equities, UTC midnight on a 24x7 UTC symbol), never a UTC calendar-day
+// floor. A VALID session argument defines the day itself: TradingView keys
+// the period on the session's timezone (`time("D", "0000-2359",
+// "America/New_York")` on a UTC crypto symbol rolls at New York midnight —
+// measured: lukeborgerding-orb-avwap-retest anchors a manual VWAP on
+// ta.change() of exactly that and only matches TV's tape 100% with the NY
+// roll, 18% with the symbol's UTC roll), so that path keeps the tz-only
+// calendar floor of the five-argument forms. A timezone-looking string in the
+// session slot is an invalid session (dropped by resolve_session_tz) and
+// falls back to the symbol clock. Intraday tfs keep the epoch-grid bucket.
+static bool symbol_clock_applies(const std::string& resolved_session,
+                                 CalendarPeriod cp) {
+    return cp != CalendarPeriod::NONE && resolved_session.empty();
+}
+
+int64_t pine_time(int64_t bar_ms,
+                  const std::string& tf_in,
+                  const std::string& session,
+                  const std::string& tz_in,
+                  const std::string& chart_tf,
+                  const std::string& sym_tz,
+                  const std::string& sym_session) {
+    std::string tf = tf_in.empty() ? chart_tf : tf_in;
+    if (tf.empty())
+        tf = "1";
+
+    // Composition with the syminfo session-tz default: the session window
+    // is read in the explicit tz, else syminfo.timezone (sym_tz), else UTC;
+    // a VALID session keeps the tf-open in the explicit-tz-else-UTC calendar
+    // (tf_tz), while no valid session takes the symbol's own D/W/M bar.
+    std::string sess, session_tz, tf_tz;
+    resolve_session_tz(session, tz_in, sym_tz, sess, session_tz, tf_tz);
+
+    if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
+        return na<int64_t>();
+
+    const CalendarPeriod cp = calendar_period_for(tf);
+    if (symbol_clock_applies(sess, cp))
+        return session_period_open_ms(bar_ms, sym_tz, sym_session, cp);
+    return compute_tf_open_ms(bar_ms, tf, tf_tz);
+}
+
+int64_t pine_time_close(int64_t bar_ms,
+                        const std::string& tf_in,
+                        const std::string& session,
+                        const std::string& tz_in,
+                        const std::string& chart_tf,
+                        const std::string& sym_tz,
+                        const std::string& sym_session) {
+    std::string tf = tf_in.empty() ? chart_tf : tf_in;
+    if (tf.empty())
+        tf = "1";
+
+    std::string sess, session_tz, tf_tz;
+    resolve_session_tz(session, tz_in, sym_tz, sess, session_tz, tf_tz);
+
+    if (!sess.empty() && !passes_session_filter(sess, session_tz, bar_ms))
+        return na<int64_t>();
+
+    const CalendarPeriod cp = calendar_period_for(tf);
+    if (symbol_clock_applies(sess, cp)) {
+        // Calendar periods report the period END (last ms), matching the
+        // tz-only forms above; intraday closes stay the exact boundary.
+        return session_period_close_ms(bar_ms, sym_tz, sym_session, cp) - 1;
+    }
+    int64_t t_open = compute_tf_open_ms(bar_ms, tf, tf_tz);
+    return compute_tf_close_ms(t_open, tf, tf_tz);
 }
 
 int64_t pine_time_tradingday(int64_t bar_ms,

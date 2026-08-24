@@ -113,6 +113,75 @@ static void test_time_gmt_in_session_slot() {
     CHECK(!is_na(pine_time(bar, "D", "UTC", "", "15")));
 }
 
+// --- syminfo_tz: default zone for a tz-less session (Pine: exchange tz) ---
+
+static void test_time_session_default_tz_is_syminfo() {
+    std::printf("test_time_session_default_tz_is_syminfo\n");
+    // time(tf, "0930-1600") with no tz argument: Pine reads the session in
+    // syminfo.timezone. 12:00Z is 08:00 EDT (outside NY RTH) but inside
+    // 0930-1600 read as UTC; 19:30Z is 15:30 EDT (inside) but outside in UTC.
+    int64_t bar_1200z = 1775563200000LL;  // 2026-04-07 12:00 UTC = 08:00 EDT
+    int64_t bar_1930z = 1775590200000LL;  // 2026-04-07 19:30 UTC = 15:30 EDT
+    // Historical default (empty syminfo_tz) == UTC, byte-identical.
+    CHECK(!is_na(pine_time(bar_1200z, "15", "0930-1600", "", "15")));
+    CHECK( is_na(pine_time(bar_1930z, "15", "0930-1600", "", "15")));
+    CHECK(!is_na(pine_time(bar_1200z, "15", "0930-1600", "", "15", "")));
+    CHECK(!is_na(pine_time(bar_1200z, "15", "0930-1600", "", "15", "UTC")));
+    // syminfo.timezone = America/New_York flips both bars.
+    CHECK( is_na(pine_time(bar_1200z, "15", "0930-1600", "", "15", "America/New_York")));
+    CHECK(!is_na(pine_time(bar_1930z, "15", "0930-1600", "", "15", "America/New_York")));
+    // time_close follows the same rule.
+    CHECK( is_na(pine_time_close(bar_1200z, "15", "0930-1600", "", "15", "America/New_York")));
+    CHECK(!is_na(pine_time_close(bar_1930z, "15", "0930-1600", "", "15", "America/New_York")));
+    // The intraday open value itself is unaffected (UTC bucket).
+    CHECK(pine_time(bar_1930z, "15", "0930-1600", "", "15", "America/New_York") == bar_1930z);
+}
+
+static void test_time_session_explicit_tz_beats_syminfo() {
+    std::printf("test_time_session_explicit_tz_beats_syminfo\n");
+    int64_t bar_1200z = 1775563200000LL;  // 08:00 EDT / 12:00 UTC / 21:00 Tokyo
+    // Explicit "UTC" wins over syminfo NY: 12:00 is inside 0930-1600.
+    CHECK(!is_na(pine_time(bar_1200z, "15", "0930-1600", "UTC", "15", "America/New_York")));
+    // Explicit NY wins over syminfo UTC: 08:00 EDT is outside.
+    CHECK( is_na(pine_time(bar_1200z, "15", "0930-1600", "America/New_York", "15", "UTC")));
+}
+
+static void test_time_session_syminfo_tz_dst_aware() {
+    std::printf("test_time_session_syminfo_tz_dst_aware\n");
+    // Session "0930-1600" in America/New_York across the 2025-11-02 fall-back:
+    // the UTC start of the window steps from 13:30Z (EDT) to 14:30Z (EST).
+    int64_t fri_1345z = 1761918300000LL;  // 2025-10-31 13:45 UTC = 09:45 EDT → inside
+    int64_t mon_1345z = 1762177500000LL;  // 2025-11-03 13:45 UTC = 08:45 EST → outside
+    int64_t mon_1445z = 1762181100000LL;  // 2025-11-03 14:45 UTC = 09:45 EST → inside
+    CHECK(!is_na(pine_time(fri_1345z, "15", "0930-1600", "", "15", "America/New_York")));
+    CHECK( is_na(pine_time(mon_1345z, "15", "0930-1600", "", "15", "America/New_York")));
+    CHECK(!is_na(pine_time(mon_1445z, "15", "0930-1600", "", "15", "America/New_York")));
+    // Under the old UTC default all three were "inside" — DST-invariant in UTC.
+    CHECK(!is_na(pine_time(fri_1345z, "15", "0930-1600", "", "15")));
+    CHECK(!is_na(pine_time(mon_1345z, "15", "0930-1600", "", "15")));
+}
+
+static void test_time_syminfo_tz_does_not_move_calendar_open() {
+    std::printf("test_time_syminfo_tz_does_not_move_calendar_open\n");
+    // syminfo_tz is a SESSION default only. The D open of a tz-less call keeps
+    // rolling exactly where it did before (UTC) — the calendar path is owned
+    // by a separate fix. An explicit tz still moves it (pre-existing).
+    int64_t bar = 1775572200000LL;  // 2026-04-07 14:30 UTC = 10:30 EDT
+    int64_t plain    = pine_time(bar, "D", "", "", "15");
+    int64_t with_sym = pine_time(bar, "D", "", "", "15", "America/New_York");
+    int64_t sess_sym = pine_time(bar, "D", "0000-2359", "", "15", "America/New_York");
+    int64_t explicit_ny = pine_time(bar, "D", "0000-2359", "America/New_York", "15");
+    CHECK(plain == 1775520000000LL);      // 2026-04-07 00:00 UTC
+    CHECK(with_sym == plain);
+    CHECK(sess_sym == plain);
+    CHECK(explicit_ny != plain);
+    CHECK(pine_time_close(bar, "D", "", "", "15", "America/New_York")
+          == pine_time_close(bar, "D", "", "", "15"));
+    // tz-looking string in the session slot is still dropped (invalid session),
+    // not adopted, regardless of syminfo_tz.
+    CHECK(pine_time(bar, "D", "America/New_York", "", "15", "America/New_York") == plain);
+}
+
 int main() {
     test_time_hourly_bucket_utc();
     test_time_session_ny_inside();
@@ -123,6 +192,10 @@ int main() {
     test_time_tz_in_session_daily_change();
     test_time_real_session_2arg_still_filters();
     test_time_gmt_in_session_slot();
+    test_time_session_default_tz_is_syminfo();
+    test_time_session_explicit_tz_beats_syminfo();
+    test_time_session_syminfo_tz_dst_aware();
+    test_time_syminfo_tz_does_not_move_calendar_open();
 
     std::printf("session_time: %d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed > 0 ? 1 : 0;

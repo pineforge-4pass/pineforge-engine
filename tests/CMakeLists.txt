@@ -20,6 +20,7 @@ set(TEST_SOURCES
     test_matrix_na
     test_matrix_snapshot_compat
     test_session_time
+    test_session_day_anchors
     test_time_tradingday
     test_chart_timezone
     test_intraday_rollover_chart_tz
@@ -85,6 +86,7 @@ set(TEST_SOURCES
     test_stop_decline_continue_path
     test_frozen_flat_gap_reject
     test_explicit_qty_fill_admission
+    test_zero_lot_entry_decline
     test_pooc_coof_reversal_gross_admission
     test_limit_fill_slippage
     test_strategy_commands_extra
@@ -113,6 +115,7 @@ set(TEST_SOURCES
     test_margin_call_intrabar_chronology
     test_margin_call_trail_exit_chronology
     test_margin_call_1x_long_entry_fill
+    test_margin_call_gap_open
     test_percent_equity_open_entry_fee
     test_streaming
     test_calc_on_order_fills

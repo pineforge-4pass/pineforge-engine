@@ -120,12 +120,14 @@ static void test_short_margin_call() {
 
     // bar0 entry @ close=100 (qty = 1000/100 = 10, notional 1000 = equity).
     //   liqPrice (short, 100% margin) = ((1000/10) + 100) / 2 = 100.
-    // bar1 small rise: high=105 > liq=100 -> partial 4x liquidation @ high=105.
+    // bar1 opens AT liq=100 (no open-point deficit — finding-430 slices a
+    // gap-open breach at the open) and rises: high=105 > liq=100 -> partial
+    // 4x liquidation @ high=105.
     //   equity@105 = 1000 - (105-100)*10 = 950; reqMargin@105 = 10*105 = 1050.
     //   qmin = 10 - 950/105 = 0.952381; 4x = 3.809524 (< 10) -> partial fill.
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: short fills @100
-        mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),  // 1: high 105 -> margin call
+        mk_bar(2000, 100.0, 105.0,  99.5, 104.0, 1.0),  // 1: high 105 -> margin call
         mk_bar(3000, 104.0, 130.0, 103.0, 128.0, 1.0),  // 2: high 130 -> further call
         mk_bar(4000, 128.0, 140.0, 127.0, 139.0, 1.0),  // 3: keep rising
     };
@@ -172,7 +174,7 @@ static void test_short_margin_call_disabled() {
     std::printf("test_short_margin_call_disabled\n");
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),
-        mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),
+        mk_bar(2000, 100.0, 105.0,  99.5, 104.0, 1.0),
         mk_bar(3000, 104.0, 200.0, 103.0, 199.0, 1.0),  // huge adverse move
     };
     ShortLiqProbe eng(/*disable_mc=*/true);
@@ -202,7 +204,7 @@ static void test_short_margin_call_qty_step() {
     // (bar1 high = 105).
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),  // 0: short fills @100
-        mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),  // 1: high 105 -> margin call
+        mk_bar(2000, 100.0, 105.0,  99.5, 104.0, 1.0),  // 1: high 105 -> margin call
         mk_bar(3000, 104.0, 130.0, 103.0, 128.0, 1.0),  // 2: high 130 -> further call
         mk_bar(4000, 128.0, 140.0, 127.0, 139.0, 1.0),  // 3: keep rising
     };
@@ -615,7 +617,7 @@ static void test_short_margin_call_account_fx() {
     constexpr double account_fx = 2.0;
     std::vector<Bar> bars = {
         mk_bar(1000, 100.0, 100.0,  99.0, 100.0, 1.0),
-        mk_bar(2000, 101.0, 105.0, 100.5, 104.0, 1.0),
+        mk_bar(2000, 100.0, 105.0,  99.5, 104.0, 1.0),
     };
     ShortLiqProbe eng(/*disable_mc=*/false, /*qty_step=*/0.0, account_fx);
     eng.run(bars.data(), (int)bars.size());

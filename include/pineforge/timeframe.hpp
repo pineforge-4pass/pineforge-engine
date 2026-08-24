@@ -97,6 +97,47 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
 bool tf_change(int64_t prev_ms, int64_t curr_ms, const std::string& tf,
                const std::string& tz, const std::string& session);
 
+// ─── Symbol-clock D/W/M bar anchors ────────────────────────────────────────────
+//
+// TradingView's daily bar is the SESSION day, not the UTC (nor the local
+// calendar) day: OANDA:EURUSD (America/New_York, 1700-1700) opens its daily
+// bar at 17:00 ET and its week at Sunday 17:00 ET; NASDAQ:AAPL (0930-1600)
+// opens at 09:30 ET Monday..Friday; a 24x7 UTC symbol opens at 00:00 UTC.
+// Every chart-level consumer of "the symbol's daily bar" — ta.vwap's default
+// anchor, timeframe.change("1D"), time("D")/time_close("D") — has to key on
+// this clock, the same one request.security aggregation already uses
+// (crosses_boundary / session_period_key above). With tz="UTC" and an
+// empty / "24x7" session all of these reduce to plain epoch integer math,
+// bit-identical to the UTC forms the corpus pins.
+//
+// Period attribution follows TV's trading-date rule: a session that wraps
+// midnight (1700-1700) is the trading day of the date it CLOSES on (the
+// bar opening Sunday 17:00 ET is Monday's daily bar), so forex weeks open on
+// the Sunday session and a month opens on the session whose close date is
+// the 1st. Equity / 24x7 sessions close on their open date, so their weeks
+// stay Monday-partitioned and months calendar-partitioned exactly as before.
+// W/M opens are nominal (the Monday / 1st session-day); they do not consult
+// a holiday calendar.
+
+/// Ordinal of the session day containing `ms` (days since epoch on the
+/// session clock). UTC + no session: ms / kMsPerDay.
+int64_t session_day_index(int64_t ms, const std::string& tz,
+                          const std::string& session);
+
+/// Open (Unix ms) of the symbol's D/W/M bar that contains `ms`.
+/// CalendarPeriod::NONE returns `ms` unchanged.
+int64_t session_period_open_ms(int64_t ms, const std::string& tz,
+                               const std::string& session,
+                               CalendarPeriod period);
+
+/// Exclusive close (Unix ms) of the symbol's D/W/M bar that contains `ms`:
+/// DAY -> session-day open + session length (16:00 ET on equities, the next
+/// 17:00 ET on forex, next midnight on 24x7); WEEK / MONTH -> the open of
+/// the next period's first session-day. CalendarPeriod::NONE returns `ms`.
+int64_t session_period_close_ms(int64_t ms, const std::string& tz,
+                                const std::string& session,
+                                CalendarPeriod period);
+
 // ─── TimeframeAggregator ───────────────────────────────────────────────────────
 
 class TimeframeAggregator {

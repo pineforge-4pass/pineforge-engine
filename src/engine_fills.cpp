@@ -1473,6 +1473,171 @@ bool BacktestEngine::margin_call_1x_long_opening_slice_before_priced_exit(
     return true;
 }
 
+// finding-430 (margin call on gap-open bars). TradingView's broker emulator
+// evaluates the margin requirement at every point of the synthesized
+// intrabar path, and the bar OPEN is the first such point. When a CARRIED
+// leveraged position (a short, or a leveraged long — anything with a finite
+// liquidation price) already breaches the requirement at the open, TV books
+// the forced-liquidation slice AT THE OPEN, with the quantity computed at
+// the open price:
+//
+//     qty_liq = 4 * floor((qty * P - equity(P)) / P)      P = bar.open
+//
+// (the usual floor-before-4x nibble with the sub-lot one-contract fallback),
+// and then re-checks the SURVIVOR at the bar's adverse extreme — so a single
+// bar can carry two "Margin call" rows: the open slice and the extreme
+// slice. The engine's process_margin_call ran once, at the end of the bar,
+// at the adverse extreme only, so an open-breach bar was liquidated at the
+// wrong price and with the wrong (extreme-computed) quantity.
+//
+// Fitted on the NASDAQ:AAPL 15m tapes (Lab findings 430/431, 8,414
+// "Margin call" events over 90 slugs, prices half-up-rounded to mintick):
+// every event whose position was already in deficit at the open fills AT
+// THE OPEN (1,020 open-gap events; the 7 remaining "extreme while the open
+// breached" events are the second slice of an open+extreme pair whose open
+// slice was the one-share fallback), 7,303 non-gap events fill at the
+// adverse extreme as before, and the open/extreme quantity rule is exact on
+// 8,403/8,414 (the 11 misses are one 2x-equity pyramid script). Exemplars:
+// dthomas1026 2025-04-23 13:30 UTC O=206.00/H=207.50 -> TV 4@206.00 (the
+// engine printed 8@207.50); benblackdiamond 2025-05-12 13:30 UTC -> TV
+// 1116@211.05 (open) + 3864 remainder (engine 1156@211.26 at the high);
+// alpha-wizard-wave-oscillator 2025-10-27 13:30 UTC -> TV 88@264.93 (open)
+// AND 12@266.66 (high) on the same bar.
+//
+// Placement: the open is the earliest point on the path, so the slice runs
+// at the broker-open boundary of dispatch_bar (right after the carried
+// FX rollover, BEFORE any resting order is evaluated at the open) and at
+// the first sub-bar open of the real-bar magnifier. None of the 507 carried
+// open-slice events in the tapes shares its bar with another exit AT the
+// open, so the open-slice-before-open-fills ordering is a modelling choice
+// consistent with TV's path chronology rather than a tape-pinned one. The
+// slice deliberately does NOT mark last_margin_call_event_bar_ /
+// intrabar_exit_margin_call_bar_: the survivor keeps its ordinary
+// adverse-extreme check (the chronological pre-exit hook or the end-of-bar
+// process_margin_call), which is TV's second same-bar slice. Bars whose
+// open does not breach are untouched, so on-tick feeds without open gaps
+// (the ETH corpus) stay bit-identical. The 1x long has no adverse-price
+// liquidation and keeps its fill-time affordability event; a COOF bar keeps
+// the established once-per-script-bar placement (no exemplar).
+bool BacktestEngine::margin_call_slice_at_bar_open(const Bar& bar) {
+    if (!margin_call_enabled_) return false;
+    if (position_side_ == PositionSide::FLAT) return false;
+    if (coof_scheduler_active_) return false;
+    // Carried positions only. A position filled at this bar's open is
+    // checked by its own opening-affordability event; the broker-open
+    // boundary runs before any fill of this bar, so this is a structural
+    // guard rather than a reachable branch.
+    if (position_open_bar_ >= bar_index_) return false;
+    const bool long_full_margin =
+        (position_side_ == PositionSide::LONG)
+        && std::isfinite(margin_long_)
+        && std::abs(margin_long_ / 100.0 - 1.0) < 1e-12;
+    if (long_full_margin) return false;
+    const double liq = compute_liquidation_price();
+    if (std::isnan(liq)) return false;
+
+    const double open = bar.open;
+    if (!std::isfinite(open) || !(open > 0.0)) return false;
+    const double pv = syminfo_.pointvalue;
+    const double qty = position_qty_;
+    const double margin_pct = (position_side_ == PositionSide::LONG)
+                                  ? margin_long_ : margin_short_;
+    const double m = margin_pct / 100.0;
+    if (!(m > 0.0)) return false;
+    if (!std::isfinite(qty) || !(qty > 0.0)
+        || !std::isfinite(position_entry_price_)
+        || !std::isfinite(pv) || !std::isfinite(initial_capital_)
+        || !std::isfinite(net_profit_sum_)) {
+        return false;
+    }
+
+    // Deficit at the open: the same fee-net eq/req arithmetic as the
+    // adverse-extreme cascade, evaluated at the open price.
+    const double fx = active_account_currency_fx();
+    if (!std::isfinite(fx) || !(fx > 0.0)) return false;
+    const double equity_open = percent_commission_live_equity(open);
+    if (!std::isfinite(equity_open)) return false;
+    const double margin_per_unit_open = open * pv * fx * m;
+    if (!std::isfinite(margin_per_unit_open) || !(margin_per_unit_open > 0.0)) {
+        return false;
+    }
+    const double req_margin_open = qty * margin_per_unit_open;
+    if (equity_open >= req_margin_open) return false;
+    double q_min = qty - equity_open / margin_per_unit_open;
+    if (!std::isfinite(q_min) || q_min <= kQtyEpsilon) return false;
+
+    // Slice quantity: floor-before-4x, representation guards, and the
+    // floor-zero one-contract fallback — identical to the cascade (see
+    // process_margin_call for the fitted evidence on each rule).
+    const double raw_q_min = q_min;
+    if (qty_step_ > 0.0) {
+        double step_count = q_min / qty_step_;
+        if (margin_zero_cover_full_liquidation_) {
+            const double nearest_step = std::round(step_count);
+            if (std::abs(step_count - nearest_step) < 1e-6) {
+                step_count = nearest_step;
+            }
+        }
+        q_min = std::floor(step_count) * qty_step_;
+    }
+    double qty_liq = 4.0 * q_min;
+    if (qty_step_ > 0.0) {
+        double floored = std::floor(qty_liq / qty_step_ + 1e-6) * qty_step_;
+        if (floored <= kQtyEpsilon) {
+            double one_contract_fallback =
+                std::numeric_limits<double>::quiet_NaN();
+            if (qty_step_ <= 1.0
+                && raw_q_min > kQtyEpsilon
+                && raw_q_min < 1.0) {
+                const double candidate = std::min(1.0, qty);
+                const bool full_position_cap =
+                    candidate >= qty - kQtyEpsilon;
+                const double gridded = apply_exit_qty_step(candidate);
+                const double grid_guard = std::max(
+                    1e-12, std::abs(candidate) * 1e-12);
+                if (full_position_cap
+                    || std::abs(gridded - candidate) <= grid_guard) {
+                    one_contract_fallback = candidate;
+                }
+            }
+            if (std::isfinite(one_contract_fallback)) {
+                floored = one_contract_fallback;
+            } else if (margin_zero_cover_full_liquidation_) {
+                floored = qty;
+            } else {
+                return false;
+            }
+        }
+        qty_liq = floored;
+    }
+    if (qty_liq >= qty - kQtyEpsilon) qty_liq = qty;
+    if (!std::isfinite(qty_liq) || qty_liq <= kQtyEpsilon) return false;
+
+    // The raw open is the fill base; the close helper applies the exit
+    // side's own snap/slippage exactly as the adverse-extreme path does.
+    const size_t trades_before = trades_.size();
+    if (qty_liq >= qty - kQtyEpsilon) {
+        execute_market_exit(open);
+    } else {
+        execute_partial_exit_qty(
+            open, qty_liq, PositionReductionCause::MARGIN_CALL);
+    }
+    if (trades_.size() == trades_before) return false;
+
+    ++broker_fill_event_seq_;
+    for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+        trades_[ti].exit_comment = "Margin call";
+        trades_[ti].exit_id = "__margin_call__";
+    }
+    // finding-311 REVIVE-B applies to this partial exactly as to the
+    // extreme-priced one: dormant brackets of the survivor re-register, and
+    // one already marketable at the open closes the remainder there.
+    if (position_side_ != PositionSide::FLAT) {
+        revive_position_brackets_after_margin_call_partial(open);
+    }
+    return true;
+}
+
 // ────────────────────────────────────────────────────────────────────
 // process_pending_orders helpers
 // ────────────────────────────────────────────────────────────────────
@@ -3418,6 +3583,85 @@ void BacktestEngine::apply_filled_order_to_state(
         }
         decline_and_cancel();
         return;
+    }
+    // Zero-lot entry decline (finding: 3commas HA-RSI fade short on
+    // NASDAQ:AAPL 15m, qty_step 1 share). TradingView floors every order
+    // quantity to the instrument's lot step and an entry whose floored
+    // quantity is ZERO is simply not placed: no fill, no trade row, no open
+    // trade — strategy.opentrades stays 0, the position stays flat, and the
+    // next signal whose quantity survives the floor fills normally. TV tape:
+    // 2025-12-02 15:45 UTC close 286.96, qty = 280/close = 0.9757 -> 0 shares,
+    // no row; the next TV entry is 2025-12-09 18:15 @ 278.35 qty 1 (280/278.38
+    // = 1.0058 -> 1). The engine used to hand the floored 0 straight to
+    // open_fresh_position, creating a PHANTOM position with position_qty_ == 0:
+    // strategy.position_size reads 0 (the script believes it is flat and never
+    // places its strategy.exit bracket) while strategy.opentrades reads 1 and
+    // pyramiding=1 is saturated, so every later entry is dropped for the rest
+    // of the tape (26 TV trades -> 2 engine trades; 172 later entry signals,
+    // 0 admitted). The same shape reaches CASH default sizing (frozen
+    // quantity floored to 0 — KI-72 above only covers percent_of_equity) and
+    // an explicit qty <= 0 (apply_qty_step returns it UNFLOORED). It also
+    // reaches same-direction ADDS: the 3commas pyramiding DCA family sizes
+    // safety orders as usdt/close, and on AAPL those floor to 0 — the engine
+    // booked 15 qty-0 add rows per slug (bch-overbought-rsi-fade-short-
+    // indicator, dot-rsi-reversal-dca-short-indicator: 54 engine trades vs 39
+    // TV) and each phantom add burned a pyramiding slot TV never spends.
+    //
+    // Decline cleanly, exactly like the KI-72 non-positive frozen quantity:
+    // consume the order, no fill, no trade row. The quantity tested is the one
+    // the market/priced-entry kernel would actually open with (frozen default,
+    // stop-placement snapshot, or calc_qty_for_type at the slipped fill).
+    // Scope: MARKET / priced ENTRY orders that would OPEN or ADD (flat or
+    // same-direction at the fill) — the add path is gated here too, upstream
+    // of add_to_pyramid_market, so a declined zero-lot add consumes no
+    // pyramiding slot (add_to_pyramid_market keeps a no-op safety net). A
+    // reversal keeps its existing path (its close leg is TV-pinned; a
+    // zero-qty reopen after it is not), and the
+    // KI-65 paired flat transaction is left alone (own qty > eps by
+    // construction). A priced entry carrying a deferred-flip carry
+    // (tv_carry_qty > 0) opens carry + own, never zero, so it is untouched.
+    if ((order.type == OrderType::MARKET || order.type == OrderType::ENTRY)
+        && !pending_flat_market_pair_is_live(order)) {
+        const PositionSide requested_side =
+            order.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        const bool opposite_at_fill =
+            position_side_ != PositionSide::FLAT
+            && position_side_ != requested_side;
+        if (!opposite_at_fill) {
+            double opening_qty;
+            if (!std::isnan(order.frozen_default_qty)) {
+                opening_qty = order.frozen_default_qty;
+            } else if (order.type == OrderType::ENTRY
+                       && use_stop_placement_open_qty(order, fill_price, bar)) {
+                opening_qty = order.stop_placement_open_qty;
+            } else {
+                opening_qty = calc_qty_for_type(
+                    apply_fill_slippage(fill_price, order.is_long),
+                    order.qty, order.qty_type);
+            }
+            // The deferred-flip carry is applied by enter_market_from_flat
+            // ONLY to a priced entry firing from FLAT whose placement side was
+            // the OPPOSITE of the requested side. A same-direction priced add
+            // (DCA safety limit/stop placed while already in the position)
+            // snapshots the live position into tv_carry_qty as well, but the
+            // add kernel never applies it — so it must not exempt a zero-lot
+            // add here (it would otherwise open a qty-0 pyramid lot and burn a
+            // pyramiding slot TV never spends).
+            const bool deferred_flip_carry =
+                order.type == OrderType::ENTRY
+                && order.tv_carry_qty > 0.0
+                && position_side_ == PositionSide::FLAT
+                && ((order.created_position_side == PositionSide::LONG)
+                        ? !order.is_long : order.is_long);
+            if (deferred_flip_carry) {
+                opening_qty = std::abs(opening_qty) + order.tv_carry_qty;
+            }
+            if (std::isfinite(opening_qty)
+                && std::abs(opening_qty) <= kQtyEpsilon) {
+                decline_and_cancel();
+                return;
+            }
+        }
     }
     // sizing_equity > 0 and frozen_default_qty > 0 are part of the invariant,
     // not paranoia: apply_qty_step returns qty UNFLOORED for qty <= 0
