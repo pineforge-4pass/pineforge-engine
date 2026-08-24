@@ -298,22 +298,44 @@ bool BacktestEngine::security_series_slot_is_new(int sec_id) const {
 }
 
 
+bool BacktestEngine::security_input_precedes_range_start(
+        const SecurityEvalState& state, int64_t input_ts) const {
+    if (!security_range_start_na_warmup_) {
+        return false;
+    }
+    // TradingView's deep-backtest request.security series are built from the
+    // HTF bars whose OPEN lies inside the loaded chart range: a bucket that
+    // opened before the range start is not a partial first bar, it is absent.
+    // Keying the cut on the bucket open (session_period_open_ms for D/W/M,
+    // the session-anchored intraday grid otherwise) reproduces that; keying
+    // on the input timestamp would let the pre-range remainder of that bucket
+    // pose as HTF bar 1 and shift every SMA-seeded EMA/RSI/ATR/Stoch by one
+    // bucket (OANDA:EURUSD 1700-1700: the week opening Sun 17:00 ET before
+    // the range start, the month opening Feb 28 17:00 ET before it). With a
+    // range start on the bucket grid — 24x7 UTC midnight for every intraday
+    // TF and D, Monday for W, the 1st for M — this is the timestamp cut.
+    // Lower-TF (passthrough) evaluators keep the timestamp cut exactly.
+    return state.aggregator.bucket_open_ms(input_ts) < security_range_start_ms_;
+}
+
+
 void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar) {
     // Opt-in KI-55 HTF warmup parity (security_range_start_na_warmup run flag):
     //   (a) start every request.security aggregation at range_start_ms, not the
-    //       feed start — drop pre-range input bars so the aggregator, its TA
-    //       members, and the exposed history all begin at the range start;
+    //       feed start — drop every input bar whose HTF bucket opened before
+    //       the range start (security_input_precedes_range_start) so the
+    //       aggregator, its TA members, and the exposed history all begin at
+    //       the first WHOLE bucket opening at/after the range start;
     //   (b) its embedded lookback ta.ema na-warms per TV built-in semantics —
     //       scoped by raising ta::ema_na_warmup_flag() for the duration of this
     //       call, which covers every evaluate_security() dispatch below (each of
     //       which is the only place the security's EMA members compute());
     //   (c) plain security expressions (e.g. `close`) read na until the first
     //       COMPLETED HTF bar from the range start — a consequence of (a): under
-    //       lookahead_off no evaluate_security() fires until the first bucket
-    //       completes, and the partial first bucket counts as HTF bar 1.
+    //       lookahead_off no evaluate_security() fires until that first whole
+    //       bucket completes; a bucket straddling the range start never counts.
     // All three collapse to no-ops when the flag is unset (byte-identical).
-    if (security_range_start_na_warmup_
-            && input_bar.timestamp < security_range_start_ms_) {
+    if (security_input_precedes_range_start(state, input_bar.timestamp)) {
         return;
     }
     struct SecurityNaWarmupScope {

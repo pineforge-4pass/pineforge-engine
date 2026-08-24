@@ -257,6 +257,23 @@ PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session) {
     static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_session(std::string(session));
 }
 
+/* Plumb the instrument class (syminfo.type: "forex" / "stock" / "crypto" /
+ * "futures" / ...) into syminfo_. Defaults to "crypto"; NULL/empty ignored. */
+PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type) {
+    if (!s || !type) return;
+    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_type(std::string(type));
+}
+
+/* Generic string-member injection (ticker / tickerid / currency /
+ * basecurrency / description / volumetype / type). Returns 0 when set, -1
+ * for a NULL handle, unknown key or empty value. */
+PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
+                                       const char* value) {
+    if (!s || !key || !value) return -1;
+    return static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_string(
+               std::string(key), std::string(value)) ? 0 : -1;
+}
+
 /* Inject the instrument tick size (syminfo.mintick). Drives the directional
  * stop-entry snap (long ceil / short floor) and slippage = N*mintick economics.
  * Defaults to 0.01 (crypto/equity); set per-instrument (e.g. 0.25 for ES,

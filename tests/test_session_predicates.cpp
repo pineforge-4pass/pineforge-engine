@@ -192,6 +192,58 @@ static void test_firstlastbar_transitions() {
     prev_in = in_session;
 }
 
+// A session window whose start equals its end ("1700-1700" — TradingView's
+// spelling of OANDA forex's 24-hour session; "0000-0000") spans the WHOLE
+// day. The half-open [start, end) arithmetic used to make it EMPTY, so every
+// bar of a forex symbol read session.ismarket == false and time(session) /
+// time_close == na (finding 455: a strategy gating its 'Session Close' exit
+// on minute(time_close) never fired on EURUSD).
+static void test_start_equals_end_is_full_day() {
+    const std::string tz = "America/New_York";
+    // 2026-04-07 (Tue, EDT = UTC-4), exact epoch ms:
+    const int64_t kTs_0930_ET = 1775568600000LL;   // 13:30 UTC
+    const int64_t kTs_1030_ET = 1775572200000LL;   // 14:30 UTC
+    const int64_t kTs_1515_ET = 1775589300000LL;   // 19:15 UTC
+    const int64_t kTs_1630_ET = 1775593800000LL;   // 20:30 UTC
+    const int64_t kTs_0500_ET = 1775552400000LL;   // 09:00 UTC (pre-market hours)
+    const int64_t kTs_1730_ET = 1775597400000LL;   // 21:30 UTC (post-market hours)
+    const int64_t kTs_SAT_1030_ET = 1775917800000LL;   // 2026-04-11 Sat
+    // Sweep a full local day at 1-minute grain: every minute is in session.
+    int in_1700 = 0, in_0000 = 0, in_days = 0;
+    for (int m = 0; m < 1440; ++m) {
+        int64_t ts = kTs_0930_ET + static_cast<int64_t>(m) * 60000LL;
+        if (pine_session_ismarket("1700-1700", tz, ts)) ++in_1700;
+        if (pine_session_ismarket("0000-0000", tz, ts)) ++in_0000;
+        if (pine_session_ismarket("1700-1700:1234567", tz, ts)) ++in_days;
+    }
+    CHECK(in_1700 == 1440);
+    CHECK(in_0000 == 1440);
+    CHECK(in_days == 1440);
+    // time(session) / time_close(session) resolve for every bar instead of na.
+    CHECK(pine_time(kTs_1030_ET, "15", "1700-1700", tz, "15") == kTs_1030_ET);
+    CHECK(pine_time_close(kTs_1030_ET, "15", "1700-1700", tz, "15")
+          == kTs_1030_ET + 15 * 60000LL);
+    // 15:15 ET bar on a 15m chart: time_close is 15:30 ET (the exemplar's
+    // minute(time_close) >= 30 session-close gate).
+    CHECK(pine_time_close(kTs_1515_ET, "15", "1700-1700", tz, "15")
+          == kTs_1515_ET + 15 * 60000LL);
+    CHECK(pine_time(kTs_1730_ET, "15", "1700-1700", tz, "15") == kTs_1730_ET);
+    // A 24-hour session has no pre-/post-market.
+    CHECK(!pine_session_ispremarket("1700-1700", tz, kTs_0500_ET));
+    CHECK(!pine_session_ispostmarket("1700-1700", tz, kTs_1730_ET));
+    CHECK(pine_session_ispremarket("0930-1600", tz, kTs_0500_ET));   // control
+    CHECK(pine_session_ispostmarket("0930-1600", tz, kTs_1730_ET));  // control
+    // Day-of-week filter still applies: Saturday is out even for 1700-1700.
+    CHECK(!pine_session_ismarket("1700-1700:23456", tz, kTs_SAT_1030_ET));
+    CHECK(pine_session_ismarket("1700-1700:23456", tz, kTs_1030_ET));
+    // Ordinary and wrapped windows are untouched.
+    CHECK(pine_session_ismarket("0930-1600", tz, kTs_1030_ET));
+    CHECK(!pine_session_ismarket("0930-1600", tz, kTs_1630_ET));
+    CHECK(pine_session_ismarket("1700-1600", tz, kTs_1030_ET));
+    CHECK(!pine_session_ismarket("1700-1600", tz, kTs_1630_ET));
+    CHECK(pine_session_ismarket("1700-1600", tz, kTs_1730_ET));
+}
+
 int main() {
     test_ismarket_inside_rth();
     test_ismarket_outside_rth_close();
@@ -208,6 +260,7 @@ int main() {
     test_hhmm_to_minutes_basic();
     test_ismarket_weekend_filter();
     test_firstlastbar_transitions();
+    test_start_equals_end_is_full_day();
 
     std::printf("\nsession_predicates: %d passed, %d failed\n",
                 tests_passed, tests_failed);

@@ -31,6 +31,7 @@ set(TEST_SOURCES
     test_historical_security_lookahead_projection
     test_pooc_global_full_exit
     test_security_range_start_na_warmup
+    test_security_range_start_bucket_gating
     test_chart_ema_na_warmup
     test_security_tf_validation
     test_security_lower_tf_input_passthrough
@@ -53,6 +54,7 @@ set(TEST_SOURCES
     test_generic_matrix_bool_dispatch
     test_map
     test_session_predicates
+    test_syminfo_type
     test_vwap_bands
     test_get_input_int64
     test_get_input_source
@@ -66,6 +68,7 @@ set(TEST_SOURCES
     test_handle_reuse_reset
     test_calendar_aggregation_wm
     test_calendar_wm_open_utc_fastpath
+    test_htf_session_close_completion
     test_adversarial_ohlcv
     test_report_trace
     test_path_resolve_extra
@@ -125,6 +128,7 @@ set(TEST_SOURCES
     test_pooc_position_visibility
     test_prearmed_exit_path_cursor
     test_prearmed_market_parent_gap_exit
+    test_prearmed_bracket_fill_bar
     test_relative_exit_after_limit_parent
     test_short_seed_close_collision
     test_short_seed_collision_percent

@@ -1069,7 +1069,13 @@ protected:
     // Independent opt-in KI-55 HTF warmup parity. When enabled,
     // request.security series aggregate from security_range_start_ms_ instead
     // of the feed start and their embedded ta.ema na-warm per TV built-in
-    // semantics. Default OFF; touched only through feed_security_eval_state.
+    // semantics. The cut is taken per evaluator on HTF-BUCKET opens, not on
+    // input timestamps: an input bar is dropped when the D/W/M (or intraday
+    // grid) bucket it belongs to opened before the range start, so the first
+    // HTF bar every series sees is a whole bucket that opened at/after the
+    // range start (security_input_precedes_range_start). Default OFF;
+    // consulted only by feed_security_eval_state and the historical
+    // lookahead projection builder.
     bool security_range_start_na_warmup_ = false;
     int64_t security_range_start_ms_ = 0;
     // Opt-in historical-only request.security lookahead projection. TradingView
@@ -2220,6 +2226,14 @@ protected:
     int security_lower_tf_sub_bar_index(int sec_id) const;
     void validate_security_timeframes(const std::string& input_tf);
     bool security_series_slot_is_new(int sec_id) const;
+    // KI-55 range-start gate for one evaluator: true when the input bar at
+    // `input_ts` belongs to an HTF bucket that opened before
+    // security_range_start_ms_ (always false while the flag is off). The
+    // progressive feed and the historical lookahead projection builder must
+    // agree on this predicate so projected child indexes line up with the
+    // per-state feed cursor.
+    bool security_input_precedes_range_start(const SecurityEvalState& state,
+                                             int64_t input_ts) const;
     void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar);
 
     virtual void configure_security_evaluators() {}
@@ -2906,6 +2920,28 @@ public:
     // would regress the crypto-on-shifted-chart case).
     void set_syminfo_timezone(const std::string& tz) { syminfo_.timezone = tz; }
     void set_syminfo_session(const std::string& s) { syminfo_.session = s; }
+    // ``syminfo.type`` ("crypto" default; "forex" / "stock" / "futures" /
+    // "index" / "fund" / "cfd" per TradingView). Scripts branch on it for
+    // instrument conventions — the canonical one being the pip size
+    // (``syminfo.type == "forex" ? 0.0001 : syminfo.mintick``), which on a
+    // 5-digit FX symbol under the crypto default computed every pip-scaled
+    // stop/target 10x too tight (finding 454). Empty is ignored.
+    void set_syminfo_type(const std::string& t) { if (!t.empty()) syminfo_.type = t; }
+    // Generic string-field injection for the remaining OHLCV-less syminfo
+    // members (ticker / tickerid / currency / basecurrency / description /
+    // volumetype / type). Unknown keys and empty values are ignored; returns
+    // true when a field was set.
+    bool set_syminfo_string(const std::string& key, const std::string& value) {
+        if (value.empty()) return false;
+        if (key == "type") { syminfo_.type = value; return true; }
+        if (key == "ticker") { syminfo_.ticker = value; return true; }
+        if (key == "tickerid") { syminfo_.tickerid = value; return true; }
+        if (key == "currency") { syminfo_.currency = value; return true; }
+        if (key == "basecurrency") { syminfo_.basecurrency = value; return true; }
+        if (key == "description") { syminfo_.description = value; return true; }
+        if (key == "volumetype") { syminfo_.volumetype = value; return true; }
+        return false;
+    }
     // Runtime syminfo injection (by design — the engine stores no instrument
     // metadata of its own; the harness supplies it per run). mintick drives the
     // directional fill snap + slippage*tick economics; pointvalue is the

@@ -138,6 +138,18 @@ int64_t session_period_close_ms(int64_t ms, const std::string& tz,
                                 const std::string& session,
                                 CalendarPeriod period);
 
+/// Exclusive close (Unix ms) of the LAST TRADED session-day of the D/W/M
+/// bar that contains `ms`: DAY is session_period_close_ms; WEEK / MONTH
+/// step back from the period's last session-day over weekend TRADING dates
+/// (Saturday / Sunday never hold a session on exchange-calendar symbols),
+/// so an equity week ends Friday 16:00 ET, a month whose last calendar day
+/// is a weekend ends on its last Friday, and the forex week ends Friday
+/// 17:00 ET (the Friday-open session is Saturday's trading date). Exchange
+/// holidays are not modelled. CalendarPeriod::NONE returns `ms`.
+int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
+                                            const std::string& session,
+                                            CalendarPeriod period);
+
 // ─── TimeframeAggregator ───────────────────────────────────────────────────────
 
 class TimeframeAggregator {
@@ -172,6 +184,17 @@ public:
 
     /// Whether aggregation is active (non-passthrough).
     bool is_active() const;
+
+    /// Open (Unix ms) of the target-TF bucket an input bar stamped `ms`
+    /// belongs to, on the aggregator's anchor clock (syminfo tz + session):
+    /// CALENDAR -> session_period_open_ms of the bar's D/W/M period (the
+    /// forex week opens Sunday 17:00 ET, its month on the session whose
+    /// close date is the 1st); RATIO -> the session-open-anchored intraday
+    /// grid bucket (the same key feed() splits on); PASSTHROUGH, or a
+    /// count-only ratio with no wall-clock width, -> `ms` itself. Pure
+    /// function of the configuration: it neither reads nor advances the
+    /// aggregation state, so callers may query it before feeding the bar.
+    int64_t bucket_open_ms(int64_t ms) const;
 
 private:
     enum class Mode { PASSTHROUGH, RATIO, CALENDAR };

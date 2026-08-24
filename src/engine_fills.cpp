@@ -2438,13 +2438,27 @@ void BacktestEngine::sort_orders_by_fill_phase(const Bar& bar) {
         for (const PendingOrder& order : pending_orders_) {
             auto parent = non_gap_limit_parents.find(order.from_entry);
             if (parent == non_gap_limit_parents.end()) continue;
+            // The child may have been (re-)issued on any bar from the
+            // parent's placement bar onward: a script that calls
+            // strategy.exit at global scope re-arms the same-id bracket
+            // every bar while the limit parent rests, so its created_bar
+            // trails the parent's by the time the parent fills while its
+            // created_seq (preserved across same-id replacement) still
+            // orders it after the parent. quantbyboji-nq-hma-midday-strategy
+            // (OANDA:EURUSD 15m, 2025-08-22 18:15Z): limit 1.17323 placed
+            // five bars earlier fills mid-path (open 1.17356), TV binds the
+            // 0.0098-tick loss leg to the fill and books it at 1.17322 on
+            // the same bar; a same-created_bar-only fence left the child in
+            // the open phase ahead of its parent, skipped while flat, and
+            // gap-filled it at the next open. The 140 sibling exits whose
+            // parent filled AT the open already shared the open phase.
             const bool exact_relative_child =
                 order.type == OrderType::EXIT
                 && !order.created_while_in_position
                 && order.created_position_side == PositionSide::FLAT
                 && !order.created_during_coof_recalc
                 && exit_children_by_parent[order.from_entry] == 1
-                && order.created_bar == parent->second.created_bar
+                && order.created_bar >= parent->second.created_bar
                 && parent->second.created_seq < order.created_seq
                 && std::isnan(order.limit_price)
                 && std::isnan(order.stop_price)
@@ -3071,9 +3085,10 @@ bool BacktestEngine::short_seed_collision_final_short_is_live(
 // Do not turn this into a general entry-bar wrong-side bypass. The exact
 // provenance below keeps freshly emitted/stale exits, priced parents, MARKET
 // pyramid adds, partial/sibling groups, POOC, COOF, and magnifier on their
-// existing paths. Generated Pine already lowers flat
-// strategy.position_avg_price to na, so an avg-derived flat bracket never
-// reaches this helper with a finite leg.
+// existing paths. A trail leg riding on the bracket is not a provenance
+// difference (see the note at the trail check below). Generated Pine
+// already lowers flat strategy.position_avg_price to na, so an avg-derived
+// flat bracket never reaches this helper with a finite leg.
 bool BacktestEngine::prearmed_market_parent_bracket_gaps_at_open(
         const PendingOrder& order, const Bar& bar,
         bool* limit_leg) const {
@@ -3090,18 +3105,37 @@ bool BacktestEngine::prearmed_market_parent_bracket_gaps_at_open(
         || order.requested_partial
         || order.qty_percent < 100.0 - kFullPercentEps
         || (!std::isfinite(order.stop_price)
-            && !std::isfinite(order.limit_price))
-        || !std::isnan(order.trail_points)
-        || !std::isnan(order.trail_price)) {
+            && !std::isfinite(order.limit_price))) {
         return false;
     }
+    // A trail leg (trail_points / trail_price) on the same bracket does not
+    // exclude it: the trail is dormant until its activation level is reached
+    // and the breached fixed leg is what fills at the open. Tape exemplar:
+    // stevenygabbyperez-fast-scalper-with-stops on NASDAQ:AAPL 15m —
+    // strategy.exit(stop=close*0.99, trail_points=...) armed with the MARKET
+    // entry, the RTH open gaps below the stop (2025-04-03: stop 221.59, open
+    // 205.54; 2026-04-27: stop 268.26, open 266.09). TV books the entry and
+    // 'Exit Long' at the open, PnL 0; the 11 same-bar stops of that script
+    // whose open did NOT breach the stop already matched on the path walk.
 
-    // Exactly ONE marketable leg at the open. Test the actual W0 broker
+    // At least one marketable leg at the open. Test the actual W0 broker
     // predicate: equality is marketable, and slippage can make the booked
-    // entry price differ from the bar open. Dual-marketable brackets stay
-    // out until a dedicated priority oracle exists (no tape exemplar); a
-    // bracket with neither leg marketable keeps the ordinary entry-bar
-    // path walk / wrong-side gating.
+    // entry price differ from the bar open. A bracket with neither leg
+    // marketable keeps the ordinary entry-bar path walk / wrong-side gating.
+    //
+    // DUAL-marketable brackets (stop AND limit both marketable at the open)
+    // scratch at the open too. Tape exemplar: bprakaash-new-era-strategy-1-0
+    // on OANDA:EURUSD 15m, 2025-07-03 / 07-24 / 08-07 / 09-09 13:30Z — a
+    // short whose signal-bar sl landed BELOW the close (so its target landed
+    // above it): stop 1.17528 < open 1.17646 < limit 1.17879 (07-03),
+    // stop == limit == open 1.16542 (08-07). TV books entry and 'TP/SL 1'
+    // exit at the same open, duration 0, PnL 0, in all four; the engine
+    // deferred the wrong-side legs to the next bar's open. The other 265
+    // trades of that population have exactly zero dual-marketable opens.
+    // Both legs price at the open, so the leg choice is observable only
+    // through slippage / per-leg comments; the STOP leg is taken, matching
+    // try_exit_open_gap_fill's resting-bracket precedence (trail, stop,
+    // limit) for the same open-gap event on a later bar.
     const bool live_long = position_side_ == PositionSide::LONG;
     const bool stop_gapped = std::isfinite(order.stop_price)
         && (live_long ? bar.open <= order.stop_price
@@ -3109,8 +3143,8 @@ bool BacktestEngine::prearmed_market_parent_bracket_gaps_at_open(
     const bool limit_marketable = std::isfinite(order.limit_price)
         && (live_long ? bar.open >= order.limit_price
                       : bar.open <= order.limit_price);
-    if (stop_gapped == limit_marketable) return false;
-    if (limit_leg != nullptr) *limit_leg = limit_marketable;
+    if (!stop_gapped && !limit_marketable) return false;
+    if (limit_leg != nullptr) *limit_leg = limit_marketable && !stop_gapped;
 
     int matching_children = 0;
     for (const PendingOrder& pending : pending_orders_) {
@@ -4077,7 +4111,7 @@ void BacktestEngine::apply_filled_order_to_state(
         // closing trade that no bar-boundary sample ever sees.
         double off = std::isnan(order.trail_offset)
                          ? 0.0
-                         : std::ceil(order.trail_offset) * syminfo_mintick_;
+                         : std::floor(order.trail_offset) * syminfo_mintick_;
         fold_exit_trail_peak_ = (position_side_ == PositionSide::LONG)
                                     ? fill_price + off
                                     : fill_price - off;

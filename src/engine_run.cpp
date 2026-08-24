@@ -1348,28 +1348,8 @@ void BacktestEngine::prepare_historical_security_lookahead_projections(
         return;
     }
 
-    // Range-start warmup drops every earlier input in
-    // feed_security_eval_state(). Build the projection from that exact same
-    // retained suffix and store child indexes relative to it: the per-state
-    // feed cursor likewise starts at zero on the first retained child because
-    // the early-return path never increments it. This composes the two
-    // independently opt-in historical semantics without exposing a pre-range
-    // aggregate or shifting the first projected bucket.
-    int projection_begin = 0;
-    if (security_range_start_na_warmup_) {
-        while (projection_begin < n_input
-                && input_bars[projection_begin].timestamp
-                    < security_range_start_ms_) {
-            ++projection_begin;
-        }
-        if (projection_begin >= n_input) {
-            return;
-        }
-    }
-
     historical_security_lookahead_projection_active_ = true;
     const int64_t input_ms = static_cast<int64_t>(input_seconds) * 1000;
-    const int projection_count = n_input - projection_begin;
 
     for (auto& state : security_eval_states_) {
         const int requested_seconds = tf_to_seconds(state.tf);
@@ -1383,6 +1363,31 @@ void BacktestEngine::prepare_historical_security_lookahead_projections(
         if (!eligible) {
             continue;
         }
+
+        // Range-start warmup drops, PER EVALUATOR, every input bar whose HTF
+        // bucket opened before the range start (feed_security_eval_state).
+        // Build this evaluator's projection from that exact same retained
+        // suffix and store child indexes relative to it: its feed cursor
+        // likewise starts at zero on the first retained child because the
+        // early-return path never increments it. The cut differs between
+        // evaluators (a "W" series loses the whole straddling week, a "60"
+        // series only the straddling hour), so it cannot be hoisted. This
+        // composes the two independently opt-in historical semantics without
+        // exposing a pre-range aggregate or shifting the first projected
+        // bucket. An evaluator with no retained input gets no projection and
+        // falls through to its (equally empty) progressive path.
+        int projection_begin = 0;
+        if (security_range_start_na_warmup_) {
+            while (projection_begin < n_input
+                    && security_input_precedes_range_start(
+                           state, input_bars[projection_begin].timestamp)) {
+                ++projection_begin;
+            }
+            if (projection_begin >= n_input) {
+                continue;
+            }
+        }
+        const int projection_count = n_input - projection_begin;
 
         const int expected_children = std::max(
             1, requested_seconds / input_seconds);

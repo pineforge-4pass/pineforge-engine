@@ -222,7 +222,7 @@ enum class LimitCell {
     ReversalLongLimitEq,  // rhyme17 2025-04-07 shape: limit == open exactly
     ReversalLongLimitPostOpen,   // correctly-sided limit, fills later at level
     ReversalShortLimitPostOpen,  // correctly-sided limit, fills later at level
-    ReversalDualMarketable,      // stop AND limit marketable: no open scratch
+    ReversalDualMarketable,      // stop AND limit marketable: open scratch
 };
 
 class PrearmedLimitBracketProbe final : public BacktestEngine {
@@ -365,11 +365,13 @@ static void check_reversal_limit(LimitCell cell, bool new_is_long,
 }
 
 // Dual-marketable bracket (stop gapped AND limit marketable at the open):
-// stays OFF the open-scratch path — no duration-0 trade on the entry bar.
-// The wrong-side stop is skipped on the entry bar and the order fires via
-// the ordinary resting-order gap on the NEXT bar's open (pre-existing
-// behavior, unchanged by the limit-leg extension).
-static void check_reversal_dual_marketable_holds_entry_bar() {
+// scratches at the open like the single-leg cells. Pinned by
+// bprakaash-new-era-strategy-1-0 (OANDA:EURUSD 15m, 2025-07-03 / 07-24 /
+// 08-07 / 09-09 13:30Z): TV books entry and exit at the same open,
+// duration 0, PnL 0. (Before that exemplar the cell held the entry bar and
+// fired on the NEXT bar's open; see test_prearmed_bracket_fill_bar.cpp for
+// the tape-shaped cells.)
+static void check_reversal_dual_marketable_scratches_at_open() {
     PrearmedLimitBracketProbe probe(LimitCell::ReversalDualMarketable);
     std::vector<Bar> bars = {
         bar(1'000, 100.0, 101.0, 99.0, 100.0),
@@ -384,9 +386,10 @@ static void check_reversal_dual_marketable_holds_entry_bar() {
     if (probe.trade_count() != 2) return;
     const Trade& fresh = probe.get_trade(1);
     CHECK(fresh.entry_bar_index == 2);
-    CHECK(fresh.exit_bar_index == 3);   // NOT the entry bar
+    CHECK(fresh.exit_bar_index == 2);   // the entry bar
     CHECK(near(fresh.entry_price, 100.0));
     CHECK(near(fresh.exit_price, 100.0));
+    CHECK(near(fresh.pnl, 0.0));
 }
 
 // Ordinary non-reversal exit re-issue control: the position has been open
@@ -529,7 +532,7 @@ int main() {
     check_reversal_limit(LimitCell::ReversalLongLimitEq, true, false);
     check_reversal_limit(LimitCell::ReversalLongLimitPostOpen, true, true);
     check_reversal_limit(LimitCell::ReversalShortLimitPostOpen, false, true);
-    check_reversal_dual_marketable_holds_entry_bar();
+    check_reversal_dual_marketable_scratches_at_open();
     check_ongoing_position_reissue_keeps_entry();
     check_partial_limit_does_not_scratch_parent_open();
 

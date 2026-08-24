@@ -568,7 +568,19 @@ ExitTrailState compute_exit_trail_state(bool is_long, double trail_points,
     // it follows the existing activation-only path; positive offsets retain
     // the ordinary best-price-minus/plus-offset trailing behaviour.
     if (!std::isnan(trail_offset) && trail_offset != 0.0) {
-        s.trail_offset_price = std::ceil(trail_offset) * syminfo_mintick;
+        // A fractional trail_offset (ticks) is TRUNCATED to whole ticks by
+        // TradingView, not rounded up: the trailing level sits
+        // floor(offset) ticks behind the running extreme. Measured on every
+        // non-gap trailing exit whose level could be recovered from the TV
+        // tape (level = TV fill + slippage ticks): nils123456-orb-strat on
+        // BINANCE:ETHUSDT.P (trail_offset = price / mintick, slippage 0)
+        // 11/11 and legalrice2697-nse-elite-strategy-v6-full-system on
+        // OANDA:EURUSD (atr * 4 / mintick, slippage 2) 58/62 sat exactly
+        // ONE tick nearer the extreme than the ceil() level, for offsets
+        // with a fractional part both below and above .5 (never zero for
+        // the .5+ half, which rules out round-to-nearest). Whole-tick
+        // offsets are unchanged.
+        s.trail_offset_price = std::floor(trail_offset) * syminfo_mintick;
     }
     s.exits_at_activation = std::isnan(s.trail_offset_price);
     // An EXPLICIT trail_offset=0 is TV's one-shot exit-at-activation trail:

@@ -611,6 +611,19 @@ PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz);
  *  ignored. Call before #run_backtest*. */
 PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session);
 
+/** Set the instrument class (``syminfo.type``: "forex", "stock", "crypto",
+ *  "futures", "index", "fund", "cfd", ...; default "crypto"). Scripts branch
+ *  on it for instrument conventions (e.g. the forex pip size). `NULL` /
+ *  empty ignored. Call before #run_backtest*. */
+PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type);
+
+/** Set one of the remaining string ``syminfo.*`` members by Pine member
+ *  name: "ticker", "tickerid", "currency", "basecurrency", "description",
+ *  "volumetype" (and "type"). Returns 0 when set, -1 for an unknown key,
+ *  empty value or NULL. Call before #run_backtest*. */
+PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
+                                       const char* value);
+
 /** Set the instrument tick size (``syminfo.mintick``, default 0.01). Drives the
  *  directional stop-entry snap and ``slippage = N*mintick`` economics. Set
  *  per-instrument (e.g. 0.25 for ES, 0.00001 for FX). Non-positive ignored.

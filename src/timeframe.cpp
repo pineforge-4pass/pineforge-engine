@@ -389,34 +389,78 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
                                     tz, session);
 }
 
+/// Epoch day of the first session-day of the W/M period FOLLOWING the one
+/// that contains session-day `d`.
+static int64_t session_period_next_first_day(int64_t d, const std::string& session,
+                                             CalendarPeriod period) {
+    const int64_t first = session_period_first_day(d, session, period);
+    if (period == CalendarPeriod::WEEK) return first + 7;
+    // First session-day of the NEXT month: step a trading date into the
+    // following month and re-anchor.
+    const int shift = session_trading_date_shift_days(session);
+    const int64_t td = first + shift;
+    time_t secs = static_cast<time_t>(td * kSecPerDay);
+    struct tm g {};
+    gmtime_r(&secs, &g);
+    int y = g.tm_year + 1900, m = g.tm_mon + 2;   // next month, 1-based
+    if (m > 12) { m = 1; ++y; }
+    return days_from_civil(y, m, 1) - shift;
+}
+
+/// Exclusive close (real epoch ms) of session-day `d`: its open plus the
+/// session length (16:00 ET on equities, the next 17:00 ET on forex).
+static int64_t session_day_close_real_ms(int64_t d, const std::string& tz,
+                                         const std::string& session) {
+    // Session close on the same wall clock as the open (a DST step inside
+    // a session never happens while a market is open).
+    return session_day_open_real_ms(d, tz, session)
+         + static_cast<int64_t>(session_length_minutes(session)) * 60000;
+}
+
 int64_t session_period_close_ms(int64_t ms, const std::string& tz,
                                 const std::string& session,
                                 CalendarPeriod period) {
     if (period == CalendarPeriod::NONE) return ms;
     const int64_t d = session_day_index(ms, tz, session);
-    if (period == CalendarPeriod::DAY) {
-        // Session close on the same wall clock as the open (a DST step
-        // inside a session never happens while a market is open).
-        return session_day_open_real_ms(d, tz, session)
-             + static_cast<int64_t>(session_length_minutes(session)) * 60000;
+    if (period == CalendarPeriod::DAY) return session_day_close_real_ms(d, tz, session);
+    return session_day_open_real_ms(session_period_next_first_day(d, session, period),
+                                    tz, session);
+}
+
+/// True when the run declares a real exchange session (equities RTH, forex
+/// 1700-1700). ""/"24x7" feeds anchor nothing and keep every integer fast
+/// path — the corpus regime must stay bit-identical.
+static bool has_trading_session(const std::string& session) {
+    return !session.empty() && session != "24x7";
+}
+
+/// Exclusive close (real epoch ms) of the LAST TRADED session-day of the
+/// D/W/M period containing `ms`. TradingView finalizes a D/W/M bar on the
+/// last chart bar that belongs to it, and on exchange-calendar symbols the
+/// period's last calendar day is frequently not a trading day: an equity
+/// week ends Friday 16:00 (Saturday holds no session), a month closing on a
+/// weekend ends on its last Friday, and the forex week's Friday-17:00-ET
+/// open (Saturday trading date) never trades, so the week ends Friday
+/// 17:00 ET. Weekend TRADING dates (Sat/Sun) are skipped; exchange
+/// holidays are not modelled (the period then completes lazily on the next
+/// period's first bar, exactly as before).
+int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
+                                            const std::string& session,
+                                            CalendarPeriod period) {
+    if (period == CalendarPeriod::NONE) return ms;
+    // ""/"24x7" markets trade every calendar day: nothing to skip.
+    if (!has_trading_session(session)) return session_period_close_ms(ms, tz, session, period);
+    const int64_t d = session_day_index(ms, tz, session);
+    if (period == CalendarPeriod::DAY) return session_day_close_real_ms(d, tz, session);
+    const int shift = session_trading_date_shift_days(session);
+    int64_t last = session_period_next_first_day(d, session, period) - 1;
+    for (int guard = 0; guard < 7; ++guard) {
+        const int64_t td = last + shift;                          // trading date
+        const int wday = static_cast<int>(((td + 4) % 7 + 7) % 7);   // 0=Sun..6=Sat
+        if (wday != 0 && wday != 6) break;
+        --last;
     }
-    const int64_t first = session_period_first_day(d, session, period);
-    int64_t next_first;
-    if (period == CalendarPeriod::WEEK) {
-        next_first = first + 7;
-    } else {
-        // First session-day of the NEXT month: step a trading date into the
-        // following month and re-anchor.
-        const int shift = session_trading_date_shift_days(session);
-        const int64_t td = first + shift;
-        time_t secs = static_cast<time_t>(td * kSecPerDay);
-        struct tm g {};
-        gmtime_r(&secs, &g);
-        int y = g.tm_year + 1900, m = g.tm_mon + 2;   // next month, 1-based
-        if (m > 12) { m = 1; ++y; }
-        next_first = days_from_civil(y, m, 1) - shift;
-    }
-    return session_day_open_real_ms(next_first, tz, session);
+    return session_day_close_real_ms(last, tz, session);
 }
 
 /// Period key for D/W/M attribution by SESSION-DAY: every bar belongs to the
@@ -609,7 +653,8 @@ AggregatedBar feed_passthrough_mode(const Bar& input_bar, FeedState s) {
 }
 
 AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
-                               int ratio, int64_t target_seconds) {
+                               int ratio, int64_t target_seconds,
+                               int64_t input_seconds) {
     AggregatedBar result;
     if (target_seconds > 0 && s.sub_bar_count > 0) {
         // Time-bucket aware ratio mode:
@@ -641,6 +686,23 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
 
         feed_merge_into_current(s, input_bar);
         bool complete = (s.sub_bar_count == ratio);
+        // Session-close completion: an intraday bucket that straddles the
+        // session close (RTH '240' 13:30-17:30 holds 10 of 16 sub-bars,
+        // '60' 15:30-16:30 two of four) never reaches its count. TradingView
+        // clips the bucket at the session close and finalizes it on the
+        // session's LAST chart bar (15:45 ET), not on the next session's
+        // first bar where the boundary test above would catch it a session
+        // late. Declared sessions only: ""/"24x7" feeds keep the count/
+        // boundary rules bit-for-bit, and multi-day ratio targets ("2D")
+        // are calendar-sized, not session-sized.
+        if (!complete && input_seconds > 0 && target_seconds < kSecPerDay
+            && has_trading_session(asess)) {
+            const int64_t next_ms = input_bar.timestamp + input_seconds * 1000;
+            if (next_ms >= session_period_last_traded_close_ms(
+                    input_bar.timestamp, atz, asess, CalendarPeriod::DAY)) {
+                complete = true;
+            }
+        }
         if (complete) {
             s.last_completed_bar = s.current_bar;
             s.has_completed = true;
@@ -770,6 +832,30 @@ AggregatedBar feed_calendar_mode(const Bar& input_bar, FeedState s,
                 }
             }
         }
+        if (!complete
+            && (cal_period == CalendarPeriod::WEEK
+                || cal_period == CalendarPeriod::MONTH)
+            && has_trading_session(asess)) {
+            // W/M on an exchange-calendar session: the rule above asks
+            // whether the same wall clock TOMORROW starts a new period, but
+            // Friday + 24h is Saturday — still this week (and a weekend
+            // month-end is still this month) — so the week completed on
+            // Monday 09:30 instead of Friday 15:45, where TradingView
+            // finalizes it (its last chart bar). Complete when the bar's
+            // end reaches the close of the period's last TRADED session-day
+            // (weekend trading dates skipped).
+            //
+            // Wrapped sessions (forex 1700-1700) need the same rule: the
+            // next-bar crossing above sees Friday 17:00 ET as the
+            // Friday-open session-day (Saturday's trading date, same
+            // week/month), so W/M completed on Sunday 17:00 and a
+            // crossover filled 17:15 where TradingView signals on Friday
+            // 16:45 and fills Sunday 17:00. The last traded session-day of
+            // the forex week is the Thursday-open one, closing Friday
+            // 17:00 ET.
+            complete = next_ms >= session_period_last_traded_close_ms(
+                input_bar.timestamp, atz, asess, cal_period);
+        }
     }
     if (complete) {
         s.last_completed_bar = s.current_bar;
@@ -803,7 +889,8 @@ AggregatedBar TimeframeAggregator::feed(const Bar& input_bar) {
         case Mode::PASSTHROUGH:
             return feed_passthrough_mode(input_bar, s);
         case Mode::RATIO:
-            return feed_ratio_mode(input_bar, s, ratio_, target_seconds_);
+            return feed_ratio_mode(input_bar, s, ratio_, target_seconds_,
+                                   input_seconds_);
         case Mode::CALENDAR:
             return feed_calendar_mode(input_bar, s, cal_period_, input_seconds_);
     }
@@ -826,6 +913,29 @@ Bar TimeframeAggregator::last_completed() const {
 
 bool TimeframeAggregator::is_active() const {
     return mode_ != Mode::PASSTHROUGH;
+}
+
+int64_t TimeframeAggregator::bucket_open_ms(int64_t ms) const {
+    switch (mode_) {
+        case Mode::CALENDAR:
+            return session_period_open_ms(ms, anchor_tz_, anchor_session_,
+                                          cal_period_);
+        case Mode::RATIO: {
+            if (target_seconds_ <= 0) return ms;   // count-only ratio: no grid
+            // Same grid feed_ratio_mode keys on: exchange-tz ms since
+            // local-midnight + session-open, floored to the bucket width.
+            // Floor (not truncate) so the open never lands after `ms` on a
+            // negative clock; for every real feed the two agree.
+            const int64_t bucket_ms = target_seconds_ * 1000;
+            const int64_t clock = intraday_clock_ms(ms, anchor_tz_, anchor_session_);
+            int64_t open_clock = (clock / bucket_ms) * bucket_ms;
+            if (clock < 0 && clock % bucket_ms != 0) open_clock -= bucket_ms;
+            return ms - (clock - open_clock);
+        }
+        case Mode::PASSTHROUGH:
+            return ms;
+    }
+    return ms;
 }
 
 } // namespace pineforge

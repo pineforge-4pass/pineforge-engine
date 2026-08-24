@@ -363,6 +363,18 @@ static bool is_allday_session(const std::string& session) {
     return (start4 == "0000" && (end4 == "2400" || end4 == "0000"));
 }
 
+// True when the first "HHMM-HHMM" window of `windows` has start == end —
+// TradingView's spelling of a 24-hour session ("1700-1700" on OANDA forex,
+// "0000-0000"). Such a window spans the whole day, not zero minutes.
+static bool first_window_is_full_day(const std::string& windows) {
+    std::size_t dash = windows.find('-');
+    if (dash == std::string::npos || dash < 4 || windows.size() < dash + 5)
+        return false;
+    int sm = hhmm_to_minutes(windows.substr(dash - 4, 4));
+    int em = hhmm_to_minutes(windows.substr(dash + 1, 4));
+    return sm >= 0 && em >= 0 && sm == em;
+}
+
 }  // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -410,6 +422,14 @@ bool local_time_in_session_windows(const std::string& windows_body,
         int em = hhmm_to_minutes(right);
         if (sm < 0 || em < 0)
             continue;
+        // A window whose start equals its end ("1700-1700" on OANDA forex,
+        // "0000-0000") is TradingView's 24-hour session: the market is
+        // open the whole day and every bar belongs to it. The half-open
+        // arithmetic below would otherwise make it EMPTY, so time(session)
+        // / time_close / session.ismarket returned na / false on every
+        // bar of a forex symbol (finding 455).
+        if (sm == em)
+            return true;
         bool in_win = (sm <= em) ? (mod >= sm && mod < em)
                                  : (mod >= sm || mod < em);
         if (in_win)
@@ -467,6 +487,10 @@ bool pine_session_ispremarket(const std::string& session,
     int rth_open_min = hhmm_to_minutes(rth_open_str);
     if (rth_open_min < 0)
         return false;
+    // start == end is a 24-hour session (see local_time_in_session_windows):
+    // the market never closes, so there is no pre-market.
+    if (first_window_is_full_day(windows))
+        return false;
 
     int pre_open_min = 4 * 60;
 
@@ -499,6 +523,9 @@ bool pine_session_ispostmarket(const std::string& session,
     }
     int rth_close_min = hhmm_to_minutes(rth_close_str);
     if (rth_close_min < 0)
+        return false;
+    // start == end is a 24-hour session: no post-market either.
+    if (first_window_is_full_day(windows))
         return false;
 
     int post_close_min = 20 * 60;

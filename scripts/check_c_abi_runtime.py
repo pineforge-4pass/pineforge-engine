@@ -22,6 +22,8 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_set_chart_timezone",
     "strategy_set_syminfo_timezone",
     "strategy_set_syminfo_session",
+    "strategy_set_syminfo_type",
+    "strategy_set_syminfo_string",
     "strategy_set_syminfo_mintick",
     "strategy_set_syminfo_pointvalue",
     "strategy_set_syminfo_metadata",

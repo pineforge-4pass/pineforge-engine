@@ -1017,6 +1017,13 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         chart_timezone=chart_tz,
         syminfo_timezone=str(runtime_overrides.get("timezone") or "") or None,
         syminfo_session=str(runtime_overrides.get("session") or "") or None,
+        syminfo_type=str(runtime_overrides.get("type") or "") or None,
+        syminfo_strings={
+            k: str(runtime_overrides.get(k))
+            for k in ("ticker", "tickerid", "currency", "basecurrency",
+                      "description", "volumetype")
+            if runtime_overrides.get(k)
+        } or None,
         syminfo_metadata=syminfo_metadata,
         syminfo_mintick=_num(runtime_overrides.get("mintick")),
         syminfo_pointvalue=_num(runtime_overrides.get("pointvalue")),
@@ -1125,6 +1132,16 @@ class Strategy:
         if hasattr(L, "strategy_set_syminfo_session"):
             L.strategy_set_syminfo_session.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
             L.strategy_set_syminfo_session.restype = None
+        # syminfo.type ("forex"/"stock"/"crypto"/...) + the generic string
+        # member setter (ticker/tickerid/currency/basecurrency/...). Older
+        # .so builds predate these exports — hasattr-guarded like the rest.
+        if hasattr(L, "strategy_set_syminfo_type"):
+            L.strategy_set_syminfo_type.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            L.strategy_set_syminfo_type.restype = None
+        if hasattr(L, "strategy_set_syminfo_string"):
+            L.strategy_set_syminfo_string.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+            L.strategy_set_syminfo_string.restype = ctypes.c_int
         if hasattr(L, "strategy_set_syminfo_metadata"):
             L.strategy_set_syminfo_metadata.argtypes = [
                 ctypes.c_void_p, ctypes.c_char_p, ctypes.c_double]
@@ -1151,6 +1168,8 @@ class Strategy:
             chart_timezone: str | None = None,
             syminfo_timezone: str | None = None,
             syminfo_session: str | None = None,
+            syminfo_type: str | None = None,
+            syminfo_strings: dict | None = None,
             syminfo_metadata: dict | None = None,
             syminfo_mintick: float | None = None,
             syminfo_pointvalue: float | None = None,
@@ -1243,6 +1262,17 @@ class Strategy:
                 self.lib.strategy_set_syminfo_timezone(state, str(syminfo_timezone).encode())
             if syminfo_session and hasattr(self.lib, "strategy_set_syminfo_session"):
                 self.lib.strategy_set_syminfo_session(state, str(syminfo_session).encode())
+            # Instrument class (syminfo.type). Unset keeps the engine's
+            # "crypto" default byte-identical; per-symbol datasets pass
+            # TV's value ("forex" for OANDA:EURUSD, "stock" for NASDAQ:AAPL).
+            if syminfo_type and hasattr(self.lib, "strategy_set_syminfo_type"):
+                self.lib.strategy_set_syminfo_type(state, str(syminfo_type).encode())
+            if syminfo_strings and hasattr(self.lib, "strategy_set_syminfo_string"):
+                for skey, sval in syminfo_strings.items():
+                    if sval is None or str(sval) == "":
+                        continue
+                    self.lib.strategy_set_syminfo_string(
+                        state, str(skey).encode(), str(sval).encode())
             if syminfo_metadata and hasattr(self.lib, "strategy_set_syminfo_metadata"):
                 for mkey, mval in syminfo_metadata.items():
                     try:
@@ -1515,6 +1545,32 @@ def _filter_trace_to_window(trace: list[dict], window: tuple[int, int] | None) -
     ]
 
 
+def format_trade_qty(qty: float) -> str:
+    """Lot-faithful quantity text for the TV-alignable export.
+
+    The previous ``f"{qty:g}"`` kept only 6 significant digits, so any
+    quantity with more digits than that was silently rewritten on the way
+    out: an OANDA:EURUSD all-in lot of 923941.16 units (TV export, 0.01 lot
+    step) printed as ``923941``, 897902.68 printed as ``897903`` (rounded UP),
+    92293.36 as ``92293.4``, and anything >= 1e6 as ``1e+06``. The ledger held
+    the exact value; only the CSV lied, which put a spurious 0.01-0.5 unit
+    "qty miss" on 1933/2708 entries of the EURUSD KI-52 all-in probe and on
+    every giua64 entry while the fills themselves were exact.
+
+    Eight decimals cover every lot step in use (1 share, 0.01 unit, 0.0001
+    contract, satoshi-scale 1e-8) and absorb binary noise from
+    floor(q/step)*step (0.30000000000000004 -> ``0.3``); trailing zeros are
+    trimmed the way TradingView prints its ``Size (qty)`` column, so every
+    value the old formatter rendered faithfully renders byte-identically.
+    """
+    if not math.isfinite(qty):
+        return f"{qty:g}"
+    text = f"{qty:.8f}".rstrip("0").rstrip(".")
+    if text in ("", "-0", "-"):
+        return "0"
+    return text
+
+
 def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
     """Emit one row per trade *side* (exit then entry) in reverse-chronological
     order — byte-for-byte alignable with TradingView's `trades.csv` export.
@@ -1552,7 +1608,7 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
                     n, side,
                     _fmt_time_utc(t[time_key]),
                     f"{t[price_key]:.6f}",
-                    f"{t['qty']:g}",
+                    format_trade_qty(float(t["qty"])),
                     f"{t['pnl']:.6f}",
                     f"{t['pnl_pct']:.4f}",
                     f"{t['max_runup']:.6f}",
@@ -1677,6 +1733,10 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
         syminfo["timezone"] = run_kwargs["syminfo_timezone"]
     if run_kwargs.get("syminfo_session"):
         syminfo["session"] = run_kwargs["syminfo_session"]
+    if run_kwargs.get("syminfo_type"):
+        syminfo["type"] = run_kwargs["syminfo_type"]
+    for skey, sval in (run_kwargs.get("syminfo_strings") or {}).items():
+        syminfo[skey] = sval
     if run_kwargs.get("syminfo_mintick") is not None:
         syminfo["mintick"] = run_kwargs["syminfo_mintick"]
     if run_kwargs.get("syminfo_pointvalue") is not None:

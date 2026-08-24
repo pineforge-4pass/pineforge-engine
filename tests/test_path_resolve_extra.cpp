@@ -475,6 +475,57 @@ static void test_zero_offset_trail_never_retro_arms() {
 // On the entry bar a no-trail EXIT whose stop/limit lies on the wrong side of
 // entry would have fired before the position existed -> blocked (+inf metric).
 // Off the entry bar, or on the correct side, it returns a finite coordinate.
+// A FRACTIONAL trail_offset (ticks) is truncated to whole ticks — the
+// level trails floor(offset) ticks behind the running extreme. TV evidence:
+// nils123456-orb-strat (ETHUSDT.P, trail_offset = price / mintick,
+// slippage 0) 11/11 and legalrice2697 (OANDA:EURUSD, atr * 4 / mintick,
+// slippage 2) 58/62 non-gap trailing exits sat exactly one tick nearer the
+// extreme than the previous ceil() level, for fractional parts on both
+// sides of .5 (so it is not round-to-nearest either).
+static void test_fractional_trail_offset_truncates() {
+    std::printf("test_fractional_trail_offset_truncates\n");
+    // Same bar / activation as the LONG case above (peak 102 on the L->H
+    // leg); trail_offset = 50.7 ticks -> floor -> 0.50 -> fill @ 101.50,
+    // not 102 - 0.51 = 101.49 (ceil) and not round-to-nearest (51 -> 101.49).
+    Bar trail_long = mk(100.5, 102, 100, 100.2);
+    ExitPathFill fl_hi = resolve_exit_path_fill(
+        trail_long, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50.7, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(fl_hi.should_fill == true);
+    CHECK(near(fl_hi.fill_price, 101.50));
+    // Fractional part below .5 truncates the same way (50.2 -> 50 ticks).
+    ExitPathFill fl_lo = resolve_exit_path_fill(
+        trail_long, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50.2, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(fl_lo.should_fill == true);
+    CHECK(near(fl_lo.fill_price, 101.50));
+    // SHORT mirror: best 98 + floor(50.7) ticks = 98.50.
+    Bar trail_short = mk(99.5, 101.5, 98, 99.8);
+    ExitPathFill fs = resolve_exit_path_fill(
+        trail_short, PositionSide::SHORT, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50.7, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(fs.should_fill == true);
+    CHECK(near(fs.fill_price, 98.50));
+    // Whole-tick offsets are unchanged (50 -> 0.50).
+    ExitPathFill fl_int = resolve_exit_path_fill(
+        trail_long, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/50.0, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(near(fl_int.fill_price, 101.50));
+    // Sub-tick offsets (0 < offset < 1) truncate to zero ticks: the level
+    // rides the extreme itself once armed (distinct from an explicit 0,
+    // which is the exit-at-activation shape). peak 102 -> fill @ 102.00.
+    ExitPathFill fl_sub = resolve_exit_path_fill(
+        trail_long, PositionSide::LONG, kNaN, kNaN,
+        /*trail_points=*/100, /*trail_price=*/kNaN, /*trail_offset=*/0.6, /*entry=*/100,
+        /*best_start=*/kNaN, false, false, kMintick);
+    CHECK(fl_sub.should_fill == true);
+    CHECK(near(fl_sub.fill_price, 102.00));
+}
+
 static void test_entry_bar_blocks_no_trail_exit() {
     std::printf("test_entry_bar_blocks_no_trail_exit\n");
     Bar wide = mk(100, 105, 95, 100);  // spans both 102 and 98
@@ -543,6 +594,7 @@ int main() {
     test_path_cross_kind_priority_order();
     test_resolve_exit_trail_fills();
     test_zero_offset_trail_never_retro_arms();
+    test_fractional_trail_offset_truncates();
     test_entry_bar_blocks_no_trail_exit();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
