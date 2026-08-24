@@ -251,6 +251,52 @@ static const std::string& empty_session() {
     return s;
 }
 
+/// Monday that starts the ISO week of a wall-clock decomposition
+/// (continuous across year boundaries; see the historical note below).
+static long monday_epoch_day_of(const struct tm& t) {
+    int y = t.tm_year + 1900, m = t.tm_mon + 1, d = t.tm_mday;
+    y -= (m <= 2);
+    long era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = (unsigned)(y - era * 400);
+    unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    long day = era * 146097L + (long)doe - 719468L;
+    int dow = (t.tm_wday + 6) % 7;   // Mon=0..Sun=6
+    return day - dow;
+}
+
+/// Period key for D/W/M attribution by SESSION-DAY: every bar belongs to the
+/// session that contains it, and that session belongs to the calendar period
+/// of its OPENING date. Forex weeks therefore start at the weekend-open
+/// session (TV's Sun-17:00-ET week), while equity/24x7 feeds — whose sessions
+/// open and close on one local date — resolve exactly as before (weeks stay
+/// Monday-partitioned over traded days; months unchanged).
+static long session_period_key(int64_t ms, const std::string& tz,
+                               const std::string& session,
+                               CalendarPeriod period) {
+    int64_t ic = intraday_clock_ms(ms, tz, session);
+    long day_idx = ic / kMsPerDay;
+    if (ic < 0 && ic % kMsPerDay != 0) --day_idx;   // floor division
+    // Real epoch of this session's open: shifted day start, mapped back
+    // through the zone offset (the session's bars share one offset).
+    const int64_t open_real = day_idx * kMsPerDay
+        + tz_offset_ms(ms, tz)
+        + static_cast<int64_t>(session_open_offset_minutes(session)) * 60000;
+    // Local calendar date of the open:
+    const int64_t lmid = calendar_day_open_local_ms(open_real, tz);
+    time_t secs = static_cast<time_t>(lmid / 1000);
+    struct tm g {};
+    gmtime_r(&secs, &g);
+    if (period == CalendarPeriod::MONTH) {
+        return static_cast<long>(g.tm_year) * 12 + g.tm_mon;
+    }
+    // WEEK: Sunday-start keys. A session opening Sunday begins the week;
+    // Mon..Fri sessions subtract their weekday back to the same Sunday.
+    // Equity/24x7 feeds trade Mon..Fri only, so the partition equals the
+    // previous Monday-start grouping bit-for-bit.
+    return day_idx - g.tm_wday;
+}
+
 bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period) {
     return crosses_boundary(prev_ms, curr_ms, period, "UTC", "");
 }
@@ -278,31 +324,21 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
         case CalendarPeriod::DAY:
             return prev_tm.tm_yday != curr_tm.tm_yday ||
                    prev_tm.tm_year != curr_tm.tm_year;
-        case CalendarPeriod::WEEK: {
-            // Monday-start weeks, CONTINUOUS across the year boundary: the ISO
-            // week that straddles Dec/Jan (e.g. Mon 2025-12-29 .. Sun 2026-01-04)
-            // is ONE week, not two. The previous (year || week-of-year) test
-            // forced a spurious boundary at every Jan 1, splitting that week and
-            // updating weekly request.security a bar early — visible as flipped
-            // crosses in a chop-at-level month (proposed-probes weekly probe).
-            // Fix: compare the absolute calendar date of each timestamp's Monday.
-            auto monday_epoch_day = [](const struct tm& t) -> long {
-                // days since 1970-01-01 (proleptic Gregorian), then back up to Monday.
-                int y = t.tm_year + 1900, m = t.tm_mon + 1, d = t.tm_mday;
-                y -= (m <= 2);
-                long era = (y >= 0 ? y : y - 399) / 400;
-                unsigned yoe = (unsigned)(y - era * 400);
-                unsigned doy = (153u * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-                unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-                long day = era * 146097L + (long)doe - 719468L;
-                int dow = (t.tm_wday + 6) % 7;   // Mon=0..Sun=6
-                return day - dow;                // the Monday that starts this week
-            };
-            return monday_epoch_day(prev_tm) != monday_epoch_day(curr_tm);
-        }
+        case CalendarPeriod::WEEK:
+            // Sunday-start week keys require a declared session (the weekend
+            // open defines the FX week). Session-less feeds — 24x7 crypto,
+            // bare daily grids — keep the Monday-start epoch math below,
+            // which their TV weekly candles use.
+            if (!session.empty() && session != "24x7") {
+                return session_period_key(prev_ms, tz, session, period)
+                       != session_period_key(curr_ms, tz, session, period);
+            }
+            return monday_epoch_day_of(prev_tm) != monday_epoch_day_of(curr_tm);
         case CalendarPeriod::MONTH:
-            return prev_tm.tm_mon != curr_tm.tm_mon ||
-                   prev_tm.tm_year != curr_tm.tm_year;
+            // Session-day attribution reduces to the shifted-instant date when
+            // no session offsets the clock, so this is safe unconditionally.
+            return session_period_key(prev_ms, tz, session, period)
+                   != session_period_key(curr_ms, tz, session, period);
         case CalendarPeriod::NONE:
             return false;
     }
