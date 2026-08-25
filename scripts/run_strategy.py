@@ -43,6 +43,7 @@ import base64
 import csv
 import ctypes
 import hashlib
+import io
 import json
 import math
 import os
@@ -75,6 +76,8 @@ _VALIDATION_META_KEYS = frozenset({
     "strategy_overrides",
     "validation_overrides",
     "ohlcv_csv",
+    "aux_security_ohlcv_csv",
+    "aux_security_input_tf",
     "ohlcv_start_ms",
     "script_tf",
     "input_tf",
@@ -595,7 +598,7 @@ def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> di
             "first_effective_ms": int(timestamps[0]),
             "last_effective_ms": int(timestamps[-1]),
         }
-    return {
+    runtime = {
         "input_tf": run_kwargs.get("input_tf") or "",
         "script_tf": run_kwargs.get("script_tf") or "",
         "bar_magnifier": bool(run_kwargs.get("bar_magnifier")),
@@ -606,6 +609,17 @@ def build_runtime_provenance(run_kwargs: dict, trade_start_ms: int | None) -> di
         "account_currency_fx_scalar": fx_scalar,
         "account_currency_fx_series": fx_summary,
     }
+    aux_path = run_kwargs.get("aux_security_ohlcv_csv")
+    if aux_path is not None:
+        runtime["aux_security_feed"] = {
+            "input_tf": run_kwargs.get("aux_security_input_tf") or "",
+            "source_path": str(Path(aux_path).resolve()),
+            "source_file_sha256": run_kwargs.get(
+                "aux_security_source_file_sha256") or "",
+            "source_values_sha256": run_kwargs.get(
+                "aux_security_source_feed_sha256") or "",
+        }
+    return runtime
 
 
 # --- ctypes mirror of <pineforge/pineforge.h> -------------------------
@@ -928,6 +942,7 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
 
     This is the single source of truth for how harnesses honour
     ``ohlcv_csv`` / ``input_tf`` / ``script_tf`` / ``ohlcv_start_ms`` /
+    ``aux_security_ohlcv_csv`` / ``aux_security_input_tf`` /
     ``chart_timezone`` / ``runtime_overrides`` — ``main()`` below and
     ``scripts/crossvalidate_metrics.py`` both consume it, so a probe that
     runs under one harness runs identically under the other. ``params``
@@ -943,6 +958,32 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
                       else (strategy_dir / _csv_val)).resolve()
     else:
         ohlcv_path = Path(default_ohlcv).resolve()
+    aux_csv_present = "aux_security_ohlcv_csv" in params
+    aux_tf_present = "aux_security_input_tf" in params
+    aux_security_ohlcv_csv = None
+    aux_security_input_tf = None
+    aux_security_source_file_sha256 = None
+    if aux_csv_present or aux_tf_present:
+        aux_csv_value = str(params.get("aux_security_ohlcv_csv") or "")
+        aux_tf_value = str(params.get("aux_security_input_tf") or "")
+        if not aux_csv_value or not aux_tf_value:
+            raise ValueError(
+                "aux_security_ohlcv_csv and aux_security_input_tf must be set together")
+        aux_security_ohlcv_csv = (
+            Path(aux_csv_value) if aux_csv_value.startswith("/")
+            else strategy_dir / aux_csv_value
+        ).resolve()
+        if not aux_security_ohlcv_csv.is_file():
+            raise FileNotFoundError(
+                "auxiliary request.security OHLCV export not found: "
+                f"{aux_security_ohlcv_csv}")
+        aux_security_input_tf = aux_tf_value
+        aux_security_source_file_sha256 = _sha256_file(
+            aux_security_ohlcv_csv)
+        if aux_security_source_file_sha256 is None:
+            raise OSError(
+                "cannot hash auxiliary request.security OHLCV export: "
+                f"{aux_security_ohlcv_csv}")
     # Per-probe chart tz override wins over the caller default. Empty
     # string is honoured (engine UTC fast path).
     if "chart_timezone" in params:
@@ -1039,6 +1080,11 @@ def inputs_run_kwargs(params, strategy_dir: Path, default_ohlcv: Path,
         magnifier_volume_weighted=bool(
             runtime_overrides.get("magnifier_volume_weighted", False)),
     )
+    if aux_security_ohlcv_csv is not None:
+        kwargs["aux_security_ohlcv_csv"] = aux_security_ohlcv_csv
+        kwargs["aux_security_input_tf"] = aux_security_input_tf
+        kwargs["aux_security_source_file_sha256"] = \
+            aux_security_source_file_sha256
     return ohlcv_path, kwargs
 
 
@@ -1151,6 +1197,11 @@ class Strategy:
                 ctypes.c_void_p, ctypes.POINTER(ctypes.c_int64),
                 ctypes.POINTER(ctypes.c_double), ctypes.c_int]
             L.strategy_set_account_currency_fx_series.restype = ctypes.c_int
+        if hasattr(L, "strategy_set_aux_security_feed"):
+            L.strategy_set_aux_security_feed.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(BarC), ctypes.c_int,
+                ctypes.c_char_p]
+            L.strategy_set_aux_security_feed.restype = ctypes.c_int
         if hasattr(L, "strategy_set_syminfo_mintick"):
             L.strategy_set_syminfo_mintick.argtypes = [ctypes.c_void_p, ctypes.c_double]
             L.strategy_set_syminfo_mintick.restype = None
@@ -1176,6 +1227,9 @@ class Strategy:
             account_currency_fx_series: "tuple | None" = None,
             account_currency_fx_source_sha256: str | None = None,
             input_tf: str | None = None, script_tf: str | None = None,
+            aux_security_ohlcv_csv: Path | None = None,
+            aux_security_input_tf: str | None = None,
+            aux_security_source_file_sha256: str | None = None,
             ohlcv_start_ms: int | None = None,
             ohlcv_end_ms: int | None = None,
             bar_magnifier: bool = False,
@@ -1227,6 +1281,30 @@ class Strategy:
             bars, n, source_feed_sha256 = _load_bars(
                 bars_csv, ohlcv_start_ms=ohlcv_start_ms,
                 ohlcv_end_ms=ohlcv_end_ms)
+        aux_requested = (aux_security_ohlcv_csv is not None
+                         or aux_security_input_tf is not None)
+        aux_bars = None
+        aux_n = 0
+        aux_source_feed_sha256 = None
+        aux_source_file_sha256 = None
+        if aux_requested:
+            if aux_security_ohlcv_csv is None or not aux_security_input_tf:
+                raise ValueError(
+                    "aux_security_ohlcv_csv and aux_security_input_tf must be set together")
+            if not hasattr(self.lib, "strategy_set_aux_security_feed"):
+                raise RuntimeError(
+                    "strategy library lacks auxiliary request.security feed support; rebuild it")
+            (aux_bars, aux_n, aux_source_feed_sha256,
+             aux_source_file_sha256) = _load_aux_bars_snapshot(
+                 Path(aux_security_ohlcv_csv))
+            if (aux_security_source_file_sha256 is not None
+                    and aux_security_source_file_sha256
+                    != aux_source_file_sha256):
+                raise RuntimeError(
+                    "auxiliary request.security OHLCV export changed after metadata resolution")
+            if aux_n <= 0:
+                raise ValueError(
+                    "auxiliary request.security OHLCV export contains no bars")
         params = params or {}
         params_json = json.dumps(params).encode()
 
@@ -1340,6 +1418,19 @@ class Strategy:
                 str(magnifier_distribution or "").upper() == "VOLUME_WEIGHTED")
             if mag_on and vw_on and hasattr(self.lib, "strategy_set_magnifier_volume_weighted"):
                 self.lib.strategy_set_magnifier_volume_weighted(state, 1)
+            if aux_requested:
+                rc = self.lib.strategy_set_aux_security_feed(
+                    state, aux_bars, aux_n,
+                    str(aux_security_input_tf).encode())
+                if rc != 0:
+                    detail = ""
+                    if hasattr(self.lib, "strategy_get_last_error"):
+                        err_ptr = self.lib.strategy_get_last_error(state)
+                        if err_ptr:
+                            detail = err_ptr.decode("utf-8", "replace")
+                    raise RuntimeError(
+                        "engine rejected auxiliary request.security feed"
+                        + (f": {detail}" if detail else ""))
             self.lib.run_backtest_full(
                 state, bars, n,
                 input_tf_b, script_tf_b,  # empty -> auto-detect input_tf, default script_tf=input_tf
@@ -1366,6 +1457,15 @@ class Strategy:
                 )
             if source_feed_sha256 is not None:
                 result["source_feed_sha256"] = source_feed_sha256
+            if aux_requested:
+                result["aux_security_ohlcv_csv"] = str(
+                    Path(aux_security_ohlcv_csv).resolve())
+                result["aux_security_input_tf"] = str(
+                    aux_security_input_tf)
+                result["aux_security_source_file_sha256"] = (
+                    aux_source_file_sha256 or "")
+                result["aux_security_source_feed_sha256"] = (
+                    aux_source_feed_sha256 or "")
             return result
         finally:
             self.lib.report_free(ctypes.byref(report))
@@ -1453,6 +1553,74 @@ def _load_bars(csv_path: Path, *, ohlcv_start_ms: int | None = None,
         bars[i].volume = v
         bars[i].timestamp = ts
     return bars, n, feed_hasher.hexdigest()
+
+
+def _load_aux_bars_snapshot(
+        csv_path: Path) -> tuple[ctypes.Array, int, str, str]:
+    """Load auxiliary bars and both identities from one immutable byte read.
+
+    The raw SHA and parsed ``BarC`` values must attest the same bytes. Reading
+    the path once eliminates the hash-then-reopen window where a replacement
+    file could be executed under the previous file's hash.
+    """
+    with csv_path.open("rb") as handle:
+        snapshot = handle.read()
+    source_file_sha256 = hashlib.sha256(snapshot).hexdigest()
+    lines = snapshot.splitlines()
+    if not lines:
+        raise ValueError(
+            f"auxiliary request.security OHLCV export is empty: {csv_path}")
+    header = lines[0].decode("utf-8-sig").strip().split(",")
+    col = {name: header.index(name)
+           for name in ("open", "high", "low", "close", "volume", "timestamp")}
+
+    try:
+        import numpy as _np
+    except ImportError:
+        _np = None
+    if _np is not None:
+        if any(line.strip() for line in lines[1:]):
+            data = _np.loadtxt(
+                io.BytesIO(snapshot), delimiter=",", skiprows=1, ndmin=2)
+        else:
+            data = _np.empty((0, len(header)), dtype="<f8")
+        count = len(data)
+        dtype = _np.dtype([
+            ("open", "<f8"), ("high", "<f8"), ("low", "<f8"),
+            ("close", "<f8"), ("volume", "<f8"), ("timestamp", "<i8"),
+        ])
+        rows = _np.empty(count, dtype=dtype)
+        for name in ("open", "high", "low", "close", "volume"):
+            rows[name] = data[:, col[name]] if count else []
+        rows["timestamp"] = (
+            data[:, col["timestamp"]].astype("<i8") if count else [])
+        canonical = _new_source_feed_hasher()
+        canonical.update(memoryview(rows))
+        bars = ((BarC * count).from_buffer_copy(rows.tobytes())
+                if count else (BarC * 0)())
+        return bars, count, canonical.hexdigest(), source_file_sha256
+
+    parsed_rows: list[tuple[float, float, float, float, float, int]] = []
+    canonical = _new_source_feed_hasher()
+    reader = csv.DictReader(io.StringIO(snapshot.decode("utf-8-sig")))
+    for row in reader:
+        parsed = (
+            float(row["open"]), float(row["high"]), float(row["low"]),
+            float(row["close"]), float(row["volume"]), int(row["timestamp"]),
+        )
+        _update_source_feed_hash(canonical, parsed)
+        parsed_rows.append(parsed)
+    count = len(parsed_rows)
+    bars = (BarC * count)()
+    for index, (open_, high, low, close, volume, timestamp) in enumerate(
+            parsed_rows):
+        bars[index].open = open_
+        bars[index].high = high
+        bars[index].low = low
+        bars[index].close = close
+        bars[index].volume = volume
+        bars[index].timestamp = timestamp
+    return bars, count, canonical.hexdigest(), source_file_sha256
 
 
 def _report_to_dict(r: ReportC) -> dict:
@@ -1877,6 +2045,11 @@ def main() -> int:
                 "error: --runner docker does not support timestamped "
                 "account-currency FX; use --runner ctypes with a freshly "
                 "built strategy library.")
+        if run_kwargs.get("aux_security_ohlcv_csv") is not None:
+            sys.exit(
+                "error: --runner docker does not support an auxiliary "
+                "request.security feed; use --runner ctypes with a freshly "
+                "built strategy library.")
         strat = None
         report = _run_via_docker(strategy_dir, ohlcv_path, params, run_kwargs,
                                  trade_start_ms, args.image)
@@ -1912,7 +2085,12 @@ def main() -> int:
             overrides_applied = {
                 str(k): str(v) for k, v in (run_kwargs.get("strategy_overrides") or {}).items()
             }
-            runtime = build_runtime_provenance(run_kwargs, trade_start_ms)
+            runtime_kwargs = dict(run_kwargs)
+            if report.get("aux_security_source_feed_sha256"):
+                runtime_kwargs["aux_security_source_feed_sha256"] = \
+                    report["aux_security_source_feed_sha256"]
+            runtime = build_runtime_provenance(
+                runtime_kwargs, trade_start_ms)
             fp = build_fingerprint(build_provenance(
                 engine_version(strat.lib),
                 cpp_path if cpp_path.exists() else None,

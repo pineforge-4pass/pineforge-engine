@@ -790,10 +790,13 @@ void BacktestEngine::run(const Bar* bars, int n) {
 
 
 // --- run_magnified_bar ---
-void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t script_bar_ts) {
+void BacktestEngine::run_magnified_bar(
+        const std::vector<Bar>& sub_bars, int64_t script_bar_ts,
+        bool caller_completed_on_boundary) {
     if (sub_bars.empty()) return;
     if (calc_on_order_fills_) {
-        run_magnified_bar_calc_on_order_fills(sub_bars, script_bar_ts);
+        run_magnified_bar_calc_on_order_fills(
+            sub_bars, script_bar_ts, caller_completed_on_boundary);
         return;
     }
 
@@ -851,7 +854,18 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
 
         // Feed security evaluators with each sub-bar
         for (auto& state : security_eval_states_) {
-            feed_security_eval_state(state, sb);
+            if (caller_completed_on_boundary
+                && state.publish_gate_tf_seconds > 0
+                && si == total_sub - 1) {
+                // This retained input belongs to the next caller. The outer
+                // loop feeds it after the completed chart body dispatches.
+                continue;
+            }
+            feed_security_eval_state(
+                state, sb,
+                caller_completed_on_boundary
+                    ? si == total_sub - 2
+                    : si == total_sub - 1);
         }
 
         if (real_bar_magnifier_mode) {
@@ -935,7 +949,8 @@ void BacktestEngine::run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t
 
 void BacktestEngine::run_magnified_bar_calc_on_order_fills(
         const std::vector<Bar>& sub_bars,
-        int64_t script_bar_ts) {
+        int64_t script_bar_ts,
+        bool caller_completed_on_boundary) {
     if (sub_bars.empty()) return;
 
     struct BrokerTick {
@@ -972,13 +987,23 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
 
     std::vector<BrokerTick> ticks;
     std::vector<double> samples;
-    for (const Bar& sb : sub_bars) {
+    for (int si = 0; si < total_sub; ++si) {
+        const Bar& sb = sub_bars[static_cast<std::size_t>(si)];
         // Historical script executions see the completed security state for
         // the script bar. Feeding all committed lower-TF bars before taking
         // the script-state checkpoint mirrors the standard path, where
         // security evaluators are fed before dispatch_bar.
         for (auto& state : security_eval_states_) {
-            feed_security_eval_state(state, sb);
+            if (caller_completed_on_boundary
+                && state.publish_gate_tf_seconds > 0
+                && si == total_sub - 1) {
+                continue;
+            }
+            feed_security_eval_state(
+                state, sb,
+                caller_completed_on_boundary
+                    ? si == total_sub - 2
+                    : si == total_sub - 1);
         }
 
         if (real_lower_tf) {
@@ -1198,6 +1223,25 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     // script_tf defaults to input_tf if not provided (strategy runs on the data's timeframe)
     std::string effective_script_tf = script_tf.empty() ? effective_input_tf : script_tf;
 
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) {
+        if (bar_magnifier) {
+            throw std::runtime_error(
+                "auxiliary request.security feed cannot share the bar-magnifier path");
+        }
+        if (effective_input_tf.empty() || effective_script_tf.empty()
+            || effective_input_tf != effective_script_tf) {
+            throw std::runtime_error(
+                "auxiliary request.security feed requires native chart input_tf == script_tf");
+        }
+        security_input_tf_ = aux_security_input_tf_;
+    } else {
+        security_input_tf_ = effective_input_tf;
+    }
+#else
+    security_input_tf_ = effective_input_tf;
+#endif
+
     // Store parameters
     input_tf_ = effective_input_tf;
     script_tf_ = effective_script_tf;
@@ -1246,11 +1290,19 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     // any future reset that releases).
     equity_curve_.reserve((size_t)std::max(expected_script_bars, 0));
 
-    validate_security_timeframes(effective_input_tf);
+    validate_security_timeframes(security_input_tf_);
 
-    init_security_eval_states_for_run(effective_input_tf);
-    prepare_historical_security_lookahead_projections(
-        input_bars, n_input, effective_input_tf);
+    init_security_eval_states_for_run(security_input_tf_);
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) {
+        prepare_aux_security_chart_ranges(input_bars, n_input,
+                                          effective_script_tf);
+    } else
+#endif
+    {
+        prepare_historical_security_lookahead_projections(
+            input_bars, n_input, effective_input_tf);
+    }
 
     if (!needs_aggregation && !bar_magnifier) {
         run_simple_bar_loop(input_bars, n_input);
@@ -1259,11 +1311,20 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                                  expected_script_bars);
     }
     clear_historical_security_lookahead_projections();
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    clear_aux_security_chart_ranges();
+#endif
     } catch (const std::exception& e) {
         clear_historical_security_lookahead_projections();
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        clear_aux_security_chart_ranges();
+#endif
         last_error_ = e.what();
     } catch (...) {
         clear_historical_security_lookahead_projections();
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        clear_aux_security_chart_ranges();
+#endif
         last_error_ = "unknown error during BacktestEngine::run";
     }
 }
@@ -1483,9 +1544,18 @@ void BacktestEngine::run_simple_bar_loop(const Bar* input_bars, int n_input) {
         // chain is wiped after the first fire).
         pending_close_qty_in_bar_ = 0.0;
 
-        // Feed security evaluators
-        for (auto& state : security_eval_states_) {
-            feed_security_eval_state(state, input_bars[i]);
+        // Feed security evaluators. On the split-feed path only the finer
+        // auxiliary slice advances request.security; the native chart bar is
+        // never passed to a security evaluator.
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+        if (aux_security_feed_enabled()) {
+            feed_aux_security_for_chart_bar(i);
+        } else
+#endif
+        {
+            for (auto& state : security_eval_states_) {
+                feed_security_eval_state(state, input_bars[i]);
+            }
         }
 
         // Update session predicates for session.ismarket / isfirstbar / islastbar.
@@ -1537,13 +1607,25 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
     int emitted_script_bars = 0;
 
     for (int i = 0; i < n_input; ++i) {
+        // Finer lookahead_on publication needs the chart aggregator's real
+        // completion event. Eager completion feeds the current child normally;
+        // boundary fallback replays the completed caller before the retained
+        // next-caller child is evaluated.
+        AggregatedBar ab = script_tf_agg_.feed(input_bars[i]);
+        const bool completed_on_boundary = ab.is_complete
+            && tf_change(ab.bar.timestamp, input_bars[i].timestamp, script_tf_,
+                         syminfo_.timezone, syminfo_.session);
         if (!bar_magnifier) {
             for (auto& state : security_eval_states_) {
-                feed_security_eval_state(state, input_bars[i]);
+                if (completed_on_boundary
+                    && state.publish_gate_tf_seconds > 0) {
+                    publish_security_eval_state_at_calling_boundary(state);
+                } else {
+                    feed_security_eval_state(
+                        state, input_bars[i], ab.is_complete);
+                }
             }
         }
-
-        AggregatedBar ab = script_tf_agg_.feed(input_bars[i]);
 
         if (bar_magnifier) {
             group_sub_bars.push_back(input_bars[i]);
@@ -1583,7 +1665,8 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
                                                             group_sub_bars.front().timestamp);
                 session_isfirstbar_ = session_ismarket_ && !prev_in_session_;
                 session_islastbar_  = false;  // not deterministic in magnifier mode without lookahead
-                run_magnified_bar(group_sub_bars, script_bar_ts);
+                run_magnified_bar(
+                    group_sub_bars, script_bar_ts, completed_on_boundary);
                 prev_in_session_ = session_ismarket_;
                 group_sub_bars.clear();
             } else {
@@ -1612,6 +1695,19 @@ void BacktestEngine::run_aggregation_bar_loop(const Bar* input_bars, int n_input
             update_equity_extremes();
             record_equity_point(script_bar_ts);
             prev_bar_timestamp_ = current_bar_.timestamp;
+        }
+        if (completed_on_boundary) {
+            // The boundary-triggering input was retained by the chart
+            // aggregator for the next caller. Feed it only after the completed
+            // caller's chart body, and only to the finer lookahead_on states
+            // that were replayed/deferred above. Other security states kept
+            // their established feed order and cadence.
+            for (auto& state : security_eval_states_) {
+                if (state.publish_gate_tf_seconds > 0) {
+                    feed_security_eval_state(
+                        state, input_bars[i], /*calling_bar_complete=*/false);
+                }
+            }
         }
     }
 }

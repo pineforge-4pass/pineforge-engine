@@ -76,6 +76,7 @@ endif()
 # === pineforge library =================================================
 add_library(pineforge STATIC
     src/c_abi.cpp
+    src/engine_aux_security.cpp
     src/engine_fills.cpp
     src/engine_lower_tf.cpp
     src/engine_metrics.cpp

@@ -2175,6 +2175,26 @@ protected:
     };
 
     std::vector<SecurityEvalState> security_eval_states_;
+    // Boundary-fallback publication replays the completed caller's already
+    // evaluated final requested value. Force generated TA sites down their
+    // recompute path so the replay advances merged history only, never the
+    // requested-context TA cadence. Keep this byte layout-unconditional so
+    // generated strategy TUs and the statically linked runtime always agree on
+    // BacktestEngine offsets.
+    bool security_history_publication_replay_ = false;
+
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    // Optional immutable finer feed for request.security. Native chart bars
+    // remain the sole source for current_bar_, broker execution and
+    // bar_index_. Per-run ranges map each chart bar to its auxiliary slice.
+    std::vector<Bar> aux_security_bars_;
+    std::string aux_security_input_tf_;
+    std::vector<std::size_t> aux_security_chart_begin_;
+    std::vector<std::size_t> aux_security_chart_end_;
+#endif
+    // The raw feed used by security aggregators in the active run. This is the
+    // chart input TF on the legacy path and the auxiliary TF on the split path.
+    std::string security_input_tf_;
 
     // --- Runtime trace state ---
     // Gated by ``trace_enabled_`` (default false) so production strategies
@@ -2234,7 +2254,11 @@ protected:
     // per-state feed cursor.
     bool security_input_precedes_range_start(const SecurityEvalState& state,
                                              int64_t input_ts) const;
-    void feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar);
+    void feed_security_eval_state(
+        SecurityEvalState& state, const Bar& input_bar,
+        bool calling_bar_complete = false);
+    void publish_security_eval_state_at_calling_boundary(
+        SecurityEvalState& state);
 
     virtual void configure_security_evaluators() {}
     virtual void evaluate_security(int sec_id, const Bar& bar, bool is_complete) {}
@@ -2251,9 +2275,12 @@ protected:
     virtual void commit_script_state() {}
 
     // Magnifier helpers
-    void run_magnified_bar(const std::vector<Bar>& sub_bars, int64_t script_bar_ts);
+    void run_magnified_bar(
+        const std::vector<Bar>& sub_bars, int64_t script_bar_ts,
+        bool caller_completed_on_boundary = false);
     void run_magnified_bar_calc_on_order_fills(const std::vector<Bar>& sub_bars,
-                                               int64_t script_bar_ts);
+                                               int64_t script_bar_ts,
+                                               bool caller_completed_on_boundary = false);
     virtual void finalize_bar() {}
 
     // --- Equity extremes update (called after each on_bar) ---
@@ -2754,6 +2781,42 @@ private:
         const Bar* input_bars, int n_input,
         const std::string& effective_input_tf);
     void clear_historical_security_lookahead_projections();
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    bool aux_security_feed_enabled() const { return !aux_security_bars_.empty(); }
+    void prepare_aux_security_chart_ranges(const Bar* chart_bars, int n_chart,
+                                           const std::string& chart_tf);
+    void feed_aux_security_for_chart_bar(int chart_index);
+    void clear_aux_security_chart_ranges();
+
+    // Neutral capability bridge for independent factorial patches. The
+    // two-argument feed exists in the base engine. A completion-aware factor
+    // may add a third bool argument; dependent-expression overload selection
+    // forwards the native chart completion only when that capability exists.
+    // Neither factor names or requires the other's feature macro.
+    template <typename EngineT>
+    static auto feed_security_at_calling_bar_boundary_impl(
+            EngineT* engine, SecurityEvalState& state, const Bar& bar,
+            bool calling_bar_complete, int)
+        -> decltype(engine->feed_security_eval_state(
+                        state, bar, calling_bar_complete), void()) {
+        engine->feed_security_eval_state(state, bar, calling_bar_complete);
+    }
+
+    template <typename EngineT>
+    static void feed_security_at_calling_bar_boundary_impl(
+            EngineT* engine, SecurityEvalState& state, const Bar& bar,
+            bool, long) {
+        engine->feed_security_eval_state(state, bar);
+    }
+
+    void feed_security_at_calling_bar_boundary(
+            SecurityEvalState& state, const Bar& bar,
+            bool calling_bar_complete) {
+        feed_security_at_calling_bar_boundary_impl(
+            this, state, bar, calling_bar_complete, 0);
+    }
+
+#endif
     // Runs the standard per-script-bar order/strategy sequence on current_bar_:
     //   process_pending_orders -> update_per_trade_extremes -> on_bar,
     // plus a second process_pending_orders when process_orders_on_close_ is set
@@ -2807,6 +2870,14 @@ public:
              bool bar_magnifier = false,
              int magnifier_samples = 4,
              MagnifierDistribution magnifier_dist = MagnifierDistribution::ENDPOINTS);
+
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    // Copies a finer request.security-only feed for subsequent historical
+    // runs. n == 0 clears it. Validation that depends on native chart bars is
+    // intentionally deferred to run(), where failures reach last_error().
+    bool set_aux_security_feed(const Bar* bars, int n,
+                               const std::string& input_tf);
+#endif
 
     // Execute confirmed historical bars, then keep this exact instance alive
     // for realtime trade updates. The warmup feed must contain at least one

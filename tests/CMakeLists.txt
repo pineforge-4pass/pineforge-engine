@@ -28,6 +28,7 @@ set(TEST_SOURCES
     test_dmi_parity
     test_integration
     test_request_security
+    test_aux_security_feed
     test_historical_security_lookahead_projection
     test_pooc_global_full_exit
     test_security_range_start_na_warmup
@@ -168,6 +169,12 @@ add_test(
     NAME test_run_strategy_identity
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_identity.py
+)
+
+add_test(
+    NAME test_run_strategy_aux_feed
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_aux_feed.py
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test

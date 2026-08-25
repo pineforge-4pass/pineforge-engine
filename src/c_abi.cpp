@@ -9,7 +9,7 @@
  *     BEFORE shipping a .so that consumers depend on.
  *   - The runtime-library-side `extern "C"` symbols (the closed-trade
  *     incarnation accessor, setters, strategy_get_last_error,
- *     the strategy_stream_* lifecycle,
+ *     the auxiliary-security-feed setter, the strategy_stream_* lifecycle,
  *     pf_version_get/pf_version_string, pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
  *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
@@ -310,6 +310,21 @@ PF_API int strategy_set_account_currency_fx_series(
                        effective_from_ms, account_per_quote, n)
         ? 0 : -1;
 }
+
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+PF_API int strategy_set_aux_security_feed(pf_strategy_t s,
+                                          const pf_bar_t* bars,
+                                          int n,
+                                          const char* input_tf) {
+    if (!s || n < 0 || (n > 0 && (!bars || !input_tf))) return -1;
+    const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
+    return static_cast<pineforge::BacktestEngine*>(s)
+                   ->set_aux_security_feed(
+                       native, n,
+                       input_tf ? std::string(input_tf) : std::string())
+        ? 0 : -1;
+}
+#endif
 
 /* See PF_ABI_VERSION doc in pineforge.h. */
 PF_API int pf_abi_version(void) { return PF_ABI_VERSION; }

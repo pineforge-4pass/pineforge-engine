@@ -570,21 +570,36 @@ void test_request_security_helper_ta_uses_security_local_state() {
 class FinerTfPublishGateHarness : public BacktestEngine {
 public:
     std::vector<int64_t> published_ts;  // bucket-start ts of is_complete evals
+    std::vector<int64_t> evaluated_ts;  // every requested-context evaluation
+    std::vector<int64_t> chart_last_eval_ts;
+    int requested_new_slot_count = 0;
+    int64_t last_evaluated_ts = -1;
 
-    explicit FinerTfPublishGateHarness(bool lookahead_on) {
-        register_security_eval(0, "5", "1", lookahead_on, false);
+    explicit FinerTfPublishGateHarness(bool lookahead_on,
+                                       const char* requested_tf = "5",
+                                       const char* input_tf = "1") {
+        register_security_eval(0, requested_tf, input_tf, lookahead_on, false);
     }
 
     void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
-        if (sec_id != 0 || !is_complete) {
+        if (sec_id != 0) {
             return;
         }
-        published_ts.push_back(bar.timestamp);
+        if (security_series_slot_is_new(sec_id)) {
+            ++requested_new_slot_count;
+        }
+        evaluated_ts.push_back(bar.timestamp);
+        last_evaluated_ts = bar.timestamp;
+        if (is_complete) {
+            published_ts.push_back(bar.timestamp);
+        }
     }
 
     void on_bar(const Bar& bar) override {
         (void)bar;
+        chart_last_eval_ts.push_back(last_evaluated_ts);
     }
+
 };
 
 void test_request_security_finer_tf_publish_gate_is_lookahead_only() {
@@ -624,6 +639,140 @@ void test_request_security_finer_tf_publish_gate_is_lookahead_only() {
             + std::to_string(on.published_ts.size()));
 
     std::cout << "test_request_security_finer_tf_publish_gate_is_lookahead_only passed.\n";
+}
+
+void test_request_security_finer_tf_publishes_on_shortened_calling_bar() {
+    // A UTC RTH session has 26 x 15m input bars. On a 60m chart the last
+    // calling bar is session-clipped to 15:30-16:00 and completes on the
+    // 15:45 input bar. Its close is not on the fixed 60m modulus from the
+    // 09:30 session anchor, which is the distinction this factor measures.
+    constexpr int64_t session_open = 9 * 3'600'000 + 30 * 60'000;
+    std::vector<Bar> input_bars;
+    input_bars.reserve(26);
+    for (int i = 0; i < 26; ++i) {
+        const double px = 100.0 + i;
+        input_bars.push_back(
+            {px, px + 1.0, px - 1.0, px + 0.5, 10.0,
+             session_open + static_cast<int64_t>(i) * 900'000});
+    }
+
+    FinerTfPublishGateHarness on(
+        /*lookahead_on=*/true, /*requested_tf=*/"15", /*input_tf=*/"15");
+    on.set_syminfo_timezone("UTC");
+    on.set_syminfo_session("0930-1600:23456");
+    on.run(input_bars.data(), static_cast<int>(input_bars.size()),
+           "15", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    require(on.last_error().empty(),
+            "shortened-session lookahead_on run should succeed: "
+                + on.last_error());
+    require(on.evaluated_ts.size() == input_bars.size(),
+            "factor A must preserve one requested-context evaluation per "
+            "15m input bar");
+
+    const std::vector<int64_t> regular_calling_closes = {
+        session_open + 3 * 900'000,
+        session_open + 7 * 900'000,
+        session_open + 11 * 900'000,
+        session_open + 15 * 900'000,
+        session_open + 19 * 900'000,
+        session_open + 23 * 900'000,
+    };
+    std::vector<int64_t> expected_on = regular_calling_closes;
+    expected_on.push_back(session_open + 25 * 900'000);
+    require(on.published_ts == expected_on,
+            "lookahead_on history must publish on every real 60m calling-bar "
+            "completion, including the 15:30-16:00 clipped bar");
+
+    FinerTfPublishGateHarness off(
+        /*lookahead_on=*/false, /*requested_tf=*/"15", /*input_tf=*/"15");
+    off.set_syminfo_timezone("UTC");
+    off.set_syminfo_session("0930-1600:23456");
+    off.run(input_bars.data(), static_cast<int>(input_bars.size()),
+            "15", "60", false, 4, MagnifierDistribution::ENDPOINTS);
+    require(off.last_error().empty(),
+            "shortened-session lookahead_off run should succeed: "
+                + off.last_error());
+    require(off.evaluated_ts.size() == input_bars.size(),
+            "lookahead_off requested-context evaluation cadence must remain "
+            "one per 15m input bar");
+    require(off.published_ts == off.evaluated_ts,
+            "lookahead_off must keep publishing every completed finer period");
+
+    std::cout << "test_request_security_finer_tf_publishes_on_shortened_calling_bar passed.\n";
+}
+
+void test_request_security_finer_tf_sparse_boundary_uses_final_caller_child() {
+    // Day 0 deliberately omits hour 23. The first day-1 input therefore makes
+    // the 1D chart aggregator complete day 0 through its boundary fallback
+    // while retaining day1 00:00 as the first child of the next caller. The
+    // merged history publication must use day0 22:00, never the retained bar.
+    constexpr int64_t day0 = 1'704'067'200'000;  // 2024-01-01 00:00 UTC
+    constexpr int64_t hour = 3'600'000;
+    std::vector<Bar> input_bars;
+    input_bars.reserve(24);
+    for (int i = 0; i <= 22; ++i) {
+        const double px = 100.0 + i;
+        input_bars.push_back(
+            {px, px, px, px, 1.0, day0 + static_cast<int64_t>(i) * hour});
+    }
+    input_bars.push_back(
+        {200.0, 200.0, 200.0, 200.0, 1.0, day0 + 24 * hour});
+    const int64_t final_day0_child = day0 + 22 * hour;
+
+    auto check = [&](FinerTfPublishGateHarness& harness,
+                     const std::string& path, bool expects_replay) {
+        require(harness.last_error().empty(),
+                path + " sparse-boundary run should succeed: "
+                    + harness.last_error());
+        require(harness.requested_new_slot_count
+                    == static_cast<int>(input_bars.size()),
+                path + " must advance requested-context TA slots exactly once "
+                    "per real input despite boundary publication");
+        require(harness.published_ts
+                    == std::vector<int64_t>{final_day0_child},
+                path + " must publish day0's actual final child, not day1 00:00");
+        require(harness.chart_last_eval_ts.size() == 1
+                    && harness.chart_last_eval_ts[0] == final_day0_child,
+                path + " chart dispatch must occur before the retained day1 "
+                    "input becomes visible");
+        const std::size_t expected_evals = input_bars.size()
+            + (expects_replay ? 1U : 0U);
+        require(harness.evaluated_ts.size() == expected_evals,
+                path + " boundary replay count must match its execution path");
+    };
+
+    FinerTfPublishGateHarness batch(
+        /*lookahead_on=*/true, /*requested_tf=*/"60", /*input_tf=*/"60");
+    batch.run(input_bars.data(), static_cast<int>(input_bars.size()),
+              "60", "1D", false, 4, MagnifierDistribution::ENDPOINTS);
+    check(batch, "batch", /*expects_replay=*/true);
+
+    FinerTfPublishGateHarness magnified(
+        /*lookahead_on=*/true, /*requested_tf=*/"60", /*input_tf=*/"60");
+    magnified.run(input_bars.data(), static_cast<int>(input_bars.size()),
+                  "60", "1D", true, 4,
+                  MagnifierDistribution::ENDPOINTS);
+    check(magnified, "magnified batch", /*expects_replay=*/false);
+
+    FinerTfPublishGateHarness stream(
+        /*lookahead_on=*/true, /*requested_tf=*/"60", /*input_tf=*/"60");
+    require(stream.stream_begin(input_bars.data(), 23, "60", "1D"),
+            "stream sparse-boundary warmup should succeed: "
+                + stream.last_error());
+    // Keep the already-configured chart/security aggregators on their 24x7
+    // day grid, but tell the normalized stream that the deliberately absent
+    // 23:00 interval is closed so it is not synthesized as a carry bar.
+    stream.set_syminfo_session("0000-2300:1234567");
+    require(stream.stream_push_tick(
+                TradeTick{day0 + 24 * hour, 1, 200.0, 1.0}),
+            "stream sparse-boundary day1 tick should be accepted: "
+                + stream.last_error());
+    require(stream.stream_advance_time(day0 + 25 * hour),
+            "stream sparse-boundary day1 input should finalize: "
+                + stream.last_error());
+    check(stream, "stream", /*expects_replay=*/true);
+
+    std::cout << "test_request_security_finer_tf_sparse_boundary_uses_final_caller_child passed.\n";
 }
 
 // KI-33 cadence guard: on the 1m-magnifier path (input_tf="1",
@@ -812,6 +961,8 @@ int main() {
     test_request_security_hook_dispatches_completed_values();
     test_request_security_magnifier_coarser_tf_cadence();
     test_request_security_finer_tf_publish_gate_is_lookahead_only();
+    test_request_security_finer_tf_publishes_on_shortened_calling_bar();
+    test_request_security_finer_tf_sparse_boundary_uses_final_caller_child();
     test_request_security_lower_tf_requires_finer_input_bars();
     test_request_security_emulates_ratio_divisible_lower_tf();
     test_request_security_lower_tf_emulation_rejects_unsupported_flags();

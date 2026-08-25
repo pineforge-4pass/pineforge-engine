@@ -77,6 +77,10 @@
  *  version 1. */
 #define PF_ABI_VERSION 2
 
+/** Feature probe for the opt-in split chart/request.security feed boundary.
+ *  When defined, #strategy_set_aux_security_feed is available. */
+#define PINEFORGE_HAS_AUX_SECURITY_FEED_V1 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -666,6 +670,25 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
 PF_API int strategy_set_account_currency_fx_series(
     pf_strategy_t s, const int64_t* effective_from_ms,
     const double* account_per_quote, int n);
+
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+/** Copy a finer feed used exclusively by same-symbol request.security calls.
+ *
+ *  The next ordinary #run_backtest_full call must receive native chart bars
+ *  with @c input_tf equal to @c script_tf and bar magnifier disabled. Chart
+ *  OHLCV, broker fills, and @c bar_index continue to advance only from that
+ *  native chart feed; @p bars advance only request.security evaluators.
+ *  Every auxiliary bar must map to exactly one native chart bar and every
+ *  native chart bar must have at least one auxiliary bar, otherwise the run
+ *  fails closed via #strategy_get_last_error. Arrays are copied. Pass
+ *  @p n == 0 to clear the auxiliary feed.
+ *
+ *  @return 0 on success, -1 for a null strategy or invalid input. */
+PF_API int strategy_set_aux_security_feed(pf_strategy_t s,
+                                          const pf_bar_t* bars,
+                                          int n,
+                                          const char* input_tf);
+#endif
 
 /** Returns the error message captured by the most recent #run_backtest /
  *  #run_backtest_full call on this strategy.

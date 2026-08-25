@@ -4,7 +4,6 @@
 
 #include "engine_internal.hpp"
 
-#include <pineforge/session_time.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -15,29 +14,6 @@
 #include <unordered_set>
 
 namespace pineforge {
-namespace {
-// Mirror of the aggregator's intraday clock in timeframe.cpp: ms that the
-// symbol clock (tz + session open) has removed from the epoch grid at `ts`.
-// Must stay arithmetic-identical to TimeframeAggregator's intraday_clock_ms().
-int64_t syminfo_clock_shift_ms(int64_t ts, const std::string& tz,
-                               const std::string& session) {
-    if ((tz.empty() || tz == "UTC" || tz == "Etc/UTC")
-        && (session.empty() || session == "24x7")) return 0;
-    int64_t day_open = calendar_day_open_local_ms(ts, tz);
-    int64_t shift = day_open - (day_open / kMsPerDay) * kMsPerDay;
-    if (!(session.empty() || session == "24x7")) {
-        int digits = 0, value = 0;
-        for (char c : session) {
-            if (c >= '0' && c <= '9') {
-                value = value * 10 + (c - '0');
-                if (++digits >= 4) break;
-            } else if (digits > 0) break;
-        }
-        shift -= static_cast<int64_t>((value / 100) * 60 + (value % 100)) * 60000;
-    }
-    return shift;
-}
-}  // namespace
 
 using namespace internal;
 
@@ -54,22 +30,25 @@ void BacktestEngine::register_security_eval(int sec_id, const std::string& reque
     state.lookahead_on = lookahead_on;
     state.heikinashi = heikinashi;
 
-    if (!input_tf.empty()) {
+    const std::string& evaluator_input_tf =
+        security_input_tf_.empty() ? input_tf : security_input_tf_;
+    if (!evaluator_input_tf.empty()) {
         int lower_ratio = 0;
         int lower_seconds = 0;
-        if (supports_lower_tf_emulation(input_tf, requested_tf, &lower_ratio, &lower_seconds)) {
+        if (supports_lower_tf_emulation(evaluator_input_tf, requested_tf,
+                                        &lower_ratio, &lower_seconds)) {
             ensure_supported_lower_tf_emulation_flags(lookahead_on, gaps_on);
             state.lower_tf_requested = true;
             state.lower_tf_emulation = true;
             state.lower_tf_ratio = lower_ratio;
             state.lower_tf_seconds = lower_seconds;
         } else {
-            int ratio = tf_ratio(input_tf, requested_tf);
+            int ratio = tf_ratio(evaluator_input_tf, requested_tf);
             if (ratio > 1) {
-                state.aggregator = TimeframeAggregator(requested_tf, input_tf,
+                state.aggregator = TimeframeAggregator(requested_tf, evaluator_input_tf,
                     syminfo_.timezone, syminfo_.session);
             } else if (ratio == -1) {
-                state.aggregator = TimeframeAggregator(requested_tf, input_tf,
+                state.aggregator = TimeframeAggregator(requested_tf, evaluator_input_tf,
                     syminfo_.timezone, syminfo_.session);
             }
             // ratio <= 0: passthrough (same or unsupported lower TF)
@@ -288,6 +267,9 @@ void BacktestEngine::validate_security_timeframes(const std::string& input_tf) {
 
 
 bool BacktestEngine::security_series_slot_is_new(int sec_id) const {
+    if (security_history_publication_replay_) {
+        return false;
+    }
     for (const auto& state : security_eval_states_) {
         if (state.sec_id != sec_id) {
             continue;
@@ -295,6 +277,29 @@ bool BacktestEngine::security_series_slot_is_new(int sec_id) const {
         return !state.lookahead_on || state.current_sub_bar_count <= 1;
     }
     return true;
+}
+
+
+void BacktestEngine::publish_security_eval_state_at_calling_boundary(
+        SecurityEvalState& state) {
+    if (state.publish_gate_tf_seconds <= 0 || state.feed_count <= 0) {
+        return;
+    }
+
+    struct ReplayScope {
+        bool& active;
+        bool previous;
+        explicit ReplayScope(bool& flag)
+            : active(flag), previous(flag) { active = true; }
+        ~ReplayScope() { active = previous; }
+    } replay_scope(security_history_publication_replay_);
+
+    // The boundary-triggering input belongs to the next calling bar. Publish
+    // the final requested value that was already evaluated for the completed
+    // caller, before the chart body runs and before that retained input is fed.
+    // security_series_slot_is_new() returns false in this scope, so generated
+    // TA sites recompute the current slot instead of advancing their cadence.
+    evaluate_security(state.sec_id, state.current_bar, true);
 }
 
 
@@ -319,7 +324,9 @@ bool BacktestEngine::security_input_precedes_range_start(
 }
 
 
-void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Bar& input_bar) {
+void BacktestEngine::feed_security_eval_state(
+        SecurityEvalState& state, const Bar& input_bar,
+        bool calling_bar_complete) {
     // Opt-in KI-55 HTF warmup parity (security_range_start_na_warmup run flag):
     //   (a) start every request.security aggregation at range_start_ms, not the
     //       feed start — drop every input bar whose HTF bucket opened before
@@ -384,7 +391,7 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         // of 15). Pure count-based dispatch is preserved as a
         // secondary trigger so dense gap-free feeds still flush
         // promptly when the chunk fills.
-        int input_seconds = tf_to_seconds(input_tf_);
+        int input_seconds = tf_to_seconds(security_input_tf_);
         int script_seconds = script_tf_seconds_;
         if (input_seconds <= 0 || script_seconds <= 0) {
             // Cannot compute bucket math — fall back to original
@@ -479,7 +486,7 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         if (synthetic_bars.empty()) {
             throw std::runtime_error(
                 "request.security lower TF emulation could not synthesize bars for requested "
-                + state.tf + " from input timeframe " + input_tf_
+                + state.tf + " from input timeframe " + security_input_tf_
             );
         }
         // Reset the sub-bar counter at the start of every chart bar's
@@ -562,22 +569,25 @@ void BacktestEngine::feed_security_eval_state(SecurityEvalState& state, const Ba
         // bookkeeping above stays driven by the real completion.
         bool publish = true;
         if (state.publish_gate_tf_seconds > 0 && script_tf_seconds_ > 0) {
-            // Anchor on the symbol clock (the same clock as the aggregators):
-            // exchange-tz seconds since local-midnight+session-open. With
-            // tz=UTC and no session the shift is zero, reducing to the
-            // previous epoch math bit-for-bit.
-            int64_t shifted = ab.bar.timestamp - syminfo_clock_shift_ms(
-                ab.bar.timestamp, syminfo_.timezone, syminfo_.session);
-            int64_t bucket_end_sec =
-                shifted / 1000 + state.publish_gate_tf_seconds;
-            publish = (bucket_end_sec % script_tf_seconds_) == 0;
+            // Merge finer-context history on the event that the calling chart
+            // aggregator actually completes. Unlike a fixed seconds modulus,
+            // this includes session-clipped calling bars.
+            // The requested-context evaluator still runs once
+            // per input update; only its is_complete publication signal is
+            // replaced.
+            publish = calling_bar_complete;
         }
         evaluate_security(state.sec_id, ab.bar, publish);
     } else if (state.lookahead_on) {
         if (state.heikinashi) apply_ha(ab.bar, /*commit=*/false);
         state.current_bar = ab.bar;
         state.eval_partial_count++;
-        evaluate_security(state.sec_id, ab.bar, false);
+        // A shortened calling bar can complete while the finer requested
+        // bucket is partial. Publish that current requested-context value to
+        // merged history without adding a second evaluator/TA dispatch.
+        const bool publish = state.publish_gate_tf_seconds > 0
+            && calling_bar_complete;
+        evaluate_security(state.sec_id, ab.bar, publish);
     } else {
         state.current_bar = ab.bar;
         if (state.gaps_on) {
