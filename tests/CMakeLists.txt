@@ -83,6 +83,7 @@ set(TEST_SOURCES
     test_c_abi_setters
     test_fills_edge
     test_default_qty_signal_freeze
+    test_qty_step_epsilon_floor
     test_margin_admission_gate
     test_reversal_admission_float_guard
     test_direct_short_reversal_affordability

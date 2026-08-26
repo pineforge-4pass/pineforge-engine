@@ -1554,12 +1554,20 @@ protected:
     // floored, not rounded, before it ever contributes to cost basis or a
     // fill (see src/engine_fills.cpp's margin-call path, which already does
     // this for liquidation lots). qty_step_ == 0 (corpus default) leaves qty
-    // untouched. Unlike the liquidation path, a regular entry legitimately
-    // CAN floor to zero (an under-funded order is simply not placed), so
-    // there is no "never stall" floor-to-one-step fallback here.
+    // untouched. A quotient that is only binary64 residue below an integer is
+    // treated as that integer, using the same 1e-6-of-a-step tolerance as
+    // percent-derived exits below. This keeps an on-grid request such as
+    // 1 / 0.00001 from losing a whole lot because the quotient materializes as
+    // 99999.999999..., while a genuinely off-grid request still floors. When
+    // quantization would be a no-op, preserve the original double so the
+    // tolerance never increases a requested quantity. Unlike the liquidation
+    // path, a regular entry legitimately CAN floor to zero (an under-funded
+    // order is simply not placed), so there is no "never stall"
+    // floor-to-one-step fallback here.
     double apply_qty_step(double qty) const {
         if (qty_step_ <= 0.0 || !std::isfinite(qty) || qty <= 0.0) return qty;
-        return std::floor(qty / qty_step_) * qty_step_;
+        double floored = std::floor(qty / qty_step_ + 1e-6) * qty_step_;
+        return floored < qty ? floored : qty;
     }
 
     // Percent-derived strategy.exit lots are floored to the same lot

@@ -365,8 +365,8 @@ void test_reversal_bracket_binding_survives_freeze() {
 //
 // The raw placement quantity is 6279.0000001 / 1000 = 6.2790000001.  Its
 // first qty_step floor is 6.2790.  In binary64, that result divided by 0.0001
-// is 62789.999999..., so applying the same floor a SECOND time produces
-// 6.2789.  frozen_default_qty is already exchange-quantized at placement;
+// is 62789.999999.... Epsilon-safe regular flooring is now idempotent at that
+// boundary, while frozen_default_qty remains exchange-quantized at placement;
 // dispatch must preserve it in the position, physical lot, and logical id
 // ledger.  Before the C fix, apply_market_order_fill handed the frozen value
 // to enter_market_from_flat as an ordinary FIXED quantity and it was floored
@@ -429,7 +429,7 @@ void test_frozen_true_flat_market_dispatch_is_not_refloored() {
 
     // Pin the test's binary boundary independently of the dispatch result.
     CHECK_NEAR(eng.one_floor_qty(), 6.2790, 1e-12);
-    CHECK_NEAR(eng.two_floor_qty(), 6.2789, 1e-12);
+    CHECK_NEAR(eng.two_floor_qty(), 6.2790, 1e-12);
 
     CHECK(eng.position_side() == PositionSide::LONG);
     CHECK_NEAR(eng.position_qty(), 6.2790, 1e-12);
@@ -515,7 +515,7 @@ void test_frozen_market_reversal_is_not_refloored() {
     eng.run(bars.data(), static_cast<int>(bars.size()));
 
     CHECK_NEAR(eng.one_floor_qty(), 6.2790, 1e-12);
-    CHECK_NEAR(eng.two_floor_qty(), 6.2789, 1e-12);
+    CHECK_NEAR(eng.two_floor_qty(), 6.2790, 1e-12);
     CHECK(eng.position_side() == PositionSide::LONG);
     CHECK_NEAR(eng.position_qty(), 6.2790, 1e-12);
     CHECK(eng.live_lot_count() == 1);
