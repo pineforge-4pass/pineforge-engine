@@ -188,6 +188,80 @@ void test_aux_label_inside_native_span_without_chart_bar_fails() {
 }
 
 
+void test_nifty_muhurat_shifted_open_maps_by_trading_date() {
+    constexpr int64_t regular_day = 1635911100000;  // 2021-11-03 09:15 IST
+    constexpr int64_t muhurat_native = 1636029000000;  // 2021-11-04 18:00 IST
+    constexpr int64_t next_regular_day = 1636343100000;  // 2021-11-08 09:15 IST
+    constexpr int64_t minute = 60000;
+    const Bar chart[] = {
+        {100.0, 160.0, 90.0, 150.0, 1000.0, regular_day},
+        {200.0, 260.0, 190.0, 250.0, 2000.0, muhurat_native},
+        {300.0, 360.0, 290.0, 350.0, 3000.0, next_regular_day},
+    };
+    const Bar aux[] = {
+        {10.0, 11.5, 9.5, 11.0, 10.0, regular_day},
+        {11.0, 12.5, 10.5, 12.0, 11.0, regular_day + minute},
+        // The immutable NSE tape starts seven minutes after the native
+        // Muhurat chart label.  Both belong to the same trading date even
+        // though neither timestamp is the configured 09:15 session open.
+        {20.0, 21.5, 19.5, 21.0, 20.0, 1636029420000},
+        {21.0, 22.5, 20.5, 22.0, 21.0, 1636033620000},
+        {30.0, 31.5, 29.5, 31.0, 30.0, next_regular_day},
+        {31.0, 32.5, 30.5, 32.0, 31.0, next_regular_day + minute},
+    };
+
+    SplitFeedProbe probe;
+    strategy_set_syminfo_timezone(
+        static_cast<pf_strategy_t>(&probe), "Asia/Kolkata");
+    strategy_set_syminfo_session(
+        static_cast<pf_strategy_t>(&probe), "0915-1530:23456");
+    assert(strategy_set_aux_security_feed(
+        static_cast<pf_strategy_t>(&probe),
+        reinterpret_cast<const pf_bar_t*>(aux), 6, "1") == 0);
+
+    probe.run(chart, 3, "1D", "1D", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    assert(probe.last_error().empty());
+    assert((probe.chart_closes == std::vector<double>{150.0, 250.0, 350.0}));
+    assert((probe.security_at_chart_close
+            == std::vector<double>{12.0, 22.0, 32.0}));
+    assert((probe.lower_tf_at_chart_close
+            == std::vector<std::vector<double>>{
+                {11.0, 12.0}, {21.0, 22.0}, {31.0, 32.0}}));
+}
+
+
+void test_nifty_absent_trading_date_still_fails() {
+    constexpr int64_t regular_day = 1635911100000;  // 2021-11-03 09:15 IST
+    constexpr int64_t next_regular_day = 1636343100000;  // 2021-11-08 09:15 IST
+    const Bar chart[] = {
+        {100.0, 101.0, 99.0, 100.0, 10.0, regular_day},
+        {300.0, 301.0, 299.0, 300.0, 10.0, next_regular_day},
+    };
+    const Bar aux[] = {
+        {1.0, 1.0, 1.0, 1.0, 1.0, regular_day},
+        // An auxiliary Muhurat trading date with no native chart bar remains
+        // an interior hole and must not be silently attached to a neighbour.
+        {2.0, 2.0, 2.0, 2.0, 1.0, 1636029420000},
+        {3.0, 3.0, 3.0, 3.0, 1.0, next_regular_day},
+    };
+
+    RoutingOnlyProbe probe;
+    strategy_set_syminfo_timezone(
+        static_cast<pf_strategy_t>(&probe), "Asia/Kolkata");
+    strategy_set_syminfo_session(
+        static_cast<pf_strategy_t>(&probe), "0915-1530:23456");
+    assert(strategy_set_aux_security_feed(
+        static_cast<pf_strategy_t>(&probe),
+        reinterpret_cast<const pf_bar_t*>(aux), 3, "1") == 0);
+
+    probe.run(chart, 2, "1D", "1D", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    assert(probe.last_error().find(
+        "does not map to a native chart bar") != std::string::npos);
+}
+
+
 void test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight() {
     constexpr int64_t session_open = 1704232800000;  // 2024-01-02 17:00 NY
     constexpr int64_t minute = 60000;
@@ -221,6 +295,8 @@ void test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight() {
 int main() {
     test_native_chart_and_auxiliary_security_are_isolated();
     test_aux_label_inside_native_span_without_chart_bar_fails();
+    test_nifty_muhurat_shifted_open_maps_by_trading_date();
+    test_nifty_absent_trading_date_still_fails();
     test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight();
     return 0;
 }

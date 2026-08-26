@@ -99,26 +99,53 @@ void BacktestEngine::prepare_aux_security_chart_ranges(
     aux_security_chart_end_.assign(static_cast<std::size_t>(n_chart), missing);
     TimeframeAggregator chart_router(chart_tf, aux_security_input_tf_,
                                      syminfo_.timezone, syminfo_.session);
-    const int64_t first_chart_label = chart_bars[0].timestamp;
-    const int64_t last_chart_label = chart_bars[n_chart - 1].timestamp;
+    const CalendarPeriod chart_period = calendar_period_for(chart_tf);
+    const bool calendar_chart = chart_period != CalendarPeriod::NONE;
+    // Calendar chart timestamps are the ACTUAL exchange bar opens.  Most
+    // sessions open at syminfo.session's nominal start, but special sessions
+    // can open at another time on the same trading date (NSE Muhurat is the
+    // pinned example).  Route calendar bars by their unique trading-period
+    // identity, then retain the native bar index/timestamp for chart and
+    // broker semantics.  Requiring timestamp equality here incorrectly turns
+    // a shifted special-session open into an interior missing-bar failure.
+    std::vector<int64_t> chart_route_keys;
+    chart_route_keys.reserve(static_cast<std::size_t>(n_chart));
+    for (int i = 0; i < n_chart; ++i) {
+        const int64_t key = calendar_chart
+            ? session_period_open_ms(chart_bars[i].timestamp,
+                                     syminfo_.timezone, syminfo_.session,
+                                     chart_period)
+            : chart_bars[i].timestamp;
+        if (!chart_route_keys.empty() && key <= chart_route_keys.back()) {
+            throw std::runtime_error(
+                "native chart feed trading-period identities must be unique and strictly increasing with an auxiliary security feed");
+        }
+        chart_route_keys.push_back(key);
+    }
+    const int64_t first_chart_key = chart_route_keys.front();
+    const int64_t last_chart_key = chart_route_keys.back();
     std::size_t chart_index = 0;
     for (std::size_t aux_index = 0; aux_index < aux_security_bars_.size();
          ++aux_index) {
-        const int64_t label = chart_router.bar_label_ms(
-            aux_security_bars_[aux_index].timestamp);
+        const int64_t label = calendar_chart
+            ? session_period_open_ms(aux_security_bars_[aux_index].timestamp,
+                                     syminfo_.timezone, syminfo_.session,
+                                     chart_period)
+            : chart_router.bar_label_ms(
+                  aux_security_bars_[aux_index].timestamp);
         // Evidence feeds may intentionally cover a wider history than the
         // native chart tape. Those leading/trailing buckets are inert. Once a
         // label enters the native span, however, it must match an actual chart
         // bar exactly; silently skipping an interior hole would shift security
         // state across the chart matrix.
-        if (label < first_chart_label || label > last_chart_label) {
+        if (label < first_chart_key || label > last_chart_key) {
             continue;
         }
         while (chart_index + 1 < static_cast<std::size_t>(n_chart)
-               && chart_bars[chart_index].timestamp < label) {
+               && chart_route_keys[chart_index] < label) {
             ++chart_index;
         }
-        if (chart_bars[chart_index].timestamp != label) {
+        if (chart_route_keys[chart_index] != label) {
             throw std::runtime_error(
                 "auxiliary request.security bar does not map to a native chart bar");
         }
