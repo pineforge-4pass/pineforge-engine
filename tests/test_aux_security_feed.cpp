@@ -158,18 +158,17 @@ void test_native_chart_and_auxiliary_security_are_isolated() {
 }
 
 
-void test_aux_label_inside_native_span_without_chart_bar_fails() {
-    constexpr int64_t day1 = 1704205800000;
-    constexpr int64_t day2 = 1704292200000;
-    constexpr int64_t day3 = 1704378600000;
+void test_intraday_aux_label_inside_native_span_without_chart_bar_fails() {
+    constexpr int64_t bar1 = 1704205800000;  // 2024-01-02 09:30 New York
+    constexpr int64_t hour = 3600000;
     const Bar chart[] = {
-        {100.0, 101.0, 99.0, 100.0, 10.0, day1},
-        {300.0, 301.0, 299.0, 300.0, 10.0, day3},
+        {100.0, 101.0, 99.0, 100.0, 10.0, bar1},
+        {300.0, 301.0, 299.0, 300.0, 10.0, bar1 + 2 * hour},
     };
     const Bar aux[] = {
-        {1.0, 1.0, 1.0, 1.0, 1.0, day1},
-        {2.0, 2.0, 2.0, 2.0, 1.0, day2},
-        {3.0, 3.0, 3.0, 3.0, 1.0, day3},
+        {1.0, 1.0, 1.0, 1.0, 1.0, bar1},
+        {2.0, 2.0, 2.0, 2.0, 1.0, bar1 + hour},
+        {3.0, 3.0, 3.0, 3.0, 1.0, bar1 + 2 * hour},
     };
 
     RoutingOnlyProbe probe;
@@ -181,7 +180,7 @@ void test_aux_label_inside_native_span_without_chart_bar_fails() {
         static_cast<pf_strategy_t>(&probe),
         reinterpret_cast<const pf_bar_t*>(aux), 3, "1") == 0);
 
-    probe.run(chart, 2, "1D", "1D", false, 4,
+    probe.run(chart, 2, "60", "60", false, 4,
               MagnifierDistribution::ENDPOINTS);
     assert(probe.last_error().find(
         "does not map to a native chart bar") != std::string::npos);
@@ -231,34 +230,43 @@ void test_nifty_muhurat_shifted_open_maps_by_trading_date() {
 }
 
 
-void test_nifty_absent_trading_date_still_fails() {
-    constexpr int64_t regular_day = 1635911100000;  // 2021-11-03 09:15 IST
-    constexpr int64_t next_regular_day = 1636343100000;  // 2021-11-08 09:15 IST
+void test_nq_labor_day_sessions_coalesce_into_native_interval() {
+    constexpr int64_t sunday_native = 1693778400000;  // 2023-09-03 17:00 CDT
+    constexpr int64_t labor_reopen = 1693864800000;  // 2023-09-04 17:00 CDT
+    constexpr int64_t tuesday_native = 1693951200000;  // 2023-09-05 17:00 CDT
+    constexpr int64_t minute = 60000;
     const Bar chart[] = {
-        {100.0, 101.0, 99.0, 100.0, 10.0, regular_day},
-        {300.0, 301.0, 299.0, 300.0, 10.0, next_regular_day},
+        {100.0, 160.0, 90.0, 150.0, 1000.0, sunday_native},
+        {300.0, 360.0, 290.0, 350.0, 3000.0, tuesday_native},
     };
     const Bar aux[] = {
-        {1.0, 1.0, 1.0, 1.0, 1.0, regular_day},
-        // An auxiliary Muhurat trading date with no native chart bar remains
-        // an interior hole and must not be silently attached to a neighbour.
-        {2.0, 2.0, 2.0, 2.0, 1.0, 1636029420000},
-        {3.0, 3.0, 3.0, 3.0, 1.0, next_regular_day},
+        {10.0, 11.5, 9.5, 11.0, 10.0, sunday_native},
+        {11.0, 12.5, 10.5, 12.0, 11.0, sunday_native + minute},
+        // TradingView's native Labor-Day candle legitimately coalesces the
+        // Sunday session and Monday-evening reopen under sunday_native.
+        {20.0, 21.5, 19.5, 21.0, 20.0, labor_reopen},
+        {21.0, 22.5, 20.5, 22.0, 21.0, labor_reopen + minute},
+        {30.0, 31.5, 29.5, 31.0, 30.0, tuesday_native},
+        {31.0, 32.5, 30.5, 32.0, 31.0, tuesday_native + minute},
     };
 
-    RoutingOnlyProbe probe;
+    SplitFeedProbe probe;
     strategy_set_syminfo_timezone(
-        static_cast<pf_strategy_t>(&probe), "Asia/Kolkata");
+        static_cast<pf_strategy_t>(&probe), "America/Chicago");
     strategy_set_syminfo_session(
-        static_cast<pf_strategy_t>(&probe), "0915-1530:23456");
+        static_cast<pf_strategy_t>(&probe), "1700-1600:23456");
     assert(strategy_set_aux_security_feed(
         static_cast<pf_strategy_t>(&probe),
-        reinterpret_cast<const pf_bar_t*>(aux), 3, "1") == 0);
+        reinterpret_cast<const pf_bar_t*>(aux), 6, "1") == 0);
 
     probe.run(chart, 2, "1D", "1D", false, 4,
               MagnifierDistribution::ENDPOINTS);
-    assert(probe.last_error().find(
-        "does not map to a native chart bar") != std::string::npos);
+    assert(probe.last_error().empty());
+    assert((probe.chart_closes == std::vector<double>{150.0, 350.0}));
+    assert((probe.security_at_chart_close == std::vector<double>{22.0, 32.0}));
+    assert((probe.lower_tf_at_chart_close
+            == std::vector<std::vector<double>>{
+                {11.0, 12.0, 21.0, 22.0}, {31.0, 32.0}}));
 }
 
 
@@ -294,9 +302,9 @@ void test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight() {
 
 int main() {
     test_native_chart_and_auxiliary_security_are_isolated();
-    test_aux_label_inside_native_span_without_chart_bar_fails();
+    test_intraday_aux_label_inside_native_span_without_chart_bar_fails();
     test_nifty_muhurat_shifted_open_maps_by_trading_date();
-    test_nifty_absent_trading_date_still_fails();
+    test_nq_labor_day_sessions_coalesce_into_native_interval();
     test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight();
     return 0;
 }
