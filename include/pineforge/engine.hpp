@@ -1587,6 +1587,27 @@ protected:
         return floored < qty ? floored : qty;
     }
 
+    // Integer-lot symbols keep one minimum contract/share for any positive
+    // percent-derived strategy.exit request when at least one whole step is
+    // still unreserved. TradingView evidence on one-contract ES/NQ/NIFTY
+    // positions shows a pair of qty_percent=50 siblings reserving 1 + 0, not
+    // 0 + 0. Fractional-lot symbols retain the floor/dust rule above.
+    //
+    // This helper is intentionally exit-percent-specific: explicit exit qty,
+    // full-percent exits, entries and other broker quantities must not acquire
+    // a minimum-one-step fallback.
+    double apply_percent_exit_qty_step(double requested_qty,
+                                       double available_qty) const {
+        double gridded = apply_exit_qty_step(requested_qty);
+        if (qty_step_ >= 1.0
+            && requested_qty > 0.0
+            && requested_qty < qty_step_
+            && available_qty >= qty_step_) {
+            return qty_step_;
+        }
+        return gridded;
+    }
+
     // TradingView reserves the entry commission when sizing percent_of_equity:
     // it sizes the notional so that notional + entry_fee <= equity*pct, i.e.
     // divides the sizing cash by (1 + commRate). Proven from TV exports for
@@ -2601,7 +2622,9 @@ private:
     // of the entry it attaches to. Only acts on multi-leg from_entry groups that
     // contain at least one partial leg; single brackets and pure 100% OCA pairs
     // are left untouched (qty=NaN → full remaining close, as before).
-    void reconcile_deferred_layered_exits(const std::string& entry_id);
+    void reconcile_deferred_layered_exits(
+        const std::string& entry_id,
+        std::vector<std::size_t>& zero_reservation_indices);
     void apply_raw_order_fill(PendingOrder& order, double fill_price,
                               double& trail_best_path_state,
                               int& exit_closed_from_bar,

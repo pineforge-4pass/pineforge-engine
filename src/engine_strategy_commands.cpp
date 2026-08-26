@@ -2513,15 +2513,14 @@ bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
         double requested_qty = live_pos_qty * (qp_io / 100.0);
         // TV floors each percent-derived PARTIAL exit lot to the
         // instrument lot step at placement (apply_exit_qty_step doc has
-        // the row-level evidence); the sub-step remainder stays open as
-        // a dust position instead of being closed by the final bracket
-        // leg. A dust-sized request that floors to zero is simply not
-        // placed (the kQtyEpsilon check below aborts), which is also
-        // TV's behaviour: dust positions carry no TP bracket and only
-        // ever close via reversal/close_all/margin call. Full-position
+        // the row-level evidence). Fractional-lot sub-step requests become
+        // zero and leave dust open. On integer-lot symbols, however, any
+        // positive request gets one minimum step while that capacity remains:
+        // a one-contract 50/50 pair reserves 1 + 0, not 0 + 0. Full-position
         // exits (qp == 100%) are left exact so they always flatten.
         if (qp_io < 100.0 - kFullPercentEps) {
-            requested_qty = apply_exit_qty_step(requested_qty);
+            requested_qty = apply_percent_exit_qty_step(
+                requested_qty, available_qty);
         }
         reserved_qty_out = std::min(requested_qty, available_qty);
     }

@@ -4561,7 +4561,7 @@ void BacktestEngine::apply_filled_order_to_state(
         }
         if (!pyramid_entries_.empty()) {
             reconcile_deferred_layered_exits(
-                pyramid_entries_.back().entry_id);
+                pyramid_entries_.back().entry_id, filled_indices);
         }
     }
 
@@ -4576,7 +4576,7 @@ void BacktestEngine::apply_filled_order_to_state(
         && (order.type == OrderType::MARKET
             || order.type == OrderType::ENTRY
             || order.type == OrderType::RAW_ORDER)) {
-        reconcile_deferred_layered_exits(order.id);
+        reconcile_deferred_layered_exits(order.id, filled_indices);
     }
 
     if (position_side_ == PositionSide::FLAT) {
@@ -5129,7 +5129,9 @@ void BacktestEngine::apply_exit_order_fill(PendingOrder& order, double fill_pric
     }
 }
 
-void BacktestEngine::reconcile_deferred_layered_exits(const std::string& entry_id) {
+void BacktestEngine::reconcile_deferred_layered_exits(
+        const std::string& entry_id,
+        std::vector<std::size_t>& zero_reservation_indices) {
     if (entry_id.empty()) return;
     const double live_pos = position_qty_;
     if (live_pos <= kQtyEpsilon) return;
@@ -5158,7 +5160,8 @@ void BacktestEngine::reconcile_deferred_layered_exits(const std::string& entry_i
     // fires first. Legs that already carry an explicit qty (reconciled at arm
     // time) are left as-is but still consume reservation capacity.
     double reserved = 0.0;
-    for (auto& o : pending_orders_) {
+    for (std::size_t i = 0; i < pending_orders_.size(); ++i) {
+        auto& o = pending_orders_[i];
         if (o.type != OrderType::EXIT) continue;
         if (o.from_entry != entry_id) continue;
         double oqp = std::isnan(o.qty_percent)
@@ -5169,9 +5172,27 @@ void BacktestEngine::reconcile_deferred_layered_exits(const std::string& entry_i
         }
         double avail = std::max(0.0, live_pos - reserved);
         double requested = live_pos * (oqp / 100.0);
-        if (oqp < 100.0 - kFullPercentEps) requested = apply_exit_qty_step(requested);
+        if (oqp < 100.0 - kFullPercentEps) {
+            requested = apply_percent_exit_qty_step(requested, avail);
+        }
         double res = std::min(requested, avail);
-        if (res <= kQtyEpsilon) continue;  // nothing left to reserve; leave deferred
+        if (res <= kQtyEpsilon) {
+            // The live-placement path declines this zero-capacity sibling.
+            // Deferred legs already exist in pending_orders_, so neutralize
+            // the doomed object for the remainder of this broker scan and
+            // compact it at the caller's normal safe point.
+            o.qty = 0.0;
+            o.qty_percent = 0.0;
+            o.limit_price = std::numeric_limits<double>::quiet_NaN();
+            o.stop_price = std::numeric_limits<double>::quiet_NaN();
+            o.profit_ticks = std::numeric_limits<double>::quiet_NaN();
+            o.loss_ticks = std::numeric_limits<double>::quiet_NaN();
+            o.trail_points = std::numeric_limits<double>::quiet_NaN();
+            o.trail_price = std::numeric_limits<double>::quiet_NaN();
+            o.trail_offset = std::numeric_limits<double>::quiet_NaN();
+            zero_reservation_indices.push_back(i);
+            continue;
+        }
         o.qty = res;
         // Keep qty_percent consistent with the qty we just froze. A deferred
         // 100% sibling capped here to the remaining slice must not keep
