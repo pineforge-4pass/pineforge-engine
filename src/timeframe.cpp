@@ -683,8 +683,33 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
         if (boundary) {
             if (s.current_emitted_complete) {
                 feed_reset_current(s, input_bar);
+                // The incoming bar can be both the first child of a fresh HTF
+                // bucket and the final chart bar of a declared session.  The
+                // normal session-close check below is reached only after a
+                // same-bucket merge, so this singleton shape used to remain
+                // partial until the next session's first bar crossed the
+                // boundary.  TradingView finalizes the clipped HTF bucket on
+                // this caller.  Keep the eager path limited to a genuinely
+                // coarser fixed intraday target on a real session; equal-TF,
+                // 24x7 and calendar aggregation retain their existing paths.
+                bool singleton_session_final = false;
+                if (ratio > 1 && input_seconds > 0
+                    && target_seconds < kSecPerDay
+                    && has_trading_session(asess)) {
+                    const int64_t next_ms =
+                        input_bar.timestamp + input_seconds * 1000;
+                    singleton_session_final =
+                        next_ms >= session_period_last_traded_close_ms(
+                            input_bar.timestamp, atz, asess,
+                            CalendarPeriod::DAY);
+                }
+                if (singleton_session_final) {
+                    s.last_completed_bar = s.current_bar;
+                    s.has_completed = true;
+                    s.current_emitted_complete = true;
+                }
                 result.bar = s.current_bar;
-                result.is_complete = false;
+                result.is_complete = singleton_session_final;
                 result.sub_bar_count = s.sub_bar_count;
                 return result;
             }

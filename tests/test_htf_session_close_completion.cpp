@@ -68,9 +68,16 @@ int64_t edt_ms(int y, int m, int d, int h, int mi) {
     return utc_ms(y, m, d, h + 4, mi);
 }
 
+// India Standard Time is fixed UTC+05:30.
+int64_t ist_ms(int y, int m, int d, int h, int mi) {
+    return utc_ms(y, m, d, h, mi) - (5 * 60 + 30) * 60 * 1000;
+}
+
 const std::string NY  = "America/New_York";
 const std::string RTH = "0930-1600";
 const std::string FX  = "1700-1700";
+const std::string IST = "Asia/Kolkata";
+const std::string NIFTY = "0915-1530";
 const int64_t k15m = 15 * 60 * 1000;
 
 Bar bar_at(int64_t ts) {
@@ -100,6 +107,12 @@ std::vector<Completion> drive(TimeframeAggregator& agg, const std::vector<int64_
 // RTH 15m grid for one date: 09:30 .. 15:45 ET (26 bars).
 void rth_day(std::vector<int64_t>& v, int y, int m, int d) {
     for (int i = 0; i < 26; ++i) v.push_back(edt_ms(y, m, d, 9, 30) + i * k15m);
+}
+
+// NSE cash session: 09:15 .. 15:15 IST (25 bars).  On a 60m grid the first
+// six buckets contain four children and the final 15:15 bucket is a singleton.
+void nifty_day(std::vector<int64_t>& v, int y, int m, int d) {
+    for (int i = 0; i < 25; ++i) v.push_back(ist_ms(y, m, d, 9, 15) + i * k15m);
 }
 
 // Forex 15m grid for one session-day: 17:00 ET on (y,m,d) .. 16:45 ET next day.
@@ -163,6 +176,97 @@ static void test_last_traded_close_helper() {
 }
 
 // ─── A: RTH intraday buckets ──────────────────────────────────────────────────
+
+static void test_nifty_60_singleton_session_final_completes_immediately() {
+    std::printf("test_nifty_60_singleton_session_final_completes_immediately\n");
+    TimeframeAggregator agg("60", "15", IST, NIFTY);
+    std::vector<int64_t> ts;
+    nifty_day(ts, 2025, 5, 29);
+    nifty_day(ts, 2025, 5, 30);
+    auto c = drive(agg, ts);
+
+    const Completion* first_final =
+        completion_at(c, ist_ms(2025, 5, 29, 15, 15));
+    CHECK(first_final != nullptr);
+    if (first_final) {
+        CHECK(first_final->subs == 1);
+        CHECK_EQ_MS(first_final->bucket_ts,
+                    ist_ms(2025, 5, 29, 15, 15));
+    }
+    CHECK(!has_completion_at(c, ist_ms(2025, 5, 30, 9, 15)));
+    CHECK(has_completion_at(c, ist_ms(2025, 5, 30, 15, 15)));
+    CHECK(c.size() == 14);
+}
+
+static void test_nifty_60_ordinary_full_hour_unchanged() {
+    std::printf("test_nifty_60_ordinary_full_hour_unchanged\n");
+    TimeframeAggregator agg("60", "15", IST, NIFTY);
+    std::vector<int64_t> ts;
+    nifty_day(ts, 2025, 5, 29);
+    auto c = drive(agg, ts);
+
+    const Completion* first =
+        completion_at(c, ist_ms(2025, 5, 29, 10, 0));
+    CHECK(first != nullptr);
+    if (first) {
+        CHECK(first->subs == 4);
+        CHECK_EQ_MS(first->bucket_ts, ist_ms(2025, 5, 29, 9, 15));
+    }
+    const Completion* last_full =
+        completion_at(c, ist_ms(2025, 5, 29, 15, 0));
+    CHECK(last_full != nullptr);
+    if (last_full) {
+        CHECK(last_full->subs == 4);
+        CHECK_EQ_MS(last_full->bucket_ts,
+                    ist_ms(2025, 5, 29, 14, 15));
+    }
+    CHECK(c.size() == 7);
+}
+
+static void test_aapl_60_two_child_session_final_unchanged() {
+    std::printf("test_aapl_60_two_child_session_final_unchanged\n");
+    TimeframeAggregator agg("60", "15", NY, RTH);
+    std::vector<int64_t> ts;
+    rth_day(ts, 2025, 6, 2);
+    rth_day(ts, 2025, 6, 3);
+    auto c = drive(agg, ts);
+
+    CHECK(!has_completion_at(c, edt_ms(2025, 6, 2, 15, 30)));
+    const Completion* final =
+        completion_at(c, edt_ms(2025, 6, 2, 15, 45));
+    CHECK(final != nullptr);
+    if (final) {
+        CHECK(final->subs == 2);
+        CHECK_EQ_MS(final->bucket_ts, edt_ms(2025, 6, 2, 15, 30));
+    }
+    CHECK(!has_completion_at(c, edt_ms(2025, 6, 3, 9, 30)));
+    CHECK(c.size() == 14);
+}
+
+static void test_24x7_singleton_boundary_remains_lazy() {
+    std::printf("test_24x7_singleton_boundary_remains_lazy\n");
+    TimeframeAggregator agg("60", "15", "UTC", "24x7");
+    const std::vector<int64_t> ts = {
+        utc_ms(2025, 6, 2, 0, 0),
+        utc_ms(2025, 6, 2, 0, 15),
+        utc_ms(2025, 6, 2, 0, 30),
+        utc_ms(2025, 6, 2, 0, 45),
+        utc_ms(2025, 6, 2, 1, 0),
+        utc_ms(2025, 6, 2, 2, 0),
+    };
+    auto c = drive(agg, ts);
+
+    CHECK(has_completion_at(c, utc_ms(2025, 6, 2, 0, 45)));
+    CHECK(!has_completion_at(c, utc_ms(2025, 6, 2, 1, 0)));
+    const Completion* lazy =
+        completion_at(c, utc_ms(2025, 6, 2, 2, 0));
+    CHECK(lazy != nullptr);
+    if (lazy) {
+        CHECK(lazy->subs == 1);
+        CHECK_EQ_MS(lazy->bucket_ts, utc_ms(2025, 6, 2, 1, 0));
+    }
+    CHECK(c.size() == 2);
+}
 
 static void test_rth_240_completes_at_1545() {
     std::printf("test_rth_240_completes_at_1545\n");
@@ -403,6 +507,10 @@ static void test_24x7_identity() {
 
 int main() {
     test_last_traded_close_helper();
+    test_nifty_60_singleton_session_final_completes_immediately();
+    test_nifty_60_ordinary_full_hour_unchanged();
+    test_aapl_60_two_child_session_final_unchanged();
+    test_24x7_singleton_boundary_remains_lazy();
     test_rth_240_completes_at_1545();
     test_rth_60_and_45_complete_at_1545();
     test_rth_week_completes_friday_1545();
