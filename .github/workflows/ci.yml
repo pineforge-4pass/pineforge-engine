@@ -94,3 +94,19 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --test-dir build-asan --output-on-failure
+
+  # The branch ruleset requires a status check named `build`, but the matrix
+  # job above reports as `build (ubuntu-latest, Release)` and friends -- a bare
+  # `build` context never appears, so the merge stays BLOCKED even with every
+  # check green. This gate carries that exact name and passes only when every
+  # matrix build did, satisfying the ruleset without loosening it.
+  build-gate:
+    name: build
+    needs: [build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every matrix build to have passed
+        run: |
+          echo "matrix build result: ${{ needs.build.result }}"
+          test "${{ needs.build.result }}" = "success"
