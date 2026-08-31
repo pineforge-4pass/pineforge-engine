@@ -1,0 +1,235 @@
+# PineForge parity campaign — post-merge baseline promotion.
+#
+# Install into BOTH product repos, unchanged (the repo axis is auto-detected):
+#   pineforge-engine/.github/workflows/promote-baseline.yml
+#   pineforge-codegen-oss/.github/workflows/promote-baseline.yml
+#
+# On a merged PR it advances the campaign baseline one axis to the merged
+# composite, reusing the snapshot from the pr-gate run that already cleared
+# it. It promotes ONLY when the merge is exact-head (the gated commit's tree is
+# now on the base branch), CI is green on that commit, and a PASS verdict binds
+# the full (engine, codegen) pair. Otherwise it exits green without promoting.
+#
+# The gate logic (exact-head + CI-green + baseline-promote.mjs) is unchanged;
+# only the transport to the campaign plane changed. The plane is now GCP: the
+# promotion reads the active baseline and the gate ledger from the Postgres
+# registry through a cloud-sql-proxy, streams the pinned documents from the
+# GCS evidence bucket, and appends the new baseline row — authenticated by
+# workload identity federation, so no long-lived GCP key lives in the repo.
+#
+# Required in each product repo:
+#   secrets PINEFORGE_APP_ID + PINEFORGE_APP_PRIVATE_KEY  the org App (already
+#          present for release.yml) — the job mints a short-lived, read-only
+#          token from it to check out the private pineforge-workflow repo, so
+#          NO personal access token is needed
+#   var    WORKFLOW_REPO         optional override, defaults to pineforge-4pass/pineforge-workflow
+#   var    GCP_WORKLOAD_IDENTITY_PROVIDER
+#          the full provider resource name — terraform/gcp output
+#          `github_workload_identity_provider`
+#   var    GCP_SERVICE_ACCOUNT
+#          the dedicated promotion service account this workflow impersonates
+#          through that provider — terraform/gcp output
+#          `github_promotion_service_account`. Terraform binds the repo-pinned
+#          federated identity to it (roles/iam.workloadIdentityUser) and
+#          grants it exactly what the steps below use, and nothing else:
+#          Cloud SQL Client on the registry instance (the proxy this job
+#          starts), accessor on secret pineforge-registry-db (the DSN
+#          password baseline-promote resolves), and objectViewer on the
+#          evidence bucket (the three pinned documents it streams). No
+#          Cloud Run role: this workflow executes no job. Nothing is left for
+#          an operator to grant by hand.
+#
+# This file's PATH is part of the identity: the WIF provider admits only
+# `<owner>/<repo>/.github/workflows/promote-baseline.yml@…`, so installing it
+# under another name mints no token — and no other workflow in the repo can
+# mint one either.
+#
+# (Optionally pin WORKFLOW_REF, defaults to main; and PINEFORGE_EVIDENCE_BUCKET,
+#  defaults to pineforge-workflow-evidence.)
+
+name: promote-baseline
+
+on:
+  pull_request:
+    types: [closed]
+  # Manual re-fire for a merge whose pull_request event already passed (e.g. a
+  # PR merged before this workflow was installed, or a rebase-merge whose PR
+  # head was orphaned): pass the exact commit now on the base branch.
+  workflow_dispatch:
+    inputs:
+      merge_commit:
+        description: "40-hex commit now on the base branch to promote"
+        required: true
+      pr_number:
+        description: "the PR number"
+        required: true
+      pr_url:
+        description: "the PR url (recorded in the merge receipt)"
+        required: true
+      merged_at:
+        description: "ISO-8601 merge time"
+        required: true
+
+permissions:
+  contents: read
+  # "Confirm CI is green" reads check-runs, which is `checks`. The older
+  # combined-status API is not called, so no `statuses: read` is granted --
+  # this block is exactly what the steps below do, and nothing spare.
+  checks: read
+  # Workload identity federation mints the GCP credential from the job's own
+  # OIDC token; nothing here can promote without this repo's identity.
+  id-token: write
+
+jobs:
+  promote:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine repo axis
+        id: axis
+        run: |
+          case "${{ github.repository }}" in
+            *codegen*) echo "repo=codegen" >> "$GITHUB_OUTPUT" ;;
+            *)         echo "repo=engine"  >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Exact-head is the safety property: the snapshot describes the gated
+      # commit's tree, so we promote only if that tree is what is now on the
+      # base branch. A squash/rebase that rewrote the tree, or a base that
+      # moved on, is skipped — those must be re-gated.
+      - name: Verify exact-head
+        id: exacthead
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.merge_commit }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || 'main' }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "$BASE_REF"
+          if ! git merge-base --is-ancestor "$HEAD_SHA" "origin/$BASE_REF"; then
+            echo "::notice::head $HEAD_SHA is not on origin/$BASE_REF — not an exact-head merge; skipping"
+            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          base_tree=$(git rev-parse "origin/$BASE_REF^{tree}")
+          head_tree=$(git rev-parse "$HEAD_SHA^{tree}")
+          if [ "$base_tree" != "$head_tree" ]; then
+            echo "::notice::base tree != head tree — the base diverged from the gated tree; re-gate. skipping"
+            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm CI is green on the merged commit
+        id: ci
+        if: steps.exacthead.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.merge_commit }}
+        run: |
+          set -euo pipefail
+          bad=$(gh api "repos/${{ github.repository }}/commits/$HEAD_SHA/check-runs" \
+            --jq '[.check_runs[] | select(.conclusion=="failure" or .conclusion=="cancelled" or .conclusion=="timed_out" or .conclusion=="action_required")] | length')
+          if [ "$bad" != "0" ]; then
+            echo "::notice::$bad failing check-run(s) on $HEAD_SHA — not green; skipping"
+            echo "green=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "green=true" >> "$GITHUB_OUTPUT"
+
+      # The campaign tooling lives in the private pineforge-workflow repo. Rather
+      # than a long-lived PAT, mint a short-lived, read-only token from the org
+      # App already installed here (the same app-id/private-key release.yml
+      # uses), scoped to just that one repo.
+      - name: Mint an org App token to read the campaign tooling
+        id: app
+        if: steps.ci.outputs.green == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PINEFORGE_APP_ID }}
+          private-key: ${{ secrets.PINEFORGE_APP_PRIVATE_KEY }}
+          owner: pineforge-4pass
+          repositories: pineforge-workflow
+
+      - name: Checkout campaign tooling (pineforge-workflow)
+        if: steps.ci.outputs.green == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.WORKFLOW_REPO || 'pineforge-4pass/pineforge-workflow' }}
+          ref: ${{ vars.WORKFLOW_REF || 'main' }}
+          token: ${{ steps.app.outputs.token }}
+          path: .workflow
+
+      - uses: actions/setup-node@v4
+        if: steps.ci.outputs.green == 'true'
+        with:
+          node-version: '22'
+
+      - name: Authenticate to GCP
+        if: steps.ci.outputs.green == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: steps.ci.outputs.green == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      # The plane is Postgres on Cloud SQL; the promotion reads the active
+      # baseline and the gate ledger there, so this runner needs the same
+      # connector-path proxy operators use.
+      - name: Start cloud-sql-proxy
+        if: steps.ci.outputs.green == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/cloud-sql-proxy \
+            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.1/cloud-sql-proxy.linux.amd64
+          chmod +x /tmp/cloud-sql-proxy
+          /tmp/cloud-sql-proxy --port 5433 \
+            gen-lang-client-0864094636:asia-east1:pineforge-workflow-pg &
+          for i in $(seq 1 30); do
+            if (exec 3<>/dev/tcp/127.0.0.1/5433) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "cloud-sql-proxy did not become ready" >&2
+          exit 1
+
+      - name: Install campaign dependencies
+        if: steps.ci.outputs.green == 'true'
+        run: npm ci --prefix .workflow/campaign
+
+      - name: Promote baseline
+        if: steps.ci.outputs.green == 'true'
+        env:
+          PINEFORGE_PLANE: gcp
+          PINEFORGE_REGISTRY_HOST: 127.0.0.1:5433
+          PINEFORGE_EVIDENCE_BUCKET: ${{ vars.PINEFORGE_EVIDENCE_BUCKET || 'pineforge-workflow-evidence' }}
+          # No metadata server on a GitHub runner; mint GCS tokens from the
+          # federated gcloud credential explicitly.
+          PINEFORGE_GCP_TOKEN_CMD: gcloud auth print-access-token
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.inputs.merge_commit }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_URL: ${{ github.event.pull_request.html_url || github.event.inputs.pr_url }}
+          MERGED_AT: ${{ github.event.pull_request.merged_at || github.event.inputs.merged_at }}
+        run: |
+          set -euo pipefail
+          ms=$(node -e "process.stdout.write(String(Date.parse(process.env.MERGED_AT)))")
+          set +e
+          node .workflow/campaign/src/baseline-promote.mjs \
+            --repo "${{ steps.axis.outputs.repo }}" \
+            --merge-commit "$HEAD_SHA" --head-sha "$HEAD_SHA" --ci-head "$HEAD_SHA" --ci-green \
+            --pr-number "$PR_NUMBER" --pr-url "$PR_URL" --merged-at-ms "$ms"
+          code=$?
+          set -e
+          # Exit 2 is `refuse`: no PASS verdict binds this merge as a single-axis
+          # advance -- a cross-cutting engine+codegen change (gated as a composite
+          # the single axis cannot complete), an ungated merge, or a non-exact-head
+          # merge. Defer green, do not fail CI; a cross-cutting pair is promoted by
+          # hand with `lab promote --composite` once both repos merge (see the
+          # baseline-promote skill). Any other non-zero is a real error.
+          if [ "$code" = "2" ]; then
+            echo "::notice::baseline not promoted (deferred): no PASS verdict binds this merge as a single-axis advance. If this was a cross-cutting engine+codegen change, run the composite promote by hand once both repos are merged. Nothing was changed."
+            exit 0
+          fi
+          exit "$code"
