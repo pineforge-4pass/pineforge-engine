@@ -130,6 +130,15 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
                                const std::string& session,
                                CalendarPeriod period);
 
+/// The session instant a native CALENDAR chart stamp covers. A stamp inside
+/// its session-day returns unchanged. A stamp in the inter-session gap (at
+/// or after its session-day's close) covers the session about to open --
+/// OANDA stamps daily FX/metal bars at the 17:00 ET break under an
+/// 1800-1700 session -- and rolls forward to the next session-day's open.
+/// ""/24x7 sessions have no gap and always return `ms` unchanged.
+int64_t session_covered_instant_ms(int64_t ms, const std::string& tz,
+                                   const std::string& session);
+
 /// Exclusive close (Unix ms) of the symbol's D/W/M bar that contains `ms`:
 /// DAY -> session-day open + session length (16:00 ET on equities, the next
 /// 17:00 ET on forex, next midnight on 24x7); WEEK / MONTH -> the open of

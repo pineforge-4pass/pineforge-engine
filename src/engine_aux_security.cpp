@@ -111,10 +111,17 @@ void BacktestEngine::prepare_aux_security_chart_ranges(
     std::vector<int64_t> chart_route_keys;
     chart_route_keys.reserve(static_cast<std::size_t>(n_chart));
     for (int i = 0; i < n_chart; ++i) {
+        // Key each native bar by the session it COVERS: OANDA stamps daily
+        // bars at the 17:00 ET break, one hour before the 1800-1700 session
+        // the bar actually carries, and the raw stamp would key one session
+        // too early -- the tail prefilter below would then drop the last
+        // bar's entire slice as beyond last_chart_key.
         const int64_t key = calendar_chart
-            ? session_period_open_ms(chart_bars[i].timestamp,
-                                     syminfo_.timezone, syminfo_.session,
-                                     chart_period)
+            ? session_period_open_ms(
+                  session_covered_instant_ms(chart_bars[i].timestamp,
+                                             syminfo_.timezone,
+                                             syminfo_.session),
+                  syminfo_.timezone, syminfo_.session, chart_period)
             : chart_bars[i].timestamp;
         if (!chart_route_keys.empty() && key <= chart_route_keys.back()) {
             throw std::runtime_error(

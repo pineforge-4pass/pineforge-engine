@@ -270,6 +270,58 @@ void test_nq_labor_day_sessions_coalesce_into_native_interval() {
 }
 
 
+void test_oanda_break_stamped_daily_bars_route_by_covered_session() {
+    // OANDA XAUUSD: session 1800-1700 ET, but the immutable daily tape stamps
+    // every bar at 17:00 ET -- inside the inter-session break, one hour BEFORE
+    // the session the bar covers.  Keying the stamp by session-day floor maps
+    // it to the PREVIOUS session, so the last chart bar's content rows read as
+    // beyond last_chart_key and the tail prefilter empties the final bar.
+    constexpr int64_t minute = 60000;
+    constexpr int64_t stamp_a = 1704751200000;  // Mon 2024-01-08 17:00 EST
+    constexpr int64_t open_a = 1704754800000;   // Mon 18:00 EST
+    constexpr int64_t stamp_b = 1704837600000;  // Tue 17:00 EST
+    constexpr int64_t open_b = 1704841200000;   // Tue 18:00 EST
+    constexpr int64_t stamp_c = 1704924000000;  // Wed 17:00 EST
+    constexpr int64_t open_c = 1704927600000;   // Wed 18:00 EST
+    constexpr int64_t lead = 1704733200000;     // Mon 12:00 EST (prior session)
+    constexpr int64_t trail = 1705014000000;    // Thu 18:00 EST (next session)
+    const Bar chart[] = {
+        {100.0, 160.0, 90.0, 150.0, 1000.0, stamp_a},
+        {200.0, 260.0, 190.0, 250.0, 2000.0, stamp_b},
+        {300.0, 360.0, 290.0, 350.0, 3000.0, stamp_c},
+    };
+    const Bar aux[] = {
+        {90.0, 90.0, 90.0, 90.0, 1.0, lead},
+        {10.0, 11.5, 9.5, 11.0, 10.0, open_a},
+        {11.0, 12.5, 10.5, 12.0, 11.0, open_a + minute},
+        {20.0, 21.5, 19.5, 21.0, 20.0, open_b},
+        {21.0, 22.5, 20.5, 22.0, 21.0, open_b + minute},
+        {30.0, 31.5, 29.5, 31.0, 30.0, open_c},
+        {31.0, 32.5, 30.5, 32.0, 31.0, open_c + minute},
+        {80.0, 80.0, 80.0, 80.0, 1.0, trail},
+    };
+
+    SplitFeedProbe probe;
+    strategy_set_syminfo_timezone(
+        static_cast<pf_strategy_t>(&probe), "America/New_York");
+    strategy_set_syminfo_session(
+        static_cast<pf_strategy_t>(&probe), "1800-1700");
+    assert(strategy_set_aux_security_feed(
+        static_cast<pf_strategy_t>(&probe),
+        reinterpret_cast<const pf_bar_t*>(aux), 8, "1") == 0);
+
+    probe.run(chart, 3, "1D", "1D", false, 4,
+              MagnifierDistribution::ENDPOINTS);
+    assert(probe.last_error().empty());
+    assert((probe.chart_closes == std::vector<double>{150.0, 250.0, 350.0}));
+    assert((probe.security_at_chart_close
+            == std::vector<double>{12.0, 22.0, 32.0}));
+    assert((probe.lower_tf_at_chart_close
+            == std::vector<std::vector<double>>{
+                {11.0, 12.0}, {21.0, 22.0}, {31.0, 32.0}}));
+}
+
+
 void test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight() {
     constexpr int64_t session_open = 1704232800000;  // 2024-01-02 17:00 NY
     constexpr int64_t minute = 60000;
@@ -305,6 +357,7 @@ int main() {
     test_intraday_aux_label_inside_native_span_without_chart_bar_fails();
     test_nifty_muhurat_shifted_open_maps_by_trading_date();
     test_nq_labor_day_sessions_coalesce_into_native_interval();
+    test_oanda_break_stamped_daily_bars_route_by_covered_session();
     test_overnight_daily_lower_tf_array_does_not_split_at_utc_midnight();
     return 0;
 }

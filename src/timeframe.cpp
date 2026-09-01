@@ -417,6 +417,17 @@ static int64_t session_day_close_real_ms(int64_t d, const std::string& tz,
          + static_cast<int64_t>(session_length_minutes(session)) * 60000;
 }
 
+int64_t session_covered_instant_ms(int64_t ms, const std::string& tz,
+                                   const std::string& session) {
+    const int64_t d = session_day_index(ms, tz, session);
+    // Inside the session-day (before its exclusive close): covered as-is.
+    // ""/24x7 sessions close exactly at the next open, so the gap is empty
+    // and every timestamp takes this branch.
+    if (ms < session_day_close_real_ms(d, tz, session)) return ms;
+    // In the gap after the close: the stamp covers the next session.
+    return session_day_open_real_ms(d + 1, tz, session);
+}
+
 int64_t session_period_close_ms(int64_t ms, const std::string& tz,
                                 const std::string& session,
                                 CalendarPeriod period) {
