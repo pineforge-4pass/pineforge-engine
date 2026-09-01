@@ -197,6 +197,10 @@ foreach(test_name ${TEST_SOURCES})
     # values in tests like test_ta_rma_warmup don't drift due to
     # contracted multiply-adds emitted in the test TU itself.
     target_compile_options(${test_name} PRIVATE -ffp-contract=off)
+    # Tests are assert()-based: strip NDEBUG (appended after the build-type
+    # flags, so it wins over Release's -DNDEBUG) or every assertion in the
+    # suite compiles to a no-op and ctest passes vacuously.
+    target_compile_options(${test_name} PRIVATE -UNDEBUG)
     if(PINEFORGE_ENABLE_COVERAGE)
         target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
     endif()
@@ -213,6 +217,7 @@ target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)
 add_executable(test_c_abi test_c_abi.c)
 set_target_properties(test_c_abi PROPERTIES LINKER_LANGUAGE CXX)
 target_link_libraries(test_c_abi PRIVATE pineforge)
+target_compile_options(test_c_abi PRIVATE -UNDEBUG)
 if(PINEFORGE_ENABLE_COVERAGE)
     target_compile_options(test_c_abi PRIVATE ${_pf_cov_test_flags})
 endif()
