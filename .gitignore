@@ -56,12 +56,12 @@ __pycache__/
 tutorial/**/trades.csv
 
 # Claude Code session state
-.claude/
+.claude/*
+!.claude/settings.json
 
 # Session-local handoff notes (not for public history)
 HANDOFF.md
 BENCH_REFRESH_HANDOFF.md
-.claude/
 
 # Internal process artifacts + working notes (kept local, not public history)
 docs/superpowers/
