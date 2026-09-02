@@ -1907,7 +1907,48 @@ def _parse_trade_dt(s: str, tz) -> int:
     return int(datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=tz).timestamp() * 1000)
 
 
-def _load_tv_entry_window(strategy_dir: Path, meta: dict, bar_interval_ms: int) -> tuple[int, int] | None:
+def _load_tv_entry_window(strategy_dir: Path, meta: dict) -> tuple[int, int] | None:
+    """The emit / trade-start window of a probe with a TradingView tape:
+    ``(first TV entry time, last TV entry time)`` in ms, or None without a
+    tape or without entries.
+
+    The window START is TradingView's first entry bar itself. It is the
+    engine's ``trade_start_time`` gate (strategy.* commands before it are
+    dropped so warmup bars do not pollute the comparison) and the lower
+    bound of the trades written to engine_trades.csv, so the engine's tape
+    begins exactly where TV's does.
+
+    It used to be ``min(entries) - bar_interval_ms``: one bar of pad so the
+    SIGNAL bar that produced TV's first entry could place its order. That
+    pad was calendar-blind, and the daily lanes exposed it. The bar before
+    a Monday is Friday, three calendar days back: orb-lite on NYSE:F 1D
+    fires its short on the 2026-03-13 (Friday) bar and TV fills it on
+    2026-03-16 (Monday), its first entry. The window opened on Sunday, the
+    engine's own one-script-TF buffer (trading_is_active,
+    engine_strategy_commands.cpp) reached Saturday, and Friday's
+    strategy.entry was dropped — the probe's whole tape shifted. The same
+    shape hides on every session gap (a Friday-close signal on an intraday
+    equity feed, a holiday, the 17:00 ET forex open whose opening minutes
+    the tape does not print).
+
+    The pad now lives in ONE place, the engine, by INDEX on the feed: the
+    engine resolves the script bar immediately preceding the first script
+    bar at/after the gate (compute_trade_start_preceding_script_bar,
+    engine_run.cpp) and admits exactly that bar in front of the gate,
+    whatever calendar gap sits between them. With the gate on Monday that
+    bar is Friday. Padding here as well would admit TWO bars before the
+    tape (a first cut of this change opened the window on the previous
+    FEED bar, and the engine then admitted the bar before that one), and a
+    strategy firing on both would book an engine-only trade filled on the
+    bar before TV's first entry — which the old ``>= window start`` trade
+    filter would even have kept. Starting the window on the entry itself
+    closes both holes: one pad, in the engine, and no engine trade dated
+    before TV's first.
+
+    On a continuous feed the engine's index pad is the same bar the old
+    interval subtraction named, so 15m crypto windows admit the same
+    signal bar as before; the trades filter merely stops keeping a fill on
+    the bar before TV's first entry, where TV has none."""
     tv_name = str(meta.get("tv_trades_csv", "tv_trades.csv"))
     tv_path = strategy_dir / tv_name
     if not tv_path.exists():
@@ -1921,7 +1962,7 @@ def _load_tv_entry_window(strategy_dir: Path, meta: dict, bar_interval_ms: int) 
                 entries.append(_parse_trade_dt(row["Date and time"], tz_offset))
     if not entries:
         return None
-    return min(entries) - bar_interval_ms, max(entries)
+    return min(entries), max(entries)
 
 
 def _infer_bar_interval_ms(csv_path: Path) -> int:
@@ -2111,7 +2152,7 @@ def main() -> int:
     elif args.emit_window_ohlcv is not None:
         emit_window = _load_window_ms(args.emit_window_ohlcv.resolve())
     else:
-        emit_window = _load_tv_entry_window(strategy_dir, params, _infer_bar_interval_ms(ohlcv_path))
+        emit_window = _load_tv_entry_window(strategy_dir, params)
         tv_window_used = emit_window is not None
         if emit_window is None:
             emit_window = _load_window_ms(REFERENCE_OHLCV)

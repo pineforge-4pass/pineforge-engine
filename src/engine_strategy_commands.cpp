@@ -43,9 +43,9 @@ namespace {
 // TradingView replays the strategy continuously from the FIRST OHLCV bar.
 // The validator's ``trade_start_time`` gate intentionally suppresses
 // strategy commands during the warmup span so TA / var accumulators
-// converge without polluting comparison output. But the gate is set to
-// ``TV first entry - input bar`` (see _trade_start_time_ms_from_tv in
-// the validator) which, on a 15m strategy fed 1m OHLCV, lands one
+// converge without polluting comparison output. But the gate used to be
+// set to ``TV first entry - input bar`` (the validator's own pad) which,
+// on a 15m strategy fed 1m OHLCV, landed one
 // MINUTE before the first TV trade — far inside the script bar that
 // CONTAINS the first TV trade, but BEFORE the script bar that
 // PRECEDES it.
@@ -67,10 +67,50 @@ namespace {
 // unconditional bypass produces in continuously-firing strategies
 // like basic/volty-expan. The buffer matches TV's chart-bar
 // resolution rather than the validator-chosen input-bar resolution.
+//
+// That millisecond buffer is calendar-blind, and the campaign's daily
+// lanes exposed it. The bar before a Monday is Friday, three calendar
+// days back, not one: orb-lite on NYSE:F 1D fires its short on the
+// 2026-03-13 (Friday) bar and TradingView fills it on 2026-03-16
+// (Monday), its first entry. The validator's window started at Monday
+// minus one bar interval (Sunday), the buffer reached one script TF
+// further (Saturday), and Friday's strategy.entry fell before the gate
+// — the entry was dropped and the probe's whole tape shifted. The same
+// shape hides on every session gap (a Friday-close signal on an
+// intraday equity feed, a holiday, the 17:00 ET forex open).
+//
+// The feed knows which bar precedes the first in-window bar, so the
+// engine resolves that bar by INDEX once per run
+// (compute_trade_start_preceding_script_bar, engine_run.cpp) and, when
+// it resolves, that rule is the whole gate: the preceding script bar is
+// admitted whatever the calendar gap in front of it, every bar at or
+// after the gate is admitted, nothing else is. The validator sets the
+// gate ON TradingView's first entry bar (run_strategy.py
+// _load_tv_entry_window; it used to pad by one bar interval itself),
+// so exactly ONE bar precedes the tape: the signal bar. Stacking the
+// millisecond buffer on top would admit two — with the gate on Monday
+// the buffer reaches Sunday and admits nothing extra, but with a gate
+// on Friday it reaches Thursday, and a strategy that fires on both of
+// the two bars before TV's first entry then books an engine-only trade
+// (review finding on the first cut of this change, 2026-09-02). On a
+// continuous feed the index rule and the millisecond rule name the
+// same bar (the preceding script bar IS one script TF back), so the
+// 1m-feed/15m-script gate of validation/62 is unchanged bar for bar.
+//
+// The millisecond buffer survives only where the index cannot be
+// resolved: no gate inside the feed (a stream's warmup gate lies past
+// its bars — the realtime bars that follow keep the buffer they always
+// had) or a gate before the feed's first bar (nothing precedes it).
 inline bool trading_is_active(int64_t current_ms, int64_t start_ms,
-                              int script_tf_seconds) {
+                              int script_tf_seconds,
+                              int bar_index, int preceding_bar_index) {
     if (start_ms == std::numeric_limits<int64_t>::min()) {
         return true;
+    }
+    if (preceding_bar_index >= 0) {
+        // The bar immediately preceding the first in-window script bar,
+        // found on the feed rather than the calendar, or in-window.
+        return bar_index == preceding_bar_index || current_ms >= start_ms;
     }
     int64_t buffer_ms = (script_tf_seconds > 0)
                            ? static_cast<int64_t>(script_tf_seconds) * 1000
@@ -85,7 +125,8 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_,
+                           bar_index_, trade_start_preceding_script_bar_)) return;
 
     NamedEntryCancelContext named_cancel_context;
     const auto named_cancel =
@@ -596,7 +637,8 @@ void BacktestEngine::strategy_close(const std::string& id,
                                     double qty, double qty_percent,
                                     bool immediately,
                                     uint64_t callsite_token) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_,
+                           bar_index_, trade_start_preceding_script_bar_)) return;
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
@@ -1471,7 +1513,8 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     const std::string& comment,
                                     double qty, const std::string& oca_name,
                                     double profit_ticks, double loss_ticks) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_,
+                           bar_index_, trade_start_preceding_script_bar_)) return;
     const bool has_actionable_exit = !std::isnan(limit_price)
         || !std::isnan(stop_price)
         || !std::isnan(profit_ticks)
@@ -2011,7 +2054,8 @@ void BacktestEngine::strategy_cancel_all() {
 void BacktestEngine::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
-    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_,
+                           bar_index_, trade_start_preceding_script_bar_)) return;
     if (default_flat_market_gross_scope_is_live()) {
         // strategy.order is outside the high-level two-entry oracle. Record
         // the call before any same-id replacement or signal-time rejection can

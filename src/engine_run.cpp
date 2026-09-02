@@ -749,6 +749,9 @@ void BacktestEngine::run(const Bar* bars, int n) {
     input_tf_ = detected_tf;
     script_tf_ = detected_tf;
     script_tf_seconds_ = tf_to_seconds(script_tf_);
+    // The trade-start gate's index-based buffer (the bar before the first
+    // in-window bar, gap or no gap) needs the feed in hand: resolve it here.
+    compute_trade_start_preceding_script_bar(bars, n, /*needs_aggregation=*/false);
 
     // Runtime diagnostics (single-timeframe path)
     diag_input_bars_processed_ = n;
@@ -1291,6 +1294,9 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     int expected_script_bars =
         count_expected_script_bars(input_bars, n_input, needs_aggregation);
     last_bar_index_ = expected_script_bars - 1;
+    // The trade-start gate's index-based buffer (the script bar before the
+    // first in-window script bar, gap or no gap) needs the feed in hand.
+    compute_trade_start_preceding_script_bar(input_bars, n_input, needs_aggregation);
     // reset_run_state() already ran above — reserve AFTER it so the capacity
     // hint isn't wiped (clear() retains capacity but order still matters for
     // any future reset that releases).
@@ -1358,6 +1364,61 @@ int BacktestEngine::count_expected_script_bars(const Bar* input_bars, int n_inpu
         }
     }
     return count;
+}
+
+
+// Resolve the script bar the trade-start gate admits by INDEX: the bar
+// immediately preceding the first script bar whose label is >= the gate.
+//
+// The validator sets trade_start_time_ on TradingView's first entry bar,
+// and the signal bar that produced that entry — the one bar in front of the
+// gate — must be allowed to place its order. The gate used to be padded in
+// milliseconds (one bar interval by the validator, one script TF by
+// trading_is_active in engine_strategy_commands.cpp), and both pads were
+// calendar-blind. On a daily feed the bar before Monday is Friday, three
+// calendar days back, so a Friday signal filled on Monday — orb-lite on
+// NYSE:F 1D, signal 2026-03-13, TV entry 2026-03-16 — sat before the
+// buffered gate and the entry was dropped. The feed itself says which bar
+// precedes the first in-window bar; this preview finds it once per run and
+// trading_is_active admits exactly that bar in front of the gate,
+// regardless of the gap (weekend, holiday, session break) between them.
+//
+// The preview aggregates the feed exactly as the bar loop will (same
+// script/input TF, timezone and session) so the index it counts is the
+// bar_index_ the loop assigns; the simple path is the input index itself.
+// A gate before the feed's first bar has no preceding bar (-1: the
+// millisecond rule alone applies, admitting everything from the gate less
+// one script TF), and so does a gate past the feed's end — a stream's
+// warmup, whose realtime bars arrive later, keeps the millisecond rule as
+// before.
+void BacktestEngine::compute_trade_start_preceding_script_bar(
+        const Bar* input_bars, int n_input, bool needs_aggregation) {
+    trade_start_preceding_script_bar_ = -1;
+    if (trade_start_time_ == std::numeric_limits<int64_t>::min()
+        || input_bars == nullptr || n_input <= 0) {
+        return;
+    }
+    if (!needs_aggregation) {
+        for (int i = 0; i < n_input; ++i) {
+            if (input_bars[i].timestamp >= trade_start_time_) {
+                trade_start_preceding_script_bar_ = i - 1;
+                return;
+            }
+        }
+        return;
+    }
+    TimeframeAggregator preview_agg(script_tf_, input_tf_,
+                                    syminfo_.timezone, syminfo_.session);
+    int script_index = 0;
+    for (int i = 0; i < n_input; ++i) {
+        AggregatedBar preview = preview_agg.feed(input_bars[i]);
+        if (!preview.is_complete) continue;
+        if (preview.bar.timestamp >= trade_start_time_) {
+            trade_start_preceding_script_bar_ = script_index - 1;
+            return;
+        }
+        ++script_index;
+    }
 }
 
 

@@ -99,6 +99,7 @@ set(TEST_SOURCES
     test_limit_fill_slippage
     test_tv_fill_rounding
     test_strategy_commands_extra
+    test_trade_start_gap_pad
     test_multi_tier_exit_precedence
     test_same_tick_multi_entry_race
     test_full_close_while_pyramiding
@@ -191,6 +192,12 @@ add_test(
     NAME test_run_strategy_aux_feed
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_aux_feed.py
+)
+
+add_test(
+    NAME test_run_strategy_gap_pad
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_gap_pad.py
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test

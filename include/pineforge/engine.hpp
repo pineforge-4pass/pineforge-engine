@@ -952,6 +952,16 @@ protected:
     // classes no longer write it.
     bool script_has_strategy_close_ = false;
     int64_t trade_start_time_ = std::numeric_limits<int64_t>::min();
+    // Script-bar index of the bar immediately PRECEDING the first script bar
+    // whose timestamp is >= trade_start_time_, computed per run() from the
+    // feed (compute_trade_start_preceding_script_bar); -1 when there is no
+    // gate, no such bar, or nothing precedes it. The validator's gate is
+    // TradingView's first entry bar; the command gate admits this one bar in
+    // front of it whatever calendar gap sits between them — a weekend, a
+    // holiday, a session break — because the signal that TradingView filled
+    // on the first in-window bar was placed on it, and nothing earlier (see
+    // trading_is_active in engine_strategy_commands.cpp).
+    int trade_start_preceding_script_bar_ = -1;
 
     // Cumulative qty of ``strategy.close`` / ``strategy.close_all`` calls
     // issued during the CURRENT on_bar. Reset at the start of every bar
@@ -3080,6 +3090,12 @@ public:
     void set_trade_start_time(int64_t timestamp_ms) {
         trade_start_time_ = timestamp_ms;
     }
+    // Resolve trade_start_preceding_script_bar_ for this feed (engine_run.cpp).
+    // Runs a preview of the script-TF aggregation when the feed is aggregated
+    // so the index it finds is the one the bar loop will assign.
+    void compute_trade_start_preceding_script_bar(const Bar* input_bars,
+                                                  int n_input,
+                                                  bool needs_aggregation);
 
     // Set the chart's display timezone. Stored in a dedicated slot so it
     // does NOT clobber ``syminfo_.timezone`` (the symbol/exchange TZ).
