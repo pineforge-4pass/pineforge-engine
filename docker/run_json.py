@@ -42,6 +42,8 @@ Schema:
           "commission":      float,   # ABI v2
           "entry_bar_index": int,     # ABI v2: script-bar index of entry fill
           "exit_bar_index":  int,     # ABI v2: script-bar index of exit fill
+          "open_at_end":     bool,    # ABI v3: range-end close of a position still
+                                      # open after the final bar (TV accounting)
           "entry_incarnation": int    # run-scoped physical-entry provenance;
                                         # 0 when the strategy lacks the accessor
         },
@@ -575,6 +577,7 @@ class TradeC(ctypes.Structure):
         ("commission",      ctypes.c_double),
         ("entry_bar_index", ctypes.c_int32),
         ("exit_bar_index",  ctypes.c_int32),
+        ("open_at_end",     ctypes.c_int32),   # ABI v3: range-end close row
     ]
 
 
@@ -701,7 +704,7 @@ def engine_version(lib: ctypes.CDLL) -> dict:
 
 # pf_report_t is CALLER-allocated: a .so built against a different ABI
 # writes past (or short of) our ReportC buffer. Assert version up front.
-EXPECTED_PF_ABI = 2
+EXPECTED_PF_ABI = 3
 
 
 def check_abi(lib: ctypes.CDLL) -> None:
@@ -869,6 +872,7 @@ def build_report_dict(report: ReportC, ohlcv_path: Path,
             "commission":      float(t.commission),
             "entry_bar_index": int(t.entry_bar_index),
             "exit_bar_index":  int(t.exit_bar_index),
+            "open_at_end":     bool(t.open_at_end),
             "entry_incarnation": (
                 int(trade_entry_incarnations[i])
                 if trade_entry_incarnations is not None

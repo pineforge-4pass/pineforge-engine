@@ -78,6 +78,8 @@ static_assert(offsetof(pf_trade_t, entry_bar_index) == offsetof(pineforge::Trade
               "pf_trade_t::entry_bar_index offset mismatch");
 static_assert(offsetof(pf_trade_t, exit_bar_index) == offsetof(pineforge::TradeC, exit_bar_index),
               "pf_trade_t::exit_bar_index offset mismatch");
+static_assert(offsetof(pf_trade_t, open_at_end) == offsetof(pineforge::TradeC, open_at_end),
+              "pf_trade_t::open_at_end offset mismatch");
 
 /* ── SecurityDiag layout parity ─────────────────────────────────── */
 /* The middle two fields differ in name (complete_count / partial_count

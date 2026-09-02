@@ -29,7 +29,8 @@ class TradeC(ctypes.Structure):
                 ("max_drawdown",ctypes.c_double),("qty",        ctypes.c_double),
                 ("commission",  ctypes.c_double),
                 ("entry_bar_index", ctypes.c_int32),
-                ("exit_bar_index",  ctypes.c_int32)]
+                ("exit_bar_index",  ctypes.c_int32),
+                ("open_at_end",     ctypes.c_int32)]   # ABI v3: range-end close row
 
 class TradeStatsC(ctypes.Structure):  # pf_trade_stats_t
     _fields_ = [("num_trades", ctypes.c_int32), ("num_wins", ctypes.c_int32),
@@ -112,7 +113,7 @@ class ReportC(ctypes.Structure):
 
 # pf_report_t is caller-allocated, so a stale mirror means the runtime
 # writes past our buffer. Assert the .so's ABI version before any run.
-EXPECTED_PF_ABI = 2
+EXPECTED_PF_ABI = 3
 
 def check_abi(lib: ctypes.CDLL) -> None:
     try:

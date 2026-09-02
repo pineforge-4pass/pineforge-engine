@@ -58,8 +58,10 @@ typedef struct pf_report_s {
 
 @note The `metrics` / `equity_curve` fields were appended in **ABI
 version 2** (`PF_ABI_VERSION`). `pf_report_t` is caller-allocated, so
-consumers must check `pf_abi_version() == 2` before running — a `.so`
+consumers must check `pf_abi_version() == 3` before running — a `.so`
 with no `pf_abi_version` symbol is ABI v1 and predates these fields.
+**ABI version 3** appends `pf_trade_t::open_at_end`, the range-end close
+flag; a v2 reader would misindex the trades array.
 
 ## Trade fields
 
@@ -88,6 +90,9 @@ typedef struct pf_trade_s {
     double  commission;     /* ABI v2: entry+exit commission deducted from pnl */
     int32_t entry_bar_index;/* ABI v2: script-bar index of entry fill (0-based) */
     int32_t exit_bar_index; /* ABI v2: script-bar index of exit fill (0-based) */
+    int32_t open_at_end;    /* ABI v3: 1 on the range-end close of a position still
+                               open after the final bar (TradingView's deep-backtest
+                               accounting: exit = last bar at its close, no Signal) */
 } pf_trade_t;
 ```
 

@@ -332,6 +332,10 @@ class VerificationResult:
     distinct_entry_identity_ok: bool = True
     distinct_entry_mismatches: int = 0
     unmatched_in_window: int = 0
+    # Matched pairs whose TV row is a browser export's "Open" snapshot and
+    # whose engine exit sits on the same bar: counted and covered, entry
+    # compared, exit/pnl not (a mark against a fill). Report-only.
+    open_mark_pairs: int = 0
     entry_p100: float = 0.0
     exit_p100: float = 0.0
     pnl_p100: float = 0.0
@@ -1101,11 +1105,37 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         tv_gate, eng_gate, distinct_tv_entry_keys)
     distinct_entry_identity_ok = distinct_entry_mismatches == 0
     entry_deltas = [relative_max(t.entry_price, e.entry_price) for t, e in gating_matched]
-    exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in gating_matched]
+    # A TV row whose exit Signal is "Open" is a browser export's snapshot of
+    # a position still open at the range's end, and its exit price is the
+    # quote at EXPORT time, not a bar's print: all 12 sampled OANDA:EURUSD
+    # registry tapes end with such rows at 2026-05-01 08:00 (+8) @ 1.17256
+    # while the feed's last bar (05-01 00:00 UTC) is o 1.17289 h 1.17299
+    # l 1.17282 c 1.1729 — 1.17256 lies outside that bar entirely (246 of
+    # 358 EURUSD tapes end with an Open row; AAPL's happen to print the last
+    # close, 271, because the market was closed at export). The engine now
+    # closes the same position on its final bar at that bar's close
+    # (open_at_end; TradingView's range-end accounting). When the engine's
+    # exit sits on the SAME bar as TV's Open row, the pair is a matched
+    # trade — it counts, it covers, its entry is compared — but its exit
+    # price and PnL are a mark against a fill, so they carry no parity
+    # information and are left out of the exit / pnl gates. An engine exit
+    # on a DIFFERENT bar keeps its deltas: TV held the position to the end
+    # and the engine did not, which is a real divergence. The ws-report-v1
+    # tapes write that row with no Signal at all and its exit at the last
+    # bar's close, so they never take this path.
+    _open_nums = still_open_trade_nums(tv_path)
+    _open_keys = {(t.entry_time, t.entry_price, t.direction)
+                  for t in tv_raw_all if t.trade_num in _open_nums}
+    def _is_open_mark_pair(t, e):
+        return ((t.entry_time, t.entry_price, t.direction) in _open_keys
+                and t.exit_time == e.exit_time)
+    priced_matched = [(t, e) for t, e in gating_matched if not _is_open_mark_pair(t, e)]
+    open_mark_pairs = len(gating_matched) - len(priced_matched)
+    exit_deltas  = [relative_max(t.exit_price,  e.exit_price)  for t, e in priced_matched]
     # PnL p90 uses *relative-to-tv_pnl*, with near-zero trades excluded so
     # scratch trades don't blow up the ratio. Mirrors canonical line ~1136.
     pnl_deltas: list[float] = []
-    for t, e in gating_matched:
+    for t, e in priced_matched:
         if abs(t.pnl) < PNL_NEAR_ZERO_USD:
             continue
         abs_diff = abs(t.pnl - e.pnl)
@@ -1214,9 +1244,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
     # open row (engine opened AND closed the position for real past window) is
     # a legitimate matched trade and is kept. This never touches the matcher,
     # the count gate, or entry/exit/pnl -- only the coverage denominator.
-    _open_nums = still_open_trade_nums(tv_path)
-    _open_keys = {(t.entry_time, t.entry_price, t.direction)
-                  for t in tv_raw_all if t.trade_num in _open_nums}
+    # (_open_nums / _open_keys are resolved above, with the exit/pnl deltas.)
     _matched_tv_ids = {id(t) for t, _ in matched}
     def _is_dropped_open(t):
         return ((t.entry_time, t.entry_price, t.direction) in _open_keys
@@ -1320,6 +1348,7 @@ def analyze_strategy(strategy_dir: Path) -> VerificationResult:
         distinct_entry_identity_ok=distinct_entry_identity_ok,
         distinct_entry_mismatches=distinct_entry_mismatches,
         unmatched_in_window=unmatched_in_window,
+        open_mark_pairs=open_mark_pairs,
         entry_p100=entry_p100,
         exit_p100=exit_p100,
         pnl_p100=pnl_p100,
@@ -1378,6 +1407,7 @@ def _print_verification(result: VerificationResult, *, show_diffs: int = 0) -> N
         f"  PnL%  p90/p100 (pts):  {percentile(result.pnlpct_deltas,0.90):.4f} / {result.pnlpct_p100:.4f}\n"
         f"  MFE/MAE p90 delta:     {result.mfe_p90*100:.4f}% / {result.mae_p90*100:.4f}%\n"
         f"  Unmatched-in-window:   {result.unmatched_in_window}\n"
+        f"  Open-mark pairs:       {result.open_mark_pairs}  (TV 'Open' row closed by the engine on the same bar; exit/pnl not gated)\n"
         f"  -> {result.label}"
     )
     if show_diffs > 0:

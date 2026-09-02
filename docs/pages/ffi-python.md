@@ -48,6 +48,7 @@ class pf_trade_t(ctypes.Structure):
         ("commission",      ctypes.c_double),   # ABI v2
         ("entry_bar_index", ctypes.c_int32),    # ABI v2
         ("exit_bar_index",  ctypes.c_int32),    # ABI v2
+        ("open_at_end",     ctypes.c_int32),    # ABI v3: range-end close row
     ]
 
 class pf_trade_stats_t(ctypes.Structure):
@@ -177,7 +178,7 @@ lib = ctypes.CDLL("./my_strategy.so")
 # ABI guard — pf_report_t is CALLER-allocated, so running an old .so
 # against the v2 mirror above (or vice versa) silently corrupts memory.
 # Verify the .so's layout version before any run:
-EXPECTED_PF_ABI = 2   # PF_ABI_VERSION in <pineforge/pineforge.h>
+EXPECTED_PF_ABI = 3   # PF_ABI_VERSION in <pineforge/pineforge.h>
 try:
     lib.pf_abi_version.restype = ctypes.c_int
     abi = lib.pf_abi_version()

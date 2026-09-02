@@ -587,6 +587,7 @@ void BacktestEngine::reset_run_state() {
     // Closed-trade list + cached P&L / count accumulators.
     trades_.clear();
     trades_.reserve(256);
+    range_end_trades_.clear();
     net_profit_sum_ = 0.0;
     gross_profit_sum_ = 0.0;
     gross_loss_sum_ = 0.0;
@@ -781,6 +782,11 @@ void BacktestEngine::run(const Bar* bars, int n) {
         record_equity_point(current_bar_.timestamp);  // ts not mutated on this path
         prev_bar_timestamp_ = current_bar_.timestamp;
     }
+    // TradingView's range-end accounting: a position still open after the
+    // last bar is reported as a closed trade at that bar's close
+    // (record_range_end_close_trades, engine_orders.cpp). Report-only:
+    // the live position is untouched.
+    record_range_end_close_trades();
     } catch (const std::exception& e) {
         last_error_ = e.what();
     } catch (...) {
@@ -1310,6 +1316,12 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
         run_aggregation_bar_loop(input_bars, n_input, bar_magnifier,
                                  expected_script_bars);
     }
+    // TradingView's range-end accounting: a position still open after the
+    // last script bar is reported as a closed trade at that bar's close
+    // (record_range_end_close_trades, engine_orders.cpp). Report-only: the
+    // live position is untouched, and the stream warmup replay, whose bars
+    // are not a range end, is skipped.
+    record_range_end_close_trades();
     clear_historical_security_lookahead_projections();
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     clear_aux_security_chart_ranges();

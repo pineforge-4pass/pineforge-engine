@@ -74,8 +74,10 @@
  *  iterate the trades array with the stale sizeof. Value 2 = first
  *  versioned layout (metrics + equity curve); .so files predating this
  *  macro have no pf_abi_version symbol — treat dlsym failure as
- *  version 1. */
-#define PF_ABI_VERSION 2
+ *  version 1. Value 3 appends pf_trade_t::open_at_end (the range-end
+ *  close flag); a v2 reader iterating trades with the v2 stride would
+ *  misindex every row after the first. */
+#define PF_ABI_VERSION 3
 
 /** Feature probe for the opt-in split chart/request.security feed boundary.
  *  When defined, #strategy_set_aux_security_feed is available. */
@@ -156,6 +158,21 @@ typedef struct pf_trade_s {
                              *   (account currency). pnl is already net of this. */
     int32_t entry_bar_index;/**< Script-bar index of the entry fill (0-based). */
     int32_t exit_bar_index; /**< Script-bar index of the exit fill (0-based). */
+    int32_t open_at_end;    /**< 1 when this row is the RANGE-END close of a position
+                             *   that was still open after the final bar; 0 for an
+                             *   exit the script or a bracket produced. TradingView's
+                             *   deep-backtest report does not leave the last position
+                             *   open: it reports it as a closed trade whose exit leg is
+                             *   the range's last bar at that bar's CLOSE, with an
+                             *   empty exit Signal, and counts it in closedTrades
+                             *   (orb-lite on NYSE:F 1D: Entry short 2026-03-16 @ 11.82,
+                             *   Exit 2026-04-30 @ 12.08 = the last close,
+                             *   closedTrades:1). The engine emulates that row
+                             *   (operator decision 2026-09-02): exit_time is the last
+                             *   script bar's label, exit_price its mintick-rounded
+                             *   close with no slippage, commission per the strategy's
+                             *   rules, pnl/pnl_pct/excursions as for any close.
+                             *   Appended in ABI v3. */
 } pf_trade_t;
 
 /** Trade-level statistics block — computed once each for all / long / short.
@@ -314,8 +331,11 @@ typedef struct pf_trace_entry_s {
 
 typedef struct pf_report_s {
     /* Trades */
-    int             total_trades;       /**< Closed-trade count (== trades_len). */
-    pf_trade_t*     trades;             /**< Heap array of closed trades. */
+    int             total_trades;       /**< Closed-trade count (== trades_len), including
+                                         *   the range-end close of a position still open
+                                         *   after the final bar (pf_trade_t::open_at_end). */
+    pf_trade_t*     trades;             /**< Heap array of closed trades; script-driven exits
+                                         *   first, then the range-end rows (open_at_end=1). */
     int             trades_len;         /**< Length of #trades. */
     double          net_profit;         /**< Sum of all closed-trade PnL. */
 

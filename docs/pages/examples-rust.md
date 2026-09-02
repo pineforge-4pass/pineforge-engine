@@ -60,6 +60,9 @@ struct PfTrade {
     commission: f64,
     entry_bar_index: i32,
     exit_bar_index: i32,
+    // ABI v3: 1 on the range-end close of a position still open after the
+    // final bar (TradingView's deep-backtest accounting)
+    open_at_end: i32,
 }
 
 // ── ABI v2 metrics PODs ──────────────────────────────────────────────
@@ -165,7 +168,7 @@ struct PfReport {
 const PF_MAGNIFIER_ENDPOINTS: c_int = 3;
 
 // PfReport is CALLER-allocated: before any run, resolve `pf_abi_version`
-// via libloading and assert it returns 2 (PF_ABI_VERSION) — an old .so
+// via libloading and assert it returns 3 (PF_ABI_VERSION) — an old .so
 // writing into this larger struct (or vice versa) corrupts memory silently.
 
 // ── Safe wrapper ──────────────────────────────────────────────────────

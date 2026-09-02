@@ -29,6 +29,7 @@ class pf_trade_t(ctypes.Structure):
         ("commission", ctypes.c_double),
         ("entry_bar_index", ctypes.c_int32),
         ("exit_bar_index", ctypes.c_int32),
+        ("open_at_end", ctypes.c_int32),   # ABI v3: range-end close row
     ]
 
 class pf_trade_stats_t(ctypes.Structure):
@@ -127,7 +128,7 @@ class pf_report_t(ctypes.Structure):
 
 # pf_report_t is caller-allocated; a layout mismatch means the runtime
 # writes past this script's report buffer. Verify the ABI before running.
-EXPECTED_PF_ABI = 2
+EXPECTED_PF_ABI = 3
 
 def check_abi(lib):
     try:

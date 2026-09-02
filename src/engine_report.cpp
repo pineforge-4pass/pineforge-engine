@@ -57,11 +57,14 @@ void BacktestEngine::fill_report(ReportC* out) const {
 }
 
 
-// Copy ``trades_`` into a freshly heap-allocated TradeC[] on ``out`` and
-// accumulate ``net_profit`` for the report. Owns the allocation; freed by
-// ``free_report``.
+// Copy ``trades_`` — followed by ``range_end_trades_``, TradingView's
+// range-end close of a position still open after the final bar
+// (record_range_end_close_trades) — into a freshly heap-allocated TradeC[]
+// on ``out`` and accumulate ``net_profit`` for the report. Owns the
+// allocation; freed by ``free_report``.
 void BacktestEngine::fill_trades_section(ReportC* out) const {
-    int n = (int)trades_.size();
+    const int n_closed = (int)trades_.size();
+    const int n = n_closed + (int)range_end_trades_.size();
     out->total_trades = n;
     out->trades_len = n;
 
@@ -70,7 +73,8 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
         double net_profit = 0.0;
 
         for (int i = 0; i < n; i++) {
-            const Trade& t = trades_[i];
+            const Trade& t = (i < n_closed) ? trades_[i]
+                                            : range_end_trades_[i - n_closed];
             out->trades[i].entry_time = t.entry_time;
             out->trades[i].exit_time = t.exit_time;
             out->trades[i].entry_price = t.entry_price;
@@ -84,6 +88,7 @@ void BacktestEngine::fill_trades_section(ReportC* out) const {
             out->trades[i].commission = t.commission;
             out->trades[i].entry_bar_index = t.entry_bar_index;
             out->trades[i].exit_bar_index = t.exit_bar_index;
+            out->trades[i].open_at_end = t.open_at_end ? 1 : 0;
             net_profit += t.pnl;
         }
 
@@ -121,7 +126,8 @@ void BacktestEngine::fill_metrics_section(ReportC* out) const {
         out->trades, out->trades_len, TradeFilter::SHORT, initial_capital_);
     out->metrics.equity = metrics::compute_equity_stats(
         out->equity_curve, n, initial_capital_, chart_timezone_,
-        first_bar_open_, current_bar_.close, bars_in_market_, net_profit_sum_);
+        first_bar_open_, current_bar_.close, bars_in_market_,
+        out->net_profit);   // includes the range-end rows, like the trades
 }
 
 

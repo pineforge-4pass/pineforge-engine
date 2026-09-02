@@ -183,6 +183,111 @@ void BacktestEngine::execute_market_exit(double fill_price) {
 }
 
 
+// Range-end accounting for a position still open after the final bar.
+//
+// TradingView's deep-backtest report — the ws-report-v1 tape the campaign
+// grades against — does not leave the last position open. It reports it as
+// a CLOSED trade whose exit leg sits on the range's last bar at that bar's
+// close, with an empty exit Signal, and counts it in closedTrades. The
+// orb-lite probe on NYSE:F 1D is the canonical row: Entry short 2026-03-16
+// @ 11.82, Exit 2026-04-30 @ 12.08 — 12.08 is the last close of the range,
+// the Signal cell is empty, metrics say closedTrades:1 (the browser export
+// writes the same row with Signal "Open", which the verifier already
+// recognises; the ws tape gives it no marker at all). On the f-1d spark
+// set 8/10 engine runs hold the same position to the last bar (the
+// engine's bars-in-market is TV's Duration + 1, the entry bar counted) and
+// 7/10 carry a mark-to-market open_pl equal to TV's row to the cent — the
+// row is exactly the engine's open position marked at the last close.
+//
+// The engine exported closed trades only: trades_ grows in emit_close_trade
+// alone, and neither run loop flattened at end of feed, so every such probe
+// was one trade short against the tape and the verifier scored the missing
+// row as an unmatched TV trade. This is the operator-decided (2026-09-02)
+// emulation of TradingView's range-end accounting: after the last script
+// bar has been dispatched and its equity point recorded, the rows that a
+// close of the open position at the last bar's close would record — one
+// per pyramid slice, as every other full close, through the same
+// build_close_trade arithmetic — are written to range_end_trades_, which
+// fill_trades_section merges behind the script's own closed trades.
+//
+// Reporting only. The live position, the pending orders, trades_ and the
+// realized sums are left exactly as the bar loop left them: a stream's
+// realtime bars continue the warmup position (stream_begin), the Pine
+// accessors never see the row (it is dated after the last on_bar), and the
+// broker-mechanics tests keep inspecting the open lot the run ended with.
+// The report is where TradingView's accounting is emulated.
+//
+// Pricing. The row is a mark at the close, not an order the broker
+// emulator fills: it takes the raw close rounded to the NEAREST tick
+// (bar_fill_price, finding-446 — the tape's 12.08 is the on-tick close; a
+// sub-tick print such as 9.565 books 9.56 like any close-priced fill) and
+// NO slippage ticks, because slippage models the fill uncertainty of a
+// market order and TV prices this row at the bar close itself. The exit
+// commission follows the strategy's rules like any close; the one tape in
+// hand has commission 0, so that part is the operator's call rather than a
+// measured one. The exit is dated on the script bar's label (the equity
+// curve's time_ms — magnifier-invariant, the same instant a
+// process_orders_on_close fill on that bar reports).
+//
+// Accounting. The report's closed-trade count, net profit, win/loss
+// tallies and commission paid include the rows (TV counts them in
+// closedTrades, and its netProfit is net of the row's exit commission). The
+// last equity point is re-marked to the flat account — open_profit 0,
+// equity = capital + net profit including the rows — so the documented
+// identity equity == initial_capital + net_profit + open_profit holds on
+// the last bar (test_metrics pins it), as it does on TradingView's own
+// curve, whose last point is the account after that close. The bar loop
+// had already folded that point's GROSS mark into the scalar drawdown /
+// run-up extremes (update_equity_extremes), and the compute_equity_stats
+// curve walk reproduces those scalars only while the curve holds exactly
+// the values that were folded: a first cut of this change re-marked the
+// point and left the scalars alone, which silently broke that identity on
+// every commissioned run whose last bar was the trough or the peak (the
+// fold had seen the gross mark, the walk saw the net one — review finding,
+// 2026-09-02). The fold is one per script bar, paired with the curve
+// point, so the scalars are re-folded from the curve here (fold_equity_
+// extreme over every point, the re-marked last one included): the walk
+// and the scalars agree again, the extremes now read the range-end close
+// the way the curve does, and every earlier point is untouched. The
+// in-market bar count is the loop's (the last bar was in market). A
+// strategy that is flat after the final bar records nothing. The stream
+// warmup replay is not a range end (the realtime bars continue it) and is
+// skipped.
+void BacktestEngine::record_range_end_close_trades() {
+    range_end_trades_.clear();
+    if (stream_warmup_mode_) return;
+    if (position_side_ == PositionSide::FLAT) return;
+    if (equity_curve_.empty()) return;          // no script bar was dispatched
+    if (!std::isfinite(current_bar_.close)) return;
+
+    const bool was_long = (position_side_ == PositionSide::LONG);
+    const double fill_price = bar_fill_price(current_bar_.close);
+    // Date the exit leg on the script bar's label, never a magnifier
+    // sub-bar; the bar itself is restored afterwards.
+    const int64_t bar_ts = current_bar_.timestamp;
+    current_bar_.timestamp = equity_curve_.back().time_ms;
+    double range_end_pnl = 0.0;
+    for (const auto& pe : pyramid_entries_) {
+        Trade row = build_close_trade(pe, pe.qty, fill_price, was_long);
+        row.open_at_end = true;              // exit_id / exit_comment stay empty
+        range_end_pnl += row.pnl;
+        range_end_trades_.push_back(std::move(row));
+    }
+    current_bar_.timestamp = bar_ts;
+
+    pf_equity_point_t& last = equity_curve_.back();
+    last.open_profit = 0.0;
+    last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+    // Re-fold the scalar extremes from the curve so they read the re-marked
+    // last point exactly as the compute_equity_stats walk will.
+    max_equity_ = initial_capital_;
+    min_equity_ = initial_capital_;
+    max_drawdown_ = 0.0;
+    max_runup_ = 0.0;
+    for (const auto& p : equity_curve_) fold_equity_extreme(p.equity);
+}
+
+
 // FIFO-drain up to qty_limit from pyramid_entries_, optionally restricted to a
 // single from_entry id. See engine.hpp for the contract. Mirrors TradingView's
 // per-pyramid trade reporting: one Trade per drained slice. Returns total qty
@@ -460,8 +565,8 @@ void BacktestEngine::purge_exit_orders(bool retain_for_pending_entries) {
 // execute_market_exit, execute_partial_exit_qty, execute_partial_exit_by_entry,
 // execute_partial_exit_by_entry_percent, and the flip branch of
 // execute_market_entry. Mirrors TradingView's per-pyramid trade reporting.
-void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
-                                      double fill_price, bool was_long) {
+Trade BacktestEngine::build_close_trade(const PyramidEntry& pe, double close_qty,
+                                        double fill_price, bool was_long) const {
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
     // multiply the price-difference PnL. The price-difference component is in
@@ -573,6 +678,14 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
         0.0, runup * pv * active_account_currency_fx() - entry_commission);
     trade.max_drawdown = drawdown * pv * active_account_currency_fx()
                          + entry_commission;
+    return trade;
+}
+
+
+void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
+                                      double fill_price, bool was_long) {
+    Trade trade = build_close_trade(pe, close_qty, fill_price, was_long);
+    const double pnl = trade.pnl;
     const double trade_pnl = trade.pnl;
     trades_.push_back(std::move(trade));
     net_profit_sum_ += trade_pnl;

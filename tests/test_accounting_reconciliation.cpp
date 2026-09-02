@@ -83,6 +83,12 @@ public:
     int win_count() const { return win_trades_count_; }
     int loss_count() const { return loss_trades_count_; }
     int even_count() const { return eventrades_count_; }
+    // TradingView's range-end accounting: the report closes a position
+    // still open after the final bar at that bar's close (report-only rows,
+    // record_range_end_close_trades). Exposed so the report can be footed
+    // to the blotter PLUS those rows.
+    const std::vector<Trade>& range_end_rows() const { return range_end_trades_; }
+    double last_close() const { return current_bar_.close; }
 };
 
 std::vector<Bar> make_feed(int n) {
@@ -128,10 +134,24 @@ static void test_reconciliation_identities() {
     }
     CHECK(near(recomputed_total, p.net_sum()));
 
-    // Report mirror foots to the cached sum.
+    // I4 — the range-end rows (TradingView's accounting for a position still
+    // open after the last bar) foot independently: each is the open lot
+    // marked at the LAST bar's close, and none of them entered the live
+    // accumulators (net_sum() is the blotter's sum alone).
+    double range_end_total = 0.0;
+    for (const Trade& t : p.range_end_rows()) {
+        CHECK(t.open_at_end);
+        CHECK(near(t.exit_price, p.last_close()));
+        double expected = (t.is_long ? (t.exit_price - t.entry_price)
+                                     : (t.entry_price - t.exit_price)) * t.qty;
+        CHECK(near(t.pnl, expected));
+        range_end_total += expected;
+    }
+
+    // Report mirror foots to the cached sum plus the range-end rows.
     ReportC r{}; p.fill_report(&r);
-    CHECK(near(r.net_profit, p.net_sum()));
-    CHECK(r.total_trades == p.trade_count());
+    CHECK(near(r.net_profit, p.net_sum() + range_end_total));
+    CHECK(r.total_trades == p.trade_count() + (int)p.range_end_rows().size());
     BacktestEngine::free_report(&r);
 }
 

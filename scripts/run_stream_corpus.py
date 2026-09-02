@@ -239,8 +239,12 @@ def run_stream(strategy: Strategy, warmup, n_warmup: int, ticks,
 
 
 def compare_reports(batch: dict, stream: dict) -> dict:
-    left = batch["trades"]
-    right = stream["trades"]
+    # The batch run's report closes a position still open after its final
+    # bar at that bar's close (TradingView's range-end accounting,
+    # open_at_end); a stream's end is not a range end and books no such row.
+    # Compare the trades the two brokers actually made.
+    left = [t for t in batch["trades"] if not t.get("open_at_end")]
+    right = [t for t in stream["trades"] if not t.get("open_at_end")]
     positional = 0
     for a, b in zip(left, right):
         same_minute = (

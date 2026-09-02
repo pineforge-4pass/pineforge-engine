@@ -665,6 +665,9 @@ class TradeC(ctypes.Structure):
         ("commission", ctypes.c_double),
         ("entry_bar_index", ctypes.c_int32),
         ("exit_bar_index", ctypes.c_int32),
+        # ABI v3: 1 on the range-end close of a position still open after the
+        # final bar (TradingView's deep-backtest accounting; pineforge.h).
+        ("open_at_end", ctypes.c_int32),
     ]
 
 
@@ -767,10 +770,15 @@ class ReportC(ctypes.Structure):
 
 
 # ABI version this harness mirrors (PF_ABI_VERSION in pineforge.h).
-# pf_report_t is CALLER-allocated: running an old .so against the v2
+# pf_report_t is CALLER-allocated: running an old .so against the v3
 # ReportC mirror (or vice versa) silently corrupts memory, so the .so's
-# pf_abi_version() export is asserted before any run.
-EXPECTED_PF_ABI = 2
+# pf_abi_version() export is asserted before any run. v3 appended
+# pf_trade_t::open_at_end (TradeC above); test_run_strategy_range_end.py
+# pins this constant to the header's macro, because the campaign's
+# verifier runs every probe through THIS harness and a stale guard here
+# is a run-error on every slug (the f-1d spark pre-check of 2026-09-02
+# found exactly that: ".so reports 3, harness expects 2" x64).
+EXPECTED_PF_ABI = 3
 
 
 def _check_abi(lib: ctypes.CDLL) -> None:
@@ -1641,6 +1649,11 @@ def _report_to_dict(r: ReportC) -> dict:
             "commission": float(t.commission),
             "entry_bar_index": int(t.entry_bar_index),
             "exit_bar_index": int(t.exit_bar_index),
+            # Range-end close of a position still open after the final bar
+            # (engine_orders.cpp record_range_end_close_trades). Carried
+            # through for JSON consumers; the CSV writer emits the row as an
+            # ordinary exit, which is how the ws-report-v1 tape prints it.
+            "open_at_end": bool(t.open_at_end),
         })
     trace_names: list[str] = []
     for i in range(r.trace_names_len):
@@ -1713,6 +1726,80 @@ def _filter_trace_to_window(trace: list[dict], window: tuple[int, int] | None) -
     ]
 
 
+def _load_tv_range_end_ms(strategy_dir: Path, meta: dict) -> int | None:
+    """The last bar of TradingView's backtest range, as the tape tells it:
+    the latest ``Date and time`` over EVERY row of tv_trades.csv — entries,
+    exits, and the row TV writes for a position still open at the range's
+    end (exit on the last bar at its close; Signal "Open" on a browser
+    export, empty on a ws-report-v1 tape). None without a tape or rows.
+
+    This bounds the feed the engine measures (``ohlcv_end_ms``). The engine
+    books a position still open after its FINAL bar as TradingView's
+    range-end close (record_range_end_close_trades, engine_orders.cpp), so
+    that final bar must be TV's last bar, not the feed's. On the ws-report
+    lanes the two coincide — NYSE:F 1D/15, NASDAQ:AAPL 15, NSE:NIFTY 15 end
+    on the last 2026-04-30 session bar and BINANCE:BTCUSDT, OANDA:XAUUSD,
+    CME_MINI:ES1!, OANDA:EURUSD, CME_MINI:NQ1! on the 2026-05-01 00:00 UTC
+    bar, exactly where the tapes' open-position rows sit (F 1D 04-30 @
+    12.08, XAU 15 @ 4622.71, ES 15 @ 7252.25, BTC 15 @ 76469.81, NIFTY @
+    24043.7, AAPL @ 271). The BINANCE:ETHUSDT.P 15 chart feed does not: it
+    runs on to 2026-05-04 15:00 UTC while every ETH tape ends at 2026-05-01
+    00:00 UTC (286 of 305 tapes with an Open row there, price 2261.44 = that
+    bar's close), and the engine already traded past the range there
+    (roi10x-shiva-lt-ls-blend's baseline tape exits at 05-01 00:15).
+    Unbounded, the range-end row would be booked on 05-04 15:00 @ 2365.09 —
+    a different bar and ~4.6% off TV's row — and pair with TV's Open row on
+    its entry, failing exit/pnl where the row was previously simply absent
+    (review finding on the first cut of this change, 2026-09-02).
+
+    Bounding by the tape's last row hides nothing the emit window did not
+    already hide: engine trades ENTERED after TV's last entry are dropped by
+    _filter_trades_to_window regardless, and the bound sits at or after
+    that entry. What it changes is only where a position still open at TV's
+    last row is marked: on that bar, as TV marks it."""
+    tv_name = str(meta.get("tv_trades_csv", "tv_trades.csv"))
+    tv_path = strategy_dir / tv_name
+    if not tv_path.exists():
+        return None
+    tz_offset = _tv_tzinfo(meta)
+    latest: int | None = None
+    with tv_path.open(encoding="utf-8-sig") as f:
+        for row in csv.DictReader(f):
+            stamp = str(row.get("Date and time", "")).strip()
+            if not stamp:
+                continue
+            ts = _parse_trade_dt(stamp, tz_offset)
+            latest = ts if latest is None else max(latest, ts)
+    return latest
+
+
+def _trim_ohlcv_csv(ohlcv_path: Path, start_ms: int | None, end_ms: int | None) -> Path | None:
+    """Write a copy of ``ohlcv_path`` holding only the bars inside
+    ``[start_ms, end_ms]`` (either bound optional, both inclusive) to a
+    temporary file and return its path; None when neither bound is set.
+    The ctypes runner applies the same bounds in _load_bars; the container
+    runner needs an already-trimmed CSV (M8 — feed the same trimmed feed
+    downstream). The caller unlinks the file."""
+    if start_ms is None and end_ms is None:
+        return None
+    import tempfile
+    fd, p = tempfile.mkstemp(suffix=".csv", prefix="pf_ohlcv_")
+    out = Path(p)
+    with ohlcv_path.open(newline="", encoding="utf-8") as fin, \
+            os.fdopen(fd, "w", newline="") as fout:
+        r = csv.DictReader(fin)
+        w = csv.DictWriter(fout, fieldnames=r.fieldnames)
+        w.writeheader()
+        for row in r:
+            ts = int(row["timestamp"])
+            if start_ms is not None and ts < int(start_ms):
+                continue
+            if end_ms is not None and ts > int(end_ms):
+                continue
+            w.writerow(row)
+    return out
+
+
 def format_trade_qty(qty: float) -> str:
     """Lot-faithful quantity text for the TV-alignable export.
 
@@ -1748,7 +1835,15 @@ def write_engine_trades_csv(trades: list[dict], path: Path) -> None:
     NEGATIVE total-USD drawdown (TV exports e.g. -8579.36). The engine ABI's
     `max_drawdown` stays positive — that mirrors Pine's
     `strategy.*trades.max_drawdown` accessors — so the sign flip happens only
-    here, in the TV-compatible export representation."""
+    here, in the TV-compatible export representation.
+
+    A trade flagged ``open_at_end`` (the engine's range-end close of a
+    position still open after the final bar) is written like any other
+    trade: TradingView's deep-backtest tape reports that position as an
+    ordinary closed trade whose exit row is the last bar at its close with
+    an EMPTY Signal (orb-lite NYSE:F 1D — Exit short 2026-04-30 @ 12.08),
+    so the row must look like every other exit for the verifier to pair it.
+    The flag stays available on the report dict for JSON consumers."""
     cum_pnls: dict[int, float] = {}
     running = 0.0
     for n, t in enumerate(trades, 1):
@@ -1850,8 +1945,9 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
 
     Mirrors Strategy.run's engine setup exactly: inputs filter, strategy_overrides,
     input_tf/script_tf, magnifier (incl. the VOLUME_WEIGHTED->ENDPOINTS+vw mapping),
-    trade_start_time, chart_timezone, syminfo. ohlcv_start_ms is applied by
-    pre-trimming the CSV fed to the container (the ctypes path trims in _load_bars).
+    trade_start_time, chart_timezone, syminfo. ohlcv_start_ms / ohlcv_end_ms are
+    applied by pre-trimming the CSV fed to the container (the ctypes path trims
+    in _load_bars).
     NEVER re-transpiles .pine (uses the committed cpp, no codegen variance)."""
     import pf_release_run as _rel
     if run_kwargs.get("account_currency_fx_series") is not None:
@@ -1862,24 +1958,13 @@ def _run_via_docker(strategy_dir: Path, ohlcv_path: Path, params: dict,
     if not generated_cpp.exists():
         raise FileNotFoundError(f"generated.cpp not found for --runner docker: {generated_cpp}")
 
-    # ohlcv_start_ms: ctypes trims bars in _load_bars; the container needs an
-    # already-trimmed CSV (M8 — feed the same trimmed feed downstream).
-    ohlcv_for_image = ohlcv_path
-    tmp_ohlcv = None
-    start_ms = run_kwargs.get("ohlcv_start_ms")
-    if start_ms is not None:
-        import tempfile
-        fd, p = tempfile.mkstemp(suffix=".csv", prefix="pf_ohlcv_")
-        tmp_ohlcv = Path(p)
-        with ohlcv_path.open(newline="", encoding="utf-8") as fin, \
-                os.fdopen(fd, "w", newline="") as fout:
-            r = csv.DictReader(fin)
-            w = csv.DictWriter(fout, fieldnames=r.fieldnames)
-            w.writeheader()
-            for row in r:
-                if int(row["timestamp"]) >= int(start_ms):
-                    w.writerow(row)
-        ohlcv_for_image = tmp_ohlcv
+    # ohlcv_start_ms / ohlcv_end_ms: ctypes trims bars in _load_bars; the
+    # container needs an already-trimmed CSV (M8 — feed the same trimmed
+    # feed downstream). The end bound is TradingView's range end, so the
+    # engine's range-end close lands on TV's last bar (_load_tv_range_end_ms).
+    tmp_ohlcv = _trim_ohlcv_csv(ohlcv_path, run_kwargs.get("ohlcv_start_ms"),
+                                run_kwargs.get("ohlcv_end_ms"))
+    ohlcv_for_image = tmp_ohlcv if tmp_ohlcv is not None else ohlcv_path
 
     # Magnifier dist/vw: mirror Strategy.run. 'VOLUME_WEIGHTED' is not a geometric
     # distribution — fall back to ENDPOINTS for the t-grid AND toggle vw.
@@ -2034,6 +2119,17 @@ def main() -> int:
     if emit_window is not None and not args.allow_trading_before_window:
         if tv_window_used or args.disable_trading_before_window:
             trade_start_ms = emit_window[0]
+    # The measurement ends where TradingView's range ends. The engine books
+    # a position still open after its final bar as TV's range-end close
+    # (open_at_end), so the final bar it sees must be TV's last bar: bound
+    # the feed to the tape's last row (_load_tv_range_end_ms — the ETH chart
+    # feed runs three days past every ETH tape). Only with a tape in use;
+    # an explicit --emit-window-ohlcv / --no-trim-output run measures the
+    # feed it was given.
+    if tv_window_used and run_kwargs.get("ohlcv_end_ms") is None:
+        range_end_ms = _load_tv_range_end_ms(strategy_dir, params)
+        if range_end_ms is not None:
+            run_kwargs["ohlcv_end_ms"] = range_end_ms
 
     if args.runner == "docker":
         if args.trace_json is not None:

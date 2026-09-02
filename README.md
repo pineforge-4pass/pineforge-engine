@@ -354,7 +354,7 @@ int main(void) {
 | `pf_version_string`                      | Full runtime version string                   |
 
 
-POD types (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, and — since ABI v2 — `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`) and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 (`PF_ABI_VERSION == 2`, exported as `pf_abi_version()`) appends computed trading metrics and a per-script-bar equity curve to `pf_report_t`; callers must verify the version before running since the report struct is caller-allocated.
+POD types (`pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, `pf_security_diag_t`, `pf_trace_entry_t`, `pf_version_t`, and — since ABI v2 — `pf_trade_stats_t`, `pf_equity_stats_t`, `pf_metrics_t`, `pf_equity_point_t`) and the `pf_magnifier_distribution_t` enum complete the surface. ABI v2 appends computed trading metrics and a per-script-bar equity curve to `pf_report_t`; ABI v3 (`PF_ABI_VERSION == 3`, exported as `pf_abi_version()`) appends `pf_trade_t::open_at_end`, the flag on the range-end close of a position still open after the final bar (TradingView's deep-backtest accounting). Callers must verify the version before running since the report struct is caller-allocated and the trades array stride grew.
 
 **Stability guarantee:** within the same `PINEFORGE_VERSION_MAJOR`, struct layouts and `extern "C"` signatures are append-only. New fields may be appended; existing fields are never reordered, removed, or retyped. New functions may be added; existing functions are never removed or signature-changed. Compile-time `static_assert`s in `src/c_abi.cpp` pin the layouts against drift.
 

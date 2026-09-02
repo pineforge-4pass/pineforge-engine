@@ -105,6 +105,10 @@ struct Trade {
     // Physical-entry provenance copied from PyramidEntry. This is deliberately
     // separate from entry_id: Pine permits user-visible IDs to be reused.
     uint64_t entry_incarnation = 0;
+    // True for the range-end close of a position still open after the final
+    // bar (record_range_end_close_trades); false for every script-driven
+    // or bracket exit. Mirrors pf_trade_t::open_at_end.
+    bool open_at_end = false;
 };
 
 struct TradeC {
@@ -124,6 +128,7 @@ struct TradeC {
     double commission;           // mirrors pf_trade_t tail; semantics documented in pineforge.h
     int32_t entry_bar_index;
     int32_t exit_bar_index;
+    int32_t open_at_end;         // ABI v3: 1 on the range-end close row (pineforge.h)
 };
 
 struct SecurityDiagC {
@@ -1125,6 +1130,12 @@ protected:
     bool current_fill_is_limit_ = false;
 
     std::vector<Trade> trades_;
+    // TradingView's range-end accounting (record_range_end_close_trades,
+    // engine_orders.cpp): the rows that close a position still open after
+    // the final script bar, at that bar's close. Report-only — they are
+    // merged behind trades_ by fill_trades_section and never enter trades_,
+    // the realized sums, or the live position (a stream continues it).
+    std::vector<Trade> range_end_trades_;
     std::vector<PendingOrder> pending_orders_;
     // A rejected strategy.entry call leaves no PendingOrder behind. The exact
     // collision gate can consume only the immediately preceding source bar, so
@@ -2388,9 +2399,13 @@ protected:
 
     // --- Equity extremes update (called after each on_bar) ---
     // NOTE: the dd/runup walk in src/engine_metrics.cpp (compute_equity_stats)
-    // MUST mirror this trough-reset logic; keep in lockstep.
-    void update_equity_extremes() {
-        double eq = initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close);
+    // MUST mirror this trough-reset logic; keep in lockstep. The fold is
+    // exactly one per script bar and always paired with record_equity_point,
+    // so the curve holds the very values folded here and a re-walk of the
+    // curve through fold_equity_extreme reproduces the scalars bit for bit
+    // — record_range_end_close_trades (engine_orders.cpp) relies on that
+    // when it re-marks the last point.
+    void fold_equity_extreme(double eq) {
         if (eq > max_equity_) {
             max_equity_ = eq;
             min_equity_ = eq;  // reset trough on new peak
@@ -2402,6 +2417,9 @@ protected:
         if (dd > max_drawdown_) max_drawdown_ = dd;
         double ru = eq - min_equity_;
         if (ru > max_runup_) max_runup_ = ru;
+    }
+    void update_equity_extremes() {
+        fold_equity_extreme(initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close));
 
         // --- Update max_contracts_held_* running peaks ---
         double abs_qty = std::abs(position_qty_);
@@ -2578,6 +2596,14 @@ private:
                               bool explicit_qty_prequantized,
                               uint64_t entry_incarnation);
     void execute_market_exit(double fill_price);
+    // Range-end accounting: record the rows that close a position still
+    // open after the final script bar at that bar's close, the way
+    // TradingView's deep-backtest report does (engine_orders.cpp). Called by
+    // every run() overload after its bar loop; a no-op when flat or during
+    // a stream warmup replay. Reporting only: the live position is kept; the
+    // last equity point is re-marked to the flat account and the scalar
+    // drawdown / run-up extremes re-folded from the curve to match.
+    void record_range_end_close_trades();
     void execute_partial_exit_qty(
         double fill_price, double qty_to_close,
         PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
@@ -2818,6 +2844,13 @@ private:
     // engine_orders.cpp).
     void emit_close_trade(const PyramidEntry& pe, double close_qty,
                           double fill_price, bool was_long);
+    // The arithmetic of emit_close_trade without its bookkeeping: the Trade
+    // row a close of ``close_qty`` of ``pe`` at ``fill_price`` on the
+    // current bar would record (pnl, pnl_pct, commission, excursions, bar
+    // indexes). emit_close_trade builds and commits; the range-end close
+    // builds only.
+    Trade build_close_trade(const PyramidEntry& pe, double close_qty,
+                            double fill_price, bool was_long) const;
     // FIFO-drain up to qty_limit from pyramid_entries_, in order, splitting the
     // boundary entry as needed. When from_entry is non-null only entries whose
     // entry_id == *from_entry are eligible (others are kept untouched); null

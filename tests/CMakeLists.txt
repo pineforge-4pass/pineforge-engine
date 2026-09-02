@@ -139,6 +139,7 @@ set(TEST_SOURCES
     test_short_seed_close_collision
     test_short_seed_collision_percent
     test_exit_bracket_position_cycle_lifetime
+    test_range_end_close
 )
 
 find_package(Threads REQUIRED)
@@ -166,6 +167,18 @@ add_test(
     NAME test_verify_corpus_metrics
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_metrics.py
+)
+
+add_test(
+    NAME test_verify_corpus_open_mark
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_verify_corpus_open_mark.py
+)
+
+add_test(
+    NAME test_run_strategy_range_end
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_run_strategy_range_end.py
 )
 
 add_test(
