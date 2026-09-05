@@ -115,6 +115,7 @@ set(TEST_SOURCES
     test_zero_lot_entry_decline
     test_pooc_coof_reversal_gross_admission
     test_limit_fill_slippage
+    test_limit_exact_touch_level_residue
     test_tv_fill_rounding
     test_strategy_commands_extra
     test_multi_tier_exit_precedence
