@@ -153,6 +153,7 @@ set(TEST_SOURCES
     test_chart_tf_security_split_feed
     test_risk_max_intraday_loss_tv
     test_aapl15_margin_brackets
+    test_dropped_reversal_mc_first
     test_percent_equity_open_entry_fee
     test_streaming
     test_calc_on_order_fills

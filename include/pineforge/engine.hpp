@@ -739,6 +739,24 @@ struct PendingOrder {
     // or is replaced wholesale by a fresh same-(id,from_entry) strategy.exit
     // call (which arms the NEW call's prices, the ordinary re-issue path).
     bool dormant_bracket = false;
+    // Round 7 family M mechanism 2a (campaign pin log-20260905t111645z-
+    // e1783b94, lab tv tapes scratchpad/r7/pins/m1d-mcbar-stop-{rev,norev};
+    // rhyme17 XAUUSD@1D TV 3/4): this bracket was RE-ISSUED — a same-(id,
+    // from_entry) strategy.exit call in the close-time script body — while
+    // the bracket it replaced was DORMANT. TradingView runs the close-time
+    // script AFTER the bar's intrabar broker events, so the re-issue cannot
+    // precede the bar's forced-liquidation pass: the new order inherits the
+    // dormancy until process_margin_call has run for the bar. A margin-call
+    // partial there revives it (REVIVE-B) against the ORIGINAL armed stop
+    // (``dormant_original_stop_price``), and a marketable revived stop closes
+    // the remainder AT THE EXTREME on the same bar (the 07-13 21:00Z bar:
+    // "Margin call" 1.0 @3375.085 THEN "Short Exit" 1.92 @3375.085; the
+    // engine's fresh re-issue used to fill at its level two bars later).
+    // Unrevived, it goes live for the next bar exactly as the plain
+    // REVIVE-A replacement did (settle_dormant_bracket_reissues).
+    bool dormant_reissue_pending = false;
+    double dormant_original_stop_price =
+        std::numeric_limits<double>::quiet_NaN();
     // Qty this deferred close debited from id_unclosed_qty_[<bare id>] in
     // compute_close_target_qty's default-FIFO branch at strategy.close CALL
     // time. On the false->true suppression transition it is re-credited to that
@@ -3408,6 +3426,12 @@ private:
     // remaining position closes at that price through the bracket's id.
     void revive_position_brackets_after_margin_call_partial(
         double margin_call_event_price);
+    // Round 7 family M mechanism 2a: after the bar's process_margin_call, a
+    // re-issued bracket that inherited its predecessor's dormancy and was not
+    // revived by a margin-call partial goes live for the next bar (the
+    // close-time re-issue takes effect once the bar's broker events are
+    // done). Called right after every process_margin_call dispatch site.
+    void settle_dormant_bracket_reissues();
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
@@ -3489,6 +3513,11 @@ private:
                                   bool& all_entries_match_out,
                                   double& retired_ledger_qty_out);
     void cancel_orders_for_full_close(const std::string& id, bool closing_long);
+    // Round 7 family M mechanism 2a: a whole-position strategy.close(id)
+    // co-queued with a same-bar opposite MARKET entry holds the id's
+    // brackets dormant instead of cancelling them (see the definitions).
+    bool reversal_pair_close_keeps_brackets(const std::string& id) const;
+    void hold_brackets_dormant_for_reversal_pair_close(const std::string& id);
     void cancel_same_bar_market_reentries_after_full_close(
         bool closed_long, bool preserve_undercap_entries);
     // Same-bar default-FIFO close routing. Token 0 uses the accepted global
@@ -3533,13 +3562,19 @@ private:
     // (id, from_entry) before the erase. TV re-issues MODIFY every live leg
     // (each keeping its own entry binding) rather than collapsing them into
     // one, so strategy_exit needs the census to re-arm the same multiplicity.
+    // replaced_dormant_out / replaced_dormant_stop_out (optional): whether a
+    // cleared leg was a dormant bracket (finding-311) and the stop it was
+    // last armed with — the re-issue inherits both (round 7 family M
+    // mechanism 2a, PendingOrder::dormant_reissue_pending).
     void clear_existing_exit_order(const std::string& id,
                                    const std::string& from_entry,
                                    bool has_trail_request,
                                    int64_t& preserved_seq_out,
                                    uint64_t& replaced_incarnation_out,
                                    double& preserved_reserved_qty_out,
-                                   int& cleared_leg_count_out);
+                                   int& cleared_leg_count_out,
+                                   bool* replaced_dormant_out = nullptr,
+                                   double* replaced_dormant_stop_out = nullptr);
     bool compute_exit_reserved_qty(const std::string& from_entry,
                                    double preserved_reserved_qty,
                                    double live_pos_qty,

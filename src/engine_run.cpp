@@ -201,6 +201,7 @@ void BacktestEngine::dispatch_bar() {
     {
         size_t trades_before_mc = trades_.size();
         process_margin_call(current_bar_);
+        settle_dormant_bracket_reissues();
         if (trades_.size() != trades_before_mc) {
             refresh_frozen_default_sizing_after_margin_call();
         }
@@ -565,6 +566,7 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     const size_t trades_before_mc = trades_.size();
     const uint64_t fill_seq_before_mc = broker_fill_event_seq_;
     process_margin_call(current_bar_);
+    settle_dormant_bracket_reissues();
     if (trades_.size() != trades_before_mc) {
         refresh_frozen_default_sizing_after_margin_call();
     }
@@ -986,6 +988,7 @@ void BacktestEngine::run_magnified_bar(
     {
         size_t trades_before_mc = trades_.size();
         process_margin_call(current_bar_);
+        settle_dormant_bracket_reissues();
         if (trades_.size() != trades_before_mc) {
             refresh_frozen_default_sizing_after_margin_call();
         }
@@ -1210,6 +1213,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
     const size_t trades_before_mc = trades_.size();
     const uint64_t fill_seq_before_mc = broker_fill_event_seq_;
     process_margin_call(current_bar_);
+    settle_dormant_bracket_reissues();
     if (trades_.size() != trades_before_mc) {
         refresh_frozen_default_sizing_after_margin_call();
     }

@@ -909,7 +909,29 @@ void BacktestEngine::strategy_close(const std::string& id,
 
     if (closes_full_position) {
         bool closing_long = (position_side_ == PositionSide::LONG);
-        cancel_orders_for_full_close(id, closing_long);
+        const bool deferred_fill =
+            !((pooc_can_fill_at_this_cursor || immediately)
+              && !(coof_scheduler_active_
+                   && coof_direct_fill_events_remaining_ == 0));
+        if (deferred_fill && reversal_pair_close_keeps_brackets(id)) {
+            // Round 7 family M mechanism 2a: the close of a same-bar
+            // `strategy.entry(opposite); strategy.close(id)` reversal pair
+            // is not a certain fill — a declined reversal voids it (design-
+            // declined-reversal-close-leg) and TradingView then still holds
+            // the id's strategy.exit brackets: killed by the decline
+            // (finding-311), revived by the bar's margin-call partial and
+            // filled AT THE EXTREME (lab tv scratchpad/r7/pins/m1d-mcbar-
+            // stop-rev: "Margin call" 1.0 @3375.085 THEN "Short Exit" 1.92
+            // @3375.085; rhyme17 XAUUSD@1D TV 3/4). Erasing them here left
+            // the declined bar with no bracket at all. Hold them dormant
+            // instead: an admitted reversal purges them with the closed
+            // cycle (classify_order_eligibility's stale-cycle Remove, the
+            // flat purge), a declined one leaves them exactly where the
+            // finding-311 kill would.
+            hold_brackets_dormant_for_reversal_pair_close(id);
+        } else {
+            cancel_orders_for_full_close(id, closing_long);
+        }
     }
 
     if ((pooc_can_fill_at_this_cursor || immediately)
@@ -1853,9 +1875,12 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     uint64_t replaced_incarnation = 0;
     double preserved_reserved_qty = std::numeric_limits<double>::quiet_NaN();
     int cleared_leg_count = 0;
+    bool replaced_dormant = false;
+    double replaced_dormant_stop = std::numeric_limits<double>::quiet_NaN();
     clear_existing_exit_order(id, from_entry, has_trail_request,
                               preserved_seq, replaced_incarnation,
-                              preserved_reserved_qty, cleared_leg_count);
+                              preserved_reserved_qty, cleared_leg_count,
+                              &replaced_dormant, &replaced_dormant_stop);
 
     double reserved_qty = std::numeric_limits<double>::quiet_NaN();
     bool bind_global_full_exit_dynamic_qty = false;
@@ -2223,6 +2248,20 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     order.tv_carry_qty = live_pos_qty;
     order.comment = comment;
     order.created_while_in_position = !effectively_flat;
+    // Round 7 family M mechanism 2a: a re-issue that replaces a DORMANT
+    // bracket (finding-311 KILL) inside the close-time script body stays
+    // dormant until this bar's process_margin_call has run — TradingView's
+    // close-time script runs after the bar's intrabar broker events, so the
+    // re-issue cannot pre-empt the bar's forced-liquidation pass and its
+    // REVIVE-B (which tests the ORIGINAL armed stop). Unrevived, it goes
+    // live for the next bar (settle_dormant_bracket_reissues), which is
+    // exactly the plain REVIVE-A replacement's timing. See
+    // PendingOrder::dormant_reissue_pending. Extra legs copy the flags.
+    if (replaced_dormant && !effectively_flat) {
+        order.dormant_bracket = true;
+        order.dormant_reissue_pending = true;
+        order.dormant_original_stop_price = replaced_dormant_stop;
+    }
 
     if (extra_leg_qtys.empty()) {
         pending_orders_.push_back(std::move(order));
@@ -2610,6 +2649,43 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
 // pending order) — verified against 3commas-3commas-pullback-sniper-
 // strategy, where the previous same-direction wipe was itself the bug
 // (closed-form count-delta 2.88% -> <0.5%).
+// Round 7 family M mechanism 2a: is this whole-position strategy.close(id)
+// the closing half of a same-bar reversal pair — an opposite-side MARKET
+// entry created on this bar is pending, so the close's fate hangs on that
+// entry's admission at the next open (the netting the decline sites apply
+// through suppress_declined_reversal_close_legs)? Mirrors that predicate's
+// shape: MARKET type, same bar, opposite to the held side, named id (a bare
+// close_all is excluded from the netting and keeps the cancel).
+bool BacktestEngine::reversal_pair_close_keeps_brackets(
+        const std::string& id) const {
+    if (id.empty() || position_side_ == PositionSide::FLAT) return false;
+    for (const PendingOrder& o : pending_orders_) {
+        if (o.type != OrderType::MARKET) continue;
+        if (o.created_bar != bar_index_) continue;
+        const PositionSide requested =
+            o.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        if (requested != position_side_) return true;
+    }
+    return false;
+}
+
+// The dormant counterpart of cancel_orders_for_full_close for the reversal
+// pair above: the id's brackets stay in the book, dormant (finding-311's
+// kill state, which a margin-call partial revives — REVIVE-B — and a fresh
+// same-(id,from_entry) strategy.exit replaces). A same-bar re-issue that was
+// itself waiting to go live (dormant_reissue_pending) is superseded: the
+// pair's close decides its fate, not the bar's end.
+void BacktestEngine::hold_brackets_dormant_for_reversal_pair_close(
+        const std::string& id) {
+    for (PendingOrder& o : pending_orders_) {
+        if (o.type != OrderType::EXIT || o.from_entry != id) continue;
+        o.dormant_bracket = true;
+        o.dormant_reissue_pending = false;
+        o.dormant_original_stop_price =
+            std::numeric_limits<double>::quiet_NaN();
+    }
+}
+
 void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*closing_long*/) {
     pending_orders_.erase(
         std::remove_if(
@@ -2800,15 +2876,34 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
                                                int64_t& preserved_seq_out,
                                                uint64_t& replaced_incarnation_out,
                                                double& preserved_reserved_qty_out,
-                                               int& cleared_leg_count_out) {
+                                               int& cleared_leg_count_out,
+                                               bool* replaced_dormant_out,
+                                               double* replaced_dormant_stop_out) {
     bool had_existing_order = false;
     preserved_seq_out = 0;
     replaced_incarnation_out = 0;
     preserved_reserved_qty_out = std::numeric_limits<double>::quiet_NaN();
     cleared_leg_count_out = 0;
+    if (replaced_dormant_out) *replaced_dormant_out = false;
+    if (replaced_dormant_stop_out) {
+        *replaced_dormant_stop_out = std::numeric_limits<double>::quiet_NaN();
+    }
     for (const auto& o : pending_orders_) {
         if (o.type == OrderType::EXIT && o.id == id && o.from_entry == from_entry) {
             ++cleared_leg_count_out;
+            // Round 7 family M mechanism 2a: a dormant leg (finding-311)
+            // hands its dormancy and its last-ARMED stop to the re-issue —
+            // the ORIGINAL armed stop when the leg is itself an inheriting
+            // re-issue of the same bar (two re-issues on one bar keep the
+            // first armed price for REVIVE-B).
+            if (o.dormant_bracket && replaced_dormant_out
+                && !*replaced_dormant_out) {
+                *replaced_dormant_out = true;
+                if (replaced_dormant_stop_out) {
+                    *replaced_dormant_stop_out = o.dormant_reissue_pending
+                        ? o.dormant_original_stop_price : o.stop_price;
+                }
+            }
             if (had_existing_order) continue;
             // The FIRST leg owns the queue position and the frozen
             // reservation the caller carries forward; later legs are the
