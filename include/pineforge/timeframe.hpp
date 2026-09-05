@@ -192,6 +192,89 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
                                             const std::string& session,
                                             CalendarPeriod period);
 
+// ─── Native daily partition for the CHART symbol's D period ────────────────────
+//
+// TradingView's D period on an exchange-calendar intraday chart is its own
+// daily bar, not the nominal session-day: on CME_MINI:NQ1!/ES1! 15m the
+// time("D"), ta.change(time("D")), timeframe.change("1D") and ta.vwap's
+// default daily anchor follow the exchange TRADE-DATE daily bars, so the
+// 17:00 CT reopen after a US-holiday early close stays inside the D bar that
+// opened before the holiday (2025-05-26 Memorial Day evening: the bar
+// stamped Sun 05-25 17:00 runs to Tue 05-27 16:00; 06-19 Juneteenth; the Sun
+// 07-06 after Independence Day, whose Thu 07-03 17:00 stamp runs to Mon
+// 07-07 16:00; 09-01 Labor Day; 11-27 Thanksgiving, to Fri 11-28 12:15;
+// 2026-01-19 MLK; 02-16 Presidents' Day) and the Good-Friday-eve session
+// (Thu 04-17 17:00 CT, 2025) belongs to the Wed 04-16 17:00 bar that runs to
+// the Sun 04-20 reopen -- pinned 2026-09-05 by lab tv o-cme-dayanchor-full
+// (ledger log-20260905t123531z-7fe6b95a: 255 D periods over 2025-04-01 ..
+// 2026-05-01, every start a registry daily-feed row, feed == TV data on
+// 25530/25530 closes). Every nominal session-day rule stays as it is; when
+// the run installs TradingView's own daily bars (strategy_set_native_
+// security_feed "D") on an intraday chart, the engine builds this partition
+// from their stamps -- the same partition request.security "D" evaluators
+// take (TimeframeAggregator::set_native_periods) -- and the chart-level
+// consumers below read it for the symbol's own clock (tz + session equal to
+// the partition's): the D period holding an instant is the native bar whose
+// stamp is the latest at or before it; its trade day is the session-day of
+// its last chart bar (the merged Memorial-Day bar is Tuesday's); a W / M
+// period groups the native days by the nominal week / month of their trade
+// day and opens on the group's first stamp (b29152c's request.security rule);
+// an instant before the first stamp, or at / after the LAST stamp's nominal
+// session-day close, keeps the nominal rules. Without an installed partition
+// (no native daily feed, a 1D chart, another symbol's clock) every function
+// is bit-identical to the nominal session calendar.
+struct NativeDayPartition {
+    std::string tz;
+    std::string session;
+    std::vector<int64_t> stamps;       // native daily stamps, strictly increasing
+    std::vector<int64_t> trade_day;    // per stamp: session_day_index of its trade day
+    std::vector<int64_t> week_open;    // per stamp: the W group's first stamp
+    std::vector<int64_t> month_open;   // per stamp: the M group's first stamp
+    int64_t last_bound = 0;            // nominal session-day close of the last stamp
+    bool empty() const { return stamps.empty(); }
+};
+
+/// Build the partition for the symbol clock (tz, session) from the native
+/// daily stamps and the chart's input bars (the trade instants: the last
+/// input bar before the next stamp, bounded by the last stamp's nominal
+/// session-day close; the stamp itself when no input bar lies in the
+/// period). Returns false -- and leaves `out` empty -- for no stamps or
+/// non-increasing stamps.
+bool build_native_day_partition(NativeDayPartition& out,
+                                const std::string& tz,
+                                const std::string& session,
+                                const std::vector<int64_t>& stamps,
+                                const Bar* input_bars, int n_input);
+
+/// Index of the native period holding `ms` under `p`: -1 before the first
+/// stamp and at / after the last stamp's nominal session-day close.
+int native_day_partition_index(const NativeDayPartition& p, int64_t ms);
+
+/// The calling thread's active chart partition, read by session_day_index /
+/// session_period_open_ms / session_period_close_ms /
+/// session_period_last_traded_close_ms / crosses_boundary (and so by
+/// tf_change, the symbol-clock pine_time forms and ta::VWAP's session
+/// anchor) whenever their (tz, session) equal the partition's. nullptr (the
+/// default) leaves every rule nominal. set_ returns the previous pointer;
+/// BacktestEngine::run installs its chart partition through
+/// NativeDayPartitionScope for exactly the run's bar loop.
+const NativeDayPartition* set_active_native_day_partition(const NativeDayPartition* p);
+const NativeDayPartition* active_native_day_partition();
+
+class NativeDayPartitionScope {
+public:
+    explicit NativeDayPartitionScope(const NativeDayPartition* p)
+        : prev_(set_active_native_day_partition(p)) {}
+    ~NativeDayPartitionScope() { set_active_native_day_partition(prev_); }
+    NativeDayPartitionScope(const NativeDayPartitionScope&) = delete;
+    NativeDayPartitionScope& operator=(const NativeDayPartitionScope&) = delete;
+private:
+    const NativeDayPartition* prev_;
+};
+
+// Feature probe: the chart-level native daily partition above exists.
+#define PINEFORGE_HAS_NATIVE_DAY_PARTITION_V1 1
+
 // ─── TimeframeAggregator ───────────────────────────────────────────────────────
 
 class TimeframeAggregator {

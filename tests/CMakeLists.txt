@@ -37,6 +37,7 @@ set(TEST_SOURCES
     test_htf_weekly_lookahead
     test_native_wm_buckets
     test_native_daily_holiday
+    test_o_close_pct_day_anchor
     test_oanda_lazy_close
     test_historical_security_lookahead_projection
     test_pooc_global_full_exit

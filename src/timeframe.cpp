@@ -423,9 +423,62 @@ static int64_t session_day_stamp_real_ms(int64_t d, const std::string& tz,
         tz);
 }
 
+// ─── Native daily partition (chart-level; see timeframe.hpp) ──────────────────
+
+namespace {
+
+thread_local const NativeDayPartition* g_active_day_partition = nullptr;
+
+/// The active partition when it keys the very clock a caller asks about:
+/// tz and session equal to the partition's (the chart symbol's), so another
+/// symbol's request.security clock, and every run without an installed
+/// partition, read the nominal rules.
+const NativeDayPartition* matching_day_partition(const std::string& tz,
+                                                 const std::string& session) {
+    const NativeDayPartition* p = g_active_day_partition;
+    if (p == nullptr || p->stamps.empty() || p->tz != tz || p->session != session) {
+        return nullptr;
+    }
+    return p;
+}
+
+/// The nominal session-day ordinal: floor of the intraday clock's day.
+int64_t session_day_index_nominal(int64_t ms, const std::string& tz,
+                                  const std::string& session) {
+    return floor_div_day(intraday_clock_ms(ms, tz, session));
+}
+
+}  // namespace
+
+int native_day_partition_index(const NativeDayPartition& p, int64_t ms) {
+    const auto it = std::upper_bound(p.stamps.begin(), p.stamps.end(), ms);
+    if (it == p.stamps.begin()) return -1;
+    if (it == p.stamps.end() && ms >= p.last_bound) return -1;
+    return static_cast<int>(it - p.stamps.begin()) - 1;
+}
+
+const NativeDayPartition* set_active_native_day_partition(const NativeDayPartition* p) {
+    const NativeDayPartition* prev = g_active_day_partition;
+    g_active_day_partition = (p != nullptr && !p->stamps.empty()) ? p : nullptr;
+    return prev;
+}
+
+const NativeDayPartition* active_native_day_partition() {
+    return g_active_day_partition;
+}
+
 int64_t session_day_index(int64_t ms, const std::string& tz,
                           const std::string& session) {
-    return floor_div_day(intraday_clock_ms(ms, tz, session));
+    // Under the chart's native daily partition the ordinal is the period's
+    // TRADE day -- the session-day of its last chart bar -- so the merged
+    // Memorial-Day bar (Sun 17:00 CT through Tue 16:00) is one day for
+    // ta.vwap's anchor and the D/W/M keys, and a period's ordinal equals the
+    // nominal one wherever the two calendars agree.
+    if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
+        const int k = native_day_partition_index(*p, ms);
+        if (k >= 0) return p->trade_day[static_cast<std::size_t>(k)];
+    }
+    return session_day_index_nominal(ms, tz, session);
 }
 
 /// Epoch day (days since 1970-01-01) of the first session-day of the
@@ -454,6 +507,19 @@ int64_t session_period_open_ms(int64_t ms, const std::string& tz,
                                const std::string& session,
                                CalendarPeriod period) {
     if (period == CalendarPeriod::NONE) return ms;
+    // Under the chart's native daily partition the D bar opens at its native
+    // stamp (time("D") on the Mon 05-26 17:00 CT reopen reads Sun 05-25
+    // 17:00, the merged bar's stamp) and a W / M bar on its group's first
+    // stamp.
+    if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
+        const int k = native_day_partition_index(*p, ms);
+        if (k >= 0) {
+            const auto idx = static_cast<std::size_t>(k);
+            if (period == CalendarPeriod::DAY) return p->stamps[idx];
+            if (period == CalendarPeriod::WEEK) return p->week_open[idx];
+            return p->month_open[idx];
+        }
+    }
     // The period's bar opens where its first session-day's D bar does: the
     // day stamp (the session open on every session but 1800-1700).
     const int64_t d = session_day_index(ms, tz, session);
@@ -489,6 +555,72 @@ static int64_t session_day_close_real_ms(int64_t d, const std::string& tz,
          + static_cast<int64_t>(session_length_minutes(session)) * 60000;
 }
 
+bool build_native_day_partition(NativeDayPartition& out,
+                                const std::string& tz,
+                                const std::string& session,
+                                const std::vector<int64_t>& stamps,
+                                const Bar* input_bars, int n_input) {
+    out = NativeDayPartition{};
+    if (stamps.empty()) return false;
+    for (std::size_t k = 1; k < stamps.size(); ++k) {
+        if (stamps[k] <= stamps[k - 1]) return false;
+    }
+    if (input_bars == nullptr || n_input < 0) n_input = 0;
+    NativeDayPartition p;
+    p.tz = tz;
+    p.session = session;
+    p.stamps = stamps;
+    // The last native bar reaches at least its own nominal session-day; a
+    // later input bar has no stamp to prove more and keeps the nominal
+    // calendar (TimeframeAggregator::set_native_periods' last bound).
+    p.last_bound = session_day_close_real_ms(
+        session_day_index_nominal(stamps.back(), tz, session), tz, session);
+    const std::size_t n = stamps.size();
+    p.trade_day.reserve(n);
+    p.week_open.reserve(n);
+    p.month_open.reserve(n);
+    // Trade instants in one merge pass: the last input bar before the next
+    // stamp (before the last bound for the last stamp), the stamp itself
+    // when no input bar lies in the period.
+    int j = 0;
+    int64_t prev_week = 0, prev_month = 0;
+    for (std::size_t k = 0; k < n; ++k) {
+        const int64_t stamp = stamps[k];
+        const int64_t next = (k + 1 < n) ? stamps[k + 1] : p.last_bound;
+        int64_t last_in_period = stamp;
+        while (j < n_input && input_bars[j].timestamp < next) {
+            if (input_bars[j].timestamp >= stamp) {
+                last_in_period = input_bars[j].timestamp;
+            }
+            ++j;
+        }
+        const int64_t td = session_day_index_nominal(last_in_period, tz, session);
+        p.trade_day.push_back(td);
+        // A native bar's W / M group is the nominal period of its trade day;
+        // consecutive stamps of one group share the group's first stamp. The
+        // FIRST stamp cannot prove it opens its group (the feed may start
+        // mid-week / mid-month): that group opens on the nominal first
+        // session-day's stamp when that lies at or before the stamp, on the
+        // stamp itself otherwise (a feed starting on a holiday session that
+        // belongs to the next week).
+        const int64_t week = session_period_first_day(td, session, CalendarPeriod::WEEK);
+        const int64_t month = session_period_first_day(td, session, CalendarPeriod::MONTH);
+        if (k == 0) {
+            p.week_open.push_back(std::min(
+                stamp, session_day_stamp_real_ms(week, tz, session)));
+            p.month_open.push_back(std::min(
+                stamp, session_day_stamp_real_ms(month, tz, session)));
+        } else {
+            p.week_open.push_back(week == prev_week ? p.week_open.back() : stamp);
+            p.month_open.push_back(month == prev_month ? p.month_open.back() : stamp);
+        }
+        prev_week = week;
+        prev_month = month;
+    }
+    out = std::move(p);
+    return true;
+}
+
 int64_t session_covered_instant_ms(int64_t ms, const std::string& tz,
                                    const std::string& session) {
     const int64_t d = session_day_index(ms, tz, session);
@@ -509,6 +641,21 @@ int64_t session_period_close_ms(int64_t ms, const std::string& tz,
                                 const std::string& session,
                                 CalendarPeriod period) {
     if (period == CalendarPeriod::NONE) return ms;
+    // Under the chart's native daily partition a W / M bar closes where the
+    // next group's first stamp opens, when the partition holds it; the D bar
+    // (and a group the partition does not close) closes on its trade day's
+    // nominal session-day close through the partitioned ordinal below.
+    if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
+        const int k = native_day_partition_index(*p, ms);
+        if (k >= 0 && period != CalendarPeriod::DAY) {
+            const std::vector<int64_t>& group =
+                period == CalendarPeriod::WEEK ? p->week_open : p->month_open;
+            const std::size_t n = p->stamps.size();
+            for (std::size_t j = static_cast<std::size_t>(k) + 1; j < n; ++j) {
+                if (group[j] != group[static_cast<std::size_t>(k)]) return p->stamps[j];
+            }
+        }
+    }
     const int64_t d = session_day_index(ms, tz, session);
     if (period == CalendarPeriod::DAY) return session_day_close_real_ms(d, tz, session);
     // W/M close on the next period's first D bar open -- its day stamp.
@@ -539,6 +686,21 @@ int64_t session_period_last_traded_close_ms(int64_t ms, const std::string& tz,
     if (period == CalendarPeriod::NONE) return ms;
     // ""/"24x7" markets trade every calendar day: nothing to skip.
     if (!has_trading_session(session)) return session_period_close_ms(ms, tz, session, period);
+    // Under the chart's native daily partition a W / M group the partition
+    // closes ends on its last native day's trade-day close.
+    if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
+        const int k = native_day_partition_index(*p, ms);
+        if (k >= 0 && period != CalendarPeriod::DAY) {
+            const std::vector<int64_t>& group =
+                period == CalendarPeriod::WEEK ? p->week_open : p->month_open;
+            const std::size_t n = p->stamps.size();
+            std::size_t last = static_cast<std::size_t>(k);
+            while (last + 1 < n && group[last + 1] == group[static_cast<std::size_t>(k)]) ++last;
+            if (last + 1 < n) {
+                return session_day_close_real_ms(p->trade_day[last], tz, session);
+            }
+        }
+    }
     const int64_t d = session_day_index(ms, tz, session);
     if (period == CalendarPeriod::DAY) return session_day_close_real_ms(d, tz, session);
     const int shift = session_trading_date_shift_days(session);
@@ -591,6 +753,18 @@ bool crosses_boundary(int64_t prev_ms, int64_t curr_ms, CalendarPeriod period,
 
     switch (period) {
         case CalendarPeriod::DAY:
+            // Under the chart's native daily partition two instants share a
+            // D period exactly when their partitioned ordinals agree (the
+            // Mon 05-26 17:00 CT reopen stays in Sunday's stamp); an instant
+            // the partition does not hold keeps its nominal ordinal, which a
+            // held period's trade day never repeats.
+            if (const NativeDayPartition* p = matching_day_partition(tz, session)) {
+                if (native_day_partition_index(*p, prev_ms) >= 0
+                    || native_day_partition_index(*p, curr_ms) >= 0) {
+                    return session_day_index(prev_ms, tz, session)
+                           != session_day_index(curr_ms, tz, session);
+                }
+            }
             return prev_tm.tm_yday != curr_tm.tm_yday ||
                    prev_tm.tm_year != curr_tm.tm_year;
         case CalendarPeriod::WEEK:

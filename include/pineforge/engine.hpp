@@ -2764,6 +2764,14 @@ protected:
     std::vector<NativeSecurityFeed> native_security_feeds_;
     int64_t diag_native_security_substitutions_ = 0;
     int64_t diag_native_security_misses_ = 0;
+    // The chart symbol's own daily partition, built per run from the native
+    // "D" feed's stamps on an intraday chart (prepare_chart_day_partition)
+    // and installed for the run's bar loop (NativeDayPartitionScope) so the
+    // chart-level D consumers -- time("D") / time_close("D"),
+    // timeframe.change("1D"), ta.change(time("D")), ta.vwap's daily anchor --
+    // read TradingView's trade-date daily bars (timeframe.hpp). Empty on a
+    // run without the feed or on a calendar chart: every rule nominal.
+    NativeDayPartition chart_day_partition_;
 
     // --- Runtime trace state ---
     // Gated by ``trace_enabled_`` (default false) so production strategies
@@ -3398,6 +3406,7 @@ private:
     // substitution a completed bucket applies. Returns whether `bar` was
     // replaced by its native sibling.
     void prepare_native_security_feeds(const Bar* input_bars, int n_input);
+    void prepare_chart_day_partition(const Bar* input_bars, int n_input);
     bool substitute_native_security_bar(SecurityEvalState& state, Bar& bar,
                                         bool count_miss = true);
     void prepare_historical_security_lookahead_projections(
@@ -3527,6 +3536,11 @@ public:
     }
     int64_t native_security_misses() const {
         return diag_native_security_misses_;
+    }
+    // Whether the last run built the chart symbol's native daily partition
+    // (an intraday chart with a native "D" feed installed).
+    bool chart_day_partition_installed() const {
+        return !chart_day_partition_.empty();
     }
 
     // Execute confirmed historical bars, then keep this exact instance alive

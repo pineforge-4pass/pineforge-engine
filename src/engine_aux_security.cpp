@@ -642,6 +642,38 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
 }
 
 
+// The chart symbol's own D period from the native daily feed. TradingView's
+// chart-level D consumers on an exchange-calendar intraday chart -- time("D"),
+// ta.change(time("D")), timeframe.change("1D"), ta.vwap's default anchor --
+// follow the exchange's trade-date daily bars, the very bars the "D" feed
+// holds, not the nominal 17:00 CT session opens: a CME holiday session's
+// 17:00 reopen stays inside the D bar that opened before the holiday (pinned
+// 2026-09-05, round 7 family O, ledger log-20260905t123531z-7fe6b95a, lab tv
+// o-cme-dayanchor-full: 255 D periods 2025-04-01 .. 2026-05-01, every start a
+// registry daily-feed row; the Mon 05-26 17:00 CT reopen reads time("D") =
+// Sun 05-25 17:00, timeframe.change("1D") false, ta.vwap cumulating on). The
+// partition is the feed's stamps with each period's trade day as the
+// session-day of its last chart bar (timeframe.hpp NativeDayPartition), built
+// only when a "D" feed is installed on an intraday chart; run() installs it
+// for the bar loop. No feed, or a calendar chart: empty, every rule nominal.
+void BacktestEngine::prepare_chart_day_partition(const Bar* input_bars,
+                                                 int n_input) {
+    chart_day_partition_ = NativeDayPartition{};
+    if (native_security_feeds_.empty()) return;
+    if (calendar_period_for(input_tf_) != CalendarPeriod::NONE) return;
+    for (const NativeSecurityFeed& feed : native_security_feeds_) {
+        if (feed.seconds != kSecPerDay || feed.bars.empty()) continue;
+        std::vector<int64_t> stamps;
+        stamps.reserve(feed.bars.size());
+        for (const Bar& bar : feed.bars) stamps.push_back(bar.timestamp);
+        build_native_day_partition(chart_day_partition_, syminfo_.timezone,
+                                   syminfo_.session, stamps, input_bars,
+                                   n_input);
+        return;
+    }
+}
+
+
 bool BacktestEngine::substitute_native_security_bar(SecurityEvalState& state,
                                                     Bar& bar,
                                                     bool count_miss) {

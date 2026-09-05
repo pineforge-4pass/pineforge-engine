@@ -682,6 +682,10 @@ void BacktestEngine::reset_run_state() {
     // Per-bar cursor + session-predicate state.
     bar_index_ = 0;
     prev_bar_timestamp_ = 0;
+    // The chart's native daily partition is rebuilt per run by the
+    // multi-timeframe run() (prepare_chart_day_partition); a run that never
+    // builds one must not report a stale one.
+    chart_day_partition_ = NativeDayPartition{};
     account_currency_fx_broker_epoch_initialized_ = false;
     account_currency_fx_broker_epoch_ = 0;
     account_currency_fx_broker_rate_ = account_currency_fx_;
@@ -1334,11 +1338,22 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
     prepare_historical_security_lookahead_projections(
         input_bars, n_input, effective_input_tf);
 
-    if (!needs_aggregation && !bar_magnifier) {
-        run_simple_bar_loop(input_bars, n_input);
-    } else {
-        run_aggregation_bar_loop(input_bars, n_input, bar_magnifier,
-                                 expected_script_bars);
+    // The chart symbol's native daily partition (a "D" feed on an intraday
+    // chart) keys the chart-level D consumers for exactly the bar loop:
+    // time("D"), timeframe.change("1D"), ta.change(time("D")) and ta.vwap's
+    // anchor read TradingView's trade-date daily bars, the request.security
+    // evaluators their own partitions installed above. Empty -> nothing
+    // installed, every rule nominal (prepare_chart_day_partition).
+    prepare_chart_day_partition(input_bars, n_input);
+    {
+        NativeDayPartitionScope chart_day_partition(
+            chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
+        if (!needs_aggregation && !bar_magnifier) {
+            run_simple_bar_loop(input_bars, n_input);
+        } else {
+            run_aggregation_bar_loop(input_bars, n_input, bar_magnifier,
+                                     expected_script_bars);
+        }
     }
     // TradingView's range-end accounting: a position still open after the
     // last script bar is reported as a closed trade at that bar's close
