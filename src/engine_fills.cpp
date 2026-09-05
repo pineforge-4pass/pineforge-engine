@@ -1323,6 +1323,12 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
         if (o.id.size() >= kClosePrefix.size()
             && o.id.compare(0, kClosePrefix.size(), kClosePrefix) == 0) continue;
         if (!o.dormant_bracket) continue;
+        // Round 9 family V: a dormancy imposed by THIS bar's close-time
+        // script (the reversal pair's strategy.close) post-dates the bar's
+        // extreme — the pass here models an event that already happened
+        // before the script ran. Not revivable on this bar; the pair's fate
+        // is decided at the next open (see PendingOrder::dormant_hold_bar).
+        if (o.dormant_hold_bar == bar_index_) continue;
         // finding-347: mirror the dormancy predicate — position-cycle
         // provenance, not bucket residency, so a leg orphaned by a sibling's
         // FIFO drain revives with its siblings.
@@ -1332,10 +1338,13 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
         // Round 7 family M mechanism 2a: a bracket re-issued in this bar's
         // close-time script over a dormant predecessor revives against the
         // stop it was ORIGINALLY armed with — in TradingView's chronology
-        // the re-issue has not happened yet when the extreme is marked.
-        const double revive_stop = o.dormant_reissue_pending
+        // the re-issue has not happened yet when the extreme is marked (the
+        // original is kept even when a same-bar pair close superseded the
+        // re-issue's settle, round 9 family V).
+        const double revive_stop = std::isfinite(o.dormant_original_stop_price)
             ? o.dormant_original_stop_price : o.stop_price;
         o.dormant_bracket = false;
+        o.dormant_hold_bar = -1;
         o.dormant_reissue_pending = false;
         o.dormant_original_stop_price =
             std::numeric_limits<double>::quiet_NaN();
@@ -1386,6 +1395,10 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
 // close-time script's fresh order — live from the next bar on.
 void BacktestEngine::settle_dormant_bracket_reissues() {
     for (PendingOrder& o : pending_orders_) {
+        // Round 9 family V: the close-time hold's stamp lives only through
+        // this bar's pass; from the next open the bracket is plainly dormant
+        // (killed for a declined reversal's bar, purged with an admitted one).
+        o.dormant_hold_bar = -1;
         if (!o.dormant_reissue_pending) continue;
         o.dormant_reissue_pending = false;
         o.dormant_bracket = false;
@@ -6362,6 +6375,10 @@ void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal() {
             || cycle_filled_entry_ids_.count(o.from_entry) != 0;
         if (!bound) continue;
         o.dormant_bracket = true;
+        // The decline is TradingView's own kill at this bar's open — a
+        // margin-call slice at this bar's extreme revives it (round 7 family
+        // M mechanism 2a), unlike a close-time pair hold (round 9 family V).
+        o.dormant_hold_bar = -1;
         // A decline that comes AFTER a same-bar re-issue (the POOC step-4
         // shape) kills the fresh order outright: it must not go live at the
         // bar's end on the strength of the re-issue it superseded.

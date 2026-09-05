@@ -757,6 +757,22 @@ struct PendingOrder {
     bool dormant_reissue_pending = false;
     double dormant_original_stop_price =
         std::numeric_limits<double>::quiet_NaN();
+    // Round 9 family V (narrowing of M-2a; campaign note log-20260905t165205z-
+    // 69e4be06; lab tv tapes scratchpad/famV/pins/famV-eth-pair-mcbar-
+    // {reissue,once,norev}, famV-eth-pair-prevbar-admitted, famV-xau1d-noMC-
+    // {rev,norev}): the bar on which a same-bar reversal pair's
+    // strategy.close(id) put THIS bracket to sleep at placement (-1 = it was
+    // not this hold that made it dormant). The pair's close is issued in the
+    // close-time script — after the bar's intrabar broker events — so its
+    // hold cannot feed that same bar's forced-liquidation pass: REVIVE-B
+    // skips a bracket whose dormancy the current bar's script imposed (ETH
+    // 2025-04-07 13:45Z: "Margin call" 2.208 @1557.76 then "Long" 4.4875
+    // @1549.51 at the 14:00Z open; 2b5e8e7 filled the remainder "Short Exit"
+    // at 1557.76 — the round-8 ETH/EURUSD/XAUUSD@15 regressions). A bracket
+    // that was already dormant (killed at this bar's OPEN by a declined
+    // reversal) keeps its revive: that is the 1D 07-14 row. Cleared once the
+    // bar's pass has run (settle_dormant_bracket_reissues).
+    int dormant_hold_bar = -1;
     // Qty this deferred close debited from id_unclosed_qty_[<bare id>] in
     // compute_close_target_qty's default-FIFO branch at strategy.close CALL
     // time. On the false->true suppression transition it is re-credited to that

@@ -2675,14 +2675,29 @@ bool BacktestEngine::reversal_pair_close_keeps_brackets(
 // same-(id,from_entry) strategy.exit replaces). A same-bar re-issue that was
 // itself waiting to go live (dormant_reissue_pending) is superseded: the
 // pair's close decides its fate, not the bar's end.
+// Round 9 family V: the hold is a CLOSE-TIME act. A bracket that was live
+// until this call goes dormant here and is stamped with this bar
+// (dormant_hold_bar), so the bar's own forced-liquidation pass — which in
+// TradingView's chronology already happened, at the extreme, before the
+// script ran — does not revive it (famV-eth-pair-mcbar-reissue/-once: the
+// 13:45Z slice 2.208 @1557.76, then "Long" 4.4875 at the 14:00Z open). A
+// bracket that was ALREADY dormant (killed at this bar's open by a declined
+// reversal, or a same-bar re-issue that inherited that dormancy) keeps its
+// revive against the ORIGINAL armed stop — the 1D 07-14 row — while the
+// pair's close still supersedes the re-issue's end-of-bar settle.
 void BacktestEngine::hold_brackets_dormant_for_reversal_pair_close(
         const std::string& id) {
     for (PendingOrder& o : pending_orders_) {
         if (o.type != OrderType::EXIT || o.from_entry != id) continue;
-        o.dormant_bracket = true;
-        o.dormant_reissue_pending = false;
-        o.dormant_original_stop_price =
-            std::numeric_limits<double>::quiet_NaN();
+        if (!o.dormant_bracket) {
+            o.dormant_bracket = true;
+            o.dormant_hold_bar = bar_index_;
+            o.dormant_reissue_pending = false;
+            o.dormant_original_stop_price =
+                std::numeric_limits<double>::quiet_NaN();
+        } else {
+            o.dormant_reissue_pending = false;
+        }
     }
 }
 

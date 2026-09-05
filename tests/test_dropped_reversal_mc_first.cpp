@@ -57,6 +57,42 @@
  *         the cascade's revive still finds it;
  *      E4 an ADMITTED reversal pair: the close fills at the open, the entry
  *         flips, and the held bracket is purged with its cycle (no zombie).
+ *
+ * Round 9 family V (campaign note log-20260905t165205z-69e4be06) NARROWS the
+ * rule: the pair's strategy.close is a CLOSE-TIME act, issued after the bar's
+ * intrabar broker events, so the dormancy it imposes must not feed that same
+ * bar's forced-liquidation pass. 2b5e8e7 held the bracket dormant inside the
+ * script body and the end-of-bar process_margin_call revived it at the
+ * extreme — the round-8 candidate-i regressions on ETH/EURUSD/XAUUSD@15
+ * (rhyme17 ETH 2025-04-07 13:45Z: TV "Margin call" 2.294 @1557.76 then
+ * "Long" 4.662 @1549.51 at the 14:00Z open; the engine closed the 4.662
+ * "Short Exit" @1557.76). lab tv tapes scratchpad/famV/pins (ws-report-v1,
+ * rangeProof covered):
+ *   F. BINANCE:ETHUSDT.P 15, 2025-04-01..04-20, the 13:45Z bar
+ *      (O 1493.53 H 1557.76 L 1489 C 1549.52), 100% short at the 13:30Z
+ *      close, filled at the 13:45Z open:
+ *      F1 famV-eth-pair-mcbar-reissue (stop avg+30 re-issued every bar; the
+ *         pair Long + close("Short") at the 13:45Z close) and F2 -once (the
+ *         stop issued once, with the pair): "Margin call" 2.208 @1557.76
+ *         THEN "Long" 4.4875 @1549.51 at the 14:00Z open, then the long
+ *         6.1999 closed by close_all at the 14:30Z open 1557.92 (csv
+ *         33cb2aac). The close-time bracket does NOT fill at the extreme.
+ *      F3 -norev (no pair): the same slice, then "Short Exit" 4.4875
+ *         @1549.51 at the 14:00Z open — a bracket born at the close with a
+ *         breached level fills at the next open (632e3afe).
+ *      F4 -prevbar-admitted (short at the 13:00Z close, resting stop 1530
+ *         from the 13:15Z close, the pair at the 13:30Z close, ADMITTED at
+ *         the 13:45Z open 1493.53): 0.0708 @1515.35 "Margin call" on the
+ *         entry bar, "Long" 6.5372 @1493.53, the purged stop never acts,
+ *         the long 6.7819 rides to the 14:30Z open 1557.92 (583a6b81).
+ *   G. OANDA:XAUUSD 1D, 2025-06-01..08-01, margin_short=50 — the 100% short
+ *      (3 lots @3322.825) has headroom, so NO cascade anywhere:
+ *      G1 famV-xau1d-noMC-rev (the pair at the 07-10 close, DECLINED at the
+ *         07-13 open — no Long row): the resting stop 3370.325 does NOT
+ *         fill on the 07-13 bar although H 3375.085 crosses it; the re-issue
+ *         fills 07-15 21:00Z @3370.325 x3 (a82f6b99) — finding-311's kill on
+ *         a bar with no revive, TV-pinned (E1's shape).
+ *      G2 -norev: the stop fills on the 07-13 bar @3370.325 x3 (2886cc24).
  */
 
 #include <algorithm>
@@ -248,6 +284,7 @@ public:
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;
     }
+    void set_margin_short(double pct) { margin_short_ = pct; }
     void entry_default(const std::string& id, bool is_long) {
         strategy_entry(id, is_long, kNaN, kNaN, kNaN, "");
     }
@@ -753,10 +790,210 @@ void test_synth_admitted_pair_purges_held_bracket() {
     CHECK(p.brackets_bound_to("S") == 0);
 }
 
+// ---------------------------------------------------------------------------
+// F. Round 9 family V — BINANCE:ETHUSDT.P 15 tapes (scratchpad/famV/pins).
+// ---------------------------------------------------------------------------
+constexpr int64_t kE1300 = 1744030800000LL;  // 2025-04-07 13:00Z
+constexpr int64_t kE1315 = 1744031700000LL;  // 13:15Z
+constexpr int64_t kE1330 = 1744032600000LL;  // 13:30Z (the probe's short signal)
+constexpr int64_t kE1345 = 1744033500000LL;  // 13:45Z (entry bar, H 1557.76)
+constexpr int64_t kE1400 = 1744034400000LL;  // 14:00Z (O 1549.51)
+constexpr int64_t kE1415 = 1744035300000LL;  // 14:15Z (close_all signal)
+constexpr int64_t kE1430 = 1744036200000LL;  // 14:30Z (O 1557.92)
+
+// The registry BINANCE:ETHUSDT.P 15 feed (27b62431096e) 2025-04-07 12:15Z ..
+// 15:00Z (lab bars).
+static const BarRow15 kEth0407[] = {
+    {1744028100000LL, 1484.81, 1519.12, 1480.77, 1516.79},  // 12:15
+    {1744029000000LL, 1516.78, 1523.99, 1503.27, 1505.59},  // 12:30
+    {1744029900000LL, 1505.58, 1526.48, 1497.0, 1520.01},   // 12:45
+    {kE1300, 1520.01, 1523.69, 1508.72, 1513.3},            // 13:00
+    {kE1315, 1513.31, 1515.35, 1501.01, 1502.54},           // 13:15
+    {kE1330, 1502.54, 1518.0, 1486.23, 1493.54},            // 13:30
+    {kE1345, 1493.53, 1557.76, 1489.0, 1549.52},            // 13:45
+    {kE1400, 1549.51, 1599.46, 1538.22, 1587.34},           // 14:00
+    {kE1415, 1587.34, 1638.47, 1549.0, 1558.24},            // 14:15
+    {kE1430, 1557.92, 1594.41, 1544.33, 1562.93},           // 14:30
+    {1744037100000LL, 1562.92, 1580.16, 1551.74, 1569.04},  // 14:45
+    {1744038000000LL, 1569.08, 1576.8, 1545.39, 1548.14},   // 15:00
+};
+
+// famV-eth-pair-mcbar-reissue == famV-eth-pair-mcbar-once (csv 33cb2aac).
+static const Row kEthPairMcbarTape[] = {
+    {kE1345, 1493.53, 2.208, kE1345, 1557.76, kExitMarginCall, -141.81984, false, ""},
+    {kE1345, 1493.53, 4.4875, kE1400, 1549.51, kExitClose, -251.21025, false, ""},
+    {kE1400, 1549.51, 6.1999, kE1430, 1557.92, kExitClose, 52.14116, true, ""},
+};
+// famV-eth-pair-mcbar-norev (csv 632e3afe).
+static const Row kEthMcbarNorevTape[] = {
+    {kE1345, 1493.53, 2.208, kE1345, 1557.76, kExitMarginCall, -141.81984, false, ""},
+    {kE1345, 1493.53, 4.4875, kE1400, 1549.51, kExitClose, -251.21025, false, "Short Exit"},
+};
+// famV-eth-pair-prevbar-admitted (csv 583a6b81).
+static const Row kEthPrevbarAdmittedTape[] = {
+    {kE1315, 1513.31, 0.0708, kE1315, 1515.35, kExitMarginCall, -0.144432, false, ""},
+    {kE1315, 1513.31, 6.5372, kE1345, 1493.53, kExitClose, 129.30582, false, ""},
+    {kE1345, 1493.53, 6.7819, kE1430, 1557.92, kExitClose, 436.68655, true, ""},
+};
+
+// The ETH tapes' broker: 10,000 USDT, mintick 0.01, lot 0.0001, 100% of
+// equity, zero commission, 1x margin, margin calls on.
+Probe run_eth(std::function<void(Probe&, const Bar&)> script) {
+    Probe p(10000.0, 0.01, 0.0001, QtyType::PERCENT_OF_EQUITY, 100.0);
+    p.script = [&](Probe& e, const Bar& bar, int) { script(e, bar); };
+    const std::vector<Bar> bars = to_bars(kEth0407);
+    p.run(bars.data(), (int)bars.size());
+    return p;
+}
+
+// The 13:45Z pair: the slice at the high, then the short closed at the 14:00Z
+// open by the admitted reversal — NOT by "Short Exit", and nothing at 1557.76
+// beyond the slice.
+void check_eth_pair_rows(const std::vector<Row>& got) {
+    const std::vector<Row> at1345 = rows_exited_at(got, kE1345);
+    CHECK(at1345.size() == 1);
+    if (at1345.size() == 1) {
+        CHECK(at1345[0].kind == kExitMarginCall);
+        CHECK_NEAR(at1345[0].qty, 2.208, 1e-6);
+    }
+    const std::vector<Row> at1400 = rows_exited_at(got, kE1400);
+    CHECK(at1400.size() == 1);
+    if (at1400.size() == 1) {
+        CHECK(!at1400[0].is_long);
+        CHECK(at1400[0].kind == kExitClose);
+        CHECK(at1400[0].exit_id != "Short Exit");
+        CHECK_NEAR(at1400[0].exit_price, 1549.51, 1e-9);
+    }
+}
+
+void test_famv_eth_pair_mcbar_reissue() {
+    std::printf("F1. famV-eth-pair-mcbar-reissue: the close-time pair leaves the bar's slice alone; 'Long' closes the rest at the next open\n");
+    Probe p = run_eth([](Probe& e, const Bar& bar) {
+        if (bar.timestamp == kE1330) e.entry_default("Short", false);
+        if (bar.timestamp == kE1345) e.entry_default("Long", true);
+        e.exit_stop("Short Exit", "Short", e.avg_price() + 30.0);
+        if (bar.timestamp == kE1345) e.close_id("Short", "Reverse to Long");
+        if (bar.timestamp == kE1415) e.close_all();
+    });
+    const std::vector<Row> got = p.rows();
+    for (const Row& r : got) print_row("engine", r);
+    check_rows_match("famV-eth-pair-mcbar-reissue", got, kEthPairMcbarTape);
+    check_eth_pair_rows(got);
+    CHECK(p.margin_call_rows() == 1);
+    CHECK(p.flat());
+}
+
+void test_famv_eth_pair_mcbar_once() {
+    std::printf("F2. famV-eth-pair-mcbar-once: the stop issued once, with the pair — same rows\n");
+    Probe p = run_eth([](Probe& e, const Bar& bar) {
+        if (bar.timestamp == kE1330) e.entry_default("Short", false);
+        if (bar.timestamp == kE1345) {
+            e.entry_default("Long", true);
+            e.exit_stop("Short Exit", "Short", e.avg_price() + 30.0);
+            e.close_id("Short", "Reverse to Long");
+        }
+        if (bar.timestamp == kE1415) e.close_all();
+    });
+    const std::vector<Row> got = p.rows();
+    for (const Row& r : got) print_row("engine", r);
+    check_rows_match("famV-eth-pair-mcbar-once", got, kEthPairMcbarTape);
+    check_eth_pair_rows(got);
+    CHECK(p.flat());
+}
+
+void test_famv_eth_mcbar_norev() {
+    std::printf("F3. famV-eth-pair-mcbar-norev: no pair — the close-born stop fills at the next open, not at the extreme\n");
+    Probe p = run_eth([](Probe& e, const Bar& bar) {
+        if (bar.timestamp == kE1330) e.entry_default("Short", false);
+        e.exit_stop("Short Exit", "Short", e.avg_price() + 30.0);
+        if (bar.timestamp == kE1415) e.close_all();
+    });
+    const std::vector<Row> got = p.rows();
+    for (const Row& r : got) print_row("engine", r);
+    check_rows_match("famV-eth-pair-mcbar-norev", got, kEthMcbarNorevTape);
+    CHECK(p.long_rows() == 0);
+    CHECK(p.flat());
+}
+
+void test_famv_eth_prevbar_admitted() {
+    std::printf("F4. famV-eth-pair-prevbar-admitted: the pair admitted at the next open purges the resting stop\n");
+    Probe p = run_eth([](Probe& e, const Bar& bar) {
+        if (bar.timestamp == kE1300) e.entry_default("Short", false);
+        if (bar.timestamp == kE1315) e.exit_stop("Short Exit", "Short", 1530.0);
+        if (bar.timestamp == kE1330) {
+            e.entry_default("Long", true);
+            e.close_id("Short", "Reverse to Long");
+        }
+        if (bar.timestamp == kE1415) e.close_all();
+    });
+    const std::vector<Row> got = p.rows();
+    for (const Row& r : got) print_row("engine", r);
+    check_rows_match("famV-eth-pair-prevbar-admitted", got, kEthPrevbarAdmittedTape);
+    int rows_at_1530 = 0;
+    for (const Row& r : got) {
+        if (std::fabs(r.exit_price - 1530.0) <= 1e-9) ++rows_at_1530;
+    }
+    CHECK(rows_at_1530 == 0);
+    CHECK(p.brackets_bound_to("Short") == 0);
+    CHECK(p.flat());
+}
+
+// ---------------------------------------------------------------------------
+// G. Round 9 family V — OANDA:XAUUSD 1D, margin_short=50: no cascade, so the
+//    declined-reversal bar shows finding-311's kill on its own.
+// ---------------------------------------------------------------------------
+constexpr int64_t kT0715 = 1752613200000LL;  // 2025-07-15 21:00Z
+
+static const Row kNoMcRevTape[] = {
+    {kT0624, 3322.825, 3.0, kT0715, 3370.325, kExitClose, -142.5, false, "Short Exit"},
+};
+static const Row kNoMcNorevTape[] = {
+    {kT0624, 3322.825, 3.0, kT0713, 3370.325, kExitClose, -142.5, false, "Short Exit"},
+};
+
+Probe run_tape_no_mc(bool with_reversal) {
+    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    p.set_margin_short(50.0);
+    p.script = [&](Probe& e, const Bar& bar, int) {
+        if (bar.timestamp == kT0623) e.entry_default("Short", false);
+        e.exit_stop("Short Exit", "Short", e.avg_price() + 47.5);
+        if (with_reversal && bar.timestamp == kT0710) {
+            e.entry_default("Long", true);
+            e.close_id("Short", "Reverse to Long");
+        }
+        if (bar.timestamp == kT0724) e.close_all();
+    };
+    const std::vector<Bar> bars = xau_tape_bars();
+    p.run(bars.data(), (int)bars.size());
+    return p;
+}
+
+void test_famv_xau1d_no_mc_rev() {
+    std::printf("G1. famV-xau1d-noMC-rev: declined reversal, no cascade — the dormant stop skips the 07-13 breach and the re-issue fills 07-15 at its level\n");
+    Probe p = run_tape_no_mc(/*with_reversal=*/true);
+    const std::vector<Row> got = p.rows();
+    for (const Row& r : got) print_row("engine", r);
+    check_rows_match("famV-xau1d-noMC-rev", got, kNoMcRevTape);
+    CHECK(p.margin_call_rows() == 0);
+    CHECK(p.long_rows() == 0);   // the reversal was declined
+    CHECK(rows_exited_at(got, kT0713).empty());
+    CHECK(p.flat());
+}
+
+void test_famv_xau1d_no_mc_norev() {
+    std::printf("G2. famV-xau1d-noMC-norev: no reversal — the stop fills on the 07-13 bar at its level\n");
+    Probe p = run_tape_no_mc(/*with_reversal=*/false);
+    const std::vector<Row> got = p.rows();
+    for (const Row& r : got) print_row("engine", r);
+    check_rows_match("famV-xau1d-noMC-norev", got, kNoMcNorevTape);
+    CHECK(p.margin_call_rows() == 0);
+    CHECK(p.flat());
+}
+
 }  // namespace
 
 int main() {
-    std::printf("test_dropped_reversal_mc_first: round 7 family M mechanism 2a\n");
+    std::printf("test_dropped_reversal_mc_first: round 7 family M mechanism 2a + round 9 family V\n");
     test_rev_tape();
     test_norev_tape();
     test_rev_probe_shape_limit_and_stop();
@@ -765,6 +1002,12 @@ int main() {
     test_synth_low_first_bar_slice_then_stop_at_extreme();
     test_synth_bracket_issued_once_held_through_pair_close();
     test_synth_admitted_pair_purges_held_bracket();
+    test_famv_eth_pair_mcbar_reissue();
+    test_famv_eth_pair_mcbar_once();
+    test_famv_eth_mcbar_norev();
+    test_famv_eth_prevbar_admitted();
+    test_famv_xau1d_no_mc_rev();
+    test_famv_xau1d_no_mc_norev();
     std::printf("%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }
