@@ -742,6 +742,8 @@ void BacktestEngine::reset_run_state() {
     _src_low_.clear();
     _src_close_.clear();
     _src_volume_.clear();
+    prev_chart_close_ = std::numeric_limits<double>::quiet_NaN();  // issue #178
+    last_chart_close_ = std::numeric_limits<double>::quiet_NaN();
     _src_hl2_.clear();
     _src_hlc3_.clear();
     _src_ohlc4_.clear();

@@ -319,6 +319,16 @@ public:
     explicit ATR(int length);
     double compute(double high, double low, double close);
     double recompute(double high, double low, double close);
+    // issue #178 (pinned 2026-09-06, lab tv i178-sparse-atr-sense,
+    // BINANCE:BTCUSDT 60, 398/398 executions): TradingView's ta.atr called
+    // inside a block that does not execute every bar advances its RMA on
+    // the EXECUTIONS only, but the true range always reads the previous
+    // CHART bar's close (close[1]), never the close of the previous
+    // execution. The 3-arg path keeps the per-call prev_close for callers
+    // that run every bar (identical there); a sparse call site must pass
+    // the chart's previous close (BacktestEngine::prev_chart_close()).
+    double compute(double high, double low, double close, double prev_chart_close);
+    double recompute(double high, double low, double close, double prev_chart_close);
 };
 
 // --- Stoch ---
@@ -927,6 +937,10 @@ public:
     explicit TR(bool handle_na = false);
     double compute(double high, double low, double close);
     double recompute(double high, double low, double close);
+    // issue #178: the sparse-call form — true range against the previous
+    // CHART bar's close (na on the first chart bar: handle_na decides).
+    double compute(double high, double low, double close, double prev_chart_close);
+    double recompute(double high, double low, double close, double prev_chart_close);
 };
 
 // --- PercentileNearestRank ---
