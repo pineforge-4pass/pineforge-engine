@@ -490,6 +490,45 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
                                                    int n_input) {
     diag_native_security_substitutions_ = 0;
     diag_native_security_misses_ = 0;
+    // On the split-feed path the chart's own bars ARE the native feed of the
+    // chart timeframe: TradingView's request.security(tickerid, <the chart's
+    // timeframe>, expr) is the chart series itself, and its "W" / "M" on a
+    // daily chart are those daily bars aggregated -- never the auxiliary 1m
+    // slice re-aggregated (round 7 family M mechanism 4: on NYSE:F 1D the
+    // 1m aggregate closes 12.195 on 2026-04-08 where the chart bar closes
+    // 12.18, so amandaborgeson06's "D" stoch read K 90.84 > D 90.60 and
+    // TradingView's chart K 90.13 < D 90.32; sensor tape scratchpad/r7/pins/
+    // m1d-amanda-sense-f). An explicit native feed of that timeframe (the
+    // 15m lanes' FEED_1D on a 1D chart is the same file) keeps precedence;
+    // the implicit feed lives only for this preparation.
+    bool pushed_chart_feed = false;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled() && input_bars != nullptr && n_input > 0
+        && script_tf_seconds_ > 0) {
+        bool have_chart_tf_feed = false;
+        for (const auto& feed : native_security_feeds_) {
+            if (feed.seconds == script_tf_seconds_) {
+                have_chart_tf_feed = true;
+                break;
+            }
+        }
+        if (!have_chart_tf_feed) {
+            NativeSecurityFeed chart_feed;
+            chart_feed.tf = script_tf_;
+            chart_feed.seconds = script_tf_seconds_;
+            chart_feed.bars.assign(input_bars, input_bars + n_input);
+            native_security_feeds_.push_back(std::move(chart_feed));
+            pushed_chart_feed = true;
+        }
+    }
+#endif
+    struct ImplicitChartFeedGuard {
+        std::vector<NativeSecurityFeed>& feeds;
+        bool active;
+        ~ImplicitChartFeedGuard() {
+            if (active && !feeds.empty()) feeds.pop_back();
+        }
+    } implicit_chart_feed_guard{native_security_feeds_, pushed_chart_feed};
     if (native_security_feeds_.empty()) {
         for (auto& state : security_eval_states_) {
             state.native_feed_index = -1;
