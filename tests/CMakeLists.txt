@@ -118,6 +118,7 @@ set(TEST_SOURCES
     test_pooc_coof_reversal_gross_admission
     test_limit_fill_slippage
     test_sparse_atr_prev_close
+    test_limit_exact_touch_level_residue
     test_tv_fill_rounding
     test_strategy_commands_extra
     test_multi_tier_exit_precedence
