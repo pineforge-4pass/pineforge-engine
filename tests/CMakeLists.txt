@@ -148,6 +148,7 @@ set(TEST_SOURCES
     test_streaming
     test_calc_on_order_fills
     test_coof_cascade_eligibility
+    test_coof_open_recalc_context
     test_cascade_exit_gapjump
     test_pooc_position_visibility
     test_prearmed_exit_path_cursor

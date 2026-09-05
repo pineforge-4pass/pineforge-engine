@@ -581,10 +581,16 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
         // order.qty — order.qty must stay NaN so every isnan(order.qty)-keyed
         // "was this default-sized?" branch (OCA cancel, reversal binding,
         // OCA fully-filled, partial-exit classification) keeps its meaning.
+        // round 7 (family M, COOF recalc sizing — coof_default_market_sizes_at_fill,
+        // engine.hpp): an order born in a calc_on_order_fills fill recalc is
+        // NOT frozen here; it sizes at its own fill (calc_qty(fill) in the
+        // dispatch), and carries no KI-54 snapshot (those gates are pinned on
+        // close-calc placements only).
         if (std::isnan(qty)
             && (default_qty_type_ == QtyType::PERCENT_OF_EQUITY
                 || default_qty_type_ == QtyType::CASH)
-            && !std::isnan(current_bar_.close)) {
+            && !std::isnan(current_bar_.close)
+            && !coof_default_market_sizes_at_fill()) {
             order.frozen_default_qty = frozen_default_market_qty(/*is_buy=*/is_long);
             // KI-54: persist the sizing basis for the fill-time TV margin
             // admission re-check (see PendingOrder::sizing_equity in
@@ -2327,10 +2333,13 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
         // (signal) bar's close too — on the mintick-ROUNDED close, the same
         // basis as strategy_entry (calc_qty, engine.hpp). Stored off to the
         // side (order.qty stays NaN) for the same reason as in strategy_entry.
+        // round 7 (family M): recalc-born strategy.order market orders size at
+        // their fill too (coof_default_market_sizes_at_fill, engine.hpp).
         if (std::isnan(qty)
             && (default_qty_type_ == QtyType::PERCENT_OF_EQUITY
                 || default_qty_type_ == QtyType::CASH)
-            && !std::isnan(current_bar_.close)) {
+            && !std::isnan(current_bar_.close)
+            && !coof_default_market_sizes_at_fill()) {
             order.frozen_default_qty = frozen_default_market_qty(/*is_buy=*/is_long);
             // KI-54: same admission snapshot as strategy_entry's MARKET
             // branch. The fill-time gate skips opposite-direction RAW fills
