@@ -1238,7 +1238,21 @@ protected:
         return is_first_tick_ && history_slot_is_new_;
     }
 
+    // issue #178: the previous CHART bar's close, tracked at every on_bar
+    // dispatch regardless of _src_series_active_ (it costs two doubles).
+    // A ta.atr / ta.tr call site inside a block that does not execute every
+    // bar must read its true range against THIS value (TradingView pin,
+    // 2026-09-06: 398/398 sparse executions on BINANCE:BTCUSDT 60), not
+    // against the close of the site's previous execution. Advances once
+    // per history slot (history_advances_new_bar()); intrabar ticks and a
+    // fill recalculation of an owned slot refresh last_chart_close_ only.
+    double prev_chart_close_ = std::numeric_limits<double>::quiet_NaN();
+    double last_chart_close_ = std::numeric_limits<double>::quiet_NaN();
+    double prev_chart_close() const { return prev_chart_close_; }
+
     void _push_source_series() {
+        if (history_advances_new_bar()) prev_chart_close_ = last_chart_close_;
+        last_chart_close_ = current_bar_.close;
         if (!_src_series_active_) return;
         const double o = current_bar_.open;
         const double h = current_bar_.high;

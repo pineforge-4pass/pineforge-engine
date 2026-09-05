@@ -84,6 +84,40 @@ double ATR::compute(double high, double low, double close) {
     return rma.compute(tr);
 }
 
+// issue #178: sparse call site — the RMA advances on this execution, the
+// true range reads the previous CHART bar's close handed in by the caller.
+double ATR::compute(double high, double low, double close, double prev_chart_close) {
+    saved_prev_close_ = prev_close;
+    saved_bar_count_ = bar_count;
+    rma.save();
+
+    if (is_na(high) || is_na(low) || is_na(close)) {
+        return na<double>();
+    }
+
+    bar_count++;
+
+    double tr;
+    if (is_na(prev_chart_close)) {
+        // First chart bar: ta.tr(true) is high - low.
+        tr = high - low;
+    } else {
+        tr = std::max({high - low,
+                       std::abs(high - prev_chart_close),
+                       std::abs(low - prev_chart_close)});
+    }
+
+    prev_close = close;
+    return rma.compute(tr);
+}
+
+double ATR::recompute(double high, double low, double close, double prev_chart_close) {
+    prev_close = saved_prev_close_;
+    bar_count = saved_bar_count_;
+    rma.restore();
+    return compute(high, low, close, prev_chart_close);
+}
+
 // --- StdDev (Standard Deviation) ---
 
 StdDev::StdDev(int length, bool biased) : length_(length), biased_(biased) {}
@@ -588,6 +622,28 @@ double TR::compute(double high, double low, double close) {
     }
     prev_close_ = close;
     return tr;
+}
+
+// issue #178: sparse call site — true range against the previous CHART
+// bar's close handed in by the caller (na on the first chart bar).
+double TR::compute(double high, double low, double close, double prev_chart_close) {
+    saved_prev_close_ = prev_close_;
+    saved_bar_count_ = bar_count_;
+    bar_count_++;
+    double tr;
+    if (is_na(prev_chart_close)) {
+        tr = handle_na_ ? (high - low) : na<double>();
+    } else {
+        tr = std::max(high - low, std::max(std::abs(high - prev_chart_close), std::abs(low - prev_chart_close)));
+    }
+    prev_close_ = close;
+    return tr;
+}
+
+double TR::recompute(double high, double low, double close, double prev_chart_close) {
+    prev_close_ = saved_prev_close_;
+    bar_count_ = saved_bar_count_;
+    return compute(high, low, close, prev_chart_close);
 }
 
 // --- Dev (Mean Absolute Deviation) ---
