@@ -2475,7 +2475,23 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
         qty_to_close_out = std::min(std::max(qty, 0.0), matching_qty_out);
     } else if (!std::isnan(qty_percent)) {
         double pct = std::clamp(qty_percent, 0.0, 100.0);
-        qty_to_close_out = matching_qty_out * (pct / 100.0);
+        // TradingView closes max(1 lot, floor(qty x pct / 100)) on an
+        // integer-lot symbol -- the same lot rule its percent-derived
+        // strategy.exit legs follow (apply_percent_exit_qty_step). Pinned
+        // 2026-09-05 (round 7 family O, ledger log-20260905t123542z-b46852d8)
+        // by three byte-identical lab tv tapes o-nq-qtypct-{a,b,c} on
+        // CME_MINI:NQ1! 15m (percent_of_equity 100 on 1.5M = 3 contracts,
+        // strategy.close(qty_percent=P1) two bars in, P2 two bars later, a
+        // full close two bars after; a: 40/10, b: 60/50, c: 30/30): every one
+        // of the 139 cycles closes exactly 1 + 1 + 1 -- 1.2 and 1.8 floor to
+        // 1 (not rounded), 0.2 / 0.6 / 0.9 close one lot (a minimum, never
+        // skipped). The raw fraction closed 0.6 then 0.42 of p181342x's two
+        // NQ contracts and carried 0.98 where TradingView closes 1 then 1
+        // and is flat. qty_step_ == 0 (the corpus default) and a fractional
+        // lot step keep the floor-to-step rule only; strategy.close_all and
+        // an explicit qty= are untouched.
+        qty_to_close_out = apply_percent_exit_qty_step(
+            matching_qty_out * (pct / 100.0), matching_qty_out);
     }
     if (qty_to_close_out <= eps) {
         return false;
