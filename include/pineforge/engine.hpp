@@ -1086,6 +1086,13 @@ protected:
     // TV's one-nibble-per-bar cascade).
     int last_margin_call_event_bar_ = -1;
     int intrabar_exit_margin_call_bar_ = -1;
+    // Round 7 family N mechanism 2: the bar_index_ on which the finding-430
+    // OPEN slice booked a partial that left a survivor. A same-bar declined
+    // reversal (finding-311 KILL) then nets to LIVE brackets — TradingView's
+    // sequence is decline -> dormant -> slice -> REVIVE-B, while the engine's
+    // open slice runs at the broker-open boundary BEFORE the order loop
+    // declines the reversal, so the revive would otherwise precede the kill.
+    int open_margin_slice_bar_ = -1;
 
     // Legacy codegen compatibility bit. Older and current generated classes
     // set this when the Pine source contains ``strategy.close`` or

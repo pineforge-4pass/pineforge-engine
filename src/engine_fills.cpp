@@ -1269,10 +1269,18 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
             || cycle_filled_entry_ids_.count(o.from_entry) != 0;
         if (!bound) continue;
         o.dormant_bracket = false;
-        // Marketable at the margin-call event price? (Full-percent default
-        // brackets only — the TV-pinned shape.)
+        // Marketable at the margin-call event price? Whole-position brackets
+        // only — the TV-pinned shape: a deferred default leg (qty NaN, 100%)
+        // or, round 7 family N mechanism 2 (fast-scalper 07-21 13:30Z, TV
+        // #160/161: 268 @214.86 'Margin call' AND 'X' 4621 @214.86 on the
+        // same bar), a leg RE-ISSUED in position that froze the whole
+        // position's quantity (requested_partial false) or now covers the
+        // whole survivor. The engine skipped that frozen leg and closed the
+        // remainder next bar @214.68.
         const bool full_pct = std::isnan(o.qty)
-            && o.qty_percent >= 100.0 - internal::kFullPercentEps;
+            ? o.qty_percent >= 100.0 - internal::kFullPercentEps
+            : (!o.requested_partial
+               || o.qty >= position_qty_ - kQtyEpsilon);
         if (!full_pct || std::isnan(o.stop_price)
             || !std::isfinite(mc_price)) continue;
         const bool mk = (position_side_ == PositionSide::SHORT)
@@ -1810,11 +1818,28 @@ bool BacktestEngine::margin_call_slice_at_bar_open(const Bar& bar) {
 
     // Deficit at the open: the same fee-net eq/req arithmetic as the
     // adverse-extreme cascade, evaluated at the open price.
+    //
+    // Round 7 family N mechanism 1 (campaign pin log-20260905t112243z-
+    // b6ddd126, lab tv tape scratchpad/r7/pins/aapl15-mcopen-willow): the
+    // SHORT side marks equity and required margin at the TICK-ROUNDED open,
+    // the same on-tick ledger the adverse-extreme cascade (process_margin_
+    // call, margin_call_slice_before_priced_exit) already marks on and the
+    // tick the slice books at. A half-tick session open discriminates: the
+    // willowsportz 5253-share short into the 04-22 13:30Z open 196.135 gives
+    // x = 103.26 at 196.14 (TV 412) and 102.999 at the raw print (408, the
+    // engine's row); algoai 06-20 o 198.235 -> 64 vs 60, shojiy 10-27 o
+    // 264.925 -> 36 vs 32. Census: with the tape's own equity the on-tick
+    // rule reproduces 1067/1067 'Margin call' rows of the four AAPL@15 all-in
+    // tapes. The LONG side keeps the raw open exactly as the cascade keeps
+    // the raw low (no evidence either way on an on-tick feed).
     const double fx = active_account_currency_fx();
     if (!std::isfinite(fx) || !(fx > 0.0)) return false;
-    const double equity_open = percent_commission_live_equity(open);
+    const double open_mark = (position_side_ == PositionSide::SHORT)
+        ? round_to_mintick(open) : open;
+    if (!std::isfinite(open_mark) || !(open_mark > 0.0)) return false;
+    const double equity_open = percent_commission_live_equity(open_mark);
     if (!std::isfinite(equity_open)) return false;
-    const double margin_per_unit_open = open * pv * fx * m;
+    const double margin_per_unit_open = open_mark * pv * fx * m;
     if (!std::isfinite(margin_per_unit_open) || !(margin_per_unit_open > 0.0)) {
         return false;
     }
@@ -1890,8 +1915,12 @@ bool BacktestEngine::margin_call_slice_at_bar_open(const Bar& bar) {
     }
     // finding-311 REVIVE-B applies to this partial exactly as to the
     // extreme-priced one: dormant brackets of the survivor re-register, and
-    // one already marketable at the open closes the remainder there.
+    // one already marketable at the open closes the remainder there. A
+    // reversal the order loop declines LATER on this bar must not re-kill
+    // them (open_margin_slice_bar_, see mark_position_brackets_dormant_on_
+    // declined_reversal).
     if (position_side_ != PositionSide::FLAT) {
+        open_margin_slice_bar_ = bar_index_;
         revive_position_brackets_after_margin_call_partial(open);
     }
     return true;
@@ -5055,13 +5084,20 @@ void BacktestEngine::apply_filled_order_to_state(
         }
     }
 
-    // This fill just opened a position from FLAT via an entry order. Freeze
-    // any LAYERED strategy.exit legs bound to that entry that were armed while
-    // flat (qty=NaN, reservation deferred): bind each to a fixed slice of the
-    // opened lot so a percent partial + its sibling 100% leg no longer
-    // over-close the whole position depending on which leg fills first.
+    // This fill just opened a position from FLAT via an entry order — or
+    // FLIPPED the position (round 7 family N mechanism 3: a reversal bar's
+    // legs are deferred against the pending entry exactly like flat-armed
+    // ones, see strategy_exit). Freeze any LAYERED strategy.exit legs bound
+    // to that entry that were armed with the reservation deferred (qty=NaN):
+    // bind each to a fixed slice of the opened lot so a percent partial +
+    // its sibling 100% leg no longer over-close the whole position depending
+    // on which leg fills first.
+    const bool flipped_position =
+        std::abs(signed_pos_before) >= kQtyEpsilon
+        && std::abs(signed_pos_after) >= kQtyEpsilon
+        && ((signed_pos_before > 0.0) != (signed_pos_after > 0.0));
     if (!paired_flat_market_fill
-        && std::abs(signed_pos_before) < kQtyEpsilon
+        && (std::abs(signed_pos_before) < kQtyEpsilon || flipped_position)
         && position_side_ != PositionSide::FLAT
         && (order.type == OrderType::MARKET
             || order.type == OrderType::ENTRY
@@ -5944,6 +5980,20 @@ void BacktestEngine::suppress_declined_reversal_close_legs(
 
 void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal() {
     if (position_side_ == PositionSide::FLAT) return;
+    // Round 7 family N mechanism 2 (note log-20260905t112259z-33f32db4; lab
+    // tv tape scratchpad/r7/pins/aapl15-mcopen1-stop-algoai + the algoai
+    // probe's 10-30 13:30Z rows): on a bar whose open carried BOTH the
+    // finding-430 margin slice and a declined all-in reversal, TradingView's
+    // chronology is decline -> brackets dormant -> open slice -> REVIVE-B, so
+    // the standing stop is live for the rest of the bar and fills at its
+    // level (1 @271.96 'Margin call', then 'X' 2814 @273.69 — the same rows
+    // the tape prints with no reversal at all). The engine's open slice runs
+    // at the broker-open boundary before the order loop reaches the
+    // reversal, so its revive found nothing dormant and this kill then
+    // silenced the stop for the bar (176 @274.11 at the cascade and a
+    // next-bar close). The kill and the revive cancel: leave the brackets
+    // live. A marketable-at-open bracket is filled by the order loop itself.
+    if (open_margin_slice_bar_ == bar_index_) return;
     // The live position's entry ids (pyramid lots) — a bracket is "standing"
     // when its from_entry names one of them, or when it is a global
     // (from_entry-less) exit. Stale exits bound to a not-yet-filled entry id

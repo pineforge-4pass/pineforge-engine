@@ -1906,9 +1906,25 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
         // Mirrors the explicit-qty path's pending-entry capacity rule above
         // (thulashimohanr fix); entries with an explicit qty keep the
         // legacy reservation math.
+        //
+        // Round 7 family N mechanism 3 (note log-20260905t112315z-a234f071;
+        // therealbouga apex-mtf-index-model, census 51/51 AAPL@15 + 56/56
+        // F@15 entries, 0 exceptions): the PARTIAL legs of the same reversal
+        // bar defer exactly like the default leg. 'S TP1' qty_percent=50 +
+        // 'S TP2' (default) issued together with the Short reversal while the
+        // old long is live split the NEW lot 50/50 on TradingView — fixed at
+        // the fill, unchanged by the per-bar re-issues and by which leg fires
+        // first. Sizing the partial against the OLD position froze it at 50%
+        // of the wrong lot (AAPL 06-24: 125 of 490, TV 245; F 08-08: 2293 of
+        // 8890, TV 4445) and, with the default sibling still deferred as a
+        // 100% leg, the fill-bar re-issue then dropped it behind that
+        // sibling (AAPL 05-07: 'S TP2' closed 502, TV 251 + 251 held). Both
+        // legs now bind once, at the fill, through
+        // reconcile_deferred_layered_exits (partial = floor(lot x pct), the
+        // default leg = the remainder); same-id re-issues carry the frozen
+        // share and only modify prices.
         bool bind_to_pending_reversal_entry = false;
-        if (!from_entry.empty() && !effectively_flat
-            && qp >= 100.0 - kFullPercentEps) {
+        if (!from_entry.empty() && !effectively_flat) {
             for (const auto& o : pending_orders_) {
                 if (o.id != from_entry) continue;
                 if (o.type != OrderType::MARKET && o.type != OrderType::ENTRY
