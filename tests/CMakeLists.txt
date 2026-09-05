@@ -147,6 +147,7 @@ set(TEST_SOURCES
     test_entry_bar_margin_path
     test_m_admission_36
     test_chart_tf_security_split_feed
+    test_risk_max_intraday_loss_tv
     test_aapl15_margin_brackets
     test_percent_equity_open_entry_fee
     test_streaming

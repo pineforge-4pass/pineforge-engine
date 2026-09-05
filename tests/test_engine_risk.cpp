@@ -5,8 +5,13 @@
 //      and blocks subsequent entries.
 //   2. consecutive-loss-day count increments once per losing chart-day
 //      and halts when it reaches risk_max_cons_loss_days_.
-//   3. intraday-loss halt latches when the day's realized PnL breaches the
-//      configured loss threshold (absolute + percent modes).
+//   3. intraday-loss is TradingView's DAY-SCOPED rule (round 7 family M
+//      mechanism 5b, lab tv m45-risk-*): the day-start equity marks the
+//      carried position at the day's first tick; a tick whose open P&L
+//      drawdown reaches the threshold (absolute, or percent of the day-start
+//      equity) closes the position and blocks orders until the day changes
+//      -- it never latches risk_halted_; realized P&L booked earlier in the
+//      day counts, the closing fill's own P&L is unbooked at its own tick.
 //   4. direction-lock (LONG_ONLY / SHORT_ONLY) gates entries in
 //      check_risk_allow_entry without touching the halt latch.
 //   5. max-position-size gate blocks entries once position_qty_ caps out.
@@ -96,6 +101,22 @@ public:
             cons_loss_day_count_ = 0;
         }
     }
+
+    // --- intraday-loss surface (TradingView's day-scoped rule) ---
+    void set_position(bool is_long, double qty, double entry_price) {
+        position_side_ = is_long ? PositionSide::LONG : PositionSide::SHORT;
+        position_qty_ = qty;
+        position_entry_price_ = entry_price;
+    }
+    void begin_day(const Bar& b) {
+        current_bar_ = b;
+        intraday_loss_begin_bar(b);
+    }
+    bool eval_intraday_loss(double mark, double excluded_realized = 0.0) {
+        return evaluate_max_intraday_loss(mark, excluded_realized);
+    }
+    bool orders_blocked() const { return intraday_loss_orders_blocked(); }
+    bool is_flat() const { return position_side_ == PositionSide::FLAT; }
 
     // --- observers ---
     bool halted() const { return risk_halted_; }
@@ -203,63 +224,112 @@ void test_winning_day_resets_cons_loss() {
     CHECK(!p.halted());
 }
 
-// ── 3a. intraday-loss (absolute) halt + day rollover reset ───────────────
+// ── 3a. intraday-loss (absolute): open P&L at a tick fires, blocks the day,
+//        never latches; the next chart-day is open again ─────────────────
 void test_intraday_loss_absolute_halt() {
     std::printf("test_intraday_loss_absolute_halt\n");
     RiskProbe p;
+    p.set_initial_capital(100000.0);
+    p.set_net_profit(0.0);
     p.set_max_intraday_loss(1000.0, /*is_pct=*/false);
 
-    // Mirror the real bar order: update_risk_state runs at bar start and
-    // registers the chart-day (zeroing intraday_pnl_ on first sight) BEFORE
-    // any fills accumulate loss into it. So tick once to register day 0...
-    p.set_bar(make_bar(100.0, kT0_UTC));
-    p.tick_risk();
+    // Day 0 opens flat: E_ds = 100000. A long 100 @100 is carried; the tick
+    // at 92 marks it -800 (no fire), the tick at 88 -1200 (fire: position
+    // closed at the tick, orders blocked for the day, no latch).
+    p.begin_day(make_bar(100.0, kT0_UTC));
+    p.set_position(/*is_long=*/true, 100.0, 100.0);
+    CHECK(!p.eval_intraday_loss(92.0));
+    CHECK(!p.orders_blocked());
+    CHECK(p.eval_intraday_loss(88.0));
+    CHECK(p.orders_blocked());
+    CHECK(p.is_flat());
     CHECK(!p.halted());
-    // ...then a -1200 fill lands during the bar...
-    p.record_trade_pnl_for_day(-1200.0, make_bar(100.0, kT0_UTC));
-    // ...and the next bar-start tick (same day, no reset) latches the halt.
-    p.tick_risk();
-    CHECK(p.halted());
-    CHECK(!p.allow_entry(true));
+    CHECK(p.allow_entry(true));   // the direction/drawdown gate is untouched
+    // Fired already today: a later tick does not fire again.
+    p.set_position(true, 100.0, 100.0);
+    CHECK(!p.eval_intraday_loss(50.0));
+    // The next chart-day lifts the block.
+    p.begin_day(make_bar(100.0, kT0_UTC + kDay_ms));
+    CHECK(!p.orders_blocked());
+    CHECK(!p.halted());
 }
 
-// ── 3b. intraday-loss below threshold does not halt; rollover clears pnl ──
+// ── 3b. intraday-loss below threshold does not fire; the day-start equity is
+//        re-captured on the next chart-day so yesterday's loss is gone ───
 void test_intraday_loss_below_threshold_and_rollover() {
     std::printf("test_intraday_loss_below_threshold_and_rollover\n");
     RiskProbe p;
+    p.set_initial_capital(100000.0);
+    p.set_net_profit(0.0);
     p.set_max_intraday_loss(1000.0, /*is_pct=*/false);
 
-    // Register day 0, then a -800 fill (under the 1000 threshold) -> no halt.
-    p.set_bar(make_bar(100.0, kT0_UTC));
-    p.tick_risk();
-    p.record_trade_pnl_for_day(-800.0, make_bar(100.0, kT0_UTC));
-    p.tick_risk();
-    CHECK(!p.halted());
+    p.begin_day(make_bar(100.0, kT0_UTC));
+    p.set_position(true, 100.0, 100.0);
+    CHECK(!p.eval_intraday_loss(92.0));          // -800 < 1000
+    // The position is closed by the script at 92 (-800 realized today):
+    // the loss stays 800 at every later tick of the day.
+    p.set_position(true, 0.0, 100.0);
+    p.set_net_profit(-800.0);
+    CHECK(!p.eval_intraday_loss(95.0));
+    CHECK(!p.orders_blocked());
 
-    // New chart-day: update_risk_state resets intraday_pnl_ to 0 for the day,
-    // so the prior day's -800 no longer counts.
-    p.set_bar(make_bar(100.0, kT0_UTC + kDay_ms));
-    p.tick_risk();
+    // New chart-day: E_ds = 99200, the -800 is history.
+    p.begin_day(make_bar(100.0, kT0_UTC + kDay_ms));
+    CHECK(!p.eval_intraday_loss(100.0));
+    CHECK(!p.orders_blocked());
     CHECK(!p.halted());
-    CHECK(std::fabs(p.intraday_pnl()) < 1e-9);
 }
 
-// ── 3c. intraday-loss (percent_of_equity) halt ───────────────────────────
+// ── 3c. intraday-loss (percent_of_equity): the base is the day-start equity;
+//        realized P&L booked today counts at later ticks, the closing fill's
+//        own P&L is unbooked at its own tick (the JOAT 02-06 quirk) ──────
 void test_intraday_loss_percent_halt() {
     std::printf("test_intraday_loss_percent_halt\n");
     RiskProbe p;
     p.set_initial_capital(100000.0);
     p.set_net_profit(0.0);
-    p.set_position_qty(0.0);            // flat -> open_profit == 0
-    // 2% of equity (100000) = 2000 threshold.
+    // 2% of the day-start equity: a short 10 @100 carried into the day at
+    // 80 -> E_ds = 100000 + 200 = 100200, threshold 2004.
     p.set_max_intraday_loss(2.0, /*is_pct=*/true);
-
-    // Register day 0 first (see test_intraday_loss_absolute_halt note).
-    p.set_bar(make_bar(100.0, kT0_UTC));
-    p.tick_risk();
-    p.record_trade_pnl_for_day(-2500.0, make_bar(100.0, kT0_UTC));
-    p.tick_risk();
-    CHECK(p.halted());
+    p.set_position(/*is_long=*/false, 10.0, 100.0);
+    p.begin_day(make_bar(80.0, kT0_UTC));
+    // The short's limit exit fills at 75 (+250 realized): checked with the
+    // position gone and the +250 unbooked, the loss is the day-start open
+    // profit 200 (0.2%) -> no fire ...
+    p.set_position(false, 0.0, 100.0);
+    p.set_net_profit(250.0);
+    CHECK(!p.eval_intraday_loss(75.0, /*excluded_realized=*/250.0));
+    // ... a day-start open profit of 2.45% does (t1: 2513.6 = 2.452% of
+    // 102513.6 fires at 2.45, not at 2.46).
+    RiskProbe q;
+    q.set_initial_capital(100000.0);
+    q.set_net_profit(0.0);
+    q.set_max_intraday_loss(2.45, /*is_pct=*/true);
+    q.set_position(false, 0.11773, 84260.5);
+    q.begin_day(make_bar(62909.87, kT0_UTC));          // E_ds 102513.6
+    q.set_position(false, 0.0, 84260.5);
+    q.set_net_profit(2699.15);
+    CHECK(q.eval_intraday_loss(61319.37, 2699.15));    // 2513.6 >= 2.45%
+    CHECK(q.orders_blocked());
+    CHECK(!q.halted());
+    RiskProbe r;
+    r.set_initial_capital(100000.0);
+    r.set_net_profit(0.0);
+    r.set_max_intraday_loss(2.46, /*is_pct=*/true);
+    r.set_position(false, 0.11773, 84260.5);
+    r.begin_day(make_bar(62909.87, kT0_UTC));
+    r.set_position(false, 0.0, 84260.5);
+    r.set_net_profit(2699.15);
+    CHECK(!r.eval_intraday_loss(61319.37, 2699.15));   // 2.452% < 2.46%
+    // Later in the day the booked +2699 counts: a new short 0.15 @60000
+    // marked at 71751.33 loses 1763 -> 1578 net = 1.54% < 2.46%.
+    r.set_position(false, 0.15, 60000.0);
+    CHECK(!r.eval_intraday_loss(71751.33));
+    // A realized loss booked earlier today counts at the next tick.
+    p.set_net_profit(-2500.0);
+    CHECK(p.eval_intraday_loss(75.0));                  // 2700 >= 2004
+    CHECK(p.orders_blocked());
+    CHECK(!p.halted());
 }
 
 // ── 4. direction-lock gating (no halt latch involved) ────────────────────

@@ -96,6 +96,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
 
     NamedEntryCancelContext named_cancel_context;
     const auto named_cancel =
@@ -747,6 +748,7 @@ void BacktestEngine::strategy_close(const std::string& id,
                                     bool immediately,
                                     uint64_t callsite_token) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
@@ -1691,6 +1693,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     double qty, const std::string& oca_name,
                                     double profit_ticks, double loss_ticks) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
     const bool has_actionable_exit = !std::isnan(limit_price)
         || !std::isnan(stop_price)
         || !std::isnan(profit_ticks)
@@ -2247,6 +2250,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
+    if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
     if (default_flat_market_gross_scope_is_live()) {
         // strategy.order is outside the high-level two-entry oracle. Record
         // the call before any same-id replacement or signal-time rejection can

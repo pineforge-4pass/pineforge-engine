@@ -201,6 +201,12 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
 
     for (size_t i = 0; i < pending_orders_.size(); i++) {
         PendingOrder& order = pending_orders_[i];
+        if (intraday_loss_cancel_pending_) {
+            // strategy.risk.max_intraday_loss fired on an earlier fill of
+            // this sweep: TradingView cancels every pending order there.
+            filled_indices.push_back(i);
+            continue;
+        }
         auto eligibility = classify_order_eligibility(
             order, opposing_pass, dual_entry_path_, pass0_opposing_skip_ids,
             exit_closed_from_bar, exit_closed_from_incarnation,
@@ -243,12 +249,19 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
             && check_risk_allow_entry(order.is_long)
             && stop_entry_margin_admission_declines(
                 order, fill.fill_price, bar);
+        const double realized_before_fill = net_profit_sum_;
         apply_filled_order_to_state(
             order, i, fill.fill_price, fill.is_limit_fill, bar,
             trail_best_path_state,
             exit_closed_from_bar, exit_closed_from_incarnation,
             exit_closed_was_long,
             filled_indices);
+        if (risk_max_intraday_loss_ > 0.0) {
+            // The closing fill's own realized P&L is not yet part of the
+            // equity TradingView checks at this tick (pinned t1).
+            evaluate_max_intraday_loss(
+                fill.fill_price, net_profit_sum_ - realized_before_fill);
+        }
         if (path_winner_stop_margin_decline) {
             // The path winner never became a broker fill. Releasing only the
             // path-winner fence lets the already-deferred, path-later stop
@@ -265,6 +278,7 @@ void BacktestEngine::process_pending_orders(const Bar& bar) {
     // If position is flat after processing, purge remaining exit orders — but
     // RETAIN from_entry brackets whose parent entry is still pending (a limit
     // entry that has not yet filled), so they fire once the entry fills.
+    finish_intraday_loss_cancel();
     if (position_side_ == PositionSide::FLAT) {
         purge_exit_orders(/*retain_for_pending_entries=*/true);
     }
@@ -459,12 +473,20 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
 
             const PositionSide side_before_fill = position_side_;
             const uint64_t events_before = broker_fill_event_seq_;
+            const double realized_before_fill = net_profit_sum_;
             apply_filled_order_to_state(
                 order, candidate.order_index, candidate.fill.fill_price,
                 candidate.fill.is_limit_fill, bar,
                 trail_best_path_state, exit_closed_from_bar,
                 exit_closed_from_incarnation, exit_closed_was_long,
                 filled_indices);
+            if (risk_max_intraday_loss_ > 0.0) {
+                // See process_pending_orders: the closing fill's own P&L is
+                // excluded at its own tick.
+                evaluate_max_intraday_loss(
+                    candidate.fill.fill_price,
+                    net_profit_sum_ - realized_before_fill);
+            }
             materialize_relative_exit_prices_for_live_position();
 
             const uint64_t produced = broker_fill_event_seq_ - events_before;
@@ -480,6 +502,7 @@ BacktestEngine::CoofFillResult BacktestEngine::process_next_pending_order(
                 filled_indices, exit_closed_from_bar,
                 exit_closed_from_incarnation,
                 exit_closed_was_long);
+            finish_intraday_loss_cancel();
             if (side_before_fill == PositionSide::FLAT
                 && position_side_ != PositionSide::FLAT) {
                 // The old cycle's same-direction cleanup has already swept

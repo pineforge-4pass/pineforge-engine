@@ -1446,6 +1446,41 @@ protected:
     double intraday_pnl_ = 0.0;
     int intraday_pnl_day_ = -1;
 
+    // TradingView's strategy.risk.max_intraday_loss (round 7 family M
+    // mechanism 5b, pinned 2026-09-05 by lab tv m45-risk-t1/t6/t9/t3b on
+    // BINANCE:BTCUSDT 1D and the JOAT probe's threshold ladder
+    // m45-joat-risk-*): the rule keeps the DAY-START equity E_ds = realized
+    // + the open position marked at the chart-tz day's first tick, and at
+    // every emulated tick compares loss = E_ds - (realized + open P&L at
+    // the tick) with pct% of E_ds (percent_of_equity) or the absolute
+    // value. A fill that CLOSES position quantity is checked with the
+    // position already gone but its own realized P&L NOT yet booked, so a
+    // profitable exit whose day-start open profit was >= the threshold
+    // fires (the JOAT 2026-02-06 short: open profit 2513.6 = 2.452% of
+    // 102513.6 fires at 2.45, not at 2.46; the +2699 exit is a gain by every
+    // other measure). Realized P&L booked earlier in the day counts at later
+    // ticks (t9). Firing closes the position at the tick as "Close Position
+    // (Max intraday Loss)", cancels every pending order and blocks every
+    // order placement until the chart-tz day changes (t1: the close-calc
+    // order of the fired day is dropped, the next day's fills). The rule
+    // never latches risk_halted_ (that stays with max_drawdown /
+    // max_cons_loss_days).
+    double intraday_loss_day_start_equity_ =
+        std::numeric_limits<double>::quiet_NaN();
+    int intraday_loss_day_ = -1;         // chart-tz day key of E_ds
+    int intraday_loss_block_day_ = -1;   // chart-tz day key while orders are blocked
+    bool intraday_loss_evaluating_ = false;
+    // A fire inside a fill loop defers the pending-order cancel to the
+    // loop's safe point (finish_intraday_loss_cancel); the loop itself
+    // removes every order it has not yet applied.
+    bool intraday_loss_cancel_pending_ = false;
+    int intraday_loss_day_key() const;
+    void intraday_loss_begin_bar(const Bar& bar);
+    bool intraday_loss_orders_blocked() const;
+    bool evaluate_max_intraday_loss(double mark_price, double excluded_realized);
+    void evaluate_max_intraday_loss_over_path(const Bar& bar);
+    void finish_intraday_loss_cancel();
+
     bool check_risk_allow_entry(bool is_long) const;
     void update_risk_state();
 

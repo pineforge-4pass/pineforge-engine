@@ -113,6 +113,9 @@ void BacktestEngine::dispatch_bar() {
         dispatch_bar_calc_on_order_fills();
         return;
     }
+    // strategy.risk.max_intraday_loss: the day-start equity is the first
+    // tick of the chart-tz day, before any fill at it.
+    intraday_loss_begin_bar(current_bar_);
 
     // A confirmed timestamped FX point is consumed at the broker boundary,
     // before any resting order or the close-time script body can observe the
@@ -175,6 +178,7 @@ void BacktestEngine::dispatch_bar() {
     _push_source_series();
     if (process_orders_on_close_) {
         process_pending_orders(current_bar_);   // step 1: old stop/limit
+        evaluate_max_intraday_loss_over_path(current_bar_);
         update_per_trade_extremes();             // step 2: update before strategy reads
         invoke_chart_on_bar(current_bar_);       // step 3: strategy logic
         flush_same_bar_close();                  // step 3b: surviving strategy.close fill
@@ -182,6 +186,7 @@ void BacktestEngine::dispatch_bar() {
         intraday_cap_pooc_close_inheritor_incarnation_ = 0;
     } else {
         process_pending_orders(current_bar_);
+        evaluate_max_intraday_loss_over_path(current_bar_);
         update_per_trade_extremes();
         invoke_chart_on_bar(current_bar_);
     }
@@ -356,6 +361,7 @@ Bar coof_segment_bar(const Bar& script_bar, double from, double to) {
 
 void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     const Bar script_bar = current_bar_;
+    intraday_loss_begin_bar(script_bar);
     // KI-67: TradingView applies NO per-bar fill-event budget. The old fixed
     // cap of 4 produced the right ~2-cycle depth by accident but the wrong
     // reach (it exact-level-filled cascade brackets on the W2->C segment AND
@@ -387,6 +393,11 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
     double path[4];
     fill_bar_path_points(script_bar, path);
     double cursor = path[0];
+    // strategy.risk.max_intraday_loss at the open tick, before its fills
+    // (a no-op on the day's first bar, whose open is the day-start mark).
+    if (evaluate_max_intraday_loss(path[0], 0.0)) {
+        finish_intraday_loss_cancel();
+    }
     // finding-446: a strategy.close booked at the cursor is a raw-bar-price
     // fill only while the cursor sits on an OHLC path point; a fill-price
     // cursor is already in its booked shape (see coof_cursor_is_bar_point_).
@@ -488,6 +499,12 @@ void BacktestEngine::dispatch_bar_calc_on_order_fills() {
 
         cursor = target;
         cursor_is_bar_point = true;
+        // strategy.risk.max_intraday_loss at the waypoint the broker reached
+        // without a fill on the leg: the position marked at the extreme /
+        // close (t6: the held short closed at the high 71751.33).
+        if (evaluate_max_intraday_loss(target, 0.0)) {
+            finish_intraday_loss_cancel();
+        }
         ++next_waypoint;
         evaluate_current_point = true;
     }
@@ -655,6 +672,11 @@ void BacktestEngine::reset_run_state() {
     last_loss_day_ = -1;
     intraday_pnl_ = 0.0;
     intraday_pnl_day_ = -1;
+    intraday_loss_day_start_equity_ = std::numeric_limits<double>::quiet_NaN();
+    intraday_loss_day_ = -1;
+    intraday_loss_block_day_ = -1;
+    intraday_loss_evaluating_ = false;
+    intraday_loss_cancel_pending_ = false;
     intraday_day_ = -1;
     intraday_cap_hit_ = false;
     intraday_fill_count_ = 0;

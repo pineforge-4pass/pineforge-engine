@@ -15,8 +15,11 @@
 
 #include <pineforge/engine.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <ctime>
 
+#include "engine_internal.hpp"
 #include "timezone.hpp"
 
 namespace pineforge {
@@ -75,30 +78,117 @@ void BacktestEngine::update_risk_state() {
         }
     }
 
-    // Check max_intraday_loss
-    if (risk_max_intraday_loss_ > 0.0) {
-        BarTime bt = _decompose_bar_time_chart_tz();
-        int cur_day = bt.dayofmonth * 100 + bt.month;
-        if (cur_day != intraday_pnl_day_) {
-            intraday_pnl_day_ = cur_day;
-            intraday_pnl_ = 0.0;
-        }
-        double intraday_threshold = risk_max_intraday_loss_;
-        if (risk_max_intraday_loss_is_pct_) {
-            double eq = initial_capital_ + net_profit_sum_ + open_profit(current_bar_.close);
-            intraday_threshold = eq * (risk_max_intraday_loss_ / 100.0);
-        }
-        if (intraday_pnl_ < 0.0 && (-intraday_pnl_) >= intraday_threshold) {
-            risk_halted_ = true;
-            return;
-        }
-    }
+    // max_intraday_loss is TradingView's day-scoped rule, evaluated at the
+    // broker's ticks (evaluate_max_intraday_loss below); it never latches
+    // risk_halted_.
 
     // Check max_cons_loss_days
     if (risk_max_cons_loss_days_ > 0 && cons_loss_day_count_ >= risk_max_cons_loss_days_) {
         risk_halted_ = true;
         return;
     }
+}
+
+// --- strategy.risk.max_intraday_loss (TradingView's arithmetic) ------------
+//
+// Pinned 2026-09-05 (lab tv, BINANCE:BTCUSDT 1D, scratchpad/r8/pins/m45-*):
+//   t1  short 0.11773 from the 01-31 open, limit exit 61319.37 filled
+//       intrabar on 2026-02-06 (+2699): the rule fires at the exit for
+//       thresholds <= 2.45% and not at 2.46% -- loss = 2513.61 = the short's
+//       open profit at the day's open 62909.87, base = 102513.6 = the
+//       day-start equity WITH that open profit (2.4520%); every order of the
+//       fired day is dropped, incl. the close-calc one, the next day's fill.
+//   t6  the short held through 02-06 with short adds: closed at the HIGH
+//       71751.33 as "Close Position (Max intraday Loss)" at 1.0% and 1.1%
+//       (loss at the high 1208.6 = 1.18%): open P&L marked at the extremes.
+//   t9  after the +2699 exit a recalc-born short 0.15 (fills 60000, -1763 at
+//       the high): no fire at 3.0% -- the booked +2699 counts at later ticks
+//       (1578 = 1.54%); only the closing fill's own P&L is missing at its
+//       own tick.
+//   t3b a long opened at the 02-03 open, no exit: closed at the LOW 72945.5
+//       (-682 = 0.68%) at 0.3% / 0.5% -- the fire lands on the first path
+//       extreme whose mark breaches.
+// JOAT (officialjackofalltrades aureate BTC@1D, 1.5%): the 02-06 fire drops
+// the recalc-born short @60000 and the close-calc short (TV 7 is 02-08).
+
+int BacktestEngine::intraday_loss_day_key() const {
+    BarTime bt = _decompose_bar_time_chart_tz();
+    return bt.dayofmonth * 100 + bt.month;
+}
+
+void BacktestEngine::intraday_loss_begin_bar(const Bar& bar) {
+    if (risk_max_intraday_loss_ <= 0.0) return;
+    const int cur_day = intraday_loss_day_key();
+    if (cur_day == intraday_loss_day_) return;
+    intraday_loss_day_ = cur_day;
+    // The day's first tick, before any fill at it: realized equity plus the
+    // carried position marked at the open.
+    intraday_loss_day_start_equity_ = current_equity() + open_profit(bar.open);
+}
+
+bool BacktestEngine::intraday_loss_orders_blocked() const {
+    if (risk_max_intraday_loss_ <= 0.0 || intraday_loss_block_day_ < 0) {
+        return false;
+    }
+    return intraday_loss_day_key() == intraday_loss_block_day_;
+}
+
+bool BacktestEngine::evaluate_max_intraday_loss(double mark_price,
+                                                double excluded_realized) {
+    if (risk_max_intraday_loss_ <= 0.0 || intraday_loss_evaluating_) {
+        return false;
+    }
+    if (std::isnan(intraday_loss_day_start_equity_) || std::isnan(mark_price)) {
+        return false;
+    }
+    if (intraday_loss_orders_blocked()) return false;  // fired already today
+    const double equity_now =
+        current_equity() - excluded_realized + open_profit(mark_price);
+    const double loss = intraday_loss_day_start_equity_ - equity_now;
+    double threshold = risk_max_intraday_loss_;
+    if (risk_max_intraday_loss_is_pct_) {
+        threshold = intraday_loss_day_start_equity_
+                    * (risk_max_intraday_loss_ / 100.0);
+    }
+    if (!(threshold > 0.0) || !(loss > 0.0)) return false;
+    const double eps = 1e-9 * std::max(1.0, std::fabs(threshold));
+    if (loss + eps < threshold) return false;
+
+    intraday_loss_evaluating_ = true;
+    intraday_loss_block_day_ = intraday_loss_day_key();
+    intraday_loss_cancel_pending_ = true;
+    if (position_side_ != PositionSide::FLAT) {
+        const size_t trades_before = trades_.size();
+        execute_market_exit(mark_price);
+        for (size_t ti = trades_before; ti < trades_.size(); ++ti) {
+            trades_[ti].exit_comment = "Close Position (Max intraday Loss)";
+            trades_[ti].exit_id = "";
+        }
+        ++broker_fill_event_seq_;
+    }
+    intraday_loss_evaluating_ = false;
+    return true;
+}
+
+// Outside a fill loop the cancel is immediate; inside one the loop removes
+// the orders it has not applied and calls this at its safe point.
+void BacktestEngine::finish_intraday_loss_cancel() {
+    if (!intraday_loss_cancel_pending_) return;
+    intraday_loss_cancel_pending_ = false;
+    strategy_cancel_all();
+}
+
+// The bar's assumed OHLC path, tick by tick, for a broker pass that applied
+// its fills in one sweep (the non-calc_on_order_fills dispatch): the mark
+// is the path point, the position the one the sweep left.
+void BacktestEngine::evaluate_max_intraday_loss_over_path(const Bar& bar) {
+    if (risk_max_intraday_loss_ <= 0.0) return;
+    double path[4];
+    internal::fill_bar_path_points(bar, path);
+    for (double px : path) {
+        if (evaluate_max_intraday_loss(px, 0.0)) break;
+    }
+    finish_intraday_loss_cancel();
 }
 
 // Tracks favorable (max_runup / MFE) and adverse (max_drawdown / MAE) price
