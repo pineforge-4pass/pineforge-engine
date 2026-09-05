@@ -1268,7 +1268,16 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
         const bool bound = o.from_entry.empty()
             || cycle_filled_entry_ids_.count(o.from_entry) != 0;
         if (!bound) continue;
+        // Round 7 family M mechanism 2a: a bracket re-issued in this bar's
+        // close-time script over a dormant predecessor revives against the
+        // stop it was ORIGINALLY armed with — in TradingView's chronology
+        // the re-issue has not happened yet when the extreme is marked.
+        const double revive_stop = o.dormant_reissue_pending
+            ? o.dormant_original_stop_price : o.stop_price;
         o.dormant_bracket = false;
+        o.dormant_reissue_pending = false;
+        o.dormant_original_stop_price =
+            std::numeric_limits<double>::quiet_NaN();
         // Marketable at the margin-call event price? Whole-position brackets
         // only — the TV-pinned shape: a deferred default leg (qty NaN, 100%)
         // or, round 7 family N mechanism 2 (fast-scalper 07-21 13:30Z, TV
@@ -1281,11 +1290,11 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
             ? o.qty_percent >= 100.0 - internal::kFullPercentEps
             : (!o.requested_partial
                || o.qty >= position_qty_ - kQtyEpsilon);
-        if (!full_pct || std::isnan(o.stop_price)
+        if (!full_pct || std::isnan(revive_stop)
             || !std::isfinite(mc_price)) continue;
         const bool mk = (position_side_ == PositionSide::SHORT)
-            ? (o.stop_price <= mc_price)
-            : (o.stop_price >= mc_price);
+            ? (revive_stop <= mc_price)
+            : (revive_stop >= mc_price);
         if (mk && marketable == nullptr) marketable = &o;
     }
     if (marketable == nullptr) return;
@@ -1307,6 +1316,20 @@ void BacktestEngine::revive_position_brackets_after_margin_call_partial(
                     return o.incarnation == exit_incarnation;
                 }),
             pending_orders_.end());
+    }
+}
+
+// Round 7 family M mechanism 2a (see PendingOrder::dormant_reissue_pending):
+// once the bar's forced-liquidation pass has run, a re-issued bracket that
+// inherited its predecessor's dormancy and was not revived there is the
+// close-time script's fresh order — live from the next bar on.
+void BacktestEngine::settle_dormant_bracket_reissues() {
+    for (PendingOrder& o : pending_orders_) {
+        if (!o.dormant_reissue_pending) continue;
+        o.dormant_reissue_pending = false;
+        o.dormant_bracket = false;
+        o.dormant_original_stop_price =
+            std::numeric_limits<double>::quiet_NaN();
     }
 }
 
@@ -6020,6 +6043,12 @@ void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal() {
             || cycle_filled_entry_ids_.count(o.from_entry) != 0;
         if (!bound) continue;
         o.dormant_bracket = true;
+        // A decline that comes AFTER a same-bar re-issue (the POOC step-4
+        // shape) kills the fresh order outright: it must not go live at the
+        // bar's end on the strength of the re-issue it superseded.
+        o.dormant_reissue_pending = false;
+        o.dormant_original_stop_price =
+            std::numeric_limits<double>::quiet_NaN();
     }
 }
 
@@ -6043,8 +6072,16 @@ BacktestEngine::OrderEligibility BacktestEngine::classify_order_eligibility(
     }
     // finding-311: a dormant bracket stays in the book (a later margin-call
     // partial revives it; a fresh same-id strategy.exit replaces it) but
-    // never matches a fill while dormant.
+    // never matches a fill while dormant. Its position cycle ended (the
+    // reversal pair's close filled, the entry flipped the position — round 7
+    // family M mechanism 2a holds the pair's brackets dormant at placement):
+    // stale like any bracket bound to a finished cycle, Remove it here since
+    // the ordinary stale-cycle check below sits behind this Skip.
     if (order.dormant_bracket) {
+        if (order.type == OrderType::EXIT && !order.from_entry.empty()
+            && cycle_filled_entry_ids_.count(order.from_entry) == 0) {
+            return OrderEligibility::Remove;
+        }
         return OrderEligibility::Skip;
     }
     if (opposing_pass == 1) {

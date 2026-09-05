@@ -147,6 +147,7 @@ set(TEST_SOURCES
     test_entry_bar_margin_path
     test_m_admission_36
     test_aapl15_margin_brackets
+    test_dropped_reversal_mc_first
     test_percent_equity_open_entry_fee
     test_streaming
     test_calc_on_order_fills
