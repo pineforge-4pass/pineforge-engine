@@ -38,6 +38,12 @@
  *                  14:00 @1.13557.
  *   famT-ps-*      syminfo.pricescale / round(1/mintick) qty-encoded: F 100 /
  *                  100, ES1! 100 / 4, EURUSD 100000 / 100000.
+
+ *   famTb-236-repro / famTb-eth-{lim,stp,blim,bstp} (round 9, r9-famT-b,
+ *                  BINANCE:ETHUSDT.P 15m, 2026-09-06): the corpus probe
+ *                  analyzer-parity-stop-limit-timing-01 TV #236 level
+ *                  3760.480000607087 fills @3760.48; the ETH band ladders —
+ *                  see the ETH section below.
  */
 
 #include <cmath>
@@ -122,6 +128,25 @@ const Bar kEU_1330 = mk_bar(1.13404, 1.13418, 1.1333, 1.13406);
 const Bar kEU_1345 = mk_bar(1.13407, 1.13556, 1.1339, 1.13536);
 const Bar kEU_1400 = mk_bar(1.13536, 1.13717, 1.13526, 1.13647);
 
+// BINANCE:ETHUSDT.P 15m (feed 27b62431096e), 2025-07-26 UTC: 00:00 .. 02:00
+// (round 9 r9-famT-b: the corpus hard-lane probe's one-tick knock-on)
+const Bar kETH0726_0000 = mk_bar(3724.18, 3725.69, 3710.21, 3713.05);
+const Bar kETH0726_0015 = mk_bar(3713.05, 3727.64, 3712.0, 3726.67);
+const Bar kETH0726_0030 = mk_bar(3726.68, 3727.12, 3719.29, 3719.55);
+const Bar kETH0726_0045 = mk_bar(3719.56, 3725.0, 3712.82, 3724.75);
+const Bar kETH0726_0100 = mk_bar(3724.76, 3725.28, 3715.62, 3721.05);
+const Bar kETH0726_0115 = mk_bar(3721.06, 3721.49, 3713.02, 3718.58);
+const Bar kETH0726_0130 = mk_bar(3718.58, 3721.23, 3708.11, 3708.48);
+const Bar kETH0726_0145 = mk_bar(3708.48, 3714.39, 3694.56, 3701.34);
+const Bar kETH0726_0200 = mk_bar(3701.34, 3714.8, 3701.33, 3714.79);
+// BINANCE:ETHUSDT.P 15m, 2025-07-27 UTC: 00:00 .. 01:15 (corpus #236's bars)
+const Bar kETH0727_0000 = mk_bar(3740.0, 3741.44, 3728.36, 3734.78);
+const Bar kETH0727_0015 = mk_bar(3734.78, 3743.66, 3731.2, 3740.15);
+const Bar kETH0727_0030 = mk_bar(3740.15, 3751.5, 3738.04, 3743.06);
+const Bar kETH0727_0045 = mk_bar(3743.05, 3754.81, 3738.83, 3754.81);
+const Bar kETH0727_0100 = mk_bar(3754.8, 3767.77, 3748.64, 3766.39);
+const Bar kETH0727_0115 = mk_bar(3766.39, 3771.68, 3761.57, 3764.28);
+
 std::vector<Bar> series(std::initializer_list<Bar> bars) {
     std::vector<Bar> out;
     int i = 0;
@@ -194,6 +219,16 @@ void expect_single_trade(const Probe& eng, bool is_long,
         std::printf("        got exit bar %lld @%.8f (expected bar %d @%.8f)\n",
                     (long long)(t.exit_time / 1000 - 1), t.exit_price,
                     exit_bar, exit_px);
+    }
+}
+
+void expect_open_position(const Probe& eng, bool is_long) {
+    CHECK(eng.trade_count() == 0);
+    CHECK(eng.position_side_ == (is_long ? PositionSide::LONG : PositionSide::SHORT));
+    if (eng.trade_count() != 0) {
+        const Trade& t = eng.get_trade(0);
+        std::printf("        got an exit at bar %lld @%.8f (expected none)\n",
+                    (long long)(t.exit_time / 1000 - 1), t.exit_price);
     }
 }
 
@@ -373,6 +408,156 @@ void test_eurusd_band() {
     }
 }
 
+// --- BINANCE:ETHUSDT.P (round 9, r9-famT-b): the hard-lane corpus tick ------
+//
+// corpus/validation/analyzer-parity-stop-limit-timing-01, TV #236: long at
+// the 2025-07-27 00:15Z open (3734.78), strategy.exit limit = close +
+// 2 * ta.atr(14) = 3734.78 + 2 * 12.850000303543267 = 3760.480000607087 —
+// 6.07e-7 above the grid, INSIDE the band. TV stores 3760.48 and fills the
+// 01:00Z bar (h 3767.77) at exactly 3760.48 (lab tv famTb-236-repro: the
+// qty-encoded exit price reads 3760.48, the level 3760.48000061); the
+// pre-famT engine ceil-snapped the raw level and filled 3760.49. Pinned by
+// four ETH sensor ladders (famTb-eth-lim / -stp / -blim / -bstp, ws-report-v1
+// rangeProof covered, 2026-09-06): on a pricescale-100 symbol at ~3700 a
+// level exactly 1e-6 off the grid is OUT (3767.77 + 1e-6 does not fill on h
+// 3767.77; 3694.56 - 1e-6 does not fill on l 3694.56) — the same double
+// arithmetic that puts F 10.04 + 1e-6 IN and ES 5513.75 + 1e-6 OUT — and an
+// out-of-band level crossed intrabar fills at the directional tick (sell
+// limit / buy stop ceil, sell stop / buy limit floor), never at the raw level.
+void test_eth_corpus_236_atr_level_in_band() {
+    std::printf("-- ETH corpus #236: limit 3734.78 + 2*ATR = 3760.480000607087 fills 01:00Z @3760.48 (not 3760.49) --\n");
+    // bars: 0 00:00 (signal, c 3734.78) 1 00:15 (fill 3734.78) 2 00:30 3 00:45 4 01:00 (h 3767.77) 5 01:15
+    const double atr14 = 12.850000303543267;   // TV ta.atr(14) at the 00:00Z bar
+    for (double level : {3734.78 + atr14 * 2.0, 3760.480000607087, 3760.48 + 0.000000607}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "L.....";
+        eng.exit_limit_ = level;
+        eng.exit_stop_ = 3734.78 - atr14;      // 3721.93: never reached
+        auto bars = series({kETH0727_0000, kETH0727_0015, kETH0727_0030, kETH0727_0045, kETH0727_0100, kETH0727_0115});
+        eng.run(bars.data(), (int)bars.size());
+        // pre-famT: bar 4 @3760.49 (baseline b6696da's row; TV's is 3760.48)
+        expect_single_trade(eng, true, 1, 3734.78, 4, 3760.48, 1.0);
+    }
+    {   // 1.2e-6 is outside the band: the bar crosses it, ceil -> 3760.49
+        Probe eng(0.01, 1.0);
+        eng.script = "L.....";
+        eng.exit_limit_ = 3760.48 + 0.0000012;
+        auto bars = series({kETH0727_0000, kETH0727_0015, kETH0727_0030, kETH0727_0045, kETH0727_0100, kETH0727_0115});
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, true, 1, 3734.78, 4, 3760.49, 1.0);
+    }
+}
+
+void test_eth_sell_limit_band() {
+    std::printf("-- ETH sell limit 3767.77 + d on h 3767.77: d <= 5e-7 fills 01:00 @3767.77; d >= 1e-6 fills 01:15 @3767.78 (ceil) --\n");
+    for (double d : {0.0, 0.0000005}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "L.....";
+        eng.exit_limit_ = 3767.77 + d;
+        auto bars = series({kETH0727_0000, kETH0727_0015, kETH0727_0030, kETH0727_0045, kETH0727_0100, kETH0727_0115});
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, true, 1, 3734.78, 4, 3767.77, 1.0);
+    }
+    for (double d : {0.000001, 0.0000012, 0.000002, 0.00001, 0.004}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "L.....";
+        eng.exit_limit_ = 3767.77 + d;
+        auto bars = series({kETH0727_0000, kETH0727_0015, kETH0727_0030, kETH0727_0045, kETH0727_0100, kETH0727_0115});
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, true, 1, 3734.78, 5, 3767.78, 1.0);
+    }
+}
+
+void test_eth_sell_stop_band() {
+    std::printf("-- ETH sell stop 3694.56 - d on l 3694.56: d <= 5e-7 fills 01:45 @3694.56; d >= 1e-6 no fill; 3700.004 -> @3700.00 (floor) --\n");
+    // bars: 0 00:00 (signal) 1 00:15 (fill 3713.05) 2 00:30 3 00:45 4 01:00 5 01:15 6 01:30 7 01:45 (o 3708.48 l 3694.56) 8 02:00
+    auto eth0726 = [] { return series({kETH0726_0000, kETH0726_0015, kETH0726_0030, kETH0726_0045, kETH0726_0100,
+                                       kETH0726_0115, kETH0726_0130, kETH0726_0145, kETH0726_0200}); };
+    for (double d : {0.0, 0.0000005}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "L........";
+        eng.exit_stop_ = 3694.56 - d;
+        auto bars = eth0726();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, true, 1, 3713.05, 7, 3694.56, 1.0);
+    }
+    for (double d : {0.000001, 0.0000012}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "L........";
+        eng.exit_stop_ = 3694.56 - d;
+        auto bars = eth0726();
+        eng.run(bars.data(), (int)bars.size());
+        expect_open_position(eng, true);
+    }
+    for (double stop : {3700.004, 3700.0 + 0.000000607}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "L........";
+        eng.exit_stop_ = stop;
+        auto bars = eth0726();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, true, 1, 3713.05, 7, 3700.0, 1.0);
+    }
+}
+
+void test_eth_buy_limit_band() {
+    std::printf("-- ETH buy limit (short) 3694.56 - d on l 3694.56: 0 fills 01:45 @3694.56; 1e-6 / 1.2e-6 no fill; 3700.004 -> @3700.00 (floor) --\n");
+    auto eth0726 = [] { return series({kETH0726_0000, kETH0726_0015, kETH0726_0030, kETH0726_0045, kETH0726_0100,
+                                       kETH0726_0115, kETH0726_0130, kETH0726_0145, kETH0726_0200}); };
+    {
+        Probe eng(0.01, 1.0);
+        eng.script = "S........";
+        eng.exit_limit_ = 3694.56;
+        auto bars = eth0726();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, false, 1, 3713.05, 7, 3694.56, 1.0);
+    }
+    for (double d : {0.000001, 0.0000012}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "S........";
+        eng.exit_limit_ = 3694.56 - d;
+        auto bars = eth0726();
+        eng.run(bars.data(), (int)bars.size());
+        expect_open_position(eng, false);
+    }
+    for (double limit : {3700.004, 3700.0 - 0.000000607}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "S........";
+        eng.exit_limit_ = limit;
+        auto bars = eth0726();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, false, 1, 3713.05, 7, 3700.0, 1.0);
+    }
+}
+
+void test_eth_buy_stop_band() {
+    std::printf("-- ETH buy stop (short) 3767.77 + d on h 3767.77: 0 fills 01:00 @3767.77; 1e-6 / 1.2e-6 / 1e-5 fill 01:15 @3767.78; 3760.004 -> @3760.01 (ceil) --\n");
+    auto eth0727 = [] { return series({kETH0727_0000, kETH0727_0015, kETH0727_0030, kETH0727_0045, kETH0727_0100, kETH0727_0115}); };
+    {
+        Probe eng(0.01, 1.0);
+        eng.script = "S.....";
+        eng.exit_stop_ = 3767.77;
+        auto bars = eth0727();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, false, 1, 3734.78, 4, 3767.77, 1.0);
+    }
+    for (double d : {0.000001, 0.0000012, 0.00001}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "S.....";
+        eng.exit_stop_ = 3767.77 + d;
+        auto bars = eth0727();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, false, 1, 3734.78, 5, 3767.78, 1.0);
+    }
+    for (double stop : {3760.004, 3760.0 + 0.000000607}) {
+        Probe eng(0.01, 1.0);
+        eng.script = "S.....";
+        eng.exit_stop_ = stop;
+        auto bars = eth0727();
+        eng.run(bars.data(), (int)bars.size());
+        expect_single_trade(eng, false, 1, 3734.78, 4, stop > 3760.001 ? 3760.01 : 3760.0, 1.0);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -384,6 +569,11 @@ int main() {
     test_masayanfx_56_limit_on_quantized_high();
     test_es_band_is_price_not_ticks();
     test_eurusd_band();
+    test_eth_corpus_236_atr_level_in_band();
+    test_eth_sell_limit_band();
+    test_eth_sell_stop_band();
+    test_eth_buy_limit_band();
+    test_eth_buy_stop_band();
     std::printf("\n=== Results: %d passed, %d failed ===\n",
                 tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
