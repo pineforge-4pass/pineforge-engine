@@ -967,6 +967,26 @@ AggregatedBar feed_ratio_mode(const Bar& input_bar, FeedState s,
                         next_ms >= session_period_last_traded_close_ms(
                             input_bar.timestamp, atz, asess,
                             CalendarPeriod::DAY);
+                    // Early close (round 8, family U): the session's last
+                    // chart bar can also be the FIRST bar of the bucket it
+                    // leaves open -- the 12:00 CT bar of a 12:15 CT
+                    // CME_MINI:NQ1! early close is the whole 12:00 "60"
+                    // bucket (2025-07-03, 11-28, 12-24, 2026-04-02). The
+                    // nominal session close (16:00 CT) is hours away, so the
+                    // singleton rule above misses it and the bucket waited
+                    // for the 17:00 CT reopen -- one chart bar late, where
+                    // TradingView's ta.change(time) fires on the 12:00 bar
+                    // (lab tv u-lati-levels-nq15, 2026-09-05). The merged-
+                    // bucket path below already completes on the next input
+                    // bar opening a later session-day (early_close_completes,
+                    // family P); apply the same rule to the singleton.
+                    if (!singleton_session_final
+                        && next_input_ms > input_bar.timestamp
+                        && (!s.agg || s.agg->early_close_completes())
+                        && crosses_boundary(input_bar.timestamp, next_input_ms,
+                                            CalendarPeriod::DAY, atz, asess)) {
+                        singleton_session_final = true;
+                    }
                 }
                 if (singleton_session_final) {
                     s.last_completed_bar = s.current_bar;

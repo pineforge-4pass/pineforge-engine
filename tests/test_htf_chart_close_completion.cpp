@@ -246,6 +246,62 @@ void test_early_close_completes_on_exchange_only() {
     }
 }
 
+// 4. Early close, singleton bucket (round 8, family U). CME_MINI:NQ1! 15m,
+//    session 1700-1600 America/Chicago: Thu 2025-07-03 closes 12:15 CT, so
+//    the 12:00 CT chart bar (17:00Z) is the whole 12:00 "60" bucket -- its
+//    first AND last bar. The nominal 16:00 CT close is hours away, so the
+//    singleton session-final rule cannot see it; the next input bar is the
+//    17:00 CT reopen (22:00Z), a later session-day. TradingView completes the
+//    bucket on the 12:00 CT bar (lab tv u-lati-levels-nq15: the level machine's
+//    ta.change(time) fires there, 2026-09-05); the engine used to wait for the
+//    reopen bar. An OTC stream keeps the boundary completion.
+void test_early_close_completes_singleton_bucket() {
+    std::printf("4. early-close completion of a singleton '60' bucket on the session's last chart bar\n");
+    const std::string CT = "America/Chicago";
+    const std::string GLOBEX = "1700-1600";
+    // 15m chart bars 08:30..12:00 CT (13:30Z..17:00Z inclusive) on 07-03.
+    std::vector<Bar> bars;
+    for (int64_t t = utc_ms(2025, 7, 3, 13, 30); t <= utc_ms(2025, 7, 3, 17, 0); t += 15 * kMinute)
+        bars.push_back(bar_at(t, 10.0));
+    const int64_t reopen = utc_ms(2025, 7, 3, 22, 0);       // 17:00 CT
+    const int64_t noon = utc_ms(2025, 7, 3, 17, 0);         // 12:00 CT = the singleton bucket
+    const int64_t eleven = utc_ms(2025, 7, 3, 16, 0);       // 11:00 CT, a full bucket
+    {
+        TimeframeAggregator h60("60", "15", CT, GLOBEX);
+        auto c = drive(h60, bars, reopen, 0);
+        CHECK(completed_on(c, eleven, utc_ms(2025, 7, 3, 16, 45)));
+        CHECK(completions_of(c, eleven) == 1);
+        CHECK(completed_on(c, noon, noon));
+        CHECK(completions_of(c, noon) == 1);
+        // The reopen bar opens a fresh bucket without re-emitting the noon one.
+        AggregatedBar re = h60.feed(bar_at(reopen, 10.0), reopen + 15 * kMinute, 0);
+        CHECK(!re.is_complete);
+    }
+    {
+        TimeframeAggregator h60("60", "15", CT, GLOBEX);
+        h60.set_early_close_completes(false);
+        auto c = drive(h60, bars, reopen, 0);
+        CHECK(!completed_on(c, noon, noon));
+        CHECK(completions_of(c, noon) == 0);
+        AggregatedBar re = h60.feed(bar_at(reopen, 10.0), reopen + 15 * kMinute, 0);
+        CHECK(re.is_complete && re.bar.timestamp == noon);
+    }
+    // A singleton that is NOT the session's last bar keeps waiting: on a
+    // regular day the 12:00 CT bar is followed by 12:15 CT in the same
+    // session-day, and the bucket completes on its real end (12:45 CT).
+    {
+        TimeframeAggregator h60("60", "15", CT, GLOBEX);
+        std::vector<Bar> regular;
+        for (int64_t t = utc_ms(2025, 7, 2, 13, 30); t <= utc_ms(2025, 7, 2, 18, 0); t += 15 * kMinute)
+            regular.push_back(bar_at(t, 10.0));
+        auto c = drive(h60, regular, utc_ms(2025, 7, 2, 18, 15), 0);
+        const int64_t noon2 = utc_ms(2025, 7, 2, 17, 0);
+        CHECK(!completed_on(c, noon2, noon2));
+        CHECK(completed_on(c, noon2, utc_ms(2025, 7, 2, 17, 45)));
+        CHECK(completions_of(c, noon2) == 1);
+    }
+}
+
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
 // 3. End to end on the split feed: the "60" bucket ending at the 17:15Z
 //    chart bar (whose slice lacks 17:29Z) is published before that chart
@@ -309,6 +365,7 @@ void test_split_feed_publishes_before_the_chart_body() {
 int main() {
     test_chart_close_completes_thin_hour();
     test_early_close_completes_on_exchange_only();
+    test_early_close_completes_singleton_bucket();
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     test_split_feed_publishes_before_the_chart_body();
 #endif
