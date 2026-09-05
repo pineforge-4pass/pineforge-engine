@@ -2075,6 +2075,46 @@ protected:
         return calc_qty(frozen_sizing_price(is_buy));
     }
 
+    // round 7 (family M, JOAT BTC@1D; campaign note log-20260905t121513z-
+    // 50167cb8, CORRECTING the m1d-coof-ctx pin): a DEFAULT-sized
+    // (percent_of_equity / cash) MARKET order that a calc_on_order_fills
+    // FILL RECALC places is sized by TradingView at ITS OWN FILL, not at the
+    // signal bar's close and not at the recalc's cursor:
+    //
+    //   lab tv scratchpad/pins/m1d-coof-size-btc (BINANCE:BTCUSDT 1D,
+    //   2025-10-01..12-31, tv-tape-m1d-coof-size-btc-7ee8712b): "B", born in
+    //   the SECOND recalc at the 10-02 open and filled at W1 = the low
+    //   118279.31, has qty 845.4564 = 10% x 1e9 / 118279.31 (cursor O
+    //   118594.99 -> 843.2; the bar's close 120529.35 -> 829.7); thirteen
+    //   entries born in a first-O recalc and filled at O size at O, never at
+    //   the finals close. The probe itself: TV 4 0.09245 = 9802.56 /
+    //   (106011.13 x 1.0001) at the 11-11 open fill (the engine froze 0.0951
+    //   at the 11-11 close 103058.99); TV 10 0.14674 at its W2 fill 69988.83
+    //   (cursor W1 63913.27 -> 0.16069, close 67988.04 -> 0.15106).
+    //
+    // The script context of such a recalc is unchanged — TradingView runs it
+    // on the CURRENT bar's finals (scratchpad/pins/m1d-coof-ctx2-{btc,f}:
+    // 103/103 encoded firings read bar k's high/low/close/volume, bar_index k,
+    // barstate.isconfirmed true, close[1] = bar k-1) — exactly what
+    // execute_coof_script_body presents. Only the SIZING moment differs from
+    // an ordinary close-calc placement: the placement freeze above is skipped
+    // for recalc-born default market orders (strategy.entry MARKET and
+    // strategy.order RAW alike), frozen_default_qty stays NaN, and the fill
+    // kernels size with calc_qty(slipped fill) — open lots marked at the fill
+    // (current_bar_ is the scheduler's point bar there). No KI-54 / gap-reject
+    // / gross-admission snapshot is taken for them: those gates are pinned on
+    // close-calc placements (their frozen invariant qty * sizing_price <=
+    // sizing_equity has no meaning at a fill-time size); the zero-lot decline
+    // and the affordability gate read the fill-time quantity. FIXED default
+    // sizing and explicit quantities are untouched (never frozen); priced
+    // (stop/limit) entries keep their own paths. Ordinary close executions
+    // (coof_fill_recalc_active_ false) freeze exactly as before, so a script
+    // without calc_on_order_fills is byte-identical.
+    bool coof_default_market_sizes_at_fill() const {
+        return calc_on_order_fills_ && coof_scheduler_active_
+            && coof_fill_recalc_active_;
+    }
+
     // KI-54 defect fix: the frozen sizing snapshot must see POST-liquidation
     // equity. TradingView liquidates intrabar, BEFORE the bar-close script
     // body runs; the engine's process_margin_call runs at the END of
