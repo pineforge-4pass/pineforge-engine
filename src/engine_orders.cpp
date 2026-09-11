@@ -9,9 +9,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace pineforge {
 using namespace internal;
@@ -133,6 +135,7 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     }
 
     if (created_position_side == PositionSide::FLAT && close_only_opposite) {
+        // fill_price is already resolved by apply_fill_slippage above.
         close_opposite_then_enter(
             id, is_long, fill_price, explicit_qty, explicit_qty_type,
             /*purge_pending_exits=*/!paired_flat_market_transaction,
@@ -881,42 +884,34 @@ void BacktestEngine::settle_position_after_partial_exit(
 // Exposure transitions resolve activation once. Matchers never refresh a
 // deadline from whichever position happens to be current at read time.
 exit_legs::Frame BacktestEngine::next_leg_event(exit_legs::Phase phase) {
-    if (exit_leg_event_seq_ == UINT64_MAX) throw std::overflow_error("exit lifecycle event exhausted");
-    const auto domain = stream_phase_ != StreamPhase::IDLE ? exit_legs::Domain::RawTicks
-        : bar_magnifier_enabled_ ? (coof_scheduler_active_ ? exit_legs::Domain::MagnifierCoof : exit_legs::Domain::Magnifier)
-        : coof_scheduler_active_ ? exit_legs::Domain::Coof : exit_legs::Domain::Ordinary;
-    return {++exit_leg_event_seq_, bar_index_, domain, phase};
+    const auto frame = preview_next_leg_event(phase);
+    ++exit_leg_event_seq_;
+    return frame;
 }
 void BacktestEngine::apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
                                       std::optional<exit_legs::Frame> supplied) {
     // Rebinding can require a later receipt event at this same hook. Preserve
     // its phase when replacing that receipt; an after-margin completion must
     // not be recorded as processed during the earlier observation phase.
-    const auto receipt_phase = supplied ? supplied->phase : exit_legs::Phase::Observation;
-    if (!order.legs.target().incarnation) order.legs.attach(order.incarnation, position_cycle_seq_);
-    if (order.legs.last_action()) {
-        exit_leg_event_seq_ = std::max(exit_leg_event_seq_, order.legs.last_action()->cause.event);
-        if (supplied && supplied->event <= order.legs.last_action()->cause.event) supplied.reset();
-    }
-    if (order.legs.target().incarnation != order.incarnation)
+    const auto result = transition_exit_leg(
+        order.legs, order.incarnation, std::move(operation), supplied,
+        exit_leg_event_seq_, position_cycle_seq_);
+    switch (result) {
+    case ExitLegTransitionResult::Applied:
+    case ExitLegTransitionResult::Replay:
+        return;
+    case ExitLegTransitionResult::Exhausted:
+        throw std::overflow_error("exit lifecycle event exhausted");
+    case ExitLegTransitionResult::RevisionExhausted:
+        throw std::overflow_error("exit lifecycle revision exhausted");
+    case ExitLegTransitionResult::StaleIdentity:
         throw std::logic_error("stale exit lifecycle instruction");
-    // Current-owner selection is explicit. The legacy cause need not prove
-    // that its older bar-only producer owned this target's current cycle.
-    if (order.legs.target().owner != position_cycle_seq_) {
-        const auto bind_cause = next_leg_event(receipt_phase);
-        const exit_legs::Action bind{order.legs.target(), order.legs.revision(), bind_cause,
-                                    exit_legs::BindOwner{position_cycle_seq_}};
-        if (order.legs.apply(order.legs.target(), bind) != exit_legs::Result::Applied)
-            throw std::logic_error("exit lifecycle owner bind refused");
-        // A supplied batch cause predates this explicit rebind. The target
-        // receives a fresh operation receipt without asserting prior ownership.
-        supplied.reset();
-    }
-    const auto cause = supplied ? *supplied : next_leg_event(receipt_phase);
-    const exit_legs::Action action{order.legs.target(), order.legs.revision(), cause, std::move(operation)};
-    const auto result = order.legs.apply({order.incarnation, position_cycle_seq_}, action);
-    if (result != exit_legs::Result::Applied && result != exit_legs::Result::Replay)
+    case ExitLegTransitionResult::BindRefused:
+        throw std::logic_error("exit lifecycle owner bind refused");
+    case ExitLegTransitionResult::ActionRefused:
         throw std::logic_error("exit lifecycle action refused");
+    }
+    throw std::logic_error("exit lifecycle action refused");
 }
 
 void BacktestEngine::bind_exit_activation(PendingOrder& order) {
@@ -940,7 +935,8 @@ void BacktestEngine::unbind_exit_activations() {
             order.leg_activation.unbind();
             if (!order.legs.target().incarnation) order.legs.attach(order.incarnation, position_cycle_seq_);
             const exit_legs::Action action{order.legs.target(), order.legs.revision(), next_leg_event(), exit_legs::BindOwner{0}};
-            if (order.legs.apply(order.legs.target(), action) != exit_legs::Result::Applied)
+            if (order.legs.apply({order.incarnation, position_cycle_seq_}, action)
+                    != exit_legs::Result::Applied)
                 throw std::logic_error("exit lifecycle flat unbind refused");
         }
     }
@@ -1170,35 +1166,64 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
 // close_only_opposite branch: TV semantic for opposite-direction entries
 // where the strategy.entry call was placed with ``close_only_opposite=true``
 // — close part of the existing opposite position by tx_qty, then open the
-// requested-direction remainder if any.
+// requested-direction remainder if any. `fill_price` is already resolved.
 void BacktestEngine::close_opposite_then_enter(const std::string& id, bool is_long,
                                                double fill_price, double explicit_qty,
                                                int explicit_qty_type,
                                                bool purge_pending_exits,
                                                bool explicit_qty_prequantized,
                                                uint64_t entry_incarnation) {
-    double tx_qty = explicit_qty_prequantized
+    execution::LifecycleEffects lifecycle;
+    if (purge_pending_exits) lifecycle.removals = snapshot_exit_pending_removals();
+    apply_resolved_close_opposite_then_enter(
+        id, is_long, fill_price, explicit_qty, explicit_qty_type,
+        explicit_qty_prequantized, entry_incarnation, std::move(lifecycle));
+}
+
+std::vector<execution::PendingRemoval>
+BacktestEngine::snapshot_exit_pending_removals() const {
+    std::vector<execution::PendingRemoval> removals;
+    for (const auto& order : pending_orders_) {
+        if (order.type == OrderType::EXIT) {
+            removals.push_back({order.incarnation, order.created_seq,
+                                order.legs.target(), order.legs.revision()});
+        }
+    }
+    return removals;
+}
+
+void BacktestEngine::apply_resolved_close_opposite_then_enter(
+        const std::string& id, bool is_long, double fill_price,
+        double explicit_qty, int explicit_qty_type,
+        bool explicit_qty_prequantized, uint64_t entry_incarnation,
+        execution::LifecycleEffects lifecycle) {
+    const double tx_qty = explicit_qty_prequantized
         ? explicit_qty
         : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
-    double close_qty = std::min(tx_qty, position_qty_);
-    // execute_partial_exit_qty applies slippage internally (mirrors its other
-    // callers, e.g. execute_partial_exit_by_percent). Pass the RAW fill_price —
-    // pre-slipping here would double-slip the close leg (issue #27).
-    execute_partial_exit_qty(fill_price, close_qty);
-    // The ordinary close-only-opposite path historically purges stale exits.
-    // A confirmed same-source flat MARKET pair is different: both transaction
-    // legs execute inside process_pending_orders, where erasing the vector
-    // would invalidate the active order reference and filled-index ledger.
-    // Its stale exits follow flip_market_position_to's safe next-pass cleanup.
-    if (purge_pending_exits) purge_exit_orders();
-    double remainder = tx_qty - close_qty;
+    const double signed_units = is_long ? tx_qty : -tx_qty;
+    double held = 0.0;
+    for (const auto& lot : pyramid_entries_) held += lot.qty;
+    const double signed_held = position_side_ == PositionSide::SHORT ? -held
+        : position_side_ == PositionSide::LONG ? held : 0.0;
+    const auto planned = order_action::plan(
+        signed_held, order_action::Transact{signed_units});
+    if (!planned || planned->no_effect()) return;
+
+    execution::Action action = order_action::Transact{signed_units};
+    const double remainder = std::abs(planned->open_units());
     if (remainder <= kQtyEpsilon) {
-        return;
+        if (!pyramid_entries_.empty() && planned->close_units() >= held)
+            action = execution::Flatten{};
+        else
+            action = order_action::Reduce{planned->close_units()};
     }
-    fill_price = apply_fill_slippage(fill_price, is_long);
-    PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-    open_fresh_position(
-        requested, fill_price, remainder, id, entry_incarnation);
+
+    const auto result = settle_execution_with_lifecycle(
+        action, execution::Fill{fill_price, id, {}, entry_incarnation},
+        lifecycle);
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved close-opposite settlement");
 }
 
 

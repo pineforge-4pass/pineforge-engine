@@ -4,6 +4,9 @@
 trusted matching adapters. It applies an already admitted, matched execution
 to the engine's existing physical lot book and emits the resulting close and
 open observations. It adds no second position ledger or persistent selector.
+Callers that supply transient EXIT lifecycle effects use the separately named
+`settle_execution_with_lifecycle` seam; the two-argument symbol is unchanged
+and forwards empty effects.
 
 The caller supplies an `execution::Action` and `execution::Fill` from
 `<pineforge/execution.hpp>`. These values describe immediate effects:
@@ -69,9 +72,27 @@ ordinary floating-point rounding. A rebate increases it.
 
 ## Integration and limits
 
-The kernel currently serves full market exits and selected frozen-transaction
-and same-side materialization paths. Existing source scheduling and dust
-decisions remain at their call sites. Migrated frozen transactions and the
+The kernel currently serves full market exits, the close-opposite-then-enter
+reversal family, and selected frozen-transaction and same-side materialization
+paths. Existing source scheduling and dust decisions remain at their call
+sites. The reversal helper consumes one already-resolved `Fill` and one current
+fee; it does not slip again. `compat::pine` suspension selection stays at the
+replacement caller. `settle_resolved_execution` remains the original
+two-argument symbol and forwards empty effects to
+`settle_execution_with_lifecycle`, the protected seam that consumes transient
+lifecycle effects. Those effects name exact pending identities, revisions and
+operations; `created_seq` 0 and `Target{0,0}` are literal expected values.
+Source selection may preview the upcoming lifecycle frame without consuming it
+and must supply a literal operation payload. They are not stored, hashed, or
+reusable execution authority. Empty effects leave other settlement callers
+unchanged.
+
+Authorized pre-close events run first, then close observations and the existing
+flat unbind, then the listed pending removals, then `open_quoted_position`,
+which still binds only remaining exits. False removal lists do not replace or
+reallocate `pending_orders_`. Native settlement does not recognize source
+cases, rewrite supplied window/barrier facts, or install a callback/plan.
+Migrated frozen transactions and the
 final short-seed crossing settle their close/open effects in one native call.
 Other legacy close loops are not yet
 grouped into one parent execution; their per-row current ticket behavior is

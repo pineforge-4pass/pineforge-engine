@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
+#include <optional>
 #include "na.hpp"
 #include "bar.hpp"
 #include "broker_events.hpp"
@@ -1796,8 +1797,18 @@ protected:
     // order, perform admission/slippage, or provide cancellation/replay. The
     // owning run must abort on an exception; failed commits are not retryable
     // in place. A saved arithmetic plan is not execution authority.
-    execution::Result settle_resolved_execution(const execution::Action& action,
-                                                const execution::Fill& fill);
+    // Empty lifecycle effects. Member-pointer type is the original two-argument
+    // symbol; it forwards to settle_execution_with_lifecycle.
+    execution::Result settle_resolved_execution(
+        const execution::Action& action, const execution::Fill& fill);
+    // Trusted matching-adapter extension for one execution plus lifecycle effects.
+    // Pre-close operations, then close observations and old-cycle unbind, then
+    // the listed pending removals, then the quoted opening path which binds
+    // only remaining exits. Native settlement does not call compat::pine
+    // selectors; the effects value is not retained.
+    execution::Result settle_execution_with_lifecycle(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle);
     // Native account value: realized balance plus marked physical lots minus
     // their remaining paid entry costs, for every fee type. No Pine sizing or
     // end-of-range reporting convention participates in this value.
@@ -3871,6 +3882,10 @@ private:
     void execute_market_exit(double fill_price);
     void append_same_side_fill(PyramidEntry lot);
     void append_quoted_lot(PyramidEntry lot, double total_qty, double average_price);
+    // Allocates the new position cycle, lots and observations, then binds
+    // exits that still remain in pending_orders_. Settlement that authorized
+    // pending removals applies those erasures after old-cycle unbind and
+    // before this opening bind.
     void open_quoted_position(PositionSide requested, PyramidEntry lot);
     // Range-end accounting: record the rows that close a position still
     // open after the final script bar at that bar's close, the way
@@ -4054,8 +4069,33 @@ private:
     // done). Called right after every process_margin_call dispatch site.
     void settle_dormant_bracket_reissues(exit_legs::Domain domain);
     exit_legs::Frame next_leg_event(exit_legs::Phase phase = exit_legs::Phase::Observation);
+    exit_legs::Frame preview_next_leg_event(
+        exit_legs::Phase phase = exit_legs::Phase::Observation) const;
     void apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
                           std::optional<exit_legs::Frame> cause = std::nullopt);
+    exit_legs::Domain current_exit_leg_domain() const;
+    enum class ExitLegTransitionResult {
+        Applied, Replay, StaleIdentity, BindRefused, ActionRefused, Exhausted,
+        RevisionExhausted
+    };
+    ExitLegTransitionResult transition_exit_leg(
+        exit_legs::Lifecycle& legs, uint64_t order_incarnation,
+        exit_legs::Operation operation, std::optional<exit_legs::Frame> supplied,
+        uint64_t& event_seq, int64_t position_cycle) const;
+    std::optional<execution::Status> validate_lifecycle_effects(
+        const execution::LifecycleEffects& lifecycle) const;
+    std::optional<execution::Status> preflight_settlement_lifecycle(
+        const execution::LifecycleEffects& lifecycle,
+        bool will_reset_to_flat, bool will_open_quoted);
+    void apply_pre_close_lifecycle_batch(const execution::LifecycleBatch& batch);
+    void apply_authorized_pending_removals(
+        const std::vector<execution::PendingRemoval>& removals);
+    std::vector<execution::PendingRemoval> snapshot_exit_pending_removals() const;
+    std::optional<execution::LifecycleBatch> select_declined_reversal_pre_close(
+        const Bar& bar) const;
+    const PendingOrder* find_unique_pending(
+        uint64_t incarnation, int64_t created_seq) const;
+    PendingOrder* find_unique_pending(uint64_t incarnation, int64_t created_seq);
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
@@ -4276,12 +4316,21 @@ private:
                                PositionSide created_position_side,
                                bool is_priced_entry,
                                uint64_t entry_incarnation);
+    // `fill_price` is already resolved. Source sizing, direction and dust
+    // selection stay here; purge_pending_exits is translated into exact
+    // pending removals for the settlement coordinator. False does not
+    // touch pending_orders_ storage.
     void close_opposite_then_enter(const std::string& id, bool is_long,
                                    double fill_price, double explicit_qty,
                                    int explicit_qty_type,
                                    bool purge_pending_exits,
                                    bool explicit_qty_prequantized,
                                    uint64_t entry_incarnation);
+    void apply_resolved_close_opposite_then_enter(
+        const std::string& id, bool is_long, double fill_price,
+        double explicit_qty, int explicit_qty_type,
+        bool explicit_qty_prequantized, uint64_t entry_incarnation,
+        execution::LifecycleEffects lifecycle);
     void flip_market_position_to(const std::string& id, bool is_long,
                                  double fill_price, double explicit_qty,
                                  int explicit_qty_type,

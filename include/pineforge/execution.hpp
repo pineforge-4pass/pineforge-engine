@@ -1,10 +1,12 @@
 #pragma once
 
+#include "exit_leg_lifecycle.hpp"
 #include "order_action.hpp"
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace pineforge::execution {
 
@@ -27,7 +29,10 @@ struct Fill {
 
 enum class Status {
     Applied, NoEffect, InvalidPrice, InvalidQuantity, InvalidBook,
-    UnrepresentableQuantity, InvalidAccounting
+    UnrepresentableQuantity, InvalidAccounting,
+    // Caller-supplied lifecycle targets/revisions/operations that cannot be
+    // applied to the current pending book. Not durable engine state.
+    InvalidLifecycle
 };
 
 struct Result {
@@ -36,6 +41,42 @@ struct Result {
     // authoritative. Opening units are signed; closing units are nonnegative.
     double closed_units = 0.0;
     double opened_units = 0.0;
+};
+
+// One pre-close operation on an exact pending identity. created_seq 0 and
+// Target{0,0} are actual expected values, not wildcards. The coordinator
+// allocates the batch cause and does not rewrite operation payloads.
+struct LifecycleIntent {
+    uint64_t order_incarnation = 0;
+    int64_t created_seq = 0;
+    exit_legs::Target target{};
+    uint64_t expected_revision = 0;
+    exit_legs::Operation operation{};
+};
+
+// Engaging this batch allocates one observation frame on a successful
+// commit even when operations is empty. Empty optional means no allocation.
+// Phase must be a valid exit_legs::Phase even for an empty operations list.
+struct LifecycleBatch {
+    exit_legs::Phase phase = exit_legs::Phase::Observation;
+    std::vector<LifecycleIntent> operations;
+};
+
+// Exact pending EXIT to remove after old-cycle unbind and before any
+// quoted opening bind. Fields are the initial snapshot before this
+// execution's own effects; incarnation 0 is refused.
+struct PendingRemoval {
+    uint64_t incarnation = 0;
+    int64_t created_seq = 0;
+    exit_legs::Target target{};
+    uint64_t expected_revision = 0;
+};
+
+// Transient, stack-local effects for one settle_execution_with_lifecycle
+// call. Not stored, hashed, replayed, or reusable execution authority.
+struct LifecycleEffects {
+    std::optional<LifecycleBatch> pre_close;
+    std::vector<PendingRemoval> removals;
 };
 
 } // namespace pineforge::execution

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -22,6 +23,12 @@ void reserve_effects(std::vector<T>& values, size_t extra) {
 
 execution::Result BacktestEngine::settle_resolved_execution(
         const execution::Action& action, const execution::Fill& fill) {
+    return settle_execution_with_lifecycle(action, fill, {});
+}
+
+execution::Result BacktestEngine::settle_execution_with_lifecycle(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle) {
     using execution::Status;
     if (!std::isfinite(fill.price)) return {Status::InvalidPrice};
     if (fill.commission_account && !std::isfinite(*fill.commission_account))
@@ -53,6 +60,8 @@ execution::Result BacktestEngine::settle_resolved_execution(
         held += lot.qty;
         if (!std::isfinite(held)) return {Status::InvalidBook};
     }
+    if (auto invalid = validate_lifecycle_effects(lifecycle))
+        return {*invalid};
     const double signed_held = position_side_ == PositionSide::SHORT ? -held : held;
     if (!flatten && requested == 0.0) return no_effect();
     if ((flatten || reduce) && pyramid_entries_.empty()) return no_effect();
@@ -182,6 +191,13 @@ execution::Result BacktestEngine::settle_resolved_execution(
         && position_entry_count_ == std::numeric_limits<int>::max())
         throw std::overflow_error("position entry counter exhausted");
 
+    const bool will_reset = closed > 0.0 && survivors.empty();
+    const bool will_open_quoted = opening > 0.0
+        && (position_side_ == PositionSide::FLAT || survivors.empty());
+    if (auto invalid = preflight_settlement_lifecycle(
+            lifecycle, will_reset, will_open_quoted))
+        return {*invalid};
+
     const size_t first_trade = trades_.size();
     const size_t first_action = stream_order_actions_.size();
     const size_t events = closed_trades.size() + (opening > 0.0 ? 1 : 0);
@@ -195,6 +211,9 @@ execution::Result BacktestEngine::settle_resolved_execution(
     // Commit through the existing accounting/observation sinks. Allocation or
     // lifecycle exceptions still abort the owning engine run; this internal
     // synchronous kernel does not promise recovery/replay of a failed commit.
+    // Order: authorized pre-close events, close observations and old-cycle
+    // unbind, authorized pending removals, then quoted opening bind.
+    if (lifecycle.pre_close) apply_pre_close_lifecycle_batch(*lifecycle.pre_close);
     for (auto& trade : closed_trades) record_close_trade(std::move(trade));
     if (closed > 0.0) {
         if (survivors.empty()) {
@@ -206,6 +225,7 @@ execution::Result BacktestEngine::settle_resolved_execution(
             position_entry_count_ = static_cast<int>(pyramid_entries_.size());
         }
     }
+    apply_authorized_pending_removals(lifecycle.removals);
     if (opening > 0.0) {
         PyramidEntry lot{fill.price, current_bar_.timestamp, opening, fill.id, bar_index_};
         lot.entry_incarnation = fill.incarnation;

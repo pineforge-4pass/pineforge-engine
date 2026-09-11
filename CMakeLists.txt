@@ -88,6 +88,7 @@ add_library(pineforge STATIC
     src/engine_metrics.cpp
     src/engine_orders.cpp
     src/engine_execution.cpp
+    src/engine_execution_lifecycle.cpp
     src/engine_path_resolve.cpp
     src/engine_report.cpp
     src/engine_risk.cpp

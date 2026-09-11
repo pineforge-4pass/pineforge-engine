@@ -46,6 +46,9 @@ struct Access {
 struct CloseOppositeAccess { friend auto access(CloseOppositeAccess); };
 struct MarketEntryAccess { friend auto access(MarketEntryAccess); };
 struct SettleAccess { friend auto access(SettleAccess); };
+struct EffectsSettleAccess { friend auto access(EffectsSettleAccess); };
+struct SelectPreCloseAccess { friend auto access(SelectPreCloseAccess); };
+struct LegRevisionAccess { friend auto access(LegRevisionAccess); };
 
 template struct Access<CloseOppositeAccess,
                        &BacktestEngine::close_opposite_then_enter>;
@@ -53,6 +56,11 @@ template struct Access<MarketEntryAccess,
                        &BacktestEngine::execute_market_entry>;
 template struct Access<SettleAccess,
                        &BacktestEngine::settle_resolved_execution>;
+template struct Access<EffectsSettleAccess,
+                       &BacktestEngine::settle_execution_with_lifecycle>;
+template struct Access<SelectPreCloseAccess,
+                       &BacktestEngine::select_declined_reversal_pre_close>;
+template struct Access<LegRevisionAccess, &exit_legs::Lifecycle::revision_>;
 
 class Book final : public BacktestEngine {
 public:
@@ -163,6 +171,46 @@ public:
         execution::Fill fill{price, "N", "native", 902};
         return (this->*access(SettleAccess{}))(
             execution::Flatten{}, fill);
+    }
+
+    execution::Result settle_effects(const execution::Action& action,
+                                     const execution::LifecycleEffects& effects) {
+        return (this->*access(EffectsSettleAccess{}))(
+            action, execution::Fill{120.0, "N", "native", 903}, effects);
+    }
+    std::optional<execution::LifecycleBatch> selected_pre_close() const {
+        return (this->*access(SelectPreCloseAccess{}))(current_bar_);
+    }
+    void set_leg_owner(int64_t owner) {
+        exit_legs::Lifecycle replacement;
+        replacement.attach(pending_orders_.front().incarnation, owner);
+        pending_orders_.front().legs = std::move(replacement);
+    }
+    void exhaust_leg_revision() {
+        pending_orders_.front().legs.*access(LegRevisionAccess{}) = UINT64_MAX;
+    }
+    void set_lifecycle_events(uint64_t value) { exit_leg_event_seq_ = value; }
+    const exit_legs::Lifecycle& first_legs() const { return pending_orders_.front().legs; }
+    void define_stop() { pending_orders_.front().legs.set_stop_price(90.0); }
+    void add_second_exit() {
+        PendingOrder order{};
+        order.id = "second-exit";
+        order.from_entry = "B";
+        order.type = OrderType::EXIT;
+        order.incarnation = 501;
+        order.created_seq = 1;
+        order.legs.attach(order.incarnation, position_cycle_seq_);
+        pending_orders_.push_back(std::move(order));
+    }
+    void seed_prior_leg_event() {
+        auto& legs = pending_orders_.front().legs;
+        const exit_legs::Frame frame{7, 1, exit_legs::Domain::Ordinary,
+                                     exit_legs::Phase::Observation};
+        const exit_legs::Action action{legs.target(), legs.revision(), frame,
+                                       exit_legs::BindOwner{4}};
+        if (legs.apply(legs.target(), action) != exit_legs::Result::Applied)
+            throw std::logic_error("invalid prior-event test fixture");
+        exit_leg_event_seq_ = 7;
     }
 
     // Calls the legacy compatibility helper directly.  `price` is intentionally
@@ -456,6 +504,244 @@ void invalid_native_requests_are_noops() {
     CHECK(invalid.fingerprint() == before_invalid);
 }
 
+execution::LifecycleIntent fixed_intent(exit_legs::Operation operation) {
+    return {500, 0, {500, 4}, 0, std::move(operation)};
+}
+
+execution::PendingRemoval fixed_removal() { return {500, 0, {500, 4}, 0}; }
+
+// Every supplied target fact is a precondition, including zero-valued sequence
+// and unbound targets. Refusal cannot spend money or mutate pending orders.
+void malformed_lifecycle_effects_are_refused() {
+    for (int kind = 0; kind < 15; ++kind) {
+        Book book;
+        book.seed_two_lots();
+        book.add_stale_exit();
+        execution::LifecycleEffects effects;
+        effects.pre_close.emplace();
+        effects.pre_close->operations.push_back(fixed_intent(exit_legs::BindOwner{4}));
+        auto& intent = effects.pre_close->operations.front();
+        switch (kind) {
+        case 0: intent.order_incarnation = 0; break;
+        case 1: intent.order_incarnation = 501; intent.target.incarnation = 501; break;
+        case 2: intent.created_seq = 1; break;
+        case 3: intent.target = {}; break;
+        case 4: intent.target.owner = 5; break;
+        case 5: intent.expected_revision = 1; break;
+        case 6: effects.pre_close->operations.push_back(intent); break;
+        case 7:
+            effects.pre_close->operations.clear();
+            effects.pre_close->phase = static_cast<exit_legs::Phase>(255);
+            break;
+        default:
+            effects.pre_close.reset();
+            effects.removals.push_back(fixed_removal());
+            if (kind == 8) effects.removals.front().expected_revision = 1;
+            if (kind == 9) effects.removals.front().target.owner = 5;
+            if (kind == 10) effects.removals.push_back(fixed_removal());
+            if (kind == 11) effects.removals.front().incarnation = 0;
+            if (kind == 12) effects.removals.front().incarnation = 501;
+            if (kind == 13) effects.removals.front().target = {};
+            if (kind == 14) effects.removals.front().created_seq = 1;
+            break;
+        }
+        const auto before = book.fingerprint();
+        const auto result = book.settle_effects(order_action::Reduce{1.0}, effects);
+        CHECK(result.status == execution::Status::InvalidLifecycle);
+        CHECK(book.fingerprint() == before);
+        CHECK(book.position() == 5.0);
+        CHECK(book.trades().empty());
+    }
+}
+
+void actual_owner_is_checked_before_close() {
+    for (bool change_in_pre_close : {false, true}) {
+        Book book;
+        book.seed_two_lots();
+        book.add_stale_exit();
+        execution::LifecycleEffects effects;
+        if (change_in_pre_close) {
+            effects.pre_close.emplace();
+            effects.pre_close->operations.push_back(fixed_intent(exit_legs::BindOwner{5}));
+        } else {
+            book.set_leg_owner(5); // Actual physical cycle is still 4.
+        }
+        const auto before = book.fingerprint();
+        bool refused = false;
+        try {
+            const auto result = book.settle_effects(execution::Flatten{}, effects);
+            refused = result.status != execution::Status::Applied
+                && result.status != execution::Status::NoEffect;
+        } catch (const std::logic_error&) {
+            refused = true;
+        }
+        CHECK(refused);
+        CHECK(book.fingerprint() == before);
+        CHECK(book.position() == 5.0);
+        CHECK(book.trades().empty());
+    }
+}
+
+void operation_window_is_literal() {
+    Book book;
+    book.seed_two_lots();
+    book.add_stale_exit();
+    book.set_lifecycle_events(10);
+    const exit_legs::Frame previous{4, 0, exit_legs::Domain::Ordinary,
+                                   exit_legs::Phase::Observation};
+    const exit_legs::ObservationWindow window{previous, 120.0, 115.0};
+    const exit_legs::Suspend suspend{{exit_legs::Leg::Stop, exit_legs::Leg::Limit},
+                                     {}, window, {}};
+    execution::LifecycleEffects effects;
+    effects.pre_close.emplace();
+    effects.pre_close->operations.push_back(fixed_intent(suspend));
+    const auto result = book.settle_effects(order_action::Reduce{1.0}, effects);
+    CHECK(result.status == execution::Status::Applied);
+    CHECK(book.position() == 4.0);
+    CHECK(book.lifecycle_events() == 11);
+    CHECK(book.first_legs().suspension().has_value());
+    if (book.first_legs().suspension()) {
+        const auto& state = *book.first_legs().suspension();
+        CHECK(state.cause.event == 11);
+        CHECK(state.window.has_value());
+        if (state.window) {
+            CHECK(state.window->excluded.event == 4);
+            CHECK(state.window->excluded.bar == 0);
+            CHECK(state.window->best == 120.0 && state.window->prefix == 115.0);
+        }
+    }
+}
+
+void source_selection_is_pure_and_empty_batch_is_real() {
+    for (bool selected : {false, true}) {
+        Book book;
+        book.seed_two_lots();
+        book.add_stale_exit();
+        if (selected) book.define_stop();
+        const auto before = book.fingerprint();
+        const auto batch = book.selected_pre_close();
+        CHECK(batch.has_value());
+        CHECK(book.fingerprint() == before);
+        if (!batch) continue;
+        CHECK(batch->operations.size() == (selected ? 1u : 0u));
+        execution::LifecycleEffects effects;
+        effects.pre_close = batch;
+        const auto result = book.settle_effects(order_action::Reduce{1.0}, effects);
+        CHECK(result.status == execution::Status::Applied);
+        CHECK(book.lifecycle_events() == 1);
+        CHECK(book.position() == 4.0);
+        CHECK(book.first_legs().suspension().has_value() == selected);
+        if (selected && book.first_legs().suspension()) {
+            CHECK(book.first_legs().suspension()->window.has_value());
+            if (book.first_legs().suspension()->window)
+                CHECK(book.first_legs().suspension()->window->excluded.event == 1);
+        }
+    }
+
+    Book flat;
+    flat.add_stale_exit();
+    execution::LifecycleEffects effects;
+    effects.pre_close.emplace();
+    effects.removals.push_back({500, 0, {500, 0}, 0});
+    const auto before = flat.fingerprint();
+    const auto result = flat.settle_effects(order_action::Reduce{1.0}, effects);
+    CHECK(result.status == execution::Status::NoEffect);
+    CHECK(flat.fingerprint() == before);
+    CHECK(flat.pending_count() == 1);
+}
+
+// The source selector historically applies through the current-owner binding
+// transition. Preserve that transition even when the stored leg owner is 0;
+// an exact snapshot of owner 0 must not be confused with a wildcard request.
+void selected_pre_close_preserves_current_owner_binding() {
+    Book book;
+    book.seed_two_lots();
+    book.add_stale_exit();
+    book.set_leg_owner(0);
+    book.define_stop();
+    const auto before = book.fingerprint();
+    const auto batch = book.selected_pre_close();
+    CHECK(batch && batch->operations.size() == 1);
+    CHECK(book.fingerprint() == before);
+    if (!batch || batch->operations.empty()) return;
+    CHECK(batch->operations.front().target.owner == 0);
+    execution::LifecycleEffects effects;
+    effects.pre_close = batch;
+    const auto result = book.settle_effects(order_action::Reduce{1.0}, effects);
+    CHECK(result.status == execution::Status::Applied);
+    CHECK(book.position() == 4.0);
+    CHECK(book.lifecycle_owner() == 4);
+    CHECK(book.lifecycle_revision() == 3); // Definition + owner bind + suspend.
+    CHECK(book.lifecycle_events() == 3); // Batch, owner bind, requested operation.
+    CHECK(book.first_legs().suspension().has_value());
+    if (book.first_legs().suspension()) {
+        CHECK(book.first_legs().suspension()->cause.event == 3);
+        CHECK(book.first_legs().suspension()->window.has_value());
+        if (book.first_legs().suspension()->window)
+            CHECK(book.first_legs().suspension()->window->excluded.event == 1);
+    }
+}
+
+void complete_lifecycle_preflight_handles_exhaustion() {
+    for (bool revision : {false, true}) {
+        Book book;
+        book.seed_two_lots();
+        book.add_stale_exit();
+        execution::LifecycleEffects effects;
+        if (revision) book.exhaust_leg_revision();
+        else {
+            book.set_lifecycle_events(UINT64_MAX);
+            effects.pre_close.emplace();
+        }
+        const auto before = book.fingerprint();
+        bool threw = false;
+        try { book.settle_effects(execution::Flatten{}, effects); }
+        catch (const std::overflow_error&) { threw = true; }
+        CHECK(threw);
+        CHECK(book.fingerprint() == before);
+        CHECK(book.position() == 5.0);
+        CHECK(book.trades().empty());
+    }
+
+    Book book;
+    book.seed_two_lots();
+    book.add_stale_exit();
+    book.define_stop();
+    execution::LifecycleEffects effects;
+    effects.pre_close = book.selected_pre_close();
+    book.exhaust_next_cycle();
+    const auto before = book.fingerprint();
+    bool threw = false;
+    try { book.settle_effects(order_action::Transact{-6.0}, effects); }
+    catch (const std::overflow_error&) { threw = true; }
+    CHECK(threw);
+    CHECK(book.fingerprint() == before);
+    CHECK(!book.first_legs().suspension());
+    CHECK(book.lifecycle_events() == 0);
+}
+
+void multiple_exits_and_prior_receipts_preserve_order() {
+    for (bool purge : {false, true}) {
+        Book book;
+        book.seed_two_lots();
+        book.add_stale_exit();
+        book.add_second_exit();
+        book.reverse_raw(120.0, 6.0, purge, 904);
+        CHECK(book.position() == -1.0);
+        CHECK(book.pending_count() == (purge ? 0u : 2u));
+        CHECK(book.lifecycle_events() == (purge ? 2u : 6u));
+        if (!purge) CHECK(book.lifecycle_revision() == 3);
+    }
+    Book prior;
+    prior.seed_two_lots();
+    prior.add_stale_exit();
+    prior.seed_prior_leg_event();
+    prior.reverse_raw(120.0, 6.0, false, 905);
+    CHECK(prior.lifecycle_events() == 10);
+    CHECK(prior.lifecycle_revision() == 4);
+    CHECK(prior.lifecycle_owner() == 5);
+}
+
 } // namespace
 
 int main() {
@@ -472,6 +758,13 @@ int main() {
     lifecycle_exhaustion_precedes_mutation();
     stream_and_trade_exhaustion_precede_mutation();
     invalid_native_requests_are_noops();
+    malformed_lifecycle_effects_are_refused();
+    actual_owner_is_checked_before_close();
+    operation_window_is_literal();
+    source_selection_is_pure_and_empty_batch_is_real();
+    selected_pre_close_preserves_current_owner_binding();
+    complete_lifecycle_preflight_handles_exhaustion();
+    multiple_exits_and_prior_receipts_preserve_order();
     std::printf("native reversal contract checks=%d failures=%d\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

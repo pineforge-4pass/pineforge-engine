@@ -10,9 +10,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #ifndef PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG
 #define PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG 1
@@ -7129,10 +7131,17 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
         // The old from_entry bracket is dormant after a reducing sell and
         // reactivates only through its established reissue/margin lifecycle.
         // Do not erase pending_orders_ while the fill loop holds references.
-        mark_position_brackets_dormant_on_declined_reversal(bar);
-        close_opposite_then_enter(order.id, false, fill_price,
-            order.frozen_default_qty, -1, /*purge_pending_exits=*/false,
-            /*explicit_qty_prequantized=*/true, order.incarnation);
+        // Resolve the matcher price once; the helper is resolved-only. The
+        // exact-book gate currently requires zero slippage/fees, but this
+        // boundary still goes through apply_fill_slippage.
+        execution::LifecycleEffects lifecycle;
+        if (auto batch = select_declined_reversal_pre_close(bar))
+            lifecycle.pre_close = std::move(*batch);
+        apply_resolved_close_opposite_then_enter(
+            order.id, false, apply_fill_slippage(fill_price, /*is_buy=*/false),
+            order.frozen_default_qty, -1,
+            /*explicit_qty_prequantized=*/true, order.incarnation,
+            std::move(lifecycle));
         for (PendingOrder& sibling : pending_orders_) {
             if (sibling.type == OrderType::MARKET
                 && sibling.created_seq > order.created_seq
@@ -7938,19 +7947,37 @@ bool BacktestEngine::dormant_bracket_trail_leg_live(const PendingOrder& o) const
         && (!std::isnan(o.legs.prices().trail_points) || !std::isnan(o.legs.prices().trail_price));
 }
 
-void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal(const Bar& bar) {
-    if (position_side_ == PositionSide::FLAT) return;
-    const auto cause = next_leg_event();
-    for (PendingOrder& order : pending_orders_) {
+std::optional<execution::LifecycleBatch>
+BacktestEngine::select_declined_reversal_pre_close(const Bar& bar) const {
+    if (position_side_ == PositionSide::FLAT) return std::nullopt;
+    execution::LifecycleBatch batch;
+    const auto upcoming = preview_next_leg_event(exit_legs::Phase::Observation);
+    const int direction = position_side_ == PositionSide::LONG ? 1 : -1;
+    const double prior_best = trail_best_before_bar_index_ == bar_index_
+        ? trail_best_before_bar_ : trail_best_price_;
+    const bool open_slice = open_margin_slice_bar_ == bar_index_;
+    for (const PendingOrder& order : pending_orders_) {
         const bool standing = order.from_entry.empty()
             || cycle_filled_entry_ids_.count(order.from_entry) != 0;
         const auto selected = compat::pine::select_exit_suspension(order,
-            {cause, position_side_ == PositionSide::LONG ? 1 : -1,
-             position_entry_price_, syminfo_mintick_, bar.open,
-             trail_best_before_bar_index_ == bar_index_ ? trail_best_before_bar_ : trail_best_price_,
-             open_margin_slice_bar_ == bar_index_, standing});
-        if (selected) apply_leg_action(order, *selected, cause);
+            {upcoming, direction, position_entry_price_, syminfo_mintick_,
+             bar.open, prior_best, open_slice, standing});
+        if (!selected) continue;
+        execution::LifecycleIntent intent;
+        intent.order_incarnation = order.incarnation;
+        intent.created_seq = order.created_seq;
+        intent.target = order.legs.target();
+        intent.expected_revision = order.legs.revision();
+        intent.operation = *selected;
+        batch.operations.push_back(std::move(intent));
     }
+    return batch;
+}
+
+void BacktestEngine::mark_position_brackets_dormant_on_declined_reversal(const Bar& bar) {
+    const auto batch = select_declined_reversal_pre_close(bar);
+    if (!batch) return;
+    apply_pre_close_lifecycle_batch(*batch);
 }
 
 // ── Inner-loop phase 1: order eligibility ─────────────────────────────
