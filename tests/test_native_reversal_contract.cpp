@@ -742,6 +742,33 @@ void multiple_exits_and_prior_receipts_preserve_order() {
     CHECK(prior.lifecycle_owner() == 5);
 }
 
+// Adapter quantities are magnitudes. Invalid magnitudes must not silently
+// reverse direction or return success to a caller that would then cancel
+// sibling orders. Explicit native Transact signed units are a separate API.
+void invalid_adapter_magnitudes_fail_before_effects() {
+    for (double quantity : {-1.0, std::numeric_limits<double>::infinity(),
+                            std::numeric_limits<double>::quiet_NaN()}) {
+        Book book;
+        book.seed_two_lots();
+        book.add_stale_exit();
+        const auto before = book.fingerprint();
+        bool threw = false;
+        try { book.reverse_raw(120.0, quantity, true, 906); }
+        catch (const std::invalid_argument&) { threw = true; }
+        CHECK(threw);
+        CHECK(book.fingerprint() == before);
+        CHECK(book.position() == 5.0);
+        CHECK(book.trades().empty());
+    }
+    Book zero;
+    zero.seed_two_lots();
+    zero.add_stale_exit();
+    const auto before = zero.fingerprint();
+    zero.reverse_raw(120.0, 0.0, true, 907);
+    CHECK(zero.fingerprint() == before);
+    CHECK(zero.pending_count() == 1);
+}
+
 } // namespace
 
 int main() {
@@ -765,6 +792,7 @@ int main() {
     selected_pre_close_preserves_current_owner_binding();
     complete_lifecycle_preflight_handles_exhaustion();
     multiple_exits_and_prior_receipts_preserve_order();
+    invalid_adapter_magnitudes_fail_before_effects();
     std::printf("native reversal contract checks=%d failures=%d\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

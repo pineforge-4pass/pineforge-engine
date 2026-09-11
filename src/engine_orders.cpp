@@ -1200,6 +1200,9 @@ void BacktestEngine::apply_resolved_close_opposite_then_enter(
     const double tx_qty = explicit_qty_prequantized
         ? explicit_qty
         : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    if (!std::isfinite(tx_qty) || tx_qty < 0.0)
+        throw std::invalid_argument("invalid close-opposite transaction quantity");
+    if (tx_qty == 0.0) return;
     const double signed_units = is_long ? tx_qty : -tx_qty;
     double held = 0.0;
     for (const auto& lot : pyramid_entries_) held += lot.qty;
@@ -1207,7 +1210,9 @@ void BacktestEngine::apply_resolved_close_opposite_then_enter(
         : position_side_ == PositionSide::LONG ? held : 0.0;
     const auto planned = order_action::plan(
         signed_held, order_action::Transact{signed_units});
-    if (!planned || planned->no_effect()) return;
+    if (!planned)
+        throw std::runtime_error("unrepresentable close-opposite transaction");
+    if (planned->no_effect()) return;
 
     execution::Action action = order_action::Transact{signed_units};
     const double remainder = std::abs(planned->open_units());
