@@ -8,6 +8,7 @@
 #include <type_traits>
 
 namespace pineforge {
+inline namespace native_run_spec_v1 {
 
 // Encodings coincide with the versioned native-v1 C transport. These values
 // describe native execution; they do not configure source strategy policies.
@@ -132,4 +133,5 @@ static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);
 static_assert(std::is_nothrow_move_assignable_v<NativeRunSpec>);
 
+}  // inline namespace native_run_spec_v1
 } // namespace pineforge

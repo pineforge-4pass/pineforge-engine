@@ -8,8 +8,8 @@
 #include <string>
 
 namespace pineforge {
-
-struct NativeRunSpec;
+inline namespace native_run_spec_v1 { struct NativeRunSpec; }
+inline namespace native_driver_v3 {
 
 // Semantic versions hashed into native continuation identity.
 inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v3";
@@ -154,4 +154,5 @@ NativeInputPreflightResult preflight_native_inputs(
         int n,
         NativeInputPolicy policy);
 
+}  // inline namespace native_driver_v3
 }  // namespace pineforge

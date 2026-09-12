@@ -7,6 +7,7 @@
 #include <string_view>
 
 namespace pineforge {
+inline namespace native_run_spec_v1 {
 namespace {
 
 using Error = NativeRunSpecError;
@@ -182,4 +183,5 @@ NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept 
     return {};
 }
 
+}  // inline namespace native_run_spec_v1
 } // namespace pineforge

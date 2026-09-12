@@ -48,6 +48,7 @@
 #include <exception>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -530,9 +531,15 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
     return pf_cabi_int([&] {
         if (!s) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-        const auto* bars = reinterpret_cast<const pineforge::Bar*>(warmup_bars);
+        if (n_warmup < 0 || (n_warmup > 0 && !warmup_bars)) return -1;
+        std::vector<pineforge::Bar> bars;
+        bars.reserve(static_cast<std::size_t>(n_warmup));
+        for (int i = 0; i < n_warmup; ++i) {
+            const auto& b = warmup_bars[i];
+            bars.push_back({b.open, b.high, b.low, b.close, b.volume, b.timestamp});
+        }
         return engine->stream_begin(
-            bars, n_warmup,
+            bars.data(), n_warmup,
             input_tf ? std::string(input_tf) : std::string(),
             script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
     });
@@ -543,8 +550,9 @@ PF_API int strategy_stream_api_version(void) { return 1; }
 PF_API int strategy_stream_push_bar(pf_strategy_t s, const pf_bar_t* bar) {
     return pf_cabi_int([&] {
         if (!s || !bar) return -1;
-        return static_cast<pineforge::BacktestEngine*>(s)->stream_push_bar(
-            *reinterpret_cast<const pineforge::Bar*>(bar)) ? 0 : -1;
+        const pineforge::Bar native{bar->open, bar->high, bar->low,
+                                     bar->close, bar->volume, bar->timestamp};
+        return static_cast<pineforge::BacktestEngine*>(s)->stream_push_bar(native) ? 0 : -1;
     });
 }
 
@@ -578,8 +586,9 @@ PF_API int strategy_stream_push_tick(pf_strategy_t s,
                                      const pf_trade_tick_t* tick) {
     return pf_cabi_int([&] {
         if (!s || !tick) return -1;
-        const auto* native = reinterpret_cast<const pineforge::TradeTick*>(tick);
-        return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(*native)
+        const pineforge::TradeTick native{tick->timestamp, tick->sequence,
+                                           tick->price, tick->quantity};
+        return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(native)
             ? 0
             : -1;
     });
@@ -591,8 +600,13 @@ PF_API int strategy_stream_push_ticks(pf_strategy_t s,
     return pf_cabi_int([&] {
         if (!s || n < 0 || (n > 0 && !ticks)) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-        const auto* native = reinterpret_cast<const pineforge::TradeTick*>(ticks);
-        return engine->stream_push_ticks(native, n) ? 0 : -1;
+        std::vector<pineforge::TradeTick> native;
+        native.reserve(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            const auto& tick = ticks[i];
+            native.push_back({tick.timestamp, tick.sequence, tick.price, tick.quantity});
+        }
+        return engine->stream_push_ticks(native.data(), n) ? 0 : -1;
     });
 }
 

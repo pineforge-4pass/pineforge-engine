@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace pineforge::native_calendar {
+inline namespace native_calendar_v2 {
 
 // Isolated calendar / interval values for a later native host. This component
 // does not match orders, emit strategy callbacks, aggregate OHLCV, or run a
@@ -410,4 +411,5 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
                                                   const Timeframe& input_tf,
                                                   int64_t ms);
 
+}  // inline namespace native_calendar_v2
 }  // namespace pineforge::native_calendar

@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace pineforge::native_order {
+inline namespace native_order_v1 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
@@ -306,4 +307,5 @@ struct TerminalCommit {
                         CommandEvent&& event) noexcept;
 };
 
+}  // inline namespace native_order_v1
 }  // namespace pineforge::native_order

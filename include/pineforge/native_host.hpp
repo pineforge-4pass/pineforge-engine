@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace pineforge {
+inline namespace engine_script_run_v12 {
 
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
@@ -133,7 +134,6 @@ struct NativeSetupResult {
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
 #define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V12 1
-inline namespace engine_script_run_v12 {
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();

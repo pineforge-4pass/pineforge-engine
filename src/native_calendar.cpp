@@ -16,6 +16,7 @@
 #include <utility>
 
 namespace pineforge::native_calendar {
+inline namespace native_calendar_v2 {
 namespace {
 
 constexpr int64_t kMsPerSecond = 1000;
@@ -1456,4 +1457,5 @@ std::optional<NativeInterval> interval_containing(const SessionCalendar& calenda
     return interval_containing(calendar, tf, tf, ms);
 }
 
+}  // inline namespace native_calendar_v2
 }  // namespace pineforge::native_calendar

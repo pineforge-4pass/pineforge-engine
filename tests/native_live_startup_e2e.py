@@ -1,5 +1,7 @@
 """CLI contract for native runner startup/identity. Python orchestrates only."""
 import json
+import hashlib
+import os
 import sqlite3
 import subprocess
 import sys
@@ -178,7 +180,6 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     p = invoke(base_cmd(no_export, warmup5, ledger, cfg_lib), success=False)
     # Fails at missing export or identity; must not deliver and must keep original identity.
     assert identity_of(ledger) == first_identity
-    assert not Path(str(ledger) + '-wal').exists() or True
 
     other_warmup = root / 'w5b.csv'
     warmup_csv(other_warmup, [0, 300000, 600000, 900000, 1200000])
@@ -201,15 +202,29 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     assert 'native-config requires NativeMarketV1' in p.stderr
     assert not ledger_bound(root / 'legacy-real-nativecfg.sqlite3')
 
-    # Real native example: startup, one live 5m bar, then exact replay.
+    # Real native example: nonempty physical actions, durable delivery failure,
+    # replay of committed state/action bytes, retry, then an idle replay.
     received = []
+    received_bytes = []
+    receiver_status = 503
+
+    def ledger_rows(path):
+        with sqlite3.connect(path) as db:
+            return {
+                'identity': identity_of(path),
+                'inputs': db.execute('SELECT input_index,canonical_json,state_hash '
+                                     'FROM inputs ORDER BY input_index').fetchall(),
+                'events': db.execute('SELECT ordinal,input_index,input_position,event_id,payload,'
+                                     'attempts,acknowledged FROM events ORDER BY ordinal').fetchall(),
+            }
 
     class Receiver(BaseHTTPRequestHandler):
         protocol_version = 'HTTP/1.1'
         def do_POST(self):
             raw = self.rfile.read(int(self.headers['Content-Length']))
             received.append(json.loads(raw))
-            self.send_response(200)
+            received_bytes.append(raw.decode('utf-8'))
+            self.send_response(receiver_status)
             self.send_header('Content-Length', '0')
             self.end_headers()
         def log_message(self, *args):
@@ -220,24 +235,77 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     thread.start()
     try:
         example_ledger = root / 'example.sqlite3'
-        example_feed = warmup5.with_suffix('.jsonl')
-        example_feed.write_text(json.dumps({
-            'type': 'bar',
-            'bar': {'ts_open': 1200000, 'o': 100, 'h': 102, 'l': 99, 'c': 101, 'v': 4},
-        }) + '\n')
-        example_cmd = [runner, 'run', '--strategy', native_example, '--warmup', str(warmup5),
+        example_warmup = root / 'native-example-warmup.csv'
+        warmup_csv(example_warmup, [0, 300000])
+        example_feed = root / 'native-example.jsonl'
+        feed_rows = [{'type': 'bar', 'bar': {
+            'ts_open': 600000 + i * 300000, 'o': 100, 'h': 102, 'l': 99, 'c': 101, 'v': 4,
+        }} for i in range(8)]
+        example_feed.write_text(''.join(json.dumps(row) + '\n' for row in feed_rows))
+        example_cmd = [runner, 'run', '--strategy', native_example, '--warmup', str(example_warmup),
                        '--mode', 'bars', '--ledger', str(example_ledger),
                        '--webhook-url', f'http://127.0.0.1:{server.server_port}/webhook',
                        '--allow-insecure-http', '--feed', str(example_feed),
                        '--native-config', str(cfg), '--name', 'native-example']
+        failed_delivery = invoke(example_cmd + ['--max-attempts', '1'], success=False)
+        assert 'webhook retry limit reached; queued event remains in ledger' in failed_delivery.stderr, failed_delivery.stderr
+        failed_rows = ledger_rows(example_ledger)
+        assert len(received) == 1, received
+        assert len(failed_rows['events']) == 1, failed_rows
+        assert failed_rows['events'][0][5:] == (1, 0), failed_rows
+        assert 0 < len(failed_rows['inputs']) < len(feed_rows), failed_rows
+        assert all(row[2].isdigit() and int(row[2]) != 0 for row in failed_rows['inputs'])
+        failed_payload = received_bytes[0]
+        assert failed_rows['events'][0][4] == failed_payload
+
+        receiver_status = 200
         example = invoke(example_cmd)
-        assert ledger_bound(example_ledger)
-        assert example['inputs_committed'] == 1
-        prior = list(received)
+        assert example['inputs_committed'] == len(feed_rows), example
+        assert example['prefix_skipped'] == len(failed_rows['inputs']), example
+        committed_rows = ledger_rows(example_ledger)
+        assert len(committed_rows['events']) == 2, committed_rows
+        assert len(received) == 3, received
+        assert received_bytes[0] == received_bytes[1] == failed_payload
+        assert committed_rows['inputs'][:len(failed_rows['inputs'])] == failed_rows['inputs']
+        assert committed_rows['events'][0][:5] == failed_rows['events'][0][:5]
+        assert committed_rows['events'][0][5:] == (2, 1), committed_rows
+        assert committed_rows['events'][1][5:] == (1, 1), committed_rows
+        assert [row[4] for row in committed_rows['events']] == received_bytes[1:]
+        assert len({row[3] for row in committed_rows['events']}) == 2
+        actions = [json.loads(row[4]) for row in committed_rows['events']]
+        assert [(a['timestamp'], a['order']['action'], a['order']['contracts'],
+                 a['order']['price'], a['order']['reduce_only']) for a in actions] == [
+                     (600000, 'buy', 1, 100, False),
+                     (2400000, 'sell', 1, 100, True),
+                 ], actions
+        assert actions[0]['order']['entry_incarnation'] == actions[1]['order']['entry_incarnation'] == 1
+        assert all(row[2].isdigit() and int(row[2]) != 0 for row in committed_rows['inputs'])
+
+        prior = list(received_bytes)
         replay = invoke(example_cmd)
         assert replay['inputs_processed'] == 0
-        assert replay['prefix_skipped'] == 1
-        assert received == prior
+        assert replay['prefix_skipped'] == len(feed_rows)
+        assert received_bytes == prior
+        assert ledger_rows(example_ledger) == committed_rows
+
+        evidence_dir = os.environ.get('PINEFORGE_NATIVE_RUNNER_EVIDENCE')
+        if evidence_dir:
+            evidence = Path(evidence_dir)
+            evidence.mkdir(parents=True, exist_ok=True)
+            receipt = {
+                'schemaVersion': 'pineforge-native-runner-replay-evidence/v1',
+                'sourceSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'runnerSha256': hashlib.sha256(Path(runner).read_bytes()).hexdigest(),
+                'librarySha256': hashlib.sha256(Path(native_example).read_bytes()).hexdigest(),
+                'config': json.loads(cfg.read_text()),
+                'warmupCsv': example_warmup.read_text(), 'inputs': feed_rows,
+                'failedDeliveryRows': failed_rows, 'committedRows': committed_rows,
+                'receivedPayloadBytes': received_bytes,
+                'recoveredSummary': example, 'idleReplaySummary': replay,
+            }
+            (evidence / 'native-runner-replay.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            with sqlite3.connect(example_ledger) as src, sqlite3.connect(evidence / 'native-runner.sqlite3') as dest:
+                src.backup(dest)
     finally:
         server.shutdown()
         server.server_close()

@@ -6,17 +6,16 @@
 #include <optional>
 
 namespace pineforge {
+inline namespace native_driver_v3 {
 
 bool native_bar_structurally_valid(const Bar& bar) noexcept {
-    if (!std::isfinite(bar.open) || !std::isfinite(bar.high)
-        || !std::isfinite(bar.low) || !std::isfinite(bar.close)) {
-        return false;
-    }
+    if (!std::isfinite(bar.open) || bar.open <= 0.0) return false;
+    if (!std::isfinite(bar.high) || bar.high <= 0.0) return false;
+    if (!std::isfinite(bar.low) || bar.low <= 0.0) return false;
+    if (!std::isfinite(bar.close) || bar.close <= 0.0) return false;
     if (bar.low > std::min(bar.open, bar.close)) return false;
     if (bar.high < std::max(bar.open, bar.close)) return false;
-    if (!std::isnan(bar.volume) && (!std::isfinite(bar.volume) || bar.volume < 0.0)) {
-        return false;
-    }
+    if (!std::isfinite(bar.volume) || bar.volume < 0.0) return false;
     return true;
 }
 
@@ -86,4 +85,5 @@ NativeInputPreflightResult preflight_native_inputs(
     return out;
 }
 
+}  // inline namespace native_driver_v3
 }  // namespace pineforge

@@ -7,6 +7,7 @@ set(TEST_SOURCES
     test_native_order_terminal
     test_native_market_vertical
     test_native_market_vertical_contract
+    test_native_calendar_driver_contract
     test_native_host_repairs
     test_order_action_integration
     test_placement_facts
@@ -491,3 +492,12 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cp
      PINEFORGE_NATIVE_MARKET_VERTICAL_CONTRACT_SHA256)
 target_compile_definitions(test_native_market_vertical_contract PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_CONTRACT_SHA256}")
+
+# Reconfigure source-bound native evidence when either fixture changes.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical_contract.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test_native_calendar_driver_contract.cpp")
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_calendar_driver_contract.cpp"
+     PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256)
+target_compile_definitions(test_native_calendar_driver_contract PRIVATE
+    PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256}")

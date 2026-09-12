@@ -7,6 +7,7 @@
 #include <variant>
 
 namespace pineforge::native_order {
+inline namespace native_order_v1 {
 namespace {
 
 template <class T>
@@ -308,4 +309,5 @@ CancelResult WorkingRequestCore::cancel(const RequestHandle& target,
     return result;
 }
 
+}  // inline namespace native_order_v1
 }  // namespace pineforge::native_order

@@ -89,6 +89,22 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
         $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>)
     set_tests_properties(native_live_startup_e2e PROPERTIES TIMEOUT 120)
+    # Exercise the real MODULE through its C ABI, without linking a second engine.
+    add_executable(test_native_example_batch
+        ${PROJECT_SOURCE_DIR}/tests/test_native_example_batch.cpp)
+    target_include_directories(test_native_example_batch PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_compile_options(test_native_example_batch PRIVATE -UNDEBUG -ffp-contract=off)
+    target_link_libraries(test_native_example_batch PRIVATE ${CMAKE_DL_LIBS})
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        target_compile_options(test_native_example_batch PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(test_native_example_batch PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_dependencies(test_native_example_batch native_market_example)
+    add_test(NAME test_native_example_batch
+        COMMAND test_native_example_batch $<TARGET_FILE:native_market_example>)
+    set_tests_properties(test_native_example_batch PROPERTIES TIMEOUT 60)
     foreach(native_test test_native_live_store test_native_live_websocket)
         add_executable(${native_test} ${PROJECT_SOURCE_DIR}/tests/${native_test}.cpp)
         target_link_libraries(${native_test} PRIVATE pineforge_live_support)

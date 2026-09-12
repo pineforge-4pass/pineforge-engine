@@ -68,6 +68,7 @@ private:
         Bar agg{};
         bool has_data = false;
         int64_t first_open_ms = 0;
+        int64_t first_source_time_ms = 0;
         int64_t latest_close_ms = 0;
         int first_index = 0;
         int last_index = 0;
@@ -112,6 +113,7 @@ private:
     void deliver_confirmed_script(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base);
     void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
                                        const NativeCoordinate& base);
+    int64_t calculation_time(const NativeCoordinate& base) const noexcept;
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
     void apply_excursion(BacktestEngine& engine, double price);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
@@ -130,6 +132,10 @@ private:
                                      NativePriceProvenance provenance,
                                      NativePathPhase phase) const;
     bool preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n);
+    bool deliver_tick(BacktestEngine& engine, const TradeTick& tick);
+    bool check_abort_or_projection(BacktestEngine& engine, NativeFailureOperation operation,
+                                   uint64_t ordinal = 0);
+    void present_refusal(BacktestEngine& engine, const char* text);
     bool finalize_elapsed_slots(BacktestEngine& engine, int64_t exclusive_end_ms);
     bool emit_quiet_carried_open(BacktestEngine& engine,
                                  const native_calendar::NativeInterval& interval);
