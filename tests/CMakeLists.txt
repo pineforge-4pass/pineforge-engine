@@ -1,6 +1,7 @@
 set(TEST_SOURCES
     test_unbounded_margin_admission
     test_resolved_execution
+    test_native_scoped_close
     test_native_reversal_contract
     test_order_action
     test_native_order_core

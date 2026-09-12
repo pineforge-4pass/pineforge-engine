@@ -33,7 +33,10 @@ enum class Status {
     UnrepresentableQuantity, InvalidAccounting,
     // Caller-supplied lifecycle targets/revisions/operations that cannot be
     // applied to the current pending book. Not durable engine state.
-    InvalidLifecycle
+    InvalidLifecycle,
+    // Invalid or unavailable run-local opening exposure on a scoped close.
+    // Existing whole-book entry points do not return this status.
+    InvalidCloseTarget = 8
 };
 
 struct Result {

@@ -20,6 +20,7 @@
 #include "broker_events.hpp"
 #include "quantity_intent.hpp"
 #include "execution.hpp"
+#include "execution_close_scope.hpp"
 #include "market_admission.hpp"
 #include "reservation_expansion.hpp"
 #include "order_cancellation.hpp"
@@ -1829,6 +1830,16 @@ protected:
         const execution::PhysicalExecutionContext& context);
     execution::SettlementInspection inspect_native_settlement(
         const execution::Action& action, const execution::Fill& fill) const;
+    // Synchronous selected-close extensions. Book preserves the original
+    // action semantics; OpeningExposure permits only Flatten/Reduce and is
+    // revalidated against the current physical book on every call.
+    execution::SettlementInspection inspect_native_settlement_scoped(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope scope) const;
+    execution::Result settle_native_execution_scoped_at(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope scope);
     // Native account value: realized balance plus marked physical lots minus
     // their remaining paid entry costs, for every fee type. No Pine sizing or
     // end-of-range reporting convention participates in this value.
@@ -3881,6 +3892,11 @@ protected:
     double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
 
 private:
+    execution::Result settle_with_context_scoped(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope scope);
     enum class PositionReductionCause {
         SCRIPT_ORDER,   // strategy.close / close_all / market exit / reversal
         BRACKET_EXIT,   // a strategy.exit bracket leg fill

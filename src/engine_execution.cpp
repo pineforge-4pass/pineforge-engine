@@ -19,6 +19,71 @@ void reserve_effects(std::vector<T>& values, size_t extra) {
         ? values.max_size() : values.capacity() * 2;
     values.reserve(std::max(required, grown));
 }
+
+struct CloseScopeInspection {
+    execution::Status status = execution::Status::Applied;
+    double held = 0.0;
+};
+
+// Called only after ordinary price/quantity/book validation. This value is
+// local to the synchronous call and grants no saved allocation authority.
+CloseScopeInspection inspect_close_scope(
+        const execution::CloseScope& scope, const execution::Action& action,
+        int64_t current_cycle, const std::vector<PyramidEntry>& lots,
+        double whole_book_held) {
+    if (std::holds_alternative<execution::Book>(scope))
+        return {execution::Status::Applied, whole_book_held};
+    const auto* exposure = std::get_if<execution::OpeningExposure>(&scope);
+    if (!exposure || exposure->incarnation == 0 || exposure->cycle <= 0
+        || exposure->cycle != current_cycle
+        || (!std::holds_alternative<execution::Flatten>(action)
+            && !std::holds_alternative<order_action::Reduce>(action)))
+        return {execution::Status::InvalidCloseTarget};
+    double held = 0.0;
+    for (const auto& lot : lots) {
+        if (lot.entry_incarnation == exposure->incarnation) held += lot.qty;
+    }
+    if (held == 0.0) return {execution::Status::InvalidCloseTarget};
+    if (!std::isfinite(held)) return {execution::Status::InvalidBook};
+    return {execution::Status::Applied, held};
+}
+
+bool selected_for_close(const execution::CloseScope& scope,
+                        const PyramidEntry& lot) {
+    if (std::holds_alternative<execution::Book>(scope)) return true;
+    const auto* exposure = std::get_if<execution::OpeningExposure>(&scope);
+    return exposure && lot.entry_incarnation == exposure->incarnation;
+}
+
+struct CloseSplit {
+    execution::Status status = execution::Status::Applied;
+    double amount = 0.0;
+    double kept = 0.0;
+};
+
+// Identical FIFO arithmetic for inspection and commit. Book callers pass
+// their original request unchanged; selected reductions pass the request
+// capped to selected exposure, independently of unrelated physical lots.
+CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
+                            double requested, double& closed, double& remaining) {
+    const double amount = !closes ? 0.0
+        : flatten ? lot.qty : std::min(lot.qty, remaining);
+    if (amount == 0.0) return {execution::Status::Applied, 0.0, lot.qty};
+    const double kept = lot.qty - amount;
+    const double next_closed = closed + amount;
+    if (!std::isfinite(next_closed) || kept == lot.qty
+        || (!flatten && closed != 0.0
+            && (next_closed == closed || next_closed == amount)))
+        return {execution::Status::UnrepresentableQuantity};
+    if (!flatten) {
+        const double next_remaining = requested - next_closed;
+        if (next_remaining < 0.0 || next_remaining == remaining)
+            return {execution::Status::UnrepresentableQuantity};
+        remaining = next_remaining;
+    }
+    closed = next_closed;
+    return {execution::Status::Applied, amount, kept};
+}
 } // namespace
 
 execution::Result BacktestEngine::settle_resolved_execution(
@@ -42,13 +107,28 @@ execution::Result BacktestEngine::settle_execution_with_lifecycle(
 execution::Result BacktestEngine::settle_native_execution_at(
         const execution::Action& action, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context) {
-    return settle_with_context(action, fill, {}, context);
+    return settle_native_execution_scoped_at(action, fill, context, execution::Book{});
+}
+
+execution::Result BacktestEngine::settle_native_execution_scoped_at(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope scope) {
+    return settle_with_context_scoped(action, fill, {}, context, scope);
 }
 
 execution::Result BacktestEngine::settle_with_context(
         const execution::Action& action, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle,
         const execution::PhysicalExecutionContext& context) {
+    return settle_with_context_scoped(action, fill, lifecycle, context, execution::Book{});
+}
+
+execution::Result BacktestEngine::settle_with_context_scoped(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope scope) {
     using execution::Status;
     if (!std::isfinite(fill.price)) return {Status::InvalidPrice};
     if (fill.commission_account && !std::isfinite(*fill.commission_account))
@@ -82,7 +162,14 @@ execution::Result BacktestEngine::settle_with_context(
     }
     if (auto invalid = validate_lifecycle_effects(lifecycle))
         return {*invalid};
-    const double signed_held = position_side_ == PositionSide::SHORT ? -held : held;
+    const auto selection = inspect_close_scope(
+        scope, action, position_cycle_seq_, pyramid_entries_, held);
+    if (selection.status != Status::Applied) return {selection.status};
+    const bool scoped = std::holds_alternative<execution::OpeningExposure>(scope);
+    const double allocation_requested = scoped && reduce
+        ? std::min(requested, selection.held) : requested;
+    const double signed_held = position_side_ == PositionSide::SHORT
+        ? -selection.held : selection.held;
     if (!flatten && requested == 0.0) return no_effect();
     if ((flatten || reduce) && pyramid_entries_.empty()) return no_effect();
 
@@ -90,7 +177,7 @@ execution::Result BacktestEngine::settle_with_context(
     // FIFO allocation below is authoritative for the surviving position: it
     // must not reject a valid decimal lot merely because a differently grouped
     // scalar addition has a one-ulp difference.
-    if (reduce && !order_action::plan(signed_held, *reduce))
+    if (reduce && !order_action::plan(signed_held, order_action::Reduce{allocation_requested}))
         return {Status::UnrepresentableQuantity};
     if (transact && !order_action::plan(signed_held, *transact))
         return {Status::UnrepresentableQuantity};
@@ -106,32 +193,22 @@ execution::Result BacktestEngine::settle_with_context(
     std::vector<PyramidEntry> survivors;
     std::vector<size_t> closing_indices;
     std::vector<double> closing_quantities;
-    if (!flatten) survivors.reserve(pyramid_entries_.size());
+    if (!flatten || scoped) survivors.reserve(pyramid_entries_.size());
     closing_indices.reserve(closes ? pyramid_entries_.size() : 0);
     closing_quantities.reserve(closes ? pyramid_entries_.size() : 0);
     double closed = 0.0;
-    double remaining = requested;
+    double remaining = allocation_requested;
     for (size_t index = 0; index < pyramid_entries_.size(); ++index) {
         const auto& lot = pyramid_entries_[index];
-        const double amount = !closes ? 0.0
-            : flatten ? lot.qty : std::min(lot.qty, remaining);
+        const auto split = next_close_split(lot, closes && selected_for_close(scope, lot),
+                                            flatten, allocation_requested, closed, remaining);
+        if (split.status != Status::Applied) return {split.status};
+        const double amount = split.amount;
         if (amount == 0.0) {
             survivors.push_back(lot);
             continue;
         }
-        const double kept = lot.qty - amount;
-        const double next_closed = closed + amount;
-        if (!std::isfinite(next_closed) || kept == lot.qty
-            || (!flatten && closed != 0.0
-                && (next_closed == closed || next_closed == amount)))
-            return {Status::UnrepresentableQuantity};
-        if (!flatten) {
-            const double next_remaining = requested - next_closed;
-            if (next_remaining < 0.0 || next_remaining == remaining)
-                return {Status::UnrepresentableQuantity};
-            remaining = next_remaining;
-        }
-        closed = next_closed;
+        const double kept = split.kept;
         closing_indices.push_back(index);
         closing_quantities.push_back(amount);
         if (kept > 0.0) {
@@ -146,6 +223,7 @@ execution::Result BacktestEngine::settle_with_context(
         }
     }
 
+    if (scoped && closed == 0.0) return no_effect();
     const double opening = !transact ? 0.0 : opposite ? remaining : requested;
     if (opening > 0.0 && opposite && !survivors.empty())
         return {Status::UnrepresentableQuantity};
@@ -275,6 +353,12 @@ execution::Result BacktestEngine::settle_with_context(
 
 execution::SettlementInspection BacktestEngine::inspect_native_settlement(
         const execution::Action& action, const execution::Fill& fill) const {
+    return inspect_native_settlement_scoped(action, fill, execution::Book{});
+}
+
+execution::SettlementInspection BacktestEngine::inspect_native_settlement_scoped(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope scope) const {
     using execution::Status;
     execution::SettlementInspection out;
     if (!std::isfinite(fill.price)) {
@@ -316,7 +400,17 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement(
             return out;
         }
     }
-    const double signed_held = position_side_ == PositionSide::SHORT ? -held : held;
+    const auto selection = inspect_close_scope(
+        scope, action, position_cycle_seq_, pyramid_entries_, held);
+    if (selection.status != Status::Applied) {
+        out.status = selection.status;
+        return out;
+    }
+    const bool scoped = std::holds_alternative<execution::OpeningExposure>(scope);
+    const double allocation_requested = scoped && reduce
+        ? std::min(requested, selection.held) : requested;
+    const double signed_held = position_side_ == PositionSide::SHORT
+        ? -selection.held : selection.held;
     if (!flatten && requested == 0.0) {
         out.status = fill.commission_account && *fill.commission_account != 0.0
             ? Status::InvalidAccounting : Status::NoEffect;
@@ -327,7 +421,7 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement(
             ? Status::InvalidAccounting : Status::NoEffect;
         return out;
     }
-    if (reduce && !order_action::plan(signed_held, *reduce)) {
+    if (reduce && !order_action::plan(signed_held, order_action::Reduce{allocation_requested})) {
         out.status = Status::UnrepresentableQuantity;
         return out;
     }
@@ -342,34 +436,23 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement(
     const bool closes = flatten || reduce || opposite;
     std::vector<PyramidEntry> survivors;
     std::vector<double> closing_quantities;
-    if (!flatten) survivors.reserve(pyramid_entries_.size());
+    if (!flatten || scoped) survivors.reserve(pyramid_entries_.size());
     closing_quantities.reserve(closes ? pyramid_entries_.size() : 0);
     double closed = 0.0;
-    double remaining = requested;
+    double remaining = allocation_requested;
     for (const auto& lot : pyramid_entries_) {
-        const double amount = !closes ? 0.0
-            : flatten ? lot.qty : std::min(lot.qty, remaining);
+        const auto split = next_close_split(lot, closes && selected_for_close(scope, lot),
+                                            flatten, allocation_requested, closed, remaining);
+        if (split.status != Status::Applied) {
+            out.status = split.status;
+            return out;
+        }
+        const double amount = split.amount;
         if (amount == 0.0) {
             survivors.push_back(lot);
             continue;
         }
-        const double kept = lot.qty - amount;
-        const double next_closed = closed + amount;
-        if (!std::isfinite(next_closed) || kept == lot.qty
-            || (!flatten && closed != 0.0
-                && (next_closed == closed || next_closed == amount))) {
-            out.status = Status::UnrepresentableQuantity;
-            return out;
-        }
-        if (!flatten) {
-            const double next_remaining = requested - next_closed;
-            if (next_remaining < 0.0 || next_remaining == remaining) {
-                out.status = Status::UnrepresentableQuantity;
-                return out;
-            }
-            remaining = next_remaining;
-        }
-        closed = next_closed;
+        const double kept = split.kept;
         closing_quantities.push_back(amount);
         if (kept > 0.0) {
             auto survivor = lot;
