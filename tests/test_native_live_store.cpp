@@ -155,27 +155,42 @@ void ledger_transactions() {
     CHECK(throws([&] { Ledger reordered(temp.file("event-order.sqlite"), "ordered"); }));
 }
 
-void crash_recovery() {
+[[noreturn]] void crash_writer(const char* path) {
+    try {
+        Ledger ledger(path, "crash-v1");
+        ledger.commit_input(0, "{\"synthetic\":true}", 42, {{"crash-event", "{\"qty\":1}"}});
+        ledger.begin_delivery("crash-event");
+        _exit(0); // Deliberately skip destructors/checkpoint/acknowledgement.
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "crash writer: %s\n", e.what());
+        _exit(1);
+    } catch (...) { _exit(1); }
+}
+
+void crash_recovery(const char* executable) {
     TempDir temp;
     const auto path = temp.file("crash.sqlite");
     const pid_t child = fork();
     if (child < 0) throw std::runtime_error("test fork failed");
     if (child == 0) {
-        try {
-            Ledger ledger(path, "crash-v1");
-            ledger.commit_input(0, "{\"synthetic\":true}", 42, {{"crash-event", "{\"qty\":1}"}});
-            ledger.begin_delivery("crash-event");
-            _exit(0); // Deliberately skip destructors/checkpoint/acknowledgement.
-        } catch (...) { _exit(1); }
+        // SQLite's platform logging state is not safe to reuse after fork.
+        // Start a fresh writer process, then exercise the same abrupt exit.
+        execl(executable, executable, "--crash-writer", path.c_str(),
+              static_cast<char*>(nullptr));
+        _exit(127);
     }
     int status = 0;
     CHECK(waitpid(child, &status, 0) == child);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     Ledger recovered(path, "crash-v1");
     CHECK(recovered.input_count() == 1);
-    CHECK(recovered.pending_event()->id == "crash-event");
-    CHECK(recovered.pending_event()->attempts == 1);
-    CHECK(recovered.pending_event()->payload == "{\"qty\":1}");
+    const auto pending = recovered.pending_event();
+    CHECK(pending.has_value());
+    if (pending) {
+        CHECK(pending->id == "crash-event");
+        CHECK(pending->attempts == 1);
+        CHECK(pending->payload == "{\"qty\":1}");
+    }
 }
 
 struct Reply {
@@ -332,10 +347,12 @@ void native_http() {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--crash-writer") == 0)
+        crash_writer(argv[2]);
     try {
         ledger_transactions();
-        crash_recovery();
+        crash_recovery(argv[0]);
         native_http();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "UNEXPECTED: %s\n", e.what());
