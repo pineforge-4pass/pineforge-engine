@@ -1064,7 +1064,9 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
 
 void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, const Bar& bar,
                                                        const NativeCoordinate& base) {
-    const bool high_first = internal::bar_path_uses_high_first(bar);
+    // Native AUTO depends on this input, including when another legacy host
+    // has installed a forced path around a nested native run.
+    const bool high_first = std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
     auto emit_match = [&](double price, int64_t time, NativePriceProvenance provenance,
                           NativePathPhase phase) {
         NativeDriverPoint point;
