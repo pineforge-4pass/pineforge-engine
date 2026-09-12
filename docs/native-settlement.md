@@ -36,6 +36,73 @@ epsilon silently discards it. `Flatten` explicitly closes all lots and avoids
 using rounded aggregate equality to mean a whole-book close. Quantities whose
 changes cannot be represented are refused before settlement.
 
+The source `execute_partial_exit_qty` adapter retains its existing `1e-10`
+FIFO endpoint policy. After its existing whole-book Flatten check, it may
+translate a quantity ending at an interior whole-lot prefix into one selected
+Flatten. It walks physical lots in FIFO order, stops before the next lot once
+the source endpoint is reached, and selects complete opening incarnations,
+independently of the logical order label that supplied the close quantity.
+A genuine partial lot, an unowned selected lot, or an opening with a fragment
+outside the prefix keeps the original scalar Reduce path. Selected Flatten
+closes the exact live quantities and all their remaining paid entry costs in
+one execution; it does not reproduce historical residual-cost discards.
+The native Reduce contract, entry-scoped adapters and transaction-flow requests
+retain their existing behavior. This source translation requires separate
+compatibility measurement; it does not establish that every observed extra
+trade row has the same cause.
+
+## Reversal to an exact exposure
+
+`execution::reverse_to_v1::ReverseTo{signed_units}`, declared in
+`<pineforge/execution_reverse_to.hpp>`, closes the entire opposite live book
+and opens exactly `abs(signed_units)` units in the requested direction. Positive
+targets open long; negative targets open short. It is a separate, call-local
+resolved-execution value available to trusted C++ adapters through four protected,
+nonvirtual methods:
+
+| Method | Result and context |
+| --- | --- |
+| `inspect_native_reversal_v1(reversal, fill)` | Non-mutating `SettlementInspection` of physical effects and the current ticket. |
+| `project_native_reversal_v1(reversal, fill)` | Non-mutating `AccountEffectProjection`, including account effects and the next cycle without consuming it. |
+| `settle_native_reversal_at_v1(reversal, fill, context)` | `Result` from settlement using the supplied `PhysicalExecutionContext` and empty lifecycle effects. |
+| `settle_reversal_with_lifecycle_v1(reversal, fill, lifecycle)` | `Result` from settlement using the engine's current time, interval and preceding exit-path facts with supplied transient lifecycle effects. |
+
+For example, reversing a held long position of `1` unit to a short target of
+`0.1` opens the exact binary64 quantity supplied as `-0.1`. The opening quantity
+is never reconstructed by adding the old position to the target and subtracting
+the closed position. Every existing lot closes in roster order using whole-lot
+Flatten allocation, and one new lot opens at the same resolved `Fill::price`.
+Close and open effects share one current ticket and the existing financial
+commit owner. No selection or partial-close scope participates in this seam.
+
+A valid call requires a nonflat book opposite to a finite, nonzero target.
+Zero or nonfinite targets return `InvalidQuantity`; a flat or same-side book
+returns `InvalidCloseTarget`; malformed physical books return `InvalidBook`.
+There is no valid no-effect reversal. Callers use `Flatten` to close without
+opening. If finite closed and opening quantities have a nonfinite gross sum,
+the call returns `UnrepresentableQuantity` before quoting fees. A tiny target
+such as `0.1` against a held quantity of `1e16` remains valid even when their
+floating-point sum absorbs the target: after all old lots close, the exact new
+quantity is representable on its own. Existing accounting, lifecycle and
+sequence preflight checks still apply before effects.
+
+Inspection, projection and settlement share allocation and fee calculations.
+Successful `opened_units` and projected `signed_units_after` preserve the signed
+target bits; the resulting book contains one lot of exactly its absolute size.
+Projection includes the opening's paid cost once and peeks the fresh cycle;
+settlement revalidates the live book and consumes that cycle when it opens.
+Invalid projections contain no usable account quote. These values grant no
+saved or replayable settlement authority.
+
+`Transact` continues to describe signed transaction flow, including its existing
+opposite-book remainder arithmetic. Native queued requests and their action and
+event algebra are unchanged; `ReverseTo` is not an `Action` or request variant.
+The source F7 reversal adapter uses this seam after resolving its opening size.
+Other flow callers, including F8, retain `Transact`. This opening-intent repair
+does not establish that the seven additional trade rows or the EURUSD (ERA)
+quantity/margin differences observed during refactor verification are repaired;
+those remain separate compatibility acceptance work.
+
 ## Costs and marked equity
 
 Every opening lot receives its paid entry commission before its entry
@@ -93,7 +160,7 @@ Projection and settlement share allocation and fee logic. Realized balance adds
 close-row PnL in commit order, and marked equity applies each resulting lot's mark
 and paid cost in roster order. A projection is data, not commit authority: later
 settlement revalidates against the current book. Source percent sizing can consume
-a close-only projection's equity before resolving one reversal transaction.
+a close-only projection's equity before resolving one reversal opening quantity.
 
 ## Integration and limits
 

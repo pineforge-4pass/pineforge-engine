@@ -156,6 +156,64 @@ struct BacktestEngine::NativeSettlementStage {
     std::unordered_set<std::uint64_t> selected_ids;
 };
 
+execution::Status BacktestEngine::validate_native_settlement_book(double& held) const {
+    using execution::Status;
+    held = 0.0;
+    if (position_side_ != PositionSide::FLAT
+        && position_side_ != PositionSide::LONG
+        && position_side_ != PositionSide::SHORT)
+        return Status::InvalidBook;
+    if ((position_side_ == PositionSide::FLAT) != pyramid_entries_.empty())
+        return Status::InvalidBook;
+    for (const auto& lot : pyramid_entries_) {
+        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price))
+            return Status::InvalidBook;
+        held += lot.qty;
+        if (!std::isfinite(held)) return Status::InvalidBook;
+    }
+    return Status::Applied;
+}
+
+execution::Status BacktestEngine::allocate_native_settlement_closes(
+        NativeSettlementStage& stage,
+        const execution::CloseScope& book_or_opening,
+        double& remaining) const {
+    using execution::Status;
+    if (!stage.flatten || stage.scoped)
+        stage.survivors.reserve(pyramid_entries_.size());
+    stage.closing_indices.reserve(stage.closes ? pyramid_entries_.size() : 0);
+    stage.closing_quantities.reserve(stage.closes ? pyramid_entries_.size() : 0);
+    double closed = 0.0;
+    for (size_t index = 0; index < pyramid_entries_.size(); ++index) {
+        const auto& lot = pyramid_entries_[index];
+        const bool member = stage.use_selected
+            ? stage.selected_ids.count(lot.entry_incarnation) != 0
+            : selected_for_close(book_or_opening, lot);
+        const auto split = next_close_split(
+            lot, stage.closes && member, stage.flatten,
+            stage.allocation_requested, closed, remaining);
+        if (split.status != Status::Applied) return split.status;
+        if (split.amount == 0.0) {
+            stage.survivors.push_back(lot);
+            continue;
+        }
+        stage.closing_indices.push_back(index);
+        stage.closing_quantities.push_back(split.amount);
+        if (split.kept > 0.0) {
+            auto survivor = lot;
+            const double scale = split.kept / lot.qty;
+            survivor.qty = split.kept;
+            survivor.max_runup *= scale;
+            survivor.max_drawdown *= scale;
+            survivor.entry_commission_account = open_entry_commission(lot)
+                - allocated_entry_commission(lot, split.amount);
+            stage.survivors.push_back(std::move(survivor));
+        }
+    }
+    stage.closed = closed;
+    return Status::Applied;
+}
+
 void BacktestEngine::stage_native_settlement(
         NativeSettlementStage& stage,
         const execution::Action& action,
@@ -190,28 +248,11 @@ void BacktestEngine::stage_native_settlement(
         fail(Status::InvalidQuantity);
         return;
     }
-    if (position_side_ != PositionSide::FLAT
-        && position_side_ != PositionSide::LONG
-        && position_side_ != PositionSide::SHORT) {
-        fail(Status::InvalidBook);
-        return;
-    }
-    if ((position_side_ == PositionSide::FLAT) != pyramid_entries_.empty()) {
-        fail(Status::InvalidBook);
-        return;
-    }
-
     double held = 0.0;
-    for (const auto& lot : pyramid_entries_) {
-        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price)) {
-            fail(Status::InvalidBook);
-            return;
-        }
-        held += lot.qty;
-        if (!std::isfinite(held)) {
-            fail(Status::InvalidBook);
-            return;
-        }
+    if (const auto status = validate_native_settlement_book(held);
+        status != Status::Applied) {
+        fail(status);
+        return;
     }
     if (lifecycle) {
         if (auto invalid = validate_lifecycle_effects(*lifecycle)) {
@@ -264,47 +305,86 @@ void BacktestEngine::stage_native_settlement(
     stage.closes = stage.flatten || reduce || stage.opposite;
     stage.was_long = position_side_ == PositionSide::LONG;
 
-    if (!stage.flatten || stage.scoped)
-        stage.survivors.reserve(pyramid_entries_.size());
-    stage.closing_indices.reserve(stage.closes ? pyramid_entries_.size() : 0);
-    stage.closing_quantities.reserve(stage.closes ? pyramid_entries_.size() : 0);
-    double closed = 0.0;
     double remaining = stage.allocation_requested;
-    for (size_t index = 0; index < pyramid_entries_.size(); ++index) {
-        const auto& lot = pyramid_entries_[index];
-        const bool member = stage.use_selected
-            ? stage.selected_ids.count(lot.entry_incarnation) != 0
-            : selected_for_close(book_or_opening, lot);
-        const auto split = next_close_split(
-            lot, stage.closes && member, stage.flatten,
-            stage.allocation_requested, closed, remaining);
-        if (split.status != Status::Applied) {
-            fail(split.status);
-            return;
-        }
-        if (split.amount == 0.0) {
-            stage.survivors.push_back(lot);
-            continue;
-        }
-        stage.closing_indices.push_back(index);
-        stage.closing_quantities.push_back(split.amount);
-        if (split.kept > 0.0) {
-            auto survivor = lot;
-            const double scale = split.kept / lot.qty;
-            survivor.qty = split.kept;
-            survivor.max_runup *= scale;
-            survivor.max_drawdown *= scale;
-            survivor.entry_commission_account = open_entry_commission(lot)
-                - allocated_entry_commission(lot, split.amount);
-            stage.survivors.push_back(std::move(survivor));
-        }
+    if (const auto status = allocate_native_settlement_closes(
+            stage, book_or_opening, remaining); status != Status::Applied) {
+        fail(status);
+        return;
     }
-    stage.closed = closed;
     stage.opening = !transact ? 0.0 : stage.opposite ? remaining : stage.requested;
     if (stage.opening > 0.0 && stage.opposite && !stage.survivors.empty()) {
         fail(Status::UnrepresentableQuantity);
         return;
     }
+    finish_native_settlement_stage(stage, fill);
+}
+
+void BacktestEngine::stage_native_settlement(
+        NativeSettlementStage& stage,
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill,
+        const execution::LifecycleEffects* lifecycle) const {
+    using execution::Status;
+    stage = NativeSettlementStage{};
+    auto fail = [&](Status status) {
+        stage.phase = NativeSettlementStage::Phase::Invalid;
+        stage.status = status;
+    };
+    if (!std::isfinite(fill.price)) { fail(Status::InvalidPrice); return; }
+    if (fill.commission_account && !std::isfinite(*fill.commission_account)) {
+        fail(Status::InvalidAccounting);
+        return;
+    }
+    if (!std::isfinite(reversal.signed_units) || reversal.signed_units == 0.0) {
+        fail(Status::InvalidQuantity);
+        return;
+    }
+    double held = 0.0;
+    if (const auto status = validate_native_settlement_book(held);
+        status != Status::Applied) {
+        fail(status);
+        return;
+    }
+    if (lifecycle) {
+        if (auto invalid = validate_lifecycle_effects(*lifecycle)) {
+            fail(*invalid);
+            return;
+        }
+    }
+    stage.incoming = reversal.signed_units < 0.0
+        ? PositionSide::SHORT : PositionSide::LONG;
+    if (position_side_ == PositionSide::FLAT || position_side_ == stage.incoming) {
+        fail(Status::InvalidCloseTarget);
+        return;
+    }
+    stage.flatten = true;
+    stage.opposite = true;
+    stage.closes = true;
+    stage.was_long = position_side_ == PositionSide::LONG;
+    stage.selected_held = held;
+    double remaining = 0.0;
+    if (const auto status = allocate_native_settlement_closes(
+            stage, execution::Book{}, remaining); status != Status::Applied) {
+        fail(status);
+        return;
+    }
+    // ReverseTo carries the exact new exposure independently of all closing
+    // lots. Neither transaction-flow subtraction nor absorption applies here.
+    stage.opening = std::abs(reversal.signed_units);
+    if (!std::isfinite(stage.closed + stage.opening)) {
+        fail(Status::UnrepresentableQuantity);
+        return;
+    }
+    finish_native_settlement_stage(stage, fill);
+}
+
+void BacktestEngine::finish_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill) const {
+    using execution::Status;
+    auto fail = [&](Status status) {
+        stage.phase = NativeSettlementStage::Phase::Invalid;
+        stage.status = status;
+    };
     stage.current_costs = quote_execution_commissions(
         stage.closing_quantities, stage.opening, fill);
     stage.ticket = 0.0;
@@ -342,6 +422,44 @@ void BacktestEngine::stage_native_settlement(
         : after_qty > 0.0 ? weighted / after_qty : 0.0;
     stage.phase = NativeSettlementStage::Phase::Ready;
     stage.status = Status::Applied;
+}
+
+execution::SettlementInspection BacktestEngine::inspect_native_reversal_v1(
+        const execution::ReverseTo& reversal, const execution::Fill& fill) const {
+    NativeSettlementStage stage;
+    stage_native_settlement(stage, reversal, fill, nullptr);
+    return inspect_native_settlement_stage(stage, fill);
+}
+
+execution::AccountEffectProjection BacktestEngine::project_native_reversal_v1(
+        const execution::ReverseTo& reversal, const execution::Fill& fill) const {
+    NativeSettlementStage stage;
+    stage_native_settlement(stage, reversal, fill, nullptr);
+    return project_native_settlement_stage(stage, fill);
+}
+
+execution::Result BacktestEngine::settle_native_reversal_at_v1(
+        const execution::ReverseTo& reversal, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context) {
+    const execution::LifecycleEffects lifecycle;
+    NativeSettlementStage stage;
+    stage_native_settlement(stage, reversal, fill, &lifecycle);
+    return commit_native_settlement_stage(stage, fill, lifecycle, context);
+}
+
+execution::Result BacktestEngine::settle_reversal_with_lifecycle_v1(
+        const execution::ReverseTo& reversal, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle) {
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = current_bar_.timestamp;
+    context.interval_index = bar_index_;
+    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+    if (!std::isnan(fold_exit_trail_peak_)) {
+        context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+    }
+    NativeSettlementStage stage;
+    stage_native_settlement(stage, reversal, fill, &lifecycle);
+    return commit_native_settlement_stage(stage, fill, lifecycle, context);
 }
 
 execution::Result BacktestEngine::settle_resolved_execution(
@@ -426,10 +544,17 @@ execution::Result BacktestEngine::settle_with_membership(
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) {
-    using execution::Status;
     NativeSettlementStage stage;
     stage_native_settlement(
         stage, action, fill, book_or_opening, selected, &lifecycle);
+    return commit_native_settlement_stage(stage, fill, lifecycle, context);
+}
+
+execution::Result BacktestEngine::commit_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context) {
+    using execution::Status;
     if (stage.phase != NativeSettlementStage::Phase::Ready)
         return {stage.status};
     const auto no_effect = [&]() -> execution::Result {
@@ -561,10 +686,15 @@ execution::SettlementInspection BacktestEngine::inspect_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) const {
-    using execution::Status;
     NativeSettlementStage stage;
     stage_native_settlement(
         stage, action, fill, book_or_opening, selected, nullptr);
+    return inspect_native_settlement_stage(stage, fill);
+}
+
+execution::SettlementInspection BacktestEngine::inspect_native_settlement_stage(
+        const NativeSettlementStage& stage, const execution::Fill& fill) const {
+    using execution::Status;
     execution::SettlementInspection out;
     if (stage.phase != NativeSettlementStage::Phase::Ready) {
         out.status = stage.status;
@@ -611,10 +741,15 @@ execution::AccountEffectProjection BacktestEngine::project_with_membership(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected) const {
-    using execution::Status;
     NativeSettlementStage stage;
     stage_native_settlement(
         stage, action, fill, book_or_opening, selected, nullptr);
+    return project_native_settlement_stage(stage, fill);
+}
+
+execution::AccountEffectProjection BacktestEngine::project_native_settlement_stage(
+        const NativeSettlementStage& stage, const execution::Fill& fill) const {
+    using execution::Status;
     if (stage.phase == NativeSettlementStage::Phase::Invalid)
         return invalid_projection(stage.status);
 

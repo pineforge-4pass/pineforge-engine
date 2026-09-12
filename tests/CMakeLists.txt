@@ -6,6 +6,9 @@ set(TEST_SOURCES
     test_native_settlement_projection
     test_native_settlement_callers
     test_native_reversal_contract
+    test_native_reverse_to
+    test_source_exact_reversal
+    test_source_fifo_endpoints
     test_order_action
     test_native_order_core
     test_native_order_terminal
@@ -352,6 +355,9 @@ set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240)
 set(PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT
     "${PROJECT_BINARY_DIR}/settlement-abi-base/receipt.json"
     CACHE FILEPATH "Prepared actual R2 ABI provider receipt")
+set(PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT
+    "${PROJECT_BINARY_DIR}/settlement-abi-prior/receipt.json"
+    CACHE FILEPATH "Prepared actual 0e18690 ABI provider receipt")
 add_test(NAME test_settlement_cpp_abi
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
         --compiler ${CMAKE_CXX_COMPILER}
@@ -359,6 +365,7 @@ add_test(NAME test_settlement_cpp_abi
         --include ${PROJECT_SOURCE_DIR}/include
         --generated-include ${PROJECT_BINARY_DIR}/include
         --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
+        --prior-receipt ${PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
         ${_pf_script_cpp_abi_flags})
 set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)

@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """Narrow offline refusal tests for the settlement ABI tooling; no C++ execution."""
 import io
+import json
 from pathlib import Path
+import shutil
 import tempfile
 import tarfile
+from types import SimpleNamespace
 import unittest
 
-from check_settlement_cpp_abi import ENGINE, ROOT, storage_declarations, validate_rejection
-from prepare_settlement_cpp_abi_base import extract_tar, read_cache
+from check_settlement_cpp_abi import (
+    ENGINE, ROOT, REVERSAL_METHODS, REVERSAL_DOMAIN, frozen_shape, load_prior,
+    storage_declarations, validate_rejection,
+)
+from prepare_settlement_cpp_abi_base import BASE_COMMIT, BASE_TREE, extract_tar, read_cache
 
 
 class AbiToolingTests(unittest.TestCase):
@@ -32,6 +38,59 @@ class AbiToolingTests(unittest.TestCase):
         valid=f'undefined reference to `{ENGINE}project_native_settlement_v1(int)\''
         with self.assertRaisesRegex(RuntimeError,'omits expected'):
             validate_rejection(valid,['project_native_settlement_v1','project_native_settlement_scoped_v1'])
+
+    def reversal_diagnostic(self, style, methods=REVERSAL_METHODS, domain=REVERSAL_DOMAIN):
+        symbols=[ENGINE+method+'(pineforge::execution::'+domain+' const&, pineforge::execution::Fill const&)'
+                 for method in methods]
+        formats={'mac': lambda symbol: '  "'+symbol+'", referenced from:\n _main',
+                 'gnu': lambda symbol: "caller.cpp: undefined reference to `"+symbol+"'",
+                 'lld': lambda symbol: 'ld.lld: error: undefined symbol: '+symbol}
+        return '\n'.join(formats[style](symbol) for symbol in symbols)
+
+    def test_reversal_rejection_requires_all_four_names_and_parameter_domain(self):
+        for style in ('mac','gnu','lld'):
+            with self.subTest(style=style):
+                valid=self.reversal_diagnostic(style)
+                self.assertEqual(len(validate_rejection(valid,REVERSAL_METHODS,REVERSAL_DOMAIN)),4)
+                for omitted in REVERSAL_METHODS:
+                    with self.assertRaisesRegex(RuntimeError,'omits expected'):
+                        validate_rejection(self.reversal_diagnostic(style,[m for m in REVERSAL_METHODS if m!=omitted]),
+                                           REVERSAL_METHODS,REVERSAL_DOMAIN)
+                for bad_domain in ('reverse_to_v2::ReverseTo','ReverseTo'):
+                    with self.assertRaisesRegex(RuntimeError,'namespace'):
+                        validate_rejection(self.reversal_diagnostic(style,domain=bad_domain),
+                                           REVERSAL_METHODS,REVERSAL_DOMAIN)
+                with self.assertRaisesRegex(RuntimeError,'unrelated'):
+                    validate_rejection(valid+"\nundefined reference to `other_dependency()'",
+                                       REVERSAL_METHODS,REVERSAL_DOMAIN)
+
+    def test_missing_prior_receipt_fails_with_exact_prepare_remedy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for receipt in (None,root/'missing.json'):
+                with self.assertRaisesRegex(RuntimeError,'settlement-abi-prior .*--commit 0e18690'):
+                    load_prior(SimpleNamespace(prior_receipt=receipt),root/'headers',{})
+            self.assertFalse((root/'headers').exists())
+
+    def test_e60_receipt_cannot_be_used_for_reversal_prior(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);receipt=root/'wrong-provider.json'
+            receipt.write_text(json.dumps({'commit':BASE_COMMIT,'tree':BASE_TREE}))
+            with self.assertRaisesRegex(RuntimeError,'does not pin 0e18690'):
+                load_prior(SimpleNamespace(prior_receipt=receipt),root/'headers',{})
+            self.assertFalse((root/'headers').exists())
+
+    def test_action_alternative_changes_are_frozen(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            copied=Path(temporary)/'include'
+            shutil.copytree(ROOT/'include',copied)
+            header=copied/'pineforge/execution.hpp'
+            source=header.read_text()
+            original='std::variant<Flatten, order_action::Reduce, order_action::Transact>'
+            self.assertIn(original,source)
+            header.write_text(source.replace(original,original[:-1]+', int>'))
+            with self.assertRaisesRegex(RuntimeError,'Action alternative'):
+                frozen_shape(ROOT/'include',copied)
 
     def test_same_size_member_change_or_added_padding_member_is_visible(self):
         source=(ROOT/'include/pineforge/engine.hpp').read_text()

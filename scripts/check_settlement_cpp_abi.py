@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual old/new settlement ABI pairings. Compile and link; NEVER run callers.
 
-Requires a separately prepared real e60 R2 archive. No Git/network/build fallback
+Requires separately prepared real e60 R2 and 0e R3 archives. No Git/network/build fallback
 is performed by this CTest-time checker. Existing native/script ABI guards stay
 separate and mandatory, including their old epoch and sanitizer RTTI controls.
 """
@@ -19,7 +19,7 @@ import tempfile
 from check_aggregate_cpp_versions import clean, body
 from check_native_cpp_abi import HOST_EVENTS_CALLER, assembly_layout_values
 from prepare_settlement_cpp_abi_base import (
-    BASE_COMMIT, BASE_TREE, COPY_CACHE, authenticate_headers, compiler_identity,
+    BASE_COMMIT, BASE_TREE, COPY_CACHE, PROVIDERS, authenticate_headers, compiler_identity,
     extract_tar, identity, read_cache, run,
 )
 
@@ -34,6 +34,9 @@ NEW_METHODS = ('inspect_native_settlement_selected', 'settle_native_execution_se
                'project_native_settlement_scoped_v1', 'project_native_settlement_selected_v1')
 NEW_PRIVATE = ('add_to_pyramid_market_with_qty_provenance',
                'sequential_same_tick_reversal_fill_with_qty_provenance')
+REVERSAL_METHODS = ('inspect_native_reversal_v1', 'project_native_reversal_v1',
+                    'settle_native_reversal_at_v1', 'settle_reversal_with_lifecycle_v1')
+REVERSAL_DOMAIN = 'reverse_to_v1::ReverseTo'
 PRESERVED_ARCHIVE_SHA = 'e13d3d19ad4613c28beddfabb119f1dddadb2c39e474edd6304a2f75c7321f60'
 PRESERVED_HEADERS_SHA = '1001102a496ae927ae98e111dd7dc68ab6c23ecc41a9eba00995144d9a532109'
 FROZEN_NATIVE_HEADERS = ('native_order.hpp', 'native_order_identity.hpp', 'native_host.hpp',
@@ -54,8 +57,10 @@ using I = ex::SettlementInspection;
 using R = ex::Result;
 using L = ex::LifecycleEffects;
 static_assert(std::is_same_v<E, pineforge::BacktestEngine>);
+static_assert(std::variant_size_v<A> == 3);
 static_assert(std::variant_size_v<S> == 2);
 static_assert(std::variant_size_v<pineforge::native_order::CommandEvent> == 16);
+static_assert(std::variant_size_v<pineforge::native_order::OrderIntent> == 3);
 '''
 OLD_CALLER = COMMON + '''
 static_assert(std::is_same_v<decltype(&E::inspect_native_settlement), I(E::*)(const A&,const F&) const>);
@@ -100,6 +105,24 @@ int main(int argc, char** argv) {
   auto p1 = e->project_native_settlement_scoped_v1(a,f,ex::Book{});
   auto p2 = e->project_native_settlement_selected_v1(a,f,set);
   return int(i.closed_units+r.closed_units+l.closed_units+p0.realized_balance+p1.remaining_entry_cost+p2.marked_equity);
+}
+'''
+REVERSAL_CALLER = COMMON + '''
+using RT = ex::reverse_to_v1::ReverseTo;
+using P = ex::AccountEffectProjection;
+static_assert(std::is_same_v<RT, ex::ReverseTo>);
+static_assert(std::is_same_v<decltype(&E::inspect_native_reversal_v1), I(E::*)(const RT&,const F&) const>);
+static_assert(std::is_same_v<decltype(&E::project_native_reversal_v1), P(E::*)(const RT&,const F&) const>);
+static_assert(std::is_same_v<decltype(&E::settle_native_reversal_at_v1), R(E::*)(const RT&,const F&,const C&)>);
+static_assert(std::is_same_v<decltype(&E::settle_reversal_with_lifecycle_v1), R(E::*)(const RT&,const F&,const L&)>);
+int main(int argc, char** argv) {
+  auto* e = reinterpret_cast<E*>(argv);
+  RT target{0.1}; F f{100,"","",1}; C c{}; L life{};
+  auto i = e->inspect_native_reversal_v1(target,f);
+  auto p = e->project_native_reversal_v1(target,f);
+  auto r = e->settle_native_reversal_at_v1(target,f,c);
+  auto l = e->settle_reversal_with_lifecycle_v1(target,f,life);
+  return int(i.closed_units+p.realized_balance+r.closed_units+l.closed_units);
 }
 '''
 PRIVATE_OLD_CALLER = COMMON + '''
@@ -177,9 +200,12 @@ def storage_declarations(header: str) -> list[str]:
     return statements
 
 
-def frozen_shape(old_include: Path, current_include: Path) -> tuple[list[str], dict]:
+def frozen_shape(old_include: Path, current_include: Path, *, selected=False) -> tuple[list[str], dict]:
     old_exec = (old_include/'pineforge/execution.hpp').read_text()
     cur_exec = (current_include/'pineforge/execution.hpp').read_text()
+    actions = [re.search(r'using\s+Action\s*=\s*[^;]+;', clean(text)) for text in (old_exec,cur_exec)]
+    if any(alias is None for alias in actions) or normalized(actions[0].group()) != normalized(actions[1].group()):
+        raise RuntimeError('Action alternative identities/order changed')
     for name in ['Result','SettlementInspection','Status','Fill','PhysicalExecutionContext','LifecycleEffects']:
         pattern = r'(?:struct|enum\s+class)\s+' + name + r'\s*\{'
         if normalized(body(old_exec, pattern, name)) != normalized(body(cur_exec, pattern, name)):
@@ -187,6 +213,10 @@ def frozen_shape(old_include: Path, current_include: Path) -> tuple[list[str], d
     for name in FROZEN_NATIVE_HEADERS:
         if normalized((old_include/'pineforge'/name).read_text()) != normalized((current_include/'pineforge'/name).read_text()):
             raise RuntimeError('R3 must preserve native header layout/contracts: ' + name)
+    if selected:
+        for name in ('execution_close_selection.hpp', 'execution_projection.hpp'):
+            if normalized((old_include/'pineforge'/name).read_text()) != normalized((current_include/'pineforge'/name).read_text()):
+                raise RuntimeError('selected/projection header layout/contracts changed: ' + name)
     scopes = [(directory/'pineforge/execution_close_scope.hpp').read_text()
               for directory in (old_include,current_include)]
     for name in ['Book','OpeningExposure']:
@@ -209,7 +239,7 @@ def frozen_shape(old_include: Path, current_include: Path) -> tuple[list[str], d
     return members, {'engineStorage': old_storage, 'virtuals': [normalized(v) for v in virtuals(old_engine)]}
 
 
-def layout_source(members: list[str]) -> tuple[str, int]:
+def layout_source(members: list[str], *, selected=False) -> tuple[str, int]:
     values = []
     assertions = []
     for name in ['Result','SettlementInspection']:
@@ -220,12 +250,16 @@ def layout_source(members: list[str]) -> tuple[str, int]:
     for index, status in enumerate(['Applied','NoEffect','InvalidPrice','InvalidQuantity','InvalidBook',
                                      'UnrepresentableQuantity','InvalidAccounting','InvalidLifecycle','InvalidCloseTarget']):
         assertions.append(f'static_assert(int(ex::Status::{status})=={index});')
-    values += ['sizeof(ex::Status)','sizeof(S)','alignof(S)','std::variant_size_v<S>',
+    values += ['sizeof(ex::Status)','sizeof(A)','alignof(A)','std::variant_size_v<A>',
+               'sizeof(S)','alignof(S)','std::variant_size_v<S>',
                'sizeof(E)','alignof(E)','sizeof(pineforge::PendingOrder)',
                'sizeof(pineforge::NativeStrategyHost)','sizeof(pineforge::NativeMarketEvent)',
                'sizeof(pineforge::NativeStateView)','sizeof(pineforge::native_order::Request)',
                'sizeof(pineforge::native_order::WorkingRequestCore)',
                'sizeof(pineforge::native_order::CommandEvent)']
+    if selected:
+        values += ['sizeof(ex::SelectedOpeningSet)', 'alignof(ex::SelectedOpeningSet)',
+                   'sizeof(ex::AccountEffectProjection)', 'alignof(ex::AccountEffectProjection)']
     for member in members:
         values += [f'offsetof(E,{member})', f'sizeof(decltype(E::{member}))', f'alignof(decltype(E::{member}))']
     return COMMON + '\n'.join(assertions) + '\nextern "C" const unsigned long long abi_layout[] = {\n' + ',\n'.join(values) + '\n};\n', len(values)
@@ -246,8 +280,8 @@ def validate_rejection(diagnostic: str, missing, domain=None) -> list[str]:
         matching = [symbol for symbol in symbols if symbol.startswith(ENGINE+method+'(')]
         if not matching:
             raise RuntimeError('link failure omits expected undefined method: '+method)
-        if domain and 'selected' in method and any(domain not in symbol for symbol in matching):
-            raise RuntimeError('selected method has wrong/missing parameter namespace: '+method)
+        if domain and ('selected' in method or 'reversal' in method) and any(domain not in symbol for symbol in matching):
+            raise RuntimeError('method has wrong/missing parameter namespace: '+method)
     unrelated = [symbol for symbol in symbols if not any(symbol.startswith(ENGINE+method+'(') for method in missing)]
     if unrelated:
         raise RuntimeError('link failure includes unrelated undefined symbols: '+', '.join(unrelated))
@@ -255,24 +289,44 @@ def validate_rejection(diagnostic: str, missing, domain=None) -> list[str]:
 
 
 def load_base(args, destination: Path, current_cache: dict) -> tuple[Path, Path, Path, dict]:
-    if not args.base_receipt.is_file():
+    return load_provider(args, destination, current_cache, args.base_receipt, PROVIDERS['e60'],
+                         expect_present=(*OLD_METHODS,*OLD_PRIVATE),
+                         expect_absent=(*NEW_METHODS,*NEW_PRIVATE,*REVERSAL_METHODS))
+
+
+def load_prior(args, destination: Path, current_cache: dict) -> tuple[Path, Path, Path, dict]:
+    return load_provider(args, destination, current_cache, args.prior_receipt, PROVIDERS['0e'],
+                         expect_present=(*OLD_METHODS,*OLD_PRIVATE,*NEW_METHODS,*NEW_PRIVATE),
+                         expect_absent=REVERSAL_METHODS)
+
+
+def load_provider(args, destination: Path, current_cache: dict, receipt_path: Path | None,
+                  provider: dict, *, expect_present, expect_absent) -> tuple[Path, Path, Path, dict]:
+    is_base = provider['commit'] == BASE_COMMIT
+    label = 'R2' if is_base else '0e18690'
+    if receipt_path is None or not receipt_path.is_file():
+        if not is_base:
+            raise RuntimeError('real 0e18690 archive receipt missing; run scripts/prepare_settlement_cpp_abi_base.py '
+                               '--source-repo . --current-build BUILD --output BUILD/settlement-abi-prior '
+                               f'--commit {provider["commit"]} --tree {provider["tree"]} '
+                               '--header-manifest tests/fixtures/settlement_cpp_abi/0e18690/manifest.json before CTest')
         raise RuntimeError('real R2 archive receipt missing; run scripts/prepare_settlement_cpp_abi_base.py '
                            '--source-repo . --current-build BUILD --output BUILD/settlement-abi-base before CTest')
-    receipt = json.loads(args.base_receipt.read_text())
-    if receipt.get('commit') != BASE_COMMIT or receipt.get('tree') != BASE_TREE:
-        raise RuntimeError('real base receipt does not pin e60 R2')
-    base_root = args.base_receipt.resolve().parent
+    receipt = json.loads(receipt_path.read_text())
+    if receipt.get('commit') != provider['commit'] or receipt.get('tree') != provider['tree']:
+        raise RuntimeError('real base receipt does not pin ' + ('e60 R2' if is_base else label))
+    base_root = receipt_path.resolve().parent
     resolve_artifact = lambda name: Path(name) if Path(name).is_absolute() else base_root/name
     library = resolve_artifact(receipt['archive'])
-    headers = resolve_artifact(receipt.get('headers','r2-headers.tar'))
+    headers = resolve_artifact(receipt.get('headers',provider['headers_name']))
     if identity(library)['sha256'] != receipt['archiveSha256'] or identity(headers)['sha256'] != receipt['headersSha256']:
-        raise RuntimeError('real R2 archive/header bytes do not match receipt')
+        raise RuntimeError('real ' + label + ' archive/header bytes do not match receipt')
     if not library.read_bytes().startswith(b'!<arch>\n'):
         raise RuntimeError('real base is not a static archive')
     if len(run(['ar','-t',str(library)]).splitlines()) < 20:
         raise RuntimeError('real base is not a full product archive')
     extract_tar(headers.read_bytes(), destination)
-    authenticate_headers(destination)
+    authenticate_headers(destination, provider['manifest'], commit=provider['commit'], tree=provider['tree'])
     if receipt.get('schemaVersion') == 'pineforge-settlement-abi-base/v1':
         old_compiler = receipt['compiler']
         current_compiler = compiler_identity(args.compiler)
@@ -285,6 +339,8 @@ def load_base(args, destination: Path, current_cache: dict) -> tuple[Path, Path,
         if identity(generated/'pineforge/version.h')['sha256'] != receipt['generatedHeaderSha256']:
             raise RuntimeError('base generated version header changed')
     else:
+        if not is_base:
+            raise RuntimeError('0e18690 provider requires portable v1 receipt; use matching preparation')
         # Explicit reuse of root's preserved Mac Release artifact, never a stub.
         if receipt['archiveSha256'] != PRESERVED_ARCHIVE_SHA or receipt['headersSha256'] != PRESERVED_HEADERS_SHA:
             raise RuntimeError('unrecognized legacy base receipt; use portable preparation')
@@ -302,10 +358,10 @@ def load_base(args, destination: Path, current_cache: dict) -> tuple[Path, Path,
         if identity(generated.parent/'lib/libpineforge.a')['sha256'] != receipt['archiveSha256']:
             raise RuntimeError('preserved base cache/header directory no longer belongs to its archive')
     symbols = defined_symbols(library)
-    for method in (*OLD_METHODS,*OLD_PRIVATE):
+    for method in expect_present:
         if ENGINE + method + '(' not in symbols:
             raise RuntimeError('real old archive omits original symbol: ' + method)
-    for method in (*NEW_METHODS,*NEW_PRIVATE):
+    for method in expect_absent:
         if ENGINE + method + '(' in symbols:
             raise RuntimeError('supplied old archive already exports new method: ' + method)
     return library, destination/'include', generated, receipt
@@ -318,6 +374,8 @@ def main() -> int:
     parser.add_argument('--include', type=Path, required=True)
     parser.add_argument('--generated-include', type=Path, required=True)
     parser.add_argument('--base-receipt', type=Path, required=True)
+    parser.add_argument('--prior-receipt', type=Path,
+                        help='required for full proof: prepared real 0e18690 provider receipt')
     parser.add_argument('--base-generated-include', type=Path)
     parser.add_argument('--extra-flag', action='append', default=[])
     parser.add_argument('--receipt', type=Path, required=True)
@@ -338,6 +396,7 @@ def main() -> int:
     stale = [str(path.relative_to(source)) for path in source_files if path.stat().st_mtime > library.stat().st_mtime]
     if sum((args.base_only,args.old_rejections_only,args.public_only)) > 1:
         raise RuntimeError('select only one partial proof mode')
+    full_matrix = not (args.base_only or args.old_rejections_only or args.public_only)
     if stale and not args.old_rejections_only:
         raise RuntimeError('current archive predates source; full rebuild required: '+', '.join(stale))
     initial_identity = identity(library)
@@ -365,6 +424,13 @@ def main() -> int:
                             'commit':BASE_COMMIT,'tree':BASE_TREE}
             members,shape = frozen_shape(old_include,include)
             report['frozenShape']=shape
+            if full_matrix:
+                prior_library,prior_include,prior_generated,prior_receipt = load_prior(args,scratch/'prior',cache)
+                report['prior']={'receiptSha256':identity(args.prior_receipt)['sha256'],
+                                 'archiveSha256':identity(prior_library)['sha256'],
+                                 'commit':prior_receipt['commit'],'tree':prior_receipt['tree']}
+                prior_members,prior_shape = frozen_shape(prior_include,include,selected=True)
+                report['priorFrozenShape']=prior_shape
 
             def compile_tu(name,text,headers,generated):
                 path=log_root/(name+'.cpp');path.write_text(text)
@@ -386,7 +452,21 @@ def main() -> int:
                     validate_rejection(diagnostic,missing,domain)
                 report['links'].append({'name':name,'argv':argv,'exitCode':result.returncode,
                     'outcome':'expected-rejection' if missing else 'linked','requiredMissing':list(missing),
-                    'selectionDomain':domain,'executed':False})
+                    'selectionDomain':domain,'parameterDomain':domain,'executed':False})
+
+            def compare_layout(name,headers,generated,layout_members,*,selected=False):
+                layout_text,word_count=layout_source(layout_members,selected=selected)
+                layouts=[]
+                for label,layout_headers,layout_generated in [(name,headers,generated),
+                        ('current' if name == 'old' else 'current-selected',include,args.generated_include)]:
+                    compile_tu(label+'-layout',layout_text,layout_headers,layout_generated)
+                    src=log_root/(label+'-layout.cpp');asm=log_root/(label+'-layout.s')
+                    run([*common,'-I',str(layout_headers),'-I',str(layout_generated),'-S',str(src),'-o',str(asm)],timeout=120,
+                        log=log_root/(label+'-layout.assembly.log'))
+                    layouts.append(assembly_layout_values(asm.read_text(),word_count))
+                if layouts[0]!=layouts[1]:
+                    raise RuntimeError('actual compiler '+name+'/current layout/offset/type-size arrays differ')
+                return {'wordCount':word_count,'values':layouts[0],'members':layout_members}
 
             # Compile every actual caller before interpreting any link outcome.
             old=compile_tu('old-book-singleton',OLD_CALLER,old_include,old_generated)
@@ -395,19 +475,12 @@ def main() -> int:
             current_private_old=compile_tu('current-old-private-types',PRIVATE_OLD_CALLER,include,args.generated_include)
             old_events=compile_tu('old-host-events-return',HOST_EVENTS_CALLER,old_include,old_generated)
             current_events=compile_tu('current-host-events-return',HOST_EVENTS_CALLER,include,args.generated_include)
-            layout_text,word_count=layout_source(members)
-            layouts=[]
-            for label,headers,generated in [('old',old_include,old_generated),('current',include,args.generated_include)]:
-                compile_tu(label+'-layout',layout_text,headers,generated)
-                src=log_root/(label+'-layout.cpp');asm=log_root/(label+'-layout.s')
-                run([*common,'-I',str(headers),'-I',str(generated),'-S',str(src),'-o',str(asm)],timeout=120,
-                    log=log_root/(label+'-layout.assembly.log'))
-                layouts.append(assembly_layout_values(asm.read_text(),word_count))
-            if layouts[0]!=layouts[1]: raise RuntimeError('actual compiler old/current layout/offset/type-size arrays differ')
-            report['layout']={'wordCount':word_count,'values':layouts[0],'members':members}
+            report['layout']=compare_layout('old',old_include,old_generated,members)
+            if full_matrix:
+                report['priorLayout']=compare_layout('prior',prior_include,prior_generated,prior_members,selected=True)
             if not args.base_only:
                 current_header=clean((include/'pineforge/engine.hpp').read_text())
-                for method in NEW_METHODS:
+                for method in (*NEW_METHODS,*(REVERSAL_METHODS if full_matrix else ())):
                     match=re.search(r'[^;{}]*\b'+method+r'\s*\([^;{}]*;',current_header)
                     if not match or re.search(r'\bvirtual\b',match.group()):
                         raise RuntimeError('new method must have one nonvirtual declaration: '+method)
@@ -435,6 +508,23 @@ def main() -> int:
                 if require_name not in changed: raise RuntimeError('selection namespace missing from real header')
                 header.write_text(changed.replace(require_name,'close_selection_v2'))
                 wrong_set=compile_tu('synthetic-selection-v2',NEW_CALLER.replace(require_name,'close_selection_v2'),wrong_selection,args.generated_include)
+                if full_matrix:
+                    prior_selected=compile_tu('prior-selected-project',NEW_CALLER,prior_include,prior_generated)
+                    reversal=compile_tu('new-four-reversal-methods',REVERSAL_CALLER,include,args.generated_include)
+                    wrong_reversal=scratch/'wrong-reversal';shutil.copytree(include,wrong_reversal)
+                    header=wrong_reversal/'pineforge/engine.hpp';changed=header.read_text();wrong_source=REVERSAL_CALLER
+                    wrong_reversal_names=[]
+                    for method in REVERSAL_METHODS:
+                        future=method[:-2]+'v2';wrong_reversal_names.append(future)
+                        changed=changed.replace(method,future);wrong_source=wrong_source.replace(method,future)
+                    header.write_text(changed)
+                    wrong_reversal_methods=compile_tu('synthetic-reversal-method-v2',wrong_source,wrong_reversal,args.generated_include)
+                    wrong_target=scratch/'wrong-target';shutil.copytree(include,wrong_target)
+                    header=wrong_target/'pineforge/execution_reverse_to.hpp';changed=header.read_text()
+                    if 'reverse_to_v1' not in changed:
+                        raise RuntimeError('reversal namespace missing from real header')
+                    header.write_text(changed.replace('reverse_to_v1','reverse_to_v2'))
+                    wrong_reverse_to=compile_tu('synthetic-reverse-to-v2',REVERSAL_CALLER.replace('reverse_to_v1','reverse_to_v2'),wrong_target,args.generated_include)
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)
@@ -455,6 +545,14 @@ def main() -> int:
                     link('synthetic-project-v2-rejected',wrong_projection,library,wrong_names)
                     link('synthetic-selection-v2-rejected',wrong_set,library,
                          (NEW_METHODS[0],NEW_METHODS[1],NEW_METHODS[2],NEW_METHODS[5]),'close_selection_v2::SelectedOpeningSet')
+                    if full_matrix:
+                        link('prior-selected-prior-real',prior_selected,prior_library)
+                        link('prior-selected-new-real',prior_selected,library)
+                        link('current-selected-prior-real',new,prior_library)
+                        link('new-reversal-new-real',reversal,library)
+                        link('new-reversal-prior-real-rejected',reversal,prior_library,REVERSAL_METHODS,REVERSAL_DOMAIN)
+                        link('synthetic-reversal-method-v2-rejected',wrong_reversal_methods,library,wrong_reversal_names,REVERSAL_DOMAIN)
+                        link('synthetic-reverse-to-v2-rejected',wrong_reverse_to,library,REVERSAL_METHODS,'reverse_to_v2::ReverseTo')
             if identity(library)!=initial_identity: raise RuntimeError('current archive changed during ABI proof')
             if any(identity(source/name)['sha256']!=sha for name,sha in report['sourceSha256'].items()):
                 raise RuntimeError('source changed during ABI proof')

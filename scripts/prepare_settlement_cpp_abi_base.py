@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the exact R2 settlement ABI provider from local Git objects, without tests.
+"""Build an exact historical settlement ABI provider from local Git objects.
 
 Run explicitly before CTest. This script never fetches Git history or dependencies.
 The exact Git object and Eigen must already be available to the current build.
@@ -21,6 +21,15 @@ BASE_COMMIT = 'e60e57156a54bb1c74c0c0a4f5a338fd924c046d'
 BASE_TREE = 'e209c89035ec884774f8f3e68e1dc118f26aaf51'
 ROOT = Path(__file__).resolve().parents[1]
 HEADER_MANIFEST = ROOT / 'tests/fixtures/settlement_cpp_abi/e60e571/manifest.json'
+PRIOR_COMMIT = '0e18690db3fb6bb4705841c2a86936dfa206380a'
+PRIOR_TREE = 'c29545d262bf6dcc22e46aa3382422f2e9c68378'
+PRIOR_HEADER_MANIFEST = ROOT / 'tests/fixtures/settlement_cpp_abi/0e18690/manifest.json'
+PROVIDERS = {
+    'e60': {'commit': BASE_COMMIT, 'tree': BASE_TREE, 'manifest': HEADER_MANIFEST,
+            'default_output': 'settlement-abi-base', 'headers_name': 'r2-headers.tar'},
+    '0e': {'commit': PRIOR_COMMIT, 'tree': PRIOR_TREE, 'manifest': PRIOR_HEADER_MANIFEST,
+           'default_output': 'settlement-abi-prior', 'headers_name': 'headers.tar'},
+}
 COPY_CACHE = (
     'CMAKE_BUILD_TYPE', 'CMAKE_C_COMPILER', 'CMAKE_CXX_COMPILER',
     'CMAKE_C_COMPILER_TARGET', 'CMAKE_CXX_COMPILER_TARGET',
@@ -63,12 +72,14 @@ def refuse_existing_base(output: Path, reason: str) -> None:
     raise RuntimeError(f'{reason}; use a fresh --build-dir (refusing to delete {output})')
 
 
-def receipt_matches_current(receipt: dict, current_cache: dict, compiler: dict) -> None:
+def receipt_matches_current(receipt: dict, current_cache: dict, compiler: dict, *,
+                            commit: str = BASE_COMMIT, tree: str = BASE_TREE) -> None:
     """Raise if a prepared base must not be reused with this current build."""
     if receipt.get('schemaVersion') != 'pineforge-settlement-abi-base/v1':
         raise RuntimeError('existing ABI base receipt is not portable v1')
-    if receipt.get('commit') != BASE_COMMIT or receipt.get('tree') != BASE_TREE:
-        raise RuntimeError('existing ABI base does not pin e60 R2')
+    if receipt.get('commit') != commit or receipt.get('tree') != tree:
+        label = 'e60 R2' if commit == BASE_COMMIT else commit
+        raise RuntimeError('existing ABI base does not pin ' + label)
     old = receipt.get('compiler') or {}
     for key in ('target', 'sha256', 'version'):
         if old.get(key) != compiler.get(key):
@@ -78,7 +89,8 @@ def receipt_matches_current(receipt: dict, current_cache: dict, compiler: dict) 
             'existing ABI base compiler/configuration/version-source/launcher differs from this build')
 
 
-def reusable_prepared_base(output: Path, current_build: Path) -> dict:
+def reusable_prepared_base(output: Path, current_build: Path, *,
+                           commit: str = BASE_COMMIT, tree: str = BASE_TREE) -> dict:
     """Return an existing receipt that is safe to reuse. Never deletes output."""
     receipt_path = output / 'receipt.json'
     if not output.exists():
@@ -89,7 +101,7 @@ def reusable_prepared_base(output: Path, current_build: Path) -> dict:
     cache = read_cache(current_build / 'CMakeCache.txt')
     compiler = compiler_identity(cache['CMAKE_CXX_COMPILER'])
     try:
-        receipt_matches_current(receipt, cache, compiler)
+        receipt_matches_current(receipt, cache, compiler, commit=commit, tree=tree)
     except RuntimeError as error:
         refuse_existing_base(output, str(error))
     resolve = lambda name: Path(name) if Path(name).is_absolute() else output / name
@@ -156,18 +168,20 @@ def extract_tar(raw: bytes, destination: Path) -> None:
                 target.chmod(member.mode & 0o777)
 
 
-def authenticate_headers(directory: Path) -> dict:
-    manifest = json.loads(HEADER_MANIFEST.read_text())
-    if manifest['commit'] != BASE_COMMIT or manifest['tree'] != BASE_TREE:
-        raise RuntimeError('tracked R2 header pin changed')
+def authenticate_headers(directory: Path, manifest_path: Path = HEADER_MANIFEST, *,
+                         commit: str = BASE_COMMIT, tree: str = BASE_TREE) -> dict:
+    manifest = json.loads(manifest_path.read_text())
+    label = 'R2' if commit == BASE_COMMIT else commit[:7]
+    if manifest['commit'] != commit or manifest['tree'] != tree:
+        raise RuntimeError('tracked ' + label + ' header pin changed')
     actual = {str(path.relative_to(directory)) for path in (directory / 'include').rglob('*') if path.is_file()}
     if actual != set(manifest['files']):
-        raise RuntimeError('R2 header closure differs from the tracked exact file inventory')
+        raise RuntimeError(label + ' header closure differs from the tracked exact file inventory')
     for name, expected in manifest['files'].items():
         raw = (directory / name).read_bytes()
         blob = hashlib.sha1(b'blob ' + str(len(raw)).encode() + b'\0' + raw).hexdigest()
         if identity(directory / name) != {'sha256': expected['sha256'], 'bytes': expected['bytes']} or blob != expected['git_blob']:
-            raise RuntimeError('R2 header bytes differ: ' + name)
+            raise RuntimeError(label + ' header bytes differ: ' + name)
     return manifest
 
 
@@ -189,7 +203,15 @@ def main() -> int:
     parser.add_argument('--current-build', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--commit', default=BASE_COMMIT)
+    parser.add_argument('--tree', default=BASE_TREE)
+    parser.add_argument('--header-manifest', type=Path, default=HEADER_MANIFEST)
     args = parser.parse_args()
+    provider = next((pin for pin in PROVIDERS.values()
+                     if (pin['commit'], pin['tree']) == (args.commit, args.tree)), None)
+    if provider is None:
+        raise RuntimeError('unsupported historical ABI commit/tree pin')
+    label = 'R2' if args.commit == BASE_COMMIT else args.commit[:7]
     repo, current, output = args.source_repo.resolve(), args.current_build.resolve(), args.output.resolve()
     if output.exists():
         raise RuntimeError('output must be new; reuse its existing receipt explicitly instead of rebuilding over it')
@@ -199,20 +221,20 @@ def main() -> int:
     if Path(cache['CMAKE_HOME_DIRECTORY']).resolve() != repo:
         raise RuntimeError('current CMake cache belongs to a different source repository')
     try:
-        commit = run(['git', '-C', str(repo), 'rev-parse', BASE_COMMIT + '^{commit}']).decode().strip()
-        tree = run(['git', '-C', str(repo), 'rev-parse', BASE_COMMIT + '^{tree}']).decode().strip()
+        commit = run(['git', '-C', str(repo), 'rev-parse', args.commit + '^{commit}']).decode().strip()
+        tree = run(['git', '-C', str(repo), 'rev-parse', args.commit + '^{tree}']).decode().strip()
     except RuntimeError as error:
-        raise RuntimeError(f'exact R2 source is unavailable; fetch the pinned object without tags '
-                           f'before preparation: git fetch --no-tags --depth=1 origin {BASE_COMMIT}') from error
-    if commit != BASE_COMMIT or tree != BASE_TREE:
-        raise RuntimeError('R2 commit/tree mismatch')
-    source_raw = run(['git', '-C', str(repo), 'archive', '--format=tar', BASE_COMMIT,
+        raise RuntimeError(f'exact {label} source is unavailable; fetch the pinned object without tags '
+                           f'before preparation: git fetch --no-tags --depth=1 origin {args.commit}') from error
+    if commit != args.commit or tree != args.tree:
+        raise RuntimeError(label + ' commit/tree mismatch')
+    source_raw = run(['git', '-C', str(repo), 'archive', '--format=tar', args.commit,
                       'CMakeLists.txt', 'VERSION', 'cmake', 'include', 'src'])
     output.mkdir(parents=True)
     (output / 'source.tar').write_bytes(source_raw)
     source, build = output / 'source', output / 'build'
     extract_tar(source_raw, source)
-    authenticate_headers(source)
+    authenticate_headers(source, args.header_manifest, commit=args.commit, tree=args.tree)
     settings = copied_cache(cache)
     eigen_source = current_eigen_source(cache, current)
     if eigen_source is not None:
@@ -231,15 +253,15 @@ def main() -> int:
         raise RuntimeError('base library is not a full static archive')
     archive_members = run(['ar', '-t', str(library)]).decode().splitlines()
     if len(archive_members) < 20:
-        raise RuntimeError('base archive is not the full R2 library')
-    headers = output / 'r2-headers.tar'
+        raise RuntimeError('base archive is not the full ' + label + ' library')
+    headers = output / provider['headers_name']
     with tarfile.open(headers, 'w') as archive:
         archive.add(source / 'include', arcname='include', recursive=True)
     source_identity = {str(path.relative_to(source)): identity(path)['sha256']
                        for path in sorted(source.rglob('*')) if path.is_file()}
-    receipt = {'schemaVersion': 'pineforge-settlement-abi-base/v1', 'commit': BASE_COMMIT, 'tree': BASE_TREE,
+    receipt = {'schemaVersion': 'pineforge-settlement-abi-base/v1', 'commit': args.commit, 'tree': args.tree,
                'archive': str(library.relative_to(output)), 'archiveSha256': identity(library)['sha256'],
-               'headers': 'r2-headers.tar', 'headersSha256': identity(headers)['sha256'],
+               'headers': headers.name, 'headersSha256': identity(headers)['sha256'],
                'generatedInclude': 'build/include',
                'generatedHeaderSha256': identity(build / 'include/pineforge/version.h')['sha256'],
                'sourceSha256': source_identity, 'sourceArchive': identity(output / 'source.tar'),

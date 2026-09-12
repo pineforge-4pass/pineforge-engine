@@ -36,6 +36,8 @@ from ci_verify import (
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT,
     BASE_TREE,
+    PRIOR_COMMIT,
+    PRIOR_TREE,
     COPY_CACHE,
     compiler_identity,
     copied_cache,
@@ -89,14 +91,17 @@ class Scripted:
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'cat-file' in argv:
-            if 'cat-file' in self.exits:
-                return Completed(int(self.exits['cat-file']), b'', b'')
+            key = 'prior-cat-file' if PRIOR_COMMIT + '^{commit}' in argv else 'cat-file'
+            if key in self.exits:
+                return Completed(int(self.exits[key]), b'', b'')
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'fetch' in argv:
-            return Completed(int(self.exits.get('fetch', 0)), b'fetched\n', b'')
+            key = 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch'
+            return Completed(int(self.exits.get(key, 0)), b'fetched\n', b'')
         if any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
-            return Completed(int(self.exits.get('prepare', 0)), b'prepared\n', b'')
+            key = 'prior-prepare' if PRIOR_COMMIT in argv else 'prepare'
+            return Completed(int(self.exits.get(key, 0)), b'prepared\n', b'')
         if any(Path(part).suffix == '.py' for part in argv):
             needles = {
                 'source-guard-c-abi': 'check_c_abi_runtime.py',
@@ -178,6 +183,7 @@ class Scripted:
                 commands[0]['command'] = f'{self.cxx} -c src/matrix.cpp'
             (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
         self._maybe_seed_abi_base()
+        self._maybe_seed_abi_base(prior=True)
         return Completed(0, b'configured\n', b'')
 
     def _build(self) -> Completed:
@@ -213,17 +219,17 @@ class Scripted:
         (self.build_dir / 'ci-smoke' / 'smoke_version').write_bytes(b'smoke')
         return Completed(0, b'installed\n', b'')
 
-    def _maybe_seed_abi_base(self) -> None:
-        kind = self.exits.get('preexisting_base')
+    def _maybe_seed_abi_base(self, *, prior=False) -> None:
+        kind = self.exits.get('preexisting_prior' if prior else 'preexisting_base')
         if not kind:
             return
-        output = self.build_dir / 'settlement-abi-base'
+        output = self.build_dir / ('settlement-abi-prior' if prior else 'settlement-abi-base')
         output.mkdir(parents=True, exist_ok=True)
         (output / 'sentinel').write_text('keep\n')
         if kind == 'no-receipt':
             return
         archive = output / 'build' / 'lib' / 'libpineforge.a'
-        headers = output / 'r2-headers.tar'
+        headers = output / ('headers.tar' if prior else 'r2-headers.tar')
         generated = output / 'build' / 'include' / 'pineforge' / 'version.h'
         archive.parent.mkdir(parents=True, exist_ok=True)
         generated.parent.mkdir(parents=True, exist_ok=True)
@@ -237,11 +243,11 @@ class Scripted:
             cache['PINEFORGE_VERSION_SOURCE'] = 'AUTO'
         receipt = {
             'schemaVersion': 'pineforge-settlement-abi-base/v1',
-            'commit': BASE_COMMIT,
-            'tree': BASE_TREE,
+            'commit': PRIOR_COMMIT if prior else BASE_COMMIT,
+            'tree': PRIOR_TREE if prior else BASE_TREE,
             'archive': 'build/lib/libpineforge.a',
             'archiveSha256': identity(archive)['sha256'],
-            'headers': 'r2-headers.tar',
+            'headers': headers.name,
             'headersSha256': identity(headers)['sha256'],
             'generatedInclude': 'build/include',
             'generatedHeaderSha256': identity(generated)['sha256'],
@@ -260,9 +266,9 @@ class Scripted:
             elif argv[0] == 'ctest' and '--test-dir' in argv:
                 names.append('ctest')
             elif argv[0] == 'git' and 'fetch' in argv:
-                names.append('fetch')
+                names.append('prior-fetch' if PRIOR_COMMIT in argv else 'fetch')
             elif any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
-                names.append('prepare')
+                names.append('prior-prepare' if PRIOR_COMMIT in argv else 'prepare')
             elif argv[0] == 'cmake' and '-S' in argv and 'smoke_consumer' in ''.join(argv):
                 names.append('smoke-configure')
             elif Path(argv[0]).name == 'smoke_version':
@@ -434,7 +440,7 @@ class ReceiptReuse(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def seed(self, *, version='FILE', corrupt=False, receipt=True):
+    def seed(self, *, version='FILE', corrupt=False, receipt=True, prior=False):
         archive = self.output / 'build' / 'lib' / 'libpineforge.a'
         headers = self.output / 'r2-headers.tar'
         generated = self.output / 'build' / 'include' / 'pineforge' / 'version.h'
@@ -453,8 +459,8 @@ class ReceiptReuse(unittest.TestCase):
         current = copied_cache(read_cache_for_test(self.build / 'CMakeCache.txt'))
         payload = {
             'schemaVersion': 'pineforge-settlement-abi-base/v1',
-            'commit': BASE_COMMIT,
-            'tree': BASE_TREE,
+            'commit': PRIOR_COMMIT if prior else BASE_COMMIT,
+            'tree': PRIOR_TREE if prior else BASE_TREE,
             'archive': 'build/lib/libpineforge.a',
             'archiveSha256': identity(archive)['sha256'],
             'headers': 'r2-headers.tar',
@@ -493,6 +499,22 @@ class ReceiptReuse(unittest.TestCase):
         self.seed(corrupt=True)
         with self.assertRaisesRegex(RuntimeError, 'fresh --build-dir'):
             reusable_prepared_base(self.output, self.build)
+        self.assertTrue((self.output / 'sentinel').is_file())
+
+    def test_prior_reuse_pins_its_own_commit_and_tree(self):
+        self.seed(prior=True)
+        receipt = reusable_prepared_base(self.output, self.build, commit=PRIOR_COMMIT, tree=PRIOR_TREE)
+        self.assertEqual(receipt['commit'], PRIOR_COMMIT)
+        with self.assertRaisesRegex(RuntimeError, 'does not pin e60 R2'):
+            reusable_prepared_base(self.output, self.build)
+        with self.assertRaisesRegex(RuntimeError, 'does not pin 0e18690'):
+            reusable_prepared_base(self.output, self.build, commit=PRIOR_COMMIT, tree=BASE_TREE)
+        self.assertTrue((self.output / 'sentinel').is_file())
+
+    def test_prior_reuse_also_refuses_version_source_mismatch(self):
+        self.seed(prior=True, version='AUTO')
+        with self.assertRaisesRegex(RuntimeError, 'fresh --build-dir'):
+            reusable_prepared_base(self.output, self.build, commit=PRIOR_COMMIT, tree=PRIOR_TREE)
         self.assertTrue((self.output / 'sentinel').is_file())
 
 
@@ -588,6 +610,12 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(summary['status'], 'passed')
         self.assertEqual(summary['exitCode'], 0)
         self.assertEqual(summary['versionSource'], 'FILE')
+        self.assertIn('abi-base', stage_names(summary))
+        self.assertIn('abi-prior', stage_names(summary))
+        names = stage_names(summary)
+        self.assertLess(names.index('build'), names.index('abi-base'))
+        self.assertLess(names.index('abi-base'), names.index('abi-prior'))
+        self.assertLess(names.index('abi-prior'), names.index('ctest'))
         self.assertIn('ctest', scripted.names())
         self.assertIn('install', scripted.names())
         self.assertTrue((build_dir / 'ci-logs' / 'ctest.log').is_file())
@@ -634,6 +662,56 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         _, _, scripted, _ = self.run_profile()
         self.assertNotIn('fetch', scripted.names())
         self.assertIn('prepare', scripted.names())
+
+    def test_matching_prior_is_reused_without_fetch_or_prepare(self):
+        code, summary, scripted, _ = self.run_profile(preexisting_prior='match')
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['abiPrior']['action'], 'reused')
+        self.assertNotIn('prior-fetch', scripted.names())
+        self.assertNotIn('prior-prepare', scripted.names())
+
+    def test_mismatch_prior_refuses_without_deletion_and_keeps_other_checks(self):
+        code, summary, scripted, build_dir = self.run_profile(preexisting_prior='mismatch')
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiPrior']['action'], 'refused')
+        self.assertIn('abi-prior', failure_stages(summary))
+        self.assertIn('fresh --build-dir', summary['failures'][0]['error'])
+        self.assertTrue((build_dir / 'settlement-abi-prior' / 'sentinel').is_file())
+        self.assertTrue((build_dir / 'settlement-abi-prior' / 'receipt.json').is_file())
+        self.assertNotIn('prior-prepare', scripted.names())
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
+
+    def test_prior_fetch_is_exact_and_only_when_object_missing(self):
+        code, summary, scripted, build_dir = self.run_profile(**{'prior-cat-file': 1})
+        self.assertEqual(code, 0, summary['failures'])
+        fetches = [argv for argv in scripted.calls if argv[0] == 'git' and 'fetch' in argv]
+        self.assertEqual(fetches, [['git', '-C', str(ROOT), 'fetch', '--no-tags', '--depth=1',
+                                    'origin', PRIOR_COMMIT]])
+        self.assertIn('abi-prior-fetch', stage_names(summary))
+        prepare = next(argv for argv in scripted.calls
+                       if any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv)
+                       and PRIOR_COMMIT in argv)
+        self.assertEqual(prepare[prepare.index('--tree') + 1], PRIOR_TREE)
+        self.assertEqual(Path(prepare[prepare.index('--output') + 1]).resolve(),
+                         (build_dir / 'settlement-abi-prior').resolve())
+        self.assertEqual(prepare[prepare.index('--header-manifest') + 1],
+                         str(ROOT / 'tests/fixtures/settlement_cpp_abi/0e18690/manifest.json'))
+
+    def test_present_prior_object_does_not_fetch(self):
+        code, summary, scripted, _ = self.run_profile(**{'prior-cat-file': 0})
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertNotIn('prior-fetch', scripted.names())
+        self.assertIn('prior-prepare', scripted.names())
+
+    def test_prior_fetch_failure_does_not_prepare_and_keeps_other_checks(self):
+        code, summary, scripted, _ = self.run_profile(**{'prior-cat-file': 1, 'prior-fetch': 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiPrior']['action'], 'failed')
+        self.assertIn('abi-prior-fetch', failure_stages(summary))
+        self.assertNotIn('prior-prepare', scripted.names())
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
 
     def test_require_websocket_rejects_skip(self):
         code, summary, scripted, _ = self.run_profile(

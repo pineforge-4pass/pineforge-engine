@@ -2,7 +2,7 @@
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
 Profiles: release, debug, sanitizers, native. Default build dir build-ci-PROFILE.
-Source guards, explicit configure, full rebuild, pinned R2 ABI prepare/reuse,
+Source guards, explicit configure, full rebuild, pinned e60 and 0e ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent
 CTest and package failures in the same run. Never deletes source, tests, or
@@ -24,6 +24,8 @@ from typing import Callable
 
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT,
+    BASE_TREE,
+    PROVIDERS,
     read_cache,
     reusable_prepared_base,
 )
@@ -297,9 +299,9 @@ def smoke_prefix(cache: dict[str, str], install_prefix: Path) -> str:
     return ';'.join(parts)
 
 
-def pinned_object_present(source: Path, runner: Runner) -> bool:
+def pinned_object_present(source: Path, runner: Runner, commit: str = BASE_COMMIT) -> bool:
     result = call_runner(
-        runner, ['git', '-C', str(source), 'cat-file', '-e', BASE_COMMIT + '^{commit}'],
+        runner, ['git', '-C', str(source), 'cat-file', '-e', commit + '^{commit}'],
         timeout=30, stream_output=False)
     return result.returncode == 0
 
@@ -331,6 +333,7 @@ class Driver:
         self.expected_version = expected_version(cfg.source)
         self.actual_version: str | None = None
         self.abi_action = 'not-started'
+        self.abi_prior_action = 'not-started'
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -350,12 +353,14 @@ class Driver:
             'actualVersion': None,
             'exitCode': None,
             'abi': {'action': self.abi_action},
+            'abiPrior': {'action': self.abi_prior_action},
             'stages': self.stages,
             'failures': self.failures,
         }
 
     def write_summary(self) -> None:
         self.summary['abi'] = {'action': self.abi_action}
+        self.summary['abiPrior'] = {'action': self.abi_prior_action}
         self.summary['actualVersion'] = self.actual_version
         self.summary['stages'] = self.stages
         self.summary['failures'] = self.failures
@@ -486,37 +491,49 @@ class Driver:
         return None
 
     def ensure_abi_base(self) -> None:
-        output = self.cfg.build_dir / 'settlement-abi-base'
+        self.abi_action = self.ensure_prepared_provider(
+            self.cfg.build_dir / 'settlement-abi-base', BASE_COMMIT, BASE_TREE,
+            extra_argv=[], stage='abi-base', fetch_stage='abi-fetch')
+
+    def ensure_abi_prior(self) -> None:
+        provider = PROVIDERS['0e']
+        manifest = self.cfg.source / provider['manifest'].relative_to(ROOT)
+        self.abi_prior_action = self.ensure_prepared_provider(
+            self.cfg.build_dir / provider['default_output'], provider['commit'], provider['tree'],
+            extra_argv=['--commit', provider['commit'], '--tree', provider['tree'],
+                        '--header-manifest', str(manifest)],
+            stage='abi-prior', fetch_stage='abi-prior-fetch')
+
+    def ensure_prepared_provider(self, output: Path, commit: str, tree: str, *,
+                                 extra_argv: list[str], stage: str, fetch_stage: str) -> str:
         prepare = [
             sys.executable, str(self.cfg.source / 'scripts/prepare_settlement_cpp_abi_base.py'),
             '--source-repo', str(self.cfg.source),
             '--current-build', str(self.cfg.build_dir),
             '--output', str(output),
             '--jobs', str(self.cfg.jobs),
+            *extra_argv,
         ]
         if output.exists():
             try:
-                receipt = reusable_prepared_base(output, self.cfg.build_dir)
+                receipt = reusable_prepared_base(output, self.cfg.build_dir, commit=commit, tree=tree)
             except Exception as error:
-                self.abi_action = 'refused'
-                self.fail_stage('abi-base', str(error), argv=['reuse-matching-receipt', str(output)])
-                return
-            self.abi_action = 'reused'
+                self.fail_stage(stage, str(error), argv=['reuse-matching-receipt', str(output)])
+                return 'refused'
             self.pass_stage(
-                'abi-base',
+                stage,
                 json.dumps({'action': 'reused', 'receipt': str(output / 'receipt.json'),
                             'archiveSha256': receipt.get('archiveSha256')}, indent=2, sort_keys=True),
                 argv=['reuse-matching-receipt', str(output / 'receipt.json')])
-            return
-        if not pinned_object_present(self.cfg.source, self.cfg.runner):
+            return 'reused'
+        if not pinned_object_present(self.cfg.source, self.cfg.runner, commit):
             fetch = ['git', '-C', str(self.cfg.source), 'fetch', '--no-tags', '--depth=1',
-                     'origin', BASE_COMMIT]
-            fetched = self.invoke('abi-fetch', fetch, timeout=120)
+                     'origin', commit]
+            fetched = self.invoke(fetch_stage, fetch, timeout=120)
             if fetched.returncode != 0:
-                self.abi_action = 'failed'
-                return
-        prepared = self.invoke('abi-base', prepare, timeout=1800)
-        self.abi_action = 'prepared' if prepared.returncode == 0 else 'failed'
+                return 'failed'
+        prepared = self.invoke(stage, prepare, timeout=1800)
+        return 'prepared' if prepared.returncode == 0 else 'failed'
 
     def run_smoke(self, cache: dict[str, str]) -> None:
         prefix = smoke_prefix(cache, self.install_prefix)
@@ -631,6 +648,7 @@ class Driver:
             self.pass_stage('native-binary', 'live runner absent as required for this profile')
 
         self.ensure_abi_base()
+        self.ensure_abi_prior()
 
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
                  '--output-on-failure', '--parallel', str(self.cfg.jobs)]

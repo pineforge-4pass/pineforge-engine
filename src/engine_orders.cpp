@@ -20,6 +20,51 @@ namespace pineforge {
 using namespace internal;
 
 namespace {
+// Existing source FIFO endpoint policy; never a native quantity tolerance.
+// Keep the R2 stop/whole-lot interpretation at 1e-10 in this adapter.
+constexpr double kSourceFifoEndpointEpsilon = kQtyEpsilon;
+
+std::optional<execution::SelectedOpeningSet> source_fifo_prefix_membership(
+        const std::vector<PyramidEntry>& lots, double qty_limit,
+        int64_t cycle) {
+    if (cycle <= 0 || !std::isfinite(qty_limit) || qty_limit <= 0.0)
+        return std::nullopt;
+
+    double qty_closed = 0.0;
+    size_t prefix_size = 0;
+    for (const auto& lot : lots) {
+        // Match the source's original accumulation and endpoint ordering.
+        // Once at the endpoint, even a tiny next sibling stays unselected.
+        if (qty_closed >= qty_limit - kSourceFifoEndpointEpsilon) break;
+        if (!std::isfinite(lot.qty) || lot.qty <= 0.0) return std::nullopt;
+        const double close_qty = std::min(lot.qty, qty_limit - qty_closed);
+        const double keep_qty = lot.qty - close_qty;
+        if (keep_qty > kSourceFifoEndpointEpsilon) return std::nullopt;
+        ++prefix_size;
+        qty_closed += close_qty;
+    }
+    if (prefix_size == 0 || prefix_size == lots.size()) return std::nullopt;
+
+    execution::SelectedOpeningSet selection{cycle, {}};
+    std::unordered_set<uint64_t> included;
+    double selected_qty = 0.0;
+    for (size_t index = 0; index < prefix_size; ++index) {
+        const auto& lot = lots[index];
+        if (lot.entry_incarnation == 0) return std::nullopt;
+        if (included.insert(lot.entry_incarnation).second)
+            selection.incarnations.push_back(lot.entry_incarnation);
+        selected_qty += lot.qty;
+        if (!std::isfinite(selected_qty)) return std::nullopt;
+    }
+    // An opening identity may have multiple physical fragments, but all of
+    // its live fragments must belong to this prefix. Otherwise use Reduce.
+    for (size_t index = prefix_size; index < lots.size(); ++index) {
+        if (included.count(lots[index].entry_incarnation) != 0)
+            return std::nullopt;
+    }
+    return selection;
+}
+
 // Source predicates are resolved here, never retained by native settlement.
 // Every fragment of an opening must agree with the selected source predicate.
 template<class Predicate>
@@ -412,9 +457,14 @@ void BacktestEngine::execute_partial_exit_qty(
     fill_price = apply_fill_slippage(fill_price, is_buy);
     const int pre_count = position_entry_count_;
     execution::Action action = order_action::Reduce{qty_to_close};
+    std::optional<execution::SelectedOpeningSet> prefix;
     if (std::abs(held) - qty_to_close <= kQtyEpsilon) action = execution::Flatten{};
-    const auto result = settle_resolved_execution(
-        action, execution::Fill{fill_price, {}, {}, 0});
+    else prefix = source_fifo_prefix_membership(
+        pyramid_entries_, qty_to_close, position_cycle_seq_);
+    const execution::Fill fill{fill_price, {}, {}, 0};
+    const auto result = prefix
+        ? settle_execution_selected_with_lifecycle(execution::Flatten{}, fill, {}, *prefix)
+        : settle_resolved_execution(action, fill);
     if (result.status != execution::Status::Applied
         && result.status != execution::Status::NoEffect)
         throw std::runtime_error("invalid resolved partial-close settlement");
@@ -1385,23 +1435,18 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
                                              uint64_t entry_incarnation) {
     // The incoming direction is also the closing direction. The caller has
     // already resolved this one price; no un-slip/re-slip or second ticket.
-    execution::Action action = execution::Flatten{};
+    const execution::Fill fill{fill_price, id, {}, entry_incarnation};
+    double incoming = 0.0;
     if (!close_only) {
-        double held = 0.0;
-        for (const auto& lot : pyramid_entries_) held += lot.qty;
-        const double incoming = source_reversal_qty(
+        incoming = source_reversal_qty(
             fill_price, explicit_qty, explicit_qty_type, explicit_qty_prequantized);
         if (!std::isfinite(incoming) || incoming < 0.0)
             throw std::runtime_error("invalid resolved flip quantity");
-        if (incoming > 0.0) {
-            const double total = held + incoming;
-            if (!std::isfinite(total) || total == held || (held > 0.0 && total == incoming))
-                throw std::runtime_error("unrepresentable resolved flip quantity");
-            action = order_action::Transact{is_long ? total : -total};
-        }
     }
-    const auto result = settle_resolved_execution(
-        action, execution::Fill{fill_price, id, {}, entry_incarnation});
+    const auto result = incoming > 0.0
+        ? settle_reversal_with_lifecycle_v1(
+            execution::ReverseTo{is_long ? incoming : -incoming}, fill, {})
+        : settle_resolved_execution(execution::Flatten{}, fill);
     if (result.status != execution::Status::Applied
         && result.status != execution::Status::NoEffect)
         throw std::runtime_error("invalid resolved flip settlement");

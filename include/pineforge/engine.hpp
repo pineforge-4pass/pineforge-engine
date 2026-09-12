@@ -23,6 +23,7 @@
 #include "execution_close_scope.hpp"
 #include "execution_close_selection.hpp"
 #include "execution_projection.hpp"
+#include "execution_reverse_to.hpp"
 #include "market_admission.hpp"
 #include "reservation_expansion.hpp"
 #include "order_cancellation.hpp"
@@ -1871,6 +1872,24 @@ protected:
         const execution::Action& action,
         const execution::Fill& fill,
         const execution::SelectedOpeningSet& selection) const;
+    // Opposite-book reversal to an exact signed exposure. Unlike Transact,
+    // the opening is not a remainder of transaction units minus held units.
+    // These synchronous extensions share the settlement owner and do not
+    // introduce a queued native request or saved commit authority.
+    execution::SettlementInspection inspect_native_reversal_v1(
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill) const;
+    execution::AccountEffectProjection project_native_reversal_v1(
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill) const;
+    execution::Result settle_native_reversal_at_v1(
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context);
+    execution::Result settle_reversal_with_lifecycle_v1(
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle);
     // Native account value: realized balance plus marked physical lots minus
     // their remaining paid entry costs, for every fee type. No Pine sizing or
     // end-of-range reporting convention participates in this value.
@@ -3891,12 +3910,32 @@ private:
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected);
     struct NativeSettlementStage;
+    execution::Status validate_native_settlement_book(double& held) const;
+    execution::Status allocate_native_settlement_closes(
+        NativeSettlementStage& stage,
+        const execution::CloseScope& book_or_opening,
+        double& remaining) const;
+    void finish_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill) const;
+    execution::SettlementInspection inspect_native_settlement_stage(
+        const NativeSettlementStage& stage, const execution::Fill& fill) const;
+    execution::AccountEffectProjection project_native_settlement_stage(
+        const NativeSettlementStage& stage, const execution::Fill& fill) const;
+    execution::Result commit_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context);
     void stage_native_settlement(
         NativeSettlementStage& stage,
         const execution::Action& action,
         const execution::Fill& fill,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected,
+        const execution::LifecycleEffects* lifecycle) const;
+    void stage_native_settlement(
+        NativeSettlementStage& stage,
+        const execution::ReverseTo& reversal,
+        const execution::Fill& fill,
         const execution::LifecycleEffects* lifecycle) const;
     enum class PositionReductionCause {
         SCRIPT_ORDER,   // strategy.close / close_all / market exit / reversal

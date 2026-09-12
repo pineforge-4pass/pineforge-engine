@@ -16,6 +16,9 @@ ARTIFACTS = {
     "settlement-abi-base/receipt.json": "settlement-abi-base-receipt.json",
     "settlement-abi-base/configure.log": "settlement-abi-base-configure.log",
     "settlement-abi-base/build.log": "settlement-abi-base-build.log",
+    "settlement-abi-prior/receipt.json": "settlement-abi-prior-receipt.json",
+    "settlement-abi-prior/configure.log": "settlement-abi-prior-configure.log",
+    "settlement-abi-prior/build.log": "settlement-abi-prior-build.log",
     "settlement-abi-receipt.json": "settlement-abi-receipt.json",
 }
 ENV_KEYS = ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_SHA", "GITHUB_RUN_ID",

@@ -53,9 +53,14 @@ separate. Git tags and checkout depth cannot change the smoke-test expectation.
 Ordinary CMake builds retain `AUTO`, the existing git-describe-first behavior.
 No release tag or VERSION value is rewritten by verification.
 
-The verifier fetches the pinned historical ABI commit without tags only when
-that object is missing. It then builds the old archive once or validates and
-reuses a matching prepared receipt. CTest itself performs no network fetch.
+The verifier fetches the pinned historical ABI commits `e60e571` (R2) and
+`0e18690` (selected settlement, before exact reversal) without tags only when
+each object is missing. It builds both full historical static libraries with
+tests disabled, or validates and reuses their matching prepared receipts under
+`settlement-abi-base/` and `settlement-abi-prior/`. Compiler, configuration and
+version-source mismatches refuse reuse without deleting the old evidence.
+Each profile needs matching providers; a Mac Release archive cannot replace
+a Linux sanitizer build. CTest itself performs no network fetch.
 The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
 actual old/new library pairs and their immutable inputs.
 
