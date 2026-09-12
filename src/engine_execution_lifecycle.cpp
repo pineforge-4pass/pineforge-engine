@@ -227,8 +227,11 @@ std::optional<execution::Status> BacktestEngine::preflight_settlement_lifecycle(
             const exit_legs::Action action{
                 copy.legs.target(), copy.legs.revision(), cause,
                 exit_legs::BindOwner{0}};
+            // Flat cleanup unbinds the lifecycle's stored owner, which may
+            // still be zero for a prearmed exit. The pending instruction's
+            // incarnation must nevertheless match exactly.
             const auto applied = copy.legs.apply(
-                {copy.incarnation, old_cycle}, action);
+                {copy.incarnation, copy.legs.target().owner}, action);
             if (applied == exit_legs::Result::Exhausted)
                 throw std::overflow_error("exit lifecycle revision exhausted");
             if (applied != exit_legs::Result::Applied) {

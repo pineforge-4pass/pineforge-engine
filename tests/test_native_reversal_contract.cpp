@@ -186,6 +186,14 @@ public:
         replacement.attach(pending_orders_.front().incarnation, owner);
         pending_orders_.front().legs = std::move(replacement);
     }
+    void set_leg_incarnation(uint64_t incarnation, int64_t owner) {
+        exit_legs::Lifecycle replacement;
+        replacement.attach(incarnation, owner);
+        pending_orders_.front().legs = std::move(replacement);
+    }
+    void bind_current_cycle_activation() {
+        pending_orders_.front().leg_activation.bind({position_cycle_seq_, 5, 5});
+    }
     void exhaust_leg_revision() {
         pending_orders_.front().legs.*access(LegRevisionAccess{}) = UINT64_MAX;
     }
@@ -554,31 +562,187 @@ void malformed_lifecycle_effects_are_refused() {
     }
 }
 
-void actual_owner_is_checked_before_close() {
-    for (bool change_in_pre_close : {false, true}) {
-        Book book;
-        book.seed_two_lots();
-        book.add_stale_exit();
-        execution::LifecycleEffects effects;
-        if (change_in_pre_close) {
-            effects.pre_close.emplace();
-            effects.pre_close->operations.push_back(fixed_intent(exit_legs::BindOwner{5}));
-        } else {
-            book.set_leg_owner(5); // Actual physical cycle is still 4.
+// A restored, prearmed EXIT can have concrete activation bounds for cycle 4
+// while its lifecycle still owns 0, or another stored owner. Flat cleanup at
+// d3996b4 unbound the currently stored target; it did not first bind cycle 4.
+// Both owners therefore get one unbind receipt, followed by the normal two
+// new-owner receipts only when the execution opens a remainder.
+void stored_exit_owner_is_unbound_on_full_close() {
+    for (int64_t owner : {int64_t{0}, int64_t{99}}) {
+        for (bool reversal : {false, true}) {
+            Book book;
+            book.seed_two_lots();
+            book.add_stale_exit();
+            book.set_leg_owner(owner);
+            book.bind_current_cycle_activation();
+            PendingOrder* const pending = book.first_pending_address();
+            CHECK(book.first_legs().target().incarnation == 500);
+            CHECK(book.lifecycle_owner() == owner);
+            CHECK(book.lifecycle_revision() == 0);
+            CHECK(book.lifecycle_events() == 0);
+
+            const execution::Action action = reversal
+                ? execution::Action{order_action::Transact{-6.0}}
+                : execution::Action{execution::Flatten{}};
+            execution::Result result;
+            try {
+                result = book.settle_effects(action, {});
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "stored owner %lld, reversal %d: %s\n",
+                             static_cast<long long>(owner), reversal, error.what());
+                CHECK(false);
+                continue;
+            }
+            CHECK(result.status == execution::Status::Applied);
+            CHECK(result.closed_units == 5.0);
+            CHECK(result.opened_units == (reversal ? -1.0 : 0.0));
+            CHECK(book.position() == (reversal ? -1.0 : 0.0));
+            CHECK(book.lots().size() == (reversal ? 1u : 0u));
+            CHECK(book.trades().size() == 2);
+            CHECK(book.pending_count() == 1);
+            CHECK(book.first_pending_address() == pending);
+            CHECK(book.first_legs().target().incarnation == 500);
+            CHECK(book.lifecycle_owner() == (reversal ? 5 : 0));
+            CHECK(book.lifecycle_revision() == (reversal ? 3u : 1u));
+            CHECK(book.lifecycle_events() == (reversal ? 3u : 1u));
+            CHECK(book.first_legs().last_action().has_value());
+            if (book.first_legs().last_action()) {
+                const auto& receipt = *book.first_legs().last_action();
+                CHECK(receipt.target.incarnation == 500);
+                CHECK(receipt.target.owner == (reversal ? 5 : owner));
+                CHECK(receipt.expected_revision == (reversal ? 2u : 0u));
+                CHECK(receipt.cause.event == (reversal ? 3u : 1u));
+                CHECK(receipt.cause.bar == 1);
+                CHECK(receipt.cause.domain == exit_legs::Domain::Ordinary);
+                CHECK(receipt.cause.phase == exit_legs::Phase::Observation);
+                CHECK(book.lifecycle_last_is_bind_to(reversal ? 5 : 0));
+            }
+            const auto& activation = pending->leg_activation.bounds();
+            CHECK(activation.has_value() == reversal);
+            if (activation) {
+                CHECK(activation->position_cycle == 5);
+                CHECK(activation->stop_first_bar == 1);
+                CHECK(activation->limit_first_bar == 1);
+            }
         }
-        const auto before = book.fingerprint();
-        bool refused = false;
-        try {
-            const auto result = book.settle_effects(execution::Flatten{}, effects);
-            refused = result.status != execution::Status::Applied
-                && result.status != execution::Status::NoEffect;
-        } catch (const std::logic_error&) {
-            refused = true;
+    }
+}
+
+// Accepting the actual stored owner does not authorize a caller to request an
+// unrelated owner. This explicit instruction still fails before any effect.
+void requested_foreign_owner_is_refused_before_close() {
+    Book book;
+    book.seed_two_lots();
+    book.add_stale_exit();
+    execution::LifecycleEffects effects;
+    effects.pre_close.emplace();
+    effects.pre_close->operations.push_back(fixed_intent(exit_legs::BindOwner{5}));
+    const auto before = book.fingerprint();
+    const auto result = book.settle_effects(execution::Flatten{}, effects);
+    CHECK(result.status == execution::Status::InvalidLifecycle);
+    CHECK(book.fingerprint() == before);
+    CHECK(book.position() == 5.0);
+    CHECK(book.trades().empty());
+    CHECK(book.lifecycle_events() == 0);
+    CHECK(book.lifecycle_owner() == 4);
+    CHECK(book.lifecycle_revision() == 0);
+}
+
+// The stored owner is not a wildcard for identity: pending incarnation 500
+// cannot act on lifecycle incarnation 999, even during whole-book cleanup.
+void mismatched_exit_incarnation_is_refused_before_close() {
+    for (int64_t owner : {int64_t{0}, int64_t{99}}) {
+        for (bool reversal : {false, true}) {
+            Book book;
+            book.seed_two_lots();
+            book.add_stale_exit();
+            book.set_leg_incarnation(999, owner);
+            book.bind_current_cycle_activation();
+            PendingOrder* const pending = book.first_pending_address();
+            const auto before = book.fingerprint();
+            bool refused = false;
+            const execution::Action action = reversal
+                ? execution::Action{order_action::Transact{-6.0}}
+                : execution::Action{execution::Flatten{}};
+            try {
+                const auto result = book.settle_effects(action, {});
+                refused = result.status == execution::Status::InvalidLifecycle;
+            } catch (const std::logic_error& error) {
+                refused = std::string(error.what()) == "exit lifecycle flat unbind refused";
+            }
+            CHECK(refused);
+            CHECK(book.fingerprint() == before);
+            CHECK(book.position() == 5.0);
+            CHECK(book.lots().size() == 2);
+            CHECK(book.trades().empty());
+            CHECK(book.pending_count() == 1);
+            CHECK(book.first_pending_address() == pending);
+            CHECK(pending->incarnation == 500);
+            CHECK(book.first_legs().target().incarnation == 999);
+            CHECK(book.lifecycle_owner() == owner);
+            CHECK(book.lifecycle_revision() == 0);
+            CHECK(book.lifecycle_events() == 0);
+            CHECK(!book.first_legs().last_action());
+            const auto& activation = pending->leg_activation.bounds();
+            CHECK(activation.has_value());
+            if (activation) {
+                CHECK(activation->position_cycle == 4);
+                CHECK(activation->stop_first_bar == 5);
+                CHECK(activation->limit_first_bar == 5);
+            }
         }
-        CHECK(refused);
-        CHECK(book.fingerprint() == before);
-        CHECK(book.position() == 5.0);
-        CHECK(book.trades().empty());
+    }
+}
+
+// Exact explicit snapshots remain preconditions, including owner 0. Capture
+// the real target, then change either its owner or definition revision before
+// submitting that snapshot. Neither removal nor pre-close operation may apply.
+void stale_exit_effect_snapshots_are_refused_before_close() {
+    for (int64_t owner : {int64_t{0}, int64_t{99}}) {
+        for (bool stale_revision : {false, true}) {
+            for (bool removal : {false, true}) {
+                Book book;
+                book.seed_two_lots();
+                book.add_stale_exit();
+                book.set_leg_owner(owner);
+                book.bind_current_cycle_activation();
+                execution::LifecycleEffects effects;
+                if (removal) {
+                    effects.removals.push_back({500, 0, {500, owner}, 0});
+                } else {
+                    effects.pre_close.emplace();
+                    effects.pre_close->operations.push_back(
+                        {500, 0, {500, owner}, 0, exit_legs::BindOwner{4}});
+                }
+                if (stale_revision) {
+                    book.define_stop();
+                } else {
+                    book.set_leg_owner(owner == 0 ? 99 : 0);
+                }
+                PendingOrder* const pending = book.first_pending_address();
+                const auto before = book.fingerprint();
+                const auto result = book.settle_effects(order_action::Transact{-6.0}, effects);
+                CHECK(result.status == execution::Status::InvalidLifecycle);
+                CHECK(book.fingerprint() == before);
+                CHECK(book.position() == 5.0);
+                CHECK(book.lots().size() == 2);
+                CHECK(book.trades().empty());
+                CHECK(book.pending_count() == 1);
+                CHECK(book.first_pending_address() == pending);
+                CHECK(book.first_legs().target().incarnation == 500);
+                CHECK(book.lifecycle_owner() == (stale_revision ? owner : (owner == 0 ? 99 : 0)));
+                CHECK(book.lifecycle_revision() == (stale_revision ? 1u : 0u));
+                CHECK(book.lifecycle_events() == 0);
+                CHECK(!book.first_legs().last_action());
+                const auto& activation = pending->leg_activation.bounds();
+                CHECK(activation.has_value());
+                if (activation) {
+                    CHECK(activation->position_cycle == 4);
+                    CHECK(activation->stop_first_bar == 5);
+                    CHECK(activation->limit_first_bar == 5);
+                }
+            }
+        }
     }
 }
 
@@ -786,7 +950,10 @@ int main() {
     stream_and_trade_exhaustion_precede_mutation();
     invalid_native_requests_are_noops();
     malformed_lifecycle_effects_are_refused();
-    actual_owner_is_checked_before_close();
+    stored_exit_owner_is_unbound_on_full_close();
+    requested_foreign_owner_is_refused_before_close();
+    mismatched_exit_incarnation_is_refused_before_close();
+    stale_exit_effect_snapshots_are_refused_before_close();
     operation_window_is_literal();
     source_selection_is_pure_and_empty_batch_is_real();
     selected_pre_close_preserves_current_owner_binding();

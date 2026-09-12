@@ -935,7 +935,9 @@ void BacktestEngine::unbind_exit_activations() {
             order.leg_activation.unbind();
             if (!order.legs.target().incarnation) order.legs.attach(order.incarnation, position_cycle_seq_);
             const exit_legs::Action action{order.legs.target(), order.legs.revision(), next_leg_event(), exit_legs::BindOwner{0}};
-            if (order.legs.apply({order.incarnation, position_cycle_seq_}, action)
+            // A prearmed lifecycle may not have acquired the physical cycle.
+            // Unbind its actual owner while preserving exact order identity.
+            if (order.legs.apply({order.incarnation, order.legs.target().owner}, action)
                     != exit_legs::Result::Applied)
                 throw std::logic_error("exit lifecycle flat unbind refused");
         }
