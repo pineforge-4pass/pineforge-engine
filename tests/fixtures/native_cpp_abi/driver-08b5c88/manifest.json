@@ -1,0 +1,38 @@
+{
+  "surface": "native_driver",
+  "source_commit": "08b5c8868eadd3022a62b32e7e2cabe0640e75f4",
+  "source_tree": "3482d155df5fe91c5dfd4a05fdfb506641d0ee19",
+  "internal_namespace": null,
+  "note": "Unversioned pineforge driver values at 08b5c88. NativeCoordinate is 72 bytes (no eligible_open_ms). src/market_driver.cpp is the authentic production native_bar_structurally_valid definition, compiled as a link control only.",
+  "captured_from": "tasks/native-abi-audit/snapshot-20260912T064119Z/08b5c88 plus git 08b5c88:src/market_driver.cpp",
+  "layout": {
+    "NativeCoordinate_sizeof": 72,
+    "NativeDriverPoint_sizeof": 104,
+    "NativeDecisionContext_sizeof": 160,
+    "NativeCoordinate_last_traded_close_ms_offset": 24
+  },
+  "archive": "headers.json.gz",
+  "archive_sha256": "17d6850a27e8ccf4b965ba4b49d080942b636b83af63e0eb1857286d7c69f6b9",
+  "files": {
+    "pineforge/bar.hpp": {
+      "sha256": "665c2528dca64ac9474de622dfd7ffdb540ff91316f70317e39aada158d1e0de",
+      "git_blob": "836f73daab382e9c8d5a6d03a942a921e39b756f",
+      "bytes": 655
+    },
+    "pineforge/market_driver.hpp": {
+      "sha256": "b8b01114abb23d39a998a7ff903c420a8cf7d422d1cc57a1b46baa778ead2297",
+      "git_blob": "b05c6e826a5746ce61a682db5d36dc6613423303",
+      "bytes": 2603
+    },
+    "pineforge/native_calendar.hpp": {
+      "sha256": "2c3f1bcbbc27b557de4ff589b642030403c298785ed7a94fa834a038fd0b8482",
+      "git_blob": "58fc5f842d88291b7bb4c031ddd47ece289d74c8",
+      "bytes": 18305
+    },
+    "src/market_driver.cpp": {
+      "sha256": "c061f91a7b66a4bba1b3a249af8b2f3f2f5adf09ebce2fa91914ffa231dc9b95",
+      "git_blob": "d6c79da62ce0847eef237a237cc71773f5e9f09c",
+      "bytes": 587
+    }
+  }
+}

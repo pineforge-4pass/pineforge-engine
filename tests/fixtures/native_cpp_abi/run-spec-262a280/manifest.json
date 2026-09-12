@@ -1,0 +1,36 @@
+{
+  "surface": "native_run_spec",
+  "source_commit": "262a28013ed277990349e845ba0554a63f6fbc79",
+  "source_tree": "fb00ed9ba02cede2fe08ee8113ae32f71fd26b00",
+  "internal_namespace": null,
+  "note": "Pre-wrapper unversioned NativeRunSpec at 262a280. Matching old/old uses a labeled minimal symbol control compiled against this header closure, not a historical validator runtime.",
+  "archive": "headers.json.gz",
+  "archive_sha256": "b8445a38fe7a4000660a1751756a659394b8ce0ccd8d3bd331fd86dfa19e7230",
+  "files": {
+    "pineforge/execution.hpp": {
+      "sha256": "b64f9bf6c433ba452f13dae48bbe4f11e3747777cb73b556369d270595329e38",
+      "git_blob": "c79bed08095f7f4dcf223f612132742781d5c1ef",
+      "bytes": 4123
+    },
+    "pineforge/exit_leg_lifecycle.hpp": {
+      "sha256": "9d785271511a350114adc7cf5bcb1600cf569f0a10559a8671b7e4b9cb9dc89a",
+      "git_blob": "91492ec22e05d7b6d9327f60ff5e239ae6906fcd",
+      "bytes": 22622
+    },
+    "pineforge/native_order.hpp": {
+      "sha256": "32b0f39fe437ae67b635b320d9b1fce6c7035d3269e44e481f5472ac14c48c73",
+      "git_blob": "5de0c973840142c079cc2639f255f9805fb59bd6",
+      "bytes": 10723
+    },
+    "pineforge/native_run_spec.hpp": {
+      "sha256": "b263a8bf3a68f58201c968ffa9ec8b54633fe3c752332df164ea11cf4bce3c7c",
+      "git_blob": "d4e54e1ce772a9d4ff3cee476a94ca1cc01827f3",
+      "bytes": 5429
+    },
+    "pineforge/order_action.hpp": {
+      "sha256": "7d76ddc3f6ba76216d5feb34cdf28908e33a92a56757a707ac6bd94dca315001",
+      "git_blob": "d992472cbefefdf8e29704a21f04614d68d39a58",
+      "bytes": 3470
+    }
+  }
+}

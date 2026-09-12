@@ -1,0 +1,45 @@
+{
+  "surface": "native_order",
+  "source_commit": "1acaf33e0340f6ae09d9529a3b6a0c12742dcb0d",
+  "source_tree": "ced31532e86bd41bc8753330ea0abcf379fdc05f",
+  "internal_namespace": null,
+  "note": "Unversioned pineforge::native_order at 1acaf33. CommandEvent has 7 alternatives. Authentic src/native_order.cpp is a compile-only old object, not a historical runtime.",
+  "captured_from": "tasks/native-abi-audit/snapshot-20260912T064119Z/1acaf33",
+  "layout": {
+    "CommandEvent_sizeof": 240,
+    "CommandEvent_variant_size": 7,
+    "WorkingRequestCore_sizeof": 80,
+    "Request_sizeof": 64,
+    "SubmitResult_sizeof": 72,
+    "LiveRequest_sizeof": 168
+  },
+  "archive": "headers.json.gz",
+  "archive_sha256": "70833e951654ebb392357eaa26188cbd153768008bb4873b8ffd5f7dec01c2a0",
+  "files": {
+    "pineforge/execution.hpp": {
+      "sha256": "971609337570accd2326938891890b77da2756a64d67ff890379a782e4ba2106",
+      "git_blob": "6902963eb220544fefc7f52912d795884c6d64a8",
+      "bytes": 2947
+    },
+    "pineforge/exit_leg_lifecycle.hpp": {
+      "sha256": "9d785271511a350114adc7cf5bcb1600cf569f0a10559a8671b7e4b9cb9dc89a",
+      "git_blob": "91492ec22e05d7b6d9327f60ff5e239ae6906fcd",
+      "bytes": 22622
+    },
+    "pineforge/native_order.hpp": {
+      "sha256": "ff32dd1b9a34bc6868b86c8dc14d27513e5ea2a710c7657c895662bcde65ee71",
+      "git_blob": "d0eaaaf0f9780ab50144fea850764e3bb7370024",
+      "bytes": 8848
+    },
+    "pineforge/order_action.hpp": {
+      "sha256": "7d76ddc3f6ba76216d5feb34cdf28908e33a92a56757a707ac6bd94dca315001",
+      "git_blob": "d992472cbefefdf8e29704a21f04614d68d39a58",
+      "bytes": 3470
+    },
+    "src/native_order.cpp": {
+      "sha256": "2a87060759706f4630ccccb1bbda37260d454154c0491cfade0ad82605a796c0",
+      "git_blob": "33854af7f129227090266db627befda372a4bc03",
+      "bytes": 12491
+    }
+  }
+}

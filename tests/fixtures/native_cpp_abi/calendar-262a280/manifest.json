@@ -1,0 +1,21 @@
+{
+  "surface": "native_calendar_descriptor",
+  "source_commit": "262a28013ed277990349e845ba0554a63f6fbc79",
+  "source_tree": "fb00ed9ba02cede2fe08ee8113ae32f71fd26b00",
+  "internal_namespace": null,
+  "note": "Pre-wrapper unversioned native_calendar at 262a280, including timezone_identity_descriptor. Byte-identical to independently reviewed f041756 header. Not a historical runtime.",
+  "layout": {
+    "NativeInterval_sizeof": 40,
+    "optional_NativeInterval_sizeof": 48,
+    "period_key_return_sizeof": 16
+  },
+  "archive": "headers.json.gz",
+  "archive_sha256": "27457d808e603601f44b1fc9d91292c44919dc81c30d7c68aea818398bf9044a",
+  "files": {
+    "pineforge/native_calendar.hpp": {
+      "sha256": "c47b3ee15d69587879cca8f491e73880cddae1ce3e7dfd0d1f4db16dfb8fcf4b",
+      "git_blob": "97c2fdc7ba68541091889eb1b40d54eb9e67b291",
+      "bytes": 19509
+    }
+  }
+}

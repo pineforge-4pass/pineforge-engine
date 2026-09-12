@@ -1,0 +1,44 @@
+{
+  "surface": "native_calendar",
+  "source_commit": null,
+  "source_tree": null,
+  "content_sha256": "a8e34c127b3d8d95f5556cf2e99fbc3d93c68c85f607a0e5e3e044b904193291",
+  "content_path": "pineforge/native_calendar.hpp",
+  "original_source_head": "ac526fd5b5a73b55e04fafd6b8a6de9bfd76e87a",
+  "internal_namespace": null,
+  "note": "Draft unversioned calendar header identified by content SHA a8e34c. NativeInterval is 32 bytes; period_key returns int64_t. Authentic src objects are compile/link controls, not a historical runtime.",
+  "captured_from": "tasks/native-abi-audit/snapshot-20260912T064119Z/draft-a8e34c",
+  "layout": {
+    "Timeframe_sizeof": 32,
+    "optional_Timeframe_sizeof": 40,
+    "SessionCalendar_sizeof": 88,
+    "NativeInterval_sizeof": 32,
+    "optional_NativeInterval_sizeof": 40,
+    "NativeInterval_last_traded_close_ms_offset": 8,
+    "period_key_return_sizeof": 8
+  },
+  "archive": "headers.json.gz",
+  "archive_sha256": "d0563720c5b667a8400b368153e4173b2a04c93643aa49cb87c46963eb203c2d",
+  "files": {
+    "pineforge/native_calendar.hpp": {
+      "sha256": "a8e34c127b3d8d95f5556cf2e99fbc3d93c68c85f607a0e5e3e044b904193291",
+      "git_blob": "d10876eeefbbf70bc17202f93c2f2ff8f05c8a10",
+      "bytes": 10019
+    },
+    "src/native_calendar.cpp": {
+      "sha256": "ba2ffce4ed521f0e0a6f9ae5eb843cf70dc35deaa77f0c07d800201ada323675",
+      "git_blob": "45b1260cd23b30e9473f68abf18b58e5c7b590fe",
+      "bytes": 32150
+    },
+    "src/timezone.cpp": {
+      "sha256": "b82e46321077cde60cd4d9483618122a7dd969e6533325026cff286dd7471a4c",
+      "git_blob": "c79c70bd9be41add561f9a185bc63182da7c80ca",
+      "bytes": 3409
+    },
+    "src/timezone.hpp": {
+      "sha256": "1fac463ce535408ee119a23c7612e29d033ca5a9761a828e0c11ae7bcde35a21",
+      "git_blob": "bdd0deb79bac26a08ee5df98d49717f8cca6a5c3",
+      "bytes": 918
+    }
+  }
+}
