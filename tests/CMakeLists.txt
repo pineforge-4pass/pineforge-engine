@@ -4,6 +4,7 @@ set(TEST_SOURCES
     test_native_reversal_contract
     test_order_action
     test_native_order_core
+    test_native_calendar
     test_order_action_integration
     test_placement_facts
     test_order_cancellation
