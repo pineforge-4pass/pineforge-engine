@@ -318,10 +318,12 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
             f.u(6);
             hash_handle(f, payload.target);
             hash_optional_request(f, payload.attempted);
+            hash_surface(f, payload.surface);
         } else if constexpr (std::is_same_v<T, native_order::InvalidHandleEvent>) {
             f.u(7);
             hash_handle(f, payload.target);
             hash_optional_request(f, payload.attempted);
+            hash_surface(f, payload.surface);
         } else if constexpr (std::is_same_v<T, native_order::NoEffectEvent>) {
             f.u(8);
             hash_definition(f, payload.definition);
@@ -1419,8 +1421,13 @@ void NativeExecutionConsumer::drain_after_applied(
 }
 
 void NativeExecutionConsumer::observe_trails(
-        BacktestEngine& engine, const native_order::MatchCursor& cursor, double price) {
+        BacktestEngine& engine, const NativeDriverPoint& point,
+        const native_order::MatchCursor& cursor, bool continuous, double price) {
     if (!std::isfinite(price) || failed()) return;
+    native_order::EvaluationContext evaluation;
+    evaluation.cursor = cursor;
+    evaluation.driver_class = classify_driver(point, continuous);
+    evaluation.existing_matching_bit = point.matching;
     std::vector<native_order::RequestHandle> handles;
     handles.reserve(requests_.live().size());
     for (const auto& live : requests_.live()) handles.push_back(live.handle());
@@ -1428,6 +1435,7 @@ void NativeExecutionConsumer::observe_trails(
         if (failed()) return;
         const auto* live = requests_.find_live(handle);
         if (!live) continue;
+        if (!requests_.evaluation_eligible(*live, evaluation)) continue;
         const auto* track = std::get_if<native_order::TrailTrack>(&live->trigger_state);
         if (!track) continue;
         const bool buy = requests_.working_is_buy(*live);
@@ -1435,7 +1443,8 @@ void NativeExecutionConsumer::observe_trails(
         native_order::Preparation<native_order::PreparedMutation> prep;
         try {
             prep = requests_.prepare_trigger(
-                handle, native_order::ObserveTrailExtremum{cursor, price}, next_timeline_ordinal_);
+                handle, native_order::ObserveTrailExtremum{cursor, price},
+                evaluation.driver_class, next_timeline_ordinal_);
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Settlement, cursor.point.ordinal});
@@ -1478,8 +1487,10 @@ void NativeExecutionConsumer::match_path(
     const auto driver_class = classify_driver(point, continuous);
     const uint64_t P = point.coordinate.ordinal;
     double t_cursor = 0.0;
+    double cursor_price = from_price;
     native_order::MatchCursor path_cursor = make_cursor(point, t_cursor);
-    observe_trails(engine, path_cursor, native_matching::price_at(from_price, to_price, t_cursor));
+    observe_trails(engine, point, path_cursor, continuous,
+                   native_matching::price_at(from_price, to_price, t_cursor));
 
     enum class Kind : std::uint8_t {
         Evaluate = 0,
@@ -1549,12 +1560,15 @@ void NativeExecutionConsumer::match_path(
             if (!facts.birth_ok || facts.waiting || !facts.driver_ok) continue;
             const double t_min = cause_floor(*live);
             if (t_min > 1.0) continue;
+            const native_matching::GeometricHit start{
+                t_min, t_min == t_cursor ? cursor_price
+                                        : native_matching::price_at(from_price, to_price, t_min)};
             Candidate row;
             row.handle = handle;
             row.incarnation = handle.incarnation;
             if (needs_evaluation(*live, facts)) {
                 row.t = t_min;
-                row.price = native_matching::price_at(from_price, to_price, t_min);
+                row.price = start.price;
                 row.kind = Kind::Evaluate;
             } else {
                 const bool buy = requests_.working_is_buy(*live);
@@ -1566,23 +1580,22 @@ void NativeExecutionConsumer::match_path(
                     const auto* stop = std::get_if<native_order::Stop>(&trigger);
                     if (!stop) continue;
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, t_min, stop->price, !buy, true);
+                        from_price, to_price, start, stop->price, !buy, true);
                     kind = Kind::ActivateStop;
                 } else if (std::holds_alternative<native_order::StopLimitPending>(state)) {
                     const auto* sl = std::get_if<native_order::StopLimit>(&trigger);
                     if (!sl) continue;
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, t_min, sl->stop, !buy, true);
+                        from_price, to_price, start, sl->stop, !buy, true);
                     kind = Kind::ActivateStopLimit;
                 } else if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
                     const auto* trail = std::get_if<native_order::Trail>(&trigger);
                     if (!trail) continue;
                     if (!trail->arm_price) {
-                        hit = native_matching::GeometricHit{t_min,
-                            native_matching::price_at(from_price, to_price, t_min)};
+                        hit = start;
                     } else {
                         hit = native_matching::first_region_entry(
-                            from_price, to_price, t_min, *trail->arm_price, buy, true);
+                            from_price, to_price, start, *trail->arm_price, buy, true);
                     }
                     kind = Kind::BeginTrail;
                 } else if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
@@ -1596,7 +1609,7 @@ void NativeExecutionConsumer::match_path(
                         return;
                     }
                     hit = native_matching::trail_stop_hit(
-                        from_price, to_price, t_min, track->best, trail->offset, buy);
+                        from_price, to_price, start, track->best, trail->offset, buy);
                     kind = Kind::ActivateTrail;
                 } else if (std::holds_alternative<native_order::LimitReady>(state)
                            || std::holds_alternative<native_order::StopLimitLive>(state)) {
@@ -1609,7 +1622,7 @@ void NativeExecutionConsumer::match_path(
                         continue;
                     }
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, t_min, level, buy, true);
+                        from_price, to_price, start, level, buy, true);
                     kind = Kind::Fill;
                 } else if (std::holds_alternative<native_order::MarketReady>(state)
                            || std::holds_alternative<native_order::StopActive>(state)
@@ -1618,8 +1631,7 @@ void NativeExecutionConsumer::match_path(
                     if (std::holds_alternative<native_order::MarketReady>(state) && continuous) {
                         continue;
                     }
-                    hit = native_matching::GeometricHit{
-                        t_min, native_matching::price_at(from_price, to_price, t_min)};
+                    hit = start;
                     kind = Kind::Fill;
                 } else {
                     continue;
@@ -1651,9 +1663,10 @@ void NativeExecutionConsumer::match_path(
         if (continuous && winner->t > t_cursor) {
             apply_excursion(engine, winner->price);
             path_cursor = make_cursor(point, winner->t);
-            observe_trails(engine, path_cursor, winner->price);
+            observe_trails(engine, point, path_cursor, continuous, winner->price);
         }
         t_cursor = winner->t;
+        cursor_price = winner->price;
         path_cursor = make_cursor(point, t_cursor);
         eval.cursor = path_cursor;
         const auto* live = requests_.find_live(winner->handle);
@@ -1711,7 +1724,8 @@ void NativeExecutionConsumer::match_path(
             }
             native_order::Preparation<native_order::PreparedMutation> prep;
             try {
-                prep = requests_.prepare_trigger(winner->handle, transition, next_timeline_ordinal_);
+                prep = requests_.prepare_trigger(winner->handle, transition,
+                                                driver_class, next_timeline_ordinal_);
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -1995,7 +2009,7 @@ void NativeExecutionConsumer::match_path(
     }
     if (continuous && t_cursor < 1.0 && !failed()) {
         apply_excursion(engine, to_price);
-        observe_trails(engine, make_cursor(point, 1.0), to_price);
+        observe_trails(engine, point, make_cursor(point, 1.0), continuous, to_price);
     }
 }
 

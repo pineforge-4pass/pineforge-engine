@@ -22,6 +22,8 @@ inline bool finite_positive(double v) noexcept {
 }
 
 inline double price_at(double from, double to, double t) noexcept {
+    if (t == 0.0) return from;
+    if (t == 1.0) return to;
     return from + t * (to - from);
 }
 
@@ -45,13 +47,16 @@ inline bool in_region(double price, double level, bool le) noexcept {
 // reports t_start when the cursor is already inside; otherwise the first
 // later crossing uses the threshold as the modeled raw price.
 inline std::optional<GeometricHit> first_region_entry(
-        double from, double to, double t_start, double level, bool le,
+        double from, double to, const GeometricHit& start, double level, bool le,
         bool include_current) noexcept {
+    const double t_start = start.t;
     if (!std::isfinite(from) || !std::isfinite(to) || !std::isfinite(level)
         || !std::isfinite(t_start) || t_start < 0.0 || t_start > 1.0) {
         return std::nullopt;
     }
-    const double current = price_at(from, to, t_start);
+    // A reached threshold is the authoritative price of this cursor. Do not
+    // reconstruct it from its rounded fraction on an activation/fill rescan.
+    const double current = start.price;
     if (!std::isfinite(current)) return std::nullopt;
     if (include_current && in_region(current, level, le)) {
         return GeometricHit{t_start, current};
@@ -98,7 +103,8 @@ inline bool trail_best_improves(double best, double price, bool buy) noexcept {
 // Adverse remaining suffix against a frozen best. Favorable monotonic
 // motion cannot hit the trailing stop on one linear segment.
 inline std::optional<GeometricHit> trail_stop_hit(
-        double from, double to, double t_start, double best, double offset, bool buy) noexcept {
+        double from, double to, const GeometricHit& start, double best, double offset, bool buy) noexcept {
+    const double t_start = start.t;
     double stop = 0.0;
     if (!checked_trail_stop(best, offset, buy, &stop)) return std::nullopt;
     if (!std::isfinite(from) || !std::isfinite(to) || !std::isfinite(t_start)
@@ -106,7 +112,7 @@ inline std::optional<GeometricHit> trail_stop_hit(
         return std::nullopt;
     }
     const bool le = !buy;
-    return first_region_entry(from, to, t_start, stop, le, true);
+    return first_region_entry(from, to, start, stop, le, true);
 }
 
 }  // namespace native_matching

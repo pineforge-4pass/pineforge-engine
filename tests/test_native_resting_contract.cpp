@@ -96,6 +96,12 @@ void capacity_per_print() {
   if(f.size()==3) {
     CHECK(f[0].opened_units==2 && f[1].opened_units==2 && f[2].opened_units==1);
     CHECK(!f[0].terminal && !f[1].terminal && f[2].terminal);
+    for(size_t i=0;i<3;++i) {
+      const auto* before=std::get_if<no::RemainingProjectionUnits>(&f[i].remaining_before);
+      const auto* after=std::get_if<no::RemainingProjectionUnits>(&f[i].remaining_after);
+      CHECK(before && before->q==5.0-2.0*i);
+      CHECK(after && after->q==(i<2?3.0-2.0*i:0.0));
+    }
     CHECK(f[0].cursor.point.ordinal!=f[1].cursor.point.ordinal);
     CHECK(f[1].cursor.point.ordinal!=f[2].cursor.point.ordinal);
   }
@@ -120,10 +126,12 @@ void stop_limit_models() {
   auto s=spec("R2-T3");s.slippage_ticks=200;CHECK(h.configure_native(s).status==NativeSetupStatus::Applied);
   const Bar b{100,103,99,102,1,T};h.run(&b,1);CHECK(h.native_state().kind==NativeLifecycleKind::Completed);
   auto f=fills(h,p);CHECK(f.size()==1);if(f.size()==1){CHECK(f[0].raw_price==101);CHECK(f[0].resolved_price==102);}
-  scenario="T8 discrete stop limit gap";Host d;no::RequestHandle q;
+  scenario="T4 discrete stop limit gap";Host d;no::RequestHandle q;
   d.begin=[&](Host& x){auto r=tx(1);r.trigger=no::StopLimit{101,102};q=put(x,r);};
   auto ds=spec("R2-T8");ds.slippage_ticks=200;CHECK(d.configure_native(ds).status==NativeSetupStatus::Applied);
   start_stream(d);d.tick(0,100);d.tick(1,103);CHECK(fills(d,q).empty());
+  auto activated=events<no::ActivatedEvent>(d);CHECK(activated.size()==1);
+  if(activated.size()==1){CHECK(activated[0].kind==no::ActivationKind::StopLimit);CHECK(activated[0].reached_price==103 && activated[0].cursor.t==0);}
   d.tick(2,100);auto df=fills(d,q);CHECK(df.size()==1);if(df.size()==1){CHECK(df[0].raw_price==100);CHECK(df[0].resolved_price==102);}
   finish(d);
 }
@@ -210,10 +218,15 @@ void persistent_trail(double sign) {
   scenario="T6 active trail remainder";Host h;h.begin=[&](Host& x){put(x,tx(sign*2));};
   start(h,sign>0?"R2-T6-L":"R2-T6-S");h.tick(0,100);
   auto r=rd(2);r.capacity=no::PointBudget{1};r.trigger=no::Trail{2,100+sign*5};auto close=put(h,r);
-  h.tick(1,100);CHECK(fills(h,close).empty());h.tick(2,100+sign*6);CHECK(fills(h,close).empty());
+  h.tick(1,100);CHECK(fills(h,close).empty());CHECK(events<no::ActivatedEvent>(h).empty());
+  h.tick(2,100+sign*6);CHECK(fills(h,close).empty());
+  auto arm=events<no::ActivatedEvent>(h);CHECK(arm.size()==1);
+  if(arm.size()==1){CHECK(arm[0].kind==no::ActivationKind::TrailArm);CHECK(arm[0].reached_price==100+sign*6);}
   h.tick(3,100+sign*10);CHECK(fills(h,close).empty());h.tick(4,100+sign*8);CHECK(fills(h,close).size()==1);
   h.tick(5,100+sign*20);auto f=fills(h,close);CHECK(f.size()==2);
   if(f.size()==2){CHECK(f[0].raw_price==100+sign*8 && f[1].raw_price==100+sign*20);CHECK(!f[0].terminal && f[1].terminal);}
+  auto activation=events<no::ActivatedEvent>(h);CHECK(activation.size()==2);
+  if(activation.size()==2){const auto* active=std::get_if<no::TrailActive>(&activation[1].after);CHECK(active && active->best_at_trigger==100+sign*10);}
   near(h.physical_position().signed_units,0);finish(h);
 }
 void group_actual_quantity() {
@@ -269,6 +282,21 @@ void nonfinite_slippage() {
     near(h.physical_position().signed_units,0);finish(h);
   }
 }
+void event_sized_child_budget(double sign) {
+  scenario="event-sized partial child";Host h;no::RequestHandle parent,child;
+  h.begin=[&](Host& x){parent=put(x,tx(sign*3));auto c=event_rd(parent);c.capacity=no::PointBudget{1};child=put(x,c);};
+  start(h,sign>0?"R2-event-budget-L":"R2-event-budget-S");
+  h.tick(0,100);near(h.physical_position().signed_units,sign*2);
+  CHECK(fills(h,parent).size()==1 && fills(h,child).size()==1);
+  h.tick(1,100);near(h.physical_position().signed_units,sign);
+  h.tick(2,100);auto f=fills(h,child);CHECK(f.size()==3);
+  if(f.size()==3){
+    for(const auto& e:f)CHECK(e.closed_units==1);
+    CHECK(!f[0].terminal && !f[1].terminal && f[2].terminal);
+    CHECK(f[0].cursor.point.ordinal!=f[1].cursor.point.ordinal && f[1].cursor.point.ordinal!=f[2].cursor.point.ordinal);
+  }
+  CHECK(events<no::QuantityBoundEvent>(h).size()==1);near(h.physical_position().signed_units,0);finish(h);
+}
 }
 int main() {
   capacity_per_print();persistent_stop_and_limit();stop_limit_models();
@@ -276,6 +304,7 @@ int main() {
   close_lifetime();cancel_cohorts();deferred_group_receipts();
   persistent_trail(1);persistent_trail(-1);group_actual_quantity();group_before_dependencies();market_surface_rejections();
   nonfinite_slippage();
+  event_sized_child_budget(1);event_sized_child_budget(-1);
   std::printf("%s native resting contract: %d checks, %d failures\n",failures?"FAIL":"PASS",checks,failures);
   return failures?1:0;
 }

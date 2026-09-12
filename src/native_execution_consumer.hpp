@@ -182,7 +182,8 @@ private:
             BacktestEngine& engine,
             std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds,
             NativeFailureOperation operation);
-    void observe_trails(BacktestEngine& engine, const native_order::MatchCursor& cursor,
+    void observe_trails(BacktestEngine& engine, const NativeDriverPoint& point,
+                        const native_order::MatchCursor& cursor, bool continuous,
                         double price);
     void record_driver(const NativeDriverPoint& point);
     NativeCoordinate coordinate_from(const native_calendar::NativeInterval& interval,

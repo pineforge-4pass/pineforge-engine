@@ -8,11 +8,12 @@ set(TEST_SOURCES
     test_native_order_terminal
     test_native_order_resting_core
     test_native_resting_contract
+    test_native_resting_acceptance
+    test_native_resting_driver_contract
     test_native_auto_path
     test_native_market_vertical
     test_native_market_vertical_contract
     test_native_calendar_driver_contract
-    test_native_auto_path
     test_native_host_repairs
     test_order_action_integration
     test_placement_facts

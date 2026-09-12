@@ -131,9 +131,14 @@ bool position_matches(const PositionIdentity& position, int64_t cycle, Side side
 
 bool opening_alive(const OpeningObservation& observation,
                    const RequestHandle& opening,
-                   int64_t cycle) noexcept {
-    return observation.queried_opening == opening && observation.queried_cycle == cycle
-        && observation.has_live_matching_lot && cycle > 0;
+                   int64_t cycle,
+                   const Side* required_side = nullptr) noexcept {
+    if (observation.queried_opening != opening || observation.queried_cycle != cycle) return false;
+    if (!observation.has_live_matching_lot || cycle <= 0) return false;
+    const auto* nonflat = std::get_if<PositionNonflat>(&observation.current_position);
+    if (!nonflat || nonflat->cycle != cycle) return false;
+    if (required_side && nonflat->side != *required_side) return false;
+    return true;
 }
 
 bool book_close_alive(const TargetObservation& observation, const BookClose& close) noexcept {
@@ -141,7 +146,79 @@ bool book_close_alive(const TargetObservation& observation, const BookClose& clo
 }
 
 bool opening_close_alive(const TargetObservation& observation, const OpeningClose& close) noexcept {
-    return observation.opening && opening_alive(*observation.opening, close.opening, close.cycle);
+    if (!observation.opening) return false;
+    if (!opening_alive(*observation.opening, close.opening, close.cycle, &close.side)) return false;
+    return position_matches(observation.current_position, close.cycle, close.side);
+}
+
+bool driver_class_matches_cursor(DriverEligibilityClass driver,
+                                  const MatchCursor& cursor) noexcept {
+    using pineforge::NativePriceProvenance;
+    using pineforge::NativePathPhase;
+    switch (cursor.point.provenance) {
+        case NativePriceProvenance::ObservedPrint:
+            return driver == DriverEligibilityClass::ObservedPrint;
+        case NativePriceProvenance::CarriedOpen:
+            return driver == DriverEligibilityClass::CarriedOpen;
+        case NativePriceProvenance::AfterCalculationClose:
+            // Completion describes the slot, not whether the input was ticks
+            // or a confirmed bar. The consumer supplies that transient fact.
+            return driver == DriverEligibilityClass::TickAfterCalculation
+                || driver == DriverEligibilityClass::ConfirmedAfterCalculationClose;
+        case NativePriceProvenance::Confirmed:
+            if (cursor.point.path_phase == NativePathPhase::High
+                || cursor.point.path_phase == NativePathPhase::Low
+                || cursor.point.path_phase == NativePathPhase::Close) {
+                return driver == DriverEligibilityClass::ConfirmedExcursion;
+            }
+            return driver == DriverEligibilityClass::ConfirmedOpen;
+        case NativePriceProvenance::ModeledOHLCOpen:
+            return driver == DriverEligibilityClass::ConfirmedOpen;
+        case NativePriceProvenance::ModeledOHLCClose:
+            return driver == DriverEligibilityClass::ConfirmedExcursion
+                || driver == DriverEligibilityClass::ConfirmedAfterCalculationClose;
+        case NativePriceProvenance::PartialFinalized:
+        case NativePriceProvenance::Calculation:
+            return driver == DriverEligibilityClass::ConfirmedAfterCalculationClose;
+    }
+    return false;
+}
+
+const MatchCursor& transition_cursor(const TriggerTransition& transition) noexcept {
+    return std::visit([](const auto& payload) -> const MatchCursor& { return payload.cursor; },
+                      transition);
+}
+
+bool stop_price_reached(bool is_buy, double level, double reached) noexcept {
+    if (!std::isfinite(reached) || !finite_positive(level)) return false;
+    return is_buy ? reached >= level : reached <= level;
+}
+
+bool same_p_continuation(const LiveRequest& live, const MatchCursor& cursor) noexcept {
+    if (cursor.point.ordinal == 0) return false;
+    if (cursor.point.effective_time_ms < live.birth().decision_time_lower_bound) return false;
+    auto same = [&](const MatchCursor& cause) noexcept {
+        return cause.point.ordinal == cursor.point.ordinal;
+    };
+    if (const auto* armed = std::get_if<ArmedTransaction>(&live.authority)) {
+        return same(armed->cause_cursor);
+    }
+    if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
+        if (const auto* from = std::get_if<EnrollmentFromApplied>(&close->enrollment)) {
+            return same(from->cursor);
+        }
+    }
+    if (const auto* close = std::get_if<BookClose>(&live.authority)) {
+        return same(close->binding_cursor);
+    }
+    return false;
+}
+
+bool trigger_cursor_eligible(const LiveRequest& live, const MatchCursor& cursor) noexcept {
+    if (point_eligible(live.birth(), cursor.point.ordinal, cursor.point.effective_time_ms)) {
+        return true;
+    }
+    return same_p_continuation(live, cursor);
 }
 
 const ExecutionAppliedEvent* as_applied(const CommandEvent& event) noexcept {
@@ -447,35 +524,124 @@ const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
     return event;
 }
 
-std::vector<EventId> WorkingRequestCore::pending_receipt_ids(
-        const PendingAdjustments& pending) const {
-    std::vector<EventId> ids;
+bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
+                                                      const EventId& cause,
+                                                      const RequestHandle& recipient,
+                                                      GroupEffect effect) const {
+    if (const auto* reduced = std::get_if<ReservationReducedEvent>(&event)) {
+        return effect == GroupEffect::Reduce && reduced->cause == cause
+            && reduced->recipient == recipient && reduced->effect == GroupEffect::Reduce
+            && reduced->definition && reduced->definition->handle == recipient;
+    }
+    if (const auto* deferred = std::get_if<DeferredGroupAdjustmentEvent>(&event)) {
+        return effect == GroupEffect::Reduce && deferred->cause == cause
+            && deferred->recipient == recipient && deferred->effect == GroupEffect::Reduce
+            && deferred->definition && deferred->definition->handle == recipient;
+    }
+    if (const auto* cancelled = std::get_if<CancelledEvent>(&event)) {
+        const bool allowed_effect = effect == GroupEffect::Cancel
+            || (effect == GroupEffect::Reduce
+                && std::holds_alternative<RemainingProjectionFlattenAll>(cancelled->unexecuted)
+                && cancelled->definition
+                && as_flatten(cancelled->definition->request.intent));
+        return allowed_effect && cancelled->reason == CancelReason::Group
+            && cancelled->cause == cause && cancelled->definition
+            && cancelled->definition->handle == recipient;
+    }
+    return false;
+}
+
+bool WorkingRequestCore::collect_pending_chain(const PendingAdjustments& pending,
+                                               const RequestHandle& recipient,
+                                               std::vector<EventId>* ids,
+                                               double* total) const {
+    ids->clear();
+    *total = 0.0;
     const auto* deferred = std::get_if<PendingDeferred>(&pending);
-    if (!deferred) return ids;
+    if (!deferred) return true;
+    if (deferred->count == 0 || deferred->tail_receipt.ordinal == 0
+        || deferred->tail_receipt.run != identity_) {
+        return false;
+    }
     EventId cursor = deferred->tail_receipt;
     for (uint64_t i = 0; i < deferred->count; ++i) {
         const CommandEvent* event = event_at(cursor);
         const auto* payload = event ? std::get_if<DeferredGroupAdjustmentEvent>(event) : nullptr;
-        if (!payload) break;
-        ids.push_back(cursor);
-        if (!payload->previous_pending_receipt) break;
-        cursor = *payload->previous_pending_receipt;
-    }
-    std::reverse(ids.begin(), ids.end());
-    return ids;
-}
-
-bool WorkingRequestCore::receipt_seen(const EventId& cause, const RequestHandle& recipient,
-                                      GroupEffect effect, uint64_t* outcome) const {
-    for (const auto& row : receipts_) {
-        if (row.cause == cause && row.recipient == recipient && row.effect == effect) {
-            const CommandEvent* event = event_at(EventId{identity_, row.outcome_ordinal});
-            if (!event) return false;
-            if (outcome) *outcome = row.outcome_ordinal;
-            return true;
+        if (!payload || payload->recipient != recipient || payload->effect != GroupEffect::Reduce
+            || !payload->definition || payload->definition->handle != recipient) {
+            return false;
+        }
+        ids->push_back(cursor);
+        if (i + 1 < deferred->count) {
+            if (!payload->previous_pending_receipt
+                || payload->previous_pending_receipt->ordinal >= cursor.ordinal) return false;
+            cursor = *payload->previous_pending_receipt;
+        } else if (payload->previous_pending_receipt) {
+            return false;
         }
     }
-    return false;
+    if (ids->size() != deferred->count) return false;
+    std::reverse(ids->begin(), ids->end());
+    // Reproduce the exact accumulation order used when each receipt was
+    // committed. Reassociating these additions tail-first changes binary64
+    // totals for valid chains such as 0.1, 0.2, 0.3.
+    double sum = 0.0;
+    for (std::size_t i = 0; i < ids->size(); ++i) {
+        const CommandEvent* event = event_at((*ids)[i]);
+        const auto* payload = event ? std::get_if<DeferredGroupAdjustmentEvent>(event) : nullptr;
+        if (!payload || !finite_positive(payload->deferred_delta)) return false;
+        if (i == 0) {
+            if (!std::holds_alternative<PendingNone>(payload->pending_before)) return false;
+        } else {
+            const auto* before = std::get_if<PendingDeferred>(&payload->pending_before);
+            if (!before || before->total != sum || before->count != i
+                || before->tail_receipt != (*ids)[i - 1]) return false;
+        }
+        if (!checked_add_positive(sum, payload->deferred_delta, &sum)) return false;
+        if (payload->pending_after.total != sum || payload->pending_after.count != i + 1
+            || payload->pending_after.tail_receipt != (*ids)[i]) return false;
+    }
+    if (sum != deferred->total) return false;
+    *total = sum;
+    return true;
+}
+
+WorkingRequestCore::ReceiptLookup WorkingRequestCore::receipt_lookup(
+        const EventId& cause, const RequestHandle& recipient, GroupEffect effect,
+        uint64_t* outcome) const {
+    ReceiptKey needle{cause, recipient, effect, 0};
+    const auto it = std::lower_bound(
+            receipts_.begin(), receipts_.end(), needle,
+            [](const ReceiptKey& a, const ReceiptKey& b) {
+                return receipt_cmp(a.cause.ordinal, a.recipient.incarnation, a.effect,
+                                   b.cause.ordinal, b.recipient.incarnation, b.effect)
+                    < 0;
+            });
+    if (it == receipts_.end()) return ReceiptLookup::Absent;
+    if (it->cause != cause || it->recipient != recipient || it->effect != effect) {
+        return ReceiptLookup::Absent;
+    }
+    const CommandEvent* event = event_at(EventId{identity_, it->outcome_ordinal});
+    if (!event || !authenticate_receipt_outcome(*event, cause, recipient, effect)) {
+        return ReceiptLookup::Conflict;
+    }
+    if (outcome) *outcome = it->outcome_ordinal;
+    return ReceiptLookup::Present;
+}
+
+std::optional<InstallError> WorkingRequestCore::validate_plan(const MutationPlan& plan) const noexcept {
+    if (plan.consumed) return InstallError::AlreadyConsumed;
+    const auto locked = plan.instance.lock();
+    if (!locked || locked != instance_ || !instance_ || instance_->expired
+        || plan.generation != instance_->generation || plan.run != identity_) {
+        return InstallError::WrongCoreOrRun;
+    }
+    if (plan.epoch != epoch_ || plan.history_size != history_.size()
+        || plan.last_ordinal != last_ordinal_
+        || epoch_ == std::numeric_limits<uint64_t>::max()) {
+        return InstallError::StalePreparation;
+    }
+    return std::nullopt;
 }
 
 bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
@@ -490,17 +656,7 @@ bool WorkingRequestCore::trail_level_ok(double best, double offset, bool is_buy,
 }
 
 InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
-    if (plan.consumed) return InstallError::AlreadyConsumed;
-    const auto locked = plan.instance.lock();
-    if (!locked || locked != instance_ || !instance_ || instance_->expired
-        || plan.generation != instance_->generation || plan.run != identity_) {
-        return InstallError::WrongCoreOrRun;
-    }
-    if (plan.epoch != epoch_ || plan.history_size != history_.size()
-        || plan.last_ordinal != last_ordinal_) {
-        return InstallError::StalePreparation;
-    }
-    if (epoch_ == std::numeric_limits<uint64_t>::max()) return InstallError::StalePreparation;
+    if (const auto error = validate_plan(plan)) return *error;
     const std::size_t first = history_.size();
     const std::size_t count = plan.events.size();
     for (auto& event : plan.events) {
@@ -611,7 +767,7 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         return RequestRejectReason::InvalidCapacity;
     }
     if (const auto* budget = std::get_if<PointBudget>(&request.capacity)) {
-        if (flatten || owner_opened) return RequestRejectReason::InvalidCapacity;
+        if (flatten) return RequestRejectReason::InvalidCapacity;
         if (!finite_positive(budget->units)) return RequestRejectReason::InvalidCapacity;
         if (!on_optional_grid(budget->units, context.quantity_grid)) {
             return RequestRejectReason::OffGrid;
@@ -655,6 +811,9 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     }
     if (const auto* member = std::get_if<Member>(&request.group)) {
         if (member->group == 0) return RequestRejectReason::InvalidGroup;
+        if (member->effect != GroupEffect::Cancel && member->effect != GroupEffect::Reduce) {
+            return RequestRejectReason::InvalidGroup;
+        }
     }
     return std::nullopt;
 }
@@ -896,11 +1055,11 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
                 : ReplaceStatus::NotWorking;
         impl->result = ReplaceResult{status, ordinal, std::nullopt, std::nullopt};
         if (kind == TargetKind::InvalidHandle) {
-            plan.events.emplace_back(
-                    InvalidHandleEvent{ordinal, std::move(staged_target), std::move(staged)});
+            plan.events.emplace_back(InvalidHandleEvent{ordinal, std::move(staged_target),
+                                                        std::move(staged), context.surface});
         } else {
-            plan.events.emplace_back(
-                    NotWorkingEvent{ordinal, std::move(staged_target), std::move(staged)});
+            plan.events.emplace_back(NotWorkingEvent{ordinal, std::move(staged_target),
+                                                     std::move(staged), context.surface});
         }
         seal_plan(plan);
         impl->plan = std::move(plan);
@@ -1179,6 +1338,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
 Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         const RequestHandle& target,
         const TriggerTransition& transition,
+        DriverEligibilityClass driver_class,
         uint64_t& next_timeline_ordinal) {
     require_identity(identity_);
     std::size_t live_index = 0;
@@ -1188,6 +1348,15 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
     LiveRequest updated = live_[live_index];
     if (std::holds_alternative<Wait>(updated.authority)
         || std::holds_alternative<UnboundBookClose>(updated.authority)) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    const MatchCursor& cursor = transition_cursor(transition);
+    if (!trigger_cursor_eligible(updated, cursor)) {
+        return NoChange{NoChangeReason::NotEligible};
+    }
+    if (!driver_class_matches_cursor(driver_class, cursor)
+        || !trigger_permits_driver(updated.request().trigger, updated.trigger_state,
+                                    driver_class, false)) {
         return NoChange{NoChangeReason::NotEligible};
     }
     const bool is_buy = working_is_buy(updated);
@@ -1229,6 +1398,11 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
+        if (trail->arm_price
+            && !stop_price_reached(!is_buy, *trail->arm_price, begin->reached_price)) {
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
         return emit_activated(ActivationKind::TrailArm, TrailTrack{begin->reached_price},
                               begin->cursor, begin->reached_price);
     }
@@ -1260,6 +1434,11 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
+        const auto* stop_px = std::get_if<Stop>(&updated.request().trigger);
+        if (!stop_px || !stop_price_reached(is_buy, stop_px->price, stop->reached_price)) {
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
         return emit_activated(ActivationKind::Stop, StopActive{}, stop->cursor, stop->reached_price);
     }
     if (const auto* stop_limit = std::get_if<ActivateStopLimit>(&transition)) {
@@ -1267,6 +1446,12 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
             if (std::holds_alternative<StopLimitLive>(updated.trigger_state)) {
                 return NoChange{NoChangeReason::NoTransition};
             }
+            return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
+                                    target};
+        }
+        const auto* stop_limit_px = std::get_if<StopLimit>(&updated.request().trigger);
+        if (!stop_limit_px
+            || !stop_price_reached(is_buy, stop_limit_px->stop, stop_limit->reached_price)) {
             return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0},
                                     target};
         }
@@ -1279,6 +1464,12 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         if (std::holds_alternative<TrailActive>(updated.trigger_state)) {
             return NoChange{NoChangeReason::NoTransition};
         }
+        return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
+    }
+    const auto* trail = std::get_if<Trail>(&updated.request().trigger);
+    double level = 0.0;
+    if (!trail || !trail_level_ok(track->best, trail->offset, is_buy, &level)
+        || !stop_price_reached(is_buy, level, trail_hit.reached_price)) {
         return PreparationError{CoreFailure::UnsupportedTransition, EventId{identity_, 0}, target};
     }
     return emit_activated(ActivationKind::TrailTrigger, TrailActive{track->best}, trail_hit.cursor,
@@ -1528,6 +1719,7 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
                                                     const CommittedExecutionFacts& facts) noexcept {
     if (!prepared.impl_) return InstallError::StalePreparation;
     auto& impl = *prepared.impl_;
+    if (const auto error = validate_plan(impl.terminal)) return *error;
     if (facts.result.status != execution::Status::Applied) return InstallError::WrongCoreOrRun;
     if (facts.result.closed_units != impl.proposal.inspected_closed_units
         || facts.result.opened_units != impl.proposal.inspected_opened_units
@@ -1596,8 +1788,10 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
         return NoChange{NoChangeReason::NoTransition};
     }
     uint64_t seen = 0;
-    if (receipt_seen(applied, recipient, member->effect, &seen)) {
-        return NoChange{NoChangeReason::AlreadyApplied};
+    const ReceiptLookup lookup = receipt_lookup(applied, recipient, member->effect, &seen);
+    if (lookup == ReceiptLookup::Present) return NoChange{NoChangeReason::AlreadyApplied};
+    if (lookup == ReceiptLookup::Conflict) {
+        return PreparationError{CoreFailure::ConflictingReceipt, applied, recipient};
     }
     if (!receipts_.empty()) {
         const auto& last = receipts_.back();
@@ -1741,6 +1935,9 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     if (!wait || wait->parent != payload->handle()) {
         return NoChange{NoChangeReason::NoTransition};
     }
+    if (payload->ordinal <= live.birth().acceptance_ordinal) {
+        return NoChange{NoChangeReason::NoTransition};
+    }
     const bool closing = as_reduce(live.request().intent) || as_flatten(live.request().intent);
     const bool opened = payload->opened_units != 0.0;
     if (closing && !opened && !payload->terminal) {
@@ -1783,7 +1980,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
     }
     const int64_t cycle = payload->cycle_after;
     const Side side = side_from_opened(payload->opened_units);
-    if (!opening_alive(*observation, payload->handle(), cycle)) {
+    if (!opening_alive(*observation, payload->handle(), cycle, &side)) {
         return PreparationError{CoreFailure::ObservationMismatch, applied, child};
     }
 
@@ -1796,10 +1993,10 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_owner_applied(
         if (!finite_positive(source)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, applied, child};
         }
-        const auto ids = pending_receipt_ids(live.pending);
+        std::vector<EventId> ids;
         double pending_total = 0.0;
-        if (const auto* deferred = std::get_if<PendingDeferred>(&live.pending)) {
-            pending_total = deferred->total;
+        if (!collect_pending_chain(live.pending, child, &ids, &pending_total)) {
+            return PreparationError{CoreFailure::ConflictingReceipt, applied, child};
         }
         const double deduct = std::min(pending_total, source);
         double after = source;

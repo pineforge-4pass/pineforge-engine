@@ -449,12 +449,14 @@ struct NotWorkingEvent {
     uint64_t ordinal = 0;
     RequestHandle target;
     std::optional<Request> attempted;
+    CommandSurface surface = CommandSurface::General;
 };
 
 struct InvalidHandleEvent {
     uint64_t ordinal = 0;
     RequestHandle target;
     std::optional<Request> attempted;
+    CommandSurface surface = CommandSurface::General;
 };
 
 struct NoEffectEvent {
@@ -782,6 +784,7 @@ public:
                                                      uint64_t& next_timeline_ordinal);
     Preparation<PreparedMutation> prepare_trigger(const RequestHandle& target,
                                                   const TriggerTransition& transition,
+                                                  DriverEligibilityClass driver_class,
                                                   uint64_t& next_timeline_ordinal);
     InstallResult install_mutation(PreparedMutation&& prepared) noexcept;
 
@@ -847,9 +850,15 @@ private:
     LiveRequest make_live(DefinitionRef definition,
                           const CommandContext& context,
                           EventId accepted) const;
-    std::vector<EventId> pending_receipt_ids(const PendingAdjustments& pending) const;
-    bool receipt_seen(const EventId& cause, const RequestHandle& recipient, GroupEffect effect,
-                      uint64_t* outcome) const;
+    enum class ReceiptLookup : std::uint8_t { Absent = 0, Present = 1, Conflict = 2 };
+    bool collect_pending_chain(const PendingAdjustments& pending,
+                               const RequestHandle& recipient,
+                               std::vector<EventId>* ids,
+                               double* total) const;
+    ReceiptLookup receipt_lookup(const EventId& cause, const RequestHandle& recipient,
+                                 GroupEffect effect, uint64_t* outcome) const;
+    bool authenticate_receipt_outcome(const CommandEvent& event, const EventId& cause,
+                                      const RequestHandle& recipient, GroupEffect effect) const;
     bool trail_level_ok(double best, double offset, bool is_buy, double* stop) const noexcept;
 
     uint64_t usable_ordinal(uint64_t next) const;
@@ -883,6 +892,7 @@ private:
         GroupEffect receipt_effect = GroupEffect::Reduce;
         uint64_t receipt_outcome = 0;
     };
+    std::optional<InstallError> validate_plan(const MutationPlan& plan) const noexcept;
     InstallResult commit(MutationPlan& plan) noexcept;
     MutationPlan begin_plan() const;
     void reserve_plan(const MutationPlan& plan);
