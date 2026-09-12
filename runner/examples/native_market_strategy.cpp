@@ -61,4 +61,7 @@ PF_API void run_backtest_full(pf_strategy_t s, pf_bar_t* bars, int n,
 
 PF_API void report_free(pf_report_t*) {}
 
+// Pull PF_API runtime/stream/native-config symbols from the static engine.
+PF_API int native_market_example_abi_version() { return pf_abi_version(); }
+
 }  // extern "C"

@@ -9,9 +9,11 @@
 
 namespace pineforge {
 
+struct NativeRunSpec;
+
 // Semantic versions hashed into native continuation identity.
-inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v1";
-inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v1";
+inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v3";
+inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v3";
 inline constexpr const char* kNativeCalendarSemanticVersion = "native-calendar/v1";
 
 enum class NativePriceProvenance : std::uint8_t {
@@ -44,6 +46,7 @@ struct NativeCoordinate {
     uint64_t ordinal = 0;
     int interval_index = 0;
     int64_t open_ms = 0;
+    int64_t eligible_open_ms = 0;
     int64_t last_traded_close_ms = 0;
     int64_t next_period_open_ms = 0;
     int64_t next_input_open_ms = 0;
@@ -83,5 +86,72 @@ public:
 };
 
 bool native_bar_structurally_valid(const Bar& bar) noexcept;
+
+// Confirmed-bar labels admitted by v9: the immutable nominal slot origin
+// and the scheduled clipped eligible opening. Both identify one slot key
+// `interval.open_ms`. Mid-slot and other off-grid timestamps are refused.
+inline bool native_confirmed_bar_label_admitted(
+        const native_calendar::NativeInterval& interval, int64_t timestamp) noexcept {
+    return timestamp == interval.open_ms || timestamp == interval.eligible_open_ms;
+}
+
+// Canonical exclusive completion of a confirmed input slot. Source-price
+// time remains a separate fact (bar.timestamp / last print).
+inline int64_t native_canonical_input_completion(
+        const native_calendar::NativeInterval& interval) noexcept {
+    return interval.next_period_open_ms;
+}
+
+// ---------------------------------------------------------------------------
+// Shared pure input preflight (host + runner)
+//
+// Exact signature the runner worker should bind:
+//   NativeInputPreflightResult
+//   preflight_native_inputs(const NativeRunSpec& spec,
+//                           const Bar* bars,
+//                           int n,
+//                           NativeInputPolicy policy);
+//
+// Calendar-aware, allocation of diagnostic text is the caller's job.
+// No host reset, callback, identity mutation, high-water change, or
+// decision-floor change. Parses the spec's session/timezone/input_tf
+// on each call. Batch may be sparse; StreamWarmup refuses missing
+// in-session bars after a closed gap by walking next_input_open_ms
+// through interval_containing (Fri 16 -> Mon 11 cannot skip Mon 09:30).
+// Warmup complete-script policy is NOT decided here.
+// ---------------------------------------------------------------------------
+enum class NativeInputPolicy : std::uint8_t {
+    Batch = 0,
+    StreamWarmup = 1,
+};
+
+enum class NativeInputPreflightError : std::uint16_t {
+    None = 0,
+    NullArray = 1,
+    InvalidCount = 2,
+    StructuralInvalid = 3,
+    Unaligned = 4,
+    OffGridLabel = 5,
+    NotStrictlyIncreasing = 6,
+    OverlappingSlot = 7,
+    InSessionGap = 8,
+    CalendarFailure = 9,
+};
+
+struct NativeInputPreflightResult {
+    NativeInputPreflightError error = NativeInputPreflightError::None;
+    int index = -1;  // first offending bar, or -1 when not index-specific
+
+    constexpr bool ok() const noexcept {
+        return error == NativeInputPreflightError::None;
+    }
+    constexpr explicit operator bool() const noexcept { return ok(); }
+};
+
+NativeInputPreflightResult preflight_native_inputs(
+        const NativeRunSpec& spec,
+        const Bar* bars,
+        int n,
+        NativeInputPolicy policy);
 
 }  // namespace pineforge

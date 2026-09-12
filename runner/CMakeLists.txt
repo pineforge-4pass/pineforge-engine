@@ -15,10 +15,17 @@ endif()
 target_link_libraries(pineforge_live_support PUBLIC ${_pf_sqlite_target} CURL::libcurl OpenSSL::Crypto Threads::Threads)
 target_compile_options(pineforge_live_support PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(pineforge_live_startup STATIC native_startup.cpp)
+target_compile_features(pineforge_live_startup PUBLIC cxx_std_17)
+target_include_directories(pineforge_live_startup PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+target_link_libraries(pineforge_live_startup PUBLIC pineforge_live_support PineForge::pineforge)
+target_compile_options(pineforge_live_startup PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
+
 add_executable(pineforge-live main.cpp parser.cpp)
 target_include_directories(pineforge-live PRIVATE
     ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
-target_link_libraries(pineforge-live PRIVATE pineforge_live_support ${CMAKE_DL_LIBS})
+target_link_libraries(pineforge-live PRIVATE pineforge_live_startup ${CMAKE_DL_LIBS})
 target_compile_options(pineforge-live PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off)
 install(TARGETS pineforge-live RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
@@ -41,6 +48,10 @@ if(PINEFORGE_BUILD_TESTS)
     target_include_directories(test_live_json PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(test_live_json PRIVATE -UNDEBUG)
     add_test(NAME test_live_json COMMAND test_live_json)
+    add_executable(test_native_live_startup ${PROJECT_SOURCE_DIR}/tests/test_native_live_startup.cpp)
+    target_link_libraries(test_native_live_startup PRIVATE pineforge_live_startup)
+    target_compile_options(test_native_live_startup PRIVATE -UNDEBUG)
+    add_test(NAME test_native_live_startup COMMAND test_native_live_startup)
     add_test(NAME native_live_help COMMAND pineforge-live --help)
     add_executable(test_live_parser ${PROJECT_SOURCE_DIR}/tests/test_live_parser.cpp parser.cpp)
     target_include_directories(test_live_parser PRIVATE ${PROJECT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR})
@@ -60,6 +71,24 @@ if(PINEFORGE_BUILD_TESTS)
         $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_live_parser_example>
         $<TARGET_FILE:live_parser_fixture>)
     set_tests_properties(native_live_e2e PROPERTIES TIMEOUT 120)
+    foreach(contract_kind absent unknown native_no_export native_stub)
+        add_library(live_contract_${contract_kind} MODULE
+            ${PROJECT_SOURCE_DIR}/tests/test_live_contract_plugins.cpp)
+        target_include_directories(live_contract_${contract_kind} PRIVATE
+            ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+        target_compile_options(live_contract_${contract_kind} PRIVATE -fvisibility=hidden)
+        set_target_properties(live_contract_${contract_kind} PROPERTIES PREFIX "")
+    endforeach()
+    target_compile_definitions(live_contract_absent PRIVATE PF_LIVE_CONTRACT_ABSENT=1)
+    target_compile_definitions(live_contract_unknown PRIVATE PF_LIVE_CONTRACT_UNKNOWN=1)
+    target_compile_definitions(live_contract_native_no_export PRIVATE PF_LIVE_CONTRACT_NATIVE_NO_EXPORT=1)
+    target_compile_definitions(live_contract_native_stub PRIVATE PF_LIVE_CONTRACT_NATIVE_STUB=1)
+    add_test(NAME native_live_startup_e2e COMMAND ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/tests/native_live_startup_e2e.py $<TARGET_FILE:pineforge-live>
+        $<TARGET_FILE:native_live_example> $<TARGET_FILE:native_market_example>
+        $<TARGET_FILE:live_contract_absent> $<TARGET_FILE:live_contract_unknown>
+        $<TARGET_FILE:live_contract_native_no_export> $<TARGET_FILE:live_contract_native_stub>)
+    set_tests_properties(native_live_startup_e2e PROPERTIES TIMEOUT 120)
     foreach(native_test test_native_live_store test_native_live_websocket)
         add_executable(${native_test} ${PROJECT_SOURCE_DIR}/tests/${native_test}.cpp)
         target_link_libraries(${native_test} PRIVATE pineforge_live_support)

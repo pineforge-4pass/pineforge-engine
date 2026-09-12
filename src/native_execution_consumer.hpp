@@ -72,9 +72,28 @@ private:
         int first_index = 0;
         int last_index = 0;
         bool sealed = false;
+        // False once a tick or quiet-carried slot has contributed. Seal then
+        // calculates without replaying modeled OHLC matching/excursion.
+        bool modeled_ohlc = true;
+    };
+
+    enum class InputContribution : std::uint8_t {
+        ConfirmedBar = 0,
+        ObservedTickSlot = 1,
+        QuietCarried = 2,
+    };
+
+    struct AppendDigest {
+        uint64_t h = 1469598103934665603ULL;
+        uint64_t count = 0;
+        void reset() noexcept {
+            h = 1469598103934665603ULL;
+            count = 0;
+        }
     };
 
     bool failed() const noexcept;
+    void latch_failure(NativeFailure failure) noexcept;
     void fail(BacktestEngine& engine, NativeFailure failure) noexcept;
     void render(BacktestEngine& engine, const char* text) const;
     const NativeRunSpec* spec_ptr() const;
@@ -86,8 +105,13 @@ private:
     bool preflight_bars(BacktestEngine& engine, const Bar* bars, int n, bool stream);
     void pump_batch(BacktestEngine& engine, const Bar* bars, int n);
     bool consume_confirmed_input(BacktestEngine& engine, const Bar& bar, int index, bool last);
+    bool contribute_input(BacktestEngine& engine, const Bar& bar,
+                          const native_calendar::NativeInterval& interval,
+                          int index, InputContribution kind);
     void seal_script(BacktestEngine& engine, NativeCompletionKind kind);
     void deliver_confirmed_script(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base);
+    void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
+                                       const NativeCoordinate& base);
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
     void apply_excursion(BacktestEngine& engine, double price);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
@@ -105,6 +129,16 @@ private:
                                      int index, int64_t effective,
                                      NativePriceProvenance provenance,
                                      NativePathPhase phase) const;
+    bool preflight_ticks(BacktestEngine& engine, const TradeTick* ticks, int n);
+    bool finalize_elapsed_slots(BacktestEngine& engine, int64_t exclusive_end_ms);
+    bool emit_quiet_carried_open(BacktestEngine& engine,
+                                 const native_calendar::NativeInterval& interval);
+    bool finalize_observed_tick_slot(BacktestEngine& engine,
+                                     const native_calendar::NativeInterval& interval,
+                                     NativeCompletionKind kind);
+    void sync_history_digest() const noexcept;
+    void fold_driver_digest(const NativeDriverPoint& point) const noexcept;
+    void fold_account_digest(const NativeAccountObservation& row) const noexcept;
 
     NativeLifecycle state_{NativeUnconfigured{}};
     uint64_t consumed_high_water_ = 0;
@@ -125,7 +159,12 @@ private:
     std::optional<int64_t> current_input_open_;
     std::optional<int64_t> observed_input_cursor_;
     std::optional<int64_t> next_tradable_synthesis_cursor_;
-    std::vector<int64_t> observed_slots_;
+    std::optional<native_calendar::NativeInterval> last_accepted_input_;
+    std::optional<int64_t> last_observed_slot_open_;
+    std::optional<native_calendar::NativeInterval> last_finalized_input_;
+    bool realtime_confirmed_bars_ = false;
+    uint64_t last_tick_sequence_ = 0;
+    bool has_tick_sequence_ = false;
     ScriptBucket script_{};
     Bar forming_{};
     bool has_forming_ = false;
@@ -135,6 +174,10 @@ private:
     std::vector<NativeDriverPoint> driver_log_;
     std::vector<NativeAccountObservation> account_log_;
     NativeDecisionContext callback_context_{};
+    std::optional<native_calendar::TimezoneIdentityDescriptor> tz_identity_{};
+    mutable AppendDigest history_digest_{};
+    mutable AppendDigest driver_digest_{};
+    mutable AppendDigest account_digest_{};
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {

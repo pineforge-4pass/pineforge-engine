@@ -178,10 +178,15 @@ std::optional<SessionCalendar> parse_session(std::string_view session,
 // separate). Also used by public resolve_civil. Not for hot interval loops.
 //
 // Accepted:
-//   IANA/TZif names and aliases installed under the system zoneinfo tree
+//   IANA/TZif names and aliases installed under libc's effective zoneinfo
+//     root (not a search of trees libc will not read):
 //     charset [A-Za-z0-9/_+-], no absolute path, no `.` / `..` components;
-//     realpath stays in TZDIR and the file magic is TZif. Leading `:` is a
-//     tzfile reference only.
+//     realpath stays in that root and the file magic is TZif. Leading `:`
+//     is a tzfile reference only.
+//     macOS: /var/db/timezone/zoneinfo (TZDIR ignored; tzset(3) does not
+//     use it). glibc: nonempty TZDIR is exclusive (relative allowed;
+//     missing/non-directory fails closed). Unset/empty TZDIR uses
+//     /usr/share/zoneinfo.
 //   UTC, GMT, Etc/UTC, Etc/GMT
 //   UTC/GMT conventional offsets (TV sign):
 //     (UTC|GMT)[+-](H|HH|HMM|HHMM|H:MM|HH:MM) hours 0–23, minutes 0–59;
@@ -194,6 +199,32 @@ std::optional<SessionCalendar> parse_session(std::string_view session,
 // overflowed digit strings, whitespace/control/NUL, absolute paths, `..`
 // traversal, and non-TZif zoneinfo files (zone.tab, iso3166.tab, +VERSION).
 bool timezone_accepted(std::string_view timezone);
+
+// Observational identity for the native runner (setup/identity time only).
+// Shares the acceptance/normalization/effective-root resolver. Does not hash.
+// Semantics version 1. nullopt = backing facts could not be established;
+// the runner must refuse. Does not relax timezone_accepted.
+enum class TimezoneSourceKind : std::uint32_t {
+    Utc = 1,
+    FixedOffset = 2,
+    PosixExplicit = 3,
+    PosixDefaultDst = 4,
+    Tzfile = 5,
+};
+
+struct TimezoneIdentityDescriptor {
+    static constexpr std::uint32_t kSemanticsVersion = 1;
+    std::uint32_t semantics_version = 0;
+    TimezoneSourceKind kind = TimezoneSourceKind::Utc;
+    std::string input;
+    std::string effective_definition;
+    std::string zoneinfo_root;
+    std::vector<std::string> resource_paths;
+    bool valid() const noexcept;
+};
+
+std::optional<TimezoneIdentityDescriptor>
+timezone_identity_descriptor(std::string_view timezone);
 
 class SessionWindow {
 public:

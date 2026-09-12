@@ -45,7 +45,30 @@
 #include <cstddef>
 #include <limits>
 #include <cstring>
+#include <exception>
 #include <string>
+#include <utility>
+
+namespace {
+
+template <typename Fn>
+void pf_cabi_void(Fn&& fn) noexcept {
+    try {
+        std::forward<Fn>(fn)();
+    } catch (...) {
+    }
+}
+
+template <typename Fn>
+int pf_cabi_int(Fn&& fn) noexcept {
+    try {
+        return std::forward<Fn>(fn)();
+    } catch (...) {
+        return -1;
+    }
+}
+
+}  // namespace
 
 namespace pineforge {
 // Generated (src/pending_order_mirror.cpp, scripts/gen_pending_order_mirror.py).
@@ -288,8 +311,10 @@ PF_API int64_t strategy_script_bars_processed(pf_strategy_t s) {
  * a backtest whose per-bar values it wants to cross-reference against
  * TradingView. */
 PF_API void strategy_set_trace_enabled(pf_strategy_t s, int on) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_trace_enabled(on != 0);
+    });
 }
 
 /* Returns the error message captured by the most recent run() on this
@@ -309,8 +334,10 @@ PF_API const char* strategy_get_last_error(pf_strategy_t s) {
 }
 
 PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_trade_start_time(timestamp_ms);
+    });
 }
 
 /* Cooperative abort of the run in progress on ``s`` (live runtime: a settle
@@ -336,8 +363,10 @@ PF_API int strategy_last_run_status(pf_strategy_t s) {
  * historical bar. Default off (on=0): every historical run stays
  * byte-identical to before this flag existed. */
 PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_realtime_tail(on != 0, horizon_bars);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_realtime_tail(on != 0, horizon_bars);
+    });
 }
 
 /* Live probe tail suppression (spec §3.2): the last bar of the array fed to
@@ -355,8 +384,10 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
  * Default off (on=0): every historical run stays byte-identical to before
  * this flag existed. */
 PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_probe_suppress_tail_logic(on != 0);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_probe_suppress_tail_logic(on != 0);
+    });
 }
 
 /* ABI v4 live-runtime surface (task 4): force the intrabar path order used
@@ -369,8 +400,10 @@ PF_API void strategy_set_probe_suppress_tail_logic(pf_strategy_t s, int on) {
  * AUTO. Default AUTO (mode=0): every historical run stays byte-identical to
  * before this flag existed. */
 PF_API void strategy_set_path_order(pf_strategy_t s, int mode) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_path_order(mode);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_path_order(mode);
+    });
 }
 
 /* ABI v4 live-runtime surface (task 4): the dual-entry-stop arbitration
@@ -393,8 +426,10 @@ PF_API int strategy_last_bar_dual_entry_path(pf_strategy_t s) {
  * NULL/0-length and every historical run is byte-identical to before this
  * flag existed. */
 PF_API void strategy_set_broker_state_hash_recording(pf_strategy_t s, int on) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_broker_state_hash_recording(on != 0);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_broker_state_hash_recording(on != 0);
+    });
 }
 
 /* ABI v4 live-runtime surface (task 6): the broker-state hash of the FINAL
@@ -492,21 +527,25 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
                                  int n_warmup,
                                  const char* input_tf,
                                  const char* script_tf) {
-    if (!s) return -1;
-    auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-    const auto* bars = reinterpret_cast<const pineforge::Bar*>(warmup_bars);
-    return engine->stream_begin(
-        bars, n_warmup,
-        input_tf ? std::string(input_tf) : std::string(),
-        script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s) return -1;
+        auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+        const auto* bars = reinterpret_cast<const pineforge::Bar*>(warmup_bars);
+        return engine->stream_begin(
+            bars, n_warmup,
+            input_tf ? std::string(input_tf) : std::string(),
+            script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
+    });
 }
 
 PF_API int strategy_stream_api_version(void) { return 1; }
 
 PF_API int strategy_stream_push_bar(pf_strategy_t s, const pf_bar_t* bar) {
-    if (!s || !bar) return -1;
-    return static_cast<pineforge::BacktestEngine*>(s)->stream_push_bar(
-        *reinterpret_cast<const pineforge::Bar*>(bar)) ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s || !bar) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->stream_push_bar(
+            *reinterpret_cast<const pineforge::Bar*>(bar)) ? 0 : -1;
+    });
 }
 
 PF_API int strategy_stream_order_actions_len(pf_strategy_t s) {
@@ -537,67 +576,85 @@ PF_API uint64_t strategy_stream_state_hash(pf_strategy_t s) {
 
 PF_API int strategy_stream_push_tick(pf_strategy_t s,
                                      const pf_trade_tick_t* tick) {
-    if (!s || !tick) return -1;
-    const auto* native = reinterpret_cast<const pineforge::TradeTick*>(tick);
-    return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(*native)
-        ? 0
-        : -1;
+    return pf_cabi_int([&] {
+        if (!s || !tick) return -1;
+        const auto* native = reinterpret_cast<const pineforge::TradeTick*>(tick);
+        return static_cast<pineforge::BacktestEngine*>(s)->stream_push_tick(*native)
+            ? 0
+            : -1;
+    });
 }
 
 PF_API int strategy_stream_push_ticks(pf_strategy_t s,
                                       const pf_trade_tick_t* ticks,
                                       int n) {
-    if (!s || n < 0 || (n > 0 && !ticks)) return -1;
-    auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-    const auto* native = reinterpret_cast<const pineforge::TradeTick*>(ticks);
-    return engine->stream_push_ticks(native, n) ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s || n < 0 || (n > 0 && !ticks)) return -1;
+        auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+        const auto* native = reinterpret_cast<const pineforge::TradeTick*>(ticks);
+        return engine->stream_push_ticks(native, n) ? 0 : -1;
+    });
 }
 
 PF_API int strategy_stream_advance_time(pf_strategy_t s, int64_t timestamp_ms) {
-    if (!s) return -1;
-    return static_cast<pineforge::BacktestEngine*>(s)
-        ->stream_advance_time(timestamp_ms) ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+            ->stream_advance_time(timestamp_ms) ? 0 : -1;
+    });
 }
 
 PF_API int strategy_stream_end(pf_strategy_t s, int finalize_partial_input_bar) {
-    if (!s) return -1;
-    return static_cast<pineforge::BacktestEngine*>(s)
-        ->stream_end(finalize_partial_input_bar != 0) ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+            ->stream_end(finalize_partial_input_bar != 0) ? 0 : -1;
+    });
 }
 
 PF_API int strategy_stream_fill_report(pf_strategy_t s, pf_report_t* out) {
-    if (!s || !out) return -1;
-    static_cast<pineforge::BacktestEngine*>(s)->fill_report(
-        reinterpret_cast<pineforge::ReportC*>(out));
-    return 0;
+    return pf_cabi_int([&] {
+        if (!s || !out) return -1;
+        static_cast<pineforge::BacktestEngine*>(s)->fill_report(
+            reinterpret_cast<pineforge::ReportC*>(out));
+        return 0;
+    });
 }
 
 /* Override the chart TZ for ``hour``/``minute``/``dayofweek``/etc. See
  * pineforge.h docstring; NULL or empty are normalised to the legacy UTC
  * fast path. */
 PF_API void strategy_set_chart_timezone(pf_strategy_t s, const char* tz) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_chart_timezone(
-        tz ? std::string(tz) : std::string());
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_chart_timezone(
+            tz ? std::string(tz) : std::string());
+    });
 }
 
 /* Plumb the symbol's exchange timezone / session string from the data feed
  * into syminfo_ (feeds session.ismarket / time(session)). NULL is ignored. */
 PF_API void strategy_set_syminfo_timezone(pf_strategy_t s, const char* tz) {
-    if (!s || !tz) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_timezone(std::string(tz));
+    pf_cabi_void([&] {
+        if (!s || !tz) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_timezone(std::string(tz));
+    });
 }
 
 PF_API void strategy_set_syminfo_session(pf_strategy_t s, const char* session) {
-    if (!s || !session) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_session(std::string(session));
+    pf_cabi_void([&] {
+        if (!s || !session) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_session(std::string(session));
+    });
 }
 
 /* Plumb the instrument class (syminfo.type: "forex" / "stock" / "crypto" /
  * "futures" / ...) into syminfo_. Defaults to "crypto"; NULL/empty ignored. */
 PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type) {
-    if (!s || !type) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_type(std::string(type));
+    pf_cabi_void([&] {
+        if (!s || !type) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_type(std::string(type));
+    });
 }
 
 /* Generic string-member injection (ticker / tickerid / currency /
@@ -605,9 +662,11 @@ PF_API void strategy_set_syminfo_type(pf_strategy_t s, const char* type) {
  * for a NULL handle, unknown key or empty value. */
 PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
                                        const char* value) {
-    if (!s || !key || !value) return -1;
-    return static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_string(
-               std::string(key), std::string(value)) ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s || !key || !value) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_string(
+                   std::string(key), std::string(value)) ? 0 : -1;
+    });
 }
 
 /* Inject the instrument tick size (syminfo.mintick). Drives the directional
@@ -615,16 +674,20 @@ PF_API int strategy_set_syminfo_string(pf_strategy_t s, const char* key,
  * Defaults to 0.01 (crypto/equity); set per-instrument (e.g. 0.25 for ES,
  * 0.00001 for FX). Non-positive values are ignored. */
 PF_API void strategy_set_syminfo_mintick(pf_strategy_t s, double mintick) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_mintick(mintick);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_mintick(mintick);
+    });
 }
 
 /* Inject the instrument point value (syminfo.pointvalue) — the $ per point per
  * contract multiplier applied to realized PnL and MFE/MAE. Defaults to 1.0
  * (crypto/equity); set per-instrument (e.g. 50 for ES). Non-positive ignored. */
 PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue) {
-    if (!s) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_pointvalue(pointvalue);
+    pf_cabi_void([&] {
+        if (!s) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_pointvalue(pointvalue);
+    });
 }
 
 /* Inject a fundamental/exchange metadata value (shares_outstanding_total,
@@ -632,19 +695,23 @@ PF_API void strategy_set_syminfo_pointvalue(pf_strategy_t s, double pointvalue) 
  * injection the corresponding syminfo.* read returns na. NULL key ignored. */
 PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
                                           double value) {
-    if (!s || !key) return;
-    static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_metadata(
-        std::string(key), value);
+    pf_cabi_void([&] {
+        if (!s || !key) return;
+        static_cast<pineforge::BacktestEngine*>(s)->set_syminfo_metadata(
+            std::string(key), value);
+    });
 }
 
 PF_API int strategy_set_account_currency_fx_series(
         pf_strategy_t s, const int64_t* effective_from_ms,
         const double* account_per_quote, int n) {
-    if (!s) return -1;
-    return static_cast<pineforge::BacktestEngine*>(s)
-                   ->set_account_currency_fx_series(
-                       effective_from_ms, account_per_quote, n)
-        ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_account_currency_fx_series(
+                           effective_from_ms, account_per_quote, n)
+            ? 0 : -1;
+    });
 }
 
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
@@ -652,13 +719,15 @@ PF_API int strategy_set_aux_security_feed(pf_strategy_t s,
                                           const pf_bar_t* bars,
                                           int n,
                                           const char* input_tf) {
-    if (!s || n < 0 || (n > 0 && (!bars || !input_tf))) return -1;
-    const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
-    return static_cast<pineforge::BacktestEngine*>(s)
-                   ->set_aux_security_feed(
-                       native, n,
-                       input_tf ? std::string(input_tf) : std::string())
-        ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s || n < 0 || (n > 0 && (!bars || !input_tf))) return -1;
+        const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_aux_security_feed(
+                           native, n,
+                           input_tf ? std::string(input_tf) : std::string())
+            ? 0 : -1;
+    });
 }
 #endif
 
@@ -667,11 +736,13 @@ PF_API int strategy_set_native_security_feed(pf_strategy_t s,
                                              const char* timeframe,
                                              const pf_bar_t* bars,
                                              int n) {
-    if (!s || !timeframe || n < 0 || (n > 0 && !bars)) return -1;
-    const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
-    return static_cast<pineforge::BacktestEngine*>(s)
-                   ->set_native_security_feed(std::string(timeframe), native, n)
-        ? 0 : -1;
+    return pf_cabi_int([&] {
+        if (!s || !timeframe || n < 0 || (n > 0 && !bars)) return -1;
+        const auto* native = reinterpret_cast<const pineforge::Bar*>(bars);
+        return static_cast<pineforge::BacktestEngine*>(s)
+                       ->set_native_security_feed(std::string(timeframe), native, n)
+            ? 0 : -1;
+    });
 }
 #endif
 

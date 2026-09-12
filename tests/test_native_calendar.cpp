@@ -2,7 +2,15 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <fcntl.h>
+#include <limits.h>
 #include <string>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <utility>
 
 using namespace pineforge::native_calendar;
@@ -127,6 +135,7 @@ constexpr int64_t kUtcJan1_2024_0930 = 1704101400000;
 constexpr int64_t kUtcDec25_2023_0930 = 1703496600000;
 constexpr int64_t kNyMar9_0230_resolved = 1741503600000;  // first representable ≥ 02:30
 constexpr int64_t kNyMar10_0230 = 1741588200000;
+constexpr int64_t kUtcMar8_0000 = 1741392000000;   // 2025-03-08 00:00 UTC
 constexpr int64_t kUtcJun10_0000 = 1749513600000;
 constexpr int64_t kUtcJun10_0000_plus0530 = 1749493800000;  // 2025-06-10 00:00 UTC+05:30
 constexpr int64_t kUtcJun10_0000_gmt_minus4 = 1749528000000;  // 2025-06-10 00:00 GMT-4
@@ -893,6 +902,404 @@ static void test_timezone_acceptance() {
     CHECK(!resolve_civil(" ", 2025, 6, 10, 0, 0, 0));
 }
 
+struct TzdirGuard {
+    bool had = false;
+    std::string old;
+    TzdirGuard() {
+        if (const char* v = std::getenv("TZDIR")) {
+            had = true;
+            old = v;
+        }
+    }
+    void set(const char* v) { ::setenv("TZDIR", v, 1); }
+    void clear() { ::unsetenv("TZDIR"); }
+    ~TzdirGuard() {
+        if (had) ::setenv("TZDIR", old.c_str(), 1);
+        else ::unsetenv("TZDIR");
+    }
+};
+
+static bool copy_file_bytes(const char* src, const char* dst) {
+    const int in = ::open(src, O_RDONLY | O_CLOEXEC);
+    if (in < 0) return false;
+    const int out = ::open(dst, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (out < 0) {
+        ::close(in);
+        return false;
+    }
+    char buf[4096];
+    bool ok = true;
+    for (;;) {
+        const ssize_t n = ::read(in, buf, sizeof(buf));
+        if (n == 0) break;
+        if (n < 0) {
+            ok = false;
+            break;
+        }
+        ssize_t off = 0;
+        while (off < n) {
+            const ssize_t w = ::write(out, buf + off, static_cast<size_t>(n - off));
+            if (w <= 0) {
+                ok = false;
+                break;
+            }
+            off += w;
+        }
+        if (!ok) break;
+    }
+    ::close(in);
+    ::close(out);
+    return ok;
+}
+
+static const char* system_nonutc_tzif() {
+    static const char* cands[] = {
+        "/var/db/timezone/zoneinfo/Asia/Taipei",
+        "/usr/share/zoneinfo/Asia/Taipei",
+    };
+    for (const char* p : cands) {
+        const int fd = ::open(p, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        char mag[4] = {};
+        const ssize_t n = ::read(fd, mag, 4);
+        ::close(fd);
+        if (n == 4 && std::memcmp(mag, "TZif", 4) == 0) return p;
+    }
+    return nullptr;
+}
+
+// Child process: libc mktime under the given TZ/TZDIR. Does not touch the
+// parent's ScopedTimezone cache.
+static int64_t libc_civil_ms(const char* tzdir, const char* tz, int y, int mo, int d) {
+    int fds[2];
+    if (::pipe(fds) != 0) return -1;
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+        ::close(fds[0]);
+        ::close(fds[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        ::close(fds[0]);
+        if (tzdir == nullptr) ::unsetenv("TZDIR");
+        else ::setenv("TZDIR", tzdir, 1);
+        ::setenv("TZ", tz, 1);
+        ::tzset();
+        std::tm tm {};
+        tm.tm_year = y - 1900;
+        tm.tm_mon = mo - 1;
+        tm.tm_mday = d;
+        tm.tm_isdst = 0;
+        const time_t t = ::mktime(&tm);
+        const int64_t ms = (t == static_cast<time_t>(-1))
+                               ? static_cast<int64_t>(-1)
+                               : static_cast<int64_t>(t) * 1000;
+        const ssize_t w = ::write(fds[1], &ms, sizeof(ms));
+        (void)w;
+        ::_exit(0);
+    }
+    ::close(fds[1]);
+    int64_t ms = -1;
+    ssize_t got = 0;
+    char* p = reinterpret_cast<char*>(&ms);
+    while (got < static_cast<ssize_t>(sizeof(ms))) {
+        const ssize_t n = ::read(fds[0], p + got, sizeof(ms) - static_cast<size_t>(got));
+        if (n <= 0) break;
+        got += n;
+    }
+    ::close(fds[0]);
+    int st = 0;
+    ::waitpid(pid, &st, 0);
+    return got == static_cast<ssize_t>(sizeof(ms)) ? ms : static_cast<int64_t>(-1);
+}
+
+static std::string independent_zoneinfo_root() {
+    char buf[PATH_MAX];
+#if defined(__APPLE__)
+    if (::realpath("/var/db/timezone/zoneinfo", buf) != nullptr) return buf;
+    if (::realpath("/usr/share/zoneinfo", buf) != nullptr) return buf;
+#elif defined(__GLIBC__)
+    if (const char* env = std::getenv("TZDIR"); env != nullptr && env[0] != '\0') {
+        if (::realpath(env, buf) == nullptr) return {};
+        struct stat st {};
+        if (::stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) return {};
+        return buf;
+    }
+    if (::realpath("/usr/share/zoneinfo", buf) != nullptr) return buf;
+#else
+    if (::realpath("/usr/share/zoneinfo", buf) != nullptr) return buf;
+#endif
+    return {};
+}
+
+static std::string independent_tzif_path(const char* name) {
+    const std::string root = independent_zoneinfo_root();
+    if (root.empty()) return {};
+    const std::string full = root + "/" + name;
+    char buf[PATH_MAX];
+    if (::realpath(full.c_str(), buf) == nullptr) return {};
+    const std::string res(buf);
+    if (res != root && res.rfind(root + "/", 0) != 0) return {};
+    const int fd = ::open(res.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return {};
+    char mag[4] = {};
+    const ssize_t n = ::read(fd, mag, 4);
+    ::close(fd);
+    if (n != 4 || std::memcmp(mag, "TZif", 4) != 0) return {};
+    return res;
+}
+
+static void check_identity(std::string_view zone,
+                           TimezoneSourceKind kind,
+                           std::string_view definition,
+                           const char* path_or_null) {
+    auto d = timezone_identity_descriptor(zone);
+    CHECK(d.has_value());
+    if (!d) return;
+    CHECK(d->valid());
+    CHECK_EQ(static_cast<long long>(d->semantics_version),
+             static_cast<long long>(TimezoneIdentityDescriptor::kSemanticsVersion));
+    CHECK_EQ(static_cast<long long>(d->kind), static_cast<long long>(kind));
+    CHECK(d->input == zone);
+    CHECK(d->effective_definition == definition);
+    if (path_or_null == nullptr) {
+        CHECK(d->resource_paths.empty());
+    } else {
+        CHECK(d->resource_paths.size() == 1);
+        if (!d->resource_paths.empty()) CHECK(d->resource_paths.front() == path_or_null);
+    }
+}
+
+static void test_timezone_identity() {
+    std::printf("test_timezone_identity\n");
+    CHECK(!TimezoneIdentityDescriptor{}.valid());
+    CHECK(!timezone_identity_descriptor("No/Such_PineForge_Zone"));
+    CHECK(!timezone_identity_descriptor("UTC+24:00"));
+    CHECK(!timezone_identity_descriptor(" "));
+
+    const std::string root = independent_zoneinfo_root();
+    CHECK(!root.empty());
+    const std::string utc_path = independent_tzif_path("UTC");
+    const std::string ny_path = independent_tzif_path("America/New_York");
+    const std::string eastern_path = independent_tzif_path("US/Eastern");
+    const std::string japan_path = independent_tzif_path("Japan");
+    const std::string posixrules_path = independent_tzif_path("posixrules");
+    const std::string gmt_path = independent_tzif_path("GMT");
+    CHECK(!ny_path.empty());
+    CHECK(!eastern_path.empty());
+    CHECK(!japan_path.empty());
+    CHECK(!posixrules_path.empty());
+    CHECK(independent_tzif_path("FOO5BAR").empty());
+
+    check_identity("", TimezoneSourceKind::Utc, "UTC",
+                   utc_path.empty() ? nullptr : utc_path.c_str());
+    check_identity("UTC", TimezoneSourceKind::Utc, "UTC",
+                   utc_path.empty() ? nullptr : utc_path.c_str());
+    check_identity("GMT", TimezoneSourceKind::Utc, "UTC",
+                   utc_path.empty() ? nullptr : utc_path.c_str());
+    check_identity("Etc/UTC", TimezoneSourceKind::Utc, "UTC",
+                   utc_path.empty() ? nullptr : utc_path.c_str());
+    check_identity("UTC+0", TimezoneSourceKind::Utc, "UTC",
+                   utc_path.empty() ? nullptr : utc_path.c_str());
+    if (!utc_path.empty() && !gmt_path.empty()) {
+        CHECK(utc_path != gmt_path);
+        auto gmt = timezone_identity_descriptor("GMT");
+        CHECK(gmt.has_value());
+        CHECK(gmt->resource_paths.size() != 1 || gmt->resource_paths.front() != gmt_path);
+    }
+
+    auto ny = timezone_identity_descriptor("America/New_York");
+    CHECK(ny.has_value());
+    CHECK(ny->valid());
+    CHECK(ny->kind == TimezoneSourceKind::Tzfile);
+    CHECK(ny->effective_definition == "America/New_York");
+    CHECK(ny->zoneinfo_root == root);
+    CHECK(ny->resource_paths.size() == 1);
+    CHECK(ny->resource_paths.front() == ny_path);
+
+    auto eastern = timezone_identity_descriptor("US/Eastern");
+    CHECK(eastern.has_value());
+    CHECK(eastern->kind == TimezoneSourceKind::Tzfile);
+    CHECK(eastern->effective_definition == "US/Eastern");
+    CHECK(eastern->resource_paths.size() == 1);
+    CHECK(eastern->resource_paths.front() == eastern_path);
+
+    auto colon = timezone_identity_descriptor(":America/New_York");
+    CHECK(colon.has_value());
+    CHECK(colon->kind == TimezoneSourceKind::Tzfile);
+    CHECK(colon->effective_definition == "America/New_York");
+    CHECK(colon->resource_paths == ny->resource_paths);
+
+    auto japan = timezone_identity_descriptor("Japan");
+    CHECK(japan.has_value());
+    CHECK(japan->kind == TimezoneSourceKind::Tzfile);
+    CHECK(japan->resource_paths.front() == japan_path);
+
+    check_identity("UTC+05:30", TimezoneSourceKind::FixedOffset, "UTC-5:30", nullptr);
+    check_identity("GMT-4", TimezoneSourceKind::FixedOffset, "UTC+4", nullptr);
+    check_identity("FOO5", TimezoneSourceKind::FixedOffset, "FOO5", nullptr);
+
+    check_identity("EST5EDT,M3.2.0,M11.1.0", TimezoneSourceKind::PosixExplicit,
+                   "EST5EDT,M3.2.0,M11.1.0", nullptr);
+    check_identity("CST6CDT,M3.2.0/2,M11.1.0/2", TimezoneSourceKind::PosixExplicit,
+                   "CST6CDT,M3.2.0/2,M11.1.0/2", nullptr);
+    check_identity("<-05>5<-04>,M3.2.0,M11.1.0", TimezoneSourceKind::PosixExplicit,
+                   "<-05>5<-04>,M3.2.0,M11.1.0", nullptr);
+
+    const std::string est5edt_path = independent_tzif_path("EST5EDT");
+    CHECK(!est5edt_path.empty());
+    check_identity("EST5EDT", TimezoneSourceKind::Tzfile, "EST5EDT", est5edt_path.c_str());
+
+    CHECK(timezone_accepted("FOO5BAR"));
+    check_identity("FOO5BAR", TimezoneSourceKind::PosixDefaultDst, "FOO5BAR",
+                   posixrules_path.c_str());
+    CHECK(timezone_accepted("EST5EDT4"));
+    check_identity("EST5EDT4", TimezoneSourceKind::PosixDefaultDst, "EST5EDT4",
+                   posixrules_path.c_str());
+}
+
+static void test_timezone_tzdir_root() {
+    std::printf("test_timezone_tzdir_root\n");
+    TzdirGuard env;
+    env.clear();
+
+    // Digit-free so a missing tzfile is not a POSIX offset spec (PfTzdirP1
+    // would be std+1 on this libc). Must not be a UTC TZif copy.
+    const char kFake[] = "PfTzdirProbe/Zone";
+    CHECK(timezone_accepted("America/New_York"));
+    CHECK(!timezone_accepted(kFake));
+    const auto ny = resolve_civil("America/New_York", 2025, 3, 8, 0, 0, 0);
+    CHECK(ny.has_value());
+    CHECK_EQ(ny->epoch_ms, kNyMar8Midnight);
+
+    const char* src = system_nonutc_tzif();
+    CHECK(src != nullptr);
+    if (src == nullptr) return;
+
+    char fake_root_tmpl[] = "/tmp/pf-tzdir-XXXXXX";
+    char* fake_root = ::mkdtemp(fake_root_tmpl);
+    CHECK(fake_root != nullptr);
+    if (fake_root == nullptr) return;
+    std::string zone_dir = std::string(fake_root) + "/PfTzdirProbe";
+    CHECK(::mkdir(zone_dir.c_str(), 0700) == 0);
+    std::string zone_path = zone_dir + "/Zone";
+    CHECK(copy_file_bytes(src, zone_path.c_str()));
+
+    char empty_tmpl[] = "/tmp/pf-tzdir-empty-XXXXXX";
+    char* empty_root = ::mkdtemp(empty_tmpl);
+    CHECK(empty_root != nullptr);
+    const std::string missing =
+        std::string("/tmp/pf-tzdir-missing-") + std::to_string(::getpid());
+
+#if defined(__GLIBC__)
+    const bool libc_reads_tzdir = true;
+#else
+    const bool libc_reads_tzdir = false;
+#endif
+
+    env.set(fake_root);
+    if (libc_reads_tzdir) {
+        CHECK(timezone_accepted(kFake));
+        CHECK(parse_session("24x7", kFake).has_value());
+        const auto fake_civil = resolve_civil(kFake, 2025, 6, 10, 0, 0, 0);
+        CHECK(fake_civil.has_value());
+        CHECK_EQ(fake_civil->epoch_ms, kUtcJun10_0000_taipei);
+        CHECK(!timezone_accepted("America/New_York"));
+        CHECK(!parse_session("24x7", "America/New_York"));
+        CHECK(!resolve_civil("America/New_York", 2025, 3, 8, 0, 0, 0));
+        CHECK(!timezone_identity_descriptor("America/New_York"));
+        auto fake_id = timezone_identity_descriptor(kFake);
+        CHECK(fake_id.has_value());
+        CHECK(fake_id->kind == TimezoneSourceKind::Tzfile);
+        char fake_real[PATH_MAX];
+        CHECK(::realpath(zone_path.c_str(), fake_real) != nullptr);
+        CHECK(fake_id->resource_paths.size() == 1);
+        CHECK(fake_id->resource_paths.front() == fake_real);
+        CHECK(timezone_accepted("FOO5BAR"));
+        CHECK(!timezone_identity_descriptor("FOO5BAR"));
+        CHECK_EQ(libc_civil_ms(fake_root, kFake, 2025, 6, 10), kUtcJun10_0000_taipei);
+        CHECK_EQ(libc_civil_ms(fake_root, "America/New_York", 2025, 3, 8), kUtcMar8_0000);
+    } else {
+        CHECK(!timezone_accepted(kFake));
+        CHECK(!parse_session("24x7", kFake));
+        CHECK(!resolve_civil(kFake, 2025, 6, 10, 0, 0, 0));
+        CHECK(!timezone_identity_descriptor(kFake));
+        CHECK(timezone_accepted("America/New_York"));
+        CHECK(parse_session("24x7", "America/New_York").has_value());
+        const auto ny_fake_dir = resolve_civil("America/New_York", 2025, 3, 8, 0, 0, 0);
+        CHECK(ny_fake_dir.has_value());
+        CHECK_EQ(ny_fake_dir->epoch_ms, kNyMar8Midnight);
+        auto ny_id = timezone_identity_descriptor("America/New_York");
+        CHECK(ny_id.has_value());
+        CHECK(ny_id->kind == TimezoneSourceKind::Tzfile);
+        CHECK(ny_id->resource_paths.front() == independent_tzif_path("America/New_York"));
+        CHECK(timezone_accepted("FOO5BAR"));
+        auto foo_id = timezone_identity_descriptor("FOO5BAR");
+        CHECK(foo_id.has_value());
+        CHECK(foo_id->kind == TimezoneSourceKind::PosixDefaultDst);
+        CHECK(foo_id->resource_paths.front() == independent_tzif_path("posixrules"));
+        CHECK_EQ(libc_civil_ms(fake_root, kFake, 2025, 6, 10), kUtcJun10_0000);
+        CHECK_EQ(libc_civil_ms(fake_root, "America/New_York", 2025, 3, 8), kNyMar8Midnight);
+    }
+    // A UTC TZif would not discriminate; the copied file is Asia/Taipei.
+    CHECK(kUtcJun10_0000_taipei != kUtcJun10_0000);
+
+    env.set(empty_root);
+    if (libc_reads_tzdir) {
+        CHECK(!timezone_accepted("America/New_York"));
+        CHECK(!timezone_identity_descriptor("America/New_York"));
+        CHECK_EQ(libc_civil_ms(empty_root, "America/New_York", 2025, 3, 8), kUtcMar8_0000);
+    } else {
+        CHECK(timezone_accepted("America/New_York"));
+        CHECK(timezone_identity_descriptor("America/New_York").has_value());
+        CHECK_EQ(libc_civil_ms(empty_root, "America/New_York", 2025, 3, 8), kNyMar8Midnight);
+    }
+
+    env.set(missing.c_str());
+    if (libc_reads_tzdir) {
+        CHECK(!timezone_accepted("America/New_York"));
+        CHECK(!timezone_identity_descriptor("America/New_York"));
+        CHECK_EQ(libc_civil_ms(missing.c_str(), "America/New_York", 2025, 3, 8),
+                 kUtcMar8_0000);
+    } else {
+        CHECK(timezone_accepted("America/New_York"));
+        CHECK(timezone_identity_descriptor("America/New_York").has_value());
+        CHECK_EQ(libc_civil_ms(missing.c_str(), "America/New_York", 2025, 3, 8),
+                 kNyMar8Midnight);
+    }
+
+    env.set("");
+    CHECK(timezone_accepted("America/New_York"));
+
+#if defined(__GLIBC__)
+    {
+        char saved_cwd[PATH_MAX];
+        const bool have_cwd = ::getcwd(saved_cwd, sizeof(saved_cwd)) != nullptr;
+        CHECK(have_cwd);
+        if (have_cwd && ::chdir(fake_root) == 0) {
+            env.set(".");
+            CHECK(timezone_accepted(kFake));
+            const auto rel = resolve_civil(kFake, 2025, 6, 10, 0, 0, 0);
+            CHECK(rel.has_value());
+            CHECK_EQ(rel->epoch_ms, kUtcJun10_0000_taipei);
+            CHECK(::chdir(saved_cwd) == 0);
+        }
+    }
+#endif
+
+    env.clear();
+    CHECK(timezone_accepted("America/New_York"));
+    CHECK(!timezone_accepted(kFake));
+    const auto ny_restored = resolve_civil("America/New_York", 2025, 3, 8, 0, 0, 0);
+    CHECK(ny_restored.has_value());
+    CHECK_EQ(ny_restored->epoch_ms, kNyMar8Midnight);
+
+    ::unlink(zone_path.c_str());
+    ::rmdir(zone_dir.c_str());
+    ::rmdir(fake_root);
+    ::rmdir(empty_root);
+}
+
 int main() {
     test_timeframe_forms();
     test_pairings();
@@ -914,6 +1321,8 @@ int main() {
     test_checked_public_values();
     test_empty_cycle_identity();
     test_timezone_acceptance();
+    test_timezone_identity();
+    test_timezone_tzdir_root();
     std::printf("test_native_calendar: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

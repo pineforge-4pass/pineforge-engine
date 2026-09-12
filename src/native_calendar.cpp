@@ -806,34 +806,64 @@ bool tz_iana_name_chars(std::string_view name) {
     return true;
 }
 
-std::string tzdir_canonical() {
+bool tzdir_realpath_dir(const char* path, std::string& out) {
+    if (path == nullptr || path[0] == '\0') return false;
     char buf[PATH_MAX];
-    const char* env = std::getenv("TZDIR");
-    const char* cands[] = {env, "/usr/share/zoneinfo", "/var/db/timezone/zoneinfo"};
-    for (const char* c : cands) {
-        if (c == nullptr || c[0] != '/') continue;
-        if (::realpath(c, buf) != nullptr) return std::string(buf);
-    }
-    return {};
+    if (::realpath(path, buf) == nullptr) return false;
+    struct stat st {};
+    if (::stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) return false;
+    out.assign(buf);
+    return true;
 }
 
-bool tz_file_is_tzif(std::string_view name) {
-    if (!tz_iana_name_chars(name)) return false;
+// Effective zoneinfo root used by this libc for relative TZ names.
+// macOS tzset(3) reads /var/db/timezone/zoneinfo and does not document TZDIR;
+// probes on this Darwin libc ignore TZDIR. glibc tzfile.c uses TZDIR when
+// nonempty (relative included) and the compile-time default only when TZDIR
+// is unset or empty; a missing/non-directory TZDIR is fail-closed so names
+// are not accepted from a tree libc will not read.
+std::string tzdir_canonical() {
+    std::string out;
+#if defined(__APPLE__)
+    if (tzdir_realpath_dir("/var/db/timezone/zoneinfo", out)) return out;
+    if (tzdir_realpath_dir("/usr/share/zoneinfo", out)) return out;
+    return {};
+#elif defined(__GLIBC__)
+    const char* env = std::getenv("TZDIR");
+    if (env != nullptr && env[0] != '\0') {
+        if (tzdir_realpath_dir(env, out)) return out;
+        return {};
+    }
+    if (tzdir_realpath_dir("/usr/share/zoneinfo", out)) return out;
+    return {};
+#else
+    if (tzdir_realpath_dir("/usr/share/zoneinfo", out)) return out;
+    return {};
+#endif
+}
+
+std::optional<std::string> tz_file_actual_path(std::string_view name) {
+    if (!tz_iana_name_chars(name)) return std::nullopt;
     const std::string dir = tzdir_canonical();
-    if (dir.empty()) return false;
+    if (dir.empty()) return std::nullopt;
     std::string full = dir;
     full.push_back('/');
     full.append(name.begin(), name.end());
     char resolved[PATH_MAX];
-    if (::realpath(full.c_str(), resolved) == nullptr) return false;
+    if (::realpath(full.c_str(), resolved) == nullptr) return std::nullopt;
     const std::string res(resolved);
-    if (res != dir && res.rfind(dir + "/", 0) != 0) return false;
+    if (res != dir && res.rfind(dir + "/", 0) != 0) return std::nullopt;
     const int fd = ::open(res.c_str(), O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return false;
+    if (fd < 0) return std::nullopt;
     char mag[4] = {};
     const ssize_t n = ::read(fd, mag, 4);
     ::close(fd);
-    return n == 4 && std::memcmp(mag, "TZif", 4) == 0;
+    if (n != 4 || std::memcmp(mag, "TZif", 4) != 0) return std::nullopt;
+    return res;
+}
+
+bool tz_file_is_tzif(std::string_view name) {
+    return tz_file_actual_path(name).has_value();
 }
 
 bool posix_consume_name(std::string_view s, std::size_t& p) {
@@ -960,26 +990,74 @@ bool tz_posix_spec_accepted(std::string_view s) {
     return p == s.size();
 }
 
-bool timezone_spec_accepted(std::string_view tz) {
-    if (tz.empty()) return true;
-    if (tz_has_nul_or_control_or_space(tz)) return false;
-    if (tz_is_utc_gmt_name(tz)) return true;
-    if (tz_looks_like_utc_gmt_offset(tz)) return tz_utc_gmt_offset_accepted(tz);
-    if (!tz.empty() && tz[0] == ':') {
+struct TzClass {
+    enum Kind { Reject, Utc, Offset, Tzfile, Posix } kind = Reject;
+    std::string_view tzfile_name{};
+};
+
+bool tz_slash_is_file_path(std::string_view tz) {
+    const auto slash = tz.find('/');
+    const auto comma = tz.find(',');
+    return slash != std::string_view::npos
+        && (comma == std::string_view::npos || slash < comma);
+}
+
+TzClass timezone_classify(std::string_view tz) {
+    TzClass out;
+    if (tz.empty()) {
+        out.kind = TzClass::Utc;
+        return out;
+    }
+    if (tz_has_nul_or_control_or_space(tz)) return out;
+    if (tz_is_utc_gmt_name(tz)) {
+        out.kind = TzClass::Utc;
+        return out;
+    }
+    if (tz_looks_like_utc_gmt_offset(tz)) {
+        out.kind = tz_utc_gmt_offset_accepted(tz) ? TzClass::Offset : TzClass::Reject;
+        return out;
+    }
+    if (tz[0] == ':') {
         const std::string_view file = tz.substr(1);
-        if (file.empty()) return false;
-        return tz_file_is_tzif(file);
+        if (file.empty() || !tz_file_is_tzif(file)) return out;
+        out.kind = TzClass::Tzfile;
+        out.tzfile_name = file;
+        return out;
     }
     // POSIX DST rule times use '/' (M3.2.0/2). A slash before any comma is a
     // tzfile path (America/New_York, US/Eastern), not a POSIX spec.
-    const auto slash = tz.find('/');
-    const auto comma = tz.find(',');
-    if (slash != std::string_view::npos
-        && (comma == std::string_view::npos || slash < comma)) {
-        return tz_file_is_tzif(tz);
+    if (tz_slash_is_file_path(tz)) {
+        if (!tz_file_is_tzif(tz)) return out;
+        out.kind = TzClass::Tzfile;
+        out.tzfile_name = tz;
+        return out;
     }
-    if (tz_file_is_tzif(tz)) return true;
-    return tz_posix_spec_accepted(tz);
+    if (tz_file_is_tzif(tz)) {
+        out.kind = TzClass::Tzfile;
+        out.tzfile_name = tz;
+        return out;
+    }
+    if (tz_posix_spec_accepted(tz)) {
+        out.kind = TzClass::Posix;
+        return out;
+    }
+    return out;
+}
+
+bool timezone_spec_accepted(std::string_view tz) {
+    return timezone_classify(tz).kind != TzClass::Reject;
+}
+
+bool posix_is_default_dst(std::string_view s) {
+    std::size_t p = 0;
+    if (!posix_consume_name(s, p) || !posix_consume_offset(s, p)) return false;
+    if (p == s.size()) return false;
+    if (!posix_consume_name(s, p)) return false;
+    if (p < s.size()
+        && (s[p] == '+' || s[p] == '-' || std::isdigit(static_cast<unsigned char>(s[p])))) {
+        if (!posix_consume_offset(s, p)) return false;
+    }
+    return p == s.size();
 }
 
 int parse_hhmm(std::string_view s, bool allow_2400) {
@@ -998,6 +1076,80 @@ int parse_hhmm(std::string_view s, bool allow_2400) {
 
 bool timezone_accepted(std::string_view timezone) {
     return timezone_spec_accepted(timezone);
+}
+
+bool TimezoneIdentityDescriptor::valid() const noexcept {
+    if (semantics_version != kSemanticsVersion) return false;
+    if (effective_definition.empty()) return false;
+    for (const std::string& p : resource_paths) {
+        if (p.empty() || p.front() != '/') return false;
+    }
+    switch (kind) {
+        case TimezoneSourceKind::Utc:
+        case TimezoneSourceKind::FixedOffset:
+        case TimezoneSourceKind::PosixExplicit:
+            return true;
+        case TimezoneSourceKind::PosixDefaultDst:
+        case TimezoneSourceKind::Tzfile:
+            return !resource_paths.empty();
+        default:
+            return false;
+    }
+}
+
+std::optional<TimezoneIdentityDescriptor>
+timezone_identity_descriptor(std::string_view timezone) {
+    const TzClass cls = timezone_classify(timezone);
+    if (cls.kind == TzClass::Reject) return std::nullopt;
+
+    TimezoneIdentityDescriptor d;
+    d.semantics_version = TimezoneIdentityDescriptor::kSemanticsVersion;
+    d.input.assign(timezone.begin(), timezone.end());
+    d.zoneinfo_root = tzdir_canonical();
+    const std::string norm =
+        pine_tz::normalize_timezone_for_posix(std::string(timezone.begin(), timezone.end()));
+
+    auto finish = [&]() -> std::optional<TimezoneIdentityDescriptor> {
+        if (!d.valid()) return std::nullopt;
+        return d;
+    };
+
+    if (cls.kind == TzClass::Utc || norm == "UTC") {
+        d.kind = TimezoneSourceKind::Utc;
+        d.effective_definition = "UTC";
+        if (auto p = tz_file_actual_path("UTC")) d.resource_paths.push_back(*p);
+        return finish();
+    }
+
+    if (cls.kind == TzClass::Offset) {
+        d.kind = TimezoneSourceKind::FixedOffset;
+        d.effective_definition = norm;
+        return finish();
+    }
+
+    if (cls.kind == TzClass::Tzfile) {
+        auto p = tz_file_actual_path(cls.tzfile_name);
+        if (!p) return std::nullopt;
+        d.kind = TimezoneSourceKind::Tzfile;
+        d.effective_definition.assign(cls.tzfile_name.begin(), cls.tzfile_name.end());
+        d.resource_paths.push_back(*p);
+        return finish();
+    }
+
+    d.effective_definition.assign(timezone.begin(), timezone.end());
+    if (posix_is_default_dst(timezone)) {
+        auto p = tz_file_actual_path("posixrules");
+        if (!p) return std::nullopt;
+        d.kind = TimezoneSourceKind::PosixDefaultDst;
+        d.resource_paths.push_back(*p);
+        return finish();
+    }
+    if (timezone.find(',') != std::string_view::npos) {
+        d.kind = TimezoneSourceKind::PosixExplicit;
+        return finish();
+    }
+    d.kind = TimezoneSourceKind::FixedOffset;
+    return finish();
 }
 
 std::optional<CivilResolution> resolve_civil(std::string_view timezone,

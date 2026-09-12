@@ -111,7 +111,8 @@ struct NativeRunSpecValidation {
 
 // Complete validation, with deterministic first-error field order. Every
 // string is semantic UTF-8 without embedded NUL (all cross C-string v1).
-// Required: identity key, both timeframe literals, tickerid, both timezones.
+// Required: identity key, both timeframe literals, tickerid, scheduling timezone.
+// Empty chart timezone is preserved as optional observation metadata.
 // Calendar parsing/compatibility remain in native_calendar. Batch monthly
 // pairings are accepted here; stream-only restrictions belong to begin.
 // Calendar parsing may allocate. Allocation/other dependency exceptions are

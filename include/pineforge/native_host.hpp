@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -77,6 +78,10 @@ struct NativeFailed { std::optional<NativeRunSpec> spec; NativeFailure failure; 
 using NativeLifecycle = std::variant<NativeUnconfigured, NativeReady, NativeRunning,
                                      NativeCompleted, NativeFailed>;
 
+static_assert(std::is_trivially_copyable_v<NativeFailure>);
+static_assert(std::is_nothrow_move_constructible_v<NativeFailed>);
+static_assert(std::is_nothrow_move_assignable_v<NativeFailed>);
+
 struct NativeStateView {
     NativeLifecycleKind kind = NativeLifecycleKind::Unconfigured;
     const NativeRunSpec* spec = nullptr;
@@ -123,7 +128,12 @@ struct NativeSetupResult {
 };
 
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
-// protected engine constructor. Noncopyable and nonmovable.
+// protected engine constructor. Noncopyable and nonmovable. Lives in the
+// same inline engine epoch as BacktestEngine so old-header/new-library
+// linkage cannot resolve an unversioned constructor against a different
+// base layout.
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V12 1
+inline namespace engine_script_run_v12 {
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -153,8 +163,10 @@ public:
     std::vector<NativeMarketEvent> native_events(uint64_t after_ordinal) const;
     int64_t native_decision_floor() const;
     uint64_t native_consumed_high_water() const;
+    uint64_t native_continuation_hash() const;
 
     friend class NativeExecutionConsumer;
 };
 
+}  // inline namespace engine_script_run_v12
 }  // namespace pineforge
