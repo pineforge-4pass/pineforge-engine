@@ -29,6 +29,20 @@ using namespace internal;
 
 namespace {
 
+std::size_t source_opening_fragment_count(const std::vector<PyramidEntry>& lots,
+                                          uint64_t incarnation) {
+    return static_cast<std::size_t>(std::count_if(lots.begin(), lots.end(),
+        [&](const PyramidEntry& lot) { return lot.entry_incarnation == incarnation; }));
+}
+
+bool source_opening_was_created(const std::vector<PyramidEntry>& lots,
+                                uint64_t incarnation, int64_t cycle_before,
+                                int64_t cycle_after, std::size_t fragments_before) {
+    return !lots.empty() && lots.back().entry_incarnation == incarnation
+        && (cycle_after != cycle_before
+            || source_opening_fragment_count(lots, incarnation) == fragments_before + 1);
+}
+
 // A pass keeps identities and ordering hints, never borrowed vector elements.
 // The hint makes the unchanged-book path constant time; OCA erasure requires
 // re-resolution by incarnation. A reused label/priority cannot match this key.
@@ -6429,6 +6443,10 @@ void BacktestEngine::apply_filled_order_to_state(
         || std::abs(position_qty_ - position_qty_before_fill) > kQtyEpsilon
         || pyramid_entries_.size() != pyramid_lots_before_fill
         || trades_.size() != trades_before;
+    const bool opening_fill_applied = !pyramid_entries_.empty()
+        && pyramid_entries_.back().entry_incarnation == order.incarnation
+        && (position_cycle_seq_ != position_cycle_before_fill
+            || pyramid_entries_.size() > pyramid_lots_before_fill);
 
     max_intraday_filled_orders_.outcome(
         primary_fill_applied ? compat::pine::FillOutcome::Committed
@@ -6456,7 +6474,7 @@ void BacktestEngine::apply_filled_order_to_state(
     }
 
     if (primary_fill_applied) {
-        if (order.type == OrderType::MARKET && process_orders_on_close_
+        if (opening_fill_applied && order.type == OrderType::MARKET && process_orders_on_close_
             && order.created_bar == bar_index_
             && order.created_position_side == PositionSide::FLAT
             && !placement_has_prior_close(order)
@@ -6471,7 +6489,7 @@ void BacktestEngine::apply_filled_order_to_state(
                 || (coof_scheduler_active_ && coof_cursor_is_bar_close_))) {
             pyramid_entries_.front().pooc_terminal_market_entry = true;
         }
-        if (order.type == OrderType::MARKET
+        if (opening_fill_applied && order.type == OrderType::MARKET
             && !process_orders_on_close_ && !calc_on_order_fills_
             && !bar_magnifier_enabled_ && !coof_scheduler_active_
             && !stream_warmup_mode_ && stream_phase_ == StreamPhase::IDLE
@@ -6482,7 +6500,7 @@ void BacktestEngine::apply_filled_order_to_state(
             && position_entry_price_ == round_to_mintick(bar.open)) {
             pyramid_entries_.front().ordinary_market_open = true;
         }
-        if (order.type == OrderType::ENTRY
+        if (opening_fill_applied && order.type == OrderType::ENTRY
             && std::isfinite(order.legs.prices().stop_price)
             && std::isnan(order.legs.prices().limit_price)
             && !order.stop_limit_activated
@@ -6964,6 +6982,13 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                                              const Bar& bar,
                                              double& trail_best_path_state,
                                              bool later_same_tick_entry) {
+    const int64_t source_cycle_before = position_cycle_seq_;
+    const std::size_t source_fragments_before =
+        source_opening_fragment_count(pyramid_entries_, order.incarnation);
+    const auto new_source_opening = [&]() {
+        return source_opening_was_created(pyramid_entries_, order.incarnation,
+            source_cycle_before, position_cycle_seq_, source_fragments_before);
+    };
     // design-market-entry-affordability: the entry leg was declined (at
     // placement or at fill) while an OPPOSITE position was live — execute the
     // reversal's closing leg only (rampatel BTC 2025-05-12 07:15Z: TV closed
@@ -7009,7 +7034,7 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                 keep_mc_close_surplus ? -1 : order.qty_type,
                 /*explicit_qty_prequantized=*/keep_mc_close_surplus,
                 /*close_only=*/!keep_mc_close_surplus, order.incarnation);
-            if (keep_mc_close_surplus && !pyramid_entries_.empty())
+            if (keep_mc_close_surplus && new_source_opening())
                 pyramid_entries_.back().entry_comment = order.comment;
         }
         trail_best_path_state = trail_best_price_;
@@ -7086,27 +7111,10 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
             const double entry_fill =
                 apply_fill_slippage(fill_price, order.is_long);
             if (std::isfinite(entry_fill) && add_qty > kQtyEpsilon) {
-                const double total_qty = position_qty_ + add_qty;
-                position_entry_price_ =
-                    (position_entry_price_ * position_qty_
-                     + entry_fill * add_qty) / total_qty;
-                position_qty_ = total_qty;
-                ++position_entry_count_;
-                trail_best_price_ = entry_fill;
-                PyramidEntry lot{};
-                lot.price = entry_fill;
-                lot.time = current_bar_.timestamp;
-                lot.qty = add_qty;
-                lot.entry_id = order.id;
-                lot.entry_bar_index = bar_index_;
-                lot.entry_comment = order.comment;
-                lot.entry_incarnation = order.incarnation;
-                lot.market_pyramid_add = true;
-                snapshot_entry_commission(lot);
-                pyramid_entries_.push_back(std::move(lot));
-                if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
-                id_unclosed_qty_[order.id] += add_qty;
-                cycle_filled_entry_ids_.insert(order.id);
+                const auto result = settle_source_opening(
+                    requested, entry_fill, add_qty, order.id, order.comment, order.incarnation);
+                if (result.status == execution::Status::Applied && result.opened_units != 0.0)
+                    pyramid_entries_.back().market_pyramid_add = true;
             }
             const double trail_best_after_fill = trail_best_price_;
             if (position_side_ == PositionSide::LONG) {
@@ -7160,7 +7168,7 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                     throw std::logic_error("replacement cancellation receipt rejected");
             }
         }
-        if (position_side_ == PositionSide::SHORT && !pyramid_entries_.empty())
+        if (position_side_ == PositionSide::SHORT && new_source_opening())
             pyramid_entries_.back().entry_comment = order.comment;
         const double trail_best_after_fill = trail_best_price_;
         if (position_side_ == PositionSide::LONG)
@@ -7194,9 +7202,7 @@ void BacktestEngine::apply_market_order_fill(PendingOrder& order, double fill_pr
                          order.incarnation);
     double trail_best_after_fill = trail_best_price_;
     // Set entry comment on the just-created pyramid entry
-    if (!pyramid_entries_.empty()
-        && (!paired_flat_market
-            || pyramid_entries_.back().entry_id == order.id)) {
+    if (new_source_opening()) {
         pyramid_entries_.back().entry_comment = order.comment;
     }
     // Update trail_best_price_ with intra-bar extremes for same-bar exit eval
@@ -7226,6 +7232,9 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     double qty_before = position_qty_;
     int count_before = position_entry_count_;
     size_t trades_before_entry = trades_.size();
+    const int64_t source_cycle_before = position_cycle_seq_;
+    const std::size_t source_fragments_before =
+        source_opening_fragment_count(pyramid_entries_, order.incarnation);
 
     // A pending priced (stop/limit) ENTRY that reaches its trigger while an
     // OPPOSITE position it did NOT open is live closes that position at the
@@ -7354,7 +7363,10 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
     bool was_priced_entry = priced_entry;
     if (did_execute) {
         double trail_best_after_fill = trail_best_price_;
-        if (!pyramid_entries_.empty()) pyramid_entries_.back().entry_comment = order.comment;
+        const bool new_source_opening = source_opening_was_created(
+            pyramid_entries_, order.incarnation, source_cycle_before,
+            position_cycle_seq_, source_fragments_before);
+        if (new_source_opening) pyramid_entries_.back().entry_comment = order.comment;
         // See apply_market_order_fill's matching guard: skip folding this
         // bar's pre-fill high/low into the trail when the fill happened AT
         // the bar's close (a POOC entry created and filled this same bar).
@@ -7372,7 +7384,7 @@ void BacktestEngine::apply_entry_order_fill(PendingOrder& order, double fill_pri
             // Mask pre-fill bar extremes for the entry this fill created
             // (guard: back() really is this order's same-bar entry — a
             // close-only-opposite fill creates no new entry).
-            if (!pyramid_entries_.empty()
+            if (new_source_opening
                 && pyramid_entries_.back().entry_bar_index == bar_index_
                 && pyramid_entries_.back().entry_id == order.id) {
                 set_entry_fill_excursion_masks(pyramid_entries_.back(), bar,
@@ -7729,29 +7741,12 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
         // Prefer the signal-time frozen quantity when the order carries one.
         double qty = !std::isnan(order.frozen_default_qty) ? order.frozen_default_qty
                    : (std::isnan(order.qty) ? calc_qty(fill_price) : order.qty);
-        position_side_ = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
-        position_cycle_seq_ = next_position_cycle_seq_++;
-        position_entry_price_ = fill_price;
-        // The shared post-dispatch hook queues the new fill's event. Clear any
-        // prior-cycle provenance first; RAW_ORDER opens do not route through
-        // open_fresh_position.
-        opening_obligations_.invalidate();
-        position_entry_time_ = current_bar_.timestamp;
-        position_qty_ = qty;
-        position_entry_count_ = 1;
-        position_open_bar_ = bar_index_;
-        trail_best_price_ = fill_price;
-        pyramid_entries_.clear();
-        id_unclosed_qty_.clear();
-        cycle_filled_entry_ids_.clear();
-        pyramid_entries_.push_back({fill_price, current_bar_.timestamp, qty, order.id, bar_index_});
-        pyramid_entries_.back().entry_incarnation = order.incarnation;
-        snapshot_entry_commission(pyramid_entries_.back());
-        if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
-        id_unclosed_qty_[order.id] += qty;
-        cycle_filled_entry_ids_.insert(order.id);
-        bind_retained_exit_activations();
-        if (!std::isnan(order.legs.prices().stop_price) || !std::isnan(order.legs.prices().limit_price)) {
+        const PositionSide requested = order.is_long ? PositionSide::LONG : PositionSide::SHORT;
+        const auto result = settle_source_opening(
+            requested, fill_price, qty, order.id, order.comment, order.incarnation);
+        if (result.status == execution::Status::Applied && result.opened_units != 0.0
+            && (!std::isnan(order.legs.prices().stop_price)
+                || !std::isnan(order.legs.prices().limit_price))) {
             set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
         }
         trail_best_path_state = trail_best_price_;
@@ -7794,23 +7789,14 @@ void BacktestEngine::apply_raw_order_fill(PendingOrder& order, double fill_price
             // Prefer the signal-time frozen quantity when the order carries one.
             double new_qty = !std::isnan(order.frozen_default_qty) ? order.frozen_default_qty
                            : (std::isnan(order.qty) ? calc_qty(fill_price) : order.qty);
-            double total_qty = position_qty_ + new_qty;
-            position_entry_price_ =
-                (position_entry_price_ * position_qty_ + fill_price * new_qty) / total_qty;
-            position_qty_ = total_qty;
-            position_entry_count_++;
-            trail_best_price_ = fill_price;
-            pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, order.id, bar_index_});
-            pyramid_entries_.back().entry_incarnation = order.incarnation;
-            snapshot_entry_commission(pyramid_entries_.back());
-            if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
+            const auto result = settle_source_opening(
+                requested, fill_price, new_qty, order.id, order.comment, order.incarnation);
             // KI-62: flag same-direction MARKET adds (strategy.order path) so a
             // same-bar from_entry bracket exit can scratch them dur-0.
-            pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
-            id_unclosed_qty_[order.id] += new_qty;
-            cycle_filled_entry_ids_.insert(order.id);
-            if (is_priced_entry) {
-                set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
+            if (result.status == execution::Status::Applied && result.opened_units != 0.0) {
+                pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
+                if (is_priced_entry)
+                    set_entry_fill_excursion_masks(pyramid_entries_.back(), current_bar_, fill_price);
             }
         } else {
             execute_market_exit(fill_price);

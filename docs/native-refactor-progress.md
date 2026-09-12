@@ -1,6 +1,6 @@
 # Standalone native engine refactor
 
-Status at 2026-09-12: **3 of 9 roadmap phases complete (33%)**. This counts
+Status at 2026-09-13: **4 of 9 roadmap phases complete (44%)**. This counts
 completed phases; it is not an estimate of elapsed work or remaining time.
 
 The acceptance boundary is a standalone C++ backtest and forward-execution
@@ -14,10 +14,10 @@ improvement resumes after the final native audit.
 | --- | --- | --- |
 | R0 | Native settlement and CI convergence | Complete, [PR #241](https://github.com/pineforge-4pass/pineforge-engine/pull/241) |
 | R1 | Native market orders, host, drivers, calendar and forward runner | Complete, [PR #243](https://github.com/pineforge-4pass/pineforge-engine/pull/243) |
-| R2 | Resting orders, partial execution, owner-bound children and group effects | R2a prerequisite complete ([PR #244](https://github.com/pineforge-4pass/pineforge-engine/pull/244)); resting lifecycle implemented, validation and acceptance pending |
-| R3 | Accounting, admission, risk and observation ownership | Open |
+| R2 | Resting orders, partial execution, owner-bound children and group effects | Complete, [PR #246](https://github.com/pineforge-4pass/pineforge-engine/pull/246) |
+| R3 | Accounting, admission, risk and observation ownership | Accounting implementation in progress; admission/risk/observation remain open |
 | R3a | Reversal execution and lifecycle settlement | Complete, [PR #242](https://github.com/pineforge-4pass/pineforge-engine/pull/242) |
-| R3b | Migrate remaining physical fill paths to shared settlement | Open |
+| R3b | Migrate remaining physical fill paths to shared settlement | Implementation in progress |
 | R4 | Complete codegen/adapter policy ownership and native independence | Open |
 | R5 | Final requirement and compatibility audit | Open |
 | R6 | Resume the parity improvement campaign after the audit | Queued |
@@ -55,10 +55,9 @@ These results apply to R2a. They do not establish acceptance of the later
 resting-order implementation, and R2a is not an additional completed roadmap
 phase.
 
-## Current R2 implementation
+## Accepted R2 resting-order state machine
 
-This branch implements the pinned native contract. Validation and review
-repairs are still in progress:
+PR #246 completed the native resting-order contract:
 
 1. Limit, stop, stop-limit and trailing requests retain trigger state and
    partial remainders. Matching distinguishes actual tick prints from
@@ -84,10 +83,17 @@ partial exits, exact deferred-receipt arithmetic and same-cursor execution price
 The sanitizer ABI control also supplies the historical v12 destructor needed
 for its RTTI; this changes only the link-test stub, not runtime behavior.
 
-Final review of the publication candidate, remaining R2 acceptance coverage,
-a new fixed-population 4190 comparison, the actual gate and published-head CI
-remain required. R2 is not complete. The earlier R2a and separate AUTO-isolation
-compatibility results do not substitute for this implementation's proof.
+The final candidate `c57e8687d91027df09474b414369162e47b94bbb` passed independent
+review, 326 local CTests (one macOS libcurl WebSocket skip), all nine PR checks
+and four post-merge workflows. It was squash merged as
+`e60e57156a54bb1c74c0c0a4f5a338fd924c046d`, with identical tree
+`e209c89035ec884774f8f3e68e1dc118f26aaf51`.
+
+The completed Cloud comparison measured 72/72 cases and 4190/4190 probes with
+zero grade, raw-trade, substantive-verifier, metadata, configuration or coverage
+differences. The actual gate returned **FAIL: `target.not-positive` only**.
+That neutral result is retained under the authorized refactor exception;
+the baseline stayed unchanged and promotion was skipped.
 
 R2 preserves all currently supported calendar, session, timezone, DST and
 timeframe behavior. Source labels remain inert in the native kernel;
@@ -96,6 +102,24 @@ to codegen/adapters. Range-end reporting remains nonphysical.
 The native R2 boundary is pinned; complete Pine lowering remains mandatory
 R4 work. The parity-improvement campaign remains paused through the final
 native audit.
+
+## Current R3 accounting and fill migration
+
+The next implementation brings the remaining partial, bound, percent, scratch,
+reversal, RAW and open/add fill paths onto the shared settlement owner. A
+transient set of opening identities selects physical exposure without putting
+Pine `from_entry` strings into the kernel. A non-applying account projection
+supplies post-close equity to source sizing before one resolved reversal.
+
+The native owner retains historical paid costs, one current execution ticket,
+physical residual quantities and deterministic observations. Adapters retain
+quantity provenance, source slot policy and the existing exit-ordering rules.
+Existing native request/event layouts and C ABI 4 remain stable. This work
+requires implementation, native and real-caller tests, independent review and
+the full publication proof below before R3b can be marked complete.
+
+R3's remaining admission, quota/day clocks, source counters and physical versus
+script-visible observation ownership stay open and must finish before R4.
 
 ## Publication and acceptance
 

@@ -69,3 +69,7 @@ docs/production-readiness-findings.md
 
 # Cloudflare wrangler local cache (never commit)
 .wrangler/
+
+# Reusable CI cache and retained diagnostics (never source bundles)
+.ccache/
+ci-diagnostics/

@@ -5,6 +5,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace pineforge {
@@ -48,6 +49,43 @@ CloseScopeInspection inspect_close_scope(
     return {execution::Status::Applied, held};
 }
 
+CloseScopeInspection inspect_selected_opening_set(
+        const execution::SelectedOpeningSet& selection,
+        const execution::Action& action,
+        int64_t current_cycle, const std::vector<PyramidEntry>& lots,
+        std::unordered_set<std::uint64_t>& ids_out) {
+    ids_out.clear();
+    if (std::holds_alternative<order_action::Transact>(action)
+        || selection.cycle <= 0 || selection.cycle != current_cycle
+        || selection.incarnations.empty())
+        return {execution::Status::InvalidCloseTarget};
+    std::unordered_set<std::uint64_t> live;
+    live.reserve(lots.size());
+    for (const auto& lot : lots) live.insert(lot.entry_incarnation);
+    ids_out.reserve(selection.incarnations.size());
+    for (const auto id : selection.incarnations) {
+        if (id == 0 || !ids_out.insert(id).second
+            || live.find(id) == live.end()) {
+            ids_out.clear();
+            return {execution::Status::InvalidCloseTarget};
+        }
+    }
+    double held = 0.0;
+    for (const auto& lot : lots) {
+        if (ids_out.count(lot.entry_incarnation) == 0) continue;
+        held += lot.qty;
+        if (!std::isfinite(held)) {
+            ids_out.clear();
+            return {execution::Status::InvalidBook};
+        }
+    }
+    if (held == 0.0) {
+        ids_out.clear();
+        return {execution::Status::InvalidCloseTarget};
+    }
+    return {execution::Status::Applied, held};
+}
+
 bool selected_for_close(const execution::CloseScope& scope,
                         const PyramidEntry& lot) {
     if (std::holds_alternative<execution::Book>(scope)) return true;
@@ -84,7 +122,227 @@ CloseSplit next_close_split(const PyramidEntry& lot, bool closes, bool flatten,
     closed = next_closed;
     return {execution::Status::Applied, amount, kept};
 }
+
+execution::AccountEffectProjection invalid_projection(execution::Status status) {
+    execution::AccountEffectProjection out;
+    out.status = status;
+    return out;
+}
 } // namespace
+
+struct BacktestEngine::NativeSettlementStage {
+    enum class Phase { Invalid, NoEffect, Ready };
+    Phase phase = Phase::Invalid;
+    execution::Status status = execution::Status::NoEffect;
+    bool flatten = false;
+    bool scoped = false;
+    bool opposite = false;
+    bool closes = false;
+    bool use_selected = false;
+    PositionSide incoming = PositionSide::LONG;
+    bool was_long = false;
+    double requested = 0.0;
+    double selected_held = 0.0;
+    double allocation_requested = 0.0;
+    double closed = 0.0;
+    double opening = 0.0;
+    double ticket = 0.0;
+    double after_qty = 0.0;
+    double after_price = 0.0;
+    std::vector<std::size_t> closing_indices;
+    std::vector<double> closing_quantities;
+    std::vector<double> current_costs;
+    std::vector<PyramidEntry> survivors;
+    std::unordered_set<std::uint64_t> selected_ids;
+};
+
+void BacktestEngine::stage_native_settlement(
+        NativeSettlementStage& stage,
+        const execution::Action& action,
+        const execution::Fill& fill,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected,
+        const execution::LifecycleEffects* lifecycle) const {
+    using execution::Status;
+    stage = NativeSettlementStage{};
+    auto fail = [&](Status status) {
+        stage.phase = NativeSettlementStage::Phase::Invalid;
+        stage.status = status;
+    };
+    auto no_effect = [&]() {
+        stage.phase = NativeSettlementStage::Phase::NoEffect;
+        stage.status = fill.commission_account && *fill.commission_account != 0.0
+            ? Status::InvalidAccounting : Status::NoEffect;
+    };
+
+    if (!std::isfinite(fill.price)) { fail(Status::InvalidPrice); return; }
+    if (fill.commission_account && !std::isfinite(*fill.commission_account)) {
+        fail(Status::InvalidAccounting);
+        return;
+    }
+
+    stage.flatten = std::holds_alternative<execution::Flatten>(action);
+    const auto* reduce = std::get_if<order_action::Reduce>(&action);
+    const auto* transact = std::get_if<order_action::Transact>(&action);
+    stage.requested = reduce ? reduce->units
+        : transact ? std::abs(transact->signed_units) : 0.0;
+    if (!std::isfinite(stage.requested) || (reduce && stage.requested < 0.0)) {
+        fail(Status::InvalidQuantity);
+        return;
+    }
+    if (position_side_ != PositionSide::FLAT
+        && position_side_ != PositionSide::LONG
+        && position_side_ != PositionSide::SHORT) {
+        fail(Status::InvalidBook);
+        return;
+    }
+    if ((position_side_ == PositionSide::FLAT) != pyramid_entries_.empty()) {
+        fail(Status::InvalidBook);
+        return;
+    }
+
+    double held = 0.0;
+    for (const auto& lot : pyramid_entries_) {
+        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price)) {
+            fail(Status::InvalidBook);
+            return;
+        }
+        held += lot.qty;
+        if (!std::isfinite(held)) {
+            fail(Status::InvalidBook);
+            return;
+        }
+    }
+    if (lifecycle) {
+        if (auto invalid = validate_lifecycle_effects(*lifecycle)) {
+            fail(*invalid);
+            return;
+        }
+    }
+
+    CloseScopeInspection selection;
+    if (selected) {
+        selection = inspect_selected_opening_set(
+            *selected, action, position_cycle_seq_, pyramid_entries_,
+            stage.selected_ids);
+        stage.use_selected = true;
+        stage.scoped = true;
+    } else {
+        selection = inspect_close_scope(
+            book_or_opening, action, position_cycle_seq_, pyramid_entries_, held);
+        stage.scoped = std::holds_alternative<execution::OpeningExposure>(
+            book_or_opening);
+    }
+    if (selection.status != Status::Applied) {
+        fail(selection.status);
+        return;
+    }
+    stage.selected_held = selection.held;
+    stage.allocation_requested = stage.scoped && reduce
+        ? std::min(stage.requested, selection.held) : stage.requested;
+    const double signed_held = position_side_ == PositionSide::SHORT
+        ? -selection.held : selection.held;
+    if (!stage.flatten && stage.requested == 0.0) { no_effect(); return; }
+    if ((stage.flatten || reduce) && pyramid_entries_.empty()) {
+        no_effect();
+        return;
+    }
+    if (reduce && !order_action::plan(signed_held,
+            order_action::Reduce{stage.allocation_requested})) {
+        fail(Status::UnrepresentableQuantity);
+        return;
+    }
+    if (transact && !order_action::plan(signed_held, *transact)) {
+        fail(Status::UnrepresentableQuantity);
+        return;
+    }
+
+    stage.incoming = transact && transact->signed_units < 0.0
+        ? PositionSide::SHORT : PositionSide::LONG;
+    stage.opposite = transact && position_side_ != PositionSide::FLAT
+        && position_side_ != stage.incoming;
+    stage.closes = stage.flatten || reduce || stage.opposite;
+    stage.was_long = position_side_ == PositionSide::LONG;
+
+    if (!stage.flatten || stage.scoped)
+        stage.survivors.reserve(pyramid_entries_.size());
+    stage.closing_indices.reserve(stage.closes ? pyramid_entries_.size() : 0);
+    stage.closing_quantities.reserve(stage.closes ? pyramid_entries_.size() : 0);
+    double closed = 0.0;
+    double remaining = stage.allocation_requested;
+    for (size_t index = 0; index < pyramid_entries_.size(); ++index) {
+        const auto& lot = pyramid_entries_[index];
+        const bool member = stage.use_selected
+            ? stage.selected_ids.count(lot.entry_incarnation) != 0
+            : selected_for_close(book_or_opening, lot);
+        const auto split = next_close_split(
+            lot, stage.closes && member, stage.flatten,
+            stage.allocation_requested, closed, remaining);
+        if (split.status != Status::Applied) {
+            fail(split.status);
+            return;
+        }
+        if (split.amount == 0.0) {
+            stage.survivors.push_back(lot);
+            continue;
+        }
+        stage.closing_indices.push_back(index);
+        stage.closing_quantities.push_back(split.amount);
+        if (split.kept > 0.0) {
+            auto survivor = lot;
+            const double scale = split.kept / lot.qty;
+            survivor.qty = split.kept;
+            survivor.max_runup *= scale;
+            survivor.max_drawdown *= scale;
+            survivor.entry_commission_account = open_entry_commission(lot)
+                - allocated_entry_commission(lot, split.amount);
+            stage.survivors.push_back(std::move(survivor));
+        }
+    }
+    stage.closed = closed;
+    stage.opening = !transact ? 0.0 : stage.opposite ? remaining : stage.requested;
+    if (stage.opening > 0.0 && stage.opposite && !stage.survivors.empty()) {
+        fail(Status::UnrepresentableQuantity);
+        return;
+    }
+    stage.current_costs = quote_execution_commissions(
+        stage.closing_quantities, stage.opening, fill);
+    stage.ticket = 0.0;
+    for (double cost : stage.current_costs) {
+        if (!std::isfinite(cost)) {
+            fail(Status::InvalidAccounting);
+            return;
+        }
+        stage.ticket += cost;
+        if (!std::isfinite(stage.ticket)) {
+            fail(Status::InvalidAccounting);
+            return;
+        }
+    }
+    double after_qty = 0.0;
+    double weighted = 0.0;
+    for (const auto& lot : stage.survivors) {
+        after_qty += lot.qty;
+        weighted += lot.price * lot.qty;
+    }
+    if (stage.opening > 0.0) {
+        const double next = after_qty + stage.opening;
+        if (!std::isfinite(next) || (after_qty > 0.0
+            && (next == after_qty || next == stage.opening))) {
+            fail(Status::UnrepresentableQuantity);
+            return;
+        }
+        after_qty = next;
+        weighted += fill.price * stage.opening;
+    }
+    const size_t after_lots = stage.survivors.size() + (stage.opening > 0.0 ? 1 : 0);
+    stage.after_qty = after_qty;
+    stage.after_price = after_lots == 1
+        ? (stage.opening > 0.0 ? fill.price : stage.survivors.front().price)
+        : after_qty > 0.0 ? weighted / after_qty : 0.0;
+    stage.phase = NativeSettlementStage::Phase::Ready;
+    stage.status = Status::Applied;
+}
 
 execution::Result BacktestEngine::settle_resolved_execution(
         const execution::Action& action, const execution::Fill& fill) {
@@ -124,151 +382,82 @@ execution::Result BacktestEngine::settle_with_context(
     return settle_with_context_scoped(action, fill, lifecycle, context, execution::Book{});
 }
 
+execution::Result BacktestEngine::settle_native_execution_selected_at(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        const execution::SelectedOpeningSet& selection) {
+    return settle_with_context_selected(action, fill, {}, context, selection);
+}
+
+execution::Result BacktestEngine::settle_execution_selected_with_lifecycle(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::SelectedOpeningSet& selection) {
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = current_bar_.timestamp;
+    context.interval_index = bar_index_;
+    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+    if (!std::isnan(fold_exit_trail_peak_)) {
+        context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+    }
+    return settle_with_context_selected(action, fill, lifecycle, context, selection);
+}
+
 execution::Result BacktestEngine::settle_with_context_scoped(
         const execution::Action& action, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle,
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope scope) {
+    return settle_with_membership(action, fill, lifecycle, context, scope, nullptr);
+}
+
+execution::Result BacktestEngine::settle_with_context_selected(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        const execution::SelectedOpeningSet& selection) {
+    return settle_with_membership(
+        action, fill, lifecycle, context, execution::Book{}, &selection);
+}
+
+execution::Result BacktestEngine::settle_with_membership(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected) {
     using execution::Status;
-    if (!std::isfinite(fill.price)) return {Status::InvalidPrice};
-    if (fill.commission_account && !std::isfinite(*fill.commission_account))
-        return {Status::InvalidAccounting};
+    NativeSettlementStage stage;
+    stage_native_settlement(
+        stage, action, fill, book_or_opening, selected, &lifecycle);
+    if (stage.phase != NativeSettlementStage::Phase::Ready)
+        return {stage.status};
     const auto no_effect = [&]() -> execution::Result {
         return {fill.commission_account && *fill.commission_account != 0.0
             ? Status::InvalidAccounting : Status::NoEffect};
     };
+    if (stage.scoped && stage.closed == 0.0) return no_effect();
 
-    const bool flatten = std::holds_alternative<execution::Flatten>(action);
-    const auto* reduce = std::get_if<order_action::Reduce>(&action);
-    const auto* transact = std::get_if<order_action::Transact>(&action);
-    const double requested = reduce ? reduce->units
-        : transact ? std::abs(transact->signed_units) : 0.0;
-    if (!std::isfinite(requested) || (reduce && requested < 0.0))
-        return {Status::InvalidQuantity};
-
-    if (position_side_ != PositionSide::FLAT
-        && position_side_ != PositionSide::LONG
-        && position_side_ != PositionSide::SHORT)
-        return {Status::InvalidBook};
-    if ((position_side_ == PositionSide::FLAT) != pyramid_entries_.empty())
-        return {Status::InvalidBook};
-
-    double held = 0.0;
-    for (const auto& lot : pyramid_entries_) {
-        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price))
-            return {Status::InvalidBook};
-        held += lot.qty;
-        if (!std::isfinite(held)) return {Status::InvalidBook};
-    }
-    if (auto invalid = validate_lifecycle_effects(lifecycle))
-        return {*invalid};
-    const auto selection = inspect_close_scope(
-        scope, action, position_cycle_seq_, pyramid_entries_, held);
-    if (selection.status != Status::Applied) return {selection.status};
-    const bool scoped = std::holds_alternative<execution::OpeningExposure>(scope);
-    const double allocation_requested = scoped && reduce
-        ? std::min(requested, selection.held) : requested;
-    const double signed_held = position_side_ == PositionSide::SHORT
-        ? -selection.held : selection.held;
-    if (!flatten && requested == 0.0) return no_effect();
-    if ((flatten || reduce) && pyramid_entries_.empty()) return no_effect();
-
-    // The scalar planner validates the request's representability. Physical
-    // FIFO allocation below is authoritative for the surviving position: it
-    // must not reject a valid decimal lot merely because a differently grouped
-    // scalar addition has a one-ulp difference.
-    if (reduce && !order_action::plan(signed_held, order_action::Reduce{allocation_requested}))
-        return {Status::UnrepresentableQuantity};
-    if (transact && !order_action::plan(signed_held, *transact))
-        return {Status::UnrepresentableQuantity};
-
-    const PositionSide incoming = transact && transact->signed_units < 0.0
-        ? PositionSide::SHORT : PositionSide::LONG;
-    const bool opposite = transact && position_side_ != PositionSide::FLAT
-        && position_side_ != incoming;
-    const bool closes = flatten || reduce || opposite;
-    const bool was_long = position_side_ == PositionSide::LONG;
-
-    // Stage all physical splits and financial rows before changing the book.
-    std::vector<PyramidEntry> survivors;
-    std::vector<size_t> closing_indices;
-    std::vector<double> closing_quantities;
-    if (!flatten || scoped) survivors.reserve(pyramid_entries_.size());
-    closing_indices.reserve(closes ? pyramid_entries_.size() : 0);
-    closing_quantities.reserve(closes ? pyramid_entries_.size() : 0);
-    double closed = 0.0;
-    double remaining = allocation_requested;
-    for (size_t index = 0; index < pyramid_entries_.size(); ++index) {
-        const auto& lot = pyramid_entries_[index];
-        const auto split = next_close_split(lot, closes && selected_for_close(scope, lot),
-                                            flatten, allocation_requested, closed, remaining);
-        if (split.status != Status::Applied) return {split.status};
-        const double amount = split.amount;
-        if (amount == 0.0) {
-            survivors.push_back(lot);
-            continue;
-        }
-        const double kept = split.kept;
-        closing_indices.push_back(index);
-        closing_quantities.push_back(amount);
-        if (kept > 0.0) {
-            auto survivor = lot;
-            const double scale = kept / lot.qty;
-            survivor.qty = kept;
-            survivor.max_runup *= scale;
-            survivor.max_drawdown *= scale;
-            survivor.entry_commission_account = open_entry_commission(lot)
-                - allocated_entry_commission(lot, amount);
-            survivors.push_back(std::move(survivor));
-        }
-    }
-
-    if (scoped && closed == 0.0) return no_effect();
-    const double opening = !transact ? 0.0 : opposite ? remaining : requested;
-    if (opening > 0.0 && opposite && !survivors.empty())
-        return {Status::UnrepresentableQuantity};
-    const auto current_costs = quote_execution_commissions(closing_quantities, opening, fill);
-    for (double cost : current_costs)
-        if (!std::isfinite(cost)) return {Status::InvalidAccounting};
-    const double opening_commission = current_costs.back();
     std::vector<Trade> closed_trades;
-    closed_trades.reserve(closing_indices.size());
-    for (size_t i = 0; i < closing_indices.size(); ++i) {
-        const auto& lot = pyramid_entries_[closing_indices[i]];
-        auto trade = build_close_trade_with_costs(lot, closing_quantities[i],
-            fill.price, was_long, allocated_entry_commission(lot, closing_quantities[i]),
-            current_costs[i], context);
+    closed_trades.reserve(stage.closing_indices.size());
+    for (size_t i = 0; i < stage.closing_indices.size(); ++i) {
+        const auto& lot = pyramid_entries_[stage.closing_indices[i]];
+        auto trade = build_close_trade_with_costs(lot, stage.closing_quantities[i],
+            fill.price, stage.was_long,
+            allocated_entry_commission(lot, stage.closing_quantities[i]),
+            stage.current_costs[i], context);
         trade.exit_id = fill.id;
         trade.exit_comment = fill.comment;
         closed_trades.push_back(std::move(trade));
     }
-    if (opening > 0.0 && (position_side_ == PositionSide::FLAT || survivors.empty())
+    if (stage.opening > 0.0
+        && (position_side_ == PositionSide::FLAT || stage.survivors.empty())
         && (next_position_cycle_seq_ <= 0
             || next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
         throw std::overflow_error("position cycle sequence exhausted");
-    double after_qty = 0.0;
-    double weighted = 0.0;
-    for (const auto& lot : survivors) {
-        after_qty += lot.qty;
-        weighted += lot.price * lot.qty;
-    }
-    if (opening > 0.0) {
-        const double next = after_qty + opening;
-        if (!std::isfinite(next) || (after_qty > 0.0
-            && (next == after_qty || next == opening)))
-            return {Status::UnrepresentableQuantity};
-        after_qty = next;
-        weighted += fill.price * opening;
-    }
-    const size_t after_lots = survivors.size() + (opening > 0.0 ? 1 : 0);
-    const double after_price = after_lots == 1
-        ? (opening > 0.0 ? fill.price : survivors.front().price)
-        : after_qty > 0.0 ? weighted / after_qty : 0.0;
-    if (!std::isfinite(after_qty) || !std::isfinite(after_price))
+    if (!std::isfinite(stage.after_qty) || !std::isfinite(stage.after_price))
         return {Status::InvalidAccounting};
 
-    // A financial sum must remain representable; reporting-only percentages
-    // or excursion projections do not decide whether an action may settle.
     double next_profit = net_profit_sum_;
     double next_gross_profit = gross_profit_sum_;
     double next_gross_loss = gross_loss_sum_;
@@ -285,27 +474,27 @@ execution::Result BacktestEngine::settle_with_context_scoped(
         || !std::isfinite(next_gross_loss) || !std::isfinite(next_intraday))
         return {Status::InvalidAccounting};
     validate_close_trade_counters(closed_trades.data(), closed_trades.size());
-    if (opening > 0.0 && !survivors.empty()
+    if (stage.opening > 0.0 && !stage.survivors.empty()
         && position_entry_count_ == std::numeric_limits<int>::max())
         throw std::overflow_error("position entry counter exhausted");
 
-    const bool will_reset = closed > 0.0 && survivors.empty();
-    const bool will_open_quoted = opening > 0.0
-        && (position_side_ == PositionSide::FLAT || survivors.empty());
+    const bool will_reset = stage.closed > 0.0 && stage.survivors.empty();
+    const bool will_open_quoted = stage.opening > 0.0
+        && (position_side_ == PositionSide::FLAT || stage.survivors.empty());
     if (auto invalid = preflight_settlement_lifecycle(
             lifecycle, will_reset, will_open_quoted))
         return {*invalid};
 
     const size_t first_trade = trades_.size();
     const size_t first_action = stream_order_actions_.size();
-    const size_t events = closed_trades.size() + (opening > 0.0 ? 1 : 0);
+    const size_t events = closed_trades.size() + (stage.opening > 0.0 ? 1 : 0);
     if (stream_observe_actions_) {
         if (events > std::numeric_limits<uint64_t>::max() - stream_action_sequence_)
             throw std::overflow_error("stream action sequence overflow");
         reserve_effects(stream_order_actions_, events);
     }
     reserve_effects(trades_, closed_trades.size());
-    if (opening > 0.0) reserve_effects(pyramid_entries_, 1);
+    if (stage.opening > 0.0) reserve_effects(pyramid_entries_, 1);
 
     // Commit through the existing accounting/observation sinks. Allocation or
     // lifecycle exceptions still abort the owning engine run; this internal
@@ -314,40 +503,40 @@ execution::Result BacktestEngine::settle_with_context_scoped(
     // unbind, authorized pending removals, then quoted opening bind.
     if (lifecycle.pre_close) apply_pre_close_lifecycle_batch(*lifecycle.pre_close);
     for (auto& trade : closed_trades) record_close_trade(std::move(trade));
-    if (closed > 0.0) {
-        if (survivors.empty()) {
+    if (stage.closed > 0.0) {
+        if (stage.survivors.empty()) {
             reset_position_state_to_flat();
         } else {
-            pyramid_entries_ = std::move(survivors);
-            position_qty_ = after_qty;
-            position_entry_price_ = after_price;
+            pyramid_entries_ = std::move(stage.survivors);
+            position_qty_ = stage.after_qty;
+            position_entry_price_ = stage.after_price;
             position_entry_count_ = static_cast<int>(pyramid_entries_.size());
         }
     }
     apply_authorized_pending_removals(lifecycle.removals);
-    if (opening > 0.0) {
-        PyramidEntry lot{fill.price, context.effective_time_ms, opening, fill.id,
+    if (stage.opening > 0.0) {
+        const double opening_commission = stage.current_costs.back();
+        PyramidEntry lot{fill.price, context.effective_time_ms, stage.opening, fill.id,
                          context.interval_index};
         lot.entry_incarnation = fill.incarnation;
         lot.entry_comment = fill.comment;
         lot.entry_commission_account = opening_commission;
         if (position_side_ == PositionSide::FLAT) {
-            open_quoted_position(incoming, std::move(lot));
+            open_quoted_position(stage.incoming, std::move(lot));
         } else {
-            append_quoted_lot(std::move(lot), after_qty, after_price);
+            append_quoted_lot(std::move(lot), stage.after_qty, stage.after_price);
         }
     }
     if (stream_observe_actions_) stream_refresh_action_metadata(first_action, first_trade);
-    double ticket = 0.0;
-    for (double cost : current_costs) ticket += cost;
     execution::Result applied;
     applied.status = Status::Applied;
-    applied.closed_units = closed;
-    applied.opened_units = incoming == PositionSide::SHORT ? -opening : opening;
-    applied.current_ticket = ticket;
+    applied.closed_units = stage.closed;
+    applied.opened_units = stage.incoming == PositionSide::SHORT
+        ? -stage.opening : stage.opening;
+    applied.current_ticket = stage.ticket;
     applied.first_trade_index = first_trade;
     applied.closed_trade_count = closed_trades.size();
-    applied.opened_lot_incarnation = opening > 0.0 ? fill.incarnation : 0;
+    applied.opened_lot_incarnation = stage.opening > 0.0 ? fill.incarnation : 0;
     return applied;
 }
 
@@ -359,147 +548,202 @@ execution::SettlementInspection BacktestEngine::inspect_native_settlement(
 execution::SettlementInspection BacktestEngine::inspect_native_settlement_scoped(
         const execution::Action& action, const execution::Fill& fill,
         execution::CloseScope scope) const {
+    return inspect_with_membership(action, fill, scope, nullptr);
+}
+
+execution::SettlementInspection BacktestEngine::inspect_native_settlement_selected(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::SelectedOpeningSet& selection) const {
+    return inspect_with_membership(action, fill, execution::Book{}, &selection);
+}
+
+execution::SettlementInspection BacktestEngine::inspect_with_membership(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected) const {
     using execution::Status;
+    NativeSettlementStage stage;
+    stage_native_settlement(
+        stage, action, fill, book_or_opening, selected, nullptr);
     execution::SettlementInspection out;
-    if (!std::isfinite(fill.price)) {
-        out.status = Status::InvalidPrice;
+    if (stage.phase != NativeSettlementStage::Phase::Ready) {
+        out.status = stage.status;
         return out;
-    }
-    if (fill.commission_account && !std::isfinite(*fill.commission_account)) {
-        out.status = Status::InvalidAccounting;
-        return out;
-    }
-    const bool flatten = std::holds_alternative<execution::Flatten>(action);
-    const auto* reduce = std::get_if<order_action::Reduce>(&action);
-    const auto* transact = std::get_if<order_action::Transact>(&action);
-    const double requested = reduce ? reduce->units
-        : transact ? std::abs(transact->signed_units) : 0.0;
-    if (!std::isfinite(requested) || (reduce && requested < 0.0)) {
-        out.status = Status::InvalidQuantity;
-        return out;
-    }
-    if (position_side_ != PositionSide::FLAT
-        && position_side_ != PositionSide::LONG
-        && position_side_ != PositionSide::SHORT) {
-        out.status = Status::InvalidBook;
-        return out;
-    }
-    if ((position_side_ == PositionSide::FLAT) != pyramid_entries_.empty()) {
-        out.status = Status::InvalidBook;
-        return out;
-    }
-    double held = 0.0;
-    for (const auto& lot : pyramid_entries_) {
-        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price)) {
-            out.status = Status::InvalidBook;
-            return out;
-        }
-        held += lot.qty;
-        if (!std::isfinite(held)) {
-            out.status = Status::InvalidBook;
-            return out;
-        }
-    }
-    const auto selection = inspect_close_scope(
-        scope, action, position_cycle_seq_, pyramid_entries_, held);
-    if (selection.status != Status::Applied) {
-        out.status = selection.status;
-        return out;
-    }
-    const bool scoped = std::holds_alternative<execution::OpeningExposure>(scope);
-    const double allocation_requested = scoped && reduce
-        ? std::min(requested, selection.held) : requested;
-    const double signed_held = position_side_ == PositionSide::SHORT
-        ? -selection.held : selection.held;
-    if (!flatten && requested == 0.0) {
-        out.status = fill.commission_account && *fill.commission_account != 0.0
-            ? Status::InvalidAccounting : Status::NoEffect;
-        return out;
-    }
-    if ((flatten || reduce) && pyramid_entries_.empty()) {
-        out.status = fill.commission_account && *fill.commission_account != 0.0
-            ? Status::InvalidAccounting : Status::NoEffect;
-        return out;
-    }
-    if (reduce && !order_action::plan(signed_held, order_action::Reduce{allocation_requested})) {
-        out.status = Status::UnrepresentableQuantity;
-        return out;
-    }
-    if (transact && !order_action::plan(signed_held, *transact)) {
-        out.status = Status::UnrepresentableQuantity;
-        return out;
-    }
-    const PositionSide incoming = transact && transact->signed_units < 0.0
-        ? PositionSide::SHORT : PositionSide::LONG;
-    const bool opposite = transact && position_side_ != PositionSide::FLAT
-        && position_side_ != incoming;
-    const bool closes = flatten || reduce || opposite;
-    std::vector<PyramidEntry> survivors;
-    std::vector<double> closing_quantities;
-    if (!flatten || scoped) survivors.reserve(pyramid_entries_.size());
-    closing_quantities.reserve(closes ? pyramid_entries_.size() : 0);
-    double closed = 0.0;
-    double remaining = allocation_requested;
-    for (const auto& lot : pyramid_entries_) {
-        const auto split = next_close_split(lot, closes && selected_for_close(scope, lot),
-                                            flatten, allocation_requested, closed, remaining);
-        if (split.status != Status::Applied) {
-            out.status = split.status;
-            return out;
-        }
-        const double amount = split.amount;
-        if (amount == 0.0) {
-            survivors.push_back(lot);
-            continue;
-        }
-        const double kept = split.kept;
-        closing_quantities.push_back(amount);
-        if (kept > 0.0) {
-            auto survivor = lot;
-            survivor.qty = kept;
-            survivors.push_back(std::move(survivor));
-        }
-    }
-    const double opening = !transact ? 0.0 : opposite ? remaining : requested;
-    if (opening > 0.0 && opposite && !survivors.empty()) {
-        out.status = Status::UnrepresentableQuantity;
-        return out;
-    }
-    const auto current_costs = quote_execution_commissions(closing_quantities, opening, fill);
-    double ticket = 0.0;
-    for (double cost : current_costs) {
-        if (!std::isfinite(cost)) {
-            out.status = Status::InvalidAccounting;
-            return out;
-        }
-        ticket += cost;
-    }
-    double after_qty = 0.0;
-    for (const auto& lot : survivors) after_qty += lot.qty;
-    if (opening > 0.0) {
-        const double next = after_qty + opening;
-        if (!std::isfinite(next) || (after_qty > 0.0
-            && (next == after_qty || next == opening))) {
-            out.status = Status::UnrepresentableQuantity;
-            return out;
-        }
-        after_qty = next;
     }
     const double fx = active_account_currency_fx();
     out.status = Status::Applied;
-    out.closed_units = closed;
-    out.opened_units = incoming == PositionSide::SHORT ? -opening : opening;
-    out.resulting_abs_units = after_qty;
-    out.resulting_lot_count = survivors.size() + (opening > 0.0 ? 1 : 0);
-    out.resulting_abs_notional = after_qty * std::abs(fill.price) * syminfo_.pointvalue * fx;
-    out.current_ticket = ticket;
-    out.would_open = opening > 0.0;
-    out.incoming_short = incoming == PositionSide::SHORT;
-    if (closed == 0.0 && opening == 0.0) {
+    out.closed_units = stage.closed;
+    out.opened_units = stage.incoming == PositionSide::SHORT
+        ? -stage.opening : stage.opening;
+    out.resulting_abs_units = stage.after_qty;
+    out.resulting_lot_count = stage.survivors.size() + (stage.opening > 0.0 ? 1 : 0);
+    out.resulting_abs_notional = stage.after_qty * std::abs(fill.price)
+        * syminfo_.pointvalue * fx;
+    out.current_ticket = stage.ticket;
+    out.would_open = stage.opening > 0.0;
+    out.incoming_short = stage.incoming == PositionSide::SHORT;
+    if (stage.closed == 0.0 && stage.opening == 0.0) {
         out.status = fill.commission_account && *fill.commission_account != 0.0
             ? Status::InvalidAccounting : Status::NoEffect;
         out.would_open = false;
     }
+    return out;
+}
+
+execution::AccountEffectProjection BacktestEngine::project_native_settlement_v1(
+        const execution::Action& action, const execution::Fill& fill) const {
+    return project_native_settlement_scoped_v1(action, fill, execution::Book{});
+}
+
+execution::AccountEffectProjection BacktestEngine::project_native_settlement_scoped_v1(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope scope) const {
+    return project_with_membership(action, fill, scope, nullptr);
+}
+
+execution::AccountEffectProjection BacktestEngine::project_native_settlement_selected_v1(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::SelectedOpeningSet& selection) const {
+    return project_with_membership(action, fill, execution::Book{}, &selection);
+}
+
+execution::AccountEffectProjection BacktestEngine::project_with_membership(
+        const execution::Action& action, const execution::Fill& fill,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected) const {
+    using execution::Status;
+    NativeSettlementStage stage;
+    stage_native_settlement(
+        stage, action, fill, book_or_opening, selected, nullptr);
+    if (stage.phase == NativeSettlementStage::Phase::Invalid)
+        return invalid_projection(stage.status);
+
+    const auto unchanged_account = [&]() -> execution::AccountEffectProjection {
+        execution::AccountEffectProjection out;
+        out.status = Status::NoEffect;
+        const double fx = active_account_currency_fx();
+        const double pv = syminfo_.pointvalue;
+        double abs_units = 0.0;
+        for (const auto& lot : pyramid_entries_) abs_units += lot.qty;
+        out.resulting_abs_units = abs_units;
+        out.resulting_lot_count = pyramid_entries_.size();
+        out.resulting_abs_notional =
+            abs_units * std::abs(fill.price) * pv * fx;
+        double remaining = 0.0;
+        for (const auto& lot : pyramid_entries_)
+            remaining += open_entry_commission(lot);
+        out.realized_balance = initial_capital_ + net_profit_sum_;
+        out.remaining_entry_cost = remaining;
+        out.marked_equity = marked_equity(fill.price);
+        out.cycle_after = pyramid_entries_.empty() ? 0 : position_cycle_seq_;
+        out.signed_units_after = position_side_ == PositionSide::SHORT
+            ? -abs_units
+            : position_side_ == PositionSide::LONG ? abs_units : 0.0;
+        if (!std::isfinite(out.resulting_abs_units)
+            || !std::isfinite(out.resulting_abs_notional)
+            || !std::isfinite(out.realized_balance)
+            || !std::isfinite(out.remaining_entry_cost)
+            || !std::isfinite(out.marked_equity)
+            || !std::isfinite(out.signed_units_after))
+            return invalid_projection(Status::InvalidAccounting);
+        return out;
+    };
+
+    if (stage.phase == NativeSettlementStage::Phase::NoEffect) {
+        if (stage.status != Status::NoEffect)
+            return invalid_projection(stage.status);
+        return unchanged_account();
+    }
+    if (stage.closed == 0.0 && stage.opening == 0.0) {
+        if (fill.commission_account && *fill.commission_account != 0.0)
+            return invalid_projection(Status::InvalidAccounting);
+        return unchanged_account();
+    }
+
+    if (stage.opening > 0.0
+        && (position_side_ == PositionSide::FLAT || stage.survivors.empty())
+        && (next_position_cycle_seq_ <= 0
+            || next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
+        throw std::overflow_error("position cycle sequence exhausted");
+
+    execution::PhysicalExecutionContext context;
+    std::vector<Trade> closed_trades;
+    closed_trades.reserve(stage.closing_indices.size());
+    for (size_t i = 0; i < stage.closing_indices.size(); ++i) {
+        const auto& lot = pyramid_entries_[stage.closing_indices[i]];
+        auto trade = build_close_trade_with_costs(lot, stage.closing_quantities[i],
+            fill.price, stage.was_long,
+            allocated_entry_commission(lot, stage.closing_quantities[i]),
+            stage.current_costs[i], context);
+        closed_trades.push_back(std::move(trade));
+    }
+
+    double realized = net_profit_sum_;
+    for (const auto& trade : closed_trades) {
+        if (!std::isfinite(trade.pnl) || !std::isfinite(trade.commission))
+            return invalid_projection(Status::InvalidAccounting);
+        realized += trade.pnl;
+    }
+    realized += initial_capital_;
+    if (!std::isfinite(realized))
+        return invalid_projection(Status::InvalidAccounting);
+
+    const double fx = active_account_currency_fx();
+    const double pv = syminfo_.pointvalue;
+    const PositionSide resulting_side = !stage.survivors.empty()
+        ? position_side_
+        : stage.opening > 0.0 ? stage.incoming : PositionSide::FLAT;
+    const double direction = resulting_side == PositionSide::SHORT ? -1.0 : 1.0;
+    double remaining = 0.0;
+    double equity = realized;
+    for (const auto& lot : stage.survivors) {
+        if (!std::isfinite(lot.qty) || lot.qty <= 0.0 || !std::isfinite(lot.price))
+            return invalid_projection(Status::InvalidAccounting);
+        const double paid = open_entry_commission(lot);
+        remaining += paid;
+        equity += direction * (fill.price - lot.price) * lot.qty * pv * fx - paid;
+    }
+    if (stage.opening > 0.0) {
+        const double paid = stage.current_costs.back();
+        remaining += paid;
+        equity += direction * (fill.price - fill.price) * stage.opening * pv * fx
+            - paid;
+    }
+    if (!std::isfinite(remaining) || !std::isfinite(equity)
+        || !std::isfinite(stage.after_qty)
+        || !std::isfinite(stage.ticket))
+        return invalid_projection(Status::InvalidAccounting);
+
+    execution::AccountEffectProjection out;
+    out.status = Status::Applied;
+    out.closed_units = stage.closed;
+    out.opened_units = stage.incoming == PositionSide::SHORT
+        ? -stage.opening : stage.opening;
+    out.resulting_abs_units = stage.after_qty;
+    out.resulting_lot_count = stage.survivors.size() + (stage.opening > 0.0 ? 1 : 0);
+    out.resulting_abs_notional =
+        stage.after_qty * std::abs(fill.price) * pv * fx;
+    out.current_ticket = stage.ticket;
+    out.would_open = stage.opening > 0.0;
+    out.incoming_short = stage.incoming == PositionSide::SHORT;
+    out.realized_balance = realized;
+    out.remaining_entry_cost = remaining;
+    out.marked_equity = equity;
+    if (out.resulting_lot_count == 0) {
+        out.cycle_after = 0;
+        out.signed_units_after = 0.0;
+    } else if (!stage.survivors.empty()) {
+        out.cycle_after = position_cycle_seq_;
+        out.signed_units_after = position_side_ == PositionSide::SHORT
+            ? -stage.after_qty : stage.after_qty;
+    } else {
+        out.cycle_after = next_position_cycle_seq_;
+        out.signed_units_after = stage.incoming == PositionSide::SHORT
+            ? -stage.after_qty : stage.after_qty;
+    }
+    if (!std::isfinite(out.resulting_abs_notional)
+        || !std::isfinite(out.signed_units_after))
+        return invalid_projection(Status::InvalidAccounting);
     return out;
 }
 

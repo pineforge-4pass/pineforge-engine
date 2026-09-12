@@ -1,20 +1,26 @@
 # PineForgeVersion.cmake
 #
-# Resolve PineForge version from two sources, in priority order:
-#   1. `git describe --tags --match 'v*' --abbrev=7 --dirty` (when in a git
-#      checkout). Strips leading 'v', exposes commits-since-tag + sha + dirty
-#      as PINEFORGE_VERSION_FULL.
-#   2. The `VERSION` file at the repo root (always present in tarballs and
-#      Docker build contexts).
+# PINEFORGE_VERSION_SOURCE (CACHE STRING, AUTO|FILE):
+#   AUTO (default) — historical behavior exactly: prefer
+#     `git describe --tags --match 'v*' --abbrev=7 --dirty` for MMP/FULL
+#     when it matches MAJOR.MINOR.PATCH after stripping a leading 'v';
+#     otherwise use the VERSION file. Git SHA/dirty are observed the same way.
+#   FILE — MMP and FULL always come from VERSION (stable release identity).
+#     Git SHA/dirty are still observed as separate fields; checkout depth or
+#     missing tags cannot change MMP/FULL. Invalid values fail configure.
 #
 # Sets in the calling scope:
 #   PINEFORGE_VERSION_MAJOR   integer
 #   PINEFORGE_VERSION_MINOR   integer
 #   PINEFORGE_VERSION_PATCH   integer
 #   PINEFORGE_VERSION_MMP     "MAJOR.MINOR.PATCH"  (for project(VERSION ...))
-#   PINEFORGE_VERSION_FULL    "MAJOR.MINOR.PATCH[-N-gSHA[-dirty]]"
+#   PINEFORGE_VERSION_FULL    AUTO: describe-or-VERSION; FILE: VERSION
 #   PINEFORGE_VERSION_GIT_SHA short sha or "unknown"
 #   PINEFORGE_VERSION_DIRTY   ON/OFF
+
+set(PINEFORGE_VERSION_SOURCE "AUTO" CACHE STRING
+    "Version identity source: AUTO (git describe preferred) or FILE (VERSION MMP/FULL)")
+set_property(CACHE PINEFORGE_VERSION_SOURCE PROPERTY STRINGS AUTO FILE)
 
 function(_pineforge_read_version_file _out_mmp)
     set(_vfile "${CMAKE_CURRENT_SOURCE_DIR}/VERSION")
@@ -30,6 +36,12 @@ function(_pineforge_read_version_file _out_mmp)
 endfunction()
 
 function(pineforge_resolve_version)
+    if(NOT PINEFORGE_VERSION_SOURCE STREQUAL "AUTO" AND
+       NOT PINEFORGE_VERSION_SOURCE STREQUAL "FILE")
+        message(FATAL_ERROR
+            "PINEFORGE_VERSION_SOURCE must be AUTO or FILE (got '${PINEFORGE_VERSION_SOURCE}')")
+    endif()
+
     _pineforge_read_version_file(_file_mmp)
 
     set(_git_full "")
@@ -67,9 +79,18 @@ function(pineforge_resolve_version)
         endif()
     endif()
 
-    set(_mmp "${_file_mmp}")
-    if(_git_full MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
-        set(_mmp "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+    if(PINEFORGE_VERSION_SOURCE STREQUAL "FILE")
+        set(_mmp "${_file_mmp}")
+        set(_full "${_file_mmp}")
+    else()
+        set(_mmp "${_file_mmp}")
+        if(_git_full MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
+            set(_mmp "${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}")
+        endif()
+        if(NOT _git_full)
+            set(_git_full "${_mmp}")
+        endif()
+        set(_full "${_git_full}")
     endif()
 
     string(REPLACE "." ";" _parts "${_mmp}")
@@ -77,15 +98,11 @@ function(pineforge_resolve_version)
     list(GET _parts 1 _min)
     list(GET _parts 2 _pat)
 
-    if(NOT _git_full)
-        set(_git_full "${_mmp}")
-    endif()
-
     set(PINEFORGE_VERSION_MAJOR   "${_maj}"      PARENT_SCOPE)
     set(PINEFORGE_VERSION_MINOR   "${_min}"      PARENT_SCOPE)
     set(PINEFORGE_VERSION_PATCH   "${_pat}"      PARENT_SCOPE)
     set(PINEFORGE_VERSION_MMP     "${_mmp}"      PARENT_SCOPE)
-    set(PINEFORGE_VERSION_FULL    "${_git_full}" PARENT_SCOPE)
+    set(PINEFORGE_VERSION_FULL    "${_full}"     PARENT_SCOPE)
     set(PINEFORGE_VERSION_GIT_SHA "${_git_sha}"  PARENT_SCOPE)
     set(PINEFORGE_VERSION_DIRTY   "${_dirty}"    PARENT_SCOPE)
 endfunction()

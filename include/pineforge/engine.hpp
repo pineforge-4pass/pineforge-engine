@@ -21,6 +21,8 @@
 #include "quantity_intent.hpp"
 #include "execution.hpp"
 #include "execution_close_scope.hpp"
+#include "execution_close_selection.hpp"
+#include "execution_projection.hpp"
 #include "market_admission.hpp"
 #include "reservation_expansion.hpp"
 #include "order_cancellation.hpp"
@@ -1840,6 +1842,35 @@ protected:
         const execution::Action& action, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope scope);
+    // --- Additive selected close (not a CloseScope overload) ---
+    execution::SettlementInspection inspect_native_settlement_selected(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        const execution::SelectedOpeningSet& selection) const;
+    execution::Result settle_native_execution_selected_at(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        const execution::SelectedOpeningSet& selection);
+    // Legacy lifecycle copy of current_bar_/fold flags, then selected commit.
+    // Empty lifecycle is valid. Do not fold selection into LifecycleEffects.
+    execution::Result settle_execution_selected_with_lifecycle(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::SelectedOpeningSet& selection);
+    // --- Additive non-applying account/effect projection ---
+    execution::AccountEffectProjection project_native_settlement_v1(
+        const execution::Action& action,
+        const execution::Fill& fill) const;
+    execution::AccountEffectProjection project_native_settlement_scoped_v1(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        execution::CloseScope scope) const;
+    execution::AccountEffectProjection project_native_settlement_selected_v1(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        const execution::SelectedOpeningSet& selection) const;
     // Native account value: realized balance plus marked physical lots minus
     // their remaining paid entry costs, for every fee type. No Pine sizing or
     // end-of-range reporting convention participates in this value.
@@ -2641,68 +2672,9 @@ protected:
     // tape discriminating round(close) from close has been replayed. A
     // future CASH mismatch on a sub-tick feed is traced here first.
     double calc_qty(double fill_price) const {
-        const double basis = round_to_mintick(fill_price);
-        switch (default_qty_type_) {
-            case QtyType::FIXED:
-                return apply_qty_step(default_qty_value_);
-            case QtyType::PERCENT_OF_EQUITY: {
-                // KI-56's clean-room v6 flat/holding pair proves that an
-                // omitted percent-of-equity add sizes from mark-to-market
-                // equity AFTER the paid percent commission on surviving lots.
-                // This is a ledger rule, independent of pct=100, margin, or
-                // how the already-open position was sized. The open lot is
-                // marked at the ROUNDED close (see above): a sub-tick print
-                // never reaches the broker ledger.
-                // round 8 family R: the broker sizes from the equity at
-                // TEN SIGNIFICANT DIGITS (tv_money_round above) — the lot
-                // count flips one lot early/late whenever the exact equity
-                // sits within half a money unit of a lot boundary.
-                double equity = percent_commission_live_equity(
-                    round_to_mintick(current_bar_.close));
-                // Round 10 family AE (NASDAQ:AAPL@15, fast-scalper; campaign
-                // note log-20260905t223336z-67f0f181): the rounding is NOT
-                // confined to sub-unit lots. On a cent-priced integer-share
-                // book the exact equity is a cent sum, but the engine's
-                // ledger carries float-accumulation noise (1094521.68 held
-                // as 1094521.6800000002) and the quotient by the close can
-                // sit exactly on an integer in decimal (1094521.68 / 238.77
-                // = 4584): TradingView floors the ten-digit equity's raw
-                // double quotient (4583.999999999999 -> 4583 shares); the
-                // noisy numerator (4584.000000000001) or the 1e-6 nudge of
-                // apply_qty_step both hand it 4584, one share the account
-                // cannot pay at the 238.78 fill, and the reversal is declined
-                // where TradingView admits it. Nine lab tv capital sweeps on
-                // AAPL (famae-sz-*): 897890.32 / 213.58 -> 4203 (the raw
-                // floor; 4204 in exact decimal), 897890.3200004 -> 4203 (the
-                // 4e-7 is rounded away before the division), 897890.321 ->
-                // 4204; 887295.33 / 211.11 -> 4202, .3300004 -> 4202,
-                // .331 -> 4203; 1094521.68 / 238.77 -> 4583 (the probe's
-                // row), 1094521.681 -> 4584 (dropped: 4584 x 238.78 > C).
-                // Every lot-stepped instrument therefore sizes from
-                // tv_money_round(equity) with the raw lot floor; only the
-                // corpus' continuous qty_step 0 keeps the exact arithmetic.
-                if (tv_money_lot_sizing()) equity = tv_money_round(equity);
-                if (!std::isfinite(equity)) return 0.0;
-                double cash = reserve_percent_commission(equity * (default_qty_value_ / 100.0)) / active_account_currency_fx();
-                // Reject (qty 0) on a non-finite / non-positive fill price — a
-                // degenerate $0/NaN print must NOT size as the raw % number.
-                if (!(std::isfinite(basis) && basis > 0)) return 0.0;
-                // Rule 1 floors the rounded-equity quantity onto the lot
-                // grid via tv_money_floor_lot, including its guarded recovery
-                // of a representable cent-lot point. No representation nudge:
-                // apply_qty_step's epsilon would still over-size the pinned
-                // everybar 1.085 placement by one lot.
-                if (tv_money_lot_sizing()) {
-                    return tv_money_floor_lot(cash / (basis * syminfo_.pointvalue),
-                                              qty_step_);
-                }
-                return apply_qty_step(cash / (basis * syminfo_.pointvalue));
-            }
-            case QtyType::CASH:
-                return (std::isfinite(basis) && basis > 0)
-                    ? apply_qty_step((default_qty_value_ / active_account_currency_fx()) / (basis * syminfo_.pointvalue)) : 0.0;
-        }
-        return apply_qty_step(default_qty_value_);
+        const double equity = default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+            ? percent_commission_live_equity(round_to_mintick(current_bar_.close)) : 0.0;
+        return calc_default_qty_from_equity(fill_price, equity);
     }
 
     // TradingView freezes DEFAULT (qty=na) market-order sizing at the SIGNAL
@@ -3897,6 +3869,35 @@ private:
         const execution::LifecycleEffects& lifecycle,
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope scope);
+    execution::Result settle_with_context_selected(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        const execution::SelectedOpeningSet& selection);
+    execution::AccountEffectProjection project_with_membership(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected) const;
+    execution::SettlementInspection inspect_with_membership(
+        const execution::Action& action,
+        const execution::Fill& fill,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected) const;
+    execution::Result settle_with_membership(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected);
+    struct NativeSettlementStage;
+    void stage_native_settlement(
+        NativeSettlementStage& stage,
+        const execution::Action& action,
+        const execution::Fill& fill,
+        execution::CloseScope book_or_opening,
+        const execution::SelectedOpeningSet* selected,
+        const execution::LifecycleEffects* lifecycle) const;
     enum class PositionReductionCause {
         SCRIPT_ORDER,   // strategy.close / close_all / market exit / reversal
         BRACKET_EXIT,   // a strategy.exit bracket leg fill
@@ -4339,6 +4340,10 @@ private:
     double active_account_currency_fx() const;
     void settle_position_after_partial_exit(
         PositionReductionCause cause);
+    void restore_source_partial_exit_slots(int pre_count, PositionReductionCause cause);
+    execution::Result settle_source_opening(
+        PositionSide requested, double fill_price, double qty,
+        const std::string& id, const std::string& comment, uint64_t incarnation);
     void enter_market_from_flat(const std::string& id, bool is_long,
                                 double fill_price, double explicit_qty,
                                 int explicit_qty_type,
@@ -4353,6 +4358,11 @@ private:
                                PositionSide created_position_side,
                                bool is_priced_entry,
                                uint64_t entry_incarnation);
+    void add_to_pyramid_market_with_qty_provenance(
+        const std::string& id, bool is_long, double fill_price, double explicit_qty,
+        int explicit_qty_type, PositionSide created_position_side,
+        bool is_priced_entry, bool explicit_qty_prequantized,
+        uint64_t entry_incarnation);
     // `fill_price` is already resolved. Source sizing, direction and dust
     // selection stay here; purge_pending_exits is translated into exact
     // pending removals for the settlement coordinator. False does not
@@ -4378,6 +4388,15 @@ private:
                                             double fill_price, double explicit_qty,
                                             int explicit_qty_type,
                                             uint64_t entry_incarnation);
+    void sequential_same_tick_reversal_fill_with_qty_provenance(
+        const std::string& id, bool is_long, double fill_price, double explicit_qty,
+        int explicit_qty_type, bool explicit_qty_prequantized,
+        uint64_t entry_incarnation);
+    double calc_default_qty_from_equity(double fill_price, double equity) const;
+    double calc_qty_for_type_from_equity(
+        double fill_price, double qty_value, int qty_type, double equity) const;
+    double source_reversal_qty(double fill_price, double explicit_qty,
+                               int explicit_qty_type, bool prequantized) const;
     void bind_exit_activation(PendingOrder& order);
     void bind_retained_exit_activations();
     void unbind_exit_activations();
