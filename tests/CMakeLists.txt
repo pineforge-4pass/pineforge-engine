@@ -2,6 +2,9 @@ set(TEST_SOURCES
     test_unbounded_margin_admission
     test_resolved_execution
     test_native_scoped_close
+    test_native_selected_settlement
+    test_native_settlement_projection
+    test_native_settlement_callers
     test_native_reversal_contract
     test_order_action
     test_native_order_core
@@ -338,6 +341,24 @@ add_test(
             ${_pf_script_cpp_abi_flags}
 )
 set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240)
+
+# The actual historical archive is prepared explicitly before CTest so the
+# compatibility check itself stays offline and cannot silently use a stub.
+set(PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT
+    "${PROJECT_BINARY_DIR}/settlement-abi-base/receipt.json"
+    CACHE FILEPATH "Prepared actual R2 ABI provider receipt")
+add_test(NAME test_settlement_cpp_abi
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
+        --compiler ${CMAKE_CXX_COMPILER}
+        --library $<TARGET_FILE:pineforge>
+        --include ${PROJECT_SOURCE_DIR}/include
+        --generated-include ${PROJECT_BINARY_DIR}/include
+        --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
+        --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
+        ${_pf_script_cpp_abi_flags})
+set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)
+add_test(NAME test_settlement_cpp_abi_tooling
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
 
 add_test(
     NAME test_derive_corpus_feeds

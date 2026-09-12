@@ -70,13 +70,40 @@ PnL, minus remaining paid entry costs of every fee type. At an unchanged mark,
 a native execution decreases this value by its current charge, subject to
 ordinary floating-point rounding. A rebate increases it.
 
+## Selected exposure and account projection
+
+`execution::SelectedOpeningSet` selects one or more opening identities in the
+current position cycle. The separately named selected settlement methods accept
+it by const reference; it is not another `CloseScope` alternative or a queued
+request field. All fragments of each selected opening participate in roster FIFO
+order. Empty sets, zero or duplicate identities, missing openings and stale cycles
+are refused before effects. Source adapters construct distinct identities from
+`from_entry` or other source predicates; the native owner does not interpret them.
+
+`project_native_settlement_v1`, `project_native_settlement_scoped_v1` and
+`project_native_settlement_selected_v1` quote the resulting physical and account
+facts without changing the engine. The projection includes realized balance,
+remaining paid entry costs, marked equity, signed exposure and resulting cycle.
+It includes unselected surviving lots and any prospective opening's paid cost.
+A valid no-effect action quotes the unchanged book at the supplied mark; invalid
+input supplies no usable quote. An unavailable fresh cycle throws without
+consuming it. Same-side additions retain the existing cycle.
+
+Projection and settlement share allocation and fee logic. Realized balance adds
+close-row PnL in commit order, and marked equity applies each resulting lot's mark
+and paid cost in roster order. A projection is data, not commit authority: later
+settlement revalidates against the current book. Source percent sizing can consume
+a close-only projection's equity before resolving one reversal transaction.
+
 ## Integration and limits
 
-The kernel currently serves full market exits, the close-opposite-then-enter
-reversal family, and selected frozen-transaction and same-side materialization
-paths. Existing source scheduling and dust decisions remain at their call
-sites. The reversal helper consumes one already-resolved `Fill` and one current
-fee; it does not slip again. `compat::pine` suspension selection stays at the
+The kernel serves native execution and the source adapters' full, partial,
+bound and percent closes, scratch fills, reversals, RAW orders and opening/add
+paths. Callers resolve source scheduling, quantity grids, price and slot policy;
+the owner applies the physical effects and accounting once. A separately matched
+scratch fill remains its own execution. Reversal closing and opening share one
+already-resolved price and one current ticket.
+`compat::pine` suspension selection stays at the
 replacement caller. `settle_resolved_execution` remains the original
 two-argument symbol and forwards empty effects to
 `settle_execution_with_lifecycle`, the protected seam that consumes transient
@@ -94,9 +121,9 @@ reallocate `pending_orders_`. Native settlement does not recognize source
 cases, rewrite supplied window/barrier facts, or install a callback/plan.
 Migrated frozen transactions and the
 final short-seed crossing settle their close/open effects in one native call.
-Other legacy close loops are not yet
-grouped into one parent execution; their per-row current ticket behavior is
-not a claim about the native contract.
+Production fill paths no longer use the old per-row close loops as a separate
+accounting owner. Historical private helpers remain for source compatibility and
+tests; they are not an alternate production execution path.
 
 The shared close builder now consumes historical entry costs. This changes
 the former reconstruction that converted both commission legs at exit-time
@@ -114,6 +141,7 @@ lifecycle exceptions abort the owning run; callers must discard that failed
 run rather than retry a partially committed execution in place. Strong
 rollback on allocation failure is not promised.
 
-The work does not remove `ShortSeedCollisionRole` or complete migration to a
-generic queued order machine. Existing executable state remains represented
-in ABI projections and fingerprints.
+The work retains `ShortSeedCollisionRole` while its source-policy consumers
+remain. Admission, source day/quota counters, script-visible observations and
+complete Pine lowering remain separate refactor work. Existing executable state
+remains represented in ABI projections and fingerprints.

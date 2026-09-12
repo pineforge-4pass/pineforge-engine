@@ -4,7 +4,7 @@
 
 # PineForge
 
-**The open-source PineScript v6 backtest engine that reproduces TradingView trade-for-trade.**
+**An open-source C++17 engine for backtesting and forward execution, with PineScript support through code generation.**
 
 [![CI](https://img.shields.io/github/actions/workflow/status/pineforge-4pass/pineforge-engine/ci.yml?branch=main&label=ci&logo=github)](https://github.com/pineforge-4pass/pineforge-engine/actions)
 [![Parity](https://img.shields.io/badge/TradingView%20parity-4%2C190%20%2F%204%2C190%20probes-brightgreen)](#validation-scoreboard)
@@ -76,10 +76,14 @@ Prefer zero install? The hosted server at **[mcp.pineforge.dev/mcp](https://mcp.
 git clone https://github.com/pineforge-4pass/pineforge-engine.git && cd pineforge-engine
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
+  --current-build build --output build/settlement-abi-base
 ctest --test-dir build --output-on-failure     # all enabled unit, replay and ABI checks
 bash tutorial/run.sh                            # MACD on BTC/USDT, end to end
 python3 tutorial/run_stream.py                  # OHLCV warm-up → realtime trades
 ```
+
+The ABI check links callers against both the current library and a separately built, pinned historical library. Preparation uses local Git history and the configured compiler; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for shallow clones and repeated checks. CTest itself stays offline.
 
 Prerequisites: CMake ≥ 3.16, a C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
 

@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -43,6 +44,10 @@ jobs:
             -DPINEFORGE_BUILD_LIVE_RUNNER=ON -DPINEFORGE_BUILD_TUTORIAL=OFF \
             -DCURL_DIR="$PWD/build-native-deps/curl-install/lib/cmake/CURL"
           cmake --build build-live -j 4
+      - name: Prepare real R2 settlement ABI provider
+        run: |
+          python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
+            --current-build build-live --output build-live/settlement-abi-base --jobs 4
       - name: Test native engine, parser, journal and transports
         run: |
           ctest --test-dir build-live --output-on-failure -j 4

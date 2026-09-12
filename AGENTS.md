@@ -13,6 +13,8 @@ cmake -B build -S . \
     -DPINEFORGE_BUILD_TESTS=ON \
     -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON
 cmake --build build -j$(nproc 2>/dev/null || echo 4)
+python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
+  --current-build build --output build/settlement-abi-base
 ctest --test-dir build --output-on-failure
 
 # 2. Run full validation corpus sweep (against TV exported trades)

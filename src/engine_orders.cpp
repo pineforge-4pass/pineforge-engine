@@ -11,12 +11,37 @@
 #include <cmath>
 #include <optional>
 #include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace pineforge {
 using namespace internal;
+
+namespace {
+// Source predicates are resolved here, never retained by native settlement.
+// Every fragment of an opening must agree with the selected source predicate.
+template<class Predicate>
+std::vector<uint64_t> source_opening_membership(
+        const std::vector<PyramidEntry>& lots, Predicate selected) {
+    std::unordered_map<uint64_t, bool> membership;
+    std::vector<uint64_t> incarnations;
+    for (const auto& lot : lots) {
+        const bool matches = selected(lot);
+        if (lot.entry_incarnation == 0) {
+            if (matches)
+                throw std::runtime_error("invalid resolved bound-close settlement: unowned opening");
+            continue;
+        }
+        const auto [it, inserted] = membership.emplace(lot.entry_incarnation, matches);
+        if (!inserted && it->second != matches)
+            throw std::runtime_error("invalid resolved bound-close settlement: heterogeneous opening");
+        if (inserted && matches) incarnations.push_back(lot.entry_incarnation);
+    }
+    return incarnations;
+}
+} // namespace
 
 
 // Risk management + per-trade extreme tracking moved to engine_risk.cpp.
@@ -25,6 +50,39 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
     if (std::isnan(qty_value)) {
         return calc_qty(fill_price);
     }
+    const double equity = qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        ? percent_commission_live_equity(round_to_mintick(current_bar_.close)) : 0.0;
+    return calc_qty_for_type_from_equity(fill_price, qty_value, qty_type, equity);
+}
+
+double BacktestEngine::calc_default_qty_from_equity(double fill_price, double equity) const {
+    const double basis = round_to_mintick(fill_price);
+    switch (default_qty_type_) {
+        case QtyType::FIXED:
+            return apply_qty_step(default_qty_value_);
+        case QtyType::PERCENT_OF_EQUITY: {
+            // Source money precision and commission reservation stay exactly
+            // here for both live-equity and post-close projection callers.
+            if (tv_money_lot_sizing()) equity = tv_money_round(equity);
+            if (!std::isfinite(equity)) return 0.0;
+            const double cash = reserve_percent_commission(
+                equity * (default_qty_value_ / 100.0)) / active_account_currency_fx();
+            if (!(std::isfinite(basis) && basis > 0.0)) return 0.0;
+            if (tv_money_lot_sizing())
+                return tv_money_floor_lot(cash / (basis * syminfo_.pointvalue), qty_step_);
+            return apply_qty_step(cash / (basis * syminfo_.pointvalue));
+        }
+        case QtyType::CASH:
+            return (std::isfinite(basis) && basis > 0.0)
+                ? apply_qty_step((default_qty_value_ / active_account_currency_fx())
+                                  / (basis * syminfo_.pointvalue)) : 0.0;
+    }
+    return apply_qty_step(default_qty_value_);
+}
+
+double BacktestEngine::calc_qty_for_type_from_equity(
+        double fill_price, double qty_value, int qty_type, double equity) const {
+    if (std::isnan(qty_value)) return calc_default_qty_from_equity(fill_price, equity);
     // qty_step_ lot-size flooring applies uniformly regardless of how the
     // caller's qty was derived — including this FIXED branch, which is the
     // common ``strategy.entry(qty=someComputedExpr)`` shape (e.g. a DCA base/
@@ -45,8 +103,6 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
     // tape pinned it (calc_qty carries the F / AAPL census).
     const double basis = round_to_mintick(fill_price);
     if (qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-        const double equity = percent_commission_live_equity(
-            round_to_mintick(current_bar_.close));
         if (!std::isfinite(equity)) return 0.0;
         double cash = reserve_percent_commission(equity * (qty_value / 100.0));
         // Reject (qty 0) on a non-finite / non-positive fill price — a degenerate
@@ -67,6 +123,24 @@ double BacktestEngine::calc_qty_for_type(double fill_price, double qty_value, in
                              / (basis * syminfo_.pointvalue)) : 0.0;
     }
     return apply_qty_step(qty_value);
+}
+
+double BacktestEngine::source_reversal_qty(
+        double fill_price, double explicit_qty, int explicit_qty_type,
+        bool prequantized) const {
+    if (prequantized) return explicit_qty;
+    const bool needs_equity = std::isnan(explicit_qty)
+        ? default_qty_type_ == QtyType::PERCENT_OF_EQUITY
+        : explicit_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+    if (!needs_equity)
+        return calc_qty_for_type_from_equity(fill_price, explicit_qty, explicit_qty_type, 0.0);
+    const auto projection = project_native_settlement_v1(
+        execution::Flatten{}, execution::Fill{fill_price, {}, {}, 0});
+    if (projection.status != execution::Status::Applied
+        && projection.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved reversal sizing projection");
+    return calc_qty_for_type_from_equity(
+        fill_price, explicit_qty, explicit_qty_type, projection.realized_balance);
 }
 
 
@@ -102,8 +176,7 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
         || (risk_direction_ == RiskDirection::SHORT_ONLY && is_long);
 
     if (is_opposite_entry && direction_blocked) {
-        double exit_fill = apply_slippage(fill_price, position_side_ == PositionSide::SHORT);
-        execute_market_exit(exit_fill);
+        execute_market_exit(fill_price);
         if (!paired_flat_market_transaction) purge_exit_orders();
         return;
     }
@@ -128,9 +201,10 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     }
 
     if (position_side_ == requested) {
-        add_to_pyramid_market(id, is_long, fill_price, explicit_qty, explicit_qty_type,
-                              created_position_side, is_priced_entry,
-                              entry_incarnation);
+        add_to_pyramid_market_with_qty_provenance(
+            id, is_long, fill_price, explicit_qty, explicit_qty_type,
+            created_position_side, is_priced_entry, explicit_qty_prequantized,
+            entry_incarnation);
         return;
     }
 
@@ -147,9 +221,9 @@ void BacktestEngine::execute_market_entry(const std::string& id, bool is_long, d
     }
 
     if (later_same_tick_entry) {
-        sequential_same_tick_reversal_fill(id, is_long, fill_price, explicit_qty,
-                                           explicit_qty_type,
-                                           entry_incarnation);
+        sequential_same_tick_reversal_fill_with_qty_provenance(
+            id, is_long, fill_price, explicit_qty, explicit_qty_type,
+            explicit_qty_prequantized, entry_incarnation);
         return;
     }
 
@@ -294,44 +368,33 @@ void BacktestEngine::record_range_end_close_trades() {
 // single from_entry id. See engine.hpp for the contract. Mirrors TradingView's
 // per-pyramid trade reporting: one Trade per drained slice. Returns total qty
 // drained so callers can assert / log if needed.
+// Retained private ABI helper. Production close paths below use explicit
+// source actions; this compatibility entry point also consumes the sole book.
 double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limit,
                                   double fill_price, bool was_long) {
-    double qty_closed = 0.0;
-    std::vector<PyramidEntry> remaining;
-    for (auto& pe : pyramid_entries_) {
-        bool eligible = (from_entry == nullptr) || (pe.entry_id == *from_entry);
-        if (!eligible || qty_closed >= qty_limit - kQtyEpsilon) {
-            remaining.push_back(pe);
-            continue;
-        }
-        double close_qty = std::min(pe.qty, qty_limit - qty_closed);
-        double keep_qty = pe.qty - close_qty;
-        qty_closed += close_qty;
-
-        emit_close_trade(pe, close_qty, fill_price, was_long);
-
-        if (keep_qty > kQtyEpsilon) {
-            // Scale the accumulated USD excursion to the kept slice so the
-            // remaining entry's extremes stay consistent with its reduced
-            // qty (update_per_trade_extremes accumulates (diff) * pe.qty).
-            double keep_scale = keep_qty / pe.qty;
-            PyramidEntry kept = pe;
-            kept.qty = keep_qty;
-            kept.max_runup *= keep_scale;
-            kept.max_drawdown *= keep_scale;
-            // Realizing part of the lot consumes that part of its paid entry
-            // cost. A later rate/type/FX change cannot rewrite the payment.
-            kept.entry_commission_account = open_entry_commission(pe)
-                - allocated_entry_commission(pe, close_qty);
-            remaining.push_back(std::move(kept));
-        }
+    (void)was_long; // physical orientation belongs to the authoritative book
+    const int pre_count = position_entry_count_;
+    execution::Result result;
+    if (from_entry) {
+        const auto incarnations = source_opening_membership(pyramid_entries_,
+            [&](const PyramidEntry& lot) { return lot.entry_id == *from_entry; });
+        if (incarnations.empty()) return 0.0;
+        const execution::SelectedOpeningSet selection{position_cycle_seq_, incarnations};
+        result = settle_execution_selected_with_lifecycle(
+            order_action::Reduce{qty_limit}, execution::Fill{fill_price, {}, {}, 0}, {}, selection);
+    } else {
+        result = settle_resolved_execution(
+            order_action::Reduce{qty_limit}, execution::Fill{fill_price, {}, {}, 0});
     }
-
-    pyramid_entries_ = std::move(remaining);
-    position_qty_ -= qty_closed;
-    return qty_closed;
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved compatibility drain settlement");
+    // Old callers chose the later source slot policy themselves. Preserve
+    // that interface without retaining its former physical FIFO/fee loop.
+    if (result.status == execution::Status::Applied && position_side_ != PositionSide::FLAT)
+        position_entry_count_ = pre_count;
+    return result.closed_units;
 }
-
 
 // Internal helper: execute a partial exit (reduce position by qty, create trade records)
 // TradingView creates individual trade records for each partial exit.
@@ -347,11 +410,16 @@ void BacktestEngine::execute_partial_exit_qty(
 
     bool is_buy = (position_side_ == PositionSide::SHORT);
     fill_price = apply_fill_slippage(fill_price, is_buy);
-    bool was_long = (position_side_ == PositionSide::LONG);
-
-    // Close FIFO across all pyramid entries, creating trade records.
-    fifo_drain(/*from_entry=*/nullptr, qty_to_close, fill_price, was_long);
-    settle_position_after_partial_exit(cause);
+    const int pre_count = position_entry_count_;
+    execution::Action action = order_action::Reduce{qty_to_close};
+    if (std::abs(held) - qty_to_close <= kQtyEpsilon) action = execution::Flatten{};
+    const auto result = settle_resolved_execution(
+        action, execution::Fill{fill_price, {}, {}, 0});
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved partial-close settlement");
+    if (result.status == execution::Status::Applied)
+        restore_source_partial_exit_slots(pre_count, cause);
 }
 
 
@@ -360,6 +428,8 @@ void BacktestEngine::execute_partial_exit_qty(
 // seam. It neither consults a pyramiding cap nor invents a source-policy bit.
 // The caller supplies the lot's immutable label, identity and fill metadata;
 // accounting and stream observations still use the engine's sole lot ledger.
+// Test-only compatibility construction seam; no production caller. Live
+// source entries use settle_source_opening and the shared settlement owner.
 void BacktestEngine::append_same_side_fill(PyramidEntry lot) {
     snapshot_entry_commission(lot);
     const double total_qty = position_qty_ + lot.qty;
@@ -408,22 +478,19 @@ void BacktestEngine::execute_partial_exit_by_entry(double fill_price,
                                                    PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
-    bool is_buy = (position_side_ == PositionSide::SHORT);
-    fill_price = apply_fill_slippage(fill_price, is_buy);
-    bool was_long = (position_side_ == PositionSide::LONG);
-
-    std::vector<PyramidEntry> remaining;
-    for (auto& pe : pyramid_entries_) {
-        if (pe.entry_id == from_entry) {
-            emit_close_trade(pe, pe.qty, fill_price, was_long);
-            position_qty_ -= pe.qty;
-        } else {
-            remaining.push_back(pe);
-        }
-    }
-
-    pyramid_entries_ = std::move(remaining);
-    settle_position_after_partial_exit(cause);
+    const auto incarnations = source_opening_membership(pyramid_entries_,
+        [&](const PyramidEntry& lot) { return lot.entry_id == from_entry; });
+    if (incarnations.empty()) return;
+    const execution::SelectedOpeningSet selection{position_cycle_seq_, incarnations};
+    fill_price = apply_fill_slippage(fill_price, position_side_ == PositionSide::SHORT);
+    const int pre_count = position_entry_count_;
+    const auto result = settle_execution_selected_with_lifecycle(
+        execution::Flatten{}, execution::Fill{fill_price, {}, {}, 0}, {}, selection);
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved bound-close settlement");
+    if (result.status == execution::Status::Applied)
+        restore_source_partial_exit_slots(pre_count, cause);
 }
 
 
@@ -437,12 +504,28 @@ void BacktestEngine::execute_partial_exit_by_entry_qty(
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
     if (!std::isfinite(qty_to_close) || qty_to_close <= kQtyEpsilon) return;
 
-    bool is_buy = (position_side_ == PositionSide::SHORT);
-    fill_price = apply_fill_slippage(fill_price, is_buy);
-    bool was_long = (position_side_ == PositionSide::LONG);
-
-    fifo_drain(&from_entry, qty_to_close, fill_price, was_long);
-    settle_position_after_partial_exit(cause);
+    const auto incarnations = source_opening_membership(pyramid_entries_,
+        [&](const PyramidEntry& lot) { return lot.entry_id == from_entry; });
+    if (incarnations.empty()) return;
+    double selected_qty = 0.0;
+    bool has_unselected_lots = false;
+    for (const auto& lot : pyramid_entries_) {
+        if (lot.entry_id == from_entry) selected_qty += lot.qty;
+        else has_unselected_lots = true;
+    }
+    const execution::SelectedOpeningSet selection{position_cycle_seq_, incarnations};
+    execution::Action action = order_action::Reduce{qty_to_close};
+    if (!has_unselected_lots && selected_qty - qty_to_close <= kQtyEpsilon)
+        action = execution::Flatten{};
+    fill_price = apply_fill_slippage(fill_price, position_side_ == PositionSide::SHORT);
+    const int pre_count = position_entry_count_;
+    const auto result = settle_execution_selected_with_lifecycle(
+        action, execution::Fill{fill_price, {}, {}, 0}, {}, selection);
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved bound-close settlement");
+    if (result.status == execution::Status::Applied)
+        restore_source_partial_exit_slots(pre_count, cause);
 }
 
 
@@ -492,28 +575,26 @@ double BacktestEngine::cover_samebar_market_adds_on_exit(const PendingOrder& ord
         || !std::isnan(order.legs.prices().trail_price);
     if (!priced_bracket) return 0.0;
 
-    bool is_buy = (position_side_ == PositionSide::SHORT);
-    double slipped = apply_fill_slippage(fill_price, is_buy);
-    bool was_long = (position_side_ == PositionSide::LONG);
-
-    std::vector<PyramidEntry> remaining;
-    remaining.reserve(pyramid_entries_.size());
-    double closed = 0.0;
-    for (auto& pe : pyramid_entries_) {
-        if (pe.market_pyramid_add
-            && pe.entry_bar_index == bar_index_
-            && pe.entry_id == order.from_entry) {
-            emit_close_trade(pe, pe.qty, slipped, was_long);
-            closed += pe.qty;
-        } else {
-            remaining.push_back(pe);
-        }
-    }
-    if (closed <= kQtyEpsilon) return 0.0;   // nothing covered
-    pyramid_entries_ = std::move(remaining);
-    position_qty_ -= closed;
-    settle_position_after_partial_exit(cause);
-    return closed;
+    const auto incarnations = source_opening_membership(pyramid_entries_,
+        [&](const PyramidEntry& lot) {
+            return lot.market_pyramid_add && lot.entry_bar_index == bar_index_
+                && lot.entry_id == order.from_entry;
+        });
+    if (incarnations.empty()) return 0.0;
+    const execution::SelectedOpeningSet selection{position_cycle_seq_, incarnations};
+    const double slipped = apply_fill_slippage(fill_price, position_side_ == PositionSide::SHORT);
+    // This is a second Fill after primary restoration and R20, so capture its
+    // own current source slot count rather than reusing the primary snapshot.
+    const int pre_count = position_entry_count_;
+    const auto result = settle_execution_selected_with_lifecycle(
+        execution::Flatten{}, execution::Fill{slipped, order.id, order.comment, order.incarnation},
+        {}, selection);
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved bound-close settlement");
+    if (result.status == execution::Status::Applied)
+        restore_source_partial_exit_slots(pre_count, cause);
+    return result.closed_units;
 }
 
 
@@ -851,6 +932,15 @@ void BacktestEngine::reset_position_state_to_flat() {
     consumed_partial_exit_ids_.clear();
 }
 
+void BacktestEngine::restore_source_partial_exit_slots(
+        int pre_count, PositionReductionCause cause) {
+    // Settlement owns quantities, average price, cycles, and physical dust.
+    // This adapter step restores only the source's occupied-slot policy.
+    if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
+    if (cause == PositionReductionCause::BRACKET_EXIT) {
+        position_entry_count_ = std::max(pre_count, static_cast<int>(pyramid_entries_.size()));
+    }
+}
 
 // After a partial exit potentially empties pyramid_entries_, either reset
 // position state to FLAT (no entries left or qty effectively zero) or
@@ -959,10 +1049,32 @@ void BacktestEngine::unbind_exit_activations() {
 void BacktestEngine::open_fresh_position(PositionSide requested, double fill_price,
                                          double qty, const std::string& id,
                                          uint64_t entry_incarnation) {
-    PyramidEntry lot{fill_price, current_bar_.timestamp, qty, id, bar_index_};
-    lot.entry_incarnation = entry_incarnation;
-    snapshot_entry_commission(lot);
-    open_quoted_position(requested, std::move(lot));
+    if (position_side_ != PositionSide::FLAT)
+        throw std::runtime_error("invalid resolved fresh opening: position not flat");
+    settle_source_opening(requested, fill_price, qty, id, {}, entry_incarnation);
+}
+
+execution::Result BacktestEngine::settle_source_opening(
+        PositionSide requested, double fill_price, double qty,
+        const std::string& id, const std::string& comment, uint64_t incarnation) {
+    if ((requested != PositionSide::LONG && requested != PositionSide::SHORT)
+        || (position_side_ != PositionSide::FLAT && position_side_ != requested)
+        || !std::isfinite(qty) || qty < 0.0)
+        throw std::runtime_error("invalid resolved source opening");
+    const std::size_t before_lots = pyramid_entries_.size();
+    const auto result = settle_resolved_execution(
+        order_action::Transact{requested == PositionSide::LONG ? qty : -qty},
+        execution::Fill{fill_price, id, comment, incarnation});
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved source opening settlement");
+    if (result.status == execution::Status::Applied
+        && (result.closed_units != 0.0 || result.opened_units == 0.0
+            || pyramid_entries_.size() != before_lots + 1
+            || pyramid_entries_.back().entry_incarnation != incarnation
+            || pyramid_entries_.back().qty != std::abs(result.opened_units)))
+        throw std::runtime_error("invalid resolved source opening lot provenance");
+    return result;
 }
 
 void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry lot) {
@@ -1139,6 +1251,16 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
                                            PositionSide created_position_side,
                                            bool is_priced_entry,
                                            uint64_t entry_incarnation) {
+    add_to_pyramid_market_with_qty_provenance(
+        id, is_long, fill_price, explicit_qty, explicit_qty_type,
+        created_position_side, is_priced_entry, false, entry_incarnation);
+}
+
+void BacktestEngine::add_to_pyramid_market_with_qty_provenance(
+        const std::string& id, bool is_long, double fill_price, double explicit_qty,
+        int explicit_qty_type, PositionSide created_position_side,
+        bool is_priced_entry, bool explicit_qty_prequantized,
+        uint64_t entry_incarnation) {
     PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
     bool flat_armed_priced =
         is_priced_entry && created_position_side == PositionSide::FLAT;
@@ -1150,26 +1272,19 @@ void BacktestEngine::add_to_pyramid_market(const std::string& id, bool is_long,
         && position_entry_count_ >= pyramiding_) {
         return;
     }
-    double new_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
+    const double new_qty = explicit_qty_prequantized
+        ? explicit_qty : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
     // Zero-lot add safety net. The fill kernel (apply_filled_order_to_state's
     // zero-lot decline) consumes such an order before it reaches here; should
     // any path bypass that gate, never materialize a qty-0 pyramid lot nor
     // spend a pyramiding slot on it — TV does not place the order at all.
     if (!(new_qty > kQtyEpsilon)) return;
-    double total_qty = position_qty_ + new_qty;
-    position_entry_price_ = (position_entry_price_ * position_qty_ + fill_price * new_qty) / total_qty;
-    position_qty_ = total_qty;
-    position_entry_count_++;
-    trail_best_price_ = fill_price;
-    pyramid_entries_.push_back({fill_price, current_bar_.timestamp, new_qty, id, bar_index_});
-    pyramid_entries_.back().entry_incarnation = entry_incarnation;
-    snapshot_entry_commission(pyramid_entries_.back());
-    if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
+    const auto result = settle_source_opening(
+        requested, fill_price, new_qty, id, {}, entry_incarnation);
     // KI-62: only a same-direction MARKET add is scratched by a same-bar
     // from_entry bracket exit; a priced pyramid add is not this collision.
-    pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
-    id_unclosed_qty_[id] += new_qty;
-    cycle_filled_entry_ids_.insert(id);
+    if (result.status == execution::Status::Applied && result.opened_units != 0.0)
+        pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
 }
 
 
@@ -1268,56 +1383,28 @@ void BacktestEngine::flip_market_position_to(const std::string& id, bool is_long
                                              bool explicit_qty_prequantized,
                                              bool close_only,
                                              uint64_t entry_incarnation) {
-    // For the close we need exit slippage based on closing direction.
-    // Closing a long = sell (price - slip); closing a short = buy (price + slip).
-    // fill_price already has entry slippage applied; un-slip it before
-    // re-applying with the exit direction.
-    double raw_price = fill_price;
-    if (slippage_ != 0 && !current_fill_is_limit_) {
-        // LIMIT-triggered entry fills were never slipped (limit-or-better
-        // path), so there is no entry slip to back out for the close leg.
-        double slip = slippage_ * syminfo_mintick_;
-        raw_price = is_long ? (fill_price - slip) : (fill_price + slip);
+    // The incoming direction is also the closing direction. The caller has
+    // already resolved this one price; no un-slip/re-slip or second ticket.
+    execution::Action action = execution::Flatten{};
+    if (!close_only) {
+        double held = 0.0;
+        for (const auto& lot : pyramid_entries_) held += lot.qty;
+        const double incoming = source_reversal_qty(
+            fill_price, explicit_qty, explicit_qty_type, explicit_qty_prequantized);
+        if (!std::isfinite(incoming) || incoming < 0.0)
+            throw std::runtime_error("invalid resolved flip quantity");
+        if (incoming > 0.0) {
+            const double total = held + incoming;
+            if (!std::isfinite(total) || total == held || (held > 0.0 && total == incoming))
+                throw std::runtime_error("unrepresentable resolved flip quantity");
+            action = order_action::Transact{is_long ? total : -total};
+        }
     }
-    // Flag-aware close leg: a limit-triggered flip's close leg follows the
-    // entry leg's limit semantics (unslipped, limit-or-better) for internal
-    // consistency with the sibling close_opposite_then_enter path — both
-    // legs land at the identical unslipped snapped price. No direct TV
-    // evidence yet (needs a limit-flip slippage>0 export) — corpus provably
-    // indifferent at slippage=0.
-    double exit_fill = apply_fill_slippage(raw_price, position_side_ == PositionSide::SHORT);
-    bool was_long = (position_side_ == PositionSide::LONG);
-
-    // Emit one Trade per pyramid entry (matches TradingView reporting)
-    for (auto& pe : pyramid_entries_) {
-        emit_close_trade(pe, pe.qty, exit_fill, was_long);
-    }
-
-    // The old lots are fully realized above. Clear their live position/PnL
-    // and entry-fee snapshots before sizing the incoming leg; otherwise a
-    // percent-typed reversal adds stale open PnL and debits the already-
-    // realized entry commission a second time.
-    reset_position_state_to_flat();
-
-    if (close_only) {
-        // Priced-entry reduce-only cases: either this order was armed during a
-        // prior cycle and flips a later opposite position, or its same-cycle
-        // frozen transaction exactly equals the grown live opposite position.
-        // In both cases close the whole position and stay flat; do NOT open.
-        // See apply_entry_order_fill's close_only_opposite predicates.
-        return;
-    }
-
-    // Default-sized MARKET quantities are frozen and exchange-quantized at
-    // signal time. Every sibling dispatch path preserves that provenance;
-    // ordinary flips must not feed the frozen contracts through qty_step a
-    // second time (binary64 can turn 1.3410 into 1.3409 on the second floor).
-    // Explicit/FIXED quantities keep their normal single fill-side floor.
-    double new_qty = explicit_qty_prequantized
-        ? explicit_qty
-        : calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
-    PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-    open_fresh_position(requested, fill_price, new_qty, id, entry_incarnation);
+    const auto result = settle_resolved_execution(
+        action, execution::Fill{fill_price, id, {}, entry_incarnation});
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved flip settlement");
 }
 
 
@@ -1369,39 +1456,29 @@ void BacktestEngine::sequential_same_tick_reversal_fill(const std::string& id,
                                                         double explicit_qty,
                                                         int explicit_qty_type,
                                                         uint64_t entry_incarnation) {
-    // fill_price arrives entry-slipped (execute_market_entry applied entry
-    // slippage). The close leg needs EXIT slippage for the closing
-    // direction — un-slip, then re-apply, mirroring flip_market_position_to.
-    double raw_price = fill_price;
-    if (slippage_ != 0 && !current_fill_is_limit_) {
-        double slip = slippage_ * syminfo_mintick_;
-        raw_price = is_long ? (fill_price - slip) : (fill_price + slip);
-    }
-    double exit_fill = apply_fill_slippage(raw_price, position_side_ == PositionSide::SHORT);
-    bool was_long = (position_side_ == PositionSide::LONG);
-    double old_qty = position_qty_;
+    sequential_same_tick_reversal_fill_with_qty_provenance(
+        id, is_long, fill_price, explicit_qty, explicit_qty_type, false, entry_incarnation);
+}
 
-    // Close the ENTIRE opposite position — one row per pyramid lot, all
-    // tagged with THIS order's id by apply_filled_order_to_state (matches
-    // TV's single-row exit attribution to the first closing signal).
-    for (auto& pe : pyramid_entries_) {
-        emit_close_trade(pe, pe.qty, exit_fill, was_long);
-    }
-    reset_position_state_to_flat();
-
-    // Plain (non-augmented) sizing, computed after the close so
-    // percent-of-equity sees the realized PnL — the same equity basis
-    // flip_market_position_to uses. Only the portion that crosses zero
-    // opens a position; if the plain qty doesn't reach past the old
-    // position, the LAST same-tick entry (filling next from flat) owns
-    // the new position instead.
-    double tx_qty = calc_qty_for_type(fill_price, explicit_qty, explicit_qty_type);
-    double remainder = tx_qty - old_qty;
-    if (remainder > kQtyEpsilon) {
-        PositionSide requested = is_long ? PositionSide::LONG : PositionSide::SHORT;
-        open_fresh_position(
-            requested, fill_price, remainder, id, entry_incarnation);
-    }
+void BacktestEngine::sequential_same_tick_reversal_fill_with_qty_provenance(
+        const std::string& id, bool is_long, double fill_price, double explicit_qty,
+        int explicit_qty_type, bool explicit_qty_prequantized, uint64_t entry_incarnation) {
+    double held = 0.0;
+    for (const auto& lot : pyramid_entries_) held += lot.qty;
+    const double transaction = source_reversal_qty(
+        fill_price, explicit_qty, explicit_qty_type, explicit_qty_prequantized);
+    if (!std::isfinite(transaction) || transaction < 0.0)
+        throw std::runtime_error("invalid resolved sequential quantity");
+    execution::Action action = execution::Flatten{};
+    if (transaction - held > kQtyEpsilon)
+        action = order_action::Transact{is_long ? transaction : -transaction};
+    // Class B closes the entire old book here; its later sibling remains a
+    // separate Fill. Empty lifecycle preserves the active pending iteration.
+    const auto result = settle_resolved_execution(
+        action, execution::Fill{fill_price, id, {}, entry_incarnation});
+    if (result.status != execution::Status::Applied
+        && result.status != execution::Status::NoEffect)
+        throw std::runtime_error("invalid resolved sequential settlement");
 }
 
 

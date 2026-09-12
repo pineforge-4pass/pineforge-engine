@@ -18,5 +18,8 @@ struct OpeningExposure {
 
 using CloseScope = std::variant<Book, OpeningExposure>;
 
+static_assert(std::variant_size_v<CloseScope> == 2,
+              "CloseScope is Book|OpeningExposure; do not add alternatives");
+
 } // inline namespace close_scope_v1
 } // namespace pineforge::execution

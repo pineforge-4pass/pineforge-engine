@@ -18,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Eigen3 (Linux)
         if: runner.os == 'Linux'
@@ -36,6 +38,11 @@ jobs:
 
       - name: Build
         run: cmake --build build -j 4
+
+      - name: Prepare real R2 settlement ABI provider
+        run: |
+          python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
+            --current-build build --output build/settlement-abi-base --jobs 4
 
       - name: Test
         run: ctest --test-dir build --output-on-failure
@@ -83,6 +90,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Eigen3
         run: |
@@ -94,6 +103,11 @@ jobs:
 
       - name: Build
         run: cmake --build build-asan -j 4
+
+      - name: Prepare real R2 settlement ABI provider
+        run: |
+          python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
+            --current-build build-asan --output build-asan/settlement-abi-base --jobs 4
 
       - name: Test under sanitizers
         env:
