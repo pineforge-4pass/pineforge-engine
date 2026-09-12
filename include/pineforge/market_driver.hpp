@@ -13,7 +13,7 @@ inline namespace native_driver_v3 {
 
 // Semantic versions hashed into native continuation identity.
 inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v3";
-inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v3";
+inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v4";
 inline constexpr const char* kNativeCalendarSemanticVersion = "native-calendar/v1";
 
 enum class NativePriceProvenance : std::uint8_t {

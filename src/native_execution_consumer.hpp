@@ -7,10 +7,11 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v12 {
+inline namespace engine_script_run_v13 {
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
@@ -53,6 +54,11 @@ public:
     native_order::ReplaceResult replace(BacktestEngine& engine,
                                         const native_order::RequestHandle& target,
                                         const native_order::Request& request);
+    native_order::SubmitResult submit_market(BacktestEngine& engine,
+                                             const native_order::Request& request);
+    native_order::ReplaceResult replace_market(BacktestEngine& engine,
+                                               const native_order::RequestHandle& target,
+                                               const native_order::Request& request);
     native_order::CancelResult cancel(BacktestEngine& engine,
                                       const native_order::RequestHandle& target);
     NativePhysicalPosition position(const BacktestEngine& engine) const;
@@ -128,17 +134,56 @@ private:
                                        const NativeCoordinate& base);
     int64_t calculation_time(const NativeCoordinate& base) const noexcept;
     void match_point(BacktestEngine& engine, const NativeDriverPoint& point);
+    void match_discrete(BacktestEngine& engine, const NativeDriverPoint& point);
+    void match_segment(BacktestEngine& engine, const NativeDriverPoint& dest, double from_price);
+    void match_path(BacktestEngine& engine, const NativeDriverPoint& point,
+                    bool continuous, double from_price, double to_price);
     void apply_excursion(BacktestEngine& engine, double price);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
     uint64_t take_ordinal(BacktestEngine& engine);
     void raise_floor(int64_t t);
-    double resolve_price(const native_order::Request& request, double raw) const;
-    bool admit_opening(const BacktestEngine& engine,
-                       const execution::SettlementInspection& inspect,
-                       native_order::MatchRejectReason* reason) const;
-    void terminal_no_effect(BacktestEngine& engine, std::size_t live_index);
-    void terminal_reject(BacktestEngine& engine, std::size_t live_index,
-                         native_order::MatchRejectReason reason);
+    native_order::DriverEligibilityClass classify_driver(
+            const NativeDriverPoint& point, bool continuous) const noexcept;
+    native_order::MatchCursor make_cursor(const NativeDriverPoint& point, double t) const noexcept;
+    native_order::PositionIdentity read_position(const BacktestEngine& engine) const;
+    native_order::OpeningObservation read_opening(
+            const BacktestEngine& engine, const native_order::RequestHandle& opening,
+            int64_t cycle) const;
+    native_order::TargetObservation read_target(
+            const BacktestEngine& engine, const native_order::LiveRequest* live) const;
+    native_order::CommandContext make_command_context(
+            const BacktestEngine& engine, const native_order::Request& request,
+            native_order::CommandSurface surface) const;
+    void refresh_target_scalars(const BacktestEngine& engine,
+                                native_order::TargetObservation& target) const noexcept;
+    bool admit_opening_inspect(const BacktestEngine& engine, double resolved_price,
+                               const execution::SettlementInspection& inspect,
+                               native_order::MatchRejectReason* reason) const;
+    void fail_preparation(BacktestEngine& engine, const native_order::PreparationError& error,
+                          NativeFailureOperation operation);
+    void catch_up_timeline() noexcept;
+    bool install_mutation(BacktestEngine& engine, native_order::PreparedMutation&& prepared,
+                          NativeFailureOperation operation, uint64_t ordinal);
+    bool install_execution(BacktestEngine& engine, native_order::PreparedExecution&& prepared,
+                           const native_order::CommittedExecutionFacts& facts,
+                           uint64_t ordinal);
+    native_order::SubmitResult submit_with_surface(
+            BacktestEngine& engine, const native_order::Request& request,
+            native_order::CommandSurface surface);
+    native_order::ReplaceResult replace_with_surface(
+            BacktestEngine& engine, const native_order::RequestHandle& target,
+            const native_order::Request& request, native_order::CommandSurface surface);
+    void drain_after_applied(BacktestEngine& engine, const native_order::EventId& applied,
+                             const native_order::RequestHandle& filler);
+    void drain_parent_terminal(BacktestEngine& engine, const native_order::EventId& cause,
+                               const native_order::RequestHandle& parent,
+                               NativeFailureOperation operation);
+    void drain_dependency_queue(
+            BacktestEngine& engine,
+            std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds,
+            NativeFailureOperation operation);
+    void observe_trails(BacktestEngine& engine, const native_order::MatchCursor& cursor,
+                        double price);
     void record_driver(const NativeDriverPoint& point);
     NativeCoordinate coordinate_from(const native_calendar::NativeInterval& interval,
                                      int index, int64_t effective,
@@ -202,5 +247,5 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
     return static_cast<NativeExecutionConsumer&>(consumer);
 }
 
-}  // inline namespace engine_script_run_v12
+}  // inline namespace engine_script_run_v13
 }  // namespace pineforge

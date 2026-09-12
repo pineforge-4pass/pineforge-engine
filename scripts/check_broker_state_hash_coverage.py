@@ -546,7 +546,7 @@ def _reservation_expansion_version_coverage(header: str, source: str) -> None:
 
 
 def _runtime_version_coverage(header: str, source: str, stream: str) -> None:
-    """The v11 layout and serialized-state contracts must advance together.
+    """The v13 layout and serialized-state contracts must advance together.
 
     Pin the actual hash entry points, rather than accepting a version string
     mentioned in a comment or an unrelated helper. Public C ABI versions have
@@ -554,21 +554,21 @@ def _runtime_version_coverage(header: str, source: str, stream: str) -> None:
     """
     header = _strip_cpp_comments(header)
     namespaces = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", header)
-    if namespaces != ["engine_script_run_v12", "engine_script_run_v12"]:
-        raise ValueError("PendingOrder and BacktestEngine layouts require internal namespace engine_script_run_v12")
+    if namespaces != ["engine_script_run_v13", "engine_script_run_v13"]:
+        raise ValueError("PendingOrder and BacktestEngine layouts require internal namespace engine_script_run_v13")
     broker = _one_braced_body(source,
         r"uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{", "broker hash")
-    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v12"\);', broker):
-        raise ValueError("broker hash must start with pineforge-broker-state/v12")
+    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v13"\);', broker):
+        raise ValueError("broker hash must start with pineforge-broker-state/v13")
     stream_body = _one_braced_body(_strip_cpp_comments(stream),
         r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{", "stream hash")
     compact = re.sub(r"\s+", "", stream_body)
-    fold = "integer(12);integer(broker_state_hash());"
+    fold = "integer(13);integer(broker_state_hash());"
     if compact.count(fold) != 1:
-        raise ValueError("stream hash requires version 9 followed by the broker hash")
+        raise ValueError("stream hash requires version 13 followed by the broker hash")
     prefix = compact[:compact.index(fold)]
     if prefix.count("{") != prefix.count("}") or (prefix and prefix[-1] not in ";}"):
-        raise ValueError("stream v11 version fold must be unconditional at function scope")
+        raise ValueError("stream v13 version fold must be unconditional at function scope")
 
 
 def main(root: Path = ROOT) -> int:

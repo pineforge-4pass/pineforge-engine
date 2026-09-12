@@ -6,6 +6,9 @@ set(TEST_SOURCES
     test_order_action
     test_native_order_core
     test_native_order_terminal
+    test_native_order_resting_core
+    test_native_resting_contract
+    test_native_auto_path
     test_native_market_vertical
     test_native_market_vertical_contract
     test_native_calendar_driver_contract

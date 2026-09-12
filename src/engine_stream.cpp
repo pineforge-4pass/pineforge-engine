@@ -678,7 +678,7 @@ uint64_t BacktestEngine::stream_state_hash() const {
         integer(static_cast<uint64_t>(bar.timestamp));
         real(bar.open); real(bar.high); real(bar.low); real(bar.close); real(bar.volume);
     };
-    integer(12); integer(broker_state_hash());
+    integer(13); integer(broker_state_hash());
     integer(static_cast<uint64_t>(stream_phase_));
     integer(static_cast<uint64_t>(stream_input_mode_));
     integer(static_cast<uint64_t>(stream_input_tf_ms_));

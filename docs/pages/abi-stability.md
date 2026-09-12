@@ -112,14 +112,20 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. Deriving placement and opposite-predecessor facts from original
-admission evidence changes the native layout and advances `PendingOrder` and
-`BacktestEngine` to `engine_script_run_v12`. Exact pre-change fd4c686/v10
-headers are authenticated before native, generated-style and standalone
-PendingOrder pairing checks. Current/old matching links must succeed and stale
-pairings must fail for the expected qualified symbols. Earlier v2-v9 controls
-remain; every translation unit must compile before any mismatch is accepted.
-No pairing executable runs.
+runtime. Resting native request values and expanded host event snapshots
+advance `PendingOrder`, `BacktestEngine`, `NativeStrategyHost`, and the private
+native consumer to `engine_script_run_v13`. Exact pre-change e7d023d/v12
+headers (and the e7d023d `native_order_v1` closure) are authenticated before
+native, generated-style, standalone PendingOrder, and return-only
+`native_events()` pairing checks. A v12 host that only calls `native_events()`
+cannot silently decode a later `CommandEvent` layout: the method lives on the
+v13 class even if `sizeof(NativeStrategyHost)` is unchanged. Allocation-free
+`NativeFailureContext` (`NativeInRunCause` / `NativeInRunRecipient` /
+`NativeInRunCursor`) is part of that same epoch13 host record; it does not
+open a C ABI or new engine epoch. Current/old
+matching links must succeed and stale pairings must fail for the expected
+qualified symbols. Earlier v2–v10 and v12 controls remain; every translation
+unit must compile before any mismatch is accepted. No pairing executable runs.
 
 New standalone lifecycle values and `Lifecycle` own the inline namespace
 `pineforge::exit_legs::lifecycle_v1`; new admission values, `Draft`, `Journal`
@@ -159,13 +165,17 @@ its creating strategy module. A fully self-contained old module can still use
 its own matching runtime; this check does not turn it into a v11 module.
 
 The integrated representation advances the broker fingerprint domain to
-`pineforge-broker-state/v11` and stream fingerprint version to 11. The original
-admission observation and prior-book direction are hashed as canonical facts;
-the three derived placement views add no redundant folds. Lifecycle definitions, generations, obligations and replay
+`pineforge-broker-state/v13` and stream fingerprint version to 13. Native
+consumer identity is `native-consumer/v4`; driver v3 shapes, `close_scope_v1`,
+and `native_run_spec_v1` stay. Stable `RunIdentity` / `RequestHandle` / `Birth`
+remain `native_order_v1`; new request, core, and event values own
+`native_order_v2`. The original admission observation and prior-book direction
+are hashed as canonical facts; the three derived placement views add no
+redundant folds. Lifecycle definitions, generations, obligations and replay
 receipts, plus causal journal state remain represented. Existing
 reservation, Pine instruction, activation, quantity, predecessor and birth facts
 remain represented. The Pine component schema remains 1; it is
-independent of the aggregate fingerprint version. Prior v2-v10 fingerprints are
+independent of the aggregate fingerprint version. Prior v2–v12 fingerprints are
 not comparable. Fingerprints are replay checks, not serialized checkpoints or
 complete hashes of private strategy state. The native runner already binds
 its strategy-library SHA; its ledger format and Python provenance fingerprints

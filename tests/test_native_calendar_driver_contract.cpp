@@ -322,15 +322,16 @@ std::string action_json(const Request& request) {
             out << "{\"type\":\"Transact\",";
             append_f64(out, "signedUnits", action.signed_units);
             out << "}";
-        } else if constexpr (std::is_same_v<T, Reduce>) {
+        } else if constexpr (std::is_same_v<T, native_order::Reduce>) {
+            const auto* units = std::get_if<native_order::ExplicitUnits>(&action.size);
             out << "{\"type\":\"Reduce\",";
-            append_f64(out, "units", action.units);
+            append_f64(out, "units", units ? units->units : 0.0);
             out << "}";
         } else {
             out << "{\"type\":\"Flatten\"}";
         }
         return out.str();
-    }, request.action);
+    }, request.intent);
 }
 
 const char* command_kind_name(const CommandEvent& event) {
@@ -346,8 +347,32 @@ const char* command_kind_name(const CommandEvent& event) {
         if constexpr (std::is_same_v<T, NoEffectEvent>) return "NoEffect";
         if constexpr (std::is_same_v<T, MatchRejectedEvent>) return "MatchRejected";
         if constexpr (std::is_same_v<T, ExecutionAppliedEvent>) return "ExecutionApplied";
+        if constexpr (std::is_same_v<T, native_order::CloseBoundEvent>) return "CloseBound";
+        if constexpr (std::is_same_v<T, native_order::ActivatedEvent>) return "Activated";
+        if constexpr (std::is_same_v<T, native_order::ReservationReducedEvent>) {
+            return "ReservationReduced";
+        }
+        if constexpr (std::is_same_v<T, native_order::DeferredGroupAdjustmentEvent>) {
+            return "DeferredGroupAdjustment";
+        }
+        if constexpr (std::is_same_v<T, native_order::QuantityBoundEvent>) return "QuantityBound";
+        if constexpr (std::is_same_v<T, native_order::ArmedEvent>) return "Armed";
         return "Unknown";
     }, event);
+}
+
+bool r1_command_event(const CommandEvent& event) {
+    const char* kind = command_kind_name(event);
+    return std::strcmp(kind, "Accepted") == 0
+        || std::strcmp(kind, "Rejected") == 0
+        || std::strcmp(kind, "Replaced") == 0
+        || std::strcmp(kind, "ReplaceRejected") == 0
+        || std::strcmp(kind, "Cancelled") == 0
+        || std::strcmp(kind, "NotWorking") == 0
+        || std::strcmp(kind, "InvalidHandle") == 0
+        || std::strcmp(kind, "NoEffect") == 0
+        || std::strcmp(kind, "MatchRejected") == 0
+        || std::strcmp(kind, "ExecutionApplied") == 0;
 }
 
 uint64_t command_ordinal(const CommandEvent& event) {
@@ -358,9 +383,14 @@ double request_quantity(const Request& request) {
     return std::visit([](const auto& action) -> double {
         using T = std::decay_t<decltype(action)>;
         if constexpr (std::is_same_v<T, Transact>) return action.signed_units;
-        if constexpr (std::is_same_v<T, Reduce>) return action.units;
+        if constexpr (std::is_same_v<T, native_order::Reduce>) {
+            if (const auto* units = std::get_if<native_order::ExplicitUnits>(&action.size)) {
+                return units->units;
+            }
+            return 0.0;
+        }
         return 0.0;
-    }, request.action);
+    }, request.intent);
 }
 
 NativeRunSpec spec(const char* input = "1", const char* script = "1") {
@@ -612,6 +642,7 @@ private:
         for (const auto& event : events) {
             if (event.command) {
                 const auto& command = *event.command;
+                if (!r1_command_event(command)) continue;
                 const char* kind = command_kind_name(command);
                 std::ostringstream out;
                 out << "{\"kind\":" << json_escape(kind)
@@ -636,10 +667,10 @@ private:
                     effect << "{\"kind\":\"ExecutionApplied\",\"ordinal\":"
                            << json_u64(applied->ordinal) << ",";
                     append_f64(effect, "price", applied->raw_price);
-                    effect << ",\"timestampMs\":" << json_i64(applied->effective_time_ms)
-                           << ",\"provenance\":" << json_u64(applied->provenance)
+                    effect << ",\"timestampMs\":" << json_i64(applied->effective_time_ms())
+                           << ",\"provenance\":" << json_u64(applied->provenance())
                            << ",";
-                    append_f64(effect, "quantity", request_quantity(applied->request));
+                    append_f64(effect, "quantity", request_quantity(applied->request()));
                     effect << ",\"observations\":{\"hostOrdinal\":" << host_ordinal_
                            << ",\"resolvedPrice\":";
                     if (std::isfinite(applied->resolved_price))
@@ -1092,8 +1123,8 @@ void lunch_real_off_session_and_replay() {
         const auto executed = fills(*host);
         CHECK(executed.size() == 1);
         if (!executed.empty()) {
-            CHECK(executed[0].effective_time_ms == 1749473100000LL);
-            CHECK(executed[0].provenance == static_cast<std::uint8_t>(NativePriceProvenance::ObservedPrint));
+            CHECK(executed[0].effective_time_ms() == 1749473100000LL);
+            CHECK(executed[0].provenance() == static_cast<std::uint8_t>(NativePriceProvenance::ObservedPrint));
             near(executed[0].raw_price, 123);
         }
         CHECK(host->stream_end(false));
@@ -1369,8 +1400,8 @@ void ticks_same_timestamp_and_atomic_refusal() {
     CHECK(executed.size() == 1);
     if (!executed.empty()) {
         near(executed[0].raw_price, 100.50);
-        CHECK(executed[0].effective_time_ms == 60000);
-        CHECK(executed[0].provenance == static_cast<std::uint8_t>(NativePriceProvenance::ObservedPrint));
+        CHECK(executed[0].effective_time_ms() == 60000);
+        CHECK(executed[0].provenance() == static_cast<std::uint8_t>(NativePriceProvenance::ObservedPrint));
     }
     const auto before = host.native_continuation_hash();
     CHECK(!host.stream_push_tick(TradeTick{60000, 2, 200, 2}));
@@ -1427,8 +1458,8 @@ void quiet_birth_floor() {
         const auto executed = fills(host);
         CHECK(executed.size() == 1);
         if (!executed.empty()) {
-            CHECK(executed[0].effective_time_ms == (advance_before_submit ? 120000 : 60000));
-            CHECK(executed[0].provenance == static_cast<std::uint8_t>(NativePriceProvenance::CarriedOpen));
+            CHECK(executed[0].effective_time_ms() == (advance_before_submit ? 120000 : 60000));
+            CHECK(executed[0].provenance() == static_cast<std::uint8_t>(NativePriceProvenance::CarriedOpen));
         }
         CHECK(host.native_decision_floor() == 180000);
         CHECK(host.stream_end(false));
@@ -1450,9 +1481,9 @@ void confirmed_close_policy() {
         const auto executed = fills(host);
         CHECK(executed.size() == (policy == NativeCloseExecution::AfterCalculation ? 1U : 0U));
         if (!executed.empty()) {
-            CHECK(executed[0].effective_time_ms == 120000);
+            CHECK(executed[0].effective_time_ms() == 120000);
             CHECK(executed[0].ordinal > host.contexts[0].coordinate.ordinal);
-                CHECK(executed[0].provenance == static_cast<std::uint8_t>(NativePriceProvenance::AfterCalculationClose));
+                CHECK(executed[0].provenance() == static_cast<std::uint8_t>(NativePriceProvenance::AfterCalculationClose));
             near(executed[0].raw_price, 101);
             near(host.runup(), 0);
             near(host.drawdown(), 0);
@@ -1477,10 +1508,10 @@ void delayed_open_after_external_birth() {
         const auto executed = fills(host);
         CHECK(executed.size() == (policy == NativeCloseExecution::AfterCalculation ? 1U : 0U));
         if (!executed.empty()) {
-            CHECK(executed[0].effective_time_ms == 600000);
+            CHECK(executed[0].effective_time_ms() == 600000);
             near(executed[0].raw_price, 109);
         }
-        for (const auto& fill : executed) CHECK(fill.effective_time_ms >= 420000);
+        for (const auto& fill : executed) CHECK(fill.effective_time_ms() >= 420000);
         CHECK(host.stream_end(false));
         ordered(host);
     }
@@ -1549,7 +1580,7 @@ void partial_end_equal_clock_and_policy() {
             const auto executed = fills(host);
             CHECK(executed.size() == (should_fill ? 1U : 0U));
             if (should_fill && !executed.empty()) {
-                CHECK(executed[0].effective_time_ms == 90000);
+                CHECK(executed[0].effective_time_ms() == 90000);
                 near(executed[0].raw_price, 107);
                 const auto modeled = points(host, NativePriceProvenance::AfterCalculationClose);
                 // Warmup has one after-calculation point even with no request.

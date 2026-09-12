@@ -18,6 +18,7 @@ FILES = (
     "include/pineforge/native_host.hpp",
     "src/native_execution_consumer.hpp",
     "src/native_execution_consumer.cpp",
+    "include/pineforge/native_order_identity.hpp",
 )
 
 DRIVER_FORWARD = (
@@ -100,17 +101,21 @@ def versioned(text, outer, version):
 
 
 def check_texts(files):
-    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v1")
-    require(order, ("RunIdentity", "WorkingRequestCore", "Request", "SubmitResult",
-                    "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
-                    "ExecutionAppliedEvent", "TerminalCommit"),
+    identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
+    require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
+    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v2")
+    require(order, ("WorkingRequestCore", "Request", "SubmitResult",
+                    "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
+                    "ExecutionAppliedEvent"),
+            "native_order_v2", r'\b(?:class|struct)\s+NAME\s*\{')
     if "CommandEvent" not in re.findall(ALIAS_DEF, order):
-        raise ValueError("CommandEvent must belong to native_order_v1")
-    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v1")
-    require(order_src, ("WorkingRequestCore::submit", "WorkingRequestCore::replace",
-                        "WorkingRequestCore::cancel", "TerminalCommit::install"),
-            "native_order_v1", r'\bNAME\s*\(')
+        raise ValueError("CommandEvent must belong to native_order_v2")
+    if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
+        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v2")
+    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v2")
+    require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live"),
+            "native_order_v2", r'\bNAME\s*\(')
 
     calendar = versioned(files[FILES[2]], "pineforge::native_calendar", "native_calendar_v2")
     require(calendar, ("Timeframe", "SessionCalendar", "NativeInterval",
@@ -164,25 +169,39 @@ def check_texts(files):
     require_namespace_functions(
         driver, ("native_bar_structurally_valid", "preflight_native_inputs"),
         "native_driver_v3")
+    if 'kNativeConsumerSemanticVersion = "native-consumer/v4"' not in driver_text:
+        raise ValueError("consumer semantic marker must remain native-consumer/v4")
     driver_src = versioned(files[FILES[7]], "pineforge", "native_driver_v3")
     require_namespace_functions(
         driver_src, ("native_bar_structurally_valid", "preflight_native_inputs"),
         "native_driver_v3")
 
-    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v12")
+    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v13")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
-                   "NativeFailure", "NativeMarketEvent", "NativeSetupResult",
-                   "NativePhysicalPosition", "NativeAccountObservation"),
-            "engine_script_run_v12",
+                   "NativeFailure", "NativeFailureContext", "NativeInRunCause",
+                   "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
+                   "NativeSetupResult", "NativePhysicalPosition", "NativeAccountObservation"),
+            "engine_script_run_v13",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
-    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v12")
+    if "native_failure_context_in_run" not in host:
+        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v13")
+    if "native_failed_run_identity" not in host:
+        raise ValueError("native_failed_run_identity must belong to engine_script_run_v13")
+    if not re.search(r'\bSubmitResult\s+submit\s*\(\s*const\s+native_order::Request\s*&', host):
+        raise ValueError("general submit must belong to engine_script_run_v13")
+    if not re.search(r'\bReplaceResult\s+replace\s*\(\s*const\s+native_order::RequestHandle\s*&',
+                     host):
+        raise ValueError("general replace must belong to engine_script_run_v13")
+    if "submit_market" not in host or "replace_market" not in host:
+        raise ValueError("market-only submit/replace must remain in engine_script_run_v13")
+    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v13")
     require(consumer, ("NativeExecutionConsumer",),
-            "engine_script_run_v12", r'\bclass\s+NAME\s*')
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v12")
+            "engine_script_run_v13", r'\bclass\s+NAME\s*')
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v13")
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
              "NativeStrategyHost::native_events"),
-            "engine_script_run_v12", r'\bNAME\s*\(')
+            "engine_script_run_v13", r'\bNAME\s*\(')
 
 
 def load(root=ROOT):
@@ -195,5 +214,5 @@ def check(root=ROOT):
 
 if __name__ == "__main__":
     check()
-    print("native_order_v1, native_calendar_v2, native_run_spec_v1, "
-          "native_driver_v3 and host engine_script_run_v12 ownership verified")
+    print("native_order identity v1 / values v2, native_calendar_v2, native_run_spec_v1, "
+          "native_driver_v3 and host engine_script_run_v13 ownership verified")

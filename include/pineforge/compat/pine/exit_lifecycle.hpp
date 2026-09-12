@@ -1,6 +1,6 @@
 #pragma once
 #include "../../exit_leg_lifecycle.hpp"
-namespace pineforge { inline namespace engine_script_run_v12 { struct PendingOrder; } }
+namespace pineforge { inline namespace engine_script_run_v13 { struct PendingOrder; } }
 namespace pineforge::compat::pine {
 struct ExitSuspensionContext {
     exit_legs::Frame cause;

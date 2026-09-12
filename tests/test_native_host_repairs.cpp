@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V12
+#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V13
 #error "native strategy host must fail closed against an unversioned epoch"
 #endif
 
@@ -264,7 +264,7 @@ public:
             if (!event.command) continue;
             if (const auto* accepted =
                     std::get_if<native_order::AcceptedEvent>(&*event.command)) {
-                birth_floor = accepted->birth.decision_time_lower_bound;
+                birth_floor = accepted->birth().decision_time_lower_bound;
             }
         }
     }
@@ -300,7 +300,7 @@ const native_order::ExecutionAppliedEvent* first_applied(
 int main() {
     {
         const std::string name = typeid(NativeStrategyHost).name();
-        CHECK(name.find("engine_script_run_v12") != std::string::npos);
+        CHECK(name.find("engine_script_run_v13") != std::string::npos);
         CHECK(name.find("NativeStrategyHost") != std::string::npos);
     }
     {
@@ -568,8 +568,8 @@ int main() {
             if (!event.command) continue;
             if (const auto* applied =
                     std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
-                if (applied->effective_time_ms == 0
-                    && applied->provenance
+                if (applied->effective_time_ms() == 0
+                    && applied->provenance()
                         == static_cast<std::uint8_t>(NativePriceProvenance::ModeledOHLCOpen)) {
                     opening_fill = true;
                 }
@@ -636,8 +636,8 @@ int main() {
             if (event.command) {
                 if (const auto* applied =
                         std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
-                    if (applied->effective_time_ms == 60000) filled_60000 = true;
-                    if (applied->effective_time_ms == 120000) filled_120000 = true;
+                    if (applied->effective_time_ms() == 60000) filled_60000 = true;
+                    if (applied->effective_time_ms() == 120000) filled_120000 = true;
                 }
             }
         }
@@ -843,7 +843,7 @@ int main() {
             if (!event.command) continue;
             if (const auto* applied =
                     std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
-                if (applied->provenance
+                if (applied->provenance()
                     == static_cast<std::uint8_t>(NativePriceProvenance::AfterCalculationClose)) {
                     after_fill = true;
                 }
@@ -1536,9 +1536,9 @@ int main() {
             if (!event.command) continue;
             if (const auto* applied =
                     std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
-                CHECK(applied->effective_time_ms == -60000);
+                CHECK(applied->effective_time_ms() == -60000);
                 near(applied->raw_price, 100.0);
-                CHECK(applied->birth.decision_time_lower_bound == -60000);
+                CHECK(applied->birth().decision_time_lower_bound == -60000);
                 saw_open_fill = true;
             }
         }
@@ -1613,8 +1613,8 @@ int main() {
             if (!event.command) continue;
             if (const auto* applied =
                     std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
-                CHECK(applied->effective_time_ms == 60000);
-                CHECK(applied->birth.decision_time_lower_bound >= 60000);
+                CHECK(applied->effective_time_ms() == 60000);
+                CHECK(applied->birth().decision_time_lower_bound >= 60000);
                 near(applied->raw_price, 102.0);
             }
         }

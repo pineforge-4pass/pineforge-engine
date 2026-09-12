@@ -19,16 +19,16 @@ class AggregateVersions(unittest.TestCase):
 
     def test_engine_and_forward_declarations(self):
         for path, text in DATA.items():
-            if 'engine_script_run_v12' in text:
+            if 'engine_script_run_v13' in text:
                 with self.subTest(path=path):
-                    self.reject(path, 'engine_script_run_v12', 'engine_script_run_v11')
+                    self.reject(path, 'engine_script_run_v13', 'engine_script_run_v12')
 
     def test_broker_and_stream_entry_points(self):
-        self.reject('src/engine_state_hash.cpp', 'pineforge-broker-state/v12', 'pineforge-broker-state/v11')
-        self.reject('src/engine_stream.cpp', 'integer(12); integer(broker_state_hash());',
-                    'integer(11); integer(broker_state_hash());')
-        self.reject('src/engine_stream.cpp', 'integer(12); integer(broker_state_hash());',
-                    'if (false) { integer(12); integer(broker_state_hash()); }')
+        self.reject('src/engine_state_hash.cpp', 'pineforge-broker-state/v13', 'pineforge-broker-state/v12')
+        self.reject('src/engine_stream.cpp', 'integer(13); integer(broker_state_hash());',
+                    'integer(12); integer(broker_state_hash());')
+        self.reject('src/engine_stream.cpp', 'integer(13); integer(broker_state_hash());',
+                    'if (false) { integer(13); integer(broker_state_hash()); }')
 
     def test_standalone_owners(self):
         for path, namespace in (

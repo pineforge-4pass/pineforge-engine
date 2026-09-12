@@ -92,7 +92,7 @@ uint64_t BacktestEngine::broker_state_hash() const {
     Fnv f;
     // v6 includes resolved exit-leg owner/coordinates and immutable Pine placement evidence.
     // It is a serialization boundary, independent of the public C ABI version.
-    f.s("pineforge-broker-state/v12");
+    f.s("pineforge-broker-state/v13");
     f.u(execution_consumer().continuation_hash());
 
     // --- Position core ---

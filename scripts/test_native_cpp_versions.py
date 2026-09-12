@@ -23,28 +23,30 @@ class NativeVersions(unittest.TestCase):
 
     def test_stale_wrapper(self):
         for path, namespace, stale in (
-            (FILES[0], "native_order_v1", "native_order_v2"),
-            (FILES[1], "native_order_v1", "native_order_v2"),
+            (FILES[0], "native_order_v2", "native_order_v1"),
+            (FILES[1], "native_order_v2", "native_order_v1"),
+            (FILES[11], "native_order_v1", "native_order_v2"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
             (FILES[4], "native_run_spec_v1", "native_run_spec_v2"),
             (FILES[5], "native_run_spec_v1", "native_run_spec_v2"),
             (FILES[6], "native_driver_v3", "native_driver_v2"),
             (FILES[7], "native_driver_v3", "native_driver_v4"),
-            (FILES[8], "engine_script_run_v12", "engine_script_run_v11"),
-            (FILES[9], "engine_script_run_v12", "engine_script_run_v11"),
-            (FILES[10], "engine_script_run_v12", "engine_script_run_v13"),
+            (FILES[8], "engine_script_run_v13", "engine_script_run_v12"),
+            (FILES[9], "engine_script_run_v13", "engine_script_run_v12"),
+            (FILES[10], "engine_script_run_v13", "engine_script_run_v12"),
         ):
             with self.subTest(path=path, namespace=namespace):
                 self.reject(path, namespace, stale)
 
     def test_duplicate_wrapper(self):
         for path, namespace in (
-            (FILES[0], "native_order_v1"),
+            (FILES[0], "native_order_v2"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
             (FILES[6], "native_driver_v3"),
-            (FILES[8], "engine_script_run_v12"),
+            (FILES[8], "engine_script_run_v13"),
+            (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
                 opening = "inline namespace " + namespace + " {"
@@ -52,11 +54,12 @@ class NativeVersions(unittest.TestCase):
 
     def test_empty_namespace_is_not_ownership(self):
         for path, namespace in (
-            (FILES[0], "native_order_v1"),
+            (FILES[0], "native_order_v2"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
             (FILES[6], "native_driver_v3"),
-            (FILES[8], "engine_script_run_v12"),
+            (FILES[8], "engine_script_run_v13"),
+            (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
                 self.reject(path, "inline namespace " + namespace + " {",
@@ -64,9 +67,10 @@ class NativeVersions(unittest.TestCase):
 
     def test_comment_only_namespace_is_not_ownership(self):
         for path, namespace, decoy in (
-            (FILES[0], "native_order_v1", "struct WorkingRequestCore"),
+            (FILES[0], "native_order_v2", "struct WorkingRequestCore"),
+            (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
-            (FILES[8], "engine_script_run_v12", "class NativeStrategyHost"),
+            (FILES[8], "engine_script_run_v13", "class NativeStrategyHost"),
         ):
             with self.subTest(path=path):
                 self.reject(
@@ -75,7 +79,9 @@ class NativeVersions(unittest.TestCase):
                     "inline namespace " + namespace + " { /* " + decoy + " */ } namespace misplaced {")
 
     def test_type_moved_outside_owner(self):
-        self.reject(FILES[0], "struct RunIdentity {",
+        self.reject(FILES[0], "struct Request {",
+                    "} struct Request {")
+        self.reject(FILES[11], "struct RunIdentity {",
                     "} struct RunIdentity {")
         self.reject(FILES[2], "struct NativeInterval {",
                     "} struct NativeInterval {")
@@ -171,11 +177,11 @@ class NativeVersions(unittest.TestCase):
 
         changed = dict(DATA)
         src = FILES[1]
-        needle = "WorkingRequestCore::submit("
+        needle = "WorkingRequestCore::reset("
         self.assertIn(needle, changed[src])
         changed[src] = changed[src].replace(
-            "}  // inline namespace native_order_v1",
-            "}  // inline namespace native_order_v1\nSubmitResult WorkingRequestCore::submit(const Request&, int64_t, uint64_t&, uint64_t&, std::optional<double>) { return {}; }\n",
+            "}  // inline namespace native_order_v2",
+            "}  // inline namespace native_order_v2\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
             1)
         with self.assertRaises(ValueError):
             check_texts(changed)
@@ -191,18 +197,28 @@ class NativeVersions(unittest.TestCase):
             DRIVER_FORWARD,
             "inline namespace native_run_spec_v1 { struct NativeRunSpec {}; }")
 
-    def test_host_public_values_cannot_leave_v12(self):
+    def test_host_public_values_cannot_leave_v13(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")
         self.reject(FILES[8], "struct NativeFailure {", "} struct NativeFailure {")
+        self.reject(FILES[8], "struct NativeFailureContext {", "} struct NativeFailureContext {")
         self.reject(FILES[9], "class NativeExecutionConsumer final : public IExecutionConsumer {",
                     "} class NativeExecutionConsumer final : public IExecutionConsumer {")
+        self.reject(
+            FILES[8],
+            "native_order::SubmitResult submit(const native_order::Request& request);",
+            "")
+        self.reject(
+            FILES[6],
+            'kNativeConsumerSemanticVersion = "native-consumer/v4"',
+            'kNativeConsumerSemanticVersion = "native-consumer/v3"')
 
 
 class FixtureAuthentication(unittest.TestCase):
     def test_authentic_fixtures_unpack(self):
         from check_native_cpp_abi import FIXTURE, authenticate_fixture
         for name in ("order-1acaf33", "calendar-draft-a8e34c", "calendar-262a280",
-                     "driver-08b5c88", "run-spec-262a280"):
+                     "driver-08b5c88", "run-spec-262a280", "host-e7d023d",
+                     "order-e7d023d"):
             with self.subTest(name=name):
                 with tempfile.TemporaryDirectory(prefix="pf-native-abi-ok-") as temp:
                     authenticate_fixture(FIXTURE / name, Path(temp) / name)

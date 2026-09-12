@@ -9,7 +9,7 @@
 
 namespace pineforge {
 enum class PositionSide;
-inline namespace engine_script_run_v12 { struct PendingOrder; }
+inline namespace engine_script_run_v13 { struct PendingOrder; }
 }
 namespace pineforge::compat::pine {
 

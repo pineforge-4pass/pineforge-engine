@@ -7,7 +7,7 @@
 #include <utility>
 
 namespace pineforge {
-inline namespace engine_script_run_v12 {
+inline namespace engine_script_run_v13 {
 
 class LegacyCompatibilityConsumer final : public IExecutionConsumer {
 public:
@@ -169,5 +169,5 @@ bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
     return execution_consumer().stream_end(*this, finalize_partial_input_bar);
 }
 
-}  // inline namespace engine_script_run_v12
+}  // inline namespace engine_script_run_v13
 }  // namespace pineforge

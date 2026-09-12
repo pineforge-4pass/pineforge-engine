@@ -1,19 +1,23 @@
 #include "native_execution_consumer.hpp"
 #include "engine_internal.hpp"
+#include "native_matching.hpp"
 
+#include <pineforge/execution_close_scope.hpp>
 #include <pineforge/market_driver.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
 
 namespace pineforge {
-inline namespace engine_script_run_v12 {
+inline namespace engine_script_run_v13 {
 namespace {
 
 struct Fnv {
@@ -30,6 +34,10 @@ struct Fnv {
     void b(bool v) noexcept { unsigned char c = v ? 1 : 0; bytes(&c, 1); }
     void s(const std::string& v) noexcept { u(v.size()); bytes(v.data(), v.size()); }
 };
+
+void hash_coordinate(Fnv& f, const NativeCoordinate& c) noexcept;
+void hash_birth(Fnv& f, const native_order::Birth& birth) noexcept;
+void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandle>& handle) noexcept;
 
 void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.s(spec.identity.session_key); f.u(spec.identity.run_number);
@@ -48,22 +56,174 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     if (spec.initial_margin_fraction) f.d(*spec.initial_margin_fraction);
 }
 
-void hash_action(Fnv& f, const execution::Action& action) noexcept {
-    f.u(action.index());
-    if (const auto* r = std::get_if<order_action::Reduce>(&action)) f.d(r->units);
-    if (const auto* t = std::get_if<order_action::Transact>(&action)) f.d(t->signed_units);
-}
-
 void hash_handle(Fnv& f, const native_order::RequestHandle& handle) noexcept {
     f.s(handle.run.session_key);
     f.u(handle.run.run_number);
     f.u(handle.incarnation);
 }
 
+void hash_event_id(Fnv& f, const native_order::EventId& id) noexcept {
+    f.s(id.run.session_key);
+    f.u(id.run.run_number);
+    f.u(id.ordinal);
+}
+
+void hash_cursor(Fnv& f, const native_order::MatchCursor& cursor) noexcept {
+    hash_coordinate(f, cursor.point);
+    f.d(cursor.t);
+}
+
+void hash_surface(Fnv& f, native_order::CommandSurface surface) noexcept {
+    f.u(static_cast<uint64_t>(surface));
+}
+
+void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
+    f.u(intent.index());
+    if (const auto* reduce = std::get_if<native_order::Reduce>(&intent)) {
+        f.u(reduce->size.index());
+        if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) {
+            f.d(units->units);
+        }
+    }
+    if (const auto* transact = std::get_if<native_order::Transact>(&intent)) {
+        f.d(transact->signed_units);
+    }
+}
+
+void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
+    f.u(trigger.index());
+    if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) f.d(limit->price);
+    if (const auto* stop = std::get_if<native_order::Stop>(&trigger)) f.d(stop->price);
+    if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
+        f.d(sl->stop);
+        f.d(sl->limit);
+    }
+    if (const auto* trail = std::get_if<native_order::Trail>(&trigger)) {
+        f.d(trail->offset);
+        f.b(trail->arm_price.has_value());
+        if (trail->arm_price) f.d(*trail->arm_price);
+    }
+}
+
+void hash_capacity(Fnv& f, const native_order::Capacity& capacity) noexcept {
+    f.u(capacity.index());
+    if (const auto* budget = std::get_if<native_order::PointBudget>(&capacity)) f.d(budget->units);
+}
+
+void hash_owner(Fnv& f, const native_order::Owner& owner) noexcept {
+    f.u(owner.index());
+    if (const auto* wait = std::get_if<native_order::WaitForApplied>(&owner)) {
+        hash_handle(f, wait->parent);
+    }
+    if (const auto* bind = std::get_if<native_order::BindOpening>(&owner)) {
+        hash_handle(f, bind->opening);
+        f.i(bind->cycle);
+    }
+}
+
+void hash_group(Fnv& f, const native_order::Group& group) noexcept {
+    f.u(group.index());
+    if (const auto* member = std::get_if<native_order::Member>(&group)) {
+        f.u(member->group);
+        f.i(member->cohort);
+        f.u(static_cast<uint64_t>(member->effect));
+    }
+}
+
 void hash_request(Fnv& f, const native_order::Request& request) noexcept {
-    hash_action(f, request.action);
+    hash_intent(f, request.intent);
     f.s(request.label);
     f.s(request.comment);
+    hash_trigger(f, request.trigger);
+    hash_capacity(f, request.capacity);
+    hash_owner(f, request.owner);
+    hash_group(f, request.group);
+}
+
+void hash_remaining(Fnv& f, const native_order::Remaining& remaining) noexcept {
+    f.u(remaining.index());
+    if (const auto* units = std::get_if<native_order::RemainingUnits>(&remaining)) f.d(units->q);
+}
+
+void hash_remaining_projection(Fnv& f, const native_order::RemainingProjection& remaining) noexcept {
+    f.u(remaining.index());
+    if (const auto* units = std::get_if<native_order::RemainingProjectionUnits>(&remaining)) {
+        f.d(units->q);
+    }
+}
+
+void hash_authority(Fnv& f, const native_order::Authority& authority) noexcept {
+    f.u(authority.index());
+    if (const auto* wait = std::get_if<native_order::Wait>(&authority)) {
+        hash_handle(f, wait->parent);
+    } else if (const auto* armed = std::get_if<native_order::ArmedTransaction>(&authority)) {
+        hash_handle(f, armed->parent);
+        hash_event_id(f, armed->cause);
+        hash_cursor(f, armed->cause_cursor);
+    } else if (const auto* close = std::get_if<native_order::BookClose>(&authority)) {
+        f.i(close->cycle);
+        f.u(static_cast<uint64_t>(close->side));
+        hash_event_id(f, close->binding_event);
+        hash_cursor(f, close->binding_cursor);
+    } else if (const auto* opening = std::get_if<native_order::OpeningClose>(&authority)) {
+        hash_handle(f, opening->opening);
+        f.i(opening->cycle);
+        f.u(static_cast<uint64_t>(opening->side));
+        f.u(opening->enrollment.index());
+        if (const auto* from_cmd = std::get_if<native_order::EnrollmentFromCommand>(&opening->enrollment)) {
+            hash_event_id(f, from_cmd->accepted);
+        }
+        if (const auto* from_app = std::get_if<native_order::EnrollmentFromApplied>(&opening->enrollment)) {
+            hash_event_id(f, from_app->cause);
+            hash_cursor(f, from_app->cursor);
+        }
+    }
+}
+
+void hash_trigger_state(Fnv& f, const native_order::TriggerState& state) noexcept {
+    f.u(state.index());
+    if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) f.d(track->best);
+    if (const auto* active = std::get_if<native_order::TrailActive>(&state)) {
+        f.d(active->best_at_trigger);
+    }
+}
+
+void hash_allowance(Fnv& f, const native_order::Allowance& allowance) noexcept {
+    f.u(allowance.index());
+    if (const auto* units = std::get_if<native_order::AllowanceUnits>(&allowance)) {
+        f.u(units->point_ordinal);
+        f.d(units->initial);
+        f.d(units->left);
+    }
+    if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&allowance)) {
+        f.u(all->point_ordinal);
+    }
+}
+
+void hash_pending(Fnv& f, const native_order::PendingAdjustments& pending) noexcept {
+    f.u(pending.index());
+    if (const auto* deferred = std::get_if<native_order::PendingDeferred>(&pending)) {
+        f.d(deferred->total);
+        f.u(deferred->count);
+        hash_event_id(f, deferred->tail_receipt);
+    }
+}
+
+void hash_definition(Fnv& f, const native_order::DefinitionRef& definition) noexcept {
+    f.b(static_cast<bool>(definition));
+    if (!definition) return;
+    hash_handle(f, definition->handle);
+    hash_request(f, definition->request);
+    hash_birth(f, definition->birth);
+    hash_optional_handle(f, definition->predecessor);
+}
+
+void hash_scope(Fnv& f, const execution::CloseScope& scope) noexcept {
+    f.u(scope.index());
+    if (const auto* opening = std::get_if<execution::OpeningExposure>(&scope)) {
+        f.u(opening->incarnation);
+        f.i(opening->cycle);
+    }
 }
 
 void hash_birth(Fnv& f, const native_order::Birth& birth) noexcept {
@@ -86,6 +246,11 @@ void hash_failure(Fnv& f, const NativeFailure& failure) noexcept {
     f.u(static_cast<uint64_t>(failure.operation));
     f.u(failure.ordinal);
     f.u(failure.discriminator);
+    f.u(static_cast<uint64_t>(failure.context.kind));
+    f.u(failure.context.cause.ordinal);
+    f.u(failure.context.recipient.incarnation);
+    hash_coordinate(f, failure.context.cursor.point);
+    f.d(failure.context.cursor.t);
 }
 
 void hash_coordinate(Fnv& f, const NativeCoordinate& c) noexcept {
@@ -122,30 +287,33 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
         f.u(payload.ordinal);
         if constexpr (std::is_same_v<T, native_order::AcceptedEvent>) {
             f.u(1);
-            hash_handle(f, payload.handle);
-            hash_request(f, payload.request);
-            hash_birth(f, payload.birth);
+            hash_definition(f, payload.definition);
+            hash_surface(f, payload.surface);
         } else if constexpr (std::is_same_v<T, native_order::RejectedEvent>) {
             f.u(2);
             hash_request(f, payload.request);
             f.u(static_cast<uint64_t>(payload.reason));
+            hash_surface(f, payload.surface);
         } else if constexpr (std::is_same_v<T, native_order::ReplacedEvent>) {
             f.u(3);
-            hash_handle(f, payload.predecessor);
-            hash_request(f, payload.predecessor_request);
-            hash_handle(f, payload.successor);
-            hash_request(f, payload.successor_request);
-            hash_birth(f, payload.successor_birth);
+            hash_definition(f, payload.predecessor_definition);
+            hash_definition(f, payload.successor_definition);
+            hash_surface(f, payload.surface);
         } else if constexpr (std::is_same_v<T, native_order::ReplaceRejectedEvent>) {
             f.u(4);
-            hash_handle(f, payload.target);
-            hash_request(f, payload.live_request);
+            hash_definition(f, payload.live_definition);
             hash_request(f, payload.attempted);
             f.u(static_cast<uint64_t>(payload.reason));
+            hash_surface(f, payload.surface);
         } else if constexpr (std::is_same_v<T, native_order::CancelledEvent>) {
             f.u(5);
-            hash_handle(f, payload.handle);
-            hash_request(f, payload.request);
+            hash_definition(f, payload.definition);
+            f.u(static_cast<uint64_t>(payload.reason));
+            f.b(payload.cause.has_value());
+            if (payload.cause) hash_event_id(f, *payload.cause);
+            hash_authority(f, payload.prior_authority);
+            hash_remaining_projection(f, payload.unexecuted);
+            hash_pending(f, payload.pending);
         } else if constexpr (std::is_same_v<T, native_order::NotWorkingEvent>) {
             f.u(6);
             hash_handle(f, payload.target);
@@ -156,31 +324,110 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
             hash_optional_request(f, payload.attempted);
         } else if constexpr (std::is_same_v<T, native_order::NoEffectEvent>) {
             f.u(8);
-            hash_handle(f, payload.handle);
-            hash_request(f, payload.request);
-            hash_birth(f, payload.birth);
+            hash_definition(f, payload.definition);
+            hash_remaining_projection(f, payload.remaining);
+            hash_authority(f, payload.authority);
+            hash_cursor(f, payload.cursor);
         } else if constexpr (std::is_same_v<T, native_order::MatchRejectedEvent>) {
             f.u(9);
-            hash_handle(f, payload.handle);
-            hash_request(f, payload.request);
-            hash_birth(f, payload.birth);
             f.u(static_cast<uint64_t>(payload.reason));
+            hash_definition(f, payload.definition);
+            hash_remaining_projection(f, payload.remaining);
+            hash_authority(f, payload.authority);
+            hash_cursor(f, payload.cursor);
         } else if constexpr (std::is_same_v<T, native_order::ExecutionAppliedEvent>) {
             f.u(10);
-            hash_handle(f, payload.handle);
-            hash_request(f, payload.request);
-            hash_birth(f, payload.birth);
-            f.i(payload.effective_time_ms);
-            f.i(payload.interval_open_ms);
-            f.i(payload.interval_last_traded_close_ms);
-            f.i(payload.interval_index);
+            hash_definition(f, payload.definition);
             f.d(payload.raw_price);
             f.d(payload.resolved_price);
             f.d(payload.current_ticket);
             f.u(payload.first_trade_index);
             f.u(payload.closed_trade_count);
             f.u(payload.opened_lot_incarnation);
-            f.u(payload.provenance);
+            f.d(payload.closed_units);
+            f.d(payload.opened_units);
+            f.d(payload.filled_working);
+            hash_remaining_projection(f, payload.remaining_before);
+            hash_remaining_projection(f, payload.remaining_after);
+            hash_allowance(f, payload.allowance_before);
+            hash_allowance(f, payload.allowance_after);
+            f.b(payload.terminal);
+            f.b(payload.terminal_reason.has_value());
+            if (payload.terminal_reason) {
+                f.u(static_cast<uint64_t>(*payload.terminal_reason));
+            }
+            f.i(payload.cycle_before);
+            f.i(payload.cycle_after);
+            hash_scope(f, payload.scope);
+            hash_cursor(f, payload.cursor);
+        } else if constexpr (std::is_same_v<T, native_order::CloseBoundEvent>) {
+            f.u(11);
+            hash_definition(f, payload.definition);
+            f.i(payload.cycle);
+            f.u(static_cast<uint64_t>(payload.side));
+            hash_cursor(f, payload.cursor);
+            hash_authority(f, payload.before);
+            hash_authority(f, payload.after);
+        } else if constexpr (std::is_same_v<T, native_order::ActivatedEvent>) {
+            f.u(12);
+            hash_definition(f, payload.definition);
+            f.u(static_cast<uint64_t>(payload.kind));
+            hash_trigger_state(f, payload.before);
+            hash_trigger_state(f, payload.after);
+            f.d(payload.reached_price);
+            hash_cursor(f, payload.cursor);
+        } else if constexpr (std::is_same_v<T, native_order::ReservationReducedEvent>) {
+            f.u(13);
+            hash_definition(f, payload.definition);
+            hash_event_id(f, payload.cause);
+            hash_handle(f, payload.recipient);
+            f.u(static_cast<uint64_t>(payload.effect));
+            f.d(payload.requested_delta);
+            f.d(payload.actual_deduction);
+            f.d(payload.before.q);
+            hash_remaining_projection(f, payload.after);
+        } else if constexpr (std::is_same_v<T, native_order::DeferredGroupAdjustmentEvent>) {
+            f.u(14);
+            hash_definition(f, payload.definition);
+            hash_event_id(f, payload.cause);
+            hash_handle(f, payload.recipient);
+            f.u(static_cast<uint64_t>(payload.effect));
+            f.d(payload.deferred_delta);
+            hash_pending(f, payload.pending_before);
+            f.d(payload.pending_after.total);
+            f.u(payload.pending_after.count);
+            hash_event_id(f, payload.pending_after.tail_receipt);
+            f.b(payload.previous_pending_receipt.has_value());
+            if (payload.previous_pending_receipt) {
+                hash_event_id(f, *payload.previous_pending_receipt);
+            }
+        } else if constexpr (std::is_same_v<T, native_order::QuantityBoundEvent>) {
+            f.u(15);
+            hash_definition(f, payload.definition);
+            hash_event_id(f, payload.source);
+            f.d(payload.source_units);
+            f.u(payload.prior_adjustment_ids.size());
+            for (const auto& id : payload.prior_adjustment_ids) hash_event_id(f, id);
+            f.d(payload.pending_total);
+            f.d(payload.effective_deduction);
+            hash_remaining_projection(f, payload.remaining);
+        } else if constexpr (std::is_same_v<T, native_order::ArmedEvent>) {
+            f.u(16);
+            hash_definition(f, payload.definition);
+            hash_authority(f, payload.before);
+            hash_authority(f, payload.after);
+            f.u(payload.enrollment.index());
+            if (const auto* from_cmd = std::get_if<native_order::EnrollmentFromCommand>(&payload.enrollment)) {
+                hash_event_id(f, from_cmd->accepted);
+            }
+            if (const auto* from_app = std::get_if<native_order::EnrollmentFromApplied>(&payload.enrollment)) {
+                hash_event_id(f, from_app->cause);
+                hash_cursor(f, from_app->cursor);
+            }
+            f.b(payload.quantity_resolution.has_value());
+            if (payload.quantity_resolution) hash_event_id(f, *payload.quantity_resolution);
+        } else {
+            static_assert(!sizeof(T), "unhashed native command event");
         }
     }, event);
 }
@@ -224,10 +471,8 @@ CommissionType fee_to_commission(NativeFeeKind kind) {
     return CommissionType::PERCENT;
 }
 
-bool buying_action(const native_order::Request& request, PositionSide side) {
-    if (const auto* t = std::get_if<order_action::Transact>(&request.action))
-        return t->signed_units > 0.0;
-    return side == PositionSide::SHORT;
+uint64_t command_ordinal(const native_order::CommandEvent& event) {
+    return std::visit([](const auto& payload) { return payload.ordinal; }, event);
 }
 
 }  // namespace
@@ -418,10 +663,12 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(requests_.identity().run_number);
     f.u(requests_.live().size());
     for (const auto& live : requests_.live()) {
-        hash_handle(f, live.handle);
-        hash_request(f, live.request);
-        hash_birth(f, live.birth);
-        hash_optional_handle(f, live.predecessor);
+        hash_definition(f, live.definition);
+        hash_remaining(f, live.remaining);
+        hash_authority(f, live.authority);
+        hash_trigger_state(f, live.trigger_state);
+        hash_allowance(f, live.allowance);
+        hash_pending(f, live.pending);
     }
     sync_history_digest();
     if (driver_digest_.count != driver_log_.size()) {
@@ -794,27 +1041,129 @@ void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double pri
     }
 }
 
-double NativeExecutionConsumer::resolve_price(const native_order::Request& request,
-                                              double raw) const {
-    const auto* spec = spec_ptr();
-    if (!spec || !std::isfinite(raw)) return std::numeric_limits<double>::quiet_NaN();
-    (void)request;
-    return raw;
+native_order::DriverEligibilityClass NativeExecutionConsumer::classify_driver(
+        const NativeDriverPoint& point, bool continuous) const noexcept {
+    using Class = native_order::DriverEligibilityClass;
+    switch (point.coordinate.provenance) {
+    case NativePriceProvenance::ObservedPrint:
+        return Class::ObservedPrint;
+    case NativePriceProvenance::CarriedOpen:
+        return Class::CarriedOpen;
+    case NativePriceProvenance::AfterCalculationClose:
+        return input_mode_ == InputMode::ObservedTicks
+            ? Class::TickAfterCalculation
+            : Class::ConfirmedAfterCalculationClose;
+    case NativePriceProvenance::ModeledOHLCOpen:
+        return Class::ConfirmedOpen;
+    case NativePriceProvenance::Confirmed:
+        return continuous ? Class::ConfirmedExcursion : Class::ConfirmedOpen;
+    case NativePriceProvenance::ModeledOHLCClose:
+        return continuous ? Class::ConfirmedExcursion : Class::ConfirmedAfterCalculationClose;
+    case NativePriceProvenance::PartialFinalized:
+    case NativePriceProvenance::Calculation:
+        return Class::ConfirmedAfterCalculationClose;
+    }
+    return Class::ObservedPrint;
 }
 
-bool NativeExecutionConsumer::admit_opening(
-        const BacktestEngine& engine,
+native_order::MatchCursor NativeExecutionConsumer::make_cursor(
+        const NativeDriverPoint& point, double t) const noexcept {
+    native_order::MatchCursor cursor;
+    cursor.point = point.coordinate;
+    cursor.t = t;
+    return cursor;
+}
+
+native_order::PositionIdentity NativeExecutionConsumer::read_position(
+        const BacktestEngine& engine) const {
+    if (engine.position_side_ == PositionSide::FLAT || engine.pyramid_entries_.empty()
+        || engine.position_cycle_seq_ <= 0) {
+        return native_order::PositionFlat{};
+    }
+    const native_order::Side side = engine.position_side_ == PositionSide::SHORT
+        ? native_order::Side::Short : native_order::Side::Long;
+    return native_order::PositionNonflat{engine.position_cycle_seq_, side};
+}
+
+native_order::OpeningObservation NativeExecutionConsumer::read_opening(
+        const BacktestEngine& engine, const native_order::RequestHandle& opening,
+        int64_t cycle) const {
+    native_order::OpeningObservation out;
+    out.queried_opening = opening;
+    out.queried_cycle = cycle;
+    out.current_position = read_position(engine);
+    out.has_live_matching_lot = false;
+    if (opening.run != requests_.identity()) return out;
+    if (cycle != engine.position_cycle_seq_ || engine.position_cycle_seq_ <= 0) return out;
+    if (engine.position_side_ == PositionSide::FLAT) return out;
+    for (const auto& lot : engine.pyramid_entries_) {
+        if (lot.entry_incarnation == opening.incarnation) {
+            out.has_live_matching_lot = true;
+            break;
+        }
+    }
+    return out;
+}
+
+native_order::TargetObservation NativeExecutionConsumer::read_target(
+        const BacktestEngine& engine, const native_order::LiveRequest* live) const {
+    native_order::TargetObservation out;
+    out.current_position = read_position(engine);
+    if (!live) return out;
+    if (const auto* opening = std::get_if<native_order::OpeningClose>(&live->authority)) {
+        out.opening = read_opening(engine, opening->opening, opening->cycle);
+    } else if (const auto* bind = std::get_if<native_order::BindOpening>(&live->request().owner)) {
+        out.opening = read_opening(engine, bind->opening, bind->cycle);
+    }
+    return out;
+}
+
+native_order::CommandContext NativeExecutionConsumer::make_command_context(
+        const BacktestEngine& engine, const native_order::Request& request,
+        native_order::CommandSurface surface) const {
+    native_order::CommandContext ctx;
+    ctx.decision_time_ms = decision_floor();
+    if (const auto* spec = spec_ptr()) ctx.quantity_grid = spec->quantity_grid;
+    ctx.surface = surface;
+    if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
+        ctx.opening = read_opening(engine, bind->opening, bind->cycle);
+    }
+    return ctx;
+}
+
+void NativeExecutionConsumer::refresh_target_scalars(
+        const BacktestEngine& engine, native_order::TargetObservation& target) const noexcept {
+    target.current_position = read_position(engine);
+    if (!target.opening) return;
+    target.opening->current_position = target.current_position;
+    target.opening->has_live_matching_lot = false;
+    const auto& opening = target.opening->queried_opening;
+    if (opening.run != requests_.identity()) return;
+    if (target.opening->queried_cycle != engine.position_cycle_seq_
+        || engine.position_cycle_seq_ <= 0) {
+        return;
+    }
+    if (engine.position_side_ == PositionSide::FLAT) return;
+    for (const auto& lot : engine.pyramid_entries_) {
+        if (lot.entry_incarnation == opening.incarnation) {
+            target.opening->has_live_matching_lot = true;
+            break;
+        }
+    }
+}
+
+bool NativeExecutionConsumer::admit_opening_inspect(
+        const BacktestEngine& engine, double resolved_price,
         const execution::SettlementInspection& inspect,
         native_order::MatchRejectReason* reason) const {
     const auto* spec = spec_ptr();
     if (!spec || !inspect.would_open) return true;
     const auto mask = static_cast<uint32_t>(spec->allowed_open_directions);
-    const bool want_short = inspect.incoming_short;
-    if (want_short && (mask & 2u) == 0) {
+    if (inspect.incoming_short && (mask & 2u) == 0) {
         if (reason) *reason = native_order::MatchRejectReason::OpeningDirection;
         return false;
     }
-    if (!want_short && (mask & 1u) == 0) {
+    if (!inspect.incoming_short && (mask & 1u) == 0) {
         if (reason) *reason = native_order::MatchRejectReason::OpeningDirection;
         return false;
     }
@@ -827,190 +1176,810 @@ bool NativeExecutionConsumer::admit_opening(
         return false;
     }
     if (spec->initial_margin_fraction) {
-        const double mark = engine.marked_equity(std::abs(inspect.opened_units) > 0
-            ? engine.syminfo_.mintick : engine.syminfo_.mintick);
-        (void)mark;
-        const double equity = engine.marked_equity(
-            inspect.resulting_abs_units == 0.0 ? spec->price_tick : spec->price_tick);
-        (void)equity;
-    }
-    if (spec->initial_margin_fraction) {
-        // Compare resulting notional * fraction to marked equity at resolved
-        // price less this execution's current charge. Caller stamped fill price
-        // into inspect via the quote; recompute mark at the inspection's implied
-        // resulting book using marked_equity on the current book is wrong for a
-        // crossing. Use inspect facts: marked_equity(resolved) - ticket.
-        // The consumer match_point passes the resolved price through Fill.
+        const double equity = engine.marked_equity(resolved_price) - inspect.current_ticket;
+        const double required = inspect.resulting_abs_notional * *spec->initial_margin_fraction;
+        if (!std::isfinite(equity) || !std::isfinite(required) || required > equity) {
+            if (reason) *reason = native_order::MatchRejectReason::InitialMargin;
+            return false;
+        }
     }
     return true;
 }
 
-void NativeExecutionConsumer::terminal_no_effect(BacktestEngine& engine, std::size_t live_index) {
-    (void)engine;
-    const auto live = requests_.live()[live_index];
-    const uint64_t ordinal = native_order::TerminalCommit::usable_ordinal(
-        requests_, next_timeline_ordinal_);
-    native_order::TerminalCommit::reserve_history(requests_);
-    native_order::NoEffectEvent event{ordinal, live.handle, live.request, live.birth};
-    native_order::TerminalCommit::install(requests_, live_index, native_order::CommandEvent{std::move(event)});
-    sync_history_digest();
-    ++next_timeline_ordinal_;
+void NativeExecutionConsumer::fail_preparation(
+        BacktestEngine& engine, const native_order::PreparationError& error,
+        NativeFailureOperation operation) {
+    NativeFailureCode code = NativeFailureCode::Contract;
+    switch (error.code) {
+    case native_order::CoreFailure::NonrepresentableQuantity:
+    case native_order::CoreFailure::UnrepresentableReservation:
+    case native_order::CoreFailure::InvalidProposal:
+    case native_order::CoreFailure::InvalidScope:
+        code = NativeFailureCode::SettlementFailure;
+        break;
+    case native_order::CoreFailure::MissingObservation:
+    case native_order::CoreFailure::ObservationMismatch:
+        code = NativeFailureCode::SettlementFailure;
+        break;
+    default:
+        code = NativeFailureCode::Contract;
+        break;
+    }
+    NativeFailure failure{code, operation, error.cause.ordinal,
+                          static_cast<uint32_t>(error.code)};
+    failure.context = native_failure_context_in_run(
+            requests_.identity(), &error.cause, &error.target, nullptr);
+    fail(engine, failure);
+    render(engine, "native working-request preparation failed");
 }
 
-void NativeExecutionConsumer::terminal_reject(BacktestEngine& engine, std::size_t live_index,
-                                              native_order::MatchRejectReason reason) {
-    (void)engine;
-    const auto live = requests_.live()[live_index];
-    const uint64_t ordinal = native_order::TerminalCommit::usable_ordinal(
-        requests_, next_timeline_ordinal_);
-    native_order::TerminalCommit::reserve_history(requests_);
-    native_order::MatchRejectedEvent event{ordinal, live.handle, live.request, live.birth, reason};
-    native_order::TerminalCommit::install(requests_, live_index, native_order::CommandEvent{std::move(event)});
+void NativeExecutionConsumer::catch_up_timeline() noexcept {
+    if (requests_.history().empty()) return;
+    const uint64_t last = command_ordinal(requests_.history().back());
+    if (last >= next_timeline_ordinal_) next_timeline_ordinal_ = last + 1;
+}
+
+bool NativeExecutionConsumer::install_mutation(
+        BacktestEngine& engine, native_order::PreparedMutation&& prepared,
+        NativeFailureOperation operation, uint64_t ordinal) {
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, operation, ordinal});
+        render(engine, "native mutation install missing preparation");
+        return false;
+    }
+    const auto result = requests_.install_mutation(std::move(prepared));
+    if (const auto* err = std::get_if<native_order::InstallError>(&result)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, operation, ordinal,
+                                   static_cast<uint32_t>(*err)});
+        render(engine, "native mutation install failed");
+        return false;
+    }
     sync_history_digest();
-    ++next_timeline_ordinal_;
+    catch_up_timeline();
+    return true;
+}
+
+bool NativeExecutionConsumer::install_execution(
+        BacktestEngine& engine, native_order::PreparedExecution&& prepared,
+        const native_order::CommittedExecutionFacts& facts, uint64_t ordinal) {
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Settlement, ordinal});
+        render(engine, "native execution install missing preparation");
+        return false;
+    }
+    const auto result = requests_.install_execution(std::move(prepared), facts);
+    if (const auto* err = std::get_if<native_order::InstallError>(&result)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                   NativeFailureOperation::Settlement, ordinal,
+                                   static_cast<uint32_t>(*err)});
+        render(engine, "native execution install failed after settlement");
+        return false;
+    }
+    sync_history_digest();
+    catch_up_timeline();
+    return true;
+}
+
+void NativeExecutionConsumer::drain_dependency_queue(
+        BacktestEngine& engine,
+        std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds,
+        NativeFailureOperation operation) {
+    if (failed() || seeds.empty()) return;
+    try {
+        struct Item {
+            uint64_t cause_ordinal = 0;
+            native_order::EventId cause;
+            native_order::RequestHandle child;
+        };
+        std::vector<Item> queue;
+        auto less_item = [](const Item& a, const Item& b) {
+            if (a.cause_ordinal != b.cause_ordinal) return a.cause_ordinal < b.cause_ordinal;
+            return a.child.incarnation < b.child.incarnation;
+        };
+        auto enqueue_children = [&](const native_order::EventId& cause,
+                                    const native_order::RequestHandle& parent,
+                                    std::size_t sort_from) {
+            auto children = requests_.waiting_children(parent);
+            for (auto& child : children) {
+                queue.push_back(Item{cause.ordinal, cause, std::move(child)});
+            }
+            if (sort_from < queue.size()) {
+                std::sort(queue.begin() + static_cast<std::ptrdiff_t>(sort_from), queue.end(),
+                          less_item);
+            }
+        };
+        for (auto& seed : seeds) {
+            enqueue_children(seed.first, seed.second, queue.size());
+        }
+        std::sort(queue.begin(), queue.end(), less_item);
+        for (std::size_t i = 0; i < queue.size() && !failed(); ++i) {
+            const native_order::EventId cause = queue[i].cause;
+            const native_order::RequestHandle child = queue[i].child;
+            auto prep = requests_.prepare_parent_terminal(cause, child, next_timeline_ordinal_);
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, operation);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+            if (!mutation || !install_mutation(engine, std::move(*mutation), operation,
+                                               cause.ordinal)) {
+                return;
+            }
+            if (requests_.find_live(child) == nullptr && !requests_.history().empty()) {
+                native_order::EventId next_cause = cause;
+                next_cause.ordinal = command_ordinal(requests_.history().back());
+                enqueue_children(next_cause, child, i + 1);
+            }
+        }
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, operation,
+                                   seeds.empty() ? 0 : seeds.front().first.ordinal});
+        render(engine, e.what());
+    }
+}
+
+void NativeExecutionConsumer::drain_parent_terminal(
+        BacktestEngine& engine, const native_order::EventId& cause,
+        const native_order::RequestHandle& parent,
+        NativeFailureOperation operation) {
+    std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
+    try {
+        seeds.push_back({cause, parent});
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, operation, cause.ordinal});
+        render(engine, e.what());
+        return;
+    }
+    drain_dependency_queue(engine, std::move(seeds), operation);
+}
+
+void NativeExecutionConsumer::drain_after_applied(
+        BacktestEngine& engine, const native_order::EventId& applied,
+        const native_order::RequestHandle& filler) {
+    try {
+        std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
+        auto note_absent = [&](const native_order::RequestHandle& parent) {
+            if (requests_.find_live(parent) != nullptr || requests_.history().empty()) return;
+            native_order::EventId cause = applied;
+            cause.ordinal = command_ordinal(requests_.history().back());
+            seeds.push_back({std::move(cause), parent});
+        };
+
+        const auto recipients = requests_.group_recipients(applied);
+        for (const auto& recipient : recipients) {
+            if (failed()) return;
+            auto prep = requests_.prepare_group_effect(applied, recipient, next_timeline_ordinal_);
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+            if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                               NativeFailureOperation::Settlement,
+                                               applied.ordinal)) {
+                return;
+            }
+            note_absent(recipient);
+        }
+
+        const auto children = requests_.waiting_children(filler);
+        for (const auto& child : children) {
+            if (failed()) return;
+            std::optional<native_order::OpeningObservation> observation;
+            if (requests_.find_live(child)) {
+                observation = read_opening(engine, filler, engine.position_cycle_seq_);
+            }
+            auto prep = requests_.prepare_owner_applied(applied, child, observation,
+                                                        next_timeline_ordinal_);
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+            if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                               NativeFailureOperation::Settlement,
+                                               applied.ordinal)) {
+                return;
+            }
+            note_absent(child);
+        }
+
+        const auto bound = requests_.bound_close_handles();
+        for (const auto& handle : bound) {
+            if (failed()) return;
+            const auto* live = requests_.find_live(handle);
+            auto target = read_target(engine, live);
+            auto prep = requests_.prepare_bound_expiry(applied, handle, target,
+                                                       next_timeline_ordinal_);
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) continue;
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+            if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                               NativeFailureOperation::Settlement,
+                                               applied.ordinal)) {
+                return;
+            }
+            note_absent(handle);
+        }
+
+        seeds.push_back({applied, filler});
+        drain_dependency_queue(engine, std::move(seeds), NativeFailureOperation::Settlement);
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                   NativeFailureOperation::Settlement, applied.ordinal});
+        render(engine, e.what());
+    }
+}
+
+void NativeExecutionConsumer::observe_trails(
+        BacktestEngine& engine, const native_order::MatchCursor& cursor, double price) {
+    if (!std::isfinite(price) || failed()) return;
+    std::vector<native_order::RequestHandle> handles;
+    handles.reserve(requests_.live().size());
+    for (const auto& live : requests_.live()) handles.push_back(live.handle());
+    for (const auto& handle : handles) {
+        if (failed()) return;
+        const auto* live = requests_.find_live(handle);
+        if (!live) continue;
+        const auto* track = std::get_if<native_order::TrailTrack>(&live->trigger_state);
+        if (!track) continue;
+        const bool buy = requests_.working_is_buy(*live);
+        if (!native_matching::trail_best_improves(track->best, price, buy)) continue;
+        native_order::Preparation<native_order::PreparedMutation> prep;
+        try {
+            prep = requests_.prepare_trigger(
+                handle, native_order::ObserveTrailExtremum{cursor, price}, next_timeline_ordinal_);
+        } catch (const std::exception& e) {
+            fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                       NativeFailureOperation::Settlement, cursor.point.ordinal});
+            render(engine, e.what());
+            return;
+        }
+        if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+            fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+            return;
+        }
+        if (std::holds_alternative<native_order::NoChange>(prep)) continue;
+        auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+        if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                           NativeFailureOperation::Settlement,
+                                           cursor.point.ordinal)) {
+            return;
+        }
+    }
 }
 
 void NativeExecutionConsumer::match_point(BacktestEngine& engine, const NativeDriverPoint& point) {
-    if (!point.matching || failed()) return;
-    std::vector<native_order::RequestHandle> order;
-    order.reserve(requests_.live().size());
-    for (const auto& live : requests_.live()) order.push_back(live.handle);
+    match_discrete(engine, point);
+}
+
+void NativeExecutionConsumer::match_discrete(BacktestEngine& engine, const NativeDriverPoint& point) {
+    match_path(engine, point, false, point.raw_price, point.raw_price);
+}
+
+void NativeExecutionConsumer::match_segment(
+        BacktestEngine& engine, const NativeDriverPoint& dest, double from_price) {
+    match_path(engine, dest, true, from_price, dest.raw_price);
+}
+
+void NativeExecutionConsumer::match_path(
+        BacktestEngine& engine, const NativeDriverPoint& point,
+        bool continuous, double from_price, double to_price) {
+    if (failed()) return;
     const auto* spec = spec_ptr();
     if (!spec) return;
-    for (const auto& handle : order) {
-        if (failed()) return;
-        std::size_t live_index = 0;
-        bool found = false;
-        for (std::size_t i = 0; i < requests_.live().size(); ++i) {
-            if (requests_.live()[i].handle == handle) {
-                live_index = i;
-                found = true;
-                break;
+    const auto driver_class = classify_driver(point, continuous);
+    const uint64_t P = point.coordinate.ordinal;
+    double t_cursor = 0.0;
+    native_order::MatchCursor path_cursor = make_cursor(point, t_cursor);
+    observe_trails(engine, path_cursor, native_matching::price_at(from_price, to_price, t_cursor));
+
+    enum class Kind : std::uint8_t {
+        Evaluate = 0,
+        ActivateStop = 1,
+        ActivateStopLimit = 2,
+        BeginTrail = 3,
+        ActivateTrail = 4,
+        Fill = 5,
+    };
+    struct Candidate {
+        native_order::RequestHandle handle;
+        uint64_t incarnation = 0;
+        double t = 0.0;
+        double price = 0.0;
+        Kind kind = Kind::Fill;
+    };
+
+    auto cause_floor = [&](const native_order::LiveRequest& live) {
+        double t_min = t_cursor;
+        if (const auto* armed = std::get_if<native_order::ArmedTransaction>(&live.authority)) {
+            if (armed->cause_cursor.point.ordinal == P) t_min = std::max(t_min, armed->cause_cursor.t);
+        }
+        if (const auto* opening = std::get_if<native_order::OpeningClose>(&live.authority)) {
+            if (const auto* from = std::get_if<native_order::EnrollmentFromApplied>(&opening->enrollment)) {
+                if (from->cursor.point.ordinal == P) t_min = std::max(t_min, from->cursor.t);
             }
         }
-        if (!found) continue;
-        const auto& live = requests_.live()[live_index];
-        if (!native_order::point_eligible(live, point.coordinate.ordinal,
-                                          point.coordinate.effective_time_ms)) {
+        return t_min;
+    };
+
+    auto needs_evaluation = [&](const native_order::LiveRequest& live,
+                                const native_order::EligibilityFacts& facts) {
+        if (facts.needs_close_bind) return true;
+        if (std::holds_alternative<native_order::AllowanceUnset>(live.allowance)) return true;
+        if (const auto* units = std::get_if<native_order::AllowanceUnits>(&live.allowance)) {
+            return units->point_ordinal != P;
+        }
+        if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&live.allowance)) {
+            return all->point_ordinal != P;
+        }
+        return false;
+    };
+
+    std::set<std::pair<uint64_t, std::uint8_t>> skipped;
+    double skip_t = t_cursor;
+    auto skip_key = [](uint64_t incarnation, Kind kind) {
+        return std::pair<uint64_t, std::uint8_t>{incarnation, static_cast<std::uint8_t>(kind)};
+    };
+
+    while (!failed()) {
+        if (skip_t != t_cursor) {
+            skipped.clear();
+            skip_t = t_cursor;
+        }
+        native_order::EvaluationContext eval;
+        eval.cursor = make_cursor(point, t_cursor);
+        eval.driver_class = driver_class;
+        eval.existing_matching_bit = point.matching;
+        std::optional<Candidate> winner;
+        std::vector<native_order::RequestHandle> snapshot;
+        snapshot.reserve(requests_.live().size());
+        for (const auto& live : requests_.live()) snapshot.push_back(live.handle());
+        for (const auto& handle : snapshot) {
+            const auto* live = requests_.find_live(handle);
+            if (!live) continue;
+            const auto facts = requests_.eligibility_facts(*live, eval);
+            if (!facts.birth_ok || facts.waiting || !facts.driver_ok) continue;
+            const double t_min = cause_floor(*live);
+            if (t_min > 1.0) continue;
+            Candidate row;
+            row.handle = handle;
+            row.incarnation = handle.incarnation;
+            if (needs_evaluation(*live, facts)) {
+                row.t = t_min;
+                row.price = native_matching::price_at(from_price, to_price, t_min);
+                row.kind = Kind::Evaluate;
+            } else {
+                const bool buy = requests_.working_is_buy(*live);
+                const auto& trigger = live->request().trigger;
+                const auto& state = live->trigger_state;
+                std::optional<native_matching::GeometricHit> hit;
+                Kind kind = Kind::Fill;
+                if (std::holds_alternative<native_order::StopIdle>(state)) {
+                    const auto* stop = std::get_if<native_order::Stop>(&trigger);
+                    if (!stop) continue;
+                    hit = native_matching::first_region_entry(
+                        from_price, to_price, t_min, stop->price, !buy, true);
+                    kind = Kind::ActivateStop;
+                } else if (std::holds_alternative<native_order::StopLimitPending>(state)) {
+                    const auto* sl = std::get_if<native_order::StopLimit>(&trigger);
+                    if (!sl) continue;
+                    hit = native_matching::first_region_entry(
+                        from_price, to_price, t_min, sl->stop, !buy, true);
+                    kind = Kind::ActivateStopLimit;
+                } else if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
+                    const auto* trail = std::get_if<native_order::Trail>(&trigger);
+                    if (!trail) continue;
+                    if (!trail->arm_price) {
+                        hit = native_matching::GeometricHit{t_min,
+                            native_matching::price_at(from_price, to_price, t_min)};
+                    } else {
+                        hit = native_matching::first_region_entry(
+                            from_price, to_price, t_min, *trail->arm_price, buy, true);
+                    }
+                    kind = Kind::BeginTrail;
+                } else if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
+                    const auto* trail = std::get_if<native_order::Trail>(&trigger);
+                    if (!trail) continue;
+                    double stop = 0.0;
+                    if (!native_matching::checked_trail_stop(track->best, trail->offset, buy, &stop)) {
+                        fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
+                                                   NativeFailureOperation::Settlement, P});
+                        render(engine, "native trailing offset is not representable");
+                        return;
+                    }
+                    hit = native_matching::trail_stop_hit(
+                        from_price, to_price, t_min, track->best, trail->offset, buy);
+                    kind = Kind::ActivateTrail;
+                } else if (std::holds_alternative<native_order::LimitReady>(state)
+                           || std::holds_alternative<native_order::StopLimitLive>(state)) {
+                    double level = 0.0;
+                    if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+                        level = limit->price;
+                    } else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) {
+                        level = sl->limit;
+                    } else {
+                        continue;
+                    }
+                    hit = native_matching::first_region_entry(
+                        from_price, to_price, t_min, level, buy, true);
+                    kind = Kind::Fill;
+                } else if (std::holds_alternative<native_order::MarketReady>(state)
+                           || std::holds_alternative<native_order::StopActive>(state)
+                           || std::holds_alternative<native_order::TrailActive>(state)) {
+                    if (!facts.ready_to_match) continue;
+                    if (std::holds_alternative<native_order::MarketReady>(state) && continuous) {
+                        continue;
+                    }
+                    hit = native_matching::GeometricHit{
+                        t_min, native_matching::price_at(from_price, to_price, t_min)};
+                    kind = Kind::Fill;
+                } else {
+                    continue;
+                }
+                if (!hit) continue;
+                if (kind == Kind::Fill) {
+                    if (const auto* units = std::get_if<native_order::AllowanceUnits>(&live->allowance)) {
+                        if (units->point_ordinal == P && units->left == 0.0) continue;
+                    }
+                    if (std::holds_alternative<native_order::RemainingUnbound>(live->remaining)) {
+                        continue;
+                    }
+                }
+                row.t = hit->t;
+                row.price = hit->price;
+                row.kind = kind;
+            }
+            if (!std::isfinite(row.price) || row.t < t_cursor || row.t > 1.0) continue;
+            if (skipped.count(skip_key(row.incarnation, row.kind))) continue;
+            if (!winner
+                || row.t < winner->t
+                || (row.t == winner->t && row.incarnation < winner->incarnation)
+                || (row.t == winner->t && row.incarnation == winner->incarnation
+                    && static_cast<uint8_t>(row.kind) < static_cast<uint8_t>(winner->kind))) {
+                winner = row;
+            }
+        }
+        if (!winner) break;
+        if (continuous && winner->t > t_cursor) {
+            apply_excursion(engine, winner->price);
+            path_cursor = make_cursor(point, winner->t);
+            observe_trails(engine, path_cursor, winner->price);
+        }
+        t_cursor = winner->t;
+        path_cursor = make_cursor(point, t_cursor);
+        eval.cursor = path_cursor;
+        const auto* live = requests_.find_live(winner->handle);
+        if (!live) continue;
+        if (winner->kind == Kind::Evaluate) {
+            native_order::Preparation<native_order::PreparedMutation> prep;
+            try {
+                prep = requests_.prepare_evaluation(
+                    winner->handle, eval, read_target(engine, live), next_timeline_ordinal_);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return;
+            }
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) {
+                skipped.insert(skip_key(winner->incarnation, winner->kind));
+                continue;
+            }
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+            if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                               NativeFailureOperation::Settlement, P)) {
+                return;
+            }
+            if (requests_.find_live(winner->handle) == nullptr && !requests_.history().empty()) {
+                try {
+                    drain_parent_terminal(
+                            engine,
+                            native_order::EventId{winner->handle.run,
+                                                  command_ordinal(requests_.history().back())},
+                            winner->handle, NativeFailureOperation::Settlement);
+                } catch (const std::exception& e) {
+                    fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, e.what());
+                    return;
+                }
+            }
             continue;
         }
+        if (winner->kind != Kind::Fill) {
+            native_order::TriggerTransition transition;
+            if (winner->kind == Kind::ActivateStop) {
+                transition = native_order::ActivateStop{path_cursor, winner->price};
+            } else if (winner->kind == Kind::ActivateStopLimit) {
+                transition = native_order::ActivateStopLimit{path_cursor, winner->price};
+            } else if (winner->kind == Kind::BeginTrail) {
+                transition = native_order::BeginTrailTracking{path_cursor, winner->price};
+            } else {
+                transition = native_order::ActivateTrail{path_cursor, winner->price};
+            }
+            native_order::Preparation<native_order::PreparedMutation> prep;
+            try {
+                prep = requests_.prepare_trigger(winner->handle, transition, next_timeline_ordinal_);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return;
+            }
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) {
+                skipped.insert(skip_key(winner->incarnation, winner->kind));
+                continue;
+            }
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prep);
+            if (!mutation || !install_mutation(engine, std::move(*mutation),
+                                               NativeFailureOperation::Settlement, P)) {
+                return;
+            }
+            continue;
+        }
+
+        live = requests_.find_live(winner->handle);
+        if (!live) continue;
+        const bool buy = requests_.working_is_buy(*live);
         const double slip = static_cast<double>(spec->slippage_ticks) * spec->price_tick;
-        const bool buy = buying_action(live.request, engine.position_side_);
-        double resolved = buy ? point.raw_price + slip : point.raw_price - slip;
+        double resolved = native_matching::apply_slippage(winner->price, slip, buy);
+        const auto& trigger = live->request().trigger;
+        // Limit protection applies only after finite slippage arithmetic.
+        // min/max must not turn an overflowed price into an executable limit.
+        if (std::isfinite(resolved)
+            && (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
+                || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state))) {
+            double level = 0.0;
+            if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) level = limit->price;
+            else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) level = sl->limit;
+            resolved = native_matching::protect_limit(resolved, level, buy);
+        }
         if (!std::isfinite(resolved) || resolved <= 0.0) {
-            terminal_reject(engine, live_index, native_order::MatchRejectReason::NonpositivePrice);
+            native_order::Preparation<native_order::PreparedMutation> prep;
+            try {
+                prep = requests_.prepare_match_rejected(
+                    winner->handle, eval, native_order::MatchRejectReason::NonpositivePrice,
+                    next_timeline_ordinal_);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return;
+            }
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (auto* mutation = std::get_if<native_order::PreparedMutation>(&prep)) {
+                if (!install_mutation(engine, std::move(*mutation),
+                                      NativeFailureOperation::Settlement, P)) {
+                    return;
+                }
+                try {
+                    drain_parent_terminal(
+                            engine,
+                            native_order::EventId{winner->handle.run,
+                                                  command_ordinal(requests_.history().back())},
+                            winner->handle, NativeFailureOperation::Settlement);
+                } catch (const std::exception& e) {
+                    fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, e.what());
+                    return;
+                }
+            }
             continue;
         }
-        execution::Fill probe{resolved, live.request.label, live.request.comment,
-                              live.handle.incarnation, std::nullopt};
+
+        execution::Action physical = execution::Flatten{};
+        execution::CloseScope scope = execution::Book{};
+        if (const auto* opening = std::get_if<native_order::OpeningClose>(&live->authority)) {
+            if (opening->opening.run != requests_.identity()) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, "native opening scope identity mismatch");
+                return;
+            }
+            scope = execution::OpeningExposure{opening->opening.incarnation, opening->cycle};
+        }
+        if (std::holds_alternative<native_order::RemainingFlattenAll>(live->remaining)
+            || std::holds_alternative<native_order::Flatten>(live->request().intent)) {
+            physical = execution::Flatten{};
+        } else {
+            double qty = 0.0;
+            if (const auto* units = std::get_if<native_order::RemainingUnits>(&live->remaining)) {
+                qty = units->q;
+            }
+            if (const auto* allow = std::get_if<native_order::AllowanceUnits>(&live->allowance)) {
+                if (allow->point_ordinal == P) qty = std::min(qty, allow->left);
+            }
+            if (!std::isfinite(qty) || qty <= 0.0) {
+                skipped.insert(skip_key(winner->incarnation, winner->kind));
+                continue;
+            }
+            if (std::holds_alternative<native_order::Transact>(live->request().intent)) {
+                physical = native_order::Transact{buy ? qty : -qty};
+            } else {
+                physical = order_action::Reduce{qty};
+            }
+        }
+
+        execution::Fill probe{resolved, live->request().label, live->request().comment,
+                              live->handle().incarnation, std::nullopt};
         execution::SettlementInspection inspect;
         try {
-            inspect = engine.inspect_native_settlement(live.request.action, probe);
+            inspect = engine.inspect_native_settlement_scoped(physical, probe, scope);
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
-                                       NativeFailureOperation::Settlement,
-                                       point.coordinate.ordinal});
+                                       NativeFailureOperation::Settlement, P});
             render(engine, e.what());
             return;
         }
         if (inspect.status == execution::Status::NoEffect) {
-            terminal_no_effect(engine, live_index);
+            native_order::Preparation<native_order::PreparedMutation> prep;
+            try {
+                prep = requests_.prepare_no_effect(winner->handle, eval, next_timeline_ordinal_);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return;
+            }
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (std::holds_alternative<native_order::NoChange>(prep)) {
+                skipped.insert(skip_key(winner->incarnation, winner->kind));
+                continue;
+            }
+            if (auto* mutation = std::get_if<native_order::PreparedMutation>(&prep)) {
+                if (!install_mutation(engine, std::move(*mutation),
+                                      NativeFailureOperation::Settlement, P)) {
+                    return;
+                }
+                try {
+                    drain_parent_terminal(
+                            engine,
+                            native_order::EventId{winner->handle.run,
+                                                  command_ordinal(requests_.history().back())},
+                            winner->handle, NativeFailureOperation::Settlement);
+                } catch (const std::exception& e) {
+                    fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, e.what());
+                    return;
+                }
+            }
             continue;
         }
         if (inspect.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
-                                       NativeFailureOperation::Settlement,
-                                       point.coordinate.ordinal,
+                                       NativeFailureOperation::Settlement, P,
                                        static_cast<uint32_t>(inspect.status)});
             render(engine, "native settlement inspection failed");
             return;
         }
-        if (inspect.would_open) {
-            native_order::MatchRejectReason reason{};
-            const auto mask = static_cast<uint32_t>(spec->allowed_open_directions);
-            bool admitted = true;
-            if (inspect.incoming_short && (mask & 2u) == 0) {
-                admitted = false; reason = native_order::MatchRejectReason::OpeningDirection;
-            } else if (!inspect.incoming_short && (mask & 1u) == 0) {
-                admitted = false; reason = native_order::MatchRejectReason::OpeningDirection;
-            } else if (spec->max_abs_units && inspect.resulting_abs_units > *spec->max_abs_units) {
-                admitted = false; reason = native_order::MatchRejectReason::MaxAbsUnits;
-            } else if (spec->max_open_lots && inspect.resulting_lot_count > *spec->max_open_lots) {
-                admitted = false; reason = native_order::MatchRejectReason::MaxOpenLots;
-            } else if (spec->initial_margin_fraction) {
-                const double equity = engine.marked_equity(resolved) - inspect.current_ticket;
-                const double required = inspect.resulting_abs_notional * *spec->initial_margin_fraction;
-                if (!std::isfinite(equity) || !std::isfinite(required) || required > equity) {
-                    admitted = false; reason = native_order::MatchRejectReason::InitialMargin;
+        native_order::MatchRejectReason admit_reason{};
+        if (inspect.would_open && !admit_opening_inspect(engine, resolved, inspect, &admit_reason)) {
+            native_order::Preparation<native_order::PreparedMutation> prep;
+            try {
+                prep = requests_.prepare_match_rejected(
+                    winner->handle, eval, admit_reason, next_timeline_ordinal_);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return;
+            }
+            if (const auto* err = std::get_if<native_order::PreparationError>(&prep)) {
+                fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+                return;
+            }
+            if (auto* mutation = std::get_if<native_order::PreparedMutation>(&prep)) {
+                if (!install_mutation(engine, std::move(*mutation),
+                                      NativeFailureOperation::Settlement, P)) {
+                    return;
+                }
+                try {
+                    drain_parent_terminal(
+                            engine,
+                            native_order::EventId{winner->handle.run,
+                                                  command_ordinal(requests_.history().back())},
+                            winner->handle, NativeFailureOperation::Settlement);
+                } catch (const std::exception& e) {
+                    fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, e.what());
+                    return;
                 }
             }
-            if (!admitted) {
-                terminal_reject(engine, live_index, reason);
-                continue;
-            }
+            continue;
         }
+
+        native_order::ExecutionProposal proposal;
+        proposal.cursor = path_cursor;
+        proposal.raw_price = winner->price;
+        proposal.resolved_price = resolved;
+        proposal.physical_action = physical;
+        proposal.scope = scope;
+        proposal.pre_fill = read_position(engine);
+        proposal.inspected_closed_units = inspect.closed_units;
+        proposal.inspected_opened_units = inspect.opened_units;
+        proposal.inspected_current_ticket = inspect.current_ticket;
+        const int64_t cycle_before = engine.position_cycle_seq_;
+        native_order::EventId applied_id;
+        native_order::TargetObservation staged_target;
+        native_order::Preparation<native_order::PreparedExecution> prepared;
+        try {
+            applied_id = native_order::EventId{winner->handle.run, next_timeline_ordinal_};
+            staged_target = read_target(engine, live);
+            prepared = requests_.prepare_execution(winner->handle, proposal, next_timeline_ordinal_);
+            account_log_.reserve(account_log_.size() + 1);
+        } catch (const std::exception& e) {
+            fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                       NativeFailureOperation::Settlement, P});
+            render(engine, e.what());
+            return;
+        }
+        if (const auto* err = std::get_if<native_order::PreparationError>(&prepared)) {
+            fail_preparation(engine, *err, NativeFailureOperation::Settlement);
+            return;
+        }
+        if (std::holds_alternative<native_order::NoChange>(prepared)) {
+            skipped.insert(skip_key(winner->incarnation, winner->kind));
+            continue;
+        }
+        auto* token = std::get_if<native_order::PreparedExecution>(&prepared);
+        if (!token) continue;
         execution::Fill fill = probe;
         fill.commission_account = inspect.current_ticket;
         execution::PhysicalExecutionContext ctx;
         ctx.effective_time_ms = point.coordinate.effective_time_ms;
         ctx.interval_index = point.coordinate.interval_index;
-        native_order::ExecutionAppliedEvent applied;
-        NativeAccountObservation observation;
-        try {
-            applied.ordinal = next_timeline_ordinal_;
-            applied.handle = live.handle;
-            applied.request = live.request;
-            applied.birth = live.birth;
-            applied.effective_time_ms = point.coordinate.effective_time_ms;
-            applied.interval_open_ms = point.coordinate.open_ms;
-            applied.interval_last_traded_close_ms = point.coordinate.last_traded_close_ms;
-            applied.interval_index = point.coordinate.interval_index;
-            applied.raw_price = point.raw_price;
-            applied.resolved_price = resolved;
-            applied.provenance = static_cast<std::uint8_t>(point.coordinate.provenance);
-            observation.ordinal = applied.ordinal;
-            observation.effective_time_ms = applied.effective_time_ms;
-            native_order::TerminalCommit::usable_ordinal(requests_, next_timeline_ordinal_);
-            native_order::TerminalCommit::reserve_history(requests_);
-            account_log_.reserve(account_log_.size() + 1);
-        } catch (const std::exception& e) {
-            fail(engine, NativeFailure{NativeFailureCode::Allocation,
-                                       NativeFailureOperation::Settlement,
-                                       point.coordinate.ordinal});
-            render(engine, e.what());
-            return;
-        }
         execution::Result settled;
         try {
-            settled = engine.settle_native_execution_at(live.request.action, fill, ctx);
+            settled = engine.settle_native_execution_scoped_at(physical, fill, ctx, scope);
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
-                                       NativeFailureOperation::Settlement,
-                                       point.coordinate.ordinal});
+                                       NativeFailureOperation::Settlement, P});
             render(engine, e.what());
             return;
         }
-        if (settled.status != execution::Status::Applied
-            && settled.status != execution::Status::NoEffect) {
+        if (settled.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
-                                       NativeFailureOperation::Settlement,
-                                       point.coordinate.ordinal,
+                                       NativeFailureOperation::Settlement, P,
                                        static_cast<uint32_t>(settled.status)});
             render(engine, "native settlement commit failed");
             return;
         }
-        if (settled.status == execution::Status::NoEffect) {
-            terminal_no_effect(engine, live_index);
-            continue;
-        }
-        applied.current_ticket = settled.current_ticket;
-        applied.first_trade_index = settled.first_trade_index;
-        applied.closed_trade_count = settled.closed_trade_count;
-        applied.opened_lot_incarnation = settled.opened_lot_incarnation;
-        native_order::TerminalCommit::install(requests_, live_index,
-                                              native_order::CommandEvent{std::move(applied)});
-        sync_history_digest();
-        ++next_timeline_ordinal_;
+        refresh_target_scalars(engine, staged_target);
+        native_order::CommittedExecutionFacts facts;
+        facts.result = settled;
+        facts.cycle_before = cycle_before;
+        facts.cycle_after = engine.position_cycle_seq_;
+        facts.post_target = std::move(staged_target);
+        facts.committed_action = physical;
+        if (!install_execution(engine, std::move(*token), facts, P)) return;
+        NativeAccountObservation observation;
+        observation.ordinal = applied_id.ordinal;
+        observation.effective_time_ms = point.coordinate.effective_time_ms;
         observation.marked_equity = engine.marked_equity(resolved);
         observation.realized_balance = engine.initial_capital_ + engine.net_profit_sum_;
         observation.signed_units = 0.0;
@@ -1022,6 +1991,11 @@ void NativeExecutionConsumer::match_point(BacktestEngine& engine, const NativeDr
         fold_account_digest(observation);
         engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
         engine.bar_index_ = point.coordinate.interval_index;
+        drain_after_applied(engine, applied_id, winner->handle);
+    }
+    if (continuous && t_cursor < 1.0 && !failed()) {
+        apply_excursion(engine, to_price);
+        observe_trails(engine, make_cursor(point, 1.0), to_price);
     }
 }
 
@@ -1064,11 +2038,11 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
 
 void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, const Bar& bar,
                                                        const NativeCoordinate& base) {
-    // Native AUTO depends on this input, including when another legacy host
-    // has installed a forced path around a nested native run.
+    // Native AUTO is local to this input; another legacy host may have a
+    // thread-local forced path installed around a nested native run.
     const bool high_first = std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
-    auto emit_match = [&](double price, int64_t time, NativePriceProvenance provenance,
-                          NativePathPhase phase) {
+    auto emit_discrete = [&](double price, int64_t time, NativePriceProvenance provenance,
+                             NativePathPhase phase, bool matching) {
         NativeDriverPoint point;
         point.coordinate = base;
         point.coordinate.ordinal = take_ordinal(engine);
@@ -1077,41 +2051,49 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         point.coordinate.provenance = provenance;
         point.coordinate.path_phase = phase;
         point.raw_price = price;
-        point.matching = true;
+        point.matching = matching;
         record_driver(point);
-        match_point(engine, point);
+        match_discrete(engine, point);
         raise_floor(time);
     };
-    auto emit_excursion = [&](double price, int64_t time, NativePathPhase phase) {
+    auto emit_segment = [&](double from, double to, int64_t time, NativePathPhase phase) {
         NativeDriverPoint point;
         point.coordinate = base;
         point.coordinate.ordinal = take_ordinal(engine);
         point.coordinate.effective_time_ms = time;
+        point.coordinate.source_price_time_ms = time;
         point.coordinate.provenance = NativePriceProvenance::Confirmed;
         point.coordinate.path_phase = phase;
-        point.raw_price = price;
+        point.raw_price = to;
+        point.matching = false;
         point.excursion = true;
         record_driver(point);
-        apply_excursion(engine, price);
+        match_segment(engine, point, from);
         raise_floor(time);
     };
     const int64_t open_time = script_.first_source_time_ms != 0
         ? script_.first_source_time_ms
         : (script_.first_open_ms != 0 ? script_.first_open_ms : bar.timestamp);
     const int64_t close_time = calculation_time(base);
-    emit_match(bar.open, open_time, NativePriceProvenance::ModeledOHLCOpen, NativePathPhase::Open);
+    emit_discrete(bar.open, open_time, NativePriceProvenance::ModeledOHLCOpen,
+                  NativePathPhase::Open, true);
     if (failed()) return;
+    double prev = bar.open;
     if (high_first) {
-        emit_excursion(bar.high, open_time, NativePathPhase::High);
+        emit_segment(prev, bar.high, open_time, NativePathPhase::High);
         if (failed()) return;
-        emit_excursion(bar.low, open_time, NativePathPhase::Low);
+        prev = bar.high;
+        emit_segment(prev, bar.low, open_time, NativePathPhase::Low);
+        prev = bar.low;
     } else {
-        emit_excursion(bar.low, open_time, NativePathPhase::Low);
+        emit_segment(prev, bar.low, open_time, NativePathPhase::Low);
         if (failed()) return;
-        emit_excursion(bar.high, open_time, NativePathPhase::High);
+        prev = bar.low;
+        emit_segment(prev, bar.high, open_time, NativePathPhase::High);
+        prev = bar.high;
     }
     if (failed()) return;
-    emit_excursion(bar.close, close_time, NativePathPhase::Close);
+    emit_segment(prev, bar.close, close_time, NativePathPhase::Close);
     if (failed()) return;
     NativeCoordinate calc = base;
     calc.ordinal = take_ordinal(engine);
@@ -1126,8 +2108,8 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     if (failed()) return;
     const auto* spec = spec_ptr();
     if (spec && spec->close_execution == NativeCloseExecution::AfterCalculation) {
-        emit_match(bar.close, close_time, NativePriceProvenance::AfterCalculationClose,
-                   NativePathPhase::Close);
+        emit_discrete(bar.close, close_time, NativePriceProvenance::AfterCalculationClose,
+                      NativePathPhase::Close, true);
     }
 }
 
@@ -1811,43 +2793,163 @@ bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_p
     }
 }
 
-native_order::SubmitResult NativeExecutionConsumer::submit(BacktestEngine& engine,
-                                                           const native_order::Request& request) {
+native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
+        BacktestEngine& engine, const native_order::Request& request,
+        native_order::CommandSurface surface) {
     if (!commands_allowed()) {
         throw std::runtime_error("native submit refused outside allowed phase");
     }
-    const int64_t floor = decision_floor();
-    auto result = requests_.submit(request, floor, engine.next_order_incarnation_,
-                                   next_timeline_ordinal_,
-                                   spec_ptr() ? spec_ptr()->quantity_grid : std::nullopt);
+    native_order::CommandContext ctx;
+    native_order::PreparedSubmit prepared;
+    try {
+        ctx = make_command_context(engine, request, surface);
+        prepared = requests_.prepare_submit(
+            request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render(engine, e.what());
+        throw;
+    }
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+        render(engine, "native submit produced no preparation");
+        throw std::runtime_error("native submit produced no preparation");
+    }
+    auto installed = requests_.install_submit(std::move(prepared));
+    if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
+                                   0, static_cast<uint32_t>(*err)});
+        render(engine, "native submit install failed");
+        throw std::runtime_error("native submit install failed");
+    }
+    auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
     sync_history_digest();
-    return result;
+    catch_up_timeline();
+    if (ok.result.status == native_order::SubmitStatus::Accepted) {
+        ++engine.next_order_incarnation_;
+    }
+    return std::move(ok.result);
+}
+
+native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
+        BacktestEngine& engine, const native_order::RequestHandle& target,
+        const native_order::Request& request, native_order::CommandSurface surface) {
+    if (!commands_allowed()) {
+        throw std::runtime_error("native replace refused outside allowed phase");
+    }
+    native_order::CommandContext ctx;
+    native_order::PreparedReplace prepared;
+    try {
+        ctx = make_command_context(engine, request, surface);
+        prepared = requests_.prepare_replace(
+            target, request, ctx, engine.next_order_incarnation_, next_timeline_ordinal_);
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render(engine, e.what());
+        throw;
+    }
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+        render(engine, "native replace produced no preparation");
+        throw std::runtime_error("native replace produced no preparation");
+    }
+    const native_order::EventId predicted = prepared.predicted_event_id();
+    const auto predicted_status = prepared.predicted().status;
+    auto installed = requests_.install_replace(std::move(prepared));
+    if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
+                                   predicted.ordinal, static_cast<uint32_t>(*err)});
+        render(engine, "native replace install failed");
+        throw std::runtime_error("native replace install failed");
+    }
+    auto& ok = std::get<native_order::CommandInstalled<native_order::ReplaceResult>>(installed);
+    sync_history_digest();
+    catch_up_timeline();
+    if (predicted_status == native_order::ReplaceStatus::Replaced) {
+        ++engine.next_order_incarnation_;
+        try {
+            drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);
+        } catch (const std::exception& e) {
+            fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                       NativeFailureOperation::Command, predicted.ordinal});
+            render(engine, e.what());
+            throw;
+        }
+        if (failed()) {
+            throw std::runtime_error("native replace dependency cleanup failed");
+        }
+    }
+    return std::move(ok.result);
+}
+
+native_order::SubmitResult NativeExecutionConsumer::submit(BacktestEngine& engine,
+                                                           const native_order::Request& request) {
+    return submit_with_surface(engine, request, native_order::CommandSurface::General);
 }
 
 native_order::ReplaceResult NativeExecutionConsumer::replace(
         BacktestEngine& engine,
         const native_order::RequestHandle& target,
         const native_order::Request& request) {
-    if (!commands_allowed()) {
-        throw std::runtime_error("native replace refused outside allowed phase");
-    }
-    const int64_t floor = decision_floor();
-    auto result = requests_.replace(target, request, floor, engine.next_order_incarnation_,
-                                    next_timeline_ordinal_,
-                                    spec_ptr() ? spec_ptr()->quantity_grid : std::nullopt);
-    sync_history_digest();
-    return result;
+    return replace_with_surface(engine, target, request, native_order::CommandSurface::General);
+}
+
+native_order::SubmitResult NativeExecutionConsumer::submit_market(
+        BacktestEngine& engine, const native_order::Request& request) {
+    return submit_with_surface(engine, request, native_order::CommandSurface::MarketOnly);
+}
+
+native_order::ReplaceResult NativeExecutionConsumer::replace_market(
+        BacktestEngine& engine,
+        const native_order::RequestHandle& target,
+        const native_order::Request& request) {
+    return replace_with_surface(engine, target, request, native_order::CommandSurface::MarketOnly);
 }
 
 native_order::CancelResult NativeExecutionConsumer::cancel(
         BacktestEngine& engine, const native_order::RequestHandle& target) {
-    (void)engine;
     if (!commands_allowed()) {
         throw std::runtime_error("native cancel refused outside allowed phase");
     }
-    auto result = requests_.cancel(target, next_timeline_ordinal_);
+    native_order::PreparedCancel prepared;
+    try {
+        prepared = requests_.prepare_cancel(target, next_timeline_ordinal_);
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render(engine, e.what());
+        throw;
+    }
+    if (!prepared) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command});
+        render(engine, "native cancel produced no preparation");
+        throw std::runtime_error("native cancel produced no preparation");
+    }
+    const auto predicted_status = prepared.predicted().status;
+    const native_order::EventId predicted = prepared.predicted_event_id();
+    auto installed = requests_.install_cancel(std::move(prepared));
+    if (const auto* err = std::get_if<native_order::InstallError>(&installed)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Command,
+                                   predicted.ordinal, static_cast<uint32_t>(*err)});
+        render(engine, "native cancel install failed");
+        throw std::runtime_error("native cancel install failed");
+    }
+    auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
     sync_history_digest();
-    return result;
+    catch_up_timeline();
+    if (predicted_status == native_order::CancelStatus::Cancelled) {
+        try {
+            drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);
+        } catch (const std::exception& e) {
+            fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                       NativeFailureOperation::Command, predicted.ordinal});
+            render(engine, e.what());
+            throw;
+        }
+        if (failed()) {
+            throw std::runtime_error("native cancel dependency cleanup failed");
+        }
+    }
+    return std::move(ok.result);
 }
 
 NativePhysicalPosition NativeExecutionConsumer::position(const BacktestEngine& engine) const {
@@ -1941,13 +3043,22 @@ NativeStateView NativeStrategyHost::native_state() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer())).view();
 }
 
-native_order::SubmitResult NativeStrategyHost::submit_market(const native_order::Request& request) {
+native_order::SubmitResult NativeStrategyHost::submit(const native_order::Request& request) {
     return as_native_consumer(execution_consumer()).submit(*this, request);
+}
+
+native_order::ReplaceResult NativeStrategyHost::replace(
+        const native_order::RequestHandle& target, const native_order::Request& request) {
+    return as_native_consumer(execution_consumer()).replace(*this, target, request);
+}
+
+native_order::SubmitResult NativeStrategyHost::submit_market(const native_order::Request& request) {
+    return as_native_consumer(execution_consumer()).submit_market(*this, request);
 }
 
 native_order::ReplaceResult NativeStrategyHost::replace_market(
         const native_order::RequestHandle& target, const native_order::Request& request) {
-    return as_native_consumer(execution_consumer()).replace(*this, target, request);
+    return as_native_consumer(execution_consumer()).replace_market(*this, target, request);
 }
 
 native_order::CancelResult NativeStrategyHost::cancel(const native_order::RequestHandle& target) {
@@ -1980,5 +3091,5 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
         .continuation_hash();
 }
 
-}  // inline namespace engine_script_run_v12
+}  // inline namespace engine_script_run_v13
 }  // namespace pineforge

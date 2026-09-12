@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pineforge/native_order.hpp>
+#include <pineforge/native_order_identity.hpp>
 
 #include <cstdint>
 #include <optional>

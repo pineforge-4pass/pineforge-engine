@@ -14,7 +14,6 @@
 #include <utility>
 #include <variant>
 
-using pineforge::execution::Action;
 using pineforge::execution::Flatten;
 using pineforge::native_order::AcceptedEvent;
 using pineforge::native_order::Birth;
@@ -36,7 +35,6 @@ using pineforge::native_order::RunIdentity;
 using pineforge::native_order::SubmitStatus;
 using pineforge::native_order::WorkingRequestCore;
 using pineforge::native_order::point_eligible;
-using pineforge::order_action::Reduce;
 using pineforge::order_action::Transact;
 
 namespace {
@@ -69,19 +67,23 @@ double step_n(double x, double toward, int n) {
 }
 
 Request tx(double q, std::string label = {}, std::string comment = {}) {
-    return Request{Action{Transact{q}}, std::move(label), std::move(comment)};
+    return Request{Transact{q}, std::move(label), std::move(comment)};
 }
 Request rd(double q, std::string label = {}, std::string comment = {}) {
-    return Request{Action{Reduce{q}}, std::move(label), std::move(comment)};
+    return Request{pineforge::native_order::Reduce{pineforge::native_order::ExplicitUnits{q}},
+                   std::move(label), std::move(comment)};
 }
 Request fl(std::string label = {}, std::string comment = {}) {
-    return Request{Action{Flatten{}}, std::move(label), std::move(comment)};
+    return Request{Flatten{}, std::move(label), std::move(comment)};
 }
 
-double transact_qty(const Action& action) {
-    return std::get<Transact>(action).signed_units;
+double transact_qty(const pineforge::native_order::OrderIntent& intent) {
+    return std::get<Transact>(intent).signed_units;
 }
-double reduce_qty(const Action& action) { return std::get<Reduce>(action).units; }
+double reduce_qty(const pineforge::native_order::OrderIntent& intent) {
+    const auto& reduce = std::get<pineforge::native_order::Reduce>(intent);
+    return std::get<pineforge::native_order::ExplicitUnits>(reduce.size).units;
+}
 
 template <class T>
 const T* as(const CommandEvent& event) {
@@ -120,21 +122,21 @@ void submit_accept_and_reject() {
     CHECK(core.live().size() == 1);
     CHECK(core.history().size() == 1);
     const LiveRequest& live = core.live().front();
-    CHECK(live.handle == *accepted.handle);
-    CHECK(live.birth.acceptance_ordinal == 1);
-    CHECK(live.birth.decision_time_lower_bound == 1000);
-    CHECK(!live.predecessor);
-    CHECK(live.request.label == "entry");
-    CHECK(live.request.comment == "first");
-    CHECK(bits_eq(transact_qty(live.request.action), 2.5));
+    CHECK(live.handle() == *accepted.handle);
+    CHECK(live.birth().acceptance_ordinal == 1);
+    CHECK(live.birth().decision_time_lower_bound == 1000);
+    CHECK(!live.predecessor());
+    CHECK(live.request().label == "entry");
+    CHECK(live.request().comment == "first");
+    CHECK(bits_eq(transact_qty(live.request().intent), 2.5));
     const auto* event = as<AcceptedEvent>(core.history().back());
     CHECK(event);
     if (event) {
         CHECK(event->ordinal == 1);
-        CHECK(event->handle == live.handle);
-        CHECK(event->birth == live.birth);
-        CHECK(event->request.label == "entry");
-        CHECK(bits_eq(transact_qty(event->request.action), 2.5));
+        CHECK(event->handle() == live.handle());
+        CHECK(event->birth() == live.birth());
+        CHECK(event->request().label == "entry");
+        CHECK(bits_eq(transact_qty(event->request().intent), 2.5));
     }
     CHECK(core.find_live(*accepted.handle) == &core.live().front());
 
@@ -146,7 +148,7 @@ void submit_accept_and_reject() {
     CHECK(inc == 2);
     CHECK(ord == 3);
     CHECK(core.live().size() == 1);
-    CHECK(core.live().front().handle.incarnation == 1);
+    CHECK(core.live().front().handle().incarnation == 1);
     CHECK(core.history().size() == 2);
     const auto* rej = as<RejectedEvent>(core.history().back());
     CHECK(rej);
@@ -155,7 +157,7 @@ void submit_accept_and_reject() {
         CHECK(rej->reason == RequestRejectReason::InvalidQuantity);
         CHECK(rej->request.label == "zero");
         CHECK(rej->request.comment == "nope");
-        CHECK(bits_eq(transact_qty(rej->request.action), 0.0));
+        CHECK(bits_eq(transact_qty(rej->request.intent), 0.0));
     }
 }
 
@@ -199,12 +201,12 @@ void quantity_rejections_preserve_bits() {
         CHECK(rej->ordinal == ord_before);
         CHECK(rej->reason == cases[i].reason);
         CHECK(rej->request.label == cases[i].request.label);
-        if (std::holds_alternative<Transact>(cases[i].request.action)) {
-            CHECK(bits_eq(transact_qty(rej->request.action),
-                          transact_qty(cases[i].request.action)));
+        if (std::holds_alternative<Transact>(cases[i].request.intent)) {
+            CHECK(bits_eq(transact_qty(rej->request.intent),
+                          transact_qty(cases[i].request.intent)));
         } else {
-            CHECK(bits_eq(reduce_qty(rej->request.action),
-                          reduce_qty(cases[i].request.action)));
+            CHECK(bits_eq(reduce_qty(rej->request.intent),
+                          reduce_qty(cases[i].request.intent)));
         }
     }
     CHECK(core.history().size() == n);
@@ -217,19 +219,19 @@ void flatten_and_signed_reduce() {
     uint64_t ord = 1;
     const auto flat = core.submit(fl("flat", "all"), 8, inc, ord, 0.25);
     CHECK(flat.status == SubmitStatus::Accepted);
-    CHECK(std::holds_alternative<Flatten>(core.live().back().request.action));
-    CHECK(core.live().back().request.label == "flat");
+    CHECK(std::holds_alternative<Flatten>(core.live().back().request().intent));
+    CHECK(core.live().back().request().label == "flat");
     CHECK(inc == 2);
     CHECK(ord == 2);
 
     const double denorm = std::numeric_limits<double>::denorm_min();
     const auto reduce = core.submit(rd(denorm, "dust"), 8, inc, ord);
     CHECK(reduce.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(reduce_qty(core.live().back().request.action), denorm));
+    CHECK(bits_eq(reduce_qty(core.live().back().request().intent), denorm));
 
     const auto sell = core.submit(tx(-4.0, "sell"), 9, inc, ord);
     CHECK(sell.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(transact_qty(core.live().back().request.action), -4.0));
+    CHECK(bits_eq(transact_qty(core.live().back().request().intent), -4.0));
     CHECK(core.live().size() == 3);
 }
 
@@ -242,32 +244,32 @@ void grid_accepts_and_preserves_bits() {
     CHECK(quantity_on_grid(q, step));
     const auto result = core.submit(tx(q, "sum"), 1, inc, ord, step);
     CHECK(result.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(transact_qty(core.live().back().request.action), q));
+    CHECK(bits_eq(transact_qty(core.live().back().request().intent), q));
     CHECK(!bits_eq(q, 0.3));
 
     const auto sell = core.submit(tx(-2.0, "sell-grid"), 1, inc, ord, 1.0);
     CHECK(sell.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(transact_qty(core.live().back().request.action), -2.0));
+    CHECK(bits_eq(transact_qty(core.live().back().request().intent), -2.0));
 
     const double exact = 2.0;
     const double one_ulp = step_n(exact, Inf, 1);
     CHECK(quantity_on_grid(one_ulp, 1.0));
     const auto near = core.submit(tx(one_ulp, "ulp1"), 1, inc, ord, 1.0);
     CHECK(near.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(transact_qty(core.live().back().request.action), one_ulp));
+    CHECK(bits_eq(transact_qty(core.live().back().request().intent), one_ulp));
     CHECK(!bits_eq(one_ulp, exact));
 
     const double below = step_n(exact, 0.0, 1);
     CHECK(quantity_on_grid(below, 1.0));
     const auto near_lo = core.submit(rd(below, "ulp-1"), 1, inc, ord, 1.0);
     CHECK(near_lo.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(reduce_qty(core.live().back().request.action), below));
+    CHECK(bits_eq(reduce_qty(core.live().back().request().intent), below));
 
     const double pow2 = 0x1p53;
     CHECK(quantity_on_grid(pow2, 1.0));
     const auto edge = core.submit(tx(pow2, "n53"), 1, inc, ord, 1.0);
     CHECK(edge.status == SubmitStatus::Accepted);
-    CHECK(bits_eq(transact_qty(core.live().back().request.action), pow2));
+    CHECK(bits_eq(transact_qty(core.live().back().request().intent), pow2));
 }
 
 void grid_rejects_off_grid_and_half() {
@@ -286,7 +288,7 @@ void grid_rejects_off_grid_and_half() {
     CHECK(rej);
     if (rej) {
         CHECK(rej->reason == RequestRejectReason::OffGrid);
-        CHECK(bits_eq(transact_qty(rej->request.action), five_ulp));
+        CHECK(bits_eq(transact_qty(rej->request.intent), five_ulp));
         CHECK(rej->request.label == "five");
     }
     CHECK(core.live().empty());
@@ -297,7 +299,7 @@ void grid_rejects_off_grid_and_half() {
     CHECK(inc == inc_before);
     const auto* half_e = as<RejectedEvent>(core.history().back());
     CHECK(half_e);
-    if (half_e) CHECK(bits_eq(transact_qty(half_e->request.action), 1.5));
+    if (half_e) CHECK(bits_eq(transact_qty(half_e->request.intent), 1.5));
 
     const auto dust = core.submit(rd(0.4, "dust"), 2, inc, ord, 1.0);
     CHECK(dust.status == SubmitStatus::Rejected);
@@ -320,8 +322,8 @@ void submit_before_point_eligibility() {
     CHECK(second.event_ordinal == 6);
     const LiveRequest& a = core.live()[0];
     const LiveRequest& b = core.live()[1];
-    CHECK(a.birth.acceptance_ordinal == 5);
-    CHECK(b.birth.acceptance_ordinal == 6);
+    CHECK(a.birth().acceptance_ordinal == 5);
+    CHECK(b.birth().acceptance_ordinal == 6);
     CHECK(!point_eligible(a, 5, 1000));
     CHECK(!point_eligible(a, 6, 999));
     CHECK(point_eligible(a, 6, 1000));
@@ -329,7 +331,7 @@ void submit_before_point_eligibility() {
     CHECK(!point_eligible(b, 6, 1000));
     CHECK(!point_eligible(b, 7, 999));
     CHECK(point_eligible(b, 7, 1000));
-    CHECK(!point_eligible(a.birth, a.birth.acceptance_ordinal, a.birth.decision_time_lower_bound));
+    CHECK(!point_eligible(a.birth(), a.birth().acceptance_ordinal, a.birth().decision_time_lower_bound));
 }
 
 void replace_valid_invalid_and_stale_cancel() {
@@ -351,16 +353,16 @@ void replace_valid_invalid_and_stale_cancel() {
     CHECK(ord == 4);
     CHECK(core.live().size() == 2);
     CHECK(core.find_live(h1));
-    CHECK(core.find_live(h1)->request.label == "old");
-    CHECK(bits_eq(transact_qty(core.find_live(h1)->request.action), 1.0));
+    CHECK(core.find_live(h1)->request().label == "old");
+    CHECK(bits_eq(transact_qty(core.find_live(h1)->request().intent), 1.0));
     const auto* rr = as<ReplaceRejectedEvent>(core.history().back());
     CHECK(rr);
     if (rr) {
-        CHECK(rr->target == h1);
-        CHECK(rr->live_request.label == "old");
+        CHECK(rr->target() == h1);
+        CHECK(rr->live_request().label == "old");
         CHECK(rr->attempted.label == "bad");
         CHECK(rr->attempted.comment == "no");
-        CHECK(bits_eq(transact_qty(rr->attempted.action), 0.0));
+        CHECK(bits_eq(transact_qty(rr->attempted.intent), 0.0));
         CHECK(rr->reason == RequestRejectReason::InvalidQuantity);
     }
 
@@ -381,27 +383,27 @@ void replace_valid_invalid_and_stale_cancel() {
     CHECK(!core.find_live(h1));
     CHECK(core.find_live(h2));
     CHECK(core.live().size() == 2);
-    CHECK(core.live()[0].handle == h2);
+    CHECK(core.live()[0].handle() == h2);
     const LiveRequest& successor = core.live()[1];
-    CHECK(successor.handle == *ok.successor);
-    CHECK(successor.birth.acceptance_ordinal == 5);
-    CHECK(successor.birth.decision_time_lower_bound == 30);
-    CHECK(successor.predecessor == h1);
-    CHECK(successor.request.label == "new");
-    CHECK(successor.request.comment == "keep-new");
-    CHECK(bits_eq(transact_qty(successor.request.action), -3.0));
+    CHECK(successor.handle() == *ok.successor);
+    CHECK(successor.birth().acceptance_ordinal == 5);
+    CHECK(successor.birth().decision_time_lower_bound == 30);
+    CHECK(successor.predecessor() == h1);
+    CHECK(successor.request().label == "new");
+    CHECK(successor.request().comment == "keep-new");
+    CHECK(bits_eq(transact_qty(successor.request().intent), -3.0));
     CHECK(point_eligible(successor, 6, 30));
     CHECK(!point_eligible(successor, 5, 30));
     const auto* replaced = as<ReplacedEvent>(core.history().back());
     CHECK(replaced);
     if (replaced) {
         CHECK(replaced->ordinal == 5);
-        CHECK(replaced->predecessor == h1);
-        CHECK(replaced->predecessor_request.label == "old");
-        CHECK(replaced->successor == successor.handle);
-        CHECK(replaced->successor_request.comment == "keep-new");
-        CHECK(replaced->successor_birth == successor.birth);
-        CHECK(bits_eq(transact_qty(replaced->successor_request.action), -3.0));
+        CHECK(replaced->predecessor() == h1);
+        CHECK(replaced->predecessor_request().label == "old");
+        CHECK(replaced->successor() == successor.handle());
+        CHECK(replaced->successor_request().comment == "keep-new");
+        CHECK(replaced->successor_birth() == successor.birth());
+        CHECK(bits_eq(transact_qty(replaced->successor_request().intent), -3.0));
     }
 
     const auto stale = core.cancel(h1, ord);
@@ -409,7 +411,7 @@ void replace_valid_invalid_and_stale_cancel() {
     CHECK(stale.event_ordinal == 6);
     CHECK(ord == 7);
     CHECK(core.find_live(h2));
-    CHECK(core.find_live(successor.handle));
+    CHECK(core.find_live(successor.handle()));
     const auto* nw = as<NotWorkingEvent>(core.history().back());
     CHECK(nw);
     if (nw) {
@@ -421,7 +423,7 @@ void replace_valid_invalid_and_stale_cancel() {
     CHECK(stale_rep.status == ReplaceStatus::NotWorking);
     CHECK(!stale_rep.successor);
     CHECK(inc == 4);
-    CHECK(core.find_live(successor.handle)->request.label == "new");
+    CHECK(core.find_live(successor.handle())->request().label == "new");
     const auto* nw2 = as<NotWorkingEvent>(core.history().back());
     CHECK(nw2);
     if (nw2) {
@@ -471,7 +473,7 @@ void foreign_zero_and_absent_handles() {
 
     CHECK(core.live().size() == 1);
     CHECK(core.find_live(*live.handle));
-    CHECK(core.live().front().request.label == "live");
+    CHECK(core.live().front().request().label == "live");
 }
 
 void metadata_and_const_views() {
@@ -484,14 +486,14 @@ void metadata_and_const_views() {
     const WorkingRequestCore& view = core;
     CHECK(view.live().size() == 1);
     CHECK(view.history().size() == 1);
-    CHECK(view.live().front().request.label == label);
-    CHECK(view.live().front().request.comment == comment);
-    CHECK(view.find_live(view.live().front().handle));
+    CHECK(view.live().front().request().label == label);
+    CHECK(view.live().front().request().comment == comment);
+    CHECK(view.find_live(view.live().front().handle()));
     const auto* accepted = as<AcceptedEvent>(view.history().front());
     CHECK(accepted);
     if (accepted) {
-        CHECK(accepted->request.label == label);
-        CHECK(accepted->request.comment == comment);
+        CHECK(accepted->request().label == label);
+        CHECK(accepted->request().comment == comment);
     }
 }
 
@@ -511,7 +513,7 @@ void counters_do_not_partially_mutate() {
         CHECK(core.live().size() == live_n);
         CHECK(core.history().size() == hist_n);
         CHECK(core.find_live(kept));
-        CHECK(core.find_live(kept)->request.label == "keep");
+        CHECK(core.find_live(kept)->request().label == "keep");
     };
 
     inc = 0;
@@ -561,8 +563,8 @@ void counters_do_not_partially_mutate() {
     } catch (const std::overflow_error&) { CHECK(true); }
     CHECK(inc == std::numeric_limits<uint64_t>::max());
     CHECK(core.find_live(kept));
-    CHECK(core.find_live(kept)->request.label == "keep");
-    CHECK(bits_eq(transact_qty(core.find_live(kept)->request.action), 1.0));
+    CHECK(core.find_live(kept)->request().label == "keep");
+    CHECK(bits_eq(transact_qty(core.find_live(kept)->request().intent), 1.0));
 
     inc = 8;
     const uint64_t ord_now = ord;
@@ -582,7 +584,7 @@ void counters_do_not_partially_mutate() {
     } catch (const std::invalid_argument&) { CHECK(true); }
     CHECK(ord == 0);
     CHECK(core.find_live(kept));
-    CHECK(core.find_live(kept)->request.label == "keep");
+    CHECK(core.find_live(kept)->request().label == "keep");
 
     ord = std::numeric_limits<uint64_t>::max();
     try {
@@ -597,7 +599,7 @@ void counters_do_not_partially_mutate() {
     const auto still = core.replace(kept, tx(0.0, "bad"), 2, inc, ord);
     CHECK(still.status == ReplaceStatus::ReplaceRejected);
     CHECK(inc == 8);
-    CHECK(core.find_live(kept)->request.label == "keep");
+    CHECK(core.find_live(kept)->request().label == "keep");
 }
 
 void reset_makes_old_handles_invalid() {
@@ -612,7 +614,7 @@ void reset_makes_old_handles_invalid() {
     } catch (const std::invalid_argument&) { CHECK(true); }
     CHECK(core.identity() == kRun);
     CHECK(core.find_live(old));
-    CHECK(core.find_live(old)->request.label == "old-run");
+    CHECK(core.find_live(old)->request().label == "old-run");
 
     try {
         core.reset(RunIdentity{"session-a", 0});
@@ -639,7 +641,7 @@ void reset_makes_old_handles_invalid() {
     CHECK(fresh.status == SubmitStatus::Accepted);
     CHECK(fresh.handle->run == next);
     CHECK(fresh.handle->incarnation == 2);
-    CHECK(core.live().front().request.label == "new-run");
+    CHECK(core.live().front().request().label == "new-run");
     CHECK(old != *fresh.handle);
 }
 
@@ -703,24 +705,24 @@ void move_construction_transfers_and_reset_rebinds() {
     const auto* transferred = destination.find_live(*successor.successor);
     CHECK(transferred);
     if (transferred) {
-        CHECK(transferred->predecessor == original.handle);
-        CHECK(transferred->birth == (Birth{3, 12}));
-        CHECK(transferred->request.label == "successor");
-        CHECK(transferred->request.comment == "kept");
-        CHECK(bits_eq(transact_qty(transferred->request.action), -2.5));
+        CHECK(transferred->predecessor() == original.handle);
+        CHECK(transferred->birth() == (Birth{3, 12}));
+        CHECK(transferred->request().label == "successor");
+        CHECK(transferred->request().comment == "kept");
+        CHECK(bits_eq(transact_qty(transferred->request().intent), -2.5));
     }
     const auto* accepted_event = as<AcceptedEvent>(destination.history().front());
     CHECK(accepted_event);
     if (accepted_event) {
-        CHECK(accepted_event->handle == *original.handle);
-        CHECK(accepted_event->request.comment == "move me");
+        CHECK(accepted_event->handle() == *original.handle);
+        CHECK(accepted_event->request().comment == "move me");
     }
     CHECK(as<RejectedEvent>(destination.history()[1]));
     const auto* replaced_event = as<ReplacedEvent>(destination.history().back());
     CHECK(replaced_event);
     if (replaced_event) {
-        CHECK(replaced_event->predecessor == *original.handle);
-        CHECK(replaced_event->successor == *successor.successor);
+        CHECK(replaced_event->predecessor() == *original.handle);
+        CHECK(replaced_event->successor() == *successor.successor);
         CHECK(replaced_event->ordinal == 3);
     }
     const auto cancelled = destination.cancel(*successor.successor, ord);
@@ -766,10 +768,10 @@ void move_assignment_replaces_destination_and_preserves_self_move() {
     const auto* transferred = destination.find_live(*request.handle);
     CHECK(transferred);
     if (transferred) {
-        CHECK(transferred->birth == (Birth{11, 80}));
-        CHECK(transferred->request.label == "transferred");
-        CHECK(transferred->request.comment == "assign me");
-        CHECK(bits_eq(reduce_qty(transferred->request.action), 2.0));
+        CHECK(transferred->birth() == (Birth{11, 80}));
+        CHECK(transferred->request().label == "transferred");
+        CHECK(transferred->request().comment == "assign me");
+        CHECK(bits_eq(reduce_qty(transferred->request().intent), 2.0));
     }
     auto* self = &destination;
     destination = std::move(*self);
@@ -817,18 +819,18 @@ void cancel_live_erases_only_that_request() {
     CHECK(core.find_live(*b.handle));
     CHECK(core.find_live(*c.handle));
     CHECK(core.live().size() == 2);
-    CHECK(core.live()[0].request.label == "b");
-    CHECK(core.live()[1].request.label == "c");
+    CHECK(core.live()[0].request().label == "b");
+    CHECK(core.live()[1].request().label == "c");
     const auto* cancelled = as<CancelledEvent>(core.history().back());
     CHECK(cancelled);
     if (cancelled) {
-        CHECK(cancelled->handle == *a.handle);
-        CHECK(cancelled->request.label == "a");
-        CHECK(bits_eq(transact_qty(cancelled->request.action), 1.0));
+        CHECK(cancelled->handle() == *a.handle);
+        CHECK(cancelled->request().label == "a");
+        CHECK(bits_eq(transact_qty(cancelled->request().intent), 1.0));
     }
     const auto again = core.cancel(*a.handle, ord);
     CHECK(again.status == CancelStatus::NotWorking);
-    CHECK(core.find_live(*b.handle)->request.comment == "stay");
+    CHECK(core.find_live(*b.handle)->request().comment == "stay");
 }
 
 void same_counter_alias() {
@@ -861,7 +863,7 @@ void same_counter_alias() {
     CHECK(inc == 2);
     CHECK(ord == 2);
     CHECK(core.find_live(*first.handle));
-    CHECK(core.find_live(*first.handle)->request.label == "kept");
+    CHECK(core.find_live(*first.handle)->request().label == "kept");
     CHECK(core.history().size() == 1);
 }
 
@@ -885,7 +887,7 @@ void reused_and_gapped_counters() {
         const auto after = core.submit(tx(2.0, "after-cancel"), 1, inc, ord);
         CHECK(after.status == SubmitStatus::Accepted);
         CHECK(after.handle->incarnation == 2);
-        CHECK(core.live().front().request.label == "after-cancel");
+        CHECK(core.live().front().request().label == "after-cancel");
     }
 
     WorkingRequestCore core(kRun);
@@ -934,7 +936,7 @@ void reused_and_gapped_counters() {
     } catch (const std::invalid_argument&) { CHECK(true); }
     CHECK(inc == 1);
     CHECK(core.live().size() == 1);
-    CHECK(core.live().front().handle.incarnation == 10);
+    CHECK(core.live().front().handle().incarnation == 10);
 
     inc = 10;
     try {
@@ -968,7 +970,7 @@ void reused_and_gapped_counters() {
         core.replace(*replaced.successor, tx(6.0, "reuse-pred"), 1, inc, ord);
         CHECK(false);
     } catch (const std::invalid_argument&) { CHECK(true); }
-    CHECK(core.find_live(*replaced.successor)->request.label == "succ");
+    CHECK(core.find_live(*replaced.successor)->request().label == "succ");
 
     inc = 20;
     const auto later = core.submit(tx(7.0, "later"), 3, inc, ord);
@@ -983,38 +985,38 @@ void aliased_const_arguments() {
     CHECK(core.submit(tx(1.0, "orig", "c1"), 10, inc, ord).status == SubmitStatus::Accepted);
     CHECK(core.submit(tx(2.0, "peer", "c2"), 11, inc, ord).status == SubmitStatus::Accepted);
 
-    const auto copied = core.submit(core.live().front().request, 12, inc, ord);
+    const auto copied = core.submit(core.live().front().request(), 12, inc, ord);
     CHECK(copied.status == SubmitStatus::Accepted);
     CHECK(copied.handle->incarnation == 3);
     CHECK(core.live().size() == 3);
-    CHECK(core.live()[0].request.label == "orig");
-    CHECK(core.live()[0].request.comment == "c1");
-    CHECK(core.live()[2].request.label == "orig");
-    CHECK(core.live()[2].request.comment == "c1");
-    CHECK(bits_eq(transact_qty(core.live()[2].request.action), 1.0));
+    CHECK(core.live()[0].request().label == "orig");
+    CHECK(core.live()[0].request().comment == "c1");
+    CHECK(core.live()[2].request().label == "orig");
+    CHECK(core.live()[2].request().comment == "c1");
+    CHECK(bits_eq(transact_qty(core.live()[2].request().intent), 1.0));
 
-    const auto repl = core.replace(core.live().front().handle, core.live().front().request, 13, inc,
+    const auto repl = core.replace(core.live().front().handle(), core.live().front().request(), 13, inc,
                                    ord);
     CHECK(repl.status == ReplaceStatus::Replaced);
     CHECK(repl.successor->incarnation == 4);
     CHECK(!core.find_live(RequestHandle{kRun, 1}));
     CHECK(core.live().size() == 3);
-    CHECK(core.live()[0].request.label == "peer");
-    CHECK(core.live().back().request.label == "orig");
-    CHECK(core.live().back().request.comment == "c1");
-    CHECK(core.live().back().predecessor->incarnation == 1);
+    CHECK(core.live()[0].request().label == "peer");
+    CHECK(core.live().back().request().label == "orig");
+    CHECK(core.live().back().request().comment == "c1");
+    CHECK(core.live().back().predecessor()->incarnation == 1);
 
-    const auto cancelled = core.cancel(core.live().front().handle, ord);
+    const auto cancelled = core.cancel(core.live().front().handle(), ord);
     CHECK(cancelled.status == CancelStatus::Cancelled);
     CHECK(core.live().size() == 2);
-    CHECK(core.live().front().request.label == "orig");
+    CHECK(core.live().front().request().label == "orig");
 
     const auto* first_accepted = as<AcceptedEvent>(core.history().front());
     CHECK(first_accepted);
-    const auto from_history = core.submit(first_accepted->request, 14, inc, ord);
+    const auto from_history = core.submit(first_accepted->request(), 14, inc, ord);
     CHECK(from_history.status == SubmitStatus::Accepted);
-    CHECK(core.live().back().request.label == "orig");
-    CHECK(core.live().back().request.comment == "c1");
+    CHECK(core.live().back().request().label == "orig");
+    CHECK(core.live().back().request().comment == "c1");
 }
 
 void history_prefix_append_stable() {
@@ -1027,24 +1029,24 @@ void history_prefix_append_stable() {
         CHECK(result.handle->incarnation == static_cast<uint64_t>(i + 1));
     }
     const CommandEvent* prefix = &core.history().front();
-    CHECK(as<AcceptedEvent>(*prefix)->request.label == "p0");
+    CHECK(as<AcceptedEvent>(*prefix)->request().label == "p0");
     CHECK(as<AcceptedEvent>(*prefix)->ordinal == 1);
 
     CHECK(core.submit(tx(1.0, "p32"), 1, inc, ord).status == SubmitStatus::Accepted);
     if (&core.history().front() != prefix) prefix = &core.history().front();
-    CHECK(as<AcceptedEvent>(*prefix)->request.label == "p0");
+    CHECK(as<AcceptedEvent>(*prefix)->request().label == "p0");
 
     const auto rejected = core.submit(tx(0.0, "rej"), 1, inc, ord);
     CHECK(rejected.status == SubmitStatus::Rejected);
     CHECK(&core.history().front() == prefix);
-    CHECK(as<AcceptedEvent>(core.history().front())->request.label == "p0");
+    CHECK(as<AcceptedEvent>(core.history().front())->request().label == "p0");
     CHECK(as<AcceptedEvent>(core.history().front())->ordinal == 1);
 
     const auto extra = core.submit(tx(2.0, "more"), 1, inc, ord);
     CHECK(extra.status == SubmitStatus::Accepted);
     CHECK(&core.history().front() == prefix);
-    CHECK(as<AcceptedEvent>(core.history()[1])->request.label == "p1");
-    CHECK(core.live().front().request.label == "p0");
+    CHECK(as<AcceptedEvent>(core.history()[1])->request().label == "p1");
+    CHECK(core.live().front().request().label == "p0");
 }
 
 void bounded_many_commands() {
@@ -1060,26 +1062,26 @@ void bounded_many_commands() {
     }
     CHECK(core.live().size() == 64);
     CHECK(core.history().size() == 64);
-    CHECK(as<AcceptedEvent>(core.history().front())->handle == first);
-    CHECK(as<AcceptedEvent>(core.history().front())->request.label == "m0");
-    CHECK(core.live().back().request.label == "m63");
+    CHECK(as<AcceptedEvent>(core.history().front())->handle() == first);
+    CHECK(as<AcceptedEvent>(core.history().front())->request().label == "m0");
+    CHECK(core.live().back().request().label == "m63");
 
     for (int i = 0; i < 32; ++i) {
-        const RequestHandle handle = core.live().front().handle;
+        const RequestHandle handle = core.live().front().handle();
         const auto cancelled = core.cancel(handle, ord);
         CHECK(cancelled.status == CancelStatus::Cancelled);
     }
     CHECK(core.live().size() == 32);
     CHECK(core.history().size() == 96);
-    CHECK(core.live().front().request.label == "m32");
-    CHECK(as<AcceptedEvent>(core.history().front())->request.label == "m0");
+    CHECK(core.live().front().request().label == "m32");
+    CHECK(as<AcceptedEvent>(core.history().front())->request().label == "m0");
 
-    const auto replaced = core.replace(core.live().front().handle, tx(2.0, "rep"), 100, inc, ord);
+    const auto replaced = core.replace(core.live().front().handle(), tx(2.0, "rep"), 100, inc, ord);
     CHECK(replaced.status == ReplaceStatus::Replaced);
     CHECK(core.live().size() == 32);
-    CHECK(core.live().back().request.label == "rep");
-    CHECK(core.live().back().predecessor->incarnation == 33);
-    CHECK(as<AcceptedEvent>(core.history().front())->request.label == "m0");
+    CHECK(core.live().back().request().label == "rep");
+    CHECK(core.live().back().predecessor()->incarnation == 33);
+    CHECK(as<AcceptedEvent>(core.history().front())->request().label == "m0");
     CHECK(core.history().size() == 97);
 }
 }  // namespace

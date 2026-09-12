@@ -44,21 +44,21 @@ def standalone_scope(text, outer, version):
 def check_texts(files):
     header = clean(files[FILES[0]])
     namespaces = re.findall(r'inline\s+namespace\s+(engine_script_run_v\d+)\s*\{', header)
-    if namespaces != ["engine_script_run_v12", "engine_script_run_v12"]:
-        raise ValueError("PendingOrder/BacktestEngine require engine_script_run_v12")
+    if namespaces != ["engine_script_run_v13", "engine_script_run_v13"]:
+        raise ValueError("PendingOrder/BacktestEngine require engine_script_run_v13")
     broker = body(clean(files[FILES[1]]),
                   r'uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{', "broker hash")
-    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v12"\);', broker):
-        raise ValueError("broker entry requires v12 domain")
+    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v13"\);', broker):
+        raise ValueError("broker entry requires v13 domain")
     stream = body(clean(files[FILES[2]]),
                   r'uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{', "stream hash")
     compact = re.sub(r'\s+', '', stream)
-    fold = "integer(12);integer(broker_state_hash());"
+    fold = "integer(13);integer(broker_state_hash());"
     if compact.count(fold) != 1:
-        raise ValueError("stream entry requires v12 then broker hash")
+        raise ValueError("stream entry requires v13 then broker hash")
     prefix = compact[:compact.index(fold)]
     if prefix.count('{') != prefix.count('}') or (prefix and prefix[-1] not in ';}'):
-        raise ValueError("stream v12 fold must be unconditional")
+        raise ValueError("stream v13 fold must be unconditional")
     life = standalone_scope(files[FILES[3]], "pineforge::exit_legs", "lifecycle_v1")
     for name in ("Lifecycle", "Definition", "Action", "Frame", "Barrier", "Suspension"):
         if not re.search(r'\b(?:class|struct)\s+' + name + r'\s*\{', life):
@@ -86,7 +86,7 @@ def check_texts(files):
     for name, text in files.items():
         if name.startswith("include/pineforge/compat/pine/"):
             found = re.findall(r'inline\s+namespace\s+(engine_script_run_v\d+)\s*\{', clean(text))
-            if any(value != "engine_script_run_v12" for value in found):
+            if any(value != "engine_script_run_v13" for value in found):
                 raise ValueError(name + " has a stale PendingOrder forward declaration")
 
 
@@ -103,4 +103,4 @@ def check(root=ROOT):
 
 if __name__ == "__main__":
     check()
-    print("aggregate v12, standalone admission v2 and lifecycle/cancellation v1 ownership verified")
+    print("aggregate v13, standalone admission v2 and lifecycle/cancellation v1 ownership verified")

@@ -2,13 +2,13 @@
 
 @tableofcontents
 
-Hand-written C++ strategies can run a **standalone native market-order** path:
-one `NativeRunSpec`, one working request roster, one physical lot book, and
+Hand-written C++ strategies can run a **standalone native** path: one
+`NativeRunSpec`, one working request roster, one physical lot book, and
 close-only callbacks. Pine `strategy.*` commands, cap/priority adapters, default
 source sizing, and complete Pine policy extraction are **not** this surface.
-Codegen and source adapters select those policies separately. Resting
-limit/stop/bracket relationships are a later roadmap; do not infer them from
-this slice.
+Codegen and source adapters select those policies separately. Resting requests
+use the general host commands; request-value members live in
+`<pineforge/native_order.hpp>` and are not restated here.
 
 Subclass `pineforge::NativeStrategyHost`. Configure with `configure_native`,
 then `run` or `stream_*`. Submit from native begin/bar callbacks, or between
@@ -66,8 +66,13 @@ host high-water.
 events, ordinals, floor, or identity at the handoff.
 
 `last_error()` is presentation text. `native_state().failure` is the durable
-record (`code`, `operation`, optional `ordinal`, `discriminator`). See
-`NativeFailureCode` / `NativeFailureOperation` in `native_host.hpp`.
+record (`code`, `operation`, optional `ordinal`, `discriminator`, and
+allocation-free `context`). Cause/recipient/cursor facts use
+`NativeInRunCause` / `NativeInRunRecipient` / `NativeInRunCursor` selected by
+`NativeFailureContextKind`; identifiers belong to the failed spec's
+`RunIdentity` (`native_failure_context_in_run`, `native_failed_run_identity`).
+A foreign run is dropped, not relabeled. Failure copy/move does not allocate.
+See `NativeFailureCode` / `NativeFailureOperation` in `native_host.hpp`.
 
 ## NativeRunSpec
 
@@ -125,17 +130,23 @@ not native spec fields.
 From a native callback in `Batch` / `Warmup` / `Realtime`:
 
 ```cpp
+submit(request);
+replace(handle, request);
+cancel(handle);
 submit_market(request);
 replace_market(handle, request);
-cancel(handle);
 ```
 
+`submit` / `replace` are the complete host commands. `submit_market` /
+`replace_market` keep the existing market-only call sites and must reject
+nondefault trigger, capacity, owner, or group extras rather than drop them.
 Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. There is no C request API in this
 slice.
 
-`native_order::Request` is `{ Action, label, comment }`. Label/comment are
-inert text. `Action` is:
+`native_order::Request` values belong to `native_order_v2`; identity types stay
+`native_order_v1`. Label/comment remain inert text. The market default path
+still constructs from:
 
 - `order_action::Transact{signed_units}` — finite nonzero
 - `order_action::Reduce{units}` — finite positive

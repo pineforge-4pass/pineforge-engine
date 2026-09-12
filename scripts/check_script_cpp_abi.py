@@ -16,7 +16,7 @@ import tempfile
 
 BASE_COMMIT = "38dc73e5503fe5395458e5f8df2a2ad78054a1ae"
 BASE_ENGINE_SHA256 = "06c937a1ccd31815ca7775268ac699ffdfddb1a1f19de4628b777f37e9a6d193"
-CURRENT_NAMESPACE = "engine_script_run_v12"
+CURRENT_NAMESPACE = "engine_script_run_v13"
 BASE_NAMESPACE = "engine_script_run_v2"
 V8_COMMIT = "79921099a9357cb5bbace907a9319479f6640d89"
 V8_TREE = "e141657c572b4a3855dfee607f9951e331b961d6"
@@ -27,6 +27,9 @@ V9_ENGINE_SHA256 = "bb984f4c25a01470c147de1366aa8c715b170361be63c68e2db0cfdf0965
 V10_COMMIT = "fd4c68685ebd612397e42bced731d7b7ee06c1b7"
 V10_TREE = "24fb6e11d979c737561c5ce8a657c5ff703fc01e"
 V10_ENGINE_SHA256 = "53b2cc6deb96143afe572581d92f0c5d8d0f67d83e307153be4b67798f4db998"
+V12_COMMIT = "e7d023dbdff1c98229155ec5bcdd1e4ac534f5fb"
+V12_TREE = "0201bf052429490fb453bbfd6037e5afd1669626"
+V12_ENGINE_SHA256 = "210a43d3166e9788dfa8bb0e670776a243af136ef8fd026f340b52911484c8bf"
 FIXTURE = Path(__file__).resolve().parents[1] / "tests/fixtures/script_cpp_abi/base38"
 
 
@@ -216,6 +219,9 @@ def main():
         v10_include = root / "basev10/include"
         frozen_headers(v10_include, FIXTURE.parent / "basev10", V10_COMMIT,
                        "engine_script_run_v10", V10_ENGINE_SHA256, V10_TREE)
+        v12_include = root / "basev12/include"
+        frozen_headers(v12_include, FIXTURE.parent / "basev12", V12_COMMIT,
+                       "engine_script_run_v12", V12_ENGINE_SHA256, V12_TREE)
         standalone_draft_include = root / "standalone-draft/include"
         frozen_standalone_headers(standalone_draft_include)
         # The exact pre-v11 aggregate closure supplies the frozen
@@ -318,6 +324,12 @@ std::optional<broker::OrderPriorityDecision> OrderPriority::select(
             BASE_SYMBOL_CONTROL.replace("engine_script_run_v2", "engine_script_run_v10"), v10_include)
         v10_priority = compile_object("basev10_pending_priority", priority_caller, v10_include)
         v10_priority_symbols = compile_object("basev10_pending_priority_symbols", priority_symbols, v10_include)
+        v12_native = compile_object("basev12_native", caller("engine_script_run_v12"), v12_include)
+        v12_generated = compile_object("basev12_generated", caller("engine_script_run_v12", True), v12_include)
+        v12_symbols = compile_object("basev12_symbol_control",
+            BASE_SYMBOL_CONTROL.replace("engine_script_run_v2", "engine_script_run_v12"), v12_include)
+        v12_priority = compile_object("basev12_pending_priority", priority_caller, v12_include)
+        v12_priority_symbols = compile_object("basev12_pending_priority_symbols", priority_symbols, v12_include)
 
         reservation_caller = '''#include <pineforge/reservation_expansion.hpp>
 int main(int argc, char**) {
@@ -559,28 +571,39 @@ void pairing_cancellation(const pineforge::order_cancellation_v1::OrderCancellat
         link("current_native_to_v10_symbols", current_native, v10_symbols, CURRENT_NAMESPACE)
         link("current_generated_to_v10_symbols", current_generated, v10_symbols, CURRENT_NAMESPACE)
         link("basev10_pending_priority_to_v10_symbols", v10_priority, v10_priority_symbols)
+        link("basev12_native_to_v12_symbols", v12_native, v12_symbols)
+        link("basev12_generated_to_v12_symbols", v12_generated, v12_symbols)
+        link("basev12_native_to_current", v12_native, args.library, "engine_script_run_v12")
+        link("basev12_generated_to_current", v12_generated, args.library, "engine_script_run_v12")
+        link("current_native_to_v12_symbols", current_native, v12_symbols, CURRENT_NAMESPACE)
+        link("current_generated_to_v12_symbols", current_generated, v12_symbols, CURRENT_NAMESPACE)
+        link("basev12_pending_priority_to_v12_symbols", v12_priority, v12_priority_symbols)
         for name, obj, runtime, expected in [
             ("basecc0_pending_priority_to_current", cc0_priority, args.library, "pineforge::engine_script_run_v7::PendingOrder"),
-            ("current_pending_priority_to_v7_symbols", current_priority, cc0_priority_symbols, "pineforge::engine_script_run_v12::PendingOrder"),
+            ("current_pending_priority_to_v7_symbols", current_priority, cc0_priority_symbols, "pineforge::engine_script_run_v13::PendingOrder"),
             ("baseff54_pending_priority_to_current", shipped_priority, args.library, "pineforge::engine_script_run_v6::PendingOrder"),
-            ("current_pending_priority_to_v6_symbols", current_priority, shipped_priority_symbols, "pineforge::engine_script_run_v12::PendingOrder"),
+            ("current_pending_priority_to_v6_symbols", current_priority, shipped_priority_symbols, "pineforge::engine_script_run_v13::PendingOrder"),
             ("base149_pending_priority_to_current", activation_priority, args.library, "pineforge::engine_script_run_v5::PendingOrder"),
-            ("current_pending_priority_to_v5_symbols", current_priority, activation_priority_symbols, "pineforge::engine_script_run_v12::PendingOrder"),
+            ("current_pending_priority_to_v5_symbols", current_priority, activation_priority_symbols, "pineforge::engine_script_run_v13::PendingOrder"),
             ("basec45_pending_priority_to_current", prior_priority, args.library, "pineforge::PendingOrder"),
             ("current_pending_priority_to_v4_symbols", current_priority, prior_priority_symbols,
-             "pineforge::engine_script_run_v12::PendingOrder"),
+             "pineforge::engine_script_run_v13::PendingOrder"),
             ("basev8_pending_priority_to_current", v8_priority, args.library,
              "pineforge::engine_script_run_v8::PendingOrder"),
             ("current_pending_priority_to_v8_symbols", current_priority, v8_priority_symbols,
-             "pineforge::engine_script_run_v12::PendingOrder"),
+             "pineforge::engine_script_run_v13::PendingOrder"),
             ("basev9_pending_priority_to_current", v9_priority, args.library,
              "pineforge::engine_script_run_v9::PendingOrder"),
             ("current_pending_priority_to_v9_symbols", current_priority, v9_priority_symbols,
-             "pineforge::engine_script_run_v12::PendingOrder"),
+             "pineforge::engine_script_run_v13::PendingOrder"),
             ("basev10_pending_priority_to_current", v10_priority, args.library,
              "pineforge::engine_script_run_v10::PendingOrder"),
             ("current_pending_priority_to_v10_symbols", current_priority, v10_priority_symbols,
+             "pineforge::engine_script_run_v13::PendingOrder"),
+            ("basev12_pending_priority_to_current", v12_priority, args.library,
              "pineforge::engine_script_run_v12::PendingOrder"),
+            ("current_pending_priority_to_v12_symbols", current_priority, v12_priority_symbols,
+             "pineforge::engine_script_run_v13::PendingOrder"),
         ]:
             result = subprocess.run([*common, str(obj), str(runtime), "-pthread", "-o", str(root / name)],
                                     capture_output=True, text=True, timeout=60)

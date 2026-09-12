@@ -1,0 +1,36 @@
+{
+    "source_commit": "e7d023dbdff1c98229155ec5bcdd1e4ac534f5fb",
+    "source_tree": "0201bf052429490fb453bbfd6037e5afd1669626",
+    "surface": "native_order",
+    "internal_namespace": "native_order_v1",
+    "note": "e7d023d native_order_v1. CommandEvent has 10 alternatives. Authentic src/native_order.cpp is a compile-only old object, not a historical runtime.",
+    "archive": "headers.json.gz",
+    "archive_sha256": "a548a9f5c417b197364a304d7edfacfab3c3a6b135edf5437f107e6e423416a1",
+    "files": {
+        "pineforge/execution.hpp": {
+            "sha256": "e6e2440118f38a0eba5b75a0fb0cf03675f92939c154aaf8dc0837653a113895",
+            "git_blob": "f270b7c64544ee9188c22752d5e41eaa78bf01d1",
+            "bytes": 4294
+        },
+        "pineforge/exit_leg_lifecycle.hpp": {
+            "sha256": "9d785271511a350114adc7cf5bcb1600cf569f0a10559a8671b7e4b9cb9dc89a",
+            "git_blob": "91492ec22e05d7b6d9327f60ff5e239ae6906fcd",
+            "bytes": 22622
+        },
+        "pineforge/native_order.hpp": {
+            "sha256": "b13006e99554ba9caa3e5b444cca3e4f2b5ebd5e372d3dcbe44bb6a677192a3e",
+            "git_blob": "e042d10bb7b4c092228659804ab5d02d2764cfce",
+            "bytes": 10797
+        },
+        "pineforge/order_action.hpp": {
+            "sha256": "7d76ddc3f6ba76216d5feb34cdf28908e33a92a56757a707ac6bd94dca315001",
+            "git_blob": "d992472cbefefdf8e29704a21f04614d68d39a58",
+            "bytes": 3470
+        },
+        "src/native_order.cpp": {
+            "sha256": "84884d9eb8fa30990c8e433d6733dbf780e39f7a4c49d5481bd461485b83badb",
+            "git_blob": "1d1175d7cdb3ceb1241cb2f18e2e23c8fd980c0d",
+            "bytes": 13237
+        }
+    }
+}

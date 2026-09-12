@@ -113,7 +113,7 @@ Request tx(double q, const char* label = "", const char* comment = "") {
     return Request{Transact{q}, label, comment};
 }
 Request rd(double q, const char* label = "", const char* comment = "") {
-    return Request{Reduce{q}, label, comment};
+    return pineforge::native_order::market_request(Reduce{q}, label, comment);
 }
 Request flat(const char* label = "", const char* comment = "") {
     return Request{Flatten{}, label, comment};
@@ -259,8 +259,36 @@ const char* event_kind_name(const CommandEvent& event) {
         if constexpr (std::is_same_v<T, NoEffectEvent>) return "NoEffect";
         if constexpr (std::is_same_v<T, MatchRejectedEvent>) return "MatchRejected";
         if constexpr (std::is_same_v<T, ExecutionAppliedEvent>) return "ExecutionApplied";
+        if constexpr (std::is_same_v<T, pineforge::native_order::CloseBoundEvent>) {
+            return "CloseBound";
+        }
+        if constexpr (std::is_same_v<T, pineforge::native_order::ActivatedEvent>) return "Activated";
+        if constexpr (std::is_same_v<T, pineforge::native_order::ReservationReducedEvent>) {
+            return "ReservationReduced";
+        }
+        if constexpr (std::is_same_v<T, pineforge::native_order::DeferredGroupAdjustmentEvent>) {
+            return "DeferredGroupAdjustment";
+        }
+        if constexpr (std::is_same_v<T, pineforge::native_order::QuantityBoundEvent>) {
+            return "QuantityBound";
+        }
+        if constexpr (std::is_same_v<T, pineforge::native_order::ArmedEvent>) return "Armed";
         return "Unknown";
     }, event);
+}
+
+bool r1_command_event(const CommandEvent& event) {
+    const char* kind = event_kind_name(event);
+    return std::strcmp(kind, "Accepted") == 0
+        || std::strcmp(kind, "Rejected") == 0
+        || std::strcmp(kind, "Replaced") == 0
+        || std::strcmp(kind, "ReplaceRejected") == 0
+        || std::strcmp(kind, "Cancelled") == 0
+        || std::strcmp(kind, "NotWorking") == 0
+        || std::strcmp(kind, "InvalidHandle") == 0
+        || std::strcmp(kind, "NoEffect") == 0
+        || std::strcmp(kind, "MatchRejected") == 0
+        || std::strcmp(kind, "ExecutionApplied") == 0;
 }
 
 uint64_t event_ordinal(const CommandEvent& event) {
@@ -318,9 +346,11 @@ const ExecutionAppliedEvent* applied_at(const std::vector<CommandEvent>& events,
 std::string lifecycle_json(const std::vector<CommandEvent>& events) {
     std::ostringstream out;
     out << "[";
-    for (std::size_t i = 0; i < events.size(); ++i) {
-        if (i) out << ",";
-        const auto& event = events[i];
+    bool first = true;
+    for (const auto& event : events) {
+        if (!r1_command_event(event)) continue;
+        if (!first) out << ",";
+        first = false;
         out << "{\"kind\":" << json_escape(event_kind_name(event))
             << ",\"ordinal\":" << json_u64(event_ordinal(event));
         if (as_event<ExecutionAppliedEvent>(event)) {
@@ -357,8 +387,8 @@ std::string physical_json(const FixtureHost& host, const std::vector<CommandEven
             comma();
             out << "{\"kind\":\"CloseLot\",\"ordinal\":" << json_u64(applied->ordinal)
                 << ",\"price\":" << json_num(applied->resolved_price)
-                << ",\"timestampMs\":" << json_i64(applied->effective_time_ms)
-                << ",\"provenance\":" << json_u64(applied->provenance);
+                << ",\"timestampMs\":" << json_i64(applied->effective_time_ms())
+                << ",\"provenance\":" << json_u64(applied->provenance());
             if (idx >= 0 && idx < host.trade_count()) {
                 out << ",\"quantity\":" << json_num(host.get_trade(idx).qty);
             }
@@ -368,15 +398,15 @@ std::string physical_json(const FixtureHost& host, const std::vector<CommandEven
             comma();
             out << "{\"kind\":\"OpenLot\",\"ordinal\":" << json_u64(applied->ordinal)
                 << ",\"price\":" << json_num(applied->resolved_price)
-                << ",\"timestampMs\":" << json_i64(applied->effective_time_ms)
-                << ",\"provenance\":" << json_u64(applied->provenance)
+                << ",\"timestampMs\":" << json_i64(applied->effective_time_ms())
+                << ",\"provenance\":" << json_u64(applied->provenance())
                 << "}";
         }
         if (applied->closed_trade_count == 0 && applied->opened_lot_incarnation == 0) {
             comma();
             out << "{\"kind\":\"ExecutionApplied\",\"ordinal\":" << json_u64(applied->ordinal)
                 << ",\"price\":" << json_num(applied->resolved_price)
-                << ",\"timestampMs\":" << json_i64(applied->effective_time_ms)
+                << ",\"timestampMs\":" << json_i64(applied->effective_time_ms())
                 << "}";
         }
     }
@@ -473,8 +503,8 @@ void expect_modeled_open_fill(const ExecutionAppliedEvent* applied,
     if (!applied) return;
     near(applied->raw_price, raw);
     near(applied->resolved_price, resolved);
-    CHECK(applied->effective_time_ms == time_ms);
-    CHECK(applied->provenance
+    CHECK(applied->effective_time_ms() == time_ms);
+    CHECK(applied->provenance()
           == static_cast<std::uint8_t>(NativePriceProvenance::ModeledOHLCOpen));
     near(applied->current_ticket, kFee);
 }

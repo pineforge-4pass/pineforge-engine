@@ -31,8 +31,12 @@ SPEC_COMMIT = "262a28013ed277990349e845ba0554a63f6fbc79"
 SPEC_TREE = "fb00ed9ba02cede2fe08ee8113ae32f71fd26b00"
 CAL262_HEADER_SHA = "c47b3ee15d69587879cca8f491e73880cddae1ce3e7dfd0d1f4db16dfb8fcf4b"
 SPEC_HEADER_SHA = "b263a8bf3a68f58201c968ffa9ec8b54633fe3c752332df164ea11cf4bce3c7c"
+V12_COMMIT = "e7d023dbdff1c98229155ec5bcdd1e4ac534f5fb"
+V12_TREE = "0201bf052429490fb453bbfd6037e5afd1669626"
+HOST_V12_HEADER_SHA = "871865715f084a0054c9d8e220cb9b957318bfdc0a0e100765d1cda85d7944b3"
+ORDER_V1_HEADER_SHA = "b13006e99554ba9caa3e5b444cca3e4f2b5ebd5e372d3dcbe44bb6a677192a3e"
 
-CURRENT_ORDER_VARIANT = 10
+CURRENT_ORDER_VARIANT = 16
 CURRENT_CALENDAR_INTERVAL = 40
 CURRENT_COORDINATE = 80
 
@@ -113,15 +117,43 @@ int main() {
 HOST_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 static_assert(std::is_same_v<pineforge::NativeStrategyHost,
-    pineforge::engine_script_run_v12::NativeStrategyHost>);
+    pineforge::engine_script_run_v13::NativeStrategyHost>);
 static_assert(std::is_same_v<pineforge::NativeStateView,
-    pineforge::engine_script_run_v12::NativeStateView>);
+    pineforge::engine_script_run_v13::NativeStateView>);
 static_assert(std::is_same_v<pineforge::NativeFailure,
-    pineforge::engine_script_run_v12::NativeFailure>);
+    pineforge::engine_script_run_v13::NativeFailure>);
+static_assert(std::is_trivially_copyable_v<pineforge::NativeFailure>);
+static_assert(std::is_trivially_copyable_v<pineforge::NativeFailureContext>);
 int main(int argc, char** argv) {
     auto* host = reinterpret_cast<pineforge::NativeStrategyHost*>(argv);
     auto state = host->native_state();
     return int(state.kind);
+}
+'''
+# Return-only observation: native_events() return layout is not in the symbol.
+HOST_EVENTS_CALLER = '''#include <pineforge/native_host.hpp>
+#include <type_traits>
+static_assert(std::is_same_v<pineforge::NativeStrategyHost,
+    pineforge::engine_script_run_v13::NativeStrategyHost>);
+int main(int argc, char** argv) {
+    auto* host = reinterpret_cast<pineforge::NativeStrategyHost*>(argv);
+    auto events = host->native_events(0);
+    return int(events.size());
+}
+'''
+OLD_HOST_EVENTS_CALLER = '''#include <pineforge/native_host.hpp>
+#include <type_traits>
+static_assert(std::is_same_v<pineforge::NativeStrategyHost,
+    pineforge::engine_script_run_v12::NativeStrategyHost>);
+int main(int argc, char** argv) {
+    auto* host = reinterpret_cast<pineforge::NativeStrategyHost*>(argv);
+    auto events = host->native_events(0);
+    return int(events.size());
+}
+'''
+HOST_EVENTS_SYMBOL_CONTROL = '''#include <pineforge/native_host.hpp>
+namespace pineforge {
+std::vector<NativeMarketEvent> NativeStrategyHost::native_events(uint64_t) const { return {}; }
 }
 '''
 # Labeled minimal symbol control. Not a historical NativeRunSpec runtime.
@@ -322,12 +354,16 @@ def main() -> int:
          "pineforge::native_calendar::native_calendar_v2::timezone_identity_descriptor("),
         ("pineforge::native_order::WorkingRequestCore::submit(",
          "pineforge::native_order::native_order_v1::WorkingRequestCore::submit("),
+        ("pineforge::native_order::native_order_v1::WorkingRequestCore::submit(",
+         "pineforge::native_order::native_order_v2::WorkingRequestCore::submit("),
         ("pineforge::validate_native_run_spec(",
          "pineforge::native_run_spec_v1::validate_native_run_spec("),
         ("pineforge::native_bar_structurally_valid(",
          "pineforge::native_driver_v3::native_bar_structurally_valid("),
         ("abi_accept_coordinate(pineforge::NativeCoordinate",
          "abi_accept_coordinate(pineforge::native_driver_v3::NativeCoordinate"),
+        ("pineforge::engine_script_run_v12::NativeStrategyHost::native_events(",
+         "pineforge::engine_script_run_v13::NativeStrategyHost::native_events("),
     )
     for old, new in controls:
         if old in new:
@@ -348,7 +384,7 @@ def main() -> int:
             "native_calendar": "pineforge::native_calendar::native_calendar_v2",
             "native_run_spec": "pineforge::native_run_spec_v1",
             "native_driver": "pineforge::native_driver_v3",
-            "native_host": "pineforge::engine_script_run_v12",
+            "native_host": "pineforge::engine_script_run_v13",
         },
         "executable_runs": 0,
         "compiles": [],
@@ -376,6 +412,12 @@ def main() -> int:
             "run-spec-262a280": {
                 "source_commit": SPEC_COMMIT, "source_tree": SPEC_TREE,
             },
+            "host-e7d023d": {
+                "source_commit": V12_COMMIT, "source_tree": V12_TREE,
+            },
+            "order-e7d023d": {
+                "source_commit": V12_COMMIT, "source_tree": V12_TREE,
+            },
         }
         unpacked = {}
         for name, expected in pins.items():
@@ -397,6 +439,14 @@ def main() -> int:
                 header = dest / "include/pineforge/native_run_spec.hpp"
                 if sha256(header.read_bytes()) != SPEC_HEADER_SHA:
                     raise RuntimeError("262a280 run-spec header content SHA mismatch")
+            if name == "host-e7d023d":
+                header = dest / "include/pineforge/native_host.hpp"
+                if sha256(header.read_bytes()) != HOST_V12_HEADER_SHA:
+                    raise RuntimeError("e7d023d host header content SHA mismatch")
+            if name == "order-e7d023d":
+                header = dest / "include/pineforge/native_order.hpp"
+                if sha256(header.read_bytes()) != ORDER_V1_HEADER_SHA:
+                    raise RuntimeError("e7d023d order-v1 header content SHA mismatch")
             unpacked[name] = dest
             receipt["fixtures"][name] = {
                 "source_commit": manifest.get("source_commit"),
@@ -511,12 +561,15 @@ def main() -> int:
         current_coordinate_provider = compile_object(
             "current_coordinate_provider", COORDINATE_PROVIDER, include)
         current_host = compile_object("current_host_caller", HOST_CALLER, include)
+        current_host_events = compile_object("current_host_events_caller", HOST_EVENTS_CALLER, include)
 
         old_order_include = unpacked["order-1acaf33"] / "include"
         old_calendar_include = unpacked["calendar-draft-a8e34c"] / "include"
         old_desc_include = unpacked["calendar-262a280"] / "include"
         old_driver_include = unpacked["driver-08b5c88"] / "include"
         old_spec_include = unpacked["run-spec-262a280"] / "include"
+        old_host_include = unpacked["host-e7d023d"] / "include"
+        old_order_v1_include = unpacked["order-e7d023d"] / "include"
 
         old_order = compile_object("old_order_caller", ORDER_CALLER, old_order_include)
         old_calendar = compile_object("old_calendar_caller", CALENDAR_CALLER, old_calendar_include)
@@ -542,6 +595,15 @@ def main() -> int:
             "old_bar_object", unpacked["driver-08b5c88"] / "src/market_driver.cpp", old_driver_include)
         old_spec_symbols = compile_object(
             "old_spec_symbol_control", SPEC_SYMBOL_CONTROL, old_spec_include)
+        old_host_events = compile_object(
+            "old_host_events_caller", OLD_HOST_EVENTS_CALLER, old_host_include)
+        old_host_events_symbols = compile_object(
+            "old_host_events_symbol_control", HOST_EVENTS_SYMBOL_CONTROL, old_host_include)
+        old_order_v1 = compile_object("old_order_v1_caller", ORDER_CALLER, old_order_v1_include)
+        old_order_v1_obj = compile_file(
+            "old_order_v1_object",
+            unpacked["order-e7d023d"] / "src/native_order.cpp",
+            old_order_v1_include)
 
         old_order_layout = compile_object(
             "old_order_layout",
@@ -596,6 +658,7 @@ def main() -> int:
         link("current_bar_to_current_library", [current_bar], library)
         link("current_preflight_to_current_library", [current_preflight], library)
         link("current_host_to_current_library", [current_host], library)
+        link("current_host_events_to_current_library", [current_host_events], library)
         link("current_coordinate_to_current_provider",
              [current_coordinate], current_coordinate_provider)
 
@@ -603,6 +666,8 @@ def main() -> int:
         link("old_calendar_to_old_objects", [old_calendar, old_timezone_obj], old_calendar_obj)
         link("old_parse_timeframe_to_old_objects", [old_parse, old_timezone_obj], old_calendar_obj)
         link("old_spec_to_old_symbol_control", [old_spec], old_spec_symbols)
+        link("old_host_events_to_old_symbols", [old_host_events], old_host_events_symbols)
+        link("old_order_v1_to_old_object", [old_order_v1], old_order_v1_obj)
         link("old_bar_to_old_object", [old_bar], old_bar_obj)
         link("old_coordinate_to_old_provider", [old_coordinate], old_coordinate_provider)
 
@@ -617,14 +682,26 @@ def main() -> int:
              "pineforge::native_calendar::timezone_identity_descriptor(")
         link("old_spec_to_current_library", [old_spec], library,
              "pineforge::validate_native_run_spec(")
+        link("old_host_events_to_current_library", [old_host_events], library,
+             "pineforge::engine_script_run_v12::NativeStrategyHost::native_events(")
         link("old_bar_to_current_library", [old_bar], library,
              "pineforge::native_bar_structurally_valid(")
         link("old_coordinate_to_current_provider", [old_coordinate], current_coordinate_provider,
              ["abi_accept_coordinate(pineforge::NativeCoordinate",
               "abi_accept_decision(pineforge::NativeDecisionContext"])
 
-        link("current_order_to_old_object", [current_order], old_order_obj,
-             "pineforge::native_order::native_order_v1::WorkingRequestCore::submit(")
+        order_text = (source_root / "include/pineforge/native_order.hpp").read_text()
+        if "inline namespace native_order_v2" in order_text:
+            current_order_submit = (
+                "pineforge::native_order::native_order_v2::WorkingRequestCore::submit(")
+            link("old_order_v1_to_current_library", [old_order_v1], library,
+                 "pineforge::native_order::native_order_v1::WorkingRequestCore::submit(")
+            link("current_order_to_old_v1_object", [current_order], old_order_v1_obj,
+                 current_order_submit)
+        else:
+            current_order_submit = (
+                "pineforge::native_order::native_order_v1::WorkingRequestCore::submit(")
+        link("current_order_to_old_object", [current_order], old_order_obj, current_order_submit)
         link("current_calendar_to_old_objects", [current_calendar, old_timezone_obj], old_calendar_obj,
              "pineforge::native_calendar::native_calendar_v2::parse_timeframe(")
         link("current_parse_timeframe_to_old_objects", [current_parse, old_timezone_obj], old_calendar_obj,
@@ -633,6 +710,8 @@ def main() -> int:
              "pineforge::native_calendar::native_calendar_v2::timezone_identity_descriptor(")
         link("current_spec_to_old_symbol_control", [current_spec], old_spec_symbols,
              "pineforge::native_run_spec_v1::validate_native_run_spec(")
+        link("current_host_events_to_old_symbols", [current_host_events], old_host_events_symbols,
+             "pineforge::engine_script_run_v13::NativeStrategyHost::native_events(")
         link("current_bar_to_old_object", [current_bar], old_bar_obj,
              "pineforge::native_driver_v3::native_bar_structurally_valid(")
         link("current_coordinate_to_old_provider", [current_coordinate], old_coordinate_provider,
