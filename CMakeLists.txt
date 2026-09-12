@@ -118,6 +118,7 @@ add_library(pineforge STATIC
     src/timeframe.cpp
     src/timezone.cpp
     src/native_calendar.cpp
+    src/native_run_spec.cpp
 )
 
 # Canonical alias for downstream find_package(PineForge) consumers.
