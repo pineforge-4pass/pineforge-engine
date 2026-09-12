@@ -75,6 +75,7 @@ set(TEST_SOURCES
     test_matrix_na
     test_matrix_snapshot_compat
     test_session_time
+    test_native_calendar
     test_session_day_anchors
     test_time_tradingday
     test_chart_timezone
