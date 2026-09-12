@@ -314,6 +314,22 @@ add_test(
 )
 
 add_test(
+    NAME test_native_cpp_versions
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_native_cpp_versions.py
+)
+add_test(
+    NAME test_native_cpp_abi
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_native_cpp_abi.py
+            --compiler ${CMAKE_CXX_COMPILER}
+            --library $<TARGET_FILE:pineforge>
+            --include ${PROJECT_SOURCE_DIR}/include
+            --generated-include ${PROJECT_BINARY_DIR}/include
+            ${_pf_script_cpp_abi_flags}
+)
+set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240)
+
+add_test(
     NAME test_derive_corpus_feeds
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/derive_corpus_feeds_self_test.py
