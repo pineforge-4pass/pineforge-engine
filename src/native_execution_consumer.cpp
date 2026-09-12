@@ -266,6 +266,57 @@ void NativeExecutionConsumer::present_refusal(BacktestEngine& engine, const char
     engine.last_run_status_ = 1;
 }
 
+bool NativeExecutionConsumer::refuse_mixed_input_mode(BacktestEngine& engine, InputMode requested) {
+    if (input_mode_ != InputMode::Unselected && input_mode_ != requested) {
+        present_refusal(engine, "native stream cannot mix confirmed bars and ticks");
+        return true;
+    }
+    return false;
+}
+
+void NativeExecutionConsumer::select_input_mode(InputMode requested) {
+    if (input_mode_ == InputMode::Unselected) input_mode_ = requested;
+}
+
+bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const char* not_ready_text) {
+    if (failed()) {
+        render(engine, "native host already failed");
+        return false;
+    }
+    // v10 §4: begin outside Ready refuses without consuming identity/history.
+    // Unconfigured/Completed stay put. A begin while Running is a contract
+    // failure, including reentry from on_native_run_begin / on_native_bar.
+    if (in_callback_ || processing_input_
+        || std::holds_alternative<NativeRunning>(state_)) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
+        render(engine, "native begin is forbidden while running");
+        return false;
+    }
+    if (!std::holds_alternative<NativeReady>(state_)) {
+        present_refusal(engine, not_ready_text);
+        return false;
+    }
+    return true;
+}
+
+bool NativeExecutionConsumer::admit_public_stream_input(BacktestEngine& engine,
+                                                        NativeFailureOperation operation) {
+    if (failed()) {
+        render(engine, "native host already failed");
+        return false;
+    }
+    // Public stream/run inputs are serialized. Nested calls from a native
+    // callback or an in-flight input are a Running contract failure, not a
+    // second pump and not a Completed downgrade. Internal pump_batch and
+    // deliver_tick are not public entry points.
+    if (in_callback_ || processing_input_) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, operation});
+        render(engine, "native public input cannot reenter an active callback or input");
+        return false;
+    }
+    return true;
+}
+
 bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
                                                         NativeFailureOperation operation,
                                                         uint64_t ordinal) {
@@ -305,7 +356,7 @@ bool NativeExecutionConsumer::commands_allowed() const {
 NativeStateView NativeExecutionConsumer::view() const {
     NativeStateView v;
     v.consumed_high_water = consumed_high_water_;
-    v.decision_floor_ms = decision_floor_ms_;
+    v.decision_floor_ms = decision_floor();
     v.spec = spec_ptr();
     if (std::holds_alternative<NativeUnconfigured>(state_)) {
         v.kind = NativeLifecycleKind::Unconfigured;
@@ -359,7 +410,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(next_timeline_ordinal_);
     f.b(in_callback_);
     f.b(processing_input_);
-    f.b(stream_ticks_);
+    f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
     if (const auto* spec = spec_ptr()) hash_spec(f, *spec);
     hash_tz_identity(f, tz_identity_);
@@ -395,7 +446,6 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     if (last_observed_slot_open_) f.i(*last_observed_slot_open_);
     f.b(last_finalized_input_.has_value());
     if (last_finalized_input_) hash_interval(f, *last_finalized_input_);
-    f.b(realtime_confirmed_bars_);
     f.b(has_tick_sequence_);
     f.u(last_tick_sequence_);
     f.i(script_.key);
@@ -546,7 +596,8 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     return result;
 }
 
-bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase phase) {
+bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase phase,
+                                          int64_t initial_floor_ms) {
     auto* ready = std::get_if<NativeReady>(&state_);
     if (!ready) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
@@ -574,8 +625,9 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.reset_run_state();
     requests_.reset(spec.identity);
     next_timeline_ordinal_ = 1;
-    decision_floor_ms_ = 0;
-    has_floor_ = false;
+    decision_floor_ms_ = initial_floor_ms;
+    has_floor_ = true;
+    input_mode_ = InputMode::Unselected;
     next_interval_index_ = 0;
     current_input_open_.reset();
     observed_input_cursor_.reset();
@@ -583,7 +635,6 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     last_accepted_input_.reset();
     last_observed_slot_open_.reset();
     last_finalized_input_.reset();
-    realtime_confirmed_bars_ = false;
     last_tick_sequence_ = 0;
     has_tick_sequence_ = false;
     script_ = ScriptBucket{};
@@ -1257,21 +1308,15 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 }
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return;
-    }
+    if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
-        if (!std::holds_alternative<NativeReady>(state_)) {
-            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
-            render(engine, "native run requires configure_native");
-            return;
-        }
         if (!preflight_bars(engine, bars, n, false)) return;
-        if (!begin_ready(engine, NativeRunPhase::Batch)) return;
+        const int64_t initial = n > 0 ? bars[0].timestamp
+                                      : std::numeric_limits<int64_t>::min();
+        if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
         pump_batch(engine, bars, n);
         if (failed()) return;
         auto* running = std::get_if<NativeRunning>(&state_);
@@ -1290,19 +1335,11 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      const std::string& script_tf,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return;
-    }
+    if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
-        if (!std::holds_alternative<NativeReady>(state_)) {
-            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
-            render(engine, "native run requires configure_native");
-            return;
-        }
         if (!timeframe_args_ok(input_tf, script_tf)) {
             present_refusal(engine, "native timeframe arguments must be empty or match the spec");
             return;
@@ -1313,7 +1350,9 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
             return;
         }
         if (!preflight_bars(engine, input_bars, n_input, false)) return;
-        if (!begin_ready(engine, NativeRunPhase::Batch)) return;
+        const int64_t initial = n_input > 0 ? input_bars[0].timestamp
+                                            : std::numeric_limits<int64_t>::min();
+        if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
         pump_batch(engine, input_bars, n_input);
         if (failed()) return;
         auto* running = std::get_if<NativeRunning>(&state_);
@@ -1344,19 +1383,11 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return false;
-    }
+    if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
-        if (!std::holds_alternative<NativeReady>(state_)) {
-            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
-            render(engine, "native stream_begin requires Ready");
-            return false;
-        }
         if (!timeframe_args_ok(input_tf, script_tf)) {
             present_refusal(engine, "native timeframe arguments must be empty or match the spec");
             return false;
@@ -1378,7 +1409,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
             return false;
         }
         if (!preflight_bars(engine, warmup_bars, n_warmup, true)) return false;
-        if (!begin_ready(engine, NativeRunPhase::Warmup)) return false;
+        if (!begin_ready(engine, NativeRunPhase::Warmup, warmup_bars[0].timestamp)) return false;
         pump_batch(engine, warmup_bars, n_warmup);
         if (failed()) return false;
         if (auto* running = std::get_if<NativeRunning>(&state_)) {
@@ -1401,10 +1432,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
 }
 
 bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar& bar) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return false;
-    }
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     try {
@@ -1413,17 +1441,14 @@ bool NativeExecutionConsumer::stream_push_bar(BacktestEngine& engine, const Bar&
             present_refusal(engine, "native stream_push_bar requires realtime");
             return false;
         }
-        if (stream_ticks_) {
-            present_refusal(engine, "native stream cannot mix confirmed bars and ticks");
-            return false;
-        }
+        if (refuse_mixed_input_mode(engine, InputMode::ConfirmedBars)) return false;
         if (!native_bar_structurally_valid(bar)) {
             present_refusal(engine, "native confirmed bar has invalid OHLCV");
             return false;
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Input)) return false;
         if (!consume_confirmed_input(engine, bar, next_interval_index_, false)) return false;
-        realtime_confirmed_bars_ = true;
+        select_input_mode(InputMode::ConfirmedBars);
         return !failed();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
@@ -1442,10 +1467,7 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
         present_refusal(engine, "native stream_push_tick requires realtime");
         return false;
     }
-    if (realtime_confirmed_bars_) {
-        present_refusal(engine, "native stream cannot mix confirmed bars and ticks");
-        return false;
-    }
+    if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
     if (n == 0) return true;
     uint64_t prev_sequence = last_tick_sequence_;
     bool prev_has_sequence = has_tick_sequence_;
@@ -1627,7 +1649,7 @@ bool NativeExecutionConsumer::finalize_elapsed_slots(BacktestEngine& engine,
 
 bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTick& tick) {
     processing_input_ = true;
-    stream_ticks_ = true;
+    select_input_mode(InputMode::ObservedTicks);
     auto interval = native_calendar::interval_containing(calendar_, input_tf_, tick.timestamp);
     if (!interval) {
         processing_input_ = false;
@@ -1675,10 +1697,7 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
 }
 
 bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const TradeTick& tick) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return false;
-    }
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     try {
@@ -1694,10 +1713,7 @@ bool NativeExecutionConsumer::stream_push_tick(BacktestEngine& engine, const Tra
 }
 
 bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const TradeTick* ticks, int n) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return false;
-    }
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Input)) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     try {
@@ -1717,10 +1733,7 @@ bool NativeExecutionConsumer::stream_push_ticks(BacktestEngine& engine, const Tr
 }
 
 bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_t timestamp_ms) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return false;
-    }
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     try {
@@ -1729,11 +1742,13 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
             present_refusal(engine, "native stream_advance_time requires realtime");
             return false;
         }
+        if (refuse_mixed_input_mode(engine, InputMode::ObservedTicks)) return false;
         if (has_floor_ && timestamp_ms < decision_floor_ms_) {
             present_refusal(engine, "native time advance regresses the decision floor");
             return false;
         }
         if (!check_abort_or_projection(engine, NativeFailureOperation::Stream)) return false;
+        select_input_mode(InputMode::ObservedTicks);
         if (has_last_price_ || has_forming_) {
             processing_input_ = true;
             const bool ok = finalize_elapsed_slots(engine, timestamp_ms);
@@ -1758,10 +1773,7 @@ bool NativeExecutionConsumer::stream_advance_time(BacktestEngine& engine, int64_
 }
 
 bool NativeExecutionConsumer::stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) {
-    if (failed()) {
-        render(engine, "native host already failed");
-        return false;
-    }
+    if (!admit_public_stream_input(engine, NativeFailureOperation::Stream)) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     try {
@@ -1802,7 +1814,7 @@ native_order::SubmitResult NativeExecutionConsumer::submit(BacktestEngine& engin
     if (!commands_allowed()) {
         throw std::runtime_error("native submit refused outside allowed phase");
     }
-    const int64_t floor = has_floor_ ? decision_floor_ms_ : 0;
+    const int64_t floor = decision_floor();
     auto result = requests_.submit(request, floor, engine.next_order_incarnation_,
                                    next_timeline_ordinal_,
                                    spec_ptr() ? spec_ptr()->quantity_grid : std::nullopt);
@@ -1817,7 +1829,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace(
     if (!commands_allowed()) {
         throw std::runtime_error("native replace refused outside allowed phase");
     }
-    const int64_t floor = has_floor_ ? decision_floor_ms_ : 0;
+    const int64_t floor = decision_floor();
     auto result = requests_.replace(target, request, floor, engine.next_order_incarnation_,
                                     next_timeline_ordinal_,
                                     spec_ptr() ? spec_ptr()->quantity_grid : std::nullopt);
@@ -1896,7 +1908,8 @@ std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t af
     }
     std::sort(out.begin(), out.end(),
               [](const NativeMarketEvent& a, const NativeMarketEvent& b) {
-                  return a.ordinal < b.ordinal;
+                  if (a.ordinal != b.ordinal) return a.ordinal < b.ordinal;
+                  return static_cast<std::uint8_t>(a.kind) < static_cast<std::uint8_t>(b.kind);
               });
     return out;
 }

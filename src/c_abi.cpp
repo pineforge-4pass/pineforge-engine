@@ -531,7 +531,13 @@ PF_API int strategy_stream_begin(pf_strategy_t s,
     return pf_cabi_int([&] {
         if (!s) return -1;
         auto* engine = static_cast<pineforge::BacktestEngine*>(s);
-        if (n_warmup < 0 || (n_warmup > 0 && !warmup_bars)) return -1;
+        if (n_warmup < 0 || (n_warmup > 0 && !warmup_bars)) {
+            // Preserve the engine's diagnostic and lifecycle contract without
+            // reading malformed C input or allocating an input array.
+            return engine->stream_begin(nullptr, n_warmup,
+                input_tf ? std::string(input_tf) : std::string(),
+                script_tf ? std::string(script_tf) : std::string()) ? 0 : -1;
+        }
         std::vector<pineforge::Bar> bars;
         bars.reserve(static_cast<std::size_t>(n_warmup));
         for (int i = 0; i < n_warmup; ++i) {

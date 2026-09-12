@@ -405,6 +405,25 @@ int main(int argc, char** argv) {
     five_minute_bars(bars);
 
     {
+        // Malformed transport arrays still reach the engine's documented
+        // diagnostic path and do not consume a Ready native run.
+        pf_strategy_t s = abi.create(nullptr);
+        CHECK(s != nullptr);
+        auto spec = complete_spec("native-example-warmup-shape", 1);
+        CHECK(abi.configure(s, &spec) == 0);
+        const double equity_before = abi.current_equity(s);
+        CHECK(abi.stream_begin(s, nullptr, 1, "5", "5") == -1);
+        CHECK(error_text(abi, s, "warmup"));
+        CHECK(abi.stream_begin(s, bars, -1, "5", "5") == -1);
+        CHECK(error_text(abi, s, "warmup"));
+        near(abi.position_size(s), 0.0);
+        near(abi.current_equity(s), equity_before);
+        CHECK(abi.stream_begin(s, bars, 1, "5", "5") == 0);
+        CHECK(abi.stream_end(s, 0) == 0);
+        abi.free_strategy(s);
+    }
+
+    {
         pf_strategy_t s = abi.create(nullptr);
         CHECK(s != nullptr);
         CHECK(abi.contract(s) == 2);
@@ -445,8 +464,8 @@ int main(int argc, char** argv) {
     }
 
     {
-        // Wrapper preflight only (pending root NativeExecutionConsumer::run_tf
-        // magnifier refusal). Does not latch Failed; Ready remains usable.
+        // Wrapper preflight preserves the output report on unsupported magnifier
+        // arguments. Does not latch Failed; Ready remains usable.
         pf_strategy_t s = abi.create(nullptr);
         CHECK(s != nullptr);
         auto spec = complete_spec("native-example-magnifier-wrapper", 1);

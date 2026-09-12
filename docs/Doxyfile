@@ -91,6 +91,7 @@ INPUT                  = ../include/pineforge/pineforge.h \
                          pages/integration-cmake.md \
                          pages/lifecycle.md \
                          pages/fill-model.md \
+                         pages/native-engine.md \
                          pages/market-admission.md \
                          pages/exit-leg-lifecycle.md \
                          pages/exit-leg-lifecycle-reflection.md \

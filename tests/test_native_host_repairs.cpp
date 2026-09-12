@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <typeinfo>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -169,18 +170,105 @@ public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++bars; }
 };
 
+class ReenterHost final : public NativeStrategyHost {
+public:
+    enum class Action {
+        None = 0,
+        End,
+        Advance,
+        PushBar,
+        PushTick,
+        PushTicks,
+        Run,
+        StreamBegin,
+    };
+    Action from_begin = Action::None;
+    Action from_bar = Action::None;
+    Bar nested = bar_at(120000, 110, 111, 109, 110);
+    TradeTick nested_tick{120000, 1, 110.0, 1.0};
+    bool nested_ok = true;
+    int callbacks = 0;
+    int begins = 0;
+
+    void on_native_run_begin() override {
+        ++begins;
+        nested_ok = fire(from_begin);
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++callbacks;
+        nested_ok = fire(from_bar);
+    }
+
+    bool fire(Action action) {
+        switch (action) {
+        case Action::None:
+            return true;
+        case Action::End:
+            return stream_end(false);
+        case Action::Advance:
+            return stream_advance_time(180000);
+        case Action::PushBar:
+            return stream_push_bar(nested);
+        case Action::PushTick:
+            return stream_push_tick(nested_tick);
+        case Action::PushTicks:
+            return stream_push_ticks(&nested_tick, 1);
+        case Action::Run:
+            run(&nested, 1);
+            return native_state().kind != NativeLifecycleKind::Failed;
+        case Action::StreamBegin:
+            return stream_begin(&nested, 1, "", "");
+        }
+        return true;
+    }
+};
+
+class ReenterEndAfterCalcHost final : public NativeStrategyHost {
+public:
+    int callbacks = 0;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        ++callbacks;
+        submit_market(Request{Transact{1.0}, "reenter-buy", ""});
+        stream_end(false);
+    }
+};
+
+int applied_fill_count(const NativeStrategyHost& host) {
+    int n = 0;
+    for (const auto& event : host.native_events(0)) {
+        if (event.command
+            && std::holds_alternative<native_order::ExecutionAppliedEvent>(*event.command)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
 class BeginSubmitHost final : public NativeStrategyHost {
 public:
     bool threw = false;
     native_order::SubmitStatus status = native_order::SubmitStatus::Rejected;
+    int64_t floor_at_begin = 0;
+    int64_t state_floor_at_begin = 0;
+    int64_t birth_floor = 0;
+    int callbacks = 0;
     void on_native_run_begin() override {
+        floor_at_begin = native_decision_floor();
+        state_floor_at_begin = native_state().decision_floor_ms;
         try {
             status = submit_market(Request{Transact{1.0}, "begin", ""}).status;
         } catch (...) {
             threw = true;
         }
+        for (const auto& event : native_events(0)) {
+            if (!event.command) continue;
+            if (const auto* accepted =
+                    std::get_if<native_order::AcceptedEvent>(&*event.command)) {
+                birth_floor = accepted->birth.decision_time_lower_bound;
+            }
+        }
     }
-    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++callbacks; }
 };
 
 class NonstandardThrowHost final : public NativeStrategyHost {
@@ -1248,6 +1336,390 @@ int main() {
         refused.run(&bar, 1, "1", "1", false, 4, MagnifierDistribution::ENDPOINTS);
         CHECK(refused.native_state().kind == NativeLifecycleKind::Completed);
         CHECK(refused.callbacks == 1);
+    }
+
+    {
+        RecordHost host;
+        host.buy_on_first = true;
+        auto spec = spec_for("completed-repeat-begin-preserves", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bars[2] = {
+            bar_at(0, 100, 101, 99, 100),
+            bar_at(60000, 102, 103, 101, 102),
+        };
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.physical_position().lot_count == 1);
+        const uint64_t hash = host.native_continuation_hash();
+        const uint64_t hw = host.native_consumed_high_water();
+        const auto events = host.native_events(0).size();
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.last_run_status() != 0);
+        CHECK(!host.last_error().empty());
+        CHECK(host.native_continuation_hash() == hash);
+        CHECK(host.native_consumed_high_water() == hw);
+        CHECK(host.physical_position().lot_count == 1);
+        CHECK(host.native_events(0).size() == events);
+        host.run(bars, 2, "1", "1");
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.native_continuation_hash() == hash);
+        CHECK(!host.stream_begin(&bars[0], 1, "", ""));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.native_continuation_hash() == hash);
+        auto spec2 = spec;
+        spec2.identity.run_number = 2;
+        CHECK(host.configure_native(spec2).status == NativeSetupStatus::Applied);
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.native_consumed_high_water() == 2);
+    }
+
+    {
+        EmptyHost host;
+        Bar bar = bar_at(60000, 100, 101, 99, 100);
+        host.run(&bar, 1);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Unconfigured);
+        CHECK(host.last_run_status() != 0);
+        CHECK(!host.last_error().empty());
+        CHECK(host.native_consumed_high_water() == 0);
+        CHECK(!host.stream_begin(&bar, 1, "", ""));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Unconfigured);
+        auto spec = spec_for("unconfigured-begin-then-configure", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        host.run(&bar, 1);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.native_consumed_high_water() == 1);
+    }
+
+    {
+        EmptyHost host;
+        auto spec = spec_for("running-forbidden-begin", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar warmup = bar_at(0, 100, 101, 99, 100);
+        CHECK(host.stream_begin(&warmup, 1, "", ""));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Running);
+        const uint64_t hw = host.native_consumed_high_water();
+        Bar next = bar_at(60000, 102, 103, 101, 102);
+        host.run(&next, 1);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(host.native_state().failure.code == NativeFailureCode::Contract);
+        CHECK(host.native_state().failure.operation == NativeFailureOperation::Begin);
+        CHECK(host.native_consumed_high_water() == hw);
+        CHECK(host.configure_native(spec).status != NativeSetupStatus::Applied);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(host.native_state().failure.code == NativeFailureCode::Contract);
+    }
+
+    {
+        AbortHost host;
+        auto spec = spec_for("failed-first-failure-persists", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bars[2] = {bar_at(0, 100, 101, 99, 100), bar_at(60000, 102, 103, 101, 102)};
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(host.native_state().failure.code == NativeFailureCode::Aborted);
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(host.native_state().failure.code == NativeFailureCode::Aborted);
+        CHECK(!host.stream_begin(&bars[0], 1, "", ""));
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(host.native_state().failure.code == NativeFailureCode::Aborted);
+    }
+
+    {
+        EmptyHost ready;
+        auto spec = spec_for("rich-source-run-failed", 1);
+        CHECK(ready.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bar = bar_at(60000, 100, 101, 99, 100);
+        std::unordered_map<std::string, std::string> inputs;
+        SymInfo info;
+        ready.run(&bar, 1, "1", "1", inputs, info);
+        CHECK(ready.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(ready.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+        EmptyHost completed;
+        CHECK(completed.configure_native(spec).status == NativeSetupStatus::Applied);
+        completed.run(&bar, 1);
+        CHECK(completed.native_state().kind == NativeLifecycleKind::Completed);
+        completed.run(&bar, 1, "1", "1", inputs, info);
+        CHECK(completed.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(completed.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+    }
+
+    {
+        ReenterEndAfterCalcHost host;
+        auto spec = spec_for("reenter-stream-end-no-aftercalc-fill", 1);
+        spec.close_execution = NativeCloseExecution::AfterCalculation;
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bar = bar_at(0, 100, 110, 90, 101);
+        host.run(&bar, 1);
+        CHECK(host.callbacks == 1);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(host.native_state().failure.code == NativeFailureCode::Contract);
+        CHECK(host.physical_position().lot_count == 0);
+        CHECK(applied_fill_count(host) == 0);
+        CHECK(host.last_run_status() != 0);
+    }
+
+    {
+        const ReenterHost::Action actions[] = {
+            ReenterHost::Action::End,
+            ReenterHost::Action::Advance,
+            ReenterHost::Action::PushBar,
+            ReenterHost::Action::PushTick,
+            ReenterHost::Action::PushTicks,
+            ReenterHost::Action::Run,
+            ReenterHost::Action::StreamBegin,
+        };
+        for (auto action : actions) {
+            ReenterHost from_bar;
+            from_bar.from_bar = action;
+            auto spec = spec_for(std::string("reenter-bar-") + std::to_string(static_cast<int>(action)), 1);
+            CHECK(from_bar.configure_native(spec).status == NativeSetupStatus::Applied);
+            Bar bar = bar_at(0, 100, 101, 99, 100);
+            from_bar.run(&bar, 1);
+            CHECK(from_bar.callbacks == 1);
+            CHECK(!from_bar.nested_ok);
+            CHECK(from_bar.native_state().kind == NativeLifecycleKind::Failed);
+            CHECK(from_bar.native_state().failure.code == NativeFailureCode::Contract);
+            CHECK(from_bar.native_state().kind != NativeLifecycleKind::Completed);
+            CHECK(applied_fill_count(from_bar) == 0);
+
+            ReenterHost from_begin;
+            from_begin.from_begin = action;
+            auto spec_b = spec_for(std::string("reenter-begin-") + std::to_string(static_cast<int>(action)), 1);
+            CHECK(from_begin.configure_native(spec_b).status == NativeSetupStatus::Applied);
+            from_begin.run(&bar, 1);
+            CHECK(from_begin.begins == 1);
+            CHECK(!from_begin.nested_ok);
+            CHECK(from_begin.native_state().kind == NativeLifecycleKind::Failed);
+            CHECK(from_begin.native_state().failure.code == NativeFailureCode::Contract);
+        }
+    }
+
+    {
+        RecordHost host;
+        host.buy_on_first = true;
+        auto spec = spec_for("ordinary-callback-submit-still-allowed", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bars[2] = {
+            bar_at(0, 100, 101, 99, 100),
+            bar_at(60000, 102, 103, 101, 102),
+        };
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.physical_position().lot_count == 1);
+        CHECK(applied_fill_count(host) == 1);
+    }
+
+    {
+        EmptyHost inert;
+        CHECK(inert.native_decision_floor() == std::numeric_limits<int64_t>::min());
+        CHECK(inert.native_state().decision_floor_ms == std::numeric_limits<int64_t>::min());
+        BeginSubmitHost simple;
+        auto spec = spec_for("negative-begin-batch-simple", 1);
+        CHECK(simple.configure_native(spec).status == NativeSetupStatus::Applied);
+        CHECK(simple.native_decision_floor() == std::numeric_limits<int64_t>::min());
+        Bar negative = bar_at(-60000, 100, 102, 99, 101);
+        simple.run(&negative, 1);
+        CHECK(simple.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(simple.status == native_order::SubmitStatus::Accepted);
+        CHECK(simple.floor_at_begin == -60000);
+        CHECK(simple.state_floor_at_begin == -60000);
+        CHECK(simple.birth_floor == -60000);
+        CHECK(simple.floor_at_begin == simple.birth_floor);
+        CHECK(applied_fill_count(simple) == 1);
+        CHECK(simple.physical_position().lot_count == 1);
+        near(simple.physical_position().signed_units, 1.0);
+        bool saw_open_fill = false;
+        for (const auto& event : simple.native_events(0)) {
+            if (!event.command) continue;
+            if (const auto* applied =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
+                CHECK(applied->effective_time_ms == -60000);
+                near(applied->raw_price, 100.0);
+                CHECK(applied->birth.decision_time_lower_bound == -60000);
+                saw_open_fill = true;
+            }
+        }
+        CHECK(saw_open_fill);
+
+        BeginSubmitHost tf;
+        CHECK(tf.configure_native(spec_for("negative-begin-batch-tf", 1)).status
+              == NativeSetupStatus::Applied);
+        tf.run(&negative, 1, "1", "1");
+        CHECK(tf.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(tf.floor_at_begin == -60000);
+        CHECK(tf.birth_floor == -60000);
+        CHECK(applied_fill_count(tf) == 1);
+
+        BeginSubmitHost warmup;
+        CHECK(warmup.configure_native(spec_for("negative-begin-warmup", 1)).status
+              == NativeSetupStatus::Applied);
+        CHECK(warmup.stream_begin(&negative, 1, "", ""));
+        CHECK(warmup.floor_at_begin == -60000);
+        CHECK(warmup.birth_floor == -60000);
+        CHECK(applied_fill_count(warmup) == 1);
+        CHECK(warmup.stream_end(false));
+    }
+
+    {
+        BeginSubmitHost positive;
+        auto spec = spec_for("positive-begin-floor-control", 1);
+        CHECK(positive.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bar = bar_at(60000, 100, 101, 99, 100);
+        positive.run(&bar, 1);
+        CHECK(positive.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(positive.floor_at_begin == 60000);
+        CHECK(positive.birth_floor == 60000);
+        CHECK(applied_fill_count(positive) == 1);
+    }
+
+    {
+        BeginSubmitHost empty;
+        auto spec = spec_for("empty-batch-unbounded-floor", 1);
+        CHECK(empty.configure_native(spec).status == NativeSetupStatus::Applied);
+        empty.run(nullptr, 0);
+        CHECK(empty.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(empty.native_consumed_high_water() == 1);
+        CHECK(empty.floor_at_begin == std::numeric_limits<int64_t>::min());
+        CHECK(empty.state_floor_at_begin == std::numeric_limits<int64_t>::min());
+        CHECK(empty.birth_floor == std::numeric_limits<int64_t>::min());
+        CHECK(empty.status == native_order::SubmitStatus::Accepted);
+        CHECK(applied_fill_count(empty) == 0);
+        CHECK(empty.physical_position().lot_count == 0);
+        CHECK(empty.callbacks == 0);
+        bool invented_price = false;
+        for (const auto& event : empty.native_events(0)) {
+            if (event.driver) invented_price = true;
+        }
+        CHECK(!invented_price);
+        CHECK(empty.native_decision_floor() == std::numeric_limits<int64_t>::min());
+    }
+
+    {
+        RecordHost host;
+        host.buy_on_first = true;
+        auto spec = spec_for("late-callback-no-retrofill", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bars[2] = {
+            bar_at(0, 100, 101, 99, 100),
+            bar_at(60000, 102, 103, 101, 102),
+        };
+        host.run(bars, 2);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(applied_fill_count(host) == 1);
+        for (const auto& event : host.native_events(0)) {
+            if (!event.command) continue;
+            if (const auto* applied =
+                    std::get_if<native_order::ExecutionAppliedEvent>(&*event.command)) {
+                CHECK(applied->effective_time_ms == 60000);
+                CHECK(applied->birth.decision_time_lower_bound >= 60000);
+                near(applied->raw_price, 102.0);
+            }
+        }
+    }
+
+    {
+        EmptyHost bars_then_advance;
+        auto spec = spec_for("mode-refuse-bar-then-advance", 1);
+        CHECK(bars_then_advance.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar warmup = bar_at(0, 100, 101, 99, 100);
+        CHECK(bars_then_advance.stream_begin(&warmup, 1, "", ""));
+        CHECK(bars_then_advance.stream_push_bar(bar_at(60000, 102, 103, 101, 102)));
+        const uint64_t hash = bars_then_advance.native_continuation_hash();
+        const int64_t floor = bars_then_advance.native_decision_floor();
+        const auto lots = bars_then_advance.physical_position().lot_count;
+        CHECK(!bars_then_advance.stream_advance_time(180000));
+        CHECK(bars_then_advance.native_state().kind == NativeLifecycleKind::Running);
+        CHECK(bars_then_advance.last_run_status() != 0);
+        CHECK(bars_then_advance.native_continuation_hash() == hash);
+        CHECK(bars_then_advance.native_decision_floor() == floor);
+        CHECK(bars_then_advance.physical_position().lot_count == lots);
+        CHECK(bars_then_advance.stream_end(false));
+
+        EmptyHost advance_then_bar;
+        CHECK(advance_then_bar.configure_native(spec_for("mode-refuse-advance-then-bar", 1)).status
+              == NativeSetupStatus::Applied);
+        CHECK(advance_then_bar.stream_begin(&warmup, 1, "", ""));
+        CHECK(advance_then_bar.stream_advance_time(90000));
+        const uint64_t hash_a = advance_then_bar.native_continuation_hash();
+        const int64_t floor_a = advance_then_bar.native_decision_floor();
+        CHECK(!advance_then_bar.stream_push_bar(bar_at(60000, 102, 103, 101, 102)));
+        CHECK(advance_then_bar.native_state().kind == NativeLifecycleKind::Running);
+        CHECK(advance_then_bar.last_run_status() != 0);
+        CHECK(advance_then_bar.native_continuation_hash() == hash_a);
+        CHECK(advance_then_bar.native_decision_floor() == floor_a);
+        CHECK(advance_then_bar.stream_end(false));
+    }
+
+    {
+        EmptyHost warmup_bar;
+        auto spec = spec_for("mode-warmup-then-bar", 1);
+        CHECK(warmup_bar.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar warmup = bar_at(0, 100, 101, 99, 100);
+        CHECK(warmup_bar.stream_begin(&warmup, 1, "", ""));
+        CHECK(warmup_bar.stream_push_bar(bar_at(60000, 102, 103, 101, 102)));
+        CHECK(warmup_bar.stream_end(false));
+        CHECK(warmup_bar.native_state().kind == NativeLifecycleKind::Completed);
+
+        EmptyHost warmup_ticks;
+        CHECK(warmup_ticks.configure_native(spec_for("mode-warmup-then-ticks", 1)).status
+              == NativeSetupStatus::Applied);
+        CHECK(warmup_ticks.stream_begin(&warmup, 1, "", ""));
+        CHECK(warmup_ticks.stream_push_tick(TradeTick{60000, 1, 100.25, 1.0}));
+        CHECK(warmup_ticks.stream_advance_time(120000));
+        CHECK(warmup_ticks.stream_end(false));
+        CHECK(warmup_ticks.native_state().kind == NativeLifecycleKind::Completed);
+
+        EmptyHost warmup_advance;
+        CHECK(warmup_advance.configure_native(spec_for("mode-warmup-then-advance", 1)).status
+              == NativeSetupStatus::Applied);
+        CHECK(warmup_advance.stream_begin(&warmup, 1, "", ""));
+        CHECK(warmup_advance.stream_advance_time(180000));
+        CHECK(warmup_advance.stream_end(false));
+        CHECK(warmup_advance.native_state().kind == NativeLifecycleKind::Completed);
+    }
+
+    {
+        RecordHost host;
+        host.buy_on_first = true;
+        auto spec = spec_for("events-after-ordinal-kind-order", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        Bar bars[2] = {
+            bar_at(0, 100, 101, 99, 100),
+            bar_at(60000, 102, 103, 101, 102),
+        };
+        host.run(bars, 2);
+        const auto all = host.native_events(0);
+        CHECK(host.native_events(0).size() == all.size());
+        uint64_t fill_ordinal = 0;
+        bool saw_pair = false;
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            if (i + 1 < all.size() && all[i].ordinal == all[i + 1].ordinal) {
+                CHECK(static_cast<uint8_t>(all[i].kind) < static_cast<uint8_t>(all[i + 1].kind));
+            }
+            if (all[i].command
+                && std::holds_alternative<native_order::ExecutionAppliedEvent>(*all[i].command)) {
+                fill_ordinal = all[i].ordinal;
+                CHECK(all[i].kind == NativeEventKind::Command);
+                CHECK(i + 1 < all.size());
+                CHECK(all[i + 1].ordinal == fill_ordinal);
+                CHECK(all[i + 1].kind == NativeEventKind::Account);
+                saw_pair = true;
+            }
+        }
+        CHECK(saw_pair);
+        CHECK(fill_ordinal > 0);
+        const auto suffix = host.native_events(fill_ordinal);
+        for (const auto& event : suffix) CHECK(event.ordinal > fill_ordinal);
+        const auto group = host.native_events(fill_ordinal - 1);
+        CHECK(group.size() >= 2);
+        CHECK(group[0].ordinal == fill_ordinal);
+        CHECK(group[0].kind == NativeEventKind::Command);
+        CHECK(group[1].ordinal == fill_ordinal);
+        CHECK(group[1].kind == NativeEventKind::Account);
+        CHECK(host.native_events(0).size() == all.size());
     }
 
     std::printf("%s %d checks %d failures\n", failures ? "FAIL" : "PASS", checks, failures);

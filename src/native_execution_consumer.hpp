@@ -4,6 +4,7 @@
 #include <pineforge/native_host.hpp>
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -57,7 +58,9 @@ public:
     NativePhysicalPosition position(const BacktestEngine& engine) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
-    int64_t decision_floor() const noexcept { return decision_floor_ms_; }
+    int64_t decision_floor() const noexcept {
+        return has_floor_ ? decision_floor_ms_ : std::numeric_limits<int64_t>::min();
+    }
     uint64_t high_water() const noexcept { return consumed_high_water_; }
     void reject_inherited_on_bar(BacktestEngine& engine);
 
@@ -84,6 +87,12 @@ private:
         QuietCarried = 2,
     };
 
+    enum class InputMode : std::uint8_t {
+        Unselected = 0,
+        ConfirmedBars = 1,
+        ObservedTicks = 2,
+    };
+
     struct AppendDigest {
         uint64_t h = 1469598103934665603ULL;
         uint64_t count = 0;
@@ -102,7 +111,11 @@ private:
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
     bool projection_ok(const BacktestEngine& engine) const;
-    bool begin_ready(BacktestEngine& engine, NativeRunPhase phase);
+    bool begin_ready(BacktestEngine& engine, NativeRunPhase phase, int64_t initial_floor_ms);
+    bool refuse_mixed_input_mode(BacktestEngine& engine, InputMode requested);
+    void select_input_mode(InputMode requested);
+    bool admit_public_begin(BacktestEngine& engine, const char* not_ready_text);
+    bool admit_public_stream_input(BacktestEngine& engine, NativeFailureOperation operation);
     bool preflight_bars(BacktestEngine& engine, const Bar* bars, int n, bool stream);
     void pump_batch(BacktestEngine& engine, const Bar* bars, int n);
     bool consume_confirmed_input(BacktestEngine& engine, const Bar& bar, int index, bool last);
@@ -160,7 +173,7 @@ private:
     NativeRunSpec applied_{};
     bool in_callback_ = false;
     bool processing_input_ = false;
-    bool stream_ticks_ = false;
+    InputMode input_mode_ = InputMode::Unselected;
     int next_interval_index_ = 0;
     std::optional<int64_t> current_input_open_;
     std::optional<int64_t> observed_input_cursor_;
@@ -168,7 +181,6 @@ private:
     std::optional<native_calendar::NativeInterval> last_accepted_input_;
     std::optional<int64_t> last_observed_slot_open_;
     std::optional<native_calendar::NativeInterval> last_finalized_input_;
-    bool realtime_confirmed_bars_ = false;
     uint64_t last_tick_sequence_ = 0;
     bool has_tick_sequence_ = false;
     ScriptBucket script_{};

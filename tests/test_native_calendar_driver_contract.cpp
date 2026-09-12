@@ -9,18 +9,37 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <functional>
+#include <iomanip>
 #include <limits>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
 namespace {
 using namespace pineforge;
+using native_order::AcceptedEvent;
+using native_order::CancelledEvent;
+using native_order::CommandEvent;
 using native_order::ExecutionAppliedEvent;
+using native_order::InvalidHandleEvent;
+using native_order::MatchRejectedEvent;
+using native_order::NoEffectEvent;
+using native_order::NotWorkingEvent;
+using native_order::RejectedEvent;
+using native_order::ReplaceRejectedEvent;
+using native_order::ReplacedEvent;
 using native_order::Request;
+using native_order::SubmitResult;
 using native_order::SubmitStatus;
+using order_action::Reduce;
 using order_action::Transact;
 
 int checks = 0;
@@ -50,6 +69,299 @@ Bar flat(int64_t timestamp, double price = 100.0, double volume = 1.0) {
 }
 
 Request buy() { return Request{Transact{1.0}, "calendar-contract", ""}; }
+
+bool proof_capture = false;
+int next_host_ordinal = 0;
+
+struct HostSnap {
+    int ordinal = 0;
+    std::string spec_json = "{}";
+    std::string identity_json =
+        "{\"sessionKey\":\"calendar-driver-contract\",\"runNumber\":1}";
+    std::string calendar_json = "{}";
+    std::vector<std::string> inputs;
+    std::vector<std::string> lifecycle;
+    std::vector<std::string> physical;
+    std::string observations_json = "{}";
+};
+
+std::vector<HostSnap> group_snaps;
+
+struct ScenarioArt {
+    std::string id;
+    std::string status = "passed";
+    std::string native_configuration = "{}";
+    std::string run_identity =
+        "{\"sessionKey\":\"calendar-driver-contract\",\"runNumber\":1}";
+    std::string calendar = "{}";
+    std::string logical_inputs = "[]";
+    std::string lifecycle_events = "[]";
+    std::string physical_effects = "[]";
+    std::string observations = "{}";
+    std::string comparisons = "[]";
+};
+
+std::vector<ScenarioArt> arts;
+
+std::string json_escape(const std::string& s) {
+    std::string out;
+    out.push_back('"');
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                char buf[8];
+                std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+                out += buf;
+            } else {
+                out.push_back(static_cast<char>(c));
+            }
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
+std::string json_num(double x) {
+    std::ostringstream out;
+    out << std::setprecision(17) << x;
+    return out.str();
+}
+
+std::string json_i64(int64_t x) {
+    std::ostringstream out;
+    out << x;
+    return out.str();
+}
+
+std::string json_u64(uint64_t x) {
+    std::ostringstream out;
+    out << x;
+    return out.str();
+}
+
+std::string json_bool(bool v) { return v ? "true" : "false"; }
+
+std::string hex64(uint64_t value) {
+    std::ostringstream out;
+    out << std::hex << std::setw(16) << std::setfill('0') << value;
+    return out.str();
+}
+
+uint64_t f64_bits(double x) {
+    uint64_t bits = 0;
+    std::memcpy(&bits, &x, sizeof(bits));
+    return bits;
+}
+
+std::string unsupported_number(double x) {
+    const char* tag = "nonfinite";
+    if (std::isnan(x)) tag = "NaN";
+    else if (std::isinf(x)) tag = x > 0 ? "+Inf" : "-Inf";
+    std::ostringstream out;
+    out << "{\"unsupported\":" << json_escape(tag)
+        << ",\"ieee754Bits\":" << json_escape(hex64(f64_bits(x))) << "}";
+    return out.str();
+}
+
+void append_f64(std::ostringstream& out, const char* key, double x) {
+    out << json_escape(key) << ":";
+    if (std::isfinite(x)) out << json_num(x);
+    else out << unsupported_number(x);
+}
+
+std::string json_array(const std::vector<std::string>& parts) {
+    std::string out = "[";
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        if (i) out += ",";
+        out += parts[i];
+    }
+    out += "]";
+    return out;
+}
+
+std::string flatten_items(const std::vector<HostSnap>& hosts,
+                          std::vector<std::string> HostSnap::*field) {
+    std::vector<std::string> all;
+    for (const auto& host : hosts) {
+        const auto& items = host.*field;
+        all.insert(all.end(), items.begin(), items.end());
+    }
+    return json_array(all);
+}
+
+bool is_sha256_hex(const char* s) {
+    if (!s) return false;
+    std::size_t n = 0;
+    for (; s[n]; ++n) {
+        const char c = s[n];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return n == 64;
+}
+
+std::string identity_json(const NativeRunSpec& spec) {
+    std::ostringstream out;
+    out << "{\"sessionKey\":" << json_escape(spec.identity.session_key)
+        << ",\"runNumber\":" << json_u64(spec.identity.run_number) << "}";
+    return out.str();
+}
+
+std::string calendar_json(const NativeRunSpec& spec, int host_ordinal) {
+    std::ostringstream out;
+    out << "{\"hostOrdinal\":" << host_ordinal
+        << ",\"timezone\":" << json_escape(spec.timezone)
+        << ",\"session\":" << json_escape(spec.session)
+        << ",\"inputTf\":" << json_escape(spec.input_tf)
+        << ",\"scriptTf\":" << json_escape(spec.script_tf)
+        << ",\"chartTimezone\":" << json_escape(spec.chart_timezone) << "}";
+    return out.str();
+}
+
+void append_optional_f64(std::ostringstream& out, const char* key,
+                         const std::optional<double>& value) {
+    out << "," << json_escape(key) << ":";
+    if (!value) out << "null";
+    else if (std::isfinite(*value)) out << json_num(*value);
+    else out << unsupported_number(*value);
+}
+
+std::string spec_config_json(const NativeRunSpec& spec, int host_ordinal) {
+    std::ostringstream out;
+    out << "{\"hostOrdinal\":" << host_ordinal
+        << ",\"sessionKey\":" << json_escape(spec.identity.session_key)
+        << ",\"runNumber\":" << json_u64(spec.identity.run_number)
+        << ",\"inputTf\":" << json_escape(spec.input_tf)
+        << ",\"scriptTf\":" << json_escape(spec.script_tf)
+        << ",\"ticker\":" << json_escape(spec.ticker)
+        << ",\"tickerid\":" << json_escape(spec.tickerid)
+        << ",\"type\":" << json_escape(spec.type)
+        << ",\"currency\":" << json_escape(spec.currency)
+        << ",\"basecurrency\":" << json_escape(spec.basecurrency)
+        << ",\"description\":" << json_escape(spec.description)
+        << ",\"volumetype\":" << json_escape(spec.volumetype)
+        << ",\"timezone\":" << json_escape(spec.timezone)
+        << ",\"session\":" << json_escape(spec.session)
+        << ",\"chartTimezone\":" << json_escape(spec.chart_timezone)
+        << ",";
+    append_f64(out, "initialCapital", spec.initial_capital);
+    out << ",";
+    append_f64(out, "pointValue", spec.point_value);
+    out << ",";
+    append_f64(out, "accountFx", spec.account_fx);
+    out << ",";
+    append_f64(out, "priceTick", spec.price_tick);
+    out << ",\"slippageTicks\":" << json_u64(spec.slippage_ticks)
+        << ",\"feeKind\":" << json_u64(static_cast<uint64_t>(spec.fee_kind))
+        << ",";
+    append_f64(out, "feeValue", spec.fee_value);
+    append_optional_f64(out, "quantityGrid", spec.quantity_grid);
+    out << ",\"closeExecution\":"
+        << json_u64(static_cast<uint64_t>(spec.close_execution));
+    append_optional_f64(out, "maxAbsUnits", spec.max_abs_units);
+    out << ",\"maxOpenLots\":";
+    if (!spec.max_open_lots) out << "null";
+    else out << json_u64(*spec.max_open_lots);
+    out << ",\"allowedOpenDirections\":"
+        << json_u64(static_cast<uint64_t>(spec.allowed_open_directions));
+    append_optional_f64(out, "initialMarginFraction", spec.initial_margin_fraction);
+    out << "}";
+    return out.str();
+}
+
+std::string interval_json(const native_calendar::NativeInterval& interval) {
+    std::ostringstream out;
+    out << "{\"openMs\":" << json_i64(interval.open_ms)
+        << ",\"eligibleOpenMs\":" << json_i64(interval.eligible_open_ms)
+        << ",\"lastTradedCloseMs\":" << json_i64(interval.last_traded_close_ms)
+        << ",\"nextPeriodOpenMs\":" << json_i64(interval.next_period_open_ms)
+        << ",\"nextInputOpenMs\":" << json_i64(interval.next_input_open_ms) << "}";
+    return out.str();
+}
+
+std::string coordinate_json(const NativeCoordinate& c) {
+    std::ostringstream out;
+    out << "{\"ordinal\":" << json_u64(c.ordinal)
+        << ",\"intervalIndex\":" << c.interval_index
+        << ",\"openMs\":" << json_i64(c.open_ms)
+        << ",\"eligibleOpenMs\":" << json_i64(c.eligible_open_ms)
+        << ",\"lastTradedCloseMs\":" << json_i64(c.last_traded_close_ms)
+        << ",\"nextPeriodOpenMs\":" << json_i64(c.next_period_open_ms)
+        << ",\"nextInputOpenMs\":" << json_i64(c.next_input_open_ms)
+        << ",\"effectiveTimeMs\":" << json_i64(c.effective_time_ms)
+        << ",\"sourcePriceTimeMs\":" << json_i64(c.source_price_time_ms)
+        << ",\"provenance\":" << json_u64(static_cast<uint64_t>(c.provenance))
+        << ",\"pathPhase\":" << json_u64(static_cast<uint64_t>(c.path_phase))
+        << ",\"completion\":" << json_u64(static_cast<uint64_t>(c.completion)) << "}";
+    return out.str();
+}
+
+void append_bar_fields(std::ostringstream& out, const Bar& bar) {
+    append_f64(out, "open", bar.open);
+    out << ",";
+    append_f64(out, "high", bar.high);
+    out << ",";
+    append_f64(out, "low", bar.low);
+    out << ",";
+    append_f64(out, "close", bar.close);
+    out << ",";
+    append_f64(out, "volume", bar.volume);
+    out << ",\"timestampMs\":" << json_i64(bar.timestamp);
+}
+
+std::string action_json(const Request& request) {
+    return std::visit([](const auto& action) -> std::string {
+        using T = std::decay_t<decltype(action)>;
+        std::ostringstream out;
+        if constexpr (std::is_same_v<T, Transact>) {
+            out << "{\"type\":\"Transact\",";
+            append_f64(out, "signedUnits", action.signed_units);
+            out << "}";
+        } else if constexpr (std::is_same_v<T, Reduce>) {
+            out << "{\"type\":\"Reduce\",";
+            append_f64(out, "units", action.units);
+            out << "}";
+        } else {
+            out << "{\"type\":\"Flatten\"}";
+        }
+        return out.str();
+    }, request.action);
+}
+
+const char* command_kind_name(const CommandEvent& event) {
+    return std::visit([](const auto& payload) -> const char* {
+        using T = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<T, AcceptedEvent>) return "Accepted";
+        if constexpr (std::is_same_v<T, RejectedEvent>) return "Rejected";
+        if constexpr (std::is_same_v<T, ReplacedEvent>) return "Replaced";
+        if constexpr (std::is_same_v<T, ReplaceRejectedEvent>) return "ReplaceRejected";
+        if constexpr (std::is_same_v<T, CancelledEvent>) return "Cancelled";
+        if constexpr (std::is_same_v<T, NotWorkingEvent>) return "NotWorking";
+        if constexpr (std::is_same_v<T, InvalidHandleEvent>) return "InvalidHandle";
+        if constexpr (std::is_same_v<T, NoEffectEvent>) return "NoEffect";
+        if constexpr (std::is_same_v<T, MatchRejectedEvent>) return "MatchRejected";
+        if constexpr (std::is_same_v<T, ExecutionAppliedEvent>) return "ExecutionApplied";
+        return "Unknown";
+    }, event);
+}
+
+uint64_t command_ordinal(const CommandEvent& event) {
+    return std::visit([](const auto& payload) { return payload.ordinal; }, event);
+}
+
+double request_quantity(const Request& request) {
+    return std::visit([](const auto& action) -> double {
+        using T = std::decay_t<decltype(action)>;
+        if constexpr (std::is_same_v<T, Transact>) return action.signed_units;
+        if constexpr (std::is_same_v<T, Reduce>) return action.units;
+        return 0.0;
+    }, request.action);
+}
 
 NativeRunSpec spec(const char* input = "1", const char* script = "1") {
     NativeRunSpec result;
@@ -81,6 +393,114 @@ public:
     std::vector<double> callback_positions;
     std::function<void(TraceHost&)> callback;
 
+    TraceHost() {
+        if (proof_capture) host_ordinal_ = next_host_ordinal++;
+    }
+
+    ~TraceHost() override { snapshot(); }
+
+    NativeSetupResult configure_native(const NativeRunSpec& value) {
+        attempted_spec_ = value;
+        configured_ = true;
+        const auto result = NativeStrategyHost::configure_native(value);
+        setup_status_ = result.status;
+        setup_error_ = static_cast<uint64_t>(result.validation.error);
+        setup_field_ = static_cast<uint64_t>(result.validation.field);
+        return result;
+    }
+
+    void run(const Bar* input, int n) {
+        NativeStrategyHost::run(input, n);
+        if (!proof_capture) return;
+        const bool admitted = last_error().empty();
+        record_bars("batchBar", input, n, admitted);
+        record_operation("batchRun", n > 0 && input ? input[0].timestamp : 0, admitted,
+                         "{\"barCount\":" + json_i64(n) + "}");
+    }
+
+    bool stream_begin(const Bar* warmup, int n, const std::string& input_tf,
+                      const std::string& script_tf = "") {
+        const bool ok = NativeStrategyHost::stream_begin(warmup, n, input_tf, script_tf);
+        if (proof_capture) {
+            record_bars("warmupBar", warmup, n, ok);
+            std::ostringstream extra;
+            extra << "{\"barCount\":" << n
+                  << ",\"inputTf\":" << json_escape(input_tf)
+                  << ",\"scriptTf\":" << json_escape(script_tf) << "}";
+            record_operation("streamBegin", n > 0 && warmup ? warmup[0].timestamp : 0, ok,
+                             extra.str());
+        }
+        return ok;
+    }
+
+    bool stream_push_bar(const Bar& bar) {
+        const bool ok = NativeStrategyHost::stream_push_bar(bar);
+        if (proof_capture) record_bar("pushBar", bar, ok);
+        return ok;
+    }
+
+    bool stream_push_tick(const TradeTick& tick) {
+        const bool ok = NativeStrategyHost::stream_push_tick(tick);
+        if (proof_capture) record_tick("tick", tick, ok);
+        return ok;
+    }
+
+    bool stream_push_ticks(const TradeTick* ticks, int n) {
+        const bool ok = NativeStrategyHost::stream_push_ticks(ticks, n);
+        if (proof_capture) record_tick_array(ticks, n, ok);
+        return ok;
+    }
+
+    bool stream_advance_time(int64_t timestamp_ms) {
+        const bool ok = NativeStrategyHost::stream_advance_time(timestamp_ms);
+        if (proof_capture) {
+            std::ostringstream out;
+            out << "{\"kind\":\"advanceTime\",\"ordinal\":" << json_u64(input_ordinal_++)
+                << ",\"effectiveTimeMs\":" << json_i64(timestamp_ms)
+                << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+                << ",\"admitted\":" << json_bool(ok) << "}}";
+            input_items_.push_back(out.str());
+        }
+        return ok;
+    }
+
+    bool stream_end(bool finalize_partial_input_bar = false) {
+        const bool ok = NativeStrategyHost::stream_end(finalize_partial_input_bar);
+        if (proof_capture) {
+            std::ostringstream out;
+            out << "{\"kind\":\"streamEnd\",\"ordinal\":" << json_u64(input_ordinal_++)
+                << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+                << ",\"finalizePartial\":" << json_bool(finalize_partial_input_bar)
+                << ",\"admitted\":" << json_bool(ok) << "}}";
+            input_items_.push_back(out.str());
+        }
+        return ok;
+    }
+
+    SubmitResult submit_market(const Request& request) {
+        const auto result = NativeStrategyHost::submit_market(request);
+        if (proof_capture) {
+            std::ostringstream out;
+            out << "{\"kind\":\"request\",\"ordinal\":" << json_u64(input_ordinal_++);
+            const double qty = request_quantity(request);
+            if (std::isfinite(qty)) out << ",\"quantity\":" << json_num(qty);
+            out << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+                << ",\"label\":" << json_escape(request.label)
+                << ",\"comment\":" << json_escape(request.comment)
+                << ",\"action\":" << action_json(request)
+                << ",\"admitted\":" << json_bool(result.status == SubmitStatus::Accepted)
+                << ",\"submitStatus\":"
+                << json_u64(static_cast<uint64_t>(result.status))
+                << ",\"eventOrdinal\":" << json_u64(result.event_ordinal);
+            if (!std::isfinite(qty)) {
+                out << ",\"quantity\":" << unsupported_number(qty);
+            }
+            out << "}}";
+            input_items_.push_back(out.str());
+        }
+        return result;
+    }
+
     void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         bars.push_back(bar);
         contexts.push_back(context);
@@ -90,6 +510,273 @@ public:
 
     double runup() const { return open_trade_max_runup(0); }
     double drawdown() const { return open_trade_max_drawdown(0); }
+
+private:
+    int host_ordinal_ = 0;
+    uint64_t input_ordinal_ = 0;
+    bool configured_ = false;
+    NativeSetupStatus setup_status_ = NativeSetupStatus::Failed;
+    uint64_t setup_error_ = 0;
+    uint64_t setup_field_ = 0;
+    NativeRunSpec attempted_spec_{};
+    std::vector<std::string> input_items_;
+
+    void record_operation(const char* kind, int64_t time_ms, bool admitted,
+                          const std::string& extra_object) {
+        std::ostringstream out;
+        out << "{\"kind\":" << json_escape(kind)
+            << ",\"ordinal\":" << json_u64(input_ordinal_++)
+            << ",\"effectiveTimeMs\":" << json_i64(time_ms)
+            << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+            << ",\"admitted\":" << json_bool(admitted);
+        if (extra_object.size() >= 2 && extra_object.front() == '{' && extra_object.back() == '}') {
+            const std::string inner = extra_object.substr(1, extra_object.size() - 2);
+            if (!inner.empty()) out << "," << inner;
+        }
+        out << "}}";
+        input_items_.push_back(out.str());
+    }
+
+    void record_bar(const char* kind, const Bar& bar, bool admitted) {
+        std::ostringstream out;
+        out << "{\"kind\":" << json_escape(kind)
+            << ",\"ordinal\":" << json_u64(input_ordinal_++)
+            << ",\"effectiveTimeMs\":" << json_i64(bar.timestamp);
+        if (std::isfinite(bar.open)) out << ",\"price\":" << json_num(bar.open);
+        if (std::isfinite(bar.volume)) out << ",\"quantity\":" << json_num(bar.volume);
+        out << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+            << ",\"admitted\":" << json_bool(admitted) << ",";
+        append_bar_fields(out, bar);
+        out << "}}";
+        input_items_.push_back(out.str());
+    }
+
+    void record_bars(const char* kind, const Bar* bars, int n, bool admitted) {
+        if (n <= 0 || !bars) return;
+        for (int i = 0; i < n; ++i) record_bar(kind, bars[i], admitted);
+    }
+
+    void record_tick_body(std::ostringstream& out, const TradeTick& tick) {
+        out << "\"effectiveTimeMs\":" << json_i64(tick.timestamp)
+            << ",\"sequence\":" << json_u64(tick.sequence);
+        if (std::isfinite(tick.price)) out << ",\"price\":" << json_num(tick.price);
+        if (std::isfinite(tick.quantity)) out << ",\"quantity\":" << json_num(tick.quantity);
+        out << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_;
+        if (!std::isfinite(tick.price)) {
+            out << ",\"price\":" << unsupported_number(tick.price);
+        }
+        if (!std::isfinite(tick.quantity)) {
+            out << ",\"quantity\":" << unsupported_number(tick.quantity);
+        }
+        out << "}";
+    }
+
+    void record_tick(const char* kind, const TradeTick& tick, bool admitted) {
+        std::ostringstream out;
+        out << "{\"kind\":" << json_escape(kind)
+            << ",\"ordinal\":" << json_u64(input_ordinal_++) << ",";
+        record_tick_body(out, tick);
+        // admitted is a logical-input fact; keep it inside calendar.
+        std::string body = out.str();
+        const auto insert_at = body.rfind('}');
+        std::ostringstream full;
+        full << body.substr(0, insert_at) << ",\"admitted\":" << json_bool(admitted)
+             << body.substr(insert_at) << "}";
+        input_items_.push_back(full.str());
+    }
+
+    void record_tick_array(const TradeTick* ticks, int n, bool admitted) {
+        std::ostringstream out;
+        out << "{\"kind\":\"tickArray\",\"ordinal\":" << json_u64(input_ordinal_++)
+            << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+            << ",\"admitted\":" << json_bool(admitted)
+            << ",\"count\":" << n << ",\"ticks\":[";
+        for (int i = 0; i < n; ++i) {
+            if (i) out << ",";
+            const TradeTick& tick = ticks[i];
+            out << "{\"effectiveTimeMs\":" << json_i64(tick.timestamp)
+                << ",\"sequence\":" << json_u64(tick.sequence);
+            if (std::isfinite(tick.price)) out << ",\"price\":" << json_num(tick.price);
+            else out << ",\"price\":" << unsupported_number(tick.price);
+            if (std::isfinite(tick.quantity)) out << ",\"quantity\":" << json_num(tick.quantity);
+            else out << ",\"quantity\":" << unsupported_number(tick.quantity);
+            out << "}";
+        }
+        out << "]}}";
+        input_items_.push_back(out.str());
+    }
+
+    std::string lifecycle_items(const std::vector<NativeMarketEvent>& events,
+                                std::vector<std::string>* physical) const {
+        std::vector<std::string> rows;
+        for (const auto& event : events) {
+            if (event.command) {
+                const auto& command = *event.command;
+                const char* kind = command_kind_name(command);
+                std::ostringstream out;
+                out << "{\"kind\":" << json_escape(kind)
+                    << ",\"ordinal\":" << json_u64(command_ordinal(command));
+                if (std::strcmp(kind, "ExecutionApplied") == 0)
+                    out << ",\"physicalEffectsPresent\":true";
+                if (const auto* rejected = std::get_if<RejectedEvent>(&command)) {
+                    out << ",\"reason\":"
+                        << json_u64(static_cast<uint64_t>(rejected->reason));
+                }
+                if (const auto* rr = std::get_if<ReplaceRejectedEvent>(&command)) {
+                    out << ",\"reason\":" << json_u64(static_cast<uint64_t>(rr->reason));
+                }
+                if (const auto* mr = std::get_if<MatchRejectedEvent>(&command)) {
+                    out << ",\"reason\":" << json_u64(static_cast<uint64_t>(mr->reason));
+                }
+                out << ",\"labels\":[\"host-" << host_ordinal_ << "\"]";
+                out << "}";
+                rows.push_back(out.str());
+                if (const auto* applied = std::get_if<ExecutionAppliedEvent>(&command)) {
+                    std::ostringstream effect;
+                    effect << "{\"kind\":\"ExecutionApplied\",\"ordinal\":"
+                           << json_u64(applied->ordinal) << ",";
+                    append_f64(effect, "price", applied->raw_price);
+                    effect << ",\"timestampMs\":" << json_i64(applied->effective_time_ms)
+                           << ",\"provenance\":" << json_u64(applied->provenance)
+                           << ",";
+                    append_f64(effect, "quantity", request_quantity(applied->request));
+                    effect << ",\"observations\":{\"hostOrdinal\":" << host_ordinal_
+                           << ",\"resolvedPrice\":";
+                    if (std::isfinite(applied->resolved_price))
+                        effect << json_num(applied->resolved_price);
+                    else effect << unsupported_number(applied->resolved_price);
+                    effect << ",\"currentTicket\":";
+                    if (std::isfinite(applied->current_ticket))
+                        effect << json_num(applied->current_ticket);
+                    else effect << unsupported_number(applied->current_ticket);
+                    effect << ",\"openedLotIncarnation\":"
+                           << json_u64(applied->opened_lot_incarnation)
+                           << ",\"closedTradeCount\":"
+                           << json_u64(applied->closed_trade_count) << "}}";
+                    physical->push_back(effect.str());
+                }
+            }
+            if (event.driver) {
+                const auto& point = *event.driver;
+                std::ostringstream effect;
+                effect << "{\"kind\":\"DriverPoint\",\"ordinal\":"
+                       << json_u64(point.coordinate.ordinal) << ",";
+                append_f64(effect, "price", point.raw_price);
+                effect << ",\"timestampMs\":"
+                       << json_i64(point.coordinate.effective_time_ms)
+                       << ",\"provenance\":"
+                       << json_u64(static_cast<uint64_t>(point.coordinate.provenance))
+                       << ",\"observations\":{\"hostOrdinal\":" << host_ordinal_
+                       << ",\"matching\":" << json_bool(point.matching)
+                       << ",\"excursion\":" << json_bool(point.excursion)
+                       << ",\"coordinate\":" << coordinate_json(point.coordinate);
+                if (point.sequence)
+                    effect << ",\"sequence\":" << json_u64(*point.sequence);
+                else effect << ",\"sequence\":null";
+                effect << "}}";
+                physical->push_back(effect.str());
+            }
+        }
+        return json_array(rows);
+    }
+
+    std::string callbacks_json() const {
+        std::vector<std::string> rows;
+        const std::size_t n = std::min(bars.size(),
+            std::min(contexts.size(), callback_positions.size()));
+        for (std::size_t i = 0; i < n; ++i) {
+            std::ostringstream out;
+            out << "{\"ordinal\":" << json_u64(i)
+                << ",\"coordinate\":" << coordinate_json(contexts[i].coordinate)
+                << ",\"decisionFloorMs\":" << json_i64(contexts[i].decision_floor_ms)
+                << ",\"inputInterval\":" << interval_json(contexts[i].input_interval)
+                << ",\"scriptInterval\":" << interval_json(contexts[i].script_interval)
+                << ",";
+            append_bar_fields(out, bars[i]);
+            out << ",";
+            append_f64(out, "signedUnits", callback_positions[i]);
+            out << "}";
+            rows.push_back(out.str());
+        }
+        return json_array(rows);
+    }
+
+    void snapshot() {
+        if (!proof_capture) return;
+        HostSnap snap;
+        snap.ordinal = host_ordinal_;
+        const auto state = native_state();
+        const NativeRunSpec* live = state.spec;
+        const NativeRunSpec& spec = live ? *live : attempted_spec_;
+        snap.spec_json = spec_config_json(spec, host_ordinal_);
+        snap.identity_json = identity_json(spec);
+        snap.calendar_json = calendar_json(spec, host_ordinal_);
+        snap.inputs = input_items_;
+        const auto events = native_events(0);
+        const std::string lifecycle = lifecycle_items(events, &snap.physical);
+        // lifecycle_items returns a JSON array; split is unnecessary — store
+        // the objects by rebuilding from events again into snap.lifecycle.
+        snap.lifecycle.clear();
+        {
+            // Re-parse is avoided: rebuild command rows only.
+            for (const auto& event : events) {
+                if (!event.command) continue;
+                const auto& command = *event.command;
+                const char* kind = command_kind_name(command);
+                std::ostringstream out;
+                out << "{\"kind\":" << json_escape(kind)
+                    << ",\"ordinal\":" << json_u64(command_ordinal(command));
+                if (std::strcmp(kind, "ExecutionApplied") == 0)
+                    out << ",\"physicalEffectsPresent\":true";
+                if (const auto* rejected = std::get_if<RejectedEvent>(&command)) {
+                    out << ",\"reason\":"
+                        << json_u64(static_cast<uint64_t>(rejected->reason));
+                }
+                if (const auto* rr = std::get_if<ReplaceRejectedEvent>(&command)) {
+                    out << ",\"reason\":"
+                        << json_u64(static_cast<uint64_t>(rr->reason));
+                }
+                if (const auto* mr = std::get_if<MatchRejectedEvent>(&command)) {
+                    out << ",\"reason\":"
+                        << json_u64(static_cast<uint64_t>(mr->reason));
+                }
+                out << ",\"labels\":[\"host-" << host_ordinal_ << "\"]}";
+                snap.lifecycle.push_back(out.str());
+            }
+        }
+        (void)lifecycle;
+        const auto position = physical_position();
+        std::ostringstream obs;
+        obs << "{\"hostOrdinal\":" << host_ordinal_
+            << ",\"configured\":" << json_bool(configured_)
+            << ",\"setupStatus\":" << json_u64(static_cast<uint64_t>(setup_status_))
+            << ",\"setupError\":" << json_u64(setup_error_)
+            << ",\"setupField\":" << json_u64(setup_field_)
+            << ",\"lifecycleKind\":" << json_u64(static_cast<uint64_t>(state.kind))
+            << ",\"phase\":" << json_u64(static_cast<uint64_t>(state.phase))
+            << ",\"completion\":" << json_u64(static_cast<uint64_t>(state.completion))
+            << ",\"failureCode\":" << json_u64(static_cast<uint64_t>(state.failure.code))
+            << ",\"failureOperation\":"
+            << json_u64(static_cast<uint64_t>(state.failure.operation))
+            << ",\"failureOrdinal\":" << json_u64(state.failure.ordinal)
+            << ",\"consumedHighWater\":" << json_u64(native_consumed_high_water())
+            << ",\"decisionFloorMs\":" << json_i64(native_decision_floor())
+            << ",\"continuationHash\":" << json_escape(hex64(native_continuation_hash()))
+            << ",\"lastError\":" << json_escape(last_error())
+            << ",";
+        append_f64(obs, "signedUnits", position.signed_units);
+        obs << ",";
+        append_f64(obs, "averagePrice", position.average_price);
+        obs << ",\"lotCount\":" << json_u64(position.lot_count)
+            << ",\"tradeCount\":" << trade_count()
+            << ",\"callbackCount\":" << json_u64(bars.size())
+            << ",\"nativeConfiguration\":" << snap.spec_json
+            << ",\"calendar\":" << snap.calendar_json
+            << ",\"callbacks\":" << callbacks_json()
+            << "}";
+        snap.observations_json = obs.str();
+        group_snaps.push_back(std::move(snap));
+    }
 };
 
 bool setup(TraceHost& host, const NativeRunSpec& value) {
@@ -900,9 +1587,79 @@ void partial_end_does_not_seal_coarser_script() {
     }
 }
 
-void run_case(const char* name, void (*body)()) {
+ScenarioArt assemble_group(const char* id, bool passed) {
+    ScenarioArt art;
+    art.id = id;
+    art.status = passed ? "passed" : "failed";
+    std::vector<std::string> configs;
+    std::vector<std::string> calendars;
+    std::vector<std::string> observations;
+    configs.reserve(group_snaps.size());
+    calendars.reserve(group_snaps.size());
+    observations.reserve(group_snaps.size());
+    for (const auto& host : group_snaps) {
+        configs.push_back(host.spec_json);
+        calendars.push_back(host.calendar_json);
+        observations.push_back(host.observations_json);
+    }
+    std::ostringstream config;
+    config << "{\"hostCount\":" << group_snaps.size()
+           << ",\"hosts\":" << json_array(configs) << "}";
+    art.native_configuration = config.str();
+    std::ostringstream cal;
+    cal << "{\"hostCount\":" << group_snaps.size()
+        << ",\"hosts\":" << json_array(calendars) << "}";
+    art.calendar = cal.str();
+    if (!group_snaps.empty()) art.run_identity = group_snaps.front().identity_json;
+    art.logical_inputs = flatten_items(group_snaps, &HostSnap::inputs);
+    art.lifecycle_events = flatten_items(group_snaps, &HostSnap::lifecycle);
+    art.physical_effects = flatten_items(group_snaps, &HostSnap::physical);
+    std::ostringstream obs;
+    obs << "{\"hostCount\":" << group_snaps.size()
+        << ",\"assertionDeltaPassed\":" << json_bool(passed)
+        << ",\"hosts\":" << json_array(observations) << "}";
+    art.observations = obs.str();
+    art.comparisons = "[]";
+    return art;
+}
+
+bool write_proof(const std::vector<ScenarioArt>& scenarios, const char* sha) {
+    const char* dir = std::getenv("PINEFORGE_NATIVE_PROOF_OUTPUT");
+    if (!dir || !*dir) return true;
+    std::ostringstream json;
+    json << "{\n  \"schemaVersion\": \"pineforge-native-scenario-artifact/v1\",\n"
+         << "  \"testName\": \"test_native_calendar_driver_contract\",\n"
+         << "  \"scenarios\": [\n";
+    for (std::size_t i = 0; i < scenarios.size(); ++i) {
+        const auto& s = scenarios[i];
+        json << "    {\n"
+             << "      \"scenarioId\": " << json_escape(s.id) << ",\n"
+             << "      \"status\": " << json_escape(s.status) << ",\n"
+             << "      \"assertionsEnabled\": true,\n"
+             << "      \"fixture\": { \"synthetic-source\": " << json_escape(sha) << " },\n"
+             << "      \"nativeConfiguration\": " << s.native_configuration << ",\n"
+             << "      \"runIdentity\": " << s.run_identity << ",\n"
+             << "      \"calendar\": " << s.calendar << ",\n"
+             << "      \"logicalInputs\": " << s.logical_inputs << ",\n"
+             << "      \"lifecycleEvents\": " << s.lifecycle_events << ",\n"
+             << "      \"physicalEffects\": " << s.physical_effects << ",\n"
+             << "      \"observations\": " << s.observations << ",\n"
+             << "      \"comparisons\": " << s.comparisons << "\n"
+             << "    }" << (i + 1 == scenarios.size() ? "\n" : ",\n");
+    }
+    json << "  ]\n}\n";
+    const std::string path = std::string(dir) + "/test_native_calendar_driver_contract.json";
+    std::ofstream out(path.c_str(), std::ios::binary);
+    if (!out) return false;
+    out << json.str();
+    return static_cast<bool>(out);
+}
+
+void run_case(const char* id, const char* name, void (*body)()) {
     scenario = name;
     ++scenarios;
+    group_snaps.clear();
+    next_host_ordinal = 0;
     const int before = failures;
     try { body(); }
     catch (const std::exception& error) {
@@ -913,35 +1670,114 @@ void run_case(const char* name, void (*body)()) {
         ++failures;
         std::printf("FAIL [%s] unexpected nonstandard exception\n", scenario);
     }
-    std::printf("%s [%s]\n", failures == before ? "PASS" : "FAIL", name);
+    const bool passed = failures == before;
+    std::printf("%s [%s]\n", passed ? "PASS" : "FAIL", name);
+    if (proof_capture) arts.push_back(assemble_group(id, passed));
 }
 } // namespace
 
 int main() {
-    run_case("C1 equal timeframe families and final monthly bars", equal_timeframe_families);
-    run_case("C1 stable counts shifted prefix and second/minute pairing", stable_count_and_cross_unit_grouping);
-    run_case("C1 sparse D-to-W/M opening attribution", daily_to_week_and_month);
-    run_case("C1/C6 explicit refusals timeframe arguments empty batch", explicit_refusals_and_empty_batch);
-    run_case("C2 NY actual 23/25-hour daily close and continuity", ny_daily_dst);
-    run_case("C2/C3 NY fixed gap and fold adjacency", ny_fixed_gap_and_fold_adjacency);
-    run_case("C3 lunch quiet canonical slot and clipped opening", lunch_quiet_slot);
-    run_case("C3/C4 real off-session prints suppress quiet synthesis and replay", lunch_real_off_session_and_replay);
-    run_case("C3/C4 nominal clipped labels and duplicate refusal", nominal_and_clipped_confirmed_labels);
-    run_case("C3 Friday close Monday opening and missing-slot refusal", friday_monday_continuity);
-    run_case("C3 overnight first origin and reordered later windows", overnight_cycle_origin_and_window_permutations);
-    run_case("C5 whole W-to-M and 2D-to-W straddling inputs", cross_calendar_straddles);
-    run_case("C7 same overnight cycle date for nD/nW/nM", cycle_date_week_month_and_counts);
-    run_case("C8 masked and DST-empty cycles preserve attribution", masked_and_gap_empty_cycle_attribution);
-    run_case("C9 partial coarser warmup carries into confirmed realtime", partial_coarser_warmup_confirmed);
-    run_case("C9 RTH scheduled close does not seal unfinished daily warmup", rth_partial_daily_warmup_seal);
-    run_case("D1 same timestamp sequence and atomic tick-array refusal", ticks_same_timestamp_and_atomic_refusal);
-    run_case("D1 tick finalization cannot replay pre-entry extrema", no_preentry_tick_extrema_replay);
-    run_case("D2 carried opening eligibility uses immutable birth floor", quiet_birth_floor);
-    run_case("D3 confirmed after-calculation point is later than callback", confirmed_close_policy);
-    run_case("D4 external birth after child inputs cannot use delayed opening", delayed_open_after_external_birth);
-    run_case("D4/C9 mixed warmup ticks quiet aggregation without price replay", mixed_warmup_tick_quiet_aggregation);
-    run_case("D5 partial equal-TF end retains actual floor and source time", partial_end_equal_clock_and_policy);
-    run_case("D5 partial child does not force coarser callback", partial_end_does_not_seal_coarser_script);
+    const char* proof_dir = std::getenv("PINEFORGE_NATIVE_PROOF_OUTPUT");
+    const char* proof_sha = nullptr;
+    if (proof_dir && *proof_dir) {
+#ifdef NDEBUG
+        std::printf("FAIL proof output requested with NDEBUG; assertions would be compiled out\n");
+        return 1;
+#endif
+#if !defined(PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256)
+        std::printf("FAIL PINEFORGE_NATIVE_PROOF_OUTPUT is set but "
+                    "PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256 is not supplied\n");
+        return 1;
+#else
+        proof_sha = PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256;
+        if (!is_sha256_hex(proof_sha)) {
+            std::printf("FAIL PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256 is missing or not a 64-char lowercase digest\n");
+            return 1;
+        }
+        proof_capture = true;
+#endif
+    }
+
+    run_case("C1-equal-timeframe-families-and-final-monthly-bars",
+             "C1 equal timeframe families and final monthly bars",
+             equal_timeframe_families);
+    run_case("C1-stable-counts-shifted-prefix-and-second-minute-pairing",
+             "C1 stable counts shifted prefix and second/minute pairing",
+             stable_count_and_cross_unit_grouping);
+    run_case("C1-sparse-D-to-W-M-opening-attribution",
+             "C1 sparse D-to-W/M opening attribution",
+             daily_to_week_and_month);
+    run_case("C1-C6-explicit-refusals-timeframe-arguments-empty-batch",
+             "C1/C6 explicit refusals timeframe arguments empty batch",
+             explicit_refusals_and_empty_batch);
+    run_case("C2-NY-actual-23-25-hour-daily-close-and-continuity",
+             "C2 NY actual 23/25-hour daily close and continuity",
+             ny_daily_dst);
+    run_case("C2-C3-NY-fixed-gap-and-fold-adjacency",
+             "C2/C3 NY fixed gap and fold adjacency",
+             ny_fixed_gap_and_fold_adjacency);
+    run_case("C3-lunch-quiet-canonical-slot-and-clipped-opening",
+             "C3 lunch quiet canonical slot and clipped opening",
+             lunch_quiet_slot);
+    run_case("C3-C4-real-off-session-prints-suppress-quiet-synthesis-and-replay",
+             "C3/C4 real off-session prints suppress quiet synthesis and replay",
+             lunch_real_off_session_and_replay);
+    run_case("C3-C4-nominal-clipped-labels-and-duplicate-refusal",
+             "C3/C4 nominal clipped labels and duplicate refusal",
+             nominal_and_clipped_confirmed_labels);
+    run_case("C3-Friday-close-Monday-opening-and-missing-slot-refusal",
+             "C3 Friday close Monday opening and missing-slot refusal",
+             friday_monday_continuity);
+    run_case("C3-overnight-first-origin-and-reordered-later-windows",
+             "C3 overnight first origin and reordered later windows",
+             overnight_cycle_origin_and_window_permutations);
+    run_case("C5-whole-W-to-M-and-2D-to-W-straddling-inputs",
+             "C5 whole W-to-M and 2D-to-W straddling inputs",
+             cross_calendar_straddles);
+    run_case("C7-same-overnight-cycle-date-for-nD-nW-nM",
+             "C7 same overnight cycle date for nD/nW/nM",
+             cycle_date_week_month_and_counts);
+    run_case("C8-masked-and-DST-empty-cycles-preserve-attribution",
+             "C8 masked and DST-empty cycles preserve attribution",
+             masked_and_gap_empty_cycle_attribution);
+    run_case("C9-partial-coarser-warmup-carries-into-confirmed-realtime",
+             "C9 partial coarser warmup carries into confirmed realtime",
+             partial_coarser_warmup_confirmed);
+    run_case("C9-RTH-scheduled-close-does-not-seal-unfinished-daily-warmup",
+             "C9 RTH scheduled close does not seal unfinished daily warmup",
+             rth_partial_daily_warmup_seal);
+    run_case("D1-same-timestamp-sequence-and-atomic-tick-array-refusal",
+             "D1 same timestamp sequence and atomic tick-array refusal",
+             ticks_same_timestamp_and_atomic_refusal);
+    run_case("D1-tick-finalization-cannot-replay-pre-entry-extrema",
+             "D1 tick finalization cannot replay pre-entry extrema",
+             no_preentry_tick_extrema_replay);
+    run_case("D2-carried-opening-eligibility-uses-immutable-birth-floor",
+             "D2 carried opening eligibility uses immutable birth floor",
+             quiet_birth_floor);
+    run_case("D3-confirmed-after-calculation-point-is-later-than-callback",
+             "D3 confirmed after-calculation point is later than callback",
+             confirmed_close_policy);
+    run_case("D4-external-birth-after-child-inputs-cannot-use-delayed-opening",
+             "D4 external birth after child inputs cannot use delayed opening",
+             delayed_open_after_external_birth);
+    run_case("D4-C9-mixed-warmup-ticks-quiet-aggregation-without-price-replay",
+             "D4/C9 mixed warmup ticks quiet aggregation without price replay",
+             mixed_warmup_tick_quiet_aggregation);
+    run_case("D5-partial-equal-TF-end-retains-actual-floor-and-source-time",
+             "D5 partial equal-TF end retains actual floor and source time",
+             partial_end_equal_clock_and_policy);
+    run_case("D5-partial-child-does-not-force-coarser-callback",
+             "D5 partial child does not force coarser callback",
+             partial_end_does_not_seal_coarser_script);
+
+    if (proof_dir && *proof_dir) {
+        if (!write_proof(arts, proof_sha)) {
+            std::printf("FAIL could not write native scenario artifact\n");
+            return 1;
+        }
+    }
+
     std::printf("%s native calendar driver: %d scenarios, %d checks, %d failures\n",
                 failures ? "FAIL" : "PASS", scenarios, checks, failures);
     return failures ? 1 : 0;

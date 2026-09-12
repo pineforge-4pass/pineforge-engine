@@ -108,13 +108,21 @@ Lifecycle-aware compiled modules reset Pine variables, indicator/history buffers
 
 ---
 
+## Native C++ strategy API
+
+Use `NativeStrategyHost` with an explicit `NativeRunSpec` for native market
+transactions, reductions and flatten requests. The [native engine guide](docs/pages/native-engine.md)
+provides a complete C++ batch/stream example, calendar and execution contracts,
+and a runnable JSON configuration for the live runner.
+
 ## Native live runner
 
 The optional C++17 `pineforge-live` executable uses this engine's native
-warmup-to-stream lifecycle. It accepts tick or confirmed 1m OHLCV input,
+warmup-to-stream lifecycle. It accepts normalized ticks or confirmed OHLCV bars,
 supports user-defined C++ parsers for broker/provider messages, and commits
 inputs plus order-action webhooks to a durable SQLite ledger. Hand-written
-C++ and codegen-generated strategies use the same strategy interface.
+C++ strategies use the native contract; generated Pine strategies retain their
+compatibility path. Both expose the versioned C ABI used by the runner.
 
 Build with `-DPINEFORGE_BUILD_LIVE_RUNNER=ON`; the option is off by default,
 so core-only users do not acquire SQLite/libcurl/OpenSSL dependencies. See
