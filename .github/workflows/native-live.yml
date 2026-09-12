@@ -10,6 +10,20 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded PR runs only. Main/post-merge and manual workflow_dispatch
+# use a unique run_id group so proof runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: "1"
+  CCACHE_MAXSIZE: 500M
+  CURL_VERSION: "8.14.1"
+  CURL_SHA256: "f4619a1e2474c4bbfedc88a7c2191209c8334b48fa1f4e53fd584cc12e9120dd"
+
 jobs:
   native-live:
     runs-on: ubuntu-latest
@@ -19,18 +33,57 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 1
+
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libeigen3-dev libsqlite3-dev libssl-dev zlib1g-dev
-      - name: Build pinned WebSocket-enabled libcurl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build libeigen3-dev libsqlite3-dev libssl-dev zlib1g-dev ccache
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-native-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-native-
+
+      - name: Identify native dependency environment
+        id: native-deps
+        shell: bash
         run: |
           mkdir -p build-native-deps
+          {
+            printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" "${GITHUB_WORKSPACE}"
+            cc --version
+            cmake --version
+            dpkg-query -W libssl-dev zlib1g-dev
+          } > build-native-deps/environment.txt
+          echo "identity=$(sha256sum build-native-deps/environment.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pinned WebSocket-enabled libcurl
+        id: curl-cache
+        uses: actions/cache@v4
+        with:
+          path: build-native-deps/curl-install
+          key: curl-${{ env.CURL_VERSION }}-${{ env.CURL_SHA256 }}-${{ steps.native-deps.outputs.identity }}-${{ hashFiles('.github/workflows/native-live.yml') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build pinned WebSocket-enabled libcurl
+        env:
+          CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          cmake_file="build-native-deps/curl-install/lib/cmake/CURL/CURLConfig.cmake"
+          if [[ "${CURL_CACHE_HIT}" == "true" && -f "$cmake_file" ]]; then
+            echo "Using cached libcurl at ${cmake_file}"
+            exit 0
+          fi
+          mkdir -p build-native-deps
           cd build-native-deps
-          curl --fail --location --proto '=https' --tlsv1.2 https://curl.se/download/curl-8.14.1.tar.xz -o curl.tar.xz
-          echo 'f4619a1e2474c4bbfedc88a7c2191209c8334b48fa1f4e53fd584cc12e9120dd  curl.tar.xz' | sha256sum -c -
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            "https://curl.se/download/curl-${CURL_VERSION}.tar.xz" -o curl.tar.xz
+          echo "${CURL_SHA256}  curl.tar.xz" | sha256sum -c -
           tar -xf curl.tar.xz
-          cmake -S curl-8.14.1 -B curl-build -G Ninja \
+          cmake -S "curl-${CURL_VERSION}" -B curl-build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/curl-install" \
             -DBUILD_CURL_EXE=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
             -DBUILD_TESTING=OFF -DCURL_USE_OPENSSL=ON -DENABLE_WEBSOCKETS=ON \
@@ -38,27 +91,20 @@ jobs:
             -DCURL_USE_LIBSSH2=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF
           cmake --build curl-build -j 4
           cmake --install curl-build
-      - name: Build native runner and tests
-        run: |
-          cmake -S . -B build-live -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DPINEFORGE_BUILD_LIVE_RUNNER=ON -DPINEFORGE_BUILD_TUTORIAL=OFF \
-            -DCURL_DIR="$PWD/build-native-deps/curl-install/lib/cmake/CURL"
-          cmake --build build-live -j 4
-      - name: Prepare real R2 settlement ABI provider
-        run: |
-          # Preserve shallow CI version metadata: fetch the old object without tags.
-          git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d
-          python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
-            --current-build build-live --output build-live/settlement-abi-base --jobs 4
-      - name: Test native engine, parser, journal and transports
-        run: |
-          ctest --test-dir build-live --output-on-failure -j 4
-          # This required lane uses the pinned WS-enabled curl. A skip is not
-          # sufficient here even though ordinary system-curl builds may skip.
-          build-live/bin/test_native_live_websocket
-          python3 scripts/check_c_abi_runtime.py
-          python3 scripts/check_broker_state_hash_coverage.py
-      - name: Install native executable
-        run: |
-          cmake --install build-live --prefix "$PWD/build-live/install"
-          build-live/install/bin/pineforge-live --help
+
+      - name: Verify native live
+        run: python3 scripts/ci_verify.py native --build-dir build-live --jobs 4 --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache --require-websocket
+
+      - name: Stage and summarize diagnostics
+        if: always()
+        env:
+          CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live --profile native
+
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-native-live
+          path: ci-diagnostics/
+          if-no-files-found: warn

@@ -6,6 +6,21 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# Cancel superseded PR runs only. Main/post-merge uses a unique run_id group so
+# in-progress and queued proof runs are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: "1"
+  CCACHE_MAXSIZE: 500M
+
 jobs:
   build:
     strategy:
@@ -21,66 +36,41 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Install Eigen3 (Linux)
+      - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache
 
-      - name: Install Eigen3 (macOS)
+      - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install eigen
-          echo "CMAKE_PREFIX_PATH_EXTRA=$(brew --prefix eigen)" >> "$GITHUB_ENV"
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew install eigen ccache
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix eigen)${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
 
-      - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
 
-      - name: Build
-        run: cmake --build build -j 4
+      - name: Verify (${{ matrix.build_type }})
+        run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs 4 --ccache
 
-      - name: Prepare real R2 settlement ABI provider
-        run: |
-          # Preserve shallow CI version metadata: fetch the old object without tags.
-          git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d
-          python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
-            --current-build build --output build/settlement-abi-base --jobs 4
+      - name: Stage and summarize diagnostics
+        if: always()
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build --profile ${{ matrix.build_type == 'Release' && 'release' || 'debug' }}
 
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
-
-      - name: C ABI runtime source check
-        run: python3 scripts/check_c_abi_runtime.py
-
-      - name: Broker-state hash coverage check
-        run: python3 scripts/check_broker_state_hash_coverage.py
-
-      - name: Pending-order POD mirror up-to-date check
-        run: python3 scripts/gen_pending_order_mirror.py --check
-
-      - name: Install PineForge
-        run: cmake --install build --prefix "$GITHUB_WORKSPACE/pf_install"
-
-      - name: find_package smoke build
-        shell: bash
-        env:
-          WORKSPACE: ${{ github.workspace }}
-          BUILD_TYPE: ${{ matrix.build_type }}
-        run: |
-          set -euo pipefail
-          EXTRA="${CMAKE_PREFIX_PATH_EXTRA:-}"
-          PREFIX="${WORKSPACE}/pf_install"
-          # Pass prefix list to CMake with ';' — ':' is for env vars on Unix only.
-          CMAKE_PFX="${PREFIX}"
-          if [[ -n "$EXTRA" ]]; then
-            CMAKE_PFX="${PREFIX};${EXTRA}"
-          fi
-          cmake -S cmake/smoke_consumer -B smoke_build \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DCMAKE_PREFIX_PATH="${CMAKE_PFX}"
-          cmake --build smoke_build -j 4
-          expected="$(tr -d '[:space:]' < VERSION)"
-          ./smoke_build/smoke_version | grep -qxF "${expected}"
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-${{ matrix.os }}-${{ matrix.build_type }}
+          path: ci-diagnostics/
+          if-no-files-found: warn
 
   # Dedicated AddressSanitizer + UndefinedBehaviorSanitizer lane. Without this,
   # the determinism / NaN-propagation / handle-reuse / C-ABI-lifecycle probes
@@ -90,34 +80,41 @@ jobs:
   # PINEFORGE_ENABLE_SANITIZERS).
   sanitizers:
     runs-on: ubuntu-latest
+    env:
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Install Eigen3
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y libeigen3-dev ccache
 
-      - name: Configure (ASan + UBSan)
-        run: cmake -B build-asan -DCMAKE_BUILD_TYPE=Debug -DPINEFORGE_ENABLE_SANITIZERS=ON
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ runner.arch }}-sanitizers-
 
-      - name: Build
-        run: cmake --build build-asan -j 4
+      - name: Verify (sanitizers)
+        run: python3 scripts/ci_verify.py sanitizers --build-dir build-asan --jobs 4 --ccache
 
-      - name: Prepare real R2 settlement ABI provider
-        run: |
-          # Preserve shallow CI version metadata: fetch the old object without tags.
-          git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d
-          python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
-            --current-build build-asan --output build-asan/settlement-abi-base --jobs 4
+      - name: Stage and summarize diagnostics
+        if: always()
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-asan --profile sanitizers
 
-      - name: Test under sanitizers
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ctest --test-dir build-asan --output-on-failure
+      - name: Retain CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-sanitizers
+          path: ci-diagnostics/
+          if-no-files-found: warn
 
   # The branch ruleset requires a status check named `build`, but the matrix
   # job above reports as `build (ubuntu-latest, Release)` and friends -- a bare

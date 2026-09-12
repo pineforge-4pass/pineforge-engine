@@ -298,6 +298,11 @@ set(TEST_SOURCES
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+add_test(NAME test_cmake_version_source
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_cmake_version_source.py)
+add_test(NAME test_ci_verify
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify.py)
+
 add_test(
     NAME test_aggregate_cpp_versions
     COMMAND ${Python3_EXECUTABLE}

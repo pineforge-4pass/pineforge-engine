@@ -11,11 +11,11 @@ and UBSan RTTI controls. No generated pairing executable is run.
 
 ## Prepare the real old provider explicitly
 
-After configuring the current candidate build, ensure the exact R2 Git object
-is available. CI retains shallow checkouts and explicitly fetches only the pinned old commit
-without tags. This preserves its existing VERSION-based release metadata; a full
-history/tag fetch would activate git-describe version selection. The same fetch
-works for a local shallow clone, outside CTest:
+The shared `ci_verify.py` profiles use `PINEFORGE_VERSION_SOURCE=FILE`, so
+verification version identity is independent of tags or checkout depth. They
+fetch the pinned old commit without tags only when it is missing and reuse a
+matching prepared archive on subsequent runs. For manual preparation, configure
+the current build first, then fetch the old object if needed, outside CTest:
 
 ```sh
 git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d

@@ -25,6 +25,7 @@ COPY_CACHE = (
     'CMAKE_BUILD_TYPE', 'CMAKE_C_COMPILER', 'CMAKE_CXX_COMPILER',
     'CMAKE_C_COMPILER_TARGET', 'CMAKE_CXX_COMPILER_TARGET',
     'CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN', 'CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN',
+    'CMAKE_C_COMPILER_LAUNCHER', 'CMAKE_CXX_COMPILER_LAUNCHER',
     'CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS',
     'CMAKE_C_FLAGS_DEBUG', 'CMAKE_CXX_FLAGS_DEBUG',
     'CMAKE_C_FLAGS_RELEASE', 'CMAKE_CXX_FLAGS_RELEASE',
@@ -36,6 +37,7 @@ COPY_CACHE = (
     'CMAKE_SYSROOT', 'CMAKE_TOOLCHAIN_FILE', 'CMAKE_PREFIX_PATH', 'Eigen3_DIR',
     'CMAKE_DISABLE_FIND_PACKAGE_Eigen3', 'FETCHCONTENT_SOURCE_DIR_EIGEN',
     'PINEFORGE_ENABLE_SANITIZERS', 'PINEFORGE_ENABLE_COVERAGE',
+    'PINEFORGE_VERSION_SOURCE',
 )
 
 
@@ -51,6 +53,59 @@ def read_cache(path: Path) -> dict[str, str]:
             name_type, value = line.split('=', 1)
             found[name_type.split(':', 1)[0]] = value
     return found
+
+
+def copied_cache(cache: dict[str, str]) -> dict[str, str]:
+    return {key: cache[key] for key in COPY_CACHE if key in cache}
+
+
+def refuse_existing_base(output: Path, reason: str) -> None:
+    raise RuntimeError(f'{reason}; use a fresh --build-dir (refusing to delete {output})')
+
+
+def receipt_matches_current(receipt: dict, current_cache: dict, compiler: dict) -> None:
+    """Raise if a prepared base must not be reused with this current build."""
+    if receipt.get('schemaVersion') != 'pineforge-settlement-abi-base/v1':
+        raise RuntimeError('existing ABI base receipt is not portable v1')
+    if receipt.get('commit') != BASE_COMMIT or receipt.get('tree') != BASE_TREE:
+        raise RuntimeError('existing ABI base does not pin e60 R2')
+    old = receipt.get('compiler') or {}
+    for key in ('target', 'sha256', 'version'):
+        if old.get(key) != compiler.get(key):
+            raise RuntimeError('existing ABI base compiler implementation/version/target differs')
+    if receipt.get('copiedCurrentCache') != copied_cache(current_cache):
+        raise RuntimeError(
+            'existing ABI base compiler/configuration/version-source/launcher differs from this build')
+
+
+def reusable_prepared_base(output: Path, current_build: Path) -> dict:
+    """Return an existing receipt that is safe to reuse. Never deletes output."""
+    receipt_path = output / 'receipt.json'
+    if not output.exists():
+        raise FileNotFoundError(str(output))
+    if not receipt_path.is_file():
+        refuse_existing_base(output, f'ABI base directory exists without a receipt at {receipt_path}')
+    receipt = json.loads(receipt_path.read_text())
+    cache = read_cache(current_build / 'CMakeCache.txt')
+    compiler = compiler_identity(cache['CMAKE_CXX_COMPILER'])
+    try:
+        receipt_matches_current(receipt, cache, compiler)
+    except RuntimeError as error:
+        refuse_existing_base(output, str(error))
+    resolve = lambda name: Path(name) if Path(name).is_absolute() else output / name
+    library = resolve(receipt['archive'])
+    headers = resolve(receipt.get('headers', 'r2-headers.tar'))
+    if not library.is_file() or not headers.is_file():
+        refuse_existing_base(output, 'existing ABI base is missing archive/header artifacts')
+    if identity(library)['sha256'] != receipt['archiveSha256'] or identity(headers)['sha256'] != receipt['headersSha256']:
+        refuse_existing_base(output, 'existing ABI base archive/header bytes do not match receipt')
+    generated_name = receipt.get('generatedInclude')
+    expected_generated = receipt.get('generatedHeaderSha256')
+    if generated_name and expected_generated:
+        generated = resolve(generated_name) / 'pineforge/version.h'
+        if not generated.is_file() or identity(generated)['sha256'] != expected_generated:
+            refuse_existing_base(output, 'existing ABI base generated version header does not match receipt')
+    return receipt
 
 
 def current_eigen_source(cache: dict[str, str], current: Path) -> Path | None:
@@ -158,7 +213,7 @@ def main() -> int:
     source, build = output / 'source', output / 'build'
     extract_tar(source_raw, source)
     authenticate_headers(source)
-    settings = {key: cache[key] for key in COPY_CACHE if key in cache}
+    settings = copied_cache(cache)
     eigen_source = current_eigen_source(cache, current)
     if eigen_source is not None:
         settings['FETCHCONTENT_SOURCE_DIR_EIGEN'] = str(eigen_source)
@@ -189,7 +244,7 @@ def main() -> int:
                'generatedHeaderSha256': identity(build / 'include/pineforge/version.h')['sha256'],
                'sourceSha256': source_identity, 'sourceArchive': identity(output / 'source.tar'),
                'compiler': compiler_identity(cache['CMAKE_CXX_COMPILER']),
-               'settings': settings, 'copiedCurrentCache': {key: cache[key] for key in COPY_CACHE if key in cache},
+               'settings': settings, 'copiedCurrentCache': copied_cache(cache),
                'currentCacheSha256': identity(current / 'CMakeCache.txt')['sha256'],
                'baseCacheSha256': identity(build / 'CMakeCache.txt')['sha256'],
                'compileCommandsSha256': identity(build / 'compile_commands.json')['sha256'],

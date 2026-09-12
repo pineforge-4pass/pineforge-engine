@@ -7,15 +7,9 @@
 Both C++ unit tests and full corpus verification must pass.
 
 ```bash
-# 1. Build and run unit tests (ctest)
-cmake -B build -S . \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DPINEFORGE_BUILD_TESTS=ON \
-    -DPINEFORGE_BUILD_CORPUS_STRATEGIES=ON
-cmake --build build -j$(nproc 2>/dev/null || echo 4)
-python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
-  --current-build build --output build/settlement-abi-base
-ctest --test-dir build --output-on-failure
+# 1. Run the same complete verification profile as CI
+python3 scripts/ci_verify.py release --build-dir build --jobs 4
+# Relevant additional profiles: debug, sanitizers, native (see docs/ci.md)
 
 # 2. Run full validation corpus sweep (against TV exported trades)
 ./scripts/run_corpus.sh

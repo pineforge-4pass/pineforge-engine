@@ -74,16 +74,12 @@ Prefer zero install? The hosted server at **[mcp.pineforge.dev/mcp](https://mcp.
 
 ```bash
 git clone https://github.com/pineforge-4pass/pineforge-engine.git && cd pineforge-engine
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
-python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
-  --current-build build --output build/settlement-abi-base
-ctest --test-dir build --output-on-failure     # all enabled unit, replay and ABI checks
+python3 scripts/ci_verify.py release --build-dir build --jobs 4
 bash tutorial/run.sh                            # MACD on BTC/USDT, end to end
 python3 tutorial/run_stream.py                  # OHLCV warm-up → realtime trades
 ```
 
-The ABI check links callers against both the current library and a separately built, pinned historical library. Preparation uses local Git history and the configured compiler; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for shallow clones and repeated checks. CTest itself stays offline.
+The [shared local/CI verifier](docs/ci.md) includes source guards, tests and installed-package smoke checks. Its ABI check links callers against both the current library and a separately built, pinned historical library. Preparation uses local Git history and the configured compiler; see the [ABI fixture guide](tests/fixtures/settlement_cpp_abi/README.md) for shallow clones and repeated checks. CTest itself stays offline.
 
 Prerequisites: CMake ≥ 3.16, a C++17 compiler (GCC ≥ 9, Clang ≥ 10, Apple Clang ≥ 12), Eigen 3.3+ (fetched automatically if absent), Python 3 for the tests (`-DPINEFORGE_BUILD_TESTS=OFF` for a library-only build). `cmake --install build --prefix /usr/local` installs `lib/libpineforge.a`, `include/pineforge/`, and the `find_package(PineForge)` config.
 
