@@ -149,11 +149,15 @@ TimeframeCompatibility stream_compatibility(const Timeframe& input, const Timefr
 // windows cannot change the union, while changing the first window can
 // change origin and trading-date assignment.
 //
-// Unmasked trading date is the local civil date of the final nonempty union
-// endpoint minus one instant. The day mask applies once to the whole cycle.
-// Empty coverage has no membership; period keys then use cycle-end minus one
-// instant. A DST gap that maps both ends of one instance to the same epoch
-// omits that empty instance and does not invalidate other windows.
+// Trading date is the civil date of the final nominal UNMASKED recurring
+// coverage endpoint minus one instant, computed in civil minutes before
+// weekday masks and before UTC DST-gap collapse. A rejected mask or empty
+// resolved window never moves that date onto the next live cycle; there is
+// no cycle-end-next-day fallback. Inverse lookup matches this date only, so
+// an empty Sunday cannot alias Monday. Empty resolved/allowed coverage has
+// no membership or synthesis; D/W/M bounds still contain the query
+// (open <= query < next_period_open). A DST gap that maps both ends of one
+// instance to the same epoch omits that instance only.
 //
 // Native origin is that first-window start. Pine's 17:00 day stamp on an
 // 1800-1700 session is a compatibility label, not this component's default.
@@ -168,6 +172,28 @@ TimeframeCompatibility stream_compatibility(const Timeframe& input, const Timefr
 class SessionCalendar;
 std::optional<SessionCalendar> parse_session(std::string_view session,
                                              std::string_view timezone);
+
+// Single calendar-owned timezone acceptance boundary. Empty is accepted and
+// means UTC for this component (native full-spec nonempty scheduling TZ is
+// separate). Also used by public resolve_civil. Not for hot interval loops.
+//
+// Accepted:
+//   IANA/TZif names and aliases installed under the system zoneinfo tree
+//     charset [A-Za-z0-9/_+-], no absolute path, no `.` / `..` components;
+//     realpath stays in TZDIR and the file magic is TZif. Leading `:` is a
+//     tzfile reference only.
+//   UTC, GMT, Etc/UTC, Etc/GMT
+//   UTC/GMT conventional offsets (TV sign):
+//     (UTC|GMT)[+-](H|HH|HMM|HHMM|H:MM|HH:MM) hours 0–23, minutes 0–59;
+//     digit length is bounded before conversion so overflow cannot escape.
+//   POSIX TZ, including DST rule forms:
+//     std offset [dst[offset][,start[/time],end[/time]]]
+//     A slash before any comma is a tzfile path; slash after a comma is
+//     POSIX rule time (M3.2.0/2), not an IANA name.
+// Rejected before libc setenv/mktime: unknown names, UTC+24:00 / UTC+01:99,
+// overflowed digit strings, whitespace/control/NUL, absolute paths, `..`
+// traversal, and non-TZif zoneinfo files (zone.tab, iso3166.tab, +VERSION).
+bool timezone_accepted(std::string_view timezone);
 
 class SessionWindow {
 public:

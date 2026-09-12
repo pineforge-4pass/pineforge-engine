@@ -116,6 +116,23 @@ constexpr int64_t kUtcJun10_0900 = 1749546000000;
 constexpr int64_t kNyMar9_0930 = 1741527000000;
 constexpr int64_t kNyMar9_1600 = 1741550400000;
 constexpr int64_t kNyMar10_0245 = 1741589100000;  // Mon 02:45 EDT, after DST
+constexpr int64_t kUtcJun8_1200 = 1749384000000;       // Sunday 2025-06-08 12:00
+constexpr int64_t kUtcJun8_0930 = 1749375000000;
+constexpr int64_t kUtcJun9_0930 = 1749461400000;
+constexpr int64_t kUtcJun7_1200 = 1749297600000;       // Saturday 2025-06-07 12:00
+constexpr int64_t kUtcJun7_0930 = 1749288600000;
+constexpr int64_t kUtcDec31_2023_1200 = 1704024000000;  // Sunday
+constexpr int64_t kUtcDec31_2023_0930 = 1704015000000;
+constexpr int64_t kUtcJan1_2024_0930 = 1704101400000;
+constexpr int64_t kUtcDec25_2023_0930 = 1703496600000;
+constexpr int64_t kNyMar9_0230_resolved = 1741503600000;  // first representable ≥ 02:30
+constexpr int64_t kNyMar10_0230 = 1741588200000;
+constexpr int64_t kUtcJun10_0000 = 1749513600000;
+constexpr int64_t kUtcJun10_0000_plus0530 = 1749493800000;  // 2025-06-10 00:00 UTC+05:30
+constexpr int64_t kUtcJun10_0000_gmt_minus4 = 1749528000000;  // 2025-06-10 00:00 GMT-4
+constexpr int64_t kUtcJun10_0000_taipei = 1749484800000;  // 2025-06-10 00:00 UTC+8
+constexpr int64_t kUtcJun10_0000_japan = 1749481200000;  // 2025-06-10 00:00 JST (UTC+9)
+constexpr int64_t kCstMar8Midnight = 1741413600000;      // 2025-03-08 00:00 CST (UTC-6)
 
 static Timeframe must_tf(const char* s) {
     auto tf = parse_timeframe(s);
@@ -728,6 +745,154 @@ static void test_checked_public_values() {
     CHECK(period_key(utc, large, 1749549600000LL).has_value());
 }
 
+static void test_empty_cycle_identity() {
+    std::printf("test_empty_cycle_identity\n");
+    auto rth = must_cal("0930-1600:23456", "UTC");
+    auto d = must_tf("D");
+    auto w = must_tf("W");
+    auto mo = must_tf("M");
+
+    CHECK(!in_session(rth, kUtcJun8_1200));
+    auto sun_d = must_iv(rth, d, kUtcJun8_1200);
+    CHECK_EQ(sun_d.open_ms, kUtcJun8_0930);
+    CHECK_EQ(sun_d.last_traded_close_ms, kUtcJun8_0930);
+    CHECK_EQ(sun_d.next_period_open_ms, kUtcJun9_0930);
+    CHECK(sun_d.open_ms <= kUtcJun8_1200 && kUtcJun8_1200 < sun_d.next_period_open_ms);
+    CHECK_EQ(sun_d.next_input_open_ms, kUtcJun9_0930);
+    CHECK(period_key(rth, d, kUtcJun8_1200).has_value());
+    CHECK_EQ(*period_key(rth, d, kUtcJun8_1200), 20247);
+    CHECK_EQ(*period_key(rth, w, kUtcJun8_1200), 2892);
+    CHECK_EQ(*period_key(rth, mo, kUtcJun8_1200), 24305);
+    auto sun_w = must_iv(rth, w, kUtcJun8_1200);
+    CHECK(sun_w.open_ms <= kUtcJun8_1200 && kUtcJun8_1200 < sun_w.next_period_open_ms);
+    CHECK(sun_w.open_ms < kUtcJun9_0930);
+
+    CHECK(!in_session(rth, kUtcJun7_1200));
+    auto sat_d = must_iv(rth, d, kUtcJun7_1200);
+    CHECK_EQ(sat_d.open_ms, kUtcJun7_0930);
+    CHECK_EQ(sat_d.last_traded_close_ms, kUtcJun7_0930);
+    CHECK_EQ(sat_d.next_period_open_ms, kUtcJun8_0930);
+    CHECK(sat_d.open_ms <= kUtcJun7_1200 && kUtcJun7_1200 < sat_d.next_period_open_ms);
+    CHECK(sat_d.next_period_open_ms - sat_d.open_ms < 2 * 86400000);
+    CHECK_EQ(*period_key(rth, d, kUtcJun7_1200), 20246);
+    CHECK_EQ(*period_key(rth, w, kUtcJun7_1200), 2892);
+
+    CHECK(!in_session(rth, kUtcDec31_2023_1200));
+    auto yend_d = must_iv(rth, d, kUtcDec31_2023_1200);
+    CHECK_EQ(yend_d.open_ms, kUtcDec31_2023_0930);
+    CHECK_EQ(yend_d.next_period_open_ms, kUtcJan1_2024_0930);
+    CHECK(yend_d.open_ms <= kUtcDec31_2023_1200 && kUtcDec31_2023_1200 < yend_d.next_period_open_ms);
+    CHECK_EQ(*period_key(rth, d, kUtcDec31_2023_1200), 19722);
+    CHECK_EQ(*period_key(rth, w, kUtcDec31_2023_1200), 2817);
+    CHECK_EQ(*period_key(rth, mo, kUtcDec31_2023_1200), 24287);
+    auto yend_w = must_iv(rth, w, kUtcDec31_2023_1200);
+    CHECK_EQ(yend_w.open_ms, kUtcDec25_2023_0930);
+    CHECK(yend_w.open_ms <= kUtcDec31_2023_1200 && kUtcDec31_2023_1200 < yend_w.next_period_open_ms);
+    auto yend_m = must_iv(rth, mo, kUtcDec31_2023_1200);
+    CHECK(yend_m.open_ms <= kUtcDec31_2023_1200 && kUtcDec31_2023_1200 < yend_m.next_period_open_ms);
+    CHECK(yend_m.next_period_open_ms == kUtcJan1_2024_0930);
+
+    auto gap = must_cal("0230-0245", "America/New_York");
+    CHECK(!in_session(gap, kNyMar9_1200));
+    auto gap_d = must_iv(gap, d, kNyMar9_1200);
+    CHECK_EQ(gap_d.open_ms, kNyMar9_0230_resolved);
+    CHECK_EQ(gap_d.last_traded_close_ms, kNyMar9_0230_resolved);
+    CHECK_EQ(gap_d.next_period_open_ms, kNyMar10_0230);
+    CHECK(gap_d.open_ms <= kNyMar9_1200 && kNyMar9_1200 < gap_d.next_period_open_ms);
+    CHECK(gap_d.open_ms != kNyMar10_0230);
+    CHECK_EQ(*period_key(gap, d, kNyMar9_1200), 20156);
+    CHECK_EQ(*period_key(gap, w, kNyMar9_1200), 2879);
+    CHECK_EQ(*period_key(gap, mo, kNyMar9_1200), 24302);
+}
+
+static void test_timezone_acceptance() {
+    std::printf("test_timezone_acceptance\n");
+    CHECK(timezone_accepted(""));
+    CHECK(timezone_accepted("UTC"));
+    CHECK(timezone_accepted("GMT"));
+    CHECK(timezone_accepted("Etc/UTC"));
+    CHECK(timezone_accepted("Etc/GMT"));
+    CHECK(timezone_accepted("America/New_York"));
+    CHECK(timezone_accepted("Asia/Taipei"));
+    CHECK(timezone_accepted("UTC+05:30"));
+    CHECK(timezone_accepted("GMT-4"));
+    CHECK(timezone_accepted("UTC+0"));
+    CHECK(timezone_accepted("EST5EDT,M3.2.0,M11.1.0"));
+    CHECK(timezone_accepted("CST6CDT,M3.2.0/2,M11.1.0/2"));
+    CHECK(timezone_accepted("GMT0BST,M3.5.0/1,M10.5.0"));
+    CHECK(timezone_accepted("<-05>5<-04>,M3.2.0,M11.1.0"));
+    CHECK(timezone_accepted("US/Eastern"));
+    CHECK(timezone_accepted("Japan"));
+    CHECK(timezone_accepted("GB"));
+    CHECK(timezone_accepted(":America/New_York"));
+
+    CHECK(!timezone_accepted("No/Such_PineForge_Zone"));
+    CHECK(!timezone_accepted("NoSuch_PineForge_Zone"));
+    CHECK(!timezone_accepted("UTC+24:00"));
+    CHECK(!timezone_accepted("GMT+24:00"));
+    CHECK(!timezone_accepted("UTC+01:99"));
+    CHECK(!timezone_accepted("UTC+5:3"));
+    CHECK(!timezone_accepted("UTC+5:30:00"));
+    CHECK(!timezone_accepted(" "));
+    CHECK(!timezone_accepted("\tUTC"));
+    CHECK(!timezone_accepted(std::string_view("UTC\0x", 5)));
+    CHECK(!timezone_accepted("UTC+99999999999999999999"));
+    CHECK(!timezone_accepted("UTC+"));
+    CHECK(!timezone_accepted("UTC++5"));
+    CHECK(!timezone_accepted("/usr/share/zoneinfo/UTC"));
+    CHECK(!timezone_accepted("../UTC"));
+    CHECK(!timezone_accepted("America/../Etc/UTC"));
+    CHECK(!timezone_accepted("zone.tab"));
+    CHECK(!timezone_accepted("iso3166.tab"));
+    CHECK(!timezone_accepted("leapseconds"));
+    CHECK(!timezone_accepted("+VERSION"));
+    CHECK(!timezone_accepted(":"));
+
+    CHECK(!parse_session("", "No/Such_PineForge_Zone"));
+    CHECK(!parse_session("24x7", "UTC+24:00"));
+    CHECK(!parse_session("0930-1600", "UTC+01:99"));
+    CHECK(!parse_session("", " "));
+    CHECK(parse_session("", "").has_value());
+    CHECK(parse_session("24x7", "UTC+05:30").has_value());
+    CHECK(parse_session("24x7", "EST5EDT,M3.2.0,M11.1.0").has_value());
+
+    auto utc_mid = resolve_civil("UTC", 2025, 6, 10, 0, 0, 0);
+    CHECK(utc_mid.has_value());
+    CHECK_EQ(utc_mid->epoch_ms, kUtcJun10_0000);
+    auto empty_mid = resolve_civil("", 2025, 6, 10, 0, 0, 0);
+    CHECK(empty_mid.has_value());
+    CHECK_EQ(empty_mid->epoch_ms, kUtcJun10_0000);
+    auto off = resolve_civil("UTC+05:30", 2025, 6, 10, 0, 0, 0);
+    CHECK(off.has_value());
+    CHECK_EQ(off->epoch_ms, kUtcJun10_0000_plus0530);
+    auto gmt = resolve_civil("GMT-4", 2025, 6, 10, 0, 0, 0);
+    CHECK(gmt.has_value());
+    CHECK_EQ(gmt->epoch_ms, kUtcJun10_0000_gmt_minus4);
+    auto taipei = resolve_civil("Asia/Taipei", 2025, 6, 10, 0, 0, 0);
+    CHECK(taipei.has_value());
+    CHECK_EQ(taipei->epoch_ms, kUtcJun10_0000_taipei);
+    auto posix = resolve_civil("EST5EDT,M3.2.0,M11.1.0", 2025, 3, 8, 0, 0, 0);
+    CHECK(posix.has_value());
+    CHECK_EQ(posix->epoch_ms, kNyMar8Midnight);
+    auto posix_time = resolve_civil("CST6CDT,M3.2.0/2,M11.1.0/2", 2025, 3, 8, 0, 0, 0);
+    CHECK(posix_time.has_value());
+    CHECK_EQ(posix_time->epoch_ms, kCstMar8Midnight);
+    auto eastern = resolve_civil("US/Eastern", 2025, 3, 8, 0, 0, 0);
+    CHECK(eastern.has_value());
+    CHECK_EQ(eastern->epoch_ms, kNyMar8Midnight);
+    auto japan = resolve_civil("Japan", 2025, 6, 10, 0, 0, 0);
+    CHECK(japan.has_value());
+    CHECK_EQ(japan->epoch_ms, kUtcJun10_0000_japan);
+    auto quoted = resolve_civil("<-05>5<-04>,M3.2.0,M11.1.0", 2025, 3, 8, 0, 0, 0);
+    CHECK(quoted.has_value());
+    CHECK_EQ(quoted->epoch_ms, kNyMar8Midnight);
+
+    CHECK(!resolve_civil("No/Such_PineForge_Zone", 2025, 6, 10, 0, 0, 0));
+    CHECK(!resolve_civil("UTC+24:00", 2025, 6, 10, 0, 0, 0));
+    CHECK(!resolve_civil("UTC+01:99", 2025, 6, 10, 0, 0, 0));
+    CHECK(!resolve_civil(" ", 2025, 6, 10, 0, 0, 0));
+}
+
 int main() {
     test_timeframe_forms();
     test_pairings();
@@ -747,6 +912,8 @@ int main() {
     test_fixed_clip_and_lunch();
     test_codex_audit_regressions();
     test_checked_public_values();
+    test_empty_cycle_identity();
+    test_timezone_acceptance();
     std::printf("test_native_calendar: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }

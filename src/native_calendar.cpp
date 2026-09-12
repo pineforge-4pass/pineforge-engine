@@ -4,8 +4,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <climits>
+#include <cstdlib>
+#include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <limits>
+#include <limits.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <utility>
 
 namespace pineforge::native_calendar {
@@ -312,28 +319,36 @@ bool same_civil_date(const CivilDate& a, const CivilDate& b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
-CivilDate civil_of_stamp(const CivilStamp& s) {
-    return CivilDate{s.year, s.month, s.day};
-}
-
 // Recurring instance of one declared window on a civil date. Wrap and
 // equal-start full-day end on the next civil date. 2400 ends at next midnight.
-std::optional<EpochSpan> window_instance(const SessionCalendar& cal,
-                                         const SessionWindow& w,
-                                         const CivilDate& date) {
-    auto start = resolve_hms(cal.timezone(), date, w.start_minutes());
-    std::optional<int64_t> end;
+int64_t civil_minutes(const CivilDate& date, int minutes) {
+    return days_from_civil(date.year, static_cast<unsigned>(date.month),
+                           static_cast<unsigned>(date.day))
+               * 1440
+           + minutes;
+}
+
+bool civil_window_instance(const SessionWindow& w,
+                           const CivilDate& date,
+                           int64_t& start_cm,
+                           int64_t& end_cm) {
+    start_cm = civil_minutes(date, w.start_minutes());
     if (w.full_day()) {
-        end = resolve_hms(cal.timezone(), add_days(date, 1), w.start_minutes());
+        end_cm = civil_minutes(add_days(date, 1), w.start_minutes());
     } else if (w.wraps()) {
-        end = resolve_hms(cal.timezone(), add_days(date, 1), w.end_minutes());
+        end_cm = civil_minutes(add_days(date, 1), w.end_minutes());
     } else if (w.end_minutes() == 1440) {
-        end = resolve_hms(cal.timezone(), add_days(date, 1), 0);
+        end_cm = civil_minutes(add_days(date, 1), 0);
     } else {
-        end = resolve_hms(cal.timezone(), date, w.end_minutes());
+        end_cm = civil_minutes(date, w.end_minutes());
     }
-    if (!start || !end) return std::nullopt;
-    return EpochSpan{*start, *end};
+    return end_cm > start_cm;
+}
+
+std::optional<int64_t> resolve_civil_minutes(const std::string& tz, int64_t cm) {
+    const int64_t days = floor_div(cm, 1440);
+    const int minutes = static_cast<int>(cm - days * 1440);
+    return resolve_hms(tz, civil_from_days(days), minutes);
 }
 
 std::vector<EpochSpan> merge_spans(std::vector<EpochSpan> spans) {
@@ -389,53 +404,57 @@ int64_t last_span_end(const std::vector<EpochSpan>& spans, int64_t origin_ms) {
 std::optional<SessionDay> session_day_from_open(const SessionCalendar& cal,
                                                 const CivilDate& open_date) {
     if (!cal.valid()) return std::nullopt;
+    const int origin = cal.origin_minutes();
+    const int64_t cycle_start_cm = civil_minutes(open_date, origin);
+    const int64_t cycle_end_cm = civil_minutes(add_days(open_date, 1), origin);
+    if (cycle_end_cm <= cycle_start_cm) return std::nullopt;
+
+    std::vector<EpochSpan> civil_raw;
+    if (cal.all_day()) {
+        civil_raw.push_back(EpochSpan{cycle_start_cm, cycle_end_cm});
+    } else {
+        for (int n = -1; n <= 1; ++n) {
+            const CivilDate inst_date = add_days(open_date, n);
+            for (const SessionWindow& w : cal.windows()) {
+                int64_t start_cm = 0;
+                int64_t end_cm = 0;
+                if (!civil_window_instance(w, inst_date, start_cm, end_cm)) continue;
+                const int64_t a = std::max(start_cm, cycle_start_cm);
+                const int64_t b = std::min(end_cm, cycle_end_cm);
+                if (b > a) civil_raw.push_back(EpochSpan{a, b});
+            }
+        }
+    }
+    auto civil_union = merge_spans(std::move(civil_raw));
+    CivilDate trading = open_date;
+    if (!civil_union.empty()) {
+        const int64_t last_cm = last_span_end(civil_union, cycle_start_cm);
+        trading = civil_from_days(floor_div(last_cm - 1, 1440));
+    }
+
     auto cycle_start = origin_on(cal, open_date);
     auto cycle_end = origin_on(cal, add_days(open_date, 1));
     if (!cycle_start || !cycle_end) return std::nullopt;
     if (*cycle_end <= *cycle_start) return std::nullopt;
 
-    std::vector<EpochSpan> raw;
-    if (cal.all_day()) {
-        raw.push_back(EpochSpan{*cycle_start, *cycle_end});
-    } else {
-        for (int n = -1; n <= 1; ++n) {
-            const CivilDate inst_date = add_days(open_date, n);
-            for (const SessionWindow& w : cal.windows()) {
-                auto inst = window_instance(cal, w, inst_date);
-                if (!inst) continue;
-                if (inst->end_ms <= inst->start_ms) continue;
-                const int64_t a = std::max(inst->start_ms, *cycle_start);
-                const int64_t b = std::min(inst->end_ms, *cycle_end);
-                if (b > a) raw.push_back(EpochSpan{a, b});
-            }
-        }
+    std::vector<EpochSpan> resolved;
+    for (const EpochSpan& civ : civil_union) {
+        auto a = resolve_civil_minutes(cal.timezone(), civ.start_ms);
+        auto b = resolve_civil_minutes(cal.timezone(), civ.end_ms);
+        if (!a || !b || *b <= *a) continue;
+        resolved.push_back(EpochSpan{*a, *b});
     }
-    auto merged = merge_spans(std::move(raw));
-
-    auto fallback_stamp = local_stamp(cal.timezone(), *cycle_end - 1);
-    if (!fallback_stamp) return std::nullopt;
-    const CivilDate fallback = civil_of_stamp(*fallback_stamp);
+    resolved = merge_spans(std::move(resolved));
 
     SessionDay day;
     day.open_date = open_date;
     day.origin_ms = *cycle_start;
     day.next_origin_ms = *cycle_end;
-
-    CivilDate unmasked = fallback;
-    int64_t unmasked_last = *cycle_start;
-    if (!merged.empty()) {
-        unmasked_last = last_span_end(merged, *cycle_start);
-        auto loc = local_stamp(cal.timezone(), unmasked_last - 1);
-        if (!loc) return std::nullopt;
-        unmasked = civil_of_stamp(*loc);
-    }
-
-    if (!merged.empty() && day_allowed(cal, unmasked)) {
-        day.trading_date = unmasked;
-        day.spans = std::move(merged);
-        day.last_traded_ms = unmasked_last;
+    day.trading_date = trading;
+    if (!resolved.empty() && day_allowed(cal, trading)) {
+        day.spans = std::move(resolved);
+        day.last_traded_ms = last_span_end(day.spans, day.origin_ms);
     } else {
-        day.trading_date = fallback;
         day.spans = {};
         day.last_traded_ms = day.origin_ms;
     }
@@ -575,8 +594,6 @@ std::optional<PeriodCore> calendar_core(const SessionCalendar& cal,
     }
     auto first = session_day_with_trading(cal, first_trading);
     auto nxt = session_day_with_trading(cal, next_trading);
-    if (!first) first = session_day_from_open(cal, first_trading);
-    if (!nxt) nxt = session_day_from_open(cal, next_trading);
     if (!first || !nxt) return std::nullopt;
     int64_t last = first->origin_ms;
     int64_t eligible = first->origin_ms;
@@ -703,6 +720,268 @@ bool all_mask_digits(std::string_view s) {
     return true;
 }
 
+bool tz_has_nul_or_control_or_space(std::string_view s) {
+    for (unsigned char c : s) {
+        if (c < 0x20 || c == 0x7F || std::isspace(c)) return true;
+    }
+    return false;
+}
+
+bool tz_is_utc_gmt_name(std::string_view s) {
+    return s == "UTC" || s == "GMT" || s == "Etc/UTC" || s == "Etc/GMT";
+}
+
+bool tz_parse_uint_bounded(std::string_view s, int max_digits, int max_value, int& out) {
+    if (s.empty() || static_cast<int>(s.size()) > max_digits) return false;
+    int n = 0;
+    for (char c : s) {
+        if (c < '0' || c > '9') return false;
+        const int d = c - '0';
+        if (n > (max_value - d) / 10) return false;
+        n = n * 10 + d;
+    }
+    if (n > max_value) return false;
+    out = n;
+    return true;
+}
+
+bool tz_utc_gmt_offset_accepted(std::string_view tz) {
+    std::size_t prefix = 0;
+    if (tz.size() >= 3 && tz.substr(0, 3) == "UTC")
+        prefix = 3;
+    else if (tz.size() >= 3 && tz.substr(0, 3) == "GMT")
+        prefix = 3;
+    else
+        return false;
+    if (prefix >= tz.size()) return false;
+    const char sign = tz[prefix];
+    if (sign != '+' && sign != '-') return false;
+    const std::string_view body = tz.substr(prefix + 1);
+    if (body.empty()) return false;
+    std::string_view hour_s;
+    std::string_view minute_s;
+    const auto colon = body.find(':');
+    if (colon != std::string_view::npos) {
+        hour_s = body.substr(0, colon);
+        minute_s = body.substr(colon + 1);
+        if (minute_s.size() != 2) return false;
+    } else if (body.size() <= 2) {
+        hour_s = body;
+        minute_s = {};
+    } else if (body.size() == 3 || body.size() == 4) {
+        hour_s = body.substr(0, body.size() - 2);
+        minute_s = body.substr(body.size() - 2);
+    } else {
+        return false;
+    }
+    int hours = 0;
+    int minutes = 0;
+    if (!tz_parse_uint_bounded(hour_s, 2, 23, hours)) return false;
+    if (!minute_s.empty() && !tz_parse_uint_bounded(minute_s, 2, 59, minutes)) return false;
+    return true;
+}
+
+bool tz_looks_like_utc_gmt_offset(std::string_view tz) {
+    if (tz.size() < 4) return false;
+    if (tz.substr(0, 3) != "UTC" && tz.substr(0, 3) != "GMT") return false;
+    const char sign = tz[3];
+    return sign == '+' || sign == '-';
+}
+
+bool tz_iana_name_chars(std::string_view name) {
+    if (name.empty() || name.size() > 255) return false;
+    if (name.front() == '/' || name.back() == '/') return false;
+    std::size_t i = 0;
+    while (i < name.size()) {
+        const auto slash = name.find('/', i);
+        const auto part = name.substr(i, slash == std::string_view::npos ? std::string_view::npos
+                                                                        : slash - i);
+        if (part.empty() || part == "." || part == "..") return false;
+        for (unsigned char c : part) {
+            if (!(std::isalnum(c) || c == '_' || c == '+' || c == '-')) return false;
+        }
+        if (slash == std::string_view::npos) break;
+        i = slash + 1;
+    }
+    return true;
+}
+
+std::string tzdir_canonical() {
+    char buf[PATH_MAX];
+    const char* env = std::getenv("TZDIR");
+    const char* cands[] = {env, "/usr/share/zoneinfo", "/var/db/timezone/zoneinfo"};
+    for (const char* c : cands) {
+        if (c == nullptr || c[0] != '/') continue;
+        if (::realpath(c, buf) != nullptr) return std::string(buf);
+    }
+    return {};
+}
+
+bool tz_file_is_tzif(std::string_view name) {
+    if (!tz_iana_name_chars(name)) return false;
+    const std::string dir = tzdir_canonical();
+    if (dir.empty()) return false;
+    std::string full = dir;
+    full.push_back('/');
+    full.append(name.begin(), name.end());
+    char resolved[PATH_MAX];
+    if (::realpath(full.c_str(), resolved) == nullptr) return false;
+    const std::string res(resolved);
+    if (res != dir && res.rfind(dir + "/", 0) != 0) return false;
+    const int fd = ::open(res.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    char mag[4] = {};
+    const ssize_t n = ::read(fd, mag, 4);
+    ::close(fd);
+    return n == 4 && std::memcmp(mag, "TZif", 4) == 0;
+}
+
+bool posix_consume_name(std::string_view s, std::size_t& p) {
+    if (p >= s.size()) return false;
+    if (s[p] == '<') {
+        const auto end = s.find('>', p + 1);
+        if (end == std::string_view::npos || end - (p + 1) < 3) return false;
+        for (std::size_t i = p + 1; i < end; ++i) {
+            const unsigned char c = static_cast<unsigned char>(s[i]);
+            if (!(std::isalnum(c) || c == '+' || c == '-')) return false;
+        }
+        p = end + 1;
+        return true;
+    }
+    const std::size_t start = p;
+    while (p < s.size()) {
+        const unsigned char c = static_cast<unsigned char>(s[p]);
+        if (std::isdigit(c) || c == '+' || c == '-' || c == ',') break;
+        ++p;
+    }
+    return p - start >= 3;
+}
+
+bool posix_consume_offset(std::string_view s, std::size_t& p) {
+    if (p < s.size() && (s[p] == '+' || s[p] == '-')) ++p;
+    if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+    int hours = 0;
+    int digits = 0;
+    while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p])) && digits < 2) {
+        hours = hours * 10 + (s[p] - '0');
+        ++p;
+        ++digits;
+    }
+    if (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+    if (hours > 24) return false;
+    auto colon_part = [&]() -> bool {
+        if (p >= s.size() || s[p] != ':') return true;
+        ++p;
+        if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+        int v = 0;
+        int d = 0;
+        while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p])) && d < 2) {
+            v = v * 10 + (s[p] - '0');
+            ++p;
+            ++d;
+        }
+        if (d < 1 || v > 59) return false;
+        return true;
+    };
+    if (!colon_part()) return false;
+    if (!colon_part()) return false;
+    return true;
+}
+
+bool posix_consume_rule(std::string_view s, std::size_t& p) {
+    if (p >= s.size()) return false;
+    if (s[p] == 'M') {
+        ++p;
+        int m = 0, n = 0, d = 0;
+        if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+        while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) {
+            m = m * 10 + (s[p] - '0');
+            ++p;
+            if (m > 12) return false;
+        }
+        if (m < 1 || p >= s.size() || s[p] != '.') return false;
+        ++p;
+        if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+        n = s[p] - '0';
+        ++p;
+        if (n < 1 || n > 5 || p >= s.size() || s[p] != '.') return false;
+        ++p;
+        if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+        d = s[p] - '0';
+        ++p;
+        if (d > 6) return false;
+    } else if (s[p] == 'J') {
+        ++p;
+        int n = 0;
+        int digits = 0;
+        if (p >= s.size() || !std::isdigit(static_cast<unsigned char>(s[p]))) return false;
+        while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) {
+            n = n * 10 + (s[p] - '0');
+            ++p;
+            ++digits;
+            if (digits > 3 || n > 365) return false;
+        }
+        if (n < 1) return false;
+    } else if (std::isdigit(static_cast<unsigned char>(s[p]))) {
+        int n = 0;
+        int digits = 0;
+        while (p < s.size() && std::isdigit(static_cast<unsigned char>(s[p]))) {
+            n = n * 10 + (s[p] - '0');
+            ++p;
+            ++digits;
+            if (digits > 3 || n > 365) return false;
+        }
+    } else {
+        return false;
+    }
+    if (p < s.size() && s[p] == '/') {
+        ++p;
+        if (!posix_consume_offset(s, p)) return false;
+    }
+    return true;
+}
+
+bool tz_posix_spec_accepted(std::string_view s) {
+    std::size_t p = 0;
+    if (!posix_consume_name(s, p)) return false;
+    if (!posix_consume_offset(s, p)) return false;
+    if (p == s.size()) return true;
+    if (!posix_consume_name(s, p)) return false;
+    if (p < s.size() && (s[p] == '+' || s[p] == '-' || std::isdigit(static_cast<unsigned char>(s[p])))) {
+        if (!posix_consume_offset(s, p)) return false;
+    }
+    if (p == s.size()) return true;
+    if (s[p] != ',') return false;
+    ++p;
+    if (!posix_consume_rule(s, p)) return false;
+    if (p >= s.size() || s[p] != ',') return false;
+    ++p;
+    if (!posix_consume_rule(s, p)) return false;
+    return p == s.size();
+}
+
+bool timezone_spec_accepted(std::string_view tz) {
+    if (tz.empty()) return true;
+    if (tz_has_nul_or_control_or_space(tz)) return false;
+    if (tz_is_utc_gmt_name(tz)) return true;
+    if (tz_looks_like_utc_gmt_offset(tz)) return tz_utc_gmt_offset_accepted(tz);
+    if (!tz.empty() && tz[0] == ':') {
+        const std::string_view file = tz.substr(1);
+        if (file.empty()) return false;
+        return tz_file_is_tzif(file);
+    }
+    // POSIX DST rule times use '/' (M3.2.0/2). A slash before any comma is a
+    // tzfile path (America/New_York, US/Eastern), not a POSIX spec.
+    const auto slash = tz.find('/');
+    const auto comma = tz.find(',');
+    if (slash != std::string_view::npos
+        && (comma == std::string_view::npos || slash < comma)) {
+        return tz_file_is_tzif(tz);
+    }
+    if (tz_file_is_tzif(tz)) return true;
+    return tz_posix_spec_accepted(tz);
+}
+
 int parse_hhmm(std::string_view s, bool allow_2400) {
     if (s.size() != 4) return -1;
     for (char c : s) {
@@ -717,6 +996,10 @@ int parse_hhmm(std::string_view s, bool allow_2400) {
 
 }  // namespace
 
+bool timezone_accepted(std::string_view timezone) {
+    return timezone_spec_accepted(timezone);
+}
+
 std::optional<CivilResolution> resolve_civil(std::string_view timezone,
                                              int year,
                                              int month,
@@ -724,6 +1007,7 @@ std::optional<CivilResolution> resolve_civil(std::string_view timezone,
                                              int hour,
                                              int minute,
                                              int second) {
+    if (!timezone_spec_accepted(timezone)) return std::nullopt;
     return resolve_stamp(std::string(timezone),
                          CivilStamp{year, month, day, hour, minute, second});
 }
@@ -887,6 +1171,7 @@ TimeframeCompatibility stream_compatibility(const Timeframe& input, const Timefr
 }
 
 std::optional<SessionCalendar> parse_session(std::string_view session, std::string_view timezone) {
+    if (!timezone_spec_accepted(timezone)) return std::nullopt;
     std::string tz(timezone.begin(), timezone.end());
     if (tz.empty()) tz = "UTC";
     std::string literal(session.begin(), session.end());
