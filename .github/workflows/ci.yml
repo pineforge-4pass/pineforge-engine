@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install Eigen3 (Linux)
         if: runner.os == 'Linux'
@@ -41,6 +41,8 @@ jobs:
 
       - name: Prepare real R2 settlement ABI provider
         run: |
+          # Preserve shallow CI version metadata: fetch the old object without tags.
+          git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d
           python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
             --current-build build --output build/settlement-abi-base --jobs 4
 
@@ -91,7 +93,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install Eigen3
         run: |
@@ -106,6 +108,8 @@ jobs:
 
       - name: Prepare real R2 settlement ABI provider
         run: |
+          # Preserve shallow CI version metadata: fetch the old object without tags.
+          git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d
           python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
             --current-build build-asan --output build-asan/settlement-abi-base --jobs 4
 

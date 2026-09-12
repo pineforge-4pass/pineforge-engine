@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Install native build dependencies
         run: |
           sudo apt-get update
@@ -46,6 +46,8 @@ jobs:
           cmake --build build-live -j 4
       - name: Prepare real R2 settlement ABI provider
         run: |
+          # Preserve shallow CI version metadata: fetch the old object without tags.
+          git fetch --no-tags --depth=1 origin e60e57156a54bb1c74c0c0a4f5a338fd924c046d
           python3 scripts/prepare_settlement_cpp_abi_base.py --source-repo . \
             --current-build build-live --output build-live/settlement-abi-base --jobs 4
       - name: Test native engine, parser, journal and transports

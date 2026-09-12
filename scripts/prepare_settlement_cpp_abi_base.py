@@ -147,9 +147,8 @@ def main() -> int:
         commit = run(['git', '-C', str(repo), 'rev-parse', BASE_COMMIT + '^{commit}']).decode().strip()
         tree = run(['git', '-C', str(repo), 'rev-parse', BASE_COMMIT + '^{tree}']).decode().strip()
     except RuntimeError as error:
-        raise RuntimeError(f'exact R2 source is unavailable; use a full-history checkout in CI, '
-                           f'or fetch the object in a local shallow clone: '
-                           f'git fetch --no-tags --depth=1 origin {BASE_COMMIT}') from error
+        raise RuntimeError(f'exact R2 source is unavailable; fetch the pinned object without tags '
+                           f'before preparation: git fetch --no-tags --depth=1 origin {BASE_COMMIT}') from error
     if commit != BASE_COMMIT or tree != BASE_TREE:
         raise RuntimeError('R2 commit/tree mismatch')
     source_raw = run(['git', '-C', str(repo), 'archive', '--format=tar', BASE_COMMIT,
