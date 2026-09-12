@@ -27,6 +27,11 @@ target_link_libraries(native_live_example PRIVATE PineForge::pineforge)
 target_compile_options(native_live_example PRIVATE -fvisibility=hidden -ffp-contract=off)
 set_target_properties(native_live_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-example")
 
+add_library(native_market_example MODULE examples/native_market_strategy.cpp)
+target_link_libraries(native_market_example PRIVATE PineForge::pineforge)
+target_compile_options(native_market_example PRIVATE -fvisibility=hidden -ffp-contract=off)
+set_target_properties(native_market_example PROPERTIES PREFIX "" OUTPUT_NAME "native-market-example")
+
 add_library(native_live_parser_example MODULE examples/demo_parser.cpp)
 target_include_directories(native_live_parser_example PRIVATE ${PROJECT_SOURCE_DIR}/include)
 set_target_properties(native_live_parser_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-parser-example")

@@ -554,16 +554,16 @@ def _runtime_version_coverage(header: str, source: str, stream: str) -> None:
     """
     header = _strip_cpp_comments(header)
     namespaces = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", header)
-    if namespaces != ["engine_script_run_v11", "engine_script_run_v11"]:
-        raise ValueError("PendingOrder and BacktestEngine layouts require internal namespace engine_script_run_v11")
+    if namespaces != ["engine_script_run_v12", "engine_script_run_v12"]:
+        raise ValueError("PendingOrder and BacktestEngine layouts require internal namespace engine_script_run_v12")
     broker = _one_braced_body(source,
         r"uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{", "broker hash")
-    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v11"\);', broker):
-        raise ValueError("broker hash must start with pineforge-broker-state/v11")
+    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v12"\);', broker):
+        raise ValueError("broker hash must start with pineforge-broker-state/v12")
     stream_body = _one_braced_body(_strip_cpp_comments(stream),
         r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{", "stream hash")
     compact = re.sub(r"\s+", "", stream_body)
-    fold = "integer(11);integer(broker_state_hash());"
+    fold = "integer(12);integer(broker_state_hash());"
     if compact.count(fold) != 1:
         raise ValueError("stream hash requires version 9 followed by the broker hash")
     prefix = compact[:compact.index(fold)]

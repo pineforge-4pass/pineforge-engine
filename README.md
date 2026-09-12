@@ -234,7 +234,7 @@ TradingView ties some day-boundary logic (intraday order caps, session rollovers
 
 ## Public C ABI
 
-`<pineforge/pineforge.h>` is the single canonical consumer header. Every compiled strategy `.so` exports exactly these 56 symbols and no internal C++ symbol (`-fvisibility=hidden`, `PF_API` on the public set, checked in CI by `scripts/check_c_abi_runtime.py`):
+`<pineforge/pineforge.h>` is the single canonical consumer header. Every compiled strategy `.so` exports exactly these 64 symbols and no internal C++ symbol (`-fvisibility=hidden`, `PF_API` on the public set, checked in CI by `scripts/check_c_abi_runtime.py`):
 
 | Symbol | Role |
 |---|---|
@@ -254,6 +254,7 @@ TradingView ties some day-boundary logic (intraday order caps, session rollovers
 | `strategy_set_account_currency_fx_series` | Effective-time quote-to-account FX |
 | `strategy_get_last_error` | The latest runtime error |
 | `pf_version_get` / `pf_version_string` / `pf_abi_version` | Runtime version, version string, struct-layout version (`PF_ABI_VERSION == 4`) |
+| `strategy_execution_contract` / `strategy_configure_native_v1` | Query Legacy vs NativeMarketV1; apply the versioned native run specification |
 | `strategy_request_abort` / `strategy_last_run_status` | Cooperative abort of a run in progress; `0`=completed, `1`=aborted |
 | `strategy_set_realtime_tail` | Live-runtime surface (ABI v4): the array's last bar is a still-forming tail — `barstate.islast=false`, `last_bar_index`/`last_bar_time` frozen at the horizon bar, no range-end row |
 | `strategy_set_probe_suppress_tail_logic` | ABI v4: the last bar runs only the broker's pre-`on_bar` steps (pending-order settlement, intraday-cap/loss checks) and returns — no `on_bar`, no margin-call / POOC second pass / bracket-reissue processing (the range-end row is `strategy_set_realtime_tail`'s to skip; the flags are independent) |

@@ -260,6 +260,23 @@ ReplaceResult WorkingRequestCore::replace(const RequestHandle& target,
     return result;
 }
 
+uint64_t TerminalCommit::usable_ordinal(const WorkingRequestCore& core, uint64_t next) {
+    return core.usable_ordinal(next);
+}
+
+void TerminalCommit::reserve_history(WorkingRequestCore& core) {
+    reserve_one(core.history_);
+}
+
+void TerminalCommit::install(WorkingRequestCore& core,
+                             std::size_t live_index,
+                             CommandEvent&& event) noexcept {
+    static_assert(std::is_nothrow_move_constructible_v<CommandEvent>);
+    static_assert(std::is_nothrow_move_assignable_v<LiveRequest>);
+    core.history_.push_back(std::move(event));
+    core.live_.erase(core.live_.begin() + static_cast<std::ptrdiff_t>(live_index));
+}
+
 CancelResult WorkingRequestCore::cancel(const RequestHandle& target,
                                         uint64_t& next_timeline_ordinal) {
     require_identity(identity_);

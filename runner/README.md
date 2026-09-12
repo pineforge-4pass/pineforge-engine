@@ -73,6 +73,14 @@ build-live/bin/pineforge-live run \
   --webhook-secret-env PINEFORGE_WEBHOOK_SECRET
 ```
 
+Native strategies use `--native-config FILE` instead of `--input` /
+`--override` / `--syminfo`. The file is a strict JSON object with `run`,
+`clock`, `instrument` and `execution` keys. Explicit CLI clock/symbol flags
+must equal the file; omitted CLI clock values take the file. Monthly stream
+input is refused before the ledger is bound. Legacy 1m identity bytes are
+unchanged when `--native-config` is absent. The additional example is
+`native-market-example`.
+
 Keep symbol metadata consistent with the corresponding backtest. `--syminfo`
 supports `type`, `currency`, `basecurrency`, `description`, `volumetype`,
 `mintick`, `pointvalue`, `qty_step`, `margin_long` and `margin_short`. Omitted

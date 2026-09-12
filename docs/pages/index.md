@@ -30,6 +30,10 @@ consumption.
   ownership, then **[Tutorial: MACD](@ref tutorial_macd)** for an
   end-to-end working example.
 
+- <b class="tab-title">I'm writing a native strategy</b>
+  Read **[Native market host](@ref native-market)** for `NativeStrategyHost`,
+  `configure_native`, and the C ABI contract query.
+
 - <b class="tab-title">I'm integrating from CMake</b>
   Jump straight to **[Install](@ref install)** and
   **[CMake integration](@ref integration_cmake)**. Then skim

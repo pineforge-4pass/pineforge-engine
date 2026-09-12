@@ -597,13 +597,22 @@ void BacktestEngine::purge_exit_orders(bool retain_for_pending_entries) {
 // execute_market_entry. Mirrors TradingView's per-pyramid trade reporting.
 Trade BacktestEngine::build_close_trade(const PyramidEntry& pe, double close_qty,
                                         double fill_price, bool was_long) const {
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = current_bar_.timestamp;
+    context.interval_index = bar_index_;
+    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+    if (!std::isnan(fold_exit_trail_peak_)) {
+        context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+    }
     return build_close_trade_with_costs(pe, close_qty, fill_price, was_long,
-        allocated_entry_commission(pe, close_qty), calc_commission(fill_price, close_qty));
+        allocated_entry_commission(pe, close_qty), calc_commission(fill_price, close_qty),
+        context);
 }
 
 Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, double close_qty,
         double fill_price, bool was_long, double entry_commission,
-        double exit_commission) const {
+        double exit_commission,
+        const execution::PhysicalExecutionContext& context) const {
     // Realized PnL scales by the instrument point value ($ per point per
     // contract). Crypto/equity (pointvalue=1) is unchanged; futures (e.g. ES=50)
     // multiply the price-difference PnL. The price-difference component is in
@@ -631,7 +640,7 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
 
     Trade trade;
     trade.entry_time = pe.time;
-    trade.exit_time = current_bar_.timestamp;
+    trade.exit_time = context.effective_time_ms;
     trade.entry_price = pe.price;
     trade.exit_price = fill_price;
     trade.qty = close_qty;
@@ -639,7 +648,7 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     trade.pnl_pct = pnl_pct;
     trade.is_long = was_long;
     trade.entry_bar_index = pe.entry_bar_index;
-    trade.exit_bar_index = bar_index_;
+    trade.exit_bar_index = context.interval_index;
     trade.entry_id = pe.entry_id;
     trade.entry_incarnation = pe.entry_incarnation;
     trade.entry_comment = pe.entry_comment;
@@ -669,19 +678,18 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     // TRAIL fills: the peak that armed the trail (fill +/- offset) is a
     // pre-fill favorable excursion no bar-boundary sample sees (TV reports
     // MFE == peak for trail exits).
-    if (!std::isnan(fold_exit_trail_peak_)) {
-        double peak_fav = (was_long ? (fold_exit_trail_peak_ - pe.price)
-                                    : (pe.price - fold_exit_trail_peak_))
-                          * close_qty;
+    if (context.preceding_exit_trail_peak) {
+        const double peak = *context.preceding_exit_trail_peak;
+        double peak_fav = (was_long ? (peak - pe.price) : (pe.price - peak)) * close_qty;
         runup = std::max(runup, peak_fav);
     }
-    if (fold_exit_path_extremes_) {
+    if (context.preceding_exit_path_prefix && *context.preceding_exit_path_prefix) {
         double fill_pos = 0.0;
         if (internal::first_touch_position(current_bar_, fill_price, &fill_pos)) {
             const bool high_first = internal::bar_path_uses_high_first(current_bar_);
             const double high_pos = high_first ? 1.0 : 2.0;
             const double low_pos  = high_first ? 2.0 : 1.0;
-            const bool same_bar = (pe.entry_bar_index == bar_index_);
+            const bool same_bar = (pe.entry_bar_index == context.interval_index);
             if (high_pos < fill_pos && !(same_bar && pe.skip_entry_bar_high)) {
                 double hi_fav = (was_long ? (current_bar_.high - pe.price)
                                           : (pe.price - current_bar_.high)) * close_qty;

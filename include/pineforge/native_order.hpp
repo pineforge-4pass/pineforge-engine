@@ -170,13 +170,57 @@ struct InvalidHandleEvent {
     std::optional<Request> attempted;
 };
 
+enum class MatchRejectReason : std::uint8_t {
+    NonpositivePrice = 0,
+    OpeningDirection = 1,
+    MaxAbsUnits = 2,
+    MaxOpenLots = 3,
+    InitialMargin = 4,
+};
+
+struct NoEffectEvent {
+    uint64_t ordinal = 0;
+    RequestHandle handle;
+    Request request;
+    Birth birth;
+};
+
+struct MatchRejectedEvent {
+    uint64_t ordinal = 0;
+    RequestHandle handle;
+    Request request;
+    Birth birth;
+    MatchRejectReason reason = MatchRejectReason::OpeningDirection;
+};
+
+struct ExecutionAppliedEvent {
+    uint64_t ordinal = 0;
+    RequestHandle handle;
+    Request request;
+    Birth birth;
+    int64_t effective_time_ms = 0;
+    int64_t interval_open_ms = 0;
+    int64_t interval_last_traded_close_ms = 0;
+    int interval_index = 0;
+    double raw_price = 0.0;
+    double resolved_price = 0.0;
+    double current_ticket = 0.0;
+    std::size_t first_trade_index = 0;
+    std::size_t closed_trade_count = 0;
+    uint64_t opened_lot_incarnation = 0;
+    std::uint8_t provenance = 0;
+};
+
 using CommandEvent = std::variant<AcceptedEvent,
                                   RejectedEvent,
                                   ReplacedEvent,
                                   ReplaceRejectedEvent,
                                   CancelledEvent,
                                   NotWorkingEvent,
-                                  InvalidHandleEvent>;
+                                  InvalidHandleEvent,
+                                  NoEffectEvent,
+                                  MatchRejectedEvent,
+                                  ExecutionAppliedEvent>;
 
 class WorkingRequestCore {
 public:
@@ -210,6 +254,10 @@ public:
                           std::optional<double> quantity_grid = std::nullopt);
 
     CancelResult cancel(const RequestHandle& target, uint64_t& next_timeline_ordinal);
+
+    // Consumer-only terminal install. Reserve history before physical commit;
+    // install is the nonthrowing live-erase + history-append suffix.
+    friend struct TerminalCommit;
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
@@ -246,5 +294,16 @@ static_assert(std::is_nothrow_move_assignable_v<CommandEvent>);
 static_assert(std::is_nothrow_move_constructible_v<SubmitResult>);
 static_assert(std::is_nothrow_move_constructible_v<ReplaceResult>);
 static_assert(std::is_nothrow_move_constructible_v<CancelResult>);
+static_assert(std::is_nothrow_move_constructible_v<NoEffectEvent>);
+static_assert(std::is_nothrow_move_constructible_v<MatchRejectedEvent>);
+static_assert(std::is_nothrow_move_constructible_v<ExecutionAppliedEvent>);
+
+struct TerminalCommit {
+    static uint64_t usable_ordinal(const WorkingRequestCore& core, uint64_t next);
+    static void reserve_history(WorkingRequestCore& core);
+    static void install(WorkingRequestCore& core,
+                        std::size_t live_index,
+                        CommandEvent&& event) noexcept;
+};
 
 }  // namespace pineforge::native_order

@@ -70,6 +70,8 @@ EXPECTED_RUNTIME = frozenset({
     "pf_version_get",
     "pf_version_string",
     "pf_abi_version",
+    "strategy_execution_contract",
+    "strategy_configure_native_v1",
 })
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")

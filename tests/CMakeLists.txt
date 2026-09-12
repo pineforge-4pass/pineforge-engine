@@ -4,6 +4,8 @@ set(TEST_SOURCES
     test_native_reversal_contract
     test_order_action
     test_native_order_core
+    test_native_order_terminal
+    test_native_market_vertical
     test_order_action_integration
     test_placement_facts
     test_order_cancellation
@@ -430,6 +432,9 @@ if(PINEFORGE_ENABLE_COVERAGE)
     endif()
 endif()
 
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_market_vertical.cpp"
+     PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256)
+
 foreach(test_name ${TEST_SOURCES})
     add_executable(${test_name} ${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE pineforge)
@@ -446,6 +451,9 @@ foreach(test_name ${TEST_SOURCES})
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+target_compile_definitions(test_native_market_vertical PRIVATE
+    PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")
 
 # std::thread needs an explicit pthread link on some toolchains.
 target_link_libraries(test_timezone_concurrency PRIVATE Threads::Threads)

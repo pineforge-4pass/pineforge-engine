@@ -26,7 +26,8 @@
  *     strategy_position_size, strategy_current_equity,
  *     strategy_script_bars_processed),
  *     pf_version_get/pf_version_string,
- *     pf_abi_version — the authoritative list is EXPECTED_RUNTIME in
+ *     pf_abi_version, strategy_execution_contract,
+ *     strategy_configure_native_v1 — the authoritative list is EXPECTED_RUNTIME in
  *     scripts/check_c_abi_runtime.py, enforced by CI). The other
  *     `extern "C"` symbols listed in pineforge.h (strategy_create,
  *     run_backtest, etc.) are emitted per-compiled-strategy by the
@@ -38,11 +39,13 @@
 // engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS, which suppresses them.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/native_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 #include <cstddef>
 #include <limits>
 #include <cstring>
+#include <string>
 
 namespace pineforge {
 // Generated (src/pending_order_mirror.cpp, scripts/gen_pending_order_mirror.py).
@@ -687,6 +690,72 @@ PF_API pf_version_t pf_version_get(void) {
 
 PF_API const char* pf_version_string(void) {
     return PINEFORGE_VERSION_FULL;
+}
+
+static_assert(sizeof(pf_native_run_spec_v1) >= sizeof(uint32_t) + sizeof(const char*),
+              "pf_native_run_spec_v1 must carry struct_size and string pointers");
+
+PF_API int strategy_execution_contract(pf_strategy_t s) {
+    try {
+        if (!s) return -1;
+        return static_cast<pineforge::BacktestEngine*>(s)->execution_contract();
+    } catch (...) {
+        return -1;
+    }
+}
+
+PF_API int strategy_configure_native_v1(pf_strategy_t s, const pf_native_run_spec_v1* spec) {
+    try {
+        if (!s || !spec) return -1;
+        auto* engine = static_cast<pineforge::BacktestEngine*>(s);
+        if (!engine->native_bound()) return -1;
+        if (spec->struct_size != sizeof(pf_native_run_spec_v1)) return -1;
+        auto* host = dynamic_cast<pineforge::NativeStrategyHost*>(engine);
+        if (!host) return -1;
+        const auto require = [](const char* p) -> const char* {
+            return p ? p : "";
+        };
+        if (!spec->session_key || !spec->input_tf || !spec->script_tf || !spec->ticker
+            || !spec->tickerid || !spec->type || !spec->currency || !spec->basecurrency
+            || !spec->description || !spec->volumetype || !spec->timezone
+            || !spec->session || !spec->chart_timezone) {
+            return -1;
+        }
+        if (spec->optional_mask & ~0xfu) return -1;
+        pineforge::NativeRunSpec cpp;
+        cpp.identity.session_key = require(spec->session_key);
+        cpp.identity.run_number = spec->run_number;
+        cpp.input_tf = require(spec->input_tf);
+        cpp.script_tf = require(spec->script_tf);
+        cpp.ticker = require(spec->ticker);
+        cpp.tickerid = require(spec->tickerid);
+        cpp.type = require(spec->type);
+        cpp.currency = require(spec->currency);
+        cpp.basecurrency = require(spec->basecurrency);
+        cpp.description = require(spec->description);
+        cpp.volumetype = require(spec->volumetype);
+        cpp.timezone = require(spec->timezone);
+        cpp.session = require(spec->session);
+        cpp.chart_timezone = require(spec->chart_timezone);
+        cpp.initial_capital = spec->initial_capital;
+        cpp.point_value = spec->point_value;
+        cpp.account_fx = spec->account_fx;
+        cpp.price_tick = spec->price_tick;
+        cpp.slippage_ticks = spec->slippage_ticks;
+        cpp.fee_kind = static_cast<pineforge::NativeFeeKind>(spec->fee_kind);
+        cpp.fee_value = spec->fee_value;
+        cpp.close_execution = static_cast<pineforge::NativeCloseExecution>(spec->close_execution);
+        cpp.allowed_open_directions =
+            static_cast<pineforge::NativeOpenDirections>(spec->allowed_open_directions);
+        if (spec->optional_mask & 1u) cpp.quantity_grid = spec->quantity_grid;
+        if (spec->optional_mask & 2u) cpp.max_abs_units = spec->max_abs_units;
+        if (spec->optional_mask & 4u) cpp.initial_margin_fraction = spec->initial_margin_fraction;
+        if (spec->optional_mask & 8u) cpp.max_open_lots = spec->max_open_lots;
+        const auto result = host->configure_native(cpp);
+        return result.status == pineforge::NativeSetupStatus::Applied ? 0 : -1;
+    } catch (...) {
+        return -1;
+    }
 }
 
 } /* extern "C" */

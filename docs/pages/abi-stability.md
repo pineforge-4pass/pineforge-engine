@@ -114,7 +114,7 @@ notice:
 Rebuild generated and native C++ objects against matching engine headers and
 runtime. Deriving placement and opposite-predecessor facts from original
 admission evidence changes the native layout and advances `PendingOrder` and
-`BacktestEngine` to `engine_script_run_v11`. Exact pre-change fd4c686/v10
+`BacktestEngine` to `engine_script_run_v12`. Exact pre-change fd4c686/v10
 headers are authenticated before native, generated-style and standalone
 PendingOrder pairing checks. Current/old matching links must succeed and stale
 pairings must fail for the expected qualified symbols. Earlier v2-v9 controls

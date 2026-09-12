@@ -17,6 +17,7 @@ namespace pineforge {
 
 bool BacktestEngine::set_aux_security_feed(const Bar* bars, int n,
                                            const std::string& input_tf) {
+    guard_native_mutation("set_aux_security_feed");
     if (n == 0) {
         aux_security_bars_.clear();
         aux_security_input_tf_.clear();
@@ -437,6 +438,7 @@ void BacktestEngine::feed_deferred_aux_security_for_chart_bar(int chart_index) {
 
 bool BacktestEngine::set_native_security_feed(const std::string& timeframe,
                                               const Bar* bars, int n) {
+    guard_native_mutation("set_native_security_feed");
     int seconds = 0;
     try {
         seconds = tf_to_seconds(timeframe);

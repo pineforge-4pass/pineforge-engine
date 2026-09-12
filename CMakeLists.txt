@@ -105,6 +105,9 @@ add_library(pineforge STATIC
     src/compat/pine/reservation_expansion.cpp
     src/pending_order_mirror.cpp
     src/native_order.cpp
+    src/engine_consumer.cpp
+    src/market_driver.cpp
+    src/native_execution_consumer.cpp
     src/magnifier.cpp
     src/math.cpp
     src/matrix.cpp

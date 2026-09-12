@@ -98,6 +98,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
+    guard_native_mutation("strategy_entry");
     auto command=begin_market_command(admission::CommandKind::Entry,id,is_long,qty,qty_type,
                                       limit_price,stop_price,oca_name,oca_type);
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) {
@@ -676,6 +677,7 @@ void BacktestEngine::strategy_close(const std::string& id,
                                     const std::string& comment,
                                     double qty, double qty_percent,
                                     bool immediately) {
+    guard_native_mutation("strategy_close");
     strategy_close(id, comment, qty, qty_percent, immediately,
                    /*callsite_token=*/0);
 }
@@ -685,6 +687,7 @@ void BacktestEngine::strategy_close(const std::string& id,
                                     double qty, double qty_percent,
                                     bool immediately,
                                     uint64_t callsite_token) {
+    guard_native_mutation("strategy_close");
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
     if (position_side_ == PositionSide::FLAT) {
@@ -877,6 +880,7 @@ void BacktestEngine::strategy_close(const std::string& id,
 }
 
 void BacktestEngine::strategy_close_all() {
+    guard_native_mutation("strategy_close_all");
     strategy_close("");
 }
 
@@ -1627,6 +1631,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
                                     const std::string& comment,
                                     double qty, const std::string& oca_name,
                                     double profit_ticks, double loss_ticks) {
+    guard_native_mutation("strategy_exit");
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
     const bool has_actionable_exit = !std::isnan(limit_price)
@@ -2072,6 +2077,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
 }
 
 void BacktestEngine::strategy_cancel(const std::string& id) {
+    guard_native_mutation("strategy_cancel");
     auto command=begin_market_command(admission::CommandKind::Cancel,id,false,
         std::numeric_limits<double>::quiet_NaN(),-1,
         std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::quiet_NaN(),"",0);
@@ -2093,6 +2099,7 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
 }
 
 void BacktestEngine::strategy_cancel_all() {
+    guard_native_mutation("strategy_cancel_all");
     auto command=begin_market_command(admission::CommandKind::CancelAll,"",false,
         std::numeric_limits<double>::quiet_NaN(),-1,
         std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::quiet_NaN(),"",0);
@@ -2103,6 +2110,7 @@ void BacktestEngine::strategy_cancel_all() {
 void BacktestEngine::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
+    guard_native_mutation("strategy_order");
     auto command=begin_market_command(admission::CommandKind::Raw,id,is_long,qty,-1,
                                       limit_price,stop_price,oca_name,oca_type);
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) {

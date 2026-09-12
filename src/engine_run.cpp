@@ -94,6 +94,7 @@ struct PathOrderScope {
 
 bool BacktestEngine::set_account_currency_fx_series(
         const int64_t* timestamps_ms, const double* rates, int n) {
+    guard_native_mutation("set_account_currency_fx_series");
     // Timestamped FX is not route-complete for the realtime scheduler. Reject
     // late installation as well as stream_begin-with-series so callers cannot
     // bypass fail-closed behavior by changing configuration after warmup.
@@ -970,7 +971,7 @@ void BacktestEngine::reset_run_state() {
 }
 
 
-void BacktestEngine::run(const Bar* bars, int n) {
+void BacktestEngine::legacy_run_simple(const Bar* bars, int n) {
     last_error_.clear();
     last_run_status_ = 0;
     abort_requested_.store(false, std::memory_order_relaxed);
@@ -1534,7 +1535,7 @@ void BacktestEngine::run_magnified_bar_calc_on_order_fills(
 // not clear any of those itself (see run_tf_impl's doc comment in
 // engine.hpp -- the SymInfo/overrides overload below calls run_tf_impl
 // directly for the same reason).
-void BacktestEngine::run(const Bar* input_bars, int n_input,
+void BacktestEngine::legacy_run_tf(const Bar* input_bars, int n_input,
                           const std::string& input_tf,
                           const std::string& script_tf,
                           bool bar_magnifier,
@@ -2307,7 +2308,7 @@ const Series<double>& BacktestEngine::get_input_source(
 
 
 // --- Full run() overload with SymInfo, StrategyOverrides, and input injection ---
-void BacktestEngine::run(const Bar* input_bars, int n_input,
+void BacktestEngine::legacy_run_rich(const Bar* input_bars, int n_input,
                           const std::string& input_tf,
                           const std::string& script_tf,
                           const std::unordered_map<std::string, std::string>& inputs,

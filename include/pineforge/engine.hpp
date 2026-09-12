@@ -7,12 +7,14 @@
 #include <cmath>
 #include <ctime>
 #include <limits>
+#include <memory>
 #include <set>
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 #include <stdexcept>
 #include <optional>
+#include <pineforge/execution_consumer.hpp>
 #include "na.hpp"
 #include "bar.hpp"
 #include "broker_events.hpp"
@@ -426,7 +428,7 @@ enum class ShortSeedCollisionRole : uint8_t {
 // PendingOrder crosses out-of-line helper boundaries independently of the
 // engine class, so its changed layout must carry the same internal epoch.
 using ExitLegLifecycle = exit_legs::Lifecycle;
-inline namespace engine_script_run_v11 {
+inline namespace engine_script_run_v12 {
 struct PendingOrder {
     std::string id;
     std::string from_entry;    // for exit orders
@@ -954,7 +956,7 @@ inline bool placement_has_opposite_market_predecessor(
     return false;
 }
 
- } // inline namespace engine_script_run_v11 (PendingOrder)
+ } // inline namespace engine_script_run_v12 (PendingOrder)
 
 // default_qty_type constants (matches TradingView)
 enum class QtyType { FIXED = 0, PERCENT_OF_EQUITY = 1, CASH = 2 };
@@ -1012,9 +1014,18 @@ struct StrategyOverrides {
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v11 {
+inline namespace engine_script_run_v12 {
 class BacktestEngine {
 protected:
+    friend class LegacyCompatibilityConsumer;
+    friend class NativeExecutionConsumer;
+    friend class NativeStrategyHost;
+    struct NativeConsumerBindTag { explicit NativeConsumerBindTag() = default; };
+    explicit BacktestEngine(NativeConsumerBindTag,
+                            compat::pine::CapAttachment cap_attachment =
+                                compat::pine::CapAttachment::None);
+    IExecutionConsumer& execution_consumer();
+    const IExecutionConsumer& execution_consumer() const;
     // --- Position state ---
     // @broker-state begin
     PositionSide position_side_ = PositionSide::FLAT;
@@ -1809,6 +1820,15 @@ protected:
     execution::Result settle_execution_with_lifecycle(
         const execution::Action& action, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle);
+    execution::Result settle_native_execution_at(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context);
+    execution::Result settle_with_context(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context);
+    execution::SettlementInspection inspect_native_settlement(
+        const execution::Action& action, const execution::Fill& fill) const;
     // Native account value: realized balance plus marked physical lots minus
     // their remaining paid entry costs, for every fee type. No Pine sizing or
     // end-of-range reporting convention participates in this value.
@@ -4278,7 +4298,8 @@ private:
                             double fill_price, bool was_long) const;
     Trade build_close_trade_with_costs(const PyramidEntry& pe, double close_qty,
         double fill_price, bool was_long, double entry_commission,
-        double exit_commission) const;
+        double exit_commission,
+        const execution::PhysicalExecutionContext& context) const;
     // FIFO-drain up to qty_limit from pyramid_entries_, in order, splitting the
     // boundary entry as needed. When from_entry is non-null only entries whose
     // entry_id == *from_entry are eligible (others are kept untouched); null
@@ -4496,21 +4517,79 @@ private:
     void fill_security_diag_section(ReportC* out) const;
     void fill_trace_section(ReportC* out) const;
 
+    void guard_native_mutation(const char* operation);
+    void legacy_run_simple(const Bar* bars, int n);
+    void legacy_run_tf(const Bar* input_bars, int n_input,
+                       const std::string& input_tf,
+                       const std::string& script_tf,
+                       bool bar_magnifier,
+                       int magnifier_samples,
+                       MagnifierDistribution magnifier_dist);
+    void legacy_run_rich(const Bar* input_bars, int n_input,
+                         const std::string& input_tf,
+                         const std::string& script_tf,
+                         const std::unordered_map<std::string, std::string>& inputs,
+                         const SymInfo& syminfo,
+                         const StrategyOverrides* overrides,
+                         bool bar_magnifier,
+                         int magnifier_samples,
+                         MagnifierDistribution magnifier_dist);
+    bool legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
+                             const std::string& input_tf,
+                             const std::string& script_tf);
+    bool legacy_stream_push_bar(const Bar& bar);
+    bool legacy_stream_push_tick(const TradeTick& tick);
+    bool legacy_stream_push_ticks(const TradeTick* ticks, int n);
+    bool legacy_stream_advance_time(int64_t timestamp_ms);
+    bool legacy_stream_end(bool finalize_partial_input_bar);
+
+    struct ExecutionConsumerSlot {
+        bool native = false;
+        mutable std::unique_ptr<IExecutionConsumer> ptr;
+        ExecutionConsumerSlot() = default;
+        ExecutionConsumerSlot(const ExecutionConsumerSlot& other) noexcept
+            : native(other.native) {}
+        ExecutionConsumerSlot& operator=(const ExecutionConsumerSlot& other) noexcept {
+            if (this != &other) {
+                native = other.native;
+                ptr.reset();
+            }
+            return *this;
+        }
+        ExecutionConsumerSlot(ExecutionConsumerSlot&& other) noexcept : native(other.native) {
+            other.ptr.reset();
+        }
+        ExecutionConsumerSlot& operator=(ExecutionConsumerSlot&& other) noexcept {
+            if (this != &other) {
+                native = other.native;
+                ptr.reset();
+                other.ptr.reset();
+            }
+            return *this;
+        }
+    };
+    ExecutionConsumerSlot execution_consumer_slot_;
+
 public:
     explicit BacktestEngine(compat::pine::CapAttachment cap_attachment =
-                                compat::pine::CapAttachment::None)
-        : max_intraday_filled_orders_(cap_attachment) {}
+                                compat::pine::CapAttachment::None);
     // Explicit frontend selection, not a generic native risk switch. This
     // preserves any prior declaration values and does not reset quota/state.
-    void enable_pine_intraday_cap() { max_intraday_filled_orders_.attach(); }
+    void enable_pine_intraday_cap() {
+        guard_native_mutation("enable_pine_intraday_cap");
+        max_intraday_filled_orders_.attach();
+    }
     // Current execution-adapter scope: intraday cap + retained-parent priority.
     // Idempotent configuration attachment, not a reset or universal Pine mode.
     // Generated constructors call this before any host metadata is forwarded.
     void attach_pine_execution_adapter() {
+        guard_native_mutation("attach_pine_execution_adapter");
         max_intraday_filled_orders_.attach();
         pine_order_priority_.attach();
     }
-    virtual ~BacktestEngine() = default;
+    virtual ~BacktestEngine();
+    int execution_contract() const;
+    bool native_bound() const;
     virtual void on_bar(const Bar& bar) = 0;
 
     // All run() overloads preflight the entire chart array before modifying
@@ -4657,10 +4736,15 @@ public:
     // so get_input_*() lookups pick up the TV-tester value rather than the
     // Pine default.
     void set_input(const std::string& key, const std::string& value) {
+        guard_native_mutation("set_input");
         inputs_[key] = value;
     }
-    void clear_inputs() { inputs_.clear(); }
+    void clear_inputs() {
+        guard_native_mutation("clear_inputs");
+        inputs_.clear();
+    }
     void set_trade_start_time(int64_t timestamp_ms) {
+        guard_native_mutation("set_trade_start_time");
         trade_start_time_ = timestamp_ms;
     }
 
@@ -4692,6 +4776,7 @@ public:
     //   * 2-arg function form ``hour(time, tz)``: honours the explicit
     //     argument, unchanged by this fix.
     void set_chart_timezone(const std::string& tz) {
+        guard_native_mutation("set_chart_timezone");
         chart_timezone_ = tz;
     }
     const std::string& chart_timezone() const { return chart_timezone_; }
@@ -4705,15 +4790,24 @@ public:
     // timezone through compat::pine::IntradayCap::risk_day(). Other risk-day rules keep
     // chart_timezone_, as do continuous/unconfigured order-counter clocks;
     // the existing crypto-on-shifted-chart contract therefore remains intact.
-    void set_syminfo_timezone(const std::string& tz) { syminfo_.timezone = tz; }
-    void set_syminfo_session(const std::string& s) { syminfo_.session = s; }
+    void set_syminfo_timezone(const std::string& tz) {
+        guard_native_mutation("set_syminfo_timezone");
+        syminfo_.timezone = tz;
+    }
+    void set_syminfo_session(const std::string& s) {
+        guard_native_mutation("set_syminfo_session");
+        syminfo_.session = s;
+    }
     // ``syminfo.type`` ("crypto" default; "forex" / "stock" / "futures" /
     // "index" / "fund" / "cfd" per TradingView). Scripts branch on it for
     // instrument conventions — the canonical one being the pip size
     // (``syminfo.type == "forex" ? 0.0001 : syminfo.mintick``), which on a
     // 5-digit FX symbol under the crypto default computed every pip-scaled
     // stop/target 10x too tight (finding 454). Empty is ignored.
-    void set_syminfo_type(const std::string& t) { if (!t.empty()) syminfo_.type = t; }
+    void set_syminfo_type(const std::string& t) {
+        guard_native_mutation("set_syminfo_type");
+        if (!t.empty()) syminfo_.type = t;
+    }
     /// Whether TradingView's session template for this symbol carries the
     /// exchange's early closes and holidays, so a D/W/M request.security
     /// bucket completes on a shortened session's actual last chart bar
@@ -4732,6 +4826,7 @@ public:
     // volumetype / type). Unknown keys and empty values are ignored; returns
     // true when a field was set.
     bool set_syminfo_string(const std::string& key, const std::string& value) {
+        guard_native_mutation("set_syminfo_string");
         if (value.empty()) return false;
         if (key == "type") { syminfo_.type = value; return true; }
         if (key == "ticker") { syminfo_.ticker = value; return true; }
@@ -4750,14 +4845,24 @@ public:
     // commission notionals, margin check — see tests/test_pointvalue.cpp).
     // Both default to crypto/equity values (0.01 / 1.0) and only matter when the
     // harness sets a non-default instrument.
-    void set_syminfo_mintick(double m) { if (m > 0.0) { syminfo_.mintick = m; syminfo_mintick_ = m; } }
-    void set_syminfo_pointvalue(double pv) { if (pv > 0.0) { syminfo_.pointvalue = pv; } }
+    void set_syminfo_mintick(double m) {
+        guard_native_mutation("set_syminfo_mintick");
+        if (m > 0.0) { syminfo_.mintick = m; syminfo_mintick_ = m; }
+    }
+    void set_syminfo_pointvalue(double pv) {
+        guard_native_mutation("set_syminfo_pointvalue");
+        if (pv > 0.0) { syminfo_.pointvalue = pv; }
+    }
 
     // Toggle TradingView's forced-liquidation (margin call) emulation. Defaults
     // ON to match TV; set false for the legacy hold-the-position behaviour.
-    void set_margin_call_enabled(bool enabled) { margin_call_enabled_ = enabled; }
+    void set_margin_call_enabled(bool enabled) {
+        guard_native_mutation("set_margin_call_enabled");
+        margin_call_enabled_ = enabled;
+    }
     bool margin_call_enabled() const { return margin_call_enabled_; }
     void set_syminfo_metadata(const std::string& key, double value) {
+        guard_native_mutation("set_syminfo_metadata");
         syminfo_metadata_[key] = value;
         // Pine's public bar_index is chart-history relative. Validation feeds
         // can start after TradingView's hidden first chart bar, while engine
@@ -4874,6 +4979,7 @@ public:
     // range-end close row/trade. Default off: every historical run is
     // byte-identical to before this flag existed.
     void set_realtime_tail(bool on, int horizon_bars) {
+        guard_native_mutation("set_realtime_tail");
         realtime_tail_ = on;
         realtime_tail_horizon_bars_ = horizon_bars;
     }
@@ -4900,6 +5006,7 @@ public:
     // Default off (@p on == 0): every historical run stays byte-identical to
     // before this flag existed.
     void set_probe_suppress_tail_logic(bool on) {
+        guard_native_mutation("set_probe_suppress_tail_logic");
         probe_suppress_tail_logic_ = on;
     }
     bool probe_suppress_tail_logic() const { return probe_suppress_tail_logic_; }
@@ -4922,6 +5029,7 @@ public:
     // Default AUTO (mode=0): every historical run stays byte-identical to
     // before this flag existed.
     void set_path_order(int mode) {
+        guard_native_mutation("set_path_order");
         path_order_mode_ = (mode == 1 || mode == 2) ? mode : 0;
     }
 
@@ -5116,12 +5224,14 @@ public:
     // set_realtime_tail, so it must be set BEFORE stream_begin to also
     // cover the warmup bars.
     void set_broker_state_hash_recording(bool on) {
+        guard_native_mutation("set_broker_state_hash_recording");
         broker_state_hash_recording_ = on;
     }
 
     // Toggle volume-weighted per-sub-bar sampling inside run_magnified_bar.
     // Has no effect unless bar magnifier is enabled.
     void set_magnifier_volume_weighted(bool on) {
+        guard_native_mutation("set_magnifier_volume_weighted");
         magnifier_volume_weighted_ = on;
     }
 
@@ -5130,7 +5240,10 @@ public:
     // flips this on per-strategy via ``strategy_set_trace_enabled`` (the
     // FFI shim defined in c_abi.cpp) before running a backtest whose
     // per-bar values it wants to cross-reference against TradingView.
-    void set_trace_enabled(bool on) { trace_enabled_ = on; }
+    void set_trace_enabled(bool on) {
+        guard_native_mutation("set_trace_enabled");
+        trace_enabled_ = on;
+    }
     bool trace_enabled() const { return trace_enabled_; }
 
     // --- Live-runtime status API (ABI v4) ---
@@ -5155,5 +5268,5 @@ public:
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 };
 
-} // inline namespace engine_script_run_v11
+} // inline namespace engine_script_run_v12
 } // namespace pineforge

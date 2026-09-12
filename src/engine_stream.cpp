@@ -21,7 +21,7 @@ Bar price_point(double price, double volume, int64_t timestamp) {
 
 }  // namespace
 
-bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
+bool BacktestEngine::legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
     const StreamPhase phase_before_begin = stream_phase_;
@@ -150,7 +150,7 @@ bool BacktestEngine::stream_begin(const Bar* warmup_bars, int n_warmup,
     }
 }
 
-bool BacktestEngine::stream_push_bar(const Bar& bar) {
+bool BacktestEngine::legacy_stream_push_bar(const Bar& bar) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -200,7 +200,7 @@ bool BacktestEngine::stream_push_bar(const Bar& bar) {
     }
 }
 
-bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
+bool BacktestEngine::legacy_stream_push_tick(const TradeTick& tick) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -300,7 +300,7 @@ bool BacktestEngine::stream_push_tick(const TradeTick& tick) {
     }
 }
 
-bool BacktestEngine::stream_push_ticks(const TradeTick* ticks, int n) {
+bool BacktestEngine::legacy_stream_push_ticks(const TradeTick* ticks, int n) {
     last_error_.clear();
     if (n < 0 || (n > 0 && ticks == nullptr)) {
         last_error_ = "stream_push_ticks received an invalid tick array";
@@ -312,7 +312,7 @@ bool BacktestEngine::stream_push_ticks(const TradeTick* ticks, int n) {
     return true;
 }
 
-bool BacktestEngine::stream_advance_time(int64_t timestamp_ms) {
+bool BacktestEngine::legacy_stream_advance_time(int64_t timestamp_ms) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -344,7 +344,7 @@ bool BacktestEngine::stream_advance_time(int64_t timestamp_ms) {
     }
 }
 
-bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
+bool BacktestEngine::legacy_stream_end(bool finalize_partial_input_bar) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -678,7 +678,7 @@ uint64_t BacktestEngine::stream_state_hash() const {
         integer(static_cast<uint64_t>(bar.timestamp));
         real(bar.open); real(bar.high); real(bar.low); real(bar.close); real(bar.volume);
     };
-    integer(11); integer(broker_state_hash());
+    integer(12); integer(broker_state_hash());
     integer(static_cast<uint64_t>(stream_phase_));
     integer(static_cast<uint64_t>(stream_input_mode_));
     integer(static_cast<uint64_t>(stream_input_tf_ms_));

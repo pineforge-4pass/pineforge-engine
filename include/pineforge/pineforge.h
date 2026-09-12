@@ -435,6 +435,31 @@ typedef void* pf_strategy_t;
  *  definitions.
  */
 
+/** Native execution contract query. Returns 1 Legacy, 2 NativeMarketV1, -1 invalid.
+ *  Absence of this symbol on a known ABI4/stream-v1 library means legacy. */
+PF_API int strategy_execution_contract(pf_strategy_t s);
+
+/** Versioned native run specification. All string pointers are non-null.
+ *  session may be empty (all-day literal). session_key, timeframes, timezone
+ *  and tickerid are nonempty. optional_mask bits: 0 quantity_grid, 1
+ *  max_abs_units, 2 initial_margin_fraction, 3 max_open_lots. */
+typedef struct pf_native_run_spec_v1 {
+    uint32_t struct_size;
+    const char *session_key; uint64_t run_number;
+    const char *input_tf, *script_tf;
+    const char *ticker, *tickerid, *type, *currency, *basecurrency, *description, *volumetype;
+    const char *timezone, *session, *chart_timezone;
+    double initial_capital, point_value, account_fx, price_tick;
+    uint32_t slippage_ticks, fee_kind; double fee_value;
+    uint32_t optional_mask, close_execution, allowed_open_directions;
+    double quantity_grid, max_abs_units, initial_margin_fraction;
+    uint64_t max_open_lots;
+} pf_native_run_spec_v1;
+
+/** Apply a native v1 specification. Returns 0 on success, -1 on failure.
+ *  Legacy handles refuse without native state mutation. */
+PF_API int strategy_configure_native_v1(pf_strategy_t s, const pf_native_run_spec_v1* spec);
+
 #ifndef PINEFORGE_NO_STRATEGY_DECLS
 
 /** Allocate a new strategy instance.

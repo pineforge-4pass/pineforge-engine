@@ -2,6 +2,7 @@
 
 #include "exit_leg_lifecycle.hpp"
 #include "order_action.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -41,6 +42,35 @@ struct Result {
     // authoritative. Opening units are signed; closing units are nonnegative.
     double closed_units = 0.0;
     double opened_units = 0.0;
+    // This execution's current ticket and committed-row references. Zero when
+    // the result is not Applied. Native terminal events copy these facts.
+    double current_ticket = 0.0;
+    std::size_t first_trade_index = 0;
+    std::size_t closed_trade_count = 0;
+    uint64_t opened_lot_incarnation = 0;
+};
+
+// Stack-bound physical coordinates for one settlement. Native supplies time
+// and index from the matching point and leaves both optionals empty. Legacy
+// callers copy current_bar_/bar_index_ and the current fold flags.
+struct PhysicalExecutionContext {
+    int64_t effective_time_ms = 0;
+    int interval_index = 0;
+    std::optional<bool> preceding_exit_path_prefix;
+    std::optional<double> preceding_exit_trail_peak;
+};
+
+// Stack-local inspect facts. Destroyed at the end of one matching step.
+struct SettlementInspection {
+    Status status = Status::NoEffect;
+    double closed_units = 0.0;
+    double opened_units = 0.0;
+    double resulting_abs_units = 0.0;
+    std::size_t resulting_lot_count = 0;
+    double resulting_abs_notional = 0.0;
+    double current_ticket = 0.0;
+    bool would_open = false;
+    bool incoming_short = false;
 };
 
 // One pre-close operation on an exact pending identity. created_seq 0 and
