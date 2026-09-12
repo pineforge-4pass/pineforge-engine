@@ -10,6 +10,10 @@ set(TEST_SOURCES
     test_native_resting_contract
     test_native_resting_acceptance
     test_native_resting_driver_contract
+    test_native_resting_owner_contract
+    test_native_resting_group_contract
+    test_native_resting_replay_contract
+    test_native_resting_matching_contract
     test_native_auto_path
     test_native_market_vertical
     test_native_market_vertical_contract

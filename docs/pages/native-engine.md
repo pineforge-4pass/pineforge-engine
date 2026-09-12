@@ -11,7 +11,7 @@ use the general host commands; request-value members live in
 `<pineforge/native_order.hpp>` and are not restated here.
 
 The resting-order lifecycle is implemented in the current R2 candidate;
-final integration, compatibility and independent-review acceptance are still
+final merge acceptance, compatibility and CI verification are still
 pending. [Refactor progress](../native-refactor-progress.md) separates this
 candidate from the completed R2a scoped-settlement prerequisite.
 

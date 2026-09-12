@@ -184,8 +184,9 @@ are separate contracts and do not change here.
 Determinism is conditional on identical externally supplied market, intent and
 fill-report sequences, configuration, code and version. It is not a claim that
 live execution prices, quantities or callback arrival are predictable. The
-version bump changes linkage and fingerprint bytes; it changes no financial
-rule, fill price, fee, quota policy or economic test expectation.
+epoch change itself changes linkage and fingerprint identity. The accompanying
+native execution behavior is described in [Native engine](native-engine.md);
+the ABI boundary alone is not a claim that every execution path is unchanged.
 
 If you find yourself reaching for any of these from outside the closed
 PineForge transpiler, you're holding it wrong — file an issue and we'll

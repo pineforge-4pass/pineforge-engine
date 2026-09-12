@@ -74,13 +74,15 @@ repairs are still in progress:
    together to epoch 13, with broker/stream hash version 13. Existing native
    run-spec, calendar/driver value domains and C ABI 4 prefixes remain.
 
-The latest integrated Release build passed 322 CTests with zero failures.
-One WebSocket transport test was skipped because the selected macOS libcurl
-lacks WebSocket support. The native proof includes 831 resting-contract
-checks, 20 scoped-ownership/chronology/failure cases (782 checks), 13 driver
-cases (882 checks), and 343 resting-core checks. Independent review findings
-have corresponding regression witnesses, including token ownership, event-sized
+The local Release suite and separate native acceptance checks pass. One
+WebSocket transport test is skipped when the selected macOS libcurl lacks
+WebSocket support. Native coverage exercises working-order quantities,
+scoped ownership and costs, group effects, driver chronology, admission,
+replay/reset, and failure prefixes. Independent review findings have
+corresponding regression witnesses, including token ownership, event-sized
 partial exits, exact deferred-receipt arithmetic and same-cursor execution prices.
+The sanitizer ABI control also supplies the historical v12 destructor needed
+for its RTTI; this changes only the link-test stub, not runtime behavior.
 
 Final review of the publication candidate, remaining R2 acceptance coverage,
 a new fixed-population 4190 comparison, the actual gate and published-head CI

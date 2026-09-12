@@ -219,11 +219,12 @@ void persistent_trail(double sign) {
   start(h,sign>0?"R2-T6-L":"R2-T6-S");h.tick(0,100);
   auto r=rd(2);r.capacity=no::PointBudget{1};r.trigger=no::Trail{2,100+sign*5};auto close=put(h,r);
   h.tick(1,100);CHECK(fills(h,close).empty());CHECK(events<no::ActivatedEvent>(h).empty());
-  h.tick(2,100+sign*6);CHECK(fills(h,close).empty());
+  h.tick(2,100-sign*3);CHECK(fills(h,close).empty());CHECK(events<no::ActivatedEvent>(h).empty());
+  h.tick(3,100+sign*6);CHECK(fills(h,close).empty());
   auto arm=events<no::ActivatedEvent>(h);CHECK(arm.size()==1);
   if(arm.size()==1){CHECK(arm[0].kind==no::ActivationKind::TrailArm);CHECK(arm[0].reached_price==100+sign*6);}
-  h.tick(3,100+sign*10);CHECK(fills(h,close).empty());h.tick(4,100+sign*8);CHECK(fills(h,close).size()==1);
-  h.tick(5,100+sign*20);auto f=fills(h,close);CHECK(f.size()==2);
+  h.tick(4,100+sign*10);CHECK(fills(h,close).empty());h.tick(5,100+sign*8);CHECK(fills(h,close).size()==1);
+  h.tick(6,100+sign*20);auto f=fills(h,close);CHECK(f.size()==2);
   if(f.size()==2){CHECK(f[0].raw_price==100+sign*8 && f[1].raw_price==100+sign*20);CHECK(!f[0].terminal && f[1].terminal);}
   auto activation=events<no::ActivatedEvent>(h);CHECK(activation.size()==2);
   if(activation.size()==2){const auto* active=std::get_if<no::TrailActive>(&activation[1].after);CHECK(active && active->best_at_trigger==100+sign*10);}
