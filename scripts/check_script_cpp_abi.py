@@ -326,8 +326,17 @@ std::optional<broker::OrderPriorityDecision> OrderPriority::select(
         v10_priority_symbols = compile_object("basev10_pending_priority_symbols", priority_symbols, v10_include)
         v12_native = compile_object("basev12_native", caller("engine_script_run_v12"), v12_include)
         v12_generated = compile_object("basev12_generated", caller("engine_script_run_v12", True), v12_include)
+        # V12 moved its virtual destructor out of line. Its positive linker
+        # control must define that key function so UBSan vptr instrumentation
+        # can resolve the class RTTI. This remains a never-executed symbol
+        # control compiled against the unchanged historical header.
+        v12_symbol_control = BASE_SYMBOL_CONTROL.replace("engine_script_run_v2", "engine_script_run_v12") + '''
+namespace pineforge { namespace engine_script_run_v12 {
+BacktestEngine::~BacktestEngine() = default;
+}}
+'''
         v12_symbols = compile_object("basev12_symbol_control",
-            BASE_SYMBOL_CONTROL.replace("engine_script_run_v2", "engine_script_run_v12"), v12_include)
+            v12_symbol_control, v12_include)
         v12_priority = compile_object("basev12_pending_priority", priority_caller, v12_include)
         v12_priority_symbols = compile_object("basev12_pending_priority_symbols", priority_symbols, v12_include)
 
