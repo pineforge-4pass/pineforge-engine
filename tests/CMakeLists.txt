@@ -4,6 +4,11 @@ set(TEST_SOURCES
     test_native_current_execution
     test_native_fx_curve
     test_native_order_terms_core
+    test_native_execution_terms
+    test_native_queued_reverse_to
+    test_native_precommit_view
+    test_native_fx_activation
+    test_native_fx_curve_c
     test_native_selected_requests
     test_native_selected_core
     test_native_scoped_close

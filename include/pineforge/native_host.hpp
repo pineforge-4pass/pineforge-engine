@@ -2,6 +2,7 @@
 
 #include <pineforge/engine.hpp>
 #include <pineforge/market_driver.hpp>
+#include <pineforge/native_fx_curve.hpp>
 #include <pineforge/native_order.hpp>
 #include <pineforge/native_run_spec.hpp>
 
@@ -252,8 +253,60 @@ struct NativeSetupResult {
     NativeRunSpecValidation validation{};
 };
 
+struct NativeFxCurveSetupResult {
+    NativeSetupStatus status = NativeSetupStatus::Failed;
+    NativeFxCurveValidation validation{};
+};
+
 enum class NativeCurrentPriceRule : std::uint8_t { AsPresented = 0, NearestTick = 1 };
 enum class NativeCurrentQuoteKind : std::uint8_t { MarketDecision = 0, ExecutionAnchor = 1 };
+
+// Read-only owning-value facts for one candidate. The host is already the
+// engine, so no engine handle or prepared execution token is exposed here.
+struct NativeExecutionTermsFacts {
+    native_order::RequestHandle target;
+    native_order::DefinitionRef definition;
+    native_order::MatchCursor cursor;
+    native_order::DriverEligibilityClass driver_class;
+    native_order::TriggerState trigger_state;
+    native_order::Remaining remaining;
+    native_order::Allowance allowance;
+    native_order::ExecutionScope scope;
+    double scope_exposure_units = 0.0;
+    NativePhysicalPosition position;
+    double opposite_book_units = 0.0;
+    bool is_buy = false;
+    native_order::NativeCandidatePriceKind price_kind =
+        native_order::NativeCandidatePriceKind::PointPrice;
+    double raw_price = 0.0;
+    std::optional<double> trigger_level;
+    NativeCurrentQuoteKind quote_kind = NativeCurrentQuoteKind::MarketDecision;
+    NativeCurrentPriceRule price_rule = NativeCurrentPriceRule::AsPresented;
+    double default_resolved_price = 0.0;
+    std::int64_t fx_effective_time_ms = 0;
+    double active_fx = 1.0;
+    double pending_group_deduction = 0.0;
+};
+
+// Ephemeral factual view of one prepared execution before any physical effect.
+struct NativePrecommitView {
+    native_order::RequestHandle target;
+    native_order::DefinitionRef definition;
+    native_order::MatchCursor cursor;
+    native_order::ExecutionPlan plan;
+    native_order::ExecutionScope scope;
+    double raw_price = 0.0;
+    double resolved_price = 0.0;
+    double inspected_closed_units = 0.0;
+    double inspected_opened_units = 0.0;
+    double inspected_current_ticket = 0.0;
+    execution::Status settlement_readiness = execution::Status::Applied;
+    execution::AccountEffectProjection account;
+    std::vector<double> closed_row_pnl;
+    bool current = false;
+};
+
+enum class NativePrecommitVerdict : std::uint8_t { Proceed = 0, Refuse = 1 };
 
 struct NativeCurrentPointView {
     NativeDecisionContext decision;
@@ -281,11 +334,13 @@ struct NativeCurrentExecutionPreview {
     std::optional<execution::Status> settlement_readiness;
     execution::AccountEffectProjection account;
     std::vector<double> closed_row_pnl;
+    std::optional<native_order::MatchRejectReason> terms_rejection;
+    std::optional<native_order::CancelReason> terms_cancellation;
 };
 
 using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
     native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,
-    native_order::MatchRejectedEvent>;
+    native_order::MatchRejectedEvent, native_order::CancelledEvent>;
 
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
@@ -310,11 +365,22 @@ public:
     virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
                                    const NativeDecisionContext&) {}
 
+    virtual native_order::ExecutionTerms resolve_execution_terms(
+            const NativeExecutionTermsFacts& facts) const {
+        return {facts.default_resolved_price, std::nullopt,
+                native_order::OpeningShape::Transact};
+    }
+    virtual NativePrecommitVerdict validate_execution_precommit(
+            const NativePrecommitView&) const {
+        return NativePrecommitVerdict::Proceed;
+    }
+
     std::optional<NativeCurrentPointView> current_execution_point() const;
     NativeCurrentExecutionPreview inspect_current_execution(const NativeCurrentExecution&) const;
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 
     NativeSetupResult configure_native(const NativeRunSpec& spec);
+    NativeFxCurveSetupResult configure_native_fx_curve(const NativeFxCurve& curve);
     NativeStateView native_state() const;
 
     native_order::SubmitResult submit(const native_order::Request& request);

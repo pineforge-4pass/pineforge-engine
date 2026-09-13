@@ -759,6 +759,8 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
     if (const auto* spec = spec_ptr()) hash_spec(f, *spec);
+    f.b(staged_fx_curve_.has_value());
+    if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
     hash_tz_identity(f, tz_identity_);
     f.s(requests_.identity().session_key);
     f.u(requests_.identity().run_number);
@@ -938,9 +940,39 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     script_tf_ = std::move(*parsed_script);
     calendar_ = std::move(*parsed_session);
     pairing_ = native_calendar::compatibility(input_tf_, script_tf_);
+    staged_fx_curve_.reset();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
     engine.last_error_.clear();
+    return result;
+}
+
+NativeFxCurveSetupResult NativeExecutionConsumer::configure_fx_curve(
+        const NativeFxCurve& curve) {
+    NativeFxCurveSetupResult result;
+    if (!std::holds_alternative<NativeReady>(state_)) {
+        result.validation = {NativeFxCurveError::WrongPhase, 0};
+        return result;
+    }
+
+    result.validation = validate_native_fx_curve(curve);
+    if (result.validation.error != NativeFxCurveError::None) return result;
+
+    if (curve.effective_from_ms.empty()) {
+        staged_fx_curve_.reset();
+        result.status = NativeSetupStatus::Applied;
+        return result;
+    }
+
+    try {
+        std::optional<NativeFxCurve> replacement;
+        replacement.emplace(curve);
+        staged_fx_curve_.swap(replacement);
+    } catch (...) {
+        result.validation = {NativeFxCurveError::AllocationFailure, 0};
+        return result;
+    }
+    result.status = NativeSetupStatus::Applied;
     return result;
 }
 
@@ -3418,6 +3450,11 @@ void NativeStrategyHost::on_bar(const Bar&) {
 
 NativeSetupResult NativeStrategyHost::configure_native(const NativeRunSpec& spec) {
     return as_native_consumer(execution_consumer()).configure(*this, spec);
+}
+
+NativeFxCurveSetupResult NativeStrategyHost::configure_native_fx_curve(
+        const NativeFxCurve& curve) {
+    return as_native_consumer(execution_consumer()).configure_fx_curve(curve);
 }
 
 NativeStateView NativeStrategyHost::native_state() const {

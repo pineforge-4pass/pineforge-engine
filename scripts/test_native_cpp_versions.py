@@ -28,8 +28,11 @@ class NativeVersions(unittest.TestCase):
             check_texts(changed)
 
     def test_current_command_and_preview_have_one_authority(self):
-        self.reject(FILES[8], 'native_order::RequestHandle target;',
-                    'native_order::RequestHandle target; std::optional<execution::SelectedOpeningSet> selected_close;')
+        self.reject(
+            FILES[8],
+            'struct NativeCurrentExecution {\n    native_order::RequestHandle target;',
+            'struct NativeCurrentExecution {\n    native_order::RequestHandle target; '
+            'std::optional<execution::SelectedOpeningSet> selected_close;')
         self.reject(FILES[8], 'std::optional<execution::Status> settlement_readiness;', '')
         self.reject(FILES[6], 'CurrentExecution = 8', 'CurrentExecution = 7')
         self.reject(FILES[6], 'Calculation = 7', 'Calculation = 9')
@@ -237,12 +240,12 @@ class NativeVersions(unittest.TestCase):
             'kNativeConsumerSemanticVersion = "native-consumer/v6"',
             'kNativeConsumerSemanticVersion = "native-consumer/v3"')
 
-    def test_phase0_native_abi_templates_are_staged(self):
+    def test_phase1c_native_abi_templates_are_active(self):
         from check_native_cpp_abi import (
             CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER,
             CURRENT_TERMS_SURFACE_READY, control_applicability,
         )
-        self.assertFalse(CURRENT_TERMS_SURFACE_READY)
+        self.assertTrue(CURRENT_TERMS_SURFACE_READY)
         self.assertIn('R4B_CURRENT_RESULT_ALTERNATIVES', CURRENT_EXECUTION_V15_CALLER)
         self.assertIn('configure_native_fx_curve', CURRENT_EXECUTION_V15_CALLER)
         self.assertIn('validate_native_fx_curve', NATIVE_FX_CURVE_CALLER)
@@ -251,7 +254,7 @@ class NativeVersions(unittest.TestCase):
         for name in ('v15_current_execution_surface_compile',
                      'v15_current_result_missing_cancelled_compile_reject',
                      'v15_native_fx_curve_surface_compile'):
-            self.assertEqual(controls[name]['status'], 'pending_surface')
+            self.assertEqual(controls[name]['status'], 'required')
 
     def test_order_namespace_is_derived_not_literal(self):
         from check_native_cpp_abi import current_order_namespace

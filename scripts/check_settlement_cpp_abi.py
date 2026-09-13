@@ -87,7 +87,7 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
 # never permits unpinned bytes or another epoch transition.
 EXEMPTED_HEADER_SHA256 = {
     'native_order.hpp': '98dab6052dfe4dea4e84e7426d852294e793ab914c1029b219a0032408132d15',
-    'native_host.hpp': '2ff544de31a1d7460556efa553f34b2936374c7a26b5ec87366113b6c4a2ebbc',
+    'native_host.hpp': '2e281eb7fd92675dc21f91d4e727bb4a1c3c63cab51d08e49bfdebed19bf2f07',
     'market_driver.hpp': '30b99e7a67ace08fc2e38158dc5eb697473a54e9149836d2c896a3ca189be39b',
     'execution_consumer.hpp': 'c32489bf16b276e216a57732a095385bef37bbb1f8dc83ac4fc61969ea26a0ac',
 }

@@ -86,7 +86,7 @@ class AbiToolingTests(unittest.TestCase):
                         self.assertEqual(actual,expected,(caller,provider,domain))
 
     def test_pending_surface_rows_are_complete_and_current_only(self):
-        self.assertFalse(checker.CURRENT_TERMS_SURFACE_READY)
+        self.assertTrue(checker.CURRENT_TERMS_SURFACE_READY)
         rows = pending_surface_rows('v15',('v13','v14','v15'),False)
         self.assertEqual({row['name'] for row in rows}, {
             'v15-'+caller+'-'+provider for caller in ('current-execution-terms','native-fx-curve')

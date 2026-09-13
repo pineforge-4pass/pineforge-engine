@@ -287,7 +287,9 @@ def check_texts(files):
     compact_preview = re.sub(r'\s+', '', preview)
     expected_preview = ('std::optional<NativeCurrentRefusal>refusal;'
         'std::optional<execution::Status>settlement_readiness;'
-        'execution::AccountEffectProjectionaccount;std::vector<double>closed_row_pnl;')
+        'execution::AccountEffectProjectionaccount;std::vector<double>closed_row_pnl;'
+        'std::optional<native_order::MatchRejectReason>terms_rejection;'
+        'std::optional<native_order::CancelReason>terms_cancellation;')
     if compact_preview != expected_preview:
         raise ValueError('preview must preserve independent readiness immediately after refusal')
     for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution', 'execute_current'):

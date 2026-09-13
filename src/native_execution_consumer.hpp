@@ -49,6 +49,7 @@ public:
     bool stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) override;
 
     NativeSetupResult configure(BacktestEngine& engine, const NativeRunSpec& spec);
+    NativeFxCurveSetupResult configure_fx_curve(const NativeFxCurve& curve);
     NativeStateView view() const;
     native_order::SubmitResult submit(BacktestEngine& engine, const native_order::Request& request);
     native_order::ReplaceResult replace(BacktestEngine& engine,
@@ -264,6 +265,7 @@ private:
     native_calendar::Timeframe script_tf_{};
     native_calendar::TimeframeCompatibility pairing_{};
     NativeRunSpec applied_{};
+    std::optional<NativeFxCurve> staged_fx_curve_;
     bool in_callback_ = false;
     bool consuming_request_ = false;
     bool draining_notifications_ = false;
