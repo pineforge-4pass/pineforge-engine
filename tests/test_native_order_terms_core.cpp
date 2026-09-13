@@ -536,7 +536,12 @@ void plan_keyed_accounting_and_shape_validation() {
     CHECK(applied.filled_working > std::get<no::RemainingProjectionUnits>(applied.remaining_before).q);
     CHECK(applied.terminal_reason == no::AppliedTerminalReason::WorkingUnitsSatisfied);
     REQUIRE(std::holds_alternative<no::AllowanceUnits>(applied.allowance_after));
-    CHECK(std::get<no::AllowanceUnits>(applied.allowance_after).left == 0.0);
+    const auto& allowance_after = std::get<no::AllowanceUnits>(applied.allowance_after);
+    CHECK(allowance_after.point_ordinal == reverse_context.cursor.point.ordinal);
+    CHECK(allowance_after.initial == 1.0);
+    CHECK(allowance_after.left == 0.0);
+    REQUIRE(std::holds_alternative<no::RemainingProjectionUnits>(applied.remaining_after));
+    CHECK(std::get<no::RemainingProjectionUnits>(applied.remaining_after).q == 0.0);
 
     Fixture reverse_partial("reverse-partial");
     const auto partial = reverse_partial.submit(no::Request{no::ReverseTo{1.0}, "reverse", ""});
@@ -558,6 +563,8 @@ void plan_keyed_accounting_and_shape_validation() {
                                                       nonflat_book(2, no::Side::Short));
     CHECK(tiny_applied.filled_working == 1e16);
     CHECK(bits(tiny_applied.opened_units) == bits(-0.1));
+    REQUIRE(std::holds_alternative<no::RemainingProjectionUnits>(tiny_applied.remaining_after));
+    CHECK(std::get<no::RemainingProjectionUnits>(tiny_applied.remaining_after).q == 0.0);
 
     Fixture transact_reject("transact-overflow");
     const auto transaction = transact_reject.submit(no::Request{no::Transact{0.1}, "tx", ""});
