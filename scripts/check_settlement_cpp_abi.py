@@ -86,8 +86,8 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
 # with the reviewed Phase-1b order and Phase-1c host landings. An exemption
 # never permits unpinned bytes or another epoch transition.
 EXEMPTED_HEADER_SHA256 = {
-    'native_order.hpp': '98dab6052dfe4dea4e84e7426d852294e793ab914c1029b219a0032408132d15',
-    'native_host.hpp': '2e281eb7fd92675dc21f91d4e727bb4a1c3c63cab51d08e49bfdebed19bf2f07',
+    'native_order.hpp': '4333150cf15ec61b7ce723872f573ddd37c5534cfbea35e8ad1e8f2b0b5c3e15',
+    'native_host.hpp': '4837669dd4f7f47918f362612432d019976832e875bf6ecfd22bc3f987b14cb1',
     'market_driver.hpp': '30b99e7a67ace08fc2e38158dc5eb697473a54e9149836d2c896a3ca189be39b',
     'execution_consumer.hpp': 'c32489bf16b276e216a57732a095385bef37bbb1f8dc83ac4fc61969ea26a0ac',
 }
