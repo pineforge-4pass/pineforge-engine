@@ -164,6 +164,34 @@ void a_f3_fee_and_a_f4_batch_rate_facts() {
     CHECK(host.rows().front().commission > 0.0);
 }
 
+void a_f7_candidate_timestamp_sink_pin() {
+    TermsHost rejected;
+    rejected.resolver = [](const NativeExecutionTermsFacts&) {
+        return no::ExecutionTerms{0.0, std::nullopt, no::OpeningShape::Transact};
+    };
+    rejected.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1)); };
+    run(rejected, spec("fx-sink-reject"), {100});
+    completed(rejected);
+    CHECK(rejected.engine_timestamp() == T);
+    const auto event = last_event<no::MatchRejectedEvent>(rejected);
+    REQUIRE(event);
+    CHECK(event->cursor.point.effective_time_ms == rejected.engine_timestamp());
+
+    TermsHost no_effect;
+    no_effect.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price, 0.0,
+                                   no::OpeningShape::Transact};
+    };
+    no_effect.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "sink-noeffect"));
+    };
+    run(no_effect, spec("fx-sink-noeffect"), {100});
+    completed(no_effect);
+    const auto terminal = last_event<no::NoEffectEvent>(no_effect);
+    REQUIRE(terminal);
+    CHECK(no_effect.engine_timestamp() == terminal->cursor.point.effective_time_ms);
+}
+
 }  // namespace
 
 int main() {
@@ -174,6 +202,7 @@ int main() {
     test("preview projection barrier", preview_projection_barrier_is_a_typed_refusal);
     test("A-F2 curve boundary and A-F6 reset clock", a_f2_curve_boundaries_hash_and_a_f6_reset_clock);
     test("A-F3 fee and A-F4 batch facts", a_f3_fee_and_a_f4_batch_rate_facts);
+    test("A-F7 candidate timestamp sink", a_f7_candidate_timestamp_sink_pin);
     std::printf("R4-B FX: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

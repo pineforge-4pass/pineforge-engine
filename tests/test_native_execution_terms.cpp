@@ -889,6 +889,57 @@ void current_preview_and_execute_see_same_terms_facts() {
     CHECK(reached);
 }
 
+void a_t9_all_current_fact_shapes_are_bitwise_identical() {
+    TermsHost host;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)
+            && std::holds_alternative<no::RemainingDeferred>(facts.remaining)) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool reached = false;
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto compare = [&](const no::RequestHandle& target, NativeCurrentPriceRule rule) {
+            h.resolved_facts.clear();
+            const auto preview = h.inspect_current_execution(command(target, rule));
+            REQUIRE(!preview.refusal);
+            const auto result = h.execute_current(command(target, rule));
+            REQUIRE(!std::holds_alternative<NativeCurrentRefusal>(result));
+            REQUIRE(h.resolved_facts.size() == 2);
+            const auto& a = h.resolved_facts[0];
+            const auto& b = h.resolved_facts[1];
+            CHECK(a.definition == b.definition && a.target == b.target);
+            CHECK(a.cursor.point.ordinal == b.cursor.point.ordinal);
+            CHECK(bits(a.cursor.t) == bits(b.cursor.t));
+            CHECK(a.remaining.index() == b.remaining.index());
+            CHECK(a.allowance.index() == b.allowance.index());
+            CHECK(a.scope.index() == b.scope.index());
+            CHECK(a.price_kind == b.price_kind && a.quote_kind == b.quote_kind
+                  && a.price_rule == b.price_rule);
+            CHECK(bits(a.raw_price) == bits(b.raw_price));
+            CHECK(bits(a.default_resolved_price) == bits(b.default_resolved_price));
+        };
+
+        h.seed(3.0, 100, 171);
+        compare(put(h, reduce(1, "facts-reduce")), NativeCurrentPriceRule::AsPresented);
+        compare(put(h, host_close("facts-host-close")), NativeCurrentPriceRule::AsPresented);
+        compare(put(h, host_open(no::Side::Long, "facts-host-open")),
+                NativeCurrentPriceRule::AsPresented);
+        compare(put(h, flat("facts-flatten")), NativeCurrentPriceRule::AsPresented);
+        compare(put(h, tx(1, "facts-nearest")), NativeCurrentPriceRule::NearestTick);
+        reached = true;
+    };
+    auto configuration = spec("terms-fact-shapes");
+    configuration.price_tick = 0.1;
+    run(host, configuration, {100.04});
+    completed(host);
+    CHECK(reached);
+}
+
 void rounded_crossing_collision_keeps_request_origin() {
     auto execute = [](TermsHost& host, const char* key) {
         host.resolver = [](const NativeExecutionTermsFacts& facts) {
@@ -1032,6 +1083,7 @@ int main() {
     test("A-T15 price boundary and A-T16 flat preview", a_t15_price_boundary_and_a_t16_flat_preview);
     test("A-T14 preview outcome table", a_t14_preview_outcome_table_without_mutation);
     test("current preview/execute terms facts", current_preview_and_execute_see_same_terms_facts);
+    test("A-T9 all current fact shapes", a_t9_all_current_fact_shapes_are_bitwise_identical);
     test("rounded crossing provenance collision", rounded_crossing_collision_keeps_request_origin);
     test("A-T6b/c/e sibling provenance controls", a_t6b_c_t6e_sibling_control_and_gap_provenance);
     test("A-T6d newly eligible point provenance", a_t6d_newly_eligible_wait_child_is_point_price);
