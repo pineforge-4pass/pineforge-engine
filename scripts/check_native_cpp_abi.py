@@ -117,11 +117,11 @@ int main() {
 HOST_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 static_assert(std::is_same_v<pineforge::NativeStrategyHost,
-    pineforge::engine_script_run_v13::NativeStrategyHost>);
+    pineforge::engine_script_run_v14::NativeStrategyHost>);
 static_assert(std::is_same_v<pineforge::NativeStateView,
-    pineforge::engine_script_run_v13::NativeStateView>);
+    pineforge::engine_script_run_v14::NativeStateView>);
 static_assert(std::is_same_v<pineforge::NativeFailure,
-    pineforge::engine_script_run_v13::NativeFailure>);
+    pineforge::engine_script_run_v14::NativeFailure>);
 static_assert(std::is_trivially_copyable_v<pineforge::NativeFailure>);
 static_assert(std::is_trivially_copyable_v<pineforge::NativeFailureContext>);
 int main(int argc, char** argv) {
@@ -134,12 +134,33 @@ int main(int argc, char** argv) {
 HOST_EVENTS_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 static_assert(std::is_same_v<pineforge::NativeStrategyHost,
-    pineforge::engine_script_run_v13::NativeStrategyHost>);
+    pineforge::engine_script_run_v14::NativeStrategyHost>);
 int main(int argc, char** argv) {
     auto* host = reinterpret_cast<pineforge::NativeStrategyHost*>(argv);
     auto events = host->native_events(0);
     return int(events.size());
 }
+'''
+CURRENT_EXECUTION_CALLER = '''#include <pineforge/native_host.hpp>
+#include <type_traits>
+using H = pineforge::engine_script_run_v14::NativeStrategyHost;
+using C = pineforge::engine_script_run_v14::NativeCurrentExecution;
+using P = pineforge::engine_script_run_v14::NativeCurrentExecutionPreview;
+static_assert(std::is_same_v<decltype(C::target), pineforge::native_order::RequestHandle>);
+static_assert(std::is_same_v<decltype(P::settlement_readiness), std::optional<pineforge::execution::Status>>);
+int main(int argc, char** argv) {
+    auto* host = reinterpret_cast<H*>(argv);
+    auto point = host->current_execution_point();
+    auto preview = host->inspect_current_execution(C{});
+    auto result = host->execute_current(C{});
+    return int(point.has_value() + preview.refusal.has_value() + result.index());
+}
+'''
+HOST_CONSTRUCTOR_CALLER = '''#include <pineforge/native_host.hpp>
+struct Host final : pineforge::NativeStrategyHost {
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {}
+};
+int main() { Host host; return int(host.native_state().kind); }
 '''
 OLD_HOST_EVENTS_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
@@ -355,15 +376,15 @@ def main() -> int:
         ("pineforge::native_order::WorkingRequestCore::submit(",
          "pineforge::native_order::native_order_v1::WorkingRequestCore::submit("),
         ("pineforge::native_order::native_order_v1::WorkingRequestCore::submit(",
-         "pineforge::native_order::native_order_v2::WorkingRequestCore::submit("),
+         "pineforge::native_order::native_order_v3::WorkingRequestCore::submit("),
         ("pineforge::validate_native_run_spec(",
          "pineforge::native_run_spec_v1::validate_native_run_spec("),
         ("pineforge::native_bar_structurally_valid(",
-         "pineforge::native_driver_v3::native_bar_structurally_valid("),
+         "pineforge::native_driver_v4::native_bar_structurally_valid("),
         ("abi_accept_coordinate(pineforge::NativeCoordinate",
-         "abi_accept_coordinate(pineforge::native_driver_v3::NativeCoordinate"),
+         "abi_accept_coordinate(pineforge::native_driver_v4::NativeCoordinate"),
         ("pineforge::engine_script_run_v12::NativeStrategyHost::native_events(",
-         "pineforge::engine_script_run_v13::NativeStrategyHost::native_events("),
+         "pineforge::engine_script_run_v14::NativeStrategyHost::native_events("),
     )
     for old, new in controls:
         if old in new:
@@ -380,11 +401,12 @@ def main() -> int:
         "library_mtime": lib_mtime,
         "compiler": (compiler_id.stdout or compiler_id.stderr).splitlines()[0],
         "current_namespaces": {
-            "native_order": "pineforge::native_order::native_order_v1",
+            "native_order_identity": "pineforge::native_order::native_order_v1",
+            "native_order": "pineforge::native_order::native_order_v3",
             "native_calendar": "pineforge::native_calendar::native_calendar_v2",
             "native_run_spec": "pineforge::native_run_spec_v1",
-            "native_driver": "pineforge::native_driver_v3",
-            "native_host": "pineforge::engine_script_run_v13",
+            "native_driver": "pineforge::native_driver_v4",
+            "native_host": "pineforge::engine_script_run_v14",
         },
         "executable_runs": 0,
         "compiles": [],
@@ -562,6 +584,7 @@ def main() -> int:
             "current_coordinate_provider", COORDINATE_PROVIDER, include)
         current_host = compile_object("current_host_caller", HOST_CALLER, include)
         current_host_events = compile_object("current_host_events_caller", HOST_EVENTS_CALLER, include)
+        current_execution = compile_object("current_execution_caller", CURRENT_EXECUTION_CALLER, include)
 
         old_order_include = unpacked["order-1acaf33"] / "include"
         old_calendar_include = unpacked["calendar-draft-a8e34c"] / "include"
@@ -659,6 +682,7 @@ def main() -> int:
         link("current_preflight_to_current_library", [current_preflight], library)
         link("current_host_to_current_library", [current_host], library)
         link("current_host_events_to_current_library", [current_host_events], library)
+        link("current_execution_to_current_library", [current_execution], library)
         link("current_coordinate_to_current_provider",
              [current_coordinate], current_coordinate_provider)
 
@@ -691,9 +715,9 @@ def main() -> int:
               "abi_accept_decision(pineforge::NativeDecisionContext"])
 
         order_text = (source_root / "include/pineforge/native_order.hpp").read_text()
-        if "inline namespace native_order_v2" in order_text:
+        if "inline namespace native_order_v3" in order_text:
             current_order_submit = (
-                "pineforge::native_order::native_order_v2::WorkingRequestCore::submit(")
+                "pineforge::native_order::native_order_v3::WorkingRequestCore::submit(")
             link("old_order_v1_to_current_library", [old_order_v1], library,
                  "pineforge::native_order::native_order_v1::WorkingRequestCore::submit(")
             link("current_order_to_old_v1_object", [current_order], old_order_v1_obj,
@@ -711,12 +735,12 @@ def main() -> int:
         link("current_spec_to_old_symbol_control", [current_spec], old_spec_symbols,
              "pineforge::native_run_spec_v1::validate_native_run_spec(")
         link("current_host_events_to_old_symbols", [current_host_events], old_host_events_symbols,
-             "pineforge::engine_script_run_v13::NativeStrategyHost::native_events(")
+             "pineforge::engine_script_run_v14::NativeStrategyHost::native_events(")
         link("current_bar_to_old_object", [current_bar], old_bar_obj,
-             "pineforge::native_driver_v3::native_bar_structurally_valid(")
+             "pineforge::native_driver_v4::native_bar_structurally_valid(")
         link("current_coordinate_to_old_provider", [current_coordinate], old_coordinate_provider,
-             ["abi_accept_coordinate(pineforge::native_driver_v3::NativeCoordinate",
-              "abi_accept_decision(pineforge::native_driver_v3::NativeDecisionContext"])
+             ["abi_accept_coordinate(pineforge::native_driver_v4::NativeCoordinate",
+              "abi_accept_decision(pineforge::native_driver_v4::NativeDecisionContext"])
 
     if args.receipt:
         args.receipt.write_text(json.dumps(receipt, indent=2) + "\n")

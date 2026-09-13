@@ -104,18 +104,18 @@ def check_texts(files):
     identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
     require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
-    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v2")
+    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v3")
     require(order, ("WorkingRequestCore", "Request", "SubmitResult",
                     "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
                     "ExecutionAppliedEvent"),
-            "native_order_v2", r'\b(?:class|struct)\s+NAME\s*\{')
+            "native_order_v3", r'\b(?:class|struct)\s+NAME\s*\{')
     if "CommandEvent" not in re.findall(ALIAS_DEF, order):
-        raise ValueError("CommandEvent must belong to native_order_v2")
+        raise ValueError("CommandEvent must belong to native_order_v3")
     if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
-        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v2")
-    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v2")
+        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v3")
+    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v3")
     require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live"),
-            "native_order_v2", r'\bNAME\s*\(')
+            "native_order_v3", r'\bNAME\s*\(')
 
     calendar = versioned(files[FILES[2]], "pineforge::native_calendar", "native_calendar_v2")
     require(calendar, ("Timeframe", "SessionCalendar", "NativeInterval",
@@ -151,57 +151,104 @@ def check_texts(files):
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
         raise ValueError("market_driver.hpp must forward-declare NativeRunSpec "
-                         "in native_run_spec_v1 outside native_driver_v3")
+                         "in native_run_spec_v1 outside native_driver_v4")
     driver_clean = clean(driver_text)
     driver_owner = body(driver_clean, r'namespace\s+pineforge\s*\{', "pineforge")
-    driver = body(driver_owner, r'inline\s+namespace\s+native_driver_v3\s*\{',
-                  "native_driver_v3")
+    driver = body(driver_owner, r'inline\s+namespace\s+native_driver_v4\s*\{',
+                  "native_driver_v4")
     if DRIVER_FORWARD in driver or "native_run_spec_v1" in driver:
-        raise ValueError("NativeRunSpec forward declaration must stay outside native_driver_v3")
+        raise ValueError("NativeRunSpec forward declaration must stay outside native_driver_v4")
     if re.search(r'\bstruct\s+NativeRunSpec\s*\{', driver_clean):
-        raise ValueError("NativeRunSpec definition does not belong to native_driver_v3")
+        raise ValueError("NativeRunSpec definition does not belong to native_driver_v4")
     # Compare ownership as if the allowed forward declaration were absent.
     driver_without_forward = driver_clean.replace(DRIVER_FORWARD, "", 1)
-    versioned(driver_without_forward, "pineforge", "native_driver_v3")
+    versioned(driver_without_forward, "pineforge", "native_driver_v4")
     require(driver, ("NativeCoordinate", "NativeDriverPoint", "NativeDecisionContext",
                      "NativeInputPreflightResult", "INativeDriverSink"),
-            "native_driver_v3", r'\b(?:class|struct)\s+NAME\s*\{')
+            "native_driver_v4", r'\b(?:class|struct)\s+NAME\s*\{')
     require_namespace_functions(
         driver, ("native_bar_structurally_valid", "preflight_native_inputs"),
-        "native_driver_v3")
-    if 'kNativeConsumerSemanticVersion = "native-consumer/v4"' not in driver_text:
-        raise ValueError("consumer semantic marker must remain native-consumer/v4")
-    driver_src = versioned(files[FILES[7]], "pineforge", "native_driver_v3")
+        "native_driver_v4")
+    if 'kNativeConsumerSemanticVersion = "native-consumer/v5"' not in driver_text:
+        raise ValueError("consumer semantic marker must remain native-consumer/v5")
+    provenance = body(driver, r'enum\s+class\s+NativePriceProvenance\s*:[^{]+\{', 'price provenance')
+    expected_provenance = [('Confirmed', '0'), ('ObservedPrint', '1'), ('ModeledOHLCOpen', '2'),
+        ('ModeledOHLCClose', '3'), ('CarriedOpen', '4'), ('AfterCalculationClose', '5'),
+        ('PartialFinalized', '6'), ('Calculation', '7'), ('CurrentExecution', '8')]
+    if re.findall(r'(\w+)\s*=\s*(\d+)', provenance) != expected_provenance:
+        raise ValueError('driver provenance must preserve 0..7 and append only CurrentExecution=8')
+    if 'kNativeDriverSemanticVersion = "native-driver/v4"' not in driver_text:
+        raise ValueError('driver semantic marker must be native-driver/v4')
+    driver_src = versioned(files[FILES[7]], "pineforge", "native_driver_v4")
     require_namespace_functions(
         driver_src, ("native_bar_structurally_valid", "preflight_native_inputs"),
-        "native_driver_v3")
+        "native_driver_v4")
 
-    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v13")
+    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v14")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
                    "NativeFailure", "NativeFailureContext", "NativeInRunCause",
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
-                   "NativeSetupResult", "NativePhysicalPosition", "NativeAccountObservation"),
-            "engine_script_run_v13",
+                   "NativeSetupResult", "NativePhysicalPosition", "NativeAccountObservation",
+                   "NativeCurrentPriceRule", "NativeCurrentQuoteKind", "NativeCurrentPointView",
+                   "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview"),
+            "engine_script_run_v14",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    current_command = body(host, r'struct\s+NativeCurrentExecution\s*\{', 'current command')
+    if re.sub(r'\s+', '', current_command) != 'native_order::RequestHandletarget;NativeCurrentPriceRuleprice_rule=NativeCurrentPriceRule::AsPresented;':
+        raise ValueError('current command has exactly target and price_rule, no competing selected authority')
+    preview = body(host, r'struct\s+NativeCurrentExecutionPreview\s*\{', 'current preview')
+    compact_preview = re.sub(r'\s+', '', preview)
+    expected_preview = ('std::optional<NativeCurrentRefusal>refusal;'
+        'std::optional<execution::Status>settlement_readiness;'
+        'execution::AccountEffectProjectionaccount;std::vector<double>closed_row_pnl;')
+    if compact_preview != expected_preview:
+        raise ValueError('preview must preserve independent readiness immediately after refusal')
+    for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution', 'execute_current'):
+        if name not in host:
+            raise ValueError('missing current host contract: ' + name)
     if "native_failure_context_in_run" not in host:
-        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v13")
+        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v14")
     if "native_failed_run_identity" not in host:
-        raise ValueError("native_failed_run_identity must belong to engine_script_run_v13")
+        raise ValueError("native_failed_run_identity must belong to engine_script_run_v14")
     if not re.search(r'\bSubmitResult\s+submit\s*\(\s*const\s+native_order::Request\s*&', host):
-        raise ValueError("general submit must belong to engine_script_run_v13")
+        raise ValueError("general submit must belong to engine_script_run_v14")
     if not re.search(r'\bReplaceResult\s+replace\s*\(\s*const\s+native_order::RequestHandle\s*&',
                      host):
-        raise ValueError("general replace must belong to engine_script_run_v13")
+        raise ValueError("general replace must belong to engine_script_run_v14")
     if "submit_market" not in host or "replace_market" not in host:
-        raise ValueError("market-only submit/replace must remain in engine_script_run_v13")
-    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v13")
+        raise ValueError("market-only submit/replace must remain in engine_script_run_v14")
+    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v14")
     require(consumer, ("NativeExecutionConsumer",),
-            "engine_script_run_v13", r'\bclass\s+NAME\s*')
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v13")
+            "engine_script_run_v14", r'\bclass\s+NAME\s*')
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v14")
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
              "NativeStrategyHost::native_events"),
-            "engine_script_run_v13", r'\bNAME\s*\(')
+            "engine_script_run_v14", r'\bNAME\s*\(')
+
+
+    # These are continuation owners, not redundant physical-book snapshots.
+    hash_requirements = {
+        'hash_owner': ('native_order::BindOpenings', 'bind->cycle', 'bind->openings.size()', 'hash_handle(f, handle)'),
+        'hash_authority': ('native_order::OpeningsClose', 'openings->cycle', 'openings->side',
+                           'openings->openings.size()', 'openings->enrollment.index()', 'hash_handle(f, handle)'),
+        'hash_scope': ('native_order::SelectedExposure', 'selected->cycle',
+                       'selected->incarnations.size()', 'f.u(incarnation)'),
+        'hash_current_point': ('point.decision.coordinate', 'point.decision.decision_floor_ms',
+                              'point.decision.input_interval', 'point.decision.script_interval',
+                              'point.price', 'point.quote_kind', 'point.quote_origin_ordinal'),
+    }
+    for function, facts in hash_requirements.items():
+        fold = body(consumer_src, r'void\s+' + function + r'\s*\([^)]*\)\s*noexcept\s*\{', function)
+        for fact in facts:
+            if fact not in fold:
+                raise ValueError(function + ' omits native continuation fact: ' + fact)
+    continuation = body(consumer_src, r'uint64_t\s+NativeExecutionConsumer::continuation_hash\(\)\s*const\s*noexcept\s*\{', 'native continuation')
+    for fact in ('current_frame_.has_value()', 'current_frame_->point', 'current_frame_->acceptance_cutoff',
+                 'applied_notifications_.size() - notification_head_', 'notification.history_index',
+                 'notification.ordinal', 'notification.point', 'consuming_request_', 'draining_notifications_'):
+        if fact not in continuation:
+            raise ValueError('native continuation omits current frame/queue fact: ' + fact)
 
 
 def load(root=ROOT):
@@ -214,5 +261,5 @@ def check(root=ROOT):
 
 if __name__ == "__main__":
     check()
-    print("native_order identity v1 / values v2, native_calendar_v2, native_run_spec_v1, "
-          "native_driver_v3 and host engine_script_run_v13 ownership verified")
+    print("native_order identity v1 / values v3, native_calendar_v2, native_run_spec_v1, "
+          "native_driver_v4 and host engine_script_run_v14 ownership verified")

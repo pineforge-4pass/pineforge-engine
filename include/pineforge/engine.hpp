@@ -432,7 +432,7 @@ enum class ShortSeedCollisionRole : uint8_t {
 // PendingOrder crosses out-of-line helper boundaries independently of the
 // engine class, so its changed layout must carry the same internal epoch.
 using ExitLegLifecycle = exit_legs::Lifecycle;
-inline namespace engine_script_run_v13 {
+inline namespace engine_script_run_v14 {
 struct PendingOrder {
     std::string id;
     std::string from_entry;    // for exit orders
@@ -960,7 +960,7 @@ inline bool placement_has_opposite_market_predecessor(
     return false;
 }
 
- } // inline namespace engine_script_run_v13 (PendingOrder)
+ } // inline namespace engine_script_run_v14 (PendingOrder)
 
 // default_qty_type constants (matches TradingView)
 enum class QtyType { FIXED = 0, PERCENT_OF_EQUITY = 1, CASH = 2 };
@@ -1018,7 +1018,7 @@ struct StrategyOverrides {
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v13 {
+inline namespace engine_script_run_v14 {
 class BacktestEngine {
 protected:
     friend class LegacyCompatibilityConsumer;
@@ -3912,6 +3912,13 @@ private:
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected);
+    // Runtime-private preview of the exact existing pre-source prefix. The
+    // caller pins the quoted ticket before entering this method.
+    execution::Status preview_native_settlement_commit(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        execution::CloseScope scope, const execution::SelectedOpeningSet* selected,
+        execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const;
     struct NativeSettlementStage;
     struct NativeSettlementRows;
     execution::Status validate_native_settlement_book(double& held) const;
@@ -5371,5 +5378,5 @@ public:
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 };
 
-} // inline namespace engine_script_run_v13
+} // inline namespace engine_script_run_v14
 } // namespace pineforge

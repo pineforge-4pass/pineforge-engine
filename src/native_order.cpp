@@ -9,7 +9,7 @@
 #include <variant>
 
 namespace pineforge::native_order {
-inline namespace native_order_v2 {
+inline namespace native_order_v3 {
 namespace {
 
 constexpr std::uint8_t kLivePush = 1;
@@ -151,6 +151,94 @@ bool opening_close_alive(const TargetObservation& observation, const OpeningClos
     return position_matches(observation.current_position, close.cycle, close.side);
 }
 
+bool handle_less(const RequestHandle& a, const RequestHandle& b) noexcept {
+    // Accepted cohorts are run-homogeneous.
+    return a.incarnation < b.incarnation;
+}
+
+void canonicalize_owner(Request& request) {
+    if (auto* bind = std::get_if<BindOpenings>(&request.owner)) {
+        std::sort(bind->openings.begin(), bind->openings.end(), handle_less);
+    }
+}
+
+bool valid_position(const PositionIdentity& position) noexcept {
+    if (std::holds_alternative<PositionFlat>(position)) return true;
+    const auto* nonflat = std::get_if<PositionNonflat>(&position);
+    return nonflat && nonflat->cycle > 0
+        && (nonflat->side == Side::Long || nonflat->side == Side::Short);
+}
+
+bool same_position(const PositionIdentity& a, const PositionIdentity& b) noexcept {
+    if (std::holds_alternative<PositionFlat>(a)) {
+        return std::holds_alternative<PositionFlat>(b);
+    }
+    const auto* left = std::get_if<PositionNonflat>(&a);
+    return left && position_matches(b, left->cycle, left->side);
+}
+
+// No allocation, including during post-commit installation. The consumer's
+// canonical observations take O(M log M); unordered complete observations are
+// also legal and use a duplicate check without a persistent membership store.
+std::optional<CoreFailure> observe_openings(
+        const std::vector<RequestHandle>& cohort, int64_t cycle, Side side,
+        const PositionIdentity& position, const std::vector<OpeningObservation>& observations,
+        std::size_t* live_count) noexcept {
+    *live_count = 0;
+    if (observations.size() < cohort.size()) return CoreFailure::MissingObservation;
+    if (cohort.empty() || observations.size() != cohort.size() || !valid_position(position)) {
+        return CoreFailure::ObservationMismatch;
+    }
+    bool ordered = true;
+    for (std::size_t i = 0; i < observations.size(); ++i) {
+        const auto& observation = observations[i];
+        if (observation.queried_cycle != cycle
+            || !same_position(observation.current_position, position)) {
+            return CoreFailure::ObservationMismatch;
+        }
+        const auto member = std::lower_bound(cohort.begin(), cohort.end(),
+                                              observation.queried_opening, handle_less);
+        if (member == cohort.end() || *member != observation.queried_opening) {
+            return CoreFailure::ObservationMismatch;
+        }
+        if (i && !handle_less(observations[i - 1].queried_opening,
+                              observation.queried_opening)) ordered = false;
+        if (observation.has_live_matching_lot) {
+            if (!position_matches(position, cycle, side)) return CoreFailure::ObservationMismatch;
+            ++*live_count;
+        }
+    }
+    if (!ordered) {
+        for (std::size_t i = 0; i < observations.size(); ++i) {
+            for (std::size_t j = 0; j < i; ++j) {
+                if (observations[i].queried_opening == observations[j].queried_opening) {
+                    return CoreFailure::ObservationMismatch;
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<CoreFailure> observe_openings(const TargetObservation& observation,
+                                           const OpeningsClose& close,
+                                           std::size_t* live_count) noexcept {
+    return observe_openings(close.openings, close.cycle, close.side,
+                            observation.current_position, observation.openings, live_count);
+}
+
+bool current_shape(const LiveRequest& live) noexcept {
+    const auto& request = live.request();
+    if (!std::holds_alternative<Market>(request.trigger)
+        || !std::holds_alternative<MarketReady>(live.trigger_state)
+        || !std::holds_alternative<ImmediateRemaining>(request.capacity)) return false;
+    if (std::holds_alternative<Independent>(request.owner)) return true;
+    const auto* reduce = as_reduce(request.intent);
+    if (!as_flatten(request.intent) && !(reduce && explicit_size(*reduce))) return false;
+    return std::holds_alternative<BindOpening>(request.owner)
+        || std::holds_alternative<BindOpenings>(request.owner);
+}
+
 bool driver_class_matches_cursor(DriverEligibilityClass driver,
                                   const MatchCursor& cursor) noexcept {
     using pineforge::NativePriceProvenance;
@@ -180,6 +268,8 @@ bool driver_class_matches_cursor(DriverEligibilityClass driver,
         case NativePriceProvenance::PartialFinalized:
         case NativePriceProvenance::Calculation:
             return driver == DriverEligibilityClass::ConfirmedAfterCalculationClose;
+        case NativePriceProvenance::CurrentExecution:
+            return driver == DriverEligibilityClass::CurrentExecution;
     }
     return false;
 }
@@ -361,6 +451,7 @@ struct PreparedExecution::Impl {
     bool opening = false;
     BookClose book_close{};
     OpeningClose opening_close{};
+    std::optional<OpeningsClose> openings_close;
     ExecutionProposal proposal{};
 };
 PreparedExecution::PreparedExecution() noexcept = default;
@@ -796,6 +887,24 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         if (std::holds_alternative<PositionFlat>(observation.current_position)) {
             return RequestRejectReason::InvalidOwner;
         }
+    } else if (const auto* bind = std::get_if<BindOpenings>(&request.owner)) {
+        if (as_transact(request.intent) || bind->cycle <= 0 || bind->openings.empty()) {
+            return RequestRejectReason::InvalidOwner;
+        }
+        auto cohort = bind->openings;
+        std::sort(cohort.begin(), cohort.end(), handle_less);
+        for (std::size_t i = 0; i < cohort.size(); ++i) {
+            if (cohort[i].incarnation == 0 || cohort[i].run != identity_
+                || (i && cohort[i] == cohort[i - 1])) return RequestRejectReason::InvalidOwner;
+        }
+        if (context.openings.empty()) return RequestRejectReason::InvalidOwner;
+        const auto& position = context.openings.front().current_position;
+        const auto* nonflat = std::get_if<PositionNonflat>(&position);
+        if (!nonflat || nonflat->cycle != bind->cycle) return RequestRejectReason::InvalidOwner;
+        std::size_t live_count = 0;
+        if (observe_openings(cohort, bind->cycle, nonflat->side, position,
+                              context.openings, &live_count)
+            || live_count != cohort.size()) return RequestRejectReason::InvalidOwner;
     } else {
         return RequestRejectReason::InvalidOwner;
     }
@@ -851,14 +960,16 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
         }
         return live;
     }
-    const auto& bind = std::get<BindOpening>(request.owner);
-    const auto& nonflat = std::get<PositionNonflat>(context.opening->current_position);
-    OpeningClose close;
-    close.opening = bind.opening;
-    close.cycle = bind.cycle;
-    close.side = nonflat.side;
-    close.enrollment = EnrollmentFromCommand{accepted};
-    live.authority = close;
+    if (const auto* bind = std::get_if<BindOpening>(&request.owner)) {
+        const auto& nonflat = std::get<PositionNonflat>(context.opening->current_position);
+        live.authority = OpeningClose{bind->opening, bind->cycle, nonflat.side,
+                                      EnrollmentFromCommand{accepted}};
+    } else {
+        const auto& selected = std::get<BindOpenings>(request.owner);
+        const auto& nonflat = std::get<PositionNonflat>(context.openings.front().current_position);
+        live.authority = OpeningsClose{selected.openings, selected.cycle, nonflat.side,
+                                       EnrollmentFromCommand{accepted}};
+    }
     if (const auto* reduce = as_reduce(request.intent)) {
         live.remaining = RemainingUnits{explicit_size(*reduce)->units};
     } else {
@@ -889,6 +1000,10 @@ bool WorkingRequestCore::trigger_permits_driver(const Trigger& trigger,
             return !market;
         case DriverEligibilityClass::ConfirmedAfterCalculationClose:
             return market ? existing_matching_bit : false;
+        case DriverEligibilityClass::CurrentExecution:
+            // Only the consumer's guarded target command supplies this bit.
+            return std::holds_alternative<Market>(trigger)
+                && std::holds_alternative<MarketReady>(state) && existing_matching_bit;
     }
     return false;
 }
@@ -901,6 +1016,9 @@ bool WorkingRequestCore::working_is_buy(const LiveRequest& live) const noexcept 
         return close->side == Side::Short;
     }
     if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
+        return close->side == Side::Short;
+    }
+    if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         return close->side == Side::Short;
     }
     return false;
@@ -926,10 +1044,17 @@ EligibilityFacts WorkingRequestCore::eligibility_facts(
     }
     facts.driver_ok = trigger_permits_driver(live.request().trigger, live.trigger_state,
                                             context.driver_class, context.existing_matching_bit);
+    if (context.driver_class == DriverEligibilityClass::CurrentExecution
+        || context.cursor.point.provenance == NativePriceProvenance::CurrentExecution) {
+        facts.driver_ok = facts.driver_ok && current_shape(live)
+            && driver_class_matches_cursor(context.driver_class, context.cursor);
+    }
     facts.is_buy = working_is_buy(live);
     if (const auto* close = std::get_if<BookClose>(&live.authority)) {
         facts.position_side = close->side;
     } else if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
+        facts.position_side = close->side;
+    } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         facts.position_side = close->side;
     }
     facts.ready_to_match = facts.birth_ok && facts.driver_ok && !facts.waiting;
@@ -960,7 +1085,8 @@ std::vector<RequestHandle> WorkingRequestCore::bound_close_handles() const {
     std::vector<RequestHandle> handles;
     for (const auto& live : live_) {
         if (std::holds_alternative<BookClose>(live.authority)
-            || std::holds_alternative<OpeningClose>(live.authority)) {
+            || std::holds_alternative<OpeningClose>(live.authority)
+            || std::holds_alternative<OpeningsClose>(live.authority)) {
             handles.push_back(live.handle());
         }
     }
@@ -1014,6 +1140,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
         impl->result.event_ordinal = ordinal;
         return PreparedSubmit(std::move(impl));
     }
+    canonicalize_owner(staged);
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -1079,6 +1206,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
         impl->plan = std::move(plan);
         return PreparedReplace(std::move(impl));
     }
+    canonicalize_owner(staged);
     const uint64_t incarnation = usable_incarnation(next_order_incarnation);
     RequestHandle successor{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
@@ -1166,7 +1294,8 @@ SubmitResult WorkingRequestCore::submit(const Request& request,
                                         uint64_t& next_order_incarnation,
                                         uint64_t& next_timeline_ordinal,
                                         std::optional<double> quantity_grid) {
-    auto prepared = prepare_submit(request, CommandContext{decision_time_ms, quantity_grid, std::nullopt},
+    auto prepared = prepare_submit(request, CommandContext{decision_time_ms, quantity_grid,
+                                                           std::nullopt, CommandSurface::General, {}},
                                    next_order_incarnation, next_timeline_ordinal);
     auto installed = install_submit(std::move(prepared));
     if (std::holds_alternative<InstallError>(installed)) {
@@ -1185,7 +1314,8 @@ ReplaceResult WorkingRequestCore::replace(const RequestHandle& target,
                                           uint64_t& next_timeline_ordinal,
                                           std::optional<double> quantity_grid) {
     auto prepared = prepare_replace(target, request,
-                                    CommandContext{decision_time_ms, quantity_grid, std::nullopt},
+                                    CommandContext{decision_time_ms, quantity_grid, std::nullopt,
+                                                    CommandSurface::General, {}},
                                     next_order_incarnation, next_timeline_ordinal);
     auto installed = install_replace(std::move(prepared));
     if (std::holds_alternative<InstallError>(installed)) {
@@ -1312,6 +1442,22 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
     }
     if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
         if (!opening_close_alive(observation, *close)) {
+            const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+            MutationPlan plan = begin_plan();
+            plan.events.emplace_back(make_cancelled(ordinal, live, CancelReason::OwnerGone,
+                                                    EventId{identity_, ordinal}));
+            plan.live_change = kLiveErase;
+            plan.live_index = live_index;
+            return finish_mutation(std::move(plan));
+        }
+    }
+
+    if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
+        std::size_t live_count = 0;
+        if (const auto error = observe_openings(observation, *close, &live_count)) {
+            return PreparationError{*error, EventId{identity_, 0}, target};
+        }
+        if (live_count == 0) {
             const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
             MutationPlan plan = begin_plan();
             plan.events.emplace_back(make_cancelled(ordinal, live, CancelReason::OwnerGone,
@@ -1545,6 +1691,8 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         return NoChange{NoChangeReason::NotEligible};
     }
     if (!fillable_state(live.trigger_state)) return NoChange{NoChangeReason::NotEligible};
+    const bool current = proposal.cursor.point.provenance == NativePriceProvenance::CurrentExecution;
+    if (current && !current_shape(live)) return NoChange{NoChangeReason::NotEligible};
 
     const uint64_t point = proposal.cursor.point.ordinal;
     double allowance_left = 0.0;
@@ -1592,21 +1740,57 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     }
 
     const bool opening_auth = std::holds_alternative<OpeningClose>(live.authority);
-    const bool book_close = std::holds_alternative<BookClose>(live.authority);
+    const auto* selected_auth = std::get_if<OpeningsClose>(&live.authority);
+    ExecutionScope canonical_scope = proposal.scope;
     if (opening_auth) {
         const auto& close = std::get<OpeningClose>(live.authority);
         const auto* scope = std::get_if<execution::OpeningExposure>(&proposal.scope);
         if (!scope || scope->incarnation != close.opening.incarnation || scope->cycle != close.cycle) {
             return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
         }
-    } else if (!std::holds_alternative<execution::Book>(proposal.scope)) {
+    } else if (selected_auth) {
+        std::size_t live_count = 0;
+        if (const auto error = observe_openings(proposal.pre_target, *selected_auth, &live_count)) {
+            return PreparationError{*error, EventId{identity_, 0}, target};
+        }
+        if (!same_position(proposal.pre_fill, proposal.pre_target.current_position)) {
+            return PreparationError{CoreFailure::ObservationMismatch, EventId{identity_, 0}, target};
+        }
+        auto* scope = std::get_if<SelectedExposure>(&canonical_scope);
+        if (!scope || scope->cycle != selected_auth->cycle || live_count == 0
+            || scope->incarnations.size() != live_count) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        std::sort(scope->incarnations.begin(), scope->incarnations.end());
+        if (std::adjacent_find(scope->incarnations.begin(), scope->incarnations.end())
+            != scope->incarnations.end()) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        for (const auto& observation : proposal.pre_target.openings) {
+            if (observation.has_live_matching_lot
+                && !std::binary_search(scope->incarnations.begin(), scope->incarnations.end(),
+                                        observation.queried_opening.incarnation)) {
+                return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+            }
+        }
+        if (proposal.inspected_opened_units != 0.0) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (std::holds_alternative<BookTransaction>(live.authority)
+               || std::holds_alternative<ArmedTransaction>(live.authority)
+               || std::holds_alternative<BookClose>(live.authority)) {
+        if (!std::holds_alternative<execution::Book>(proposal.scope)) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+    } else {
         return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
     }
-    (void)book_close;
 
     if (!std::isfinite(proposal.inspected_closed_units) || proposal.inspected_closed_units < 0.0
         || !std::isfinite(proposal.inspected_opened_units)
-        || !std::isfinite(proposal.resolved_price) || proposal.resolved_price <= 0.0) {
+        || !std::isfinite(proposal.resolved_price)
+        || (proposal.resolved_price <= 0.0
+            && !(current && proposal.inspected_opened_units == 0.0))) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
     double filled = proposal.inspected_closed_units;
@@ -1672,7 +1856,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     base.remaining_before = project_remaining(live.remaining);
     base.allowance_before = live.allowance;
     base.allowance_after = allowance_after;
-    base.scope = proposal.scope;
+    base.scope = std::move(canonical_scope);
     fill_applied_cursor(base, proposal.cursor);
 
     ExecutionAppliedEvent terminal = base;
@@ -1708,6 +1892,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     impl->flatten = flatten;
     impl->opening = opening_auth;
     if (opening_auth) impl->opening_close = std::get<OpeningClose>(live.authority);
+    if (selected_auth) impl->openings_close = *selected_auth;
     if (std::holds_alternative<BookClose>(live.authority)) {
         impl->book_close = std::get<BookClose>(live.authority);
     }
@@ -1737,6 +1922,13 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
     };
 
     bool retain = impl.can_retain;
+    if (impl.openings_close) {
+        std::size_t live_count = 0;
+        if (observe_openings(facts.post_target, *impl.openings_close, &live_count)) {
+            return InstallError::WrongCoreOrRun;
+        }
+        if (live_count == 0) retain = false;
+    }
     if (retain && impl.opening && !opening_close_alive(facts.post_target, impl.opening_close)) {
         retain = false;
     }
@@ -2080,6 +2272,12 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_bound_expiry(
         gone = !book_close_alive(observation, *close);
     } else if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
         gone = !opening_close_alive(observation, *close);
+    } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
+        std::size_t live_count = 0;
+        if (const auto error = observe_openings(observation, *close, &live_count)) {
+            return PreparationError{*error, physical_cause, child};
+        }
+        gone = live_count == 0;
     } else {
         return NoChange{NoChangeReason::NoTransition};
     }
@@ -2137,6 +2335,11 @@ static_assert(std::is_nothrow_move_constructible_v<PreparedReplace>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedCancel>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedMutation>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedExecution>);
+// Authority/scope classification above must be reviewed when an alternative
+// is introduced; an unhandled value must never acquire Book authority.
+static_assert(std::variant_size_v<Owner> == 4);
+static_assert(std::variant_size_v<Authority> == 7);
+static_assert(std::variant_size_v<ExecutionScope> == 3);
 
-}  // inline namespace native_order_v2
+}  // inline namespace native_order_v3
 }  // namespace pineforge::native_order

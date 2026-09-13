@@ -18,34 +18,50 @@ class NativeVersions(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_texts(changed)
 
+    def test_current_command_and_preview_have_one_authority(self):
+        self.reject(FILES[8], 'native_order::RequestHandle target;',
+                    'native_order::RequestHandle target; std::optional<execution::SelectedOpeningSet> selected_close;')
+        self.reject(FILES[8], 'std::optional<execution::Status> settlement_readiness;', '')
+        self.reject(FILES[6], 'CurrentExecution = 8', 'CurrentExecution = 7')
+        self.reject(FILES[6], 'Calculation = 7', 'Calculation = 9')
+        self.reject(FILES[6], 'native-driver/v4', 'native-driver/v3')
+
+    def test_current_cause_and_selected_hash_coverage(self):
+        for fold in ('f.u(bind->openings.size());', 'f.u(openings->openings.size());',
+                     'f.u(selected->incarnations.size());', 'f.d(point.price);',
+                     'f.u(point.quote_origin_ordinal);', 'f.u(current_frame_->acceptance_cutoff);',
+                     'f.u(notification.ordinal);'):
+            with self.subTest(fold=fold):
+                self.reject(FILES[10], fold, '')
+
     def test_current(self):
         check_texts(DATA)
 
     def test_stale_wrapper(self):
         for path, namespace, stale in (
-            (FILES[0], "native_order_v2", "native_order_v1"),
-            (FILES[1], "native_order_v2", "native_order_v1"),
-            (FILES[11], "native_order_v1", "native_order_v2"),
+            (FILES[0], "native_order_v3", "native_order_v1"),
+            (FILES[1], "native_order_v3", "native_order_v1"),
+            (FILES[11], "native_order_v1", "native_order_v3"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
             (FILES[4], "native_run_spec_v1", "native_run_spec_v2"),
             (FILES[5], "native_run_spec_v1", "native_run_spec_v2"),
-            (FILES[6], "native_driver_v3", "native_driver_v2"),
-            (FILES[7], "native_driver_v3", "native_driver_v4"),
-            (FILES[8], "engine_script_run_v13", "engine_script_run_v12"),
-            (FILES[9], "engine_script_run_v13", "engine_script_run_v12"),
-            (FILES[10], "engine_script_run_v13", "engine_script_run_v12"),
+            (FILES[6], "native_driver_v4", "native_driver_v2"),
+            (FILES[7], "native_driver_v4", "native_driver_v3"),
+            (FILES[8], "engine_script_run_v14", "engine_script_run_v12"),
+            (FILES[9], "engine_script_run_v14", "engine_script_run_v12"),
+            (FILES[10], "engine_script_run_v14", "engine_script_run_v12"),
         ):
             with self.subTest(path=path, namespace=namespace):
                 self.reject(path, namespace, stale)
 
     def test_duplicate_wrapper(self):
         for path, namespace in (
-            (FILES[0], "native_order_v2"),
+            (FILES[0], "native_order_v3"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
-            (FILES[6], "native_driver_v3"),
-            (FILES[8], "engine_script_run_v13"),
+            (FILES[6], "native_driver_v4"),
+            (FILES[8], "engine_script_run_v14"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -54,11 +70,11 @@ class NativeVersions(unittest.TestCase):
 
     def test_empty_namespace_is_not_ownership(self):
         for path, namespace in (
-            (FILES[0], "native_order_v2"),
+            (FILES[0], "native_order_v3"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
-            (FILES[6], "native_driver_v3"),
-            (FILES[8], "engine_script_run_v13"),
+            (FILES[6], "native_driver_v4"),
+            (FILES[8], "engine_script_run_v14"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -67,10 +83,10 @@ class NativeVersions(unittest.TestCase):
 
     def test_comment_only_namespace_is_not_ownership(self):
         for path, namespace, decoy in (
-            (FILES[0], "native_order_v2", "struct WorkingRequestCore"),
+            (FILES[0], "native_order_v3", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
-            (FILES[8], "engine_script_run_v13", "class NativeStrategyHost"),
+            (FILES[8], "engine_script_run_v14", "class NativeStrategyHost"),
         ):
             with self.subTest(path=path):
                 self.reject(
@@ -159,8 +175,8 @@ class NativeVersions(unittest.TestCase):
         func = changed[src][start:end]
         text = changed[src][:start] + changed[src][end:]
         text = text.replace(
-            "}  // inline namespace native_driver_v3",
-            "}  // inline namespace native_driver_v3\n" + func,
+            "}  // inline namespace native_driver_v4",
+            "}  // inline namespace native_driver_v4\n" + func,
             1)
         changed[src] = text
         with self.assertRaises(ValueError):
@@ -180,8 +196,8 @@ class NativeVersions(unittest.TestCase):
         needle = "WorkingRequestCore::reset("
         self.assertIn(needle, changed[src])
         changed[src] = changed[src].replace(
-            "}  // inline namespace native_order_v2",
-            "}  // inline namespace native_order_v2\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
+            "}  // inline namespace native_order_v3",
+            "}  // inline namespace native_order_v3\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
             1)
         with self.assertRaises(ValueError):
             check_texts(changed)
@@ -190,14 +206,14 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[6], DRIVER_FORWARD, "")
         self.reject(
             FILES[6],
-            DRIVER_FORWARD + "\ninline namespace native_driver_v3 {",
-            "inline namespace native_driver_v3 {\n" + DRIVER_FORWARD)
+            DRIVER_FORWARD + "\ninline namespace native_driver_v4 {",
+            "inline namespace native_driver_v4 {\n" + DRIVER_FORWARD)
         self.reject(
             FILES[6],
             DRIVER_FORWARD,
             "inline namespace native_run_spec_v1 { struct NativeRunSpec {}; }")
 
-    def test_host_public_values_cannot_leave_v13(self):
+    def test_host_public_values_cannot_leave_v14(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")
         self.reject(FILES[8], "struct NativeFailure {", "} struct NativeFailure {")
         self.reject(FILES[8], "struct NativeFailureContext {", "} struct NativeFailureContext {")
@@ -209,7 +225,7 @@ class NativeVersions(unittest.TestCase):
             "")
         self.reject(
             FILES[6],
-            'kNativeConsumerSemanticVersion = "native-consumer/v4"',
+            'kNativeConsumerSemanticVersion = "native-consumer/v5"',
             'kNativeConsumerSemanticVersion = "native-consumer/v3"')
 
 

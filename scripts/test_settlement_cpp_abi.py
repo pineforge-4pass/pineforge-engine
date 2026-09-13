@@ -10,10 +10,10 @@ from types import SimpleNamespace
 import unittest
 
 from check_settlement_cpp_abi import (
-    ENGINE, ROOT, REVERSAL_METHODS, REVERSAL_DOMAIN, frozen_shape, load_prior,
+    ENGINE, OLD_ENGINE, ROOT, REVERSAL_METHODS, REVERSAL_DOMAIN, frozen_shape, load_prior,
     storage_declarations, validate_rejection,
 )
-from prepare_settlement_cpp_abi_base import BASE_COMMIT, BASE_TREE, extract_tar, read_cache
+from prepare_settlement_cpp_abi_base import BASE_COMMIT, BASE_TREE, extract_tar, read_cache, PROVIDERS, authenticate_headers
 
 
 class AbiToolingTests(unittest.TestCase):
@@ -79,6 +79,26 @@ class AbiToolingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'does not pin 0e18690'):
                 load_prior(SimpleNamespace(prior_receipt=receipt),root/'headers',{})
             self.assertFalse((root/'headers').exists())
+
+    def test_cross_epoch_rejection_cannot_match_the_other_epoch(self):
+        method='project_native_settlement_v1'
+        diagnostic=f"undefined reference to `{OLD_ENGINE}{method}(int)'"
+        self.assertEqual(len(validate_rejection(diagnostic,[method],engine=OLD_ENGINE)),1)
+        with self.assertRaisesRegex(RuntimeError,'omits expected'):
+            validate_rejection(diagnostic,[method])
+
+    def test_real_v13_headers_are_authenticated_and_financial_shape_stays_frozen(self):
+        fixture=ROOT/'tests/fixtures/native_cpp_abi/host-c3ed455'
+        with tempfile.TemporaryDirectory() as temporary:
+            old=Path(temporary)/'v13'
+            extract_tar((fixture/'headers.tar').read_bytes(),old)
+            provider=PROVIDERS['v13']
+            authenticate_headers(old,fixture/'manifest.json',commit=provider['commit'],tree=provider['tree'])
+            members,shape=frozen_shape(old/'include',ROOT/'include',selected=True)
+            self.assertTrue(shape['epochBreak'])
+            self.assertEqual(shape['oldEpoch'],['engine_script_run_v13']*2)
+            self.assertEqual(shape['currentEpoch'],['engine_script_run_v14']*2)
+            self.assertGreater(len(members),100)
 
     def test_action_alternative_changes_are_frozen(self):
         with tempfile.TemporaryDirectory() as temporary:

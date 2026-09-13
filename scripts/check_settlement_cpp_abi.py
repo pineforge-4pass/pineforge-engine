@@ -17,14 +17,15 @@ import subprocess
 import tempfile
 
 from check_aggregate_cpp_versions import clean, body
-from check_native_cpp_abi import HOST_EVENTS_CALLER, assembly_layout_values
+from check_native_cpp_abi import HOST_EVENTS_CALLER, HOST_CALLER, HOST_CONSTRUCTOR_CALLER, CURRENT_EXECUTION_CALLER, ORDER_CALLER, BAR_CALLER, assembly_layout_values, undefined_mentions
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT, BASE_TREE, COPY_CACHE, PROVIDERS, authenticate_headers, compiler_identity,
     extract_tar, identity, read_cache, run,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ENGINE = 'pineforge::engine_script_run_v13::BacktestEngine::'
+ENGINE = 'pineforge::engine_script_run_v14::BacktestEngine::'
+OLD_ENGINE = 'pineforge::engine_script_run_v13::BacktestEngine::'
 OLD_METHODS = ('inspect_native_settlement', 'inspect_native_settlement_scoped',
                'settle_native_execution_at', 'settle_native_execution_scoped_at',
                'settle_resolved_execution','settle_execution_with_lifecycle','settle_with_context')
@@ -47,7 +48,7 @@ COMMON = '''#include <pineforge/native_host.hpp>
 #include <cstddef>
 #include <type_traits>
 #include <utility>
-using E = pineforge::engine_script_run_v13::BacktestEngine;
+using E = pineforge::BacktestEngine;
 namespace ex = pineforge::execution;
 using A = ex::Action;
 using F = ex::Fill;
@@ -210,7 +211,15 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
         pattern = r'(?:struct|enum\s+class)\s+' + name + r'\s*\{'
         if normalized(body(old_exec, pattern, name)) != normalized(body(cur_exec, pattern, name)):
             raise RuntimeError('frozen execution aggregate/enum changed: ' + name)
-    for name in FROZEN_NATIVE_HEADERS:
+    old_engine = (old_include/'pineforge/engine.hpp').read_text()
+    cur_engine = (current_include/'pineforge/engine.hpp').read_text()
+    old_epoch = re.findall(r'inline namespace (engine_script_run_v\d+)', clean(old_engine))
+    new_epoch = re.findall(r'inline namespace (engine_script_run_v\d+)', clean(cur_engine))
+    epoch_break = old_epoch != new_epoch
+    if epoch_break and (old_epoch != ['engine_script_run_v13'] * 2 or new_epoch != ['engine_script_run_v14'] * 2):
+        raise RuntimeError('unreviewed engine epoch transition')
+    frozen_native = ('native_order_identity.hpp', 'native_run_spec.hpp', 'native_calendar.hpp') if epoch_break else FROZEN_NATIVE_HEADERS
+    for name in frozen_native:
         if normalized((old_include/'pineforge'/name).read_text()) != normalized((current_include/'pineforge'/name).read_text()):
             raise RuntimeError('R3 must preserve native header layout/contracts: ' + name)
     if selected:
@@ -229,14 +238,17 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     old_engine = (old_include/'pineforge/engine.hpp').read_text()
     cur_engine = (current_include/'pineforge/engine.hpp').read_text()
     old_storage, current_storage = storage_declarations(old_engine), storage_declarations(cur_engine)
-    if old_storage != current_storage:
+    if not epoch_break and old_storage != current_storage:
         raise RuntimeError('engine named data declarations/order changed')
     virtuals = lambda text: re.findall(r'\bvirtual\b[^;{]*(?:;|\{)', clean(text))
-    if [normalized(v) for v in virtuals(old_engine)] != [normalized(v) for v in virtuals(cur_engine)]:
+    if not epoch_break and [normalized(v) for v in virtuals(old_engine)] != [normalized(v) for v in virtuals(cur_engine)]:
         raise RuntimeError('engine virtual method inventory changed')
     members = [re.search(r'\b([A-Za-z_]\w*)\s*(?:\[[^]]*\])?\s*$', declaration).group(1)
                for declaration in old_storage if not declaration.startswith('static ')]
-    return members, {'engineStorage': old_storage, 'virtuals': [normalized(v) for v in virtuals(old_engine)]}
+    return members, {'epochBreak': epoch_break, 'oldEpoch': old_epoch, 'currentEpoch': new_epoch,
+                     'engineStorage': old_storage, 'currentEngineStorage': current_storage,
+                     'virtuals': [normalized(v) for v in virtuals(old_engine)],
+                     'currentVirtuals': [normalized(v) for v in virtuals(cur_engine)]}
 
 
 def layout_source(members: list[str], *, selected=False) -> tuple[str, int]:
@@ -270,19 +282,19 @@ def defined_symbols(library: Path) -> str:
     return '\n'.join(line for line in raw.splitlines() if re.search(r'\b[TWtw]\s+', line))
 
 
-def validate_rejection(diagnostic: str, missing, domain=None) -> list[str]:
+def validate_rejection(diagnostic: str, missing, domain=None, engine=ENGINE) -> list[str]:
     symbols = re.findall(r'^\s*"(.+)", referenced from:', diagnostic, re.M)
     symbols += re.findall(r"undefined reference to [`'](.+)'", diagnostic)
     symbols += re.findall(r'undefined symbol:\s*(.+)', diagnostic)
     if not symbols:
         raise RuntimeError('link failure has no recognized undefined-symbol diagnostics')
     for method in missing:
-        matching = [symbol for symbol in symbols if symbol.startswith(ENGINE+method+'(')]
+        matching = [symbol for symbol in symbols if symbol.startswith(engine+method+'(')]
         if not matching:
             raise RuntimeError('link failure omits expected undefined method: '+method)
         if domain and ('selected' in method or 'reversal' in method) and any(domain not in symbol for symbol in matching):
             raise RuntimeError('method has wrong/missing parameter namespace: '+method)
-    unrelated = [symbol for symbol in symbols if not any(symbol.startswith(ENGINE+method+'(') for method in missing)]
+    unrelated = [symbol for symbol in symbols if not any(symbol.startswith(engine+method+'(') for method in missing)]
     if unrelated:
         raise RuntimeError('link failure includes unrelated undefined symbols: '+', '.join(unrelated))
     return symbols
@@ -303,13 +315,13 @@ def load_prior(args, destination: Path, current_cache: dict) -> tuple[Path, Path
 def load_provider(args, destination: Path, current_cache: dict, receipt_path: Path | None,
                   provider: dict, *, expect_present, expect_absent) -> tuple[Path, Path, Path, dict]:
     is_base = provider['commit'] == BASE_COMMIT
-    label = 'R2' if is_base else '0e18690'
+    label = 'R2' if is_base else provider['commit'][:7]
     if receipt_path is None or not receipt_path.is_file():
         if not is_base:
-            raise RuntimeError('real 0e18690 archive receipt missing; run scripts/prepare_settlement_cpp_abi_base.py '
-                               '--source-repo . --current-build BUILD --output BUILD/settlement-abi-prior '
+            raise RuntimeError(f'real {label} archive receipt missing; run scripts/prepare_settlement_cpp_abi_base.py '
+                               f'--source-repo . --current-build BUILD --output BUILD/{provider["default_output"]} '
                                f'--commit {provider["commit"]} --tree {provider["tree"]} '
-                               '--header-manifest tests/fixtures/settlement_cpp_abi/0e18690/manifest.json before CTest')
+                               f'--header-manifest {provider["manifest"].relative_to(ROOT)} before CTest')
         raise RuntimeError('real R2 archive receipt missing; run scripts/prepare_settlement_cpp_abi_base.py '
                            '--source-repo . --current-build BUILD --output BUILD/settlement-abi-base before CTest')
     receipt = json.loads(receipt_path.read_text())
@@ -340,7 +352,7 @@ def load_provider(args, destination: Path, current_cache: dict, receipt_path: Pa
             raise RuntimeError('base generated version header changed')
     else:
         if not is_base:
-            raise RuntimeError('0e18690 provider requires portable v1 receipt; use matching preparation')
+            raise RuntimeError(label+' provider requires portable v1 receipt; use matching preparation')
         # Explicit reuse of root's preserved Mac Release artifact, never a stub.
         if receipt['archiveSha256'] != PRESERVED_ARCHIVE_SHA or receipt['headersSha256'] != PRESERVED_HEADERS_SHA:
             raise RuntimeError('unrecognized legacy base receipt; use portable preparation')
@@ -359,10 +371,10 @@ def load_provider(args, destination: Path, current_cache: dict, receipt_path: Pa
             raise RuntimeError('preserved base cache/header directory no longer belongs to its archive')
     symbols = defined_symbols(library)
     for method in expect_present:
-        if ENGINE + method + '(' not in symbols:
+        if OLD_ENGINE + method + '(' not in symbols:
             raise RuntimeError('real old archive omits original symbol: ' + method)
     for method in expect_absent:
-        if ENGINE + method + '(' in symbols:
+        if OLD_ENGINE + method + '(' in symbols:
             raise RuntimeError('supplied old archive already exports new method: ' + method)
     return library, destination/'include', generated, receipt
 
@@ -376,6 +388,7 @@ def main() -> int:
     parser.add_argument('--base-receipt', type=Path, required=True)
     parser.add_argument('--prior-receipt', type=Path,
                         help='required for full proof: prepared real 0e18690 provider receipt')
+    parser.add_argument('--v13-receipt', type=Path, help='prepared real c3ed455 epoch 13 provider; mandatory in full matrix')
     parser.add_argument('--base-generated-include', type=Path)
     parser.add_argument('--extra-flag', action='append', default=[])
     parser.add_argument('--receipt', type=Path, required=True)
@@ -431,8 +444,22 @@ def main() -> int:
                                  'commit':prior_receipt['commit'],'tree':prior_receipt['tree']}
                 prior_members,prior_shape = frozen_shape(prior_include,include,selected=True)
                 report['priorFrozenShape']=prior_shape
+                v13_library,v13_include,v13_generated,v13_receipt = load_provider(
+                    args,scratch/'v13',cache,args.v13_receipt,PROVIDERS['v13'],
+                    expect_present=(*OLD_METHODS,*OLD_PRIVATE,*NEW_METHODS,*NEW_PRIVATE,*REVERSAL_METHODS),
+                    expect_absent=())
+                report['v13']={'receiptSha256':identity(args.v13_receipt)['sha256'],
+                               'archiveSha256':identity(v13_library)['sha256'],
+                               'commit':v13_receipt['commit'],'tree':v13_receipt['tree']}
+
 
             def compile_tu(name,text,headers,generated):
+                # Each caller must name its actual header epoch, including return-only APIs.
+                epoch = re.search(r'inline namespace (engine_script_run_v\d+)',
+                                  (headers/'pineforge/engine.hpp').read_text()).group(1)
+                text = text.replace('engine_script_run_v14', epoch)
+                text = '#include <pineforge/native_host.hpp>\n#include <type_traits>\n' + text
+                text += '\nstatic_assert(std::is_same_v<pineforge::BacktestEngine, pineforge::'+epoch+'::BacktestEngine>);\n'
                 path=log_root/(name+'.cpp');path.write_text(text)
                 obj=log_root/(name+'.o')
                 argv=[*common,'-I',str(headers),'-I',str(generated),'-c',str(path),'-o',str(obj)]
@@ -440,18 +467,24 @@ def main() -> int:
                 report['compiles'].append({'name':name,'argv':argv,'sourceSha256':identity(path)['sha256'],'objectSha256':identity(obj)['sha256']})
                 return obj
 
-            def link(name,obj,runtime,missing=(),domain=None):
+            def link(name,obj,runtime,missing=(),domain=None,engine=ENGINE, symbol_missing=None):
                 argv=[*common,str(obj),str(runtime),'-pthread','-o',str(log_root/name)]
                 result=subprocess.run(argv,capture_output=True,text=True,timeout=120)
                 diagnostic=result.stdout+result.stderr
                 (log_root/(name+'.link.log')).write_text(diagnostic)
-                if not missing:
+                if not missing and not symbol_missing:
                     if result.returncode: raise RuntimeError(name+' positive pair failed:\n'+diagnostic)
                 else:
                     if result.returncode == 0: raise RuntimeError(name+' unexpectedly linked')
-                    validate_rejection(diagnostic,missing,domain)
+                    if symbol_missing:
+                        needles = [symbol_missing] if isinstance(symbol_missing,str) else symbol_missing
+                        if any(not undefined_mentions(diagnostic, needle) for needle in needles):
+                            raise RuntimeError(name+' lacks expected epoch symbol: '+str(symbol_missing)+'\n'+diagnostic)
+                    else:
+                        validate_rejection(diagnostic,missing,domain,engine)
                 report['links'].append({'name':name,'argv':argv,'exitCode':result.returncode,
-                    'outcome':'expected-rejection' if missing else 'linked','requiredMissing':list(missing),
+                    'outcome':'expected-rejection' if missing or symbol_missing else 'linked','requiredMissing':list(missing),
+                    'engineDomain':engine,'requiredEpochSymbol':symbol_missing,
                     'selectionDomain':domain,'parameterDomain':domain,'executed':False})
 
             def compare_layout(name,headers,generated,layout_members,*,selected=False):
@@ -464,9 +497,15 @@ def main() -> int:
                     run([*common,'-I',str(layout_headers),'-I',str(layout_generated),'-S',str(src),'-o',str(asm)],timeout=120,
                         log=log_root/(label+'-layout.assembly.log'))
                     layouts.append(assembly_layout_values(asm.read_text(),word_count))
-                if layouts[0]!=layouts[1]:
+                epoch_break = 'engine_script_run_v13' in (headers/'pineforge/engine.hpp').read_text() and 'engine_script_run_v14' in (include/'pineforge/engine.hpp').read_text()
+                # The leading words cover the unchanged financial Result/Inspection,
+                # status and Action/CloseScope. Native aggregate changes are fenced.
+                financial_words = sum(2 + len(fields) for fields in FIELDS.values()) + 7
+                compared = [values[:financial_words] if epoch_break else values for values in layouts]
+                if compared[0]!=compared[1]:
                     raise RuntimeError('actual compiler '+name+'/current layout/offset/type-size arrays differ')
-                return {'wordCount':word_count,'values':layouts[0],'members':layout_members}
+                return {'wordCount':word_count,'values':layouts[0],'currentValues':layouts[1],
+                        'expectedEpochBreak':epoch_break,'comparedWords':len(compared[0]),'members':layout_members}
 
             # Compile every actual caller before interpreting any link outcome.
             old=compile_tu('old-book-singleton',OLD_CALLER,old_include,old_generated)
@@ -525,15 +564,43 @@ def main() -> int:
                         raise RuntimeError('reversal namespace missing from real header')
                     header.write_text(changed.replace('reverse_to_v1','reverse_to_v2'))
                     wrong_reverse_to=compile_tu('synthetic-reverse-to-v2',REVERSAL_CALLER.replace('reverse_to_v1','reverse_to_v2'),wrong_target,args.generated_include)
+            if full_matrix:
+                v13_host = compile_tu('v13-host',HOST_CALLER,v13_include,v13_generated)
+                v13_ctor = compile_tu('v13-ctor',HOST_CONSTRUCTOR_CALLER,v13_include,v13_generated)
+                current_ctor = compile_tu('v14-ctor',HOST_CONSTRUCTOR_CALLER,include,args.generated_include)
+                current_execution = compile_tu('v14-current-execution',CURRENT_EXECUTION_CALLER,include,args.generated_include)
+                v13_events = compile_tu('v13-events',HOST_EVENTS_CALLER,v13_include,v13_generated)
+                v13_order = compile_tu('v13-order',ORDER_CALLER,v13_include,v13_generated)
+                v13_driver = compile_tu('v13-driver',BAR_CALLER,v13_include,v13_generated)
+                current_host = compile_tu('v14-host',HOST_CALLER,include,args.generated_include)
+                current_order = compile_tu('v14-order',ORDER_CALLER,include,args.generated_include)
+                current_driver = compile_tu('v14-driver',BAR_CALLER,include,args.generated_include)
+                link('v13-constructor-v13-real',v13_ctor,v13_library)
+                link('v14-constructor-v14-real',current_ctor,library)
+                link('v13-constructor-v14-rejected',v13_ctor,library,symbol_missing='pineforge::engine_script_run_v13::NativeStrategyHost::NativeStrategyHost(')
+                link('v14-constructor-v13-rejected',current_ctor,v13_library,symbol_missing='pineforge::engine_script_run_v14::NativeStrategyHost::NativeStrategyHost(')
+                link('v14-current-execution-v14-real',current_execution,library)
+                link('v14-current-execution-v13-rejected',current_execution,v13_library,
+                     symbol_missing=['pineforge::engine_script_run_v14::NativeStrategyHost::'+method+'(' for method in
+                         ('current_execution_point','inspect_current_execution','execute_current')])
+                for name,old_obj,new_obj,old_symbol,new_symbol in (
+                    ('host',v13_host,current_host,'pineforge::engine_script_run_v13::NativeStrategyHost::native_state(', 'pineforge::engine_script_run_v14::NativeStrategyHost::native_state('),
+                    ('events',v13_events,current_events,'pineforge::engine_script_run_v13::NativeStrategyHost::native_events(', 'pineforge::engine_script_run_v14::NativeStrategyHost::native_events('),
+                    ('order',v13_order,current_order,'pineforge::native_order::native_order_v2::WorkingRequestCore::submit(', 'pineforge::native_order::native_order_v3::WorkingRequestCore::submit('),
+                    ('driver',v13_driver,current_driver,'pineforge::native_driver_v3::native_bar_structurally_valid(', 'pineforge::native_driver_v4::native_bar_structurally_valid(')):
+                    link('v13-'+name+'-v13-real',old_obj,v13_library)
+                    link('v14-'+name+'-v14-real',new_obj,library)
+                    link('v13-'+name+'-v14-rejected',old_obj,library,symbol_missing=old_symbol)
+                    link('v14-'+name+'-v13-rejected',new_obj,v13_library,symbol_missing=new_symbol)
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)
             if not args.old_rejections_only:
-                link('old-api-new-real',old,library)
+                link('old-api-new-real-epoch-rejected',old,library,OLD_METHODS,engine=OLD_ENGINE)
                 link('current-old-api-new-real',cur_old,library)
-                link('old-private-new-real',private_old,library)
+                link('old-private-new-real-epoch-rejected',private_old,library,OLD_PRIVATE,engine=OLD_ENGINE)
                 link('current-old-private-new-real',current_private_old,library)
-                link('old-events-new-real',old_events,library)
+                link('old-events-new-real-epoch-rejected',old_events,library,symbol_missing='pineforge::engine_script_run_v13::NativeStrategyHost::native_events(')
                 link('current-events-new-real',current_events,library)
             if not args.base_only:
                 link('new-api-old-real-rejected',new,old_library,NEW_METHODS,'close_selection_v1::SelectedOpeningSet')
@@ -547,8 +614,8 @@ def main() -> int:
                          (NEW_METHODS[0],NEW_METHODS[1],NEW_METHODS[2],NEW_METHODS[5]),'close_selection_v2::SelectedOpeningSet')
                     if full_matrix:
                         link('prior-selected-prior-real',prior_selected,prior_library)
-                        link('prior-selected-new-real',prior_selected,library)
-                        link('current-selected-prior-real',new,prior_library)
+                        link('prior-selected-new-real-epoch-rejected',prior_selected,library,NEW_METHODS,'close_selection_v1::SelectedOpeningSet',engine=OLD_ENGINE)
+                        link('current-selected-prior-real-epoch-rejected',new,prior_library,NEW_METHODS,'close_selection_v1::SelectedOpeningSet')
                         link('new-reversal-new-real',reversal,library)
                         link('new-reversal-prior-real-rejected',reversal,prior_library,REVERSAL_METHODS,REVERSAL_DOMAIN)
                         link('synthetic-reversal-method-v2-rejected',wrong_reversal_methods,library,wrong_reversal_names,REVERSAL_DOMAIN)

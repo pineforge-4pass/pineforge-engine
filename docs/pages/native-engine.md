@@ -149,7 +149,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. There is no C request API in this
 slice.
 
-`native_order::Request` values belong to `native_order_v2`; identity types stay
+`native_order::Request` values belong to `native_order_v3`; identity types stay
 `native_order_v1`. Label/comment remain inert text. The market default path
 still constructs from:
 
@@ -165,6 +165,79 @@ cycle identity through scoped settlement. Group cancellation/reduction is
 caused by committed execution events. See the request header for the exact
 value types; source-specific Pine lowering remains codegen/adapter work.
 
+### Selected exposure and current execution (R4-A)
+
+`BindOpenings{{first, last}, cycle}` on a Flatten or explicit-unit Reduce binds
+one fixed cohort of already-live opening provenances. All handles must be
+unique, nonzero, in this run and physically live in the supplied positive
+cycle. Enrollment rejects the entire request if any member is invalid.
+Accepted definitions use canonical handle order; execution still closes lots
+in physical FIFO order. Later retirement narrows the live subset, while the
+immutable definition retains the original cohort. Several fragments of one
+opening share its provenance. A new handle with the same label is excluded.
+
+One selected request produces one execution and ticket, even when it closes
+several rows. `ExecutionAppliedEvent::scope` uses native `ExecutionScope`
+(Book, OpeningExposure, SelectedExposure). Financial `execution::CloseScope`
+remains the original two-alternative type. The event's committed row range
+identifies actual contributors to a quantity-limited close.
+
+Inside `on_native_bar` or `on_native_applied`, a request accepted or replaced
+in that exact callback can be consumed synchronously:
+
+```cpp
+native_order::Request request{native_order::Flatten{}, "close cohort", ""};
+request.owner = native_order::BindOpenings{{first, last}, cycle};
+auto accepted = submit(request);
+if (accepted.handle) {
+    NativeCurrentExecution command{*accepted.handle, NativeCurrentPriceRule::NearestTick};
+    auto preview = inspect_current_execution(command);
+    // The adapter may validate its own policy here. Preview is never an apply token.
+    if (!preview.refusal && preview.settlement_readiness == execution::Status::Applied) {
+        auto outcome = execute_current(command);
+        // Applied effects and relationship drains are visible before this statement.
+    }
+}
+```
+
+The command contains only a target and price rule. Membership comes from the
+request. It cannot supply another selection, a saved cursor, price, ticket,
+or prepared financial plan. Current execution supports Market with
+ImmediateRemaining, resolved units, Independent/BindOpening/BindOpenings
+ownership and existing groups; current Transact remains Independent.
+Priced, budgeted and waiting requests retain queued semantics and receive an
+explicit current-execution refusal. Only the chosen target is consumed.
+
+`current_execution_point()` returns an owning presentation of the active
+callback's quote and calendar-derived decision context. AsPresented uses that
+price; NearestTick uses the existing rounding primitive. Configured directional
+slippage applies once. An ordinary execution notification anchors at its
+resolved execution price. A current execution notification inherits its cause's
+quote, so a chain does not compound slippage. Finite nonpositive current prices
+are permitted for pure closes; opening effects and ordinary matching keep their
+positive-price restriction. Native opening admission still decides separately.
+
+`NativeCurrentExecutionPreview::settlement_readiness` reports the financial
+pre-source preparation boundary. It is independent of the account projection's
+status and excludes later counter/lifecycle checks and opening admission.
+Refusals leave readiness absent. Invalid/NoEffect readiness skips source
+preflight. Applied readiness requires source preflight even for opening-only
+commands whose account projection overflows. Ordered `closed_row_pnl` values
+exist only for Applied readiness and use execution's pinned ticket allocation.
+Execution revalidates; editing the preview cannot authorize or alter a fill.
+
+The default-empty `on_native_applied(event, context)` notification follows the
+Account record and group/owner/dependency drains. Synchronous commands enqueue
+notifications FIFO until the outer callback returns and passes projection and
+abort checks. Callback depth stays one; event values remain valid during later
+submissions. Notifications never automatically execute newborn requests and
+have no semantic 64-execution cap. Failure after a physical commit discards the
+host; a failed host cannot retry. Configuration projection is checked before
+in-callback execution as well as after callback return.
+
+This native slice does not switch generated Pine code to the native consumer
+or complete source scheduling, ownership transfer, or parity acceptance.
+
 A `quantity_grid`, when present, admits Transact/Reduce quantities on the
 exact binary64 grid in `native_order.hpp`. Flatten is not gridded. Rejection
 does not rewrite the attempted bits.
@@ -176,7 +249,7 @@ does not rewrite the attempted bits.
   not change.
 - `Rejected` — rejection ordinal, no handle (`InvalidQuantity` / `OffGrid`).
 
-Fills appear later as `ExecutionAppliedEvent` on the same command history
+Ordinary queued fills appear later as `ExecutionAppliedEvent` on the same command history
 (`native_events(0)`). Default market requests retain acceptance/incarnation
 priority at an eligible matching driver point. Their birth eligibility is
 `point_ordinal > birth.acceptance_ordinal` and

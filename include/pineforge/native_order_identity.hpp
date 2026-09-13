@@ -8,7 +8,7 @@ namespace pineforge::native_order {
 inline namespace native_order_v1 {
 
 // Stable native-v1 identity leaf. Request/core/event values live in
-// native_order_v2; do not duplicate these types there.
+// native_order_v3; do not duplicate these types there.
 
 struct RunIdentity {
     std::string session_key;

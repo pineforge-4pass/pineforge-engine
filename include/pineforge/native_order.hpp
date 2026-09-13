@@ -19,13 +19,13 @@
 #include <vector>
 
 namespace pineforge::native_order {
-inline namespace native_order_v2 {
+inline namespace native_order_v3 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
 // calendar, host phase, or a second physical book.
 //
-// Identity types remain native_order_v1. Request/core/event values are v2.
+// Identity types remain native_order_v1. Request/core/event values are v3.
 // Physical execution::Action is unchanged; native Reduce uses a typed size
 // source instead of a dummy units field.
 
@@ -73,7 +73,11 @@ struct BindOpening {
     RequestHandle opening;
     int64_t cycle = 0;
 };
-using Owner = std::variant<Independent, WaitForApplied, BindOpening>;
+struct BindOpenings {
+    std::vector<RequestHandle> openings;
+    int64_t cycle = 0;
+};
+using Owner = std::variant<Independent, WaitForApplied, BindOpening, BindOpenings>;
 
 enum class GroupEffect : std::uint8_t { Cancel = 0, Reduce = 1 };
 struct NoGroup {};
@@ -200,8 +204,24 @@ struct OpeningClose {
     Side side = Side::Long;
     Enrollment enrollment;
 };
+// Immutable fixed cohort. Current physical liveness is observed, never stored
+// here; later fragments of an enrolled provenance remain authorized.
+struct OpeningsClose {
+    std::vector<RequestHandle> openings;
+    int64_t cycle = 0;
+    Side side = Side::Long;
+    Enrollment enrollment;
+};
 using Authority = std::variant<BookTransaction, Wait, ArmedTransaction, UnboundBookClose, BookClose,
-                               OpeningClose>;
+                               OpeningClose, OpeningsClose>;
+
+// Native authorization receipt, converted to a call-local financial
+// SelectedOpeningSet only at the consumer's settlement boundary.
+struct SelectedExposure {
+    int64_t cycle = 0;
+    std::vector<uint64_t> incarnations;
+};
+using ExecutionScope = std::variant<execution::Book, execution::OpeningExposure, SelectedExposure>;
 
 struct MarketReady {};
 struct LimitReady {};
@@ -255,6 +275,7 @@ struct OpeningObservation {
 struct TargetObservation {
     PositionIdentity current_position;
     std::optional<OpeningObservation> opening;
+    std::vector<OpeningObservation> openings;
 };
 
 struct RequestDefinition {
@@ -391,6 +412,7 @@ enum class DriverEligibilityClass : std::uint8_t {
     ConfirmedOpen = 3,
     ConfirmedExcursion = 4,
     ConfirmedAfterCalculationClose = 5,
+    CurrentExecution = 6,
 };
 
 enum class CommandSurface : std::uint8_t { General = 0, MarketOnly = 1 };
@@ -522,7 +544,7 @@ struct ExecutionAppliedEvent {
     std::optional<AppliedTerminalReason> terminal_reason;
     int64_t cycle_before = 0;
     int64_t cycle_after = 0;
-    execution::CloseScope scope = execution::Book{};
+    ExecutionScope scope = execution::Book{};
     MatchCursor cursor{};
     const RequestHandle& handle() const noexcept { return definition->handle; }
     const Request& request() const noexcept { return definition->request; }
@@ -604,6 +626,7 @@ struct CommandContext {
     std::optional<double> quantity_grid;
     std::optional<OpeningObservation> opening;
     CommandSurface surface = CommandSurface::General;
+    std::vector<OpeningObservation> openings;
 };
 
 struct EvaluationContext {
@@ -640,11 +663,12 @@ struct ExecutionProposal {
     double raw_price = 0.0;
     double resolved_price = 0.0;
     execution::Action physical_action{};
-    execution::CloseScope scope = execution::Book{};
+    ExecutionScope scope = execution::Book{};
     PositionIdentity pre_fill = PositionFlat{};
     double inspected_closed_units = 0.0;
     double inspected_opened_units = 0.0;
     double inspected_current_ticket = 0.0;
+    TargetObservation pre_target{};
 };
 
 struct CommittedExecutionFacts {
@@ -742,8 +766,8 @@ public:
     const LiveRequest* find_live(const RequestHandle& handle) const;
     const CommandEvent* event_at(const EventId& id) const;
 
-    // R1 producer convenience: prepare then install one command. BindOpening
-    // enrollment still requires CommandContext.opening via prepare_submit.
+    // R1 producer convenience: prepare then install one command. Bound opening
+    // enrollment requires CommandContext observations via prepare_submit.
     SubmitResult submit(const Request& request,
                         int64_t decision_time_ms,
                         uint64_t& next_order_incarnation,
@@ -1022,5 +1046,5 @@ static_assert(std::is_nothrow_move_constructible_v<MatchRejectedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<ExecutionAppliedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchCursor>);
 
-}  // inline namespace native_order_v2
+}  // inline namespace native_order_v3
 }  // namespace pineforge::native_order

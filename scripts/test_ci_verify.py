@@ -41,6 +41,8 @@ from prepare_settlement_cpp_abi_base import (
     BASE_TREE,
     PRIOR_COMMIT,
     PRIOR_TREE,
+    V13_COMMIT,
+    V13_TREE,
     COPY_CACHE,
     compiler_identity,
     copied_cache,
@@ -94,7 +96,9 @@ class Scripted:
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'cat-file' in argv:
-            if PRIOR_COMMIT + '^{commit}' in argv:
+            if V13_COMMIT + '^{commit}' in argv:
+                key = 'v13-cat-file'
+            elif PRIOR_COMMIT + '^{commit}' in argv:
                 key = 'prior-cat-file'
             elif BASE_COMMIT + '^{commit}' in argv:
                 key = 'cat-file'
@@ -105,10 +109,10 @@ class Scripted:
             # on a previous full verifier run having fetched old commits.
             return Completed(int(self.exits.get(key, 0)), b'', b'')
         if argv[0] == 'git' and 'fetch' in argv:
-            key = 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch'
+            key = 'v13-fetch' if V13_COMMIT in argv else 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch'
             return Completed(int(self.exits.get(key, 0)), b'fetched\n', b'')
         if any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
-            key = 'prior-prepare' if PRIOR_COMMIT in argv else 'prepare'
+            key = 'v13-prepare' if V13_COMMIT in argv else 'prior-prepare' if PRIOR_COMMIT in argv else 'prepare'
             return Completed(int(self.exits.get(key, 0)), b'prepared\n', b'')
         if any(Path(part).suffix == '.py' for part in argv):
             needles = {
@@ -282,9 +286,9 @@ class Scripted:
             elif argv[0] == 'ctest' and '--test-dir' in argv:
                 names.append('ctest')
             elif argv[0] == 'git' and 'fetch' in argv:
-                names.append('prior-fetch' if PRIOR_COMMIT in argv else 'fetch')
+                names.append('v13-fetch' if V13_COMMIT in argv else 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch')
             elif any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
-                names.append('prior-prepare' if PRIOR_COMMIT in argv else 'prepare')
+                names.append('v13-prepare' if V13_COMMIT in argv else 'prior-prepare' if PRIOR_COMMIT in argv else 'prepare')
             elif argv[0] == 'cmake' and '-S' in argv and 'smoke_consumer' in ''.join(argv):
                 names.append('smoke-configure')
             elif Path(argv[0]).name == 'smoke_version':
@@ -559,7 +563,7 @@ class GitObjectDiscovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)  # deliberately not a Git repository
             scripted = Scripted(source / 'build', source)
-            for commit in (BASE_COMMIT, PRIOR_COMMIT):
+            for commit in (BASE_COMMIT, PRIOR_COMMIT, V13_COMMIT):
                 self.assertTrue(ci_verify.pinned_object_present(source, scripted, commit))
             self.assertFalse(ci_verify.pinned_object_present(source, scripted, '0' * 40))
 
@@ -777,6 +781,26 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                          (build_dir / 'settlement-abi-prior').resolve())
         self.assertEqual(prepare[prepare.index('--header-manifest') + 1],
                          str(ROOT / 'tests/fixtures/settlement_cpp_abi/0e18690/manifest.json'))
+
+    def test_v13_provider_uses_its_own_pinned_profile_preparation(self):
+        code, summary, scripted, build_dir = self.run_profile(**{'v13-cat-file': 1})
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['abiV13']['action'], 'prepared')
+        fetches = [argv for argv in scripted.calls if argv[0] == 'git' and 'fetch' in argv]
+        self.assertEqual(fetches, [['git', '-C', str(ROOT), 'fetch', '--no-tags', '--depth=1', 'origin', V13_COMMIT]])
+        prepare = next(argv for argv in scripted.calls if V13_COMMIT in argv and '--tree' in argv)
+        self.assertEqual(prepare[prepare.index('--tree')+1], V13_TREE)
+        self.assertEqual(Path(prepare[prepare.index('--output')+1]).resolve(), (build_dir/'native-abi-v13').resolve())
+        self.assertEqual(prepare[prepare.index('--header-manifest')+1],
+                         str(ROOT/'tests/fixtures/native_cpp_abi/host-c3ed455/manifest.json'))
+
+    def test_v13_provider_failure_is_reported_without_hiding_checks(self):
+        code, summary, scripted, _ = self.run_profile(**{'v13-prepare': 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiV13']['action'], 'failed')
+        self.assertIn('abi-v13', failure_stages(summary))
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
 
     def test_present_prior_object_does_not_fetch(self):
         code, summary, scripted, _ = self.run_profile(**{'prior-cat-file': 0})

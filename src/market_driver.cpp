@@ -6,7 +6,7 @@
 #include <optional>
 
 namespace pineforge {
-inline namespace native_driver_v3 {
+inline namespace native_driver_v4 {
 
 bool native_bar_structurally_valid(const Bar& bar) noexcept {
     if (!std::isfinite(bar.open) || bar.open <= 0.0) return false;
@@ -85,5 +85,5 @@ NativeInputPreflightResult preflight_native_inputs(
     return out;
 }
 
-}  // inline namespace native_driver_v3
+}  // inline namespace native_driver_v4
 }  // namespace pineforge

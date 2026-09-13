@@ -14,7 +14,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v13 {
+inline namespace engine_script_run_v14 {
 
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
@@ -252,12 +252,47 @@ struct NativeSetupResult {
     NativeRunSpecValidation validation{};
 };
 
+enum class NativeCurrentPriceRule : std::uint8_t { AsPresented = 0, NearestTick = 1 };
+enum class NativeCurrentQuoteKind : std::uint8_t { MarketDecision = 0, ExecutionAnchor = 1 };
+
+struct NativeCurrentPointView {
+    NativeDecisionContext decision;
+    double price = 0.0;
+    NativeCurrentQuoteKind quote_kind = NativeCurrentQuoteKind::MarketDecision;
+    std::uint64_t quote_origin_ordinal = 0;
+};
+
+enum class NativeCurrentRefusal : std::uint8_t {
+    NoExecutionContext = 0, Reentrant = 1, InvalidHandle = 2, NotWorking = 3,
+    NotAcceptedInCallback = 4, UnsupportedRequest = 5, UnreadyOwner = 6,
+    InvalidSelection = 7, ConfigurationMismatch = 8,
+};
+
+struct NativeCurrentExecution {
+    native_order::RequestHandle target;
+    NativeCurrentPriceRule price_rule = NativeCurrentPriceRule::AsPresented;
+};
+
+// Recomputed observations, never an apply token. Readiness is the financial
+// pre-source preparation boundary, independent of account projection validity
+// and excluding opening admission and late counter/lifecycle checks.
+struct NativeCurrentExecutionPreview {
+    std::optional<NativeCurrentRefusal> refusal;
+    std::optional<execution::Status> settlement_readiness;
+    execution::AccountEffectProjection account;
+    std::vector<double> closed_row_pnl;
+};
+
+using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
+    native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,
+    native_order::MatchRejectedEvent>;
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
-#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V13 1
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V14 1
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -271,6 +306,13 @@ public:
 
     virtual void on_native_run_begin() {}
     virtual void on_native_bar(const Bar& bar, const NativeDecisionContext& context) = 0;
+
+    virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
+                                   const NativeDecisionContext&) {}
+
+    std::optional<NativeCurrentPointView> current_execution_point() const;
+    NativeCurrentExecutionPreview inspect_current_execution(const NativeCurrentExecution&) const;
+    NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 
     NativeSetupResult configure_native(const NativeRunSpec& spec);
     NativeStateView native_state() const;
@@ -295,5 +337,5 @@ public:
     friend class NativeExecutionConsumer;
 };
 
-}  // inline namespace engine_script_run_v13
+}  // inline namespace engine_script_run_v14
 }  // namespace pineforge

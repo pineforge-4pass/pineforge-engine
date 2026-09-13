@@ -9,11 +9,11 @@
 
 namespace pineforge {
 inline namespace native_run_spec_v1 { struct NativeRunSpec; }
-inline namespace native_driver_v3 {
+inline namespace native_driver_v4 {
 
 // Semantic versions hashed into native continuation identity.
-inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v3";
-inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v4";
+inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v4";
+inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v5";
 inline constexpr const char* kNativeCalendarSemanticVersion = "native-calendar/v1";
 
 enum class NativePriceProvenance : std::uint8_t {
@@ -25,6 +25,7 @@ enum class NativePriceProvenance : std::uint8_t {
     AfterCalculationClose = 5,
     PartialFinalized = 6,
     Calculation = 7,
+    CurrentExecution = 8,
 };
 
 enum class NativePathPhase : std::uint8_t {
@@ -154,5 +155,5 @@ NativeInputPreflightResult preflight_native_inputs(
         int n,
         NativeInputPolicy policy);
 
-}  // inline namespace native_driver_v3
+}  // inline namespace native_driver_v4
 }  // namespace pineforge

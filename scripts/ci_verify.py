@@ -337,6 +337,7 @@ class Driver:
         self.actual_version: str | None = None
         self.abi_action = 'not-started'
         self.abi_prior_action = 'not-started'
+        self.abi_v13_action = 'not-started'
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -357,6 +358,7 @@ class Driver:
             'exitCode': None,
             'abi': {'action': self.abi_action},
             'abiPrior': {'action': self.abi_prior_action},
+            'abiV13': {'action': self.abi_v13_action},
             'stages': self.stages,
             'failures': self.failures,
         }
@@ -364,6 +366,7 @@ class Driver:
     def write_summary(self) -> None:
         self.summary['abi'] = {'action': self.abi_action}
         self.summary['abiPrior'] = {'action': self.abi_prior_action}
+        self.summary['abiV13'] = {'action': self.abi_v13_action}
         self.summary['actualVersion'] = self.actual_version
         self.summary['stages'] = self.stages
         self.summary['failures'] = self.failures
@@ -509,6 +512,15 @@ class Driver:
             extra_argv=['--commit', provider['commit'], '--tree', provider['tree'],
                         '--header-manifest', str(manifest)],
             stage='abi-prior', fetch_stage='abi-prior-fetch')
+
+    def ensure_abi_v13(self) -> None:
+        provider = PROVIDERS['v13']
+        manifest = self.cfg.source / provider['manifest'].relative_to(ROOT)
+        self.abi_v13_action = self.ensure_prepared_provider(
+            self.cfg.build_dir / provider['default_output'], provider['commit'], provider['tree'],
+            extra_argv=['--commit', provider['commit'], '--tree', provider['tree'],
+                        '--header-manifest', str(manifest)],
+            stage='abi-v13', fetch_stage='abi-v13-fetch')
 
     def ensure_prepared_provider(self, output: Path, commit: str, tree: str, *,
                                  extra_argv: list[str], stage: str, fetch_stage: str) -> str:
@@ -656,6 +668,7 @@ class Driver:
 
         self.ensure_abi_base()
         self.ensure_abi_prior()
+        self.ensure_abi_v13()
 
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
                  '--output-on-failure', '--no-tests=error', '--parallel', str(self.cfg.jobs)]

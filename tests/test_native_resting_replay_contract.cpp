@@ -179,7 +179,12 @@ void same_owner(const no::Owner& a, const no::Owner& b) {
     else if (const auto* o = std::get_if<no::BindOpening>(&a)) {
         same_handle(o->opening, std::get<no::BindOpening>(b).opening);
         same_i64(o->cycle, std::get<no::BindOpening>(b).cycle);
-    }
+    } else if (const auto* o = std::get_if<no::BindOpenings>(&a)) {
+        const auto& other = std::get<no::BindOpenings>(b);
+        same_i64(o->cycle, other.cycle);
+        REQUIRE(o->openings.size() == other.openings.size());
+        for (size_t i = 0; i < o->openings.size(); ++i) same_handle(o->openings[i], other.openings[i]);
+    } else CHECK(std::holds_alternative<no::Independent>(a));
 }
 void same_group(const no::Group& a, const no::Group& b) {
     REQUIRE(a.index() == b.index());
@@ -247,7 +252,13 @@ void same_authority(const no::Authority& a, const no::Authority& b) {
         same_i64(o->cycle, std::get<no::OpeningClose>(b).cycle);
         CHECK(o->side == std::get<no::OpeningClose>(b).side);
         same_enrollment(o->enrollment, std::get<no::OpeningClose>(b).enrollment);
-    }
+    } else if (const auto* o = std::get_if<no::OpeningsClose>(&a)) {
+        const auto& other = std::get<no::OpeningsClose>(b);
+        same_i64(o->cycle, other.cycle); CHECK(o->side == other.side);
+        same_enrollment(o->enrollment, other.enrollment);
+        REQUIRE(o->openings.size() == other.openings.size());
+        for (size_t i = 0; i < o->openings.size(); ++i) same_handle(o->openings[i], other.openings[i]);
+    } else CHECK(std::holds_alternative<no::BookTransaction>(a) || std::holds_alternative<no::UnboundBookClose>(a));
 }
 void same_trigger_state(const no::TriggerState& a, const no::TriggerState& b) {
     REQUIRE(a.index() == b.index());
@@ -274,12 +285,16 @@ void same_pending(const no::PendingAdjustments& a, const no::PendingAdjustments&
         same_event_id(d->tail_receipt, std::get<no::PendingDeferred>(b).tail_receipt);
     }
 }
-void same_scope(const execution::CloseScope& a, const execution::CloseScope& b) {
+void same_scope(const no::ExecutionScope& a, const no::ExecutionScope& b) {
     REQUIRE(a.index() == b.index());
     if (const auto* o = std::get_if<execution::OpeningExposure>(&a)) {
         same_u64(o->incarnation, std::get<execution::OpeningExposure>(b).incarnation);
         same_i64(o->cycle, std::get<execution::OpeningExposure>(b).cycle);
-    }
+    } else if (const auto* selected = std::get_if<no::SelectedExposure>(&a)) {
+        const auto& other = std::get<no::SelectedExposure>(b);
+        same_i64(selected->cycle, other.cycle);
+        CHECK(selected->incarnations == other.incarnations);
+    } else CHECK(std::holds_alternative<execution::Book>(a));
 }
 void same_opt_event(const std::optional<no::EventId>& a, const std::optional<no::EventId>& b) {
     CHECK(a.has_value() == b.has_value());

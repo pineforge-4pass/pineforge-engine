@@ -24,7 +24,12 @@ HEADER_MANIFEST = ROOT / 'tests/fixtures/settlement_cpp_abi/e60e571/manifest.jso
 PRIOR_COMMIT = '0e18690db3fb6bb4705841c2a86936dfa206380a'
 PRIOR_TREE = 'c29545d262bf6dcc22e46aa3382422f2e9c68378'
 PRIOR_HEADER_MANIFEST = ROOT / 'tests/fixtures/settlement_cpp_abi/0e18690/manifest.json'
+V13_COMMIT = 'c3ed45516721d3185fcd2f50bb293793304bc6e6'
+V13_TREE = 'bb80c4767dddc0e5c9ae172672edd955ad344890'
 PROVIDERS = {
+    'v13': {'commit': V13_COMMIT, 'tree': V13_TREE,
+            'manifest': ROOT / 'tests/fixtures/native_cpp_abi/host-c3ed455/manifest.json',
+            'default_output': 'native-abi-v13', 'headers_name': 'headers.tar'},
     'e60': {'commit': BASE_COMMIT, 'tree': BASE_TREE, 'manifest': HEADER_MANIFEST,
             'default_output': 'settlement-abi-base', 'headers_name': 'r2-headers.tar'},
     '0e': {'commit': PRIOR_COMMIT, 'tree': PRIOR_TREE, 'manifest': PRIOR_HEADER_MANIFEST,

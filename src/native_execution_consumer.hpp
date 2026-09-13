@@ -11,7 +11,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v13 {
+inline namespace engine_script_run_v14 {
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
@@ -61,6 +61,11 @@ public:
                                                const native_order::Request& request);
     native_order::CancelResult cancel(BacktestEngine& engine,
                                       const native_order::RequestHandle& target);
+    std::optional<NativeCurrentPointView> current_execution_point() const;
+    NativeCurrentExecutionPreview inspect_current_execution(
+        const BacktestEngine& engine, const NativeCurrentExecution& command) const;
+    NativeCurrentExecutionResult execute_current(
+        BacktestEngine& engine, const NativeCurrentExecution& command);
     NativePhysicalPosition position(const BacktestEngine& engine) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
@@ -71,6 +76,47 @@ public:
     void reject_inherited_on_bar(BacktestEngine& engine);
 
 private:
+    struct CurrentExecutionFrame {
+        NativeCurrentPointView point;
+        uint64_t acceptance_cutoff = 0;
+    };
+    // Stable append-only history index, never a borrowed element reference.
+    struct AppliedNotification {
+        std::size_t history_index = 0;
+        uint64_t ordinal = 0;
+        NativeCurrentPointView point;
+    };
+    struct ResolvedCandidate {
+        execution::Action physical = execution::Flatten{};
+        native_order::ExecutionScope scope = execution::Book{};
+        execution::CloseScope financial_scope = execution::Book{};
+        std::optional<execution::SelectedOpeningSet> selected;
+        native_order::TargetObservation target;
+        execution::Fill fill;
+        execution::SettlementInspection inspect;
+    };
+    std::optional<NativeCurrentRefusal> validate_current_execution(
+        const BacktestEngine& engine, const NativeCurrentExecution& command) const;
+    double current_price(const BacktestEngine& engine, const native_order::LiveRequest& live,
+                         NativeCurrentPriceRule rule) const;
+    ResolvedCandidate inspect_candidate(const BacktestEngine& engine,
+        const native_order::LiveRequest& live, const native_order::MatchCursor& cursor,
+        double resolved) const;
+    std::optional<NativeCurrentExecutionResult> consume_matched_request(
+        BacktestEngine& engine, const native_order::RequestHandle& handle,
+        const native_order::EvaluationContext& evaluation, double raw_price,
+        double resolved_price, const NativeCurrentPointView& notification_point);
+    NativeCurrentPointView execution_anchor(const native_order::MatchCursor& cursor,
+                                            double resolved) const;
+    void enqueue_applied_notification(AppliedNotification notification);
+    void drain_applied_notifications(BacktestEngine& engine);
+    void invoke_applied_callback(BacktestEngine& engine, const AppliedNotification& notification);
+    void finish_callback(BacktestEngine& engine, uint64_t ordinal);
+    std::vector<native_order::OpeningObservation> read_openings(
+        const BacktestEngine& engine, const std::vector<native_order::RequestHandle>& handles,
+        int64_t cycle) const;
+    void refresh_openings(const BacktestEngine& engine,
+        std::vector<native_order::OpeningObservation>& openings) const noexcept;
     struct ScriptBucket {
         int64_t key = 0;
         native_calendar::NativeInterval interval{};
@@ -218,6 +264,11 @@ private:
     native_calendar::TimeframeCompatibility pairing_{};
     NativeRunSpec applied_{};
     bool in_callback_ = false;
+    bool consuming_request_ = false;
+    bool draining_notifications_ = false;
+    std::optional<CurrentExecutionFrame> current_frame_;
+    std::vector<AppliedNotification> applied_notifications_;
+    std::size_t notification_head_ = 0;
     bool processing_input_ = false;
     InputMode input_mode_ = InputMode::Unselected;
     int next_interval_index_ = 0;
@@ -248,5 +299,5 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
     return static_cast<NativeExecutionConsumer&>(consumer);
 }
 
-}  // inline namespace engine_script_run_v13
+}  // inline namespace engine_script_run_v14
 }  // namespace pineforge
