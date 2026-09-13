@@ -136,6 +136,9 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
     values = {
         'CMAKE_BUILD_TYPE': profile.build_type,
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
+        # Preserve the invoking virtualenv path: resolving its symlink can
+        # silently select the base interpreter for CMake-registered tests.
+        'Python3_EXECUTABLE': sys.executable,
         'PINEFORGE_BUILD_TESTS': 'ON',
         'PINEFORGE_BUILD_TUTORIAL': 'ON' if profile.tutorial else 'OFF',
         'PINEFORGE_BUILD_LIVE_RUNNER': 'ON' if profile.live_runner else 'OFF',
@@ -476,6 +479,9 @@ class Driver:
         if cache.get('PINEFORGE_VERSION_SOURCE') != 'FILE':
             return (f'PINEFORGE_VERSION_SOURCE expected FILE '
                     f'got {cache.get("PINEFORGE_VERSION_SOURCE")!r}')
+        if cache.get('Python3_EXECUTABLE') != sys.executable:
+            return (f'Python3_EXECUTABLE expected {sys.executable!r} '
+                    f'got {cache.get("Python3_EXECUTABLE")!r}')
         for key, wanted in (
             ('PINEFORGE_BUILD_TESTS', True),
             ('PINEFORGE_BUILD_TUTORIAL', profile.tutorial),
@@ -603,6 +609,7 @@ class Driver:
             'liveRunner': cmake_on(cache.get('PINEFORGE_BUILD_LIVE_RUNNER')),
             'sanitizers': cmake_on(cache.get('PINEFORGE_ENABLE_SANITIZERS')),
             'versionSource': cache.get('PINEFORGE_VERSION_SOURCE'),
+            'python': cache.get('Python3_EXECUTABLE'),
             'buildType': cache.get('CMAKE_BUILD_TYPE'),
         }, indent=2, sort_keys=True))
         if self.cfg.profile.sanitizers:
@@ -651,7 +658,7 @@ class Driver:
         self.ensure_abi_prior()
 
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
-                 '--output-on-failure', '--parallel', str(self.cfg.jobs)]
+                 '--output-on-failure', '--no-tests=error', '--parallel', str(self.cfg.jobs)]
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
         self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)

@@ -21,8 +21,11 @@ ARTIFACTS = {
     "settlement-abi-prior/build.log": "settlement-abi-prior-build.log",
     "settlement-abi-receipt.json": "settlement-abi-receipt.json",
 }
+DEPENDENCY_ARTIFACTS = ('environment.txt', 'curl-configure.log',
+                        'curl-build.log', 'curl-install.log')
 ENV_KEYS = ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_SHA", "GITHUB_RUN_ID",
-            "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "RUNNER_OS", "RUNNER_ARCH", "CURL_CACHE_HIT")
+            "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "RUNNER_OS", "RUNNER_ARCH", "CURL_CACHE_HIT",
+            "ImageOS", "ImageVersion")
 
 
 def copy_regular(source: Path, target: Path) -> None:
@@ -41,6 +44,8 @@ def main() -> int:
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--profile", choices=("release", "debug", "sanitizers", "native"), required=True)
     parser.add_argument("--output", type=Path, default=Path("ci-diagnostics"))
+    parser.add_argument("--dependency-dir", type=Path,
+                        help="optional native dependency logs; binaries and caches are excluded")
     args = parser.parse_args()
     build = args.build_dir.resolve()
     output = args.output.resolve()
@@ -57,6 +62,13 @@ def main() -> int:
             copy_regular(path, args.output / target)
         else:
             missing.append(source)
+    if args.dependency_dir is not None:
+        for name in DEPENDENCY_ARTIFACTS:
+            source = args.dependency_dir / name
+            if source.is_file() and not source.is_symlink():
+                copy_regular(source, args.output / 'native-dependencies' / name)
+            else:
+                missing.append('native-dependencies/' + name)
     for directory in args.build_dir.glob("settlement-abi-receipt.artifacts-*"):
         if directory.is_symlink() or not directory.is_dir():
             continue

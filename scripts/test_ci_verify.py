@@ -12,8 +12,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import ci_verify
 from ci_verify import (
@@ -126,6 +128,9 @@ class Scripted:
         if argv[0] == 'cmake' and '--install' in argv:
             return self._install()
         if argv[0] == 'ctest':
+            if self.exits.get('actual_empty_ctest'):
+                return default_runner(argv, extra_env=extra_env, timeout=timeout,
+                                      combine_stderr=combine_stderr, stream_output=False)
             env_ok = True
             if self.profile == 'sanitizers':
                 env_ok = extra_env == SANITIZER_RUN_ENV
@@ -160,6 +165,7 @@ class Scripted:
             'PINEFORGE_BUILD_LIVE_RUNNER': live,
             'PINEFORGE_ENABLE_SANITIZERS': sanitizers,
             'PINEFORGE_VERSION_SOURCE': 'FILE',
+            'Python3_EXECUTABLE': self.exits.get('cache_python', sys.executable),
         }
         if self.exits.get('cache_version_source'):
             values['PINEFORGE_VERSION_SOURCE'] = self.exits['cache_version_source']
@@ -173,6 +179,10 @@ class Scripted:
         if code != 0:
             return Completed(code, b'', b'configure failed\n')
         write_cache(self.build_dir / 'CMakeCache.txt', self._cache_values())
+        if self.exits.get('actual_empty_ctest'):
+            # A real, empty CTest inventory proves the no-test exit policy.
+            # Configure/build remain scripted; no engine executable is run.
+            (self.build_dir / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
         if self.profile == 'sanitizers':
             commands = [{
                 'directory': str(self.build_dir),
@@ -524,6 +534,45 @@ def read_cache_for_test(path: Path) -> dict[str, str]:
 
 
 class DriverOrderingAndAggregation(unittest.TestCase):
+    def test_configure_binds_invoking_python_without_resolving_venv_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            entry = Path(temporary) / 'venv' / 'bin' / 'python'
+            entry.parent.mkdir(parents=True)
+            entry.symlink_to(sys.executable)
+            with mock.patch.object(ci_verify.sys, 'executable', str(entry)):
+                cfg = ci_verify.build_config(['release', '--build-dir', str(Path(temporary) / 'build')])
+                definitions = cmake_cache_definitions(cfg)
+                self.assertEqual(definitions.get('Python3_EXECUTABLE'), str(entry))
+                self.assertNotEqual(definitions['Python3_EXECUTABLE'], str(entry.resolve()))
+
+    def test_different_configured_python_refuses_before_build(self):
+        code, summary, scripted, _ = self.run_profile(cache_python='/not-the-invoking-python')
+        self.assertEqual(code, 1)
+        self.assertIn('profile-options', failure_stages(summary))
+        self.assertNotIn('build', scripted.names())
+        self.assertIn('Python3_EXECUTABLE', summary['failures'][0]['error'])
+
+    def test_empty_inventory_fails_real_ctest_without_hiding_package_checks(self):
+        code, summary, scripted, build_dir = self.run_profile(actual_empty_ctest=True)
+        self.assertEqual(code, 1)
+        self.assertIn('ctest', failure_stages(summary))
+        self.assertIn('install', scripted.names())
+        self.assertIn('smoke-version', scripted.names())
+        self.assertIn('No tests were found', (build_dir / 'ci-logs/ctest.log').read_text())
+        ctest = next(argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
+        self.assertIn('--no-tests=error', ctest)
+
+    def test_real_empty_ctest_default_succeeds_but_strict_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / 'CTestTestfile.cmake').write_text('# deliberately empty inventory\n')
+            argv = ['ctest', '--test-dir', temporary]
+            default = default_runner(argv, stream_output=False)
+            strict = default_runner([*argv, '--no-tests=error'], stream_output=False)
+        self.assertEqual(default.returncode, 0, default.stdout)
+        self.assertNotEqual(strict.returncode, 0)
+        self.assertIn(b'No tests were found', default.stdout + default.stderr)
+        self.assertIn(b'No tests were found', strict.stdout + strict.stderr)
+
     def test_local_ccache_uses_content_identity(self):
         seen = []
         def runner(argv, **kwargs):

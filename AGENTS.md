@@ -7,6 +7,10 @@
 Both C++ unit tests and full corpus verification must pass.
 
 ```bash
+# Fast workflow/source checks first (requires actionlint 1.7.12 + ShellCheck).
+# This does not replace either verification step below.
+python3 scripts/ci_preflight.py
+
 # 1. Run the same complete verification profile as CI
 python3 scripts/ci_verify.py release --build-dir build --jobs 4
 # Relevant additional profiles: debug, sanitizers, native (see docs/ci.md)

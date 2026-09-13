@@ -1,19 +1,17 @@
 name: Native live runner
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Cancel superseded PR runs only. Main/post-merge and manual workflow_dispatch
-# use a unique run_id group so proof runs are never cancelled.
+# The caller owns PR cancellation. Keep a distinct group: github.workflow in
+# a reusable workflow names the caller, so an unprefixed group would collide
+# with CI and could cancel it. Main/manual proof groups stay unique per run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: native-live-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -26,13 +24,18 @@ env:
 
 jobs:
   native-live:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Install native build dependencies
         run: |
@@ -88,9 +91,10 @@ jobs:
             -DBUILD_CURL_EXE=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
             -DBUILD_TESTING=OFF -DCURL_USE_OPENSSL=ON -DENABLE_WEBSOCKETS=ON \
             -DHTTP_ONLY=ON -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF \
-            -DCURL_USE_LIBSSH2=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF
-          cmake --build curl-build -j 4
-          cmake --install curl-build
+            -DCURL_USE_LIBSSH2=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF \
+            2>&1 | tee curl-configure.log
+          cmake --build curl-build -j 4 2>&1 | tee curl-build.log
+          cmake --install curl-build 2>&1 | tee curl-install.log
 
       - name: Verify native live
         run: python3 scripts/ci_verify.py native --build-dir build-live --jobs 4 --generator Ninja --curl-dir "${{ github.workspace }}/build-native-deps/curl-install/lib/cmake/CURL" --ccache --require-websocket
@@ -99,7 +103,7 @@ jobs:
         if: always()
         env:
           CURL_CACHE_HIT: ${{ steps.curl-cache.outputs.cache-hit }}
-        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live --profile native
+        run: python3 scripts/collect_ci_diagnostics.py --build-dir build-live --profile native --dependency-dir build-native-deps
 
       - name: Retain CI diagnostics
         if: always()

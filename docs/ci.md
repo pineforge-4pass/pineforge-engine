@@ -1,6 +1,18 @@
 # Local verification and CI
 
-Use the same entrypoint as GitHub Actions before publishing a change:
+Start with the fast preflight used by GitHub Actions. Install actionlint 1.7.12
+and ShellCheck, then run:
+
+```sh
+python3 scripts/ci_preflight.py
+```
+
+This checks the CI/native workflow syntax, expressions and shell commands,
+source ABI/hash/schema guards, and the verifier's failure-handling tests. A
+failure blocks all compilation lanes and retains logs in `build-ci-preflight/`.
+It does not compile the engine or replace any complete verification profile.
+
+Then use the same verification entrypoint as GitHub Actions before publishing:
 
 ```sh
 python3 scripts/ci_verify.py release --build-dir build --jobs 4
@@ -11,6 +23,11 @@ prepares the real historical ABI provider, runs CTest, installs the package,
 and builds and runs the `find_package` consumer. The smoke test compares the
 installed library's reported version with `VERSION`. After a successful build,
 a failing test suite does not hide a separate install or package failure.
+
+CI pins Ubuntu 24.04 and macOS 26, the platforms used by the preceding green
+refactor PR, and selects Python 3.12 explicitly. CMake uses the same interpreter as the
+verification driver, so its Python checks do not switch to a different system
+Python. CTest must discover tests; an empty suite is a failure.
 
 ## Profiles
 
@@ -70,13 +87,18 @@ Each build directory contains `ci-summary.json` and full command logs under
 `ci-logs/`, plus CTest JUnit when the installed CTest supports it. A version
 failure records both actual and expected values. GitHub Actions retains compact
 diagnostics, CTest logs and ABI receipts and publishes the stage results in its
-job summary. Compiler objects, binaries and dependency caches are not uploaded
+job summary. Native curl configure/build/install logs and dependency environment
+identity are retained even if preparation fails before the verifier starts.
+Compiler objects, binaries and dependency caches are not uploaded
 as diagnostics.
 
-Superseded pull-request runs are canceled. Main/post-merge and manual proof runs
-use distinct concurrency groups and remain uncanceled. The required `build`
-check still depends on every standard matrix lane; sanitizer and native-live
-checks remain separate requirements.
+Superseded pull-request runs are canceled. CI/native main/post-merge and manual proof runs
+use distinct concurrency groups and remain uncanceled. Native verification is a
+reusable workflow called once by CI, with a separate concurrency namespace; it
+also supports manual dispatch. The required `build` check passes only when
+preflight, all four standard builds, sanitizers and native verification succeed.
+A failed, canceled or skipped dependency cannot produce a green `build` check.
+The separate required `sanitizers` status remains available.
 
 These checks do not run the parity campaign. Fixed-population Cloud measurement,
 the actual gate and post-merge evidence remain separate acceptance steps.
