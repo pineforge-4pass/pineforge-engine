@@ -1707,6 +1707,49 @@ void a_h1_h2_fresh_terms_replay_and_hash_mutations() {
                                       rejection_b[0].attempted_terms));
 }
 
+void d4_real_appended_histories_cover_terms_fields() {
+    auto run_host_sized = [](Host& host, const char* key, double units, double price_delta) {
+        host.resolver = [units, price_delta](const NativeExecutionTermsFacts& facts) {
+            if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+                return no::ExecutionTerms{facts.default_resolved_price + price_delta, units,
+                                           no::OpeningShape::Transact};
+            }
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& h) { put(h, host_open("D4-host")); };
+        start(host, key);
+        host.tick(1, 100);
+        finish(host);
+        const auto receipt = events_of<no::TermsResolvedEvent>(host);
+        REQUIRE(receipt.size() == 1);
+        return receipt.front();
+    };
+    Host units_one, units_two, price_changed;
+    const auto one = run_host_sized(units_one, "D4-history", 1.0, 0.0);
+    const auto two = run_host_sized(units_two, "D4-history", 2.0, 0.0);
+    const auto price = run_host_sized(price_changed, "D4-history", 1.0, 1.0);
+    CHECK(units_one.native_continuation_hash() != units_two.native_continuation_hash());
+    CHECK(units_one.native_continuation_hash() != price_changed.native_continuation_hash());
+    CHECK(!equal_terms_resolved_bits(one, two, true));
+    CHECK(!equal_terms_resolved_bits(one, price, true));
+
+    Host curve_a, curve_b;
+    auto configure_curve = [](Host& host, const char* key, double rate) {
+        host.beginning = [](Host& h) { put(h, tx(1, "curve-history")); };
+        const auto run_spec = configuration(key);
+        REQUIRE(host.configure_native(run_spec).status == NativeSetupStatus::Applied);
+        REQUIRE(host.configure_native_fx_curve(NativeFxCurve{{T}, {rate}}).status
+                == NativeSetupStatus::Applied);
+        const Bar bar{100, 100, 100, 100, 1, T};
+        host.run(&bar, 1);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    };
+    configure_curve(curve_a, "D4-curve", 1.25);
+    configure_curve(curve_b, "D4-curve", 1.5);
+    CHECK(curve_a.native_continuation_hash() != curve_b.native_continuation_hash());
+}
+
 void run_case(const char* name, const std::function<void()>& body) {
     scenario = name; boundary = ""; ++cases;
     const int previous = failures;
@@ -1756,6 +1799,8 @@ int main() {
     run_case("terms replay predicates and mutations", [] { terms_predicate_mutations(); });
     run_case("A-H1/A-H2 fresh terms replay and hashes",
              [] { a_h1_h2_fresh_terms_replay_and_hash_mutations(); });
+    run_case("D4 real appended durable histories",
+             [] { d4_real_appended_histories_cover_terms_fields(); });
     std::printf("%s native resting replay: %d cases, %d checks, %d failures\n",
                 failures ? "FAIL" : "PASS", cases, checks, failures);
     return failures ? 1 : 0;
