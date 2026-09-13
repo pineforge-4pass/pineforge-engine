@@ -134,6 +134,10 @@ directions. Current-execution callers use v14 or v15 only; v15 terms and
 FX-curve callers require the v15 host surface. No ABI caller executable is
 run.
 
+For the 0.14.x line, this is an internal C++ epoch transition rather than a
+public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
+guarantee remains in force.
+
 The transitions from the two frozen host epochs to `engine_script_run_v15`
 drop no check. Against each historical provider the checker still compares,
 in full and unconditionally:

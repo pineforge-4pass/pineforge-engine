@@ -628,8 +628,10 @@ namespace no = pineforge::native_order;
 
 class NativeSelectedExample final : public pineforge::NativeStrategyHost {
     std::optional<no::RequestHandle> opening_;
+    std::optional<no::RequestHandle> reversal_;
     std::optional<std::int64_t> opening_cycle_;
     int bars_ = 0;
+    bool child_submitted_ = false;
 
     no::ExecutionTerms resolve_execution_terms(
             const pineforge::NativeExecutionTermsFacts& facts) const override {
@@ -648,6 +650,7 @@ class NativeSelectedExample final : public pineforge::NativeStrategyHost {
                        const pineforge::NativeDecisionContext&) override {
         ++bars_;
         if (bars_ == 1) {
+            submit(no::Request{no::Transact{1.0}, "baseline-open", ""});
             no::Request open;
             open.intent = no::HostSized{no::HostSizedKind::Open, no::Side::Long};
             open.label = "sized-limit";
@@ -655,24 +658,16 @@ class NativeSelectedExample final : public pineforge::NativeStrategyHost {
             opening_ = submit(open).handle;
             return;
         }
-        if (bars_ == 2 && opening_ && opening_cycle_) {
+        if (!child_submitted_ && opening_ && opening_cycle_) {
             no::Request child;
             child.intent = no::Reduce{no::OwnerOpenedUnits{}};
             child.label = "bound-stop";
             child.trigger = no::Stop{99.0};
             child.owner = no::BindOpening{*opening_, *opening_cycle_};
             submit(child);
-            return;
+            child_submitted_ = true;
         }
-        if (bars_ == 3) {
-            no::Request reverse;
-            reverse.intent = no::ReverseTo{-1.0};
-            reverse.label = "exact-reverse";
-            reverse.trigger = no::Stop{99.0};
-            submit(reverse);
-            return;
-        }
-        if (bars_ == 4 && opening_ && opening_cycle_) {
+        if (bars_ == 3 && opening_ && opening_cycle_) {
             no::Request selected{no::Flatten{}, "selected-flatten", ""};
             selected.owner = no::BindOpenings{{*opening_}, *opening_cycle_};
             const auto accepted = submit(selected);
@@ -685,6 +680,12 @@ class NativeSelectedExample final : public pineforge::NativeStrategyHost {
                     execute_current(current);
                 }
             }
+        }
+        if (bars_ == 4 && !reversal_) {
+            no::Request reverse;
+            reverse.intent = no::ReverseTo{-1.0};
+            reverse.label = "exact-reverse";
+            reversal_ = submit(reverse).handle;
         }
     }
 

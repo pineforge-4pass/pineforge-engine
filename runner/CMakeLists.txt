@@ -39,6 +39,11 @@ target_link_libraries(native_market_example PRIVATE PineForge::pineforge)
 target_compile_options(native_market_example PRIVATE -fvisibility=hidden -ffp-contract=off)
 set_target_properties(native_market_example PROPERTIES PREFIX "" OUTPUT_NAME "native-market-example")
 
+add_library(native_selected_example MODULE examples/native_selected_strategy.cpp)
+target_link_libraries(native_selected_example PRIVATE PineForge::pineforge)
+target_compile_options(native_selected_example PRIVATE -fvisibility=hidden -ffp-contract=off)
+set_target_properties(native_selected_example PROPERTIES PREFIX "" OUTPUT_NAME "native-selected-example")
+
 add_library(native_live_parser_example MODULE examples/demo_parser.cpp)
 target_include_directories(native_live_parser_example PRIVATE ${PROJECT_SOURCE_DIR}/include)
 set_target_properties(native_live_parser_example PROPERTIES PREFIX "" OUTPUT_NAME "native-live-parser-example")
@@ -105,6 +110,22 @@ if(PINEFORGE_BUILD_TESTS)
     add_test(NAME test_native_example_batch
         COMMAND test_native_example_batch $<TARGET_FILE:native_market_example>)
     set_tests_properties(test_native_example_batch PROPERTIES TIMEOUT 60)
+    # Exercise the second native MODULE through the same C ABI boundary.
+    add_executable(test_native_example_selected
+        ${PROJECT_SOURCE_DIR}/tests/test_native_example_selected.cpp)
+    target_include_directories(test_native_example_selected PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_compile_options(test_native_example_selected PRIVATE -UNDEBUG -ffp-contract=off)
+    target_link_libraries(test_native_example_selected PRIVATE ${CMAKE_DL_LIBS})
+    if(PINEFORGE_ENABLE_SANITIZERS)
+        target_compile_options(test_native_example_selected PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(test_native_example_selected PRIVATE -fsanitize=address,undefined)
+    endif()
+    add_dependencies(test_native_example_selected native_selected_example)
+    add_test(NAME test_native_example_selected
+        COMMAND test_native_example_selected $<TARGET_FILE:native_selected_example>)
+    set_tests_properties(test_native_example_selected PROPERTIES TIMEOUT 60)
     foreach(native_test test_native_live_store test_native_live_websocket)
         add_executable(${native_test} ${PROJECT_SOURCE_DIR}/tests/${native_test}.cpp)
         target_link_libraries(${native_test} PRIVATE pineforge_live_support)
