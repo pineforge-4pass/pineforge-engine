@@ -38,6 +38,7 @@ struct TermsHost : Host {
                 account_currency_fx_broker_epoch_, account_currency_fx_broker_rate_};
     }
     std::int64_t engine_timestamp() const { return current_bar_.timestamp; }
+    void poison_next_cycle() { next_position_cycle_seq_ = std::numeric_limits<std::int64_t>::max(); }
 
     no::ExecutionTerms resolve_execution_terms(
             const NativeExecutionTermsFacts& facts) const override {

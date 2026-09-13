@@ -212,6 +212,30 @@ void a_p6_submit_exception_is_callback_failure() {
     CHECK(host.rows().empty() && host.lots().empty());
 }
 
+void a_p4_cycle_exhaustion_precedes_effects_and_validator() {
+    TermsHost host;
+    bool reached = false;
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.poison_next_cycle();
+        const auto target = put(h, tx(1, "cycle-overflow"));
+        bool threw = false;
+        try {
+            (void)h.execute_current(command(target));
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(threw);
+        CHECK(h.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(h.native_state().failure.code == NativeFailureCode::SettlementFailure);
+        CHECK(h.validator_calls == 0);
+        CHECK(h.lots().empty() && h.rows().empty());
+        reached = true;
+    };
+    run(host, spec("precommit-cycle"), {100});
+    CHECK(reached);
+}
+
 }  // namespace
 
 int main() {
@@ -223,6 +247,7 @@ int main() {
     test("A-P2 opening-only and A-P3 no-effect", a_p2_opening_only_and_a_p3_noeffect_skip);
     test("A-P5 validator and A-P6b preview", a_p5_validator_exception_and_a_p6b_preview_exception);
     test("A-P6 submit exception split", a_p6_submit_exception_is_callback_failure);
+    test("A-P4 cycle exhaustion pre-effects", a_p4_cycle_exhaustion_precedes_effects_and_validator);
     std::printf("R4-B precommit: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
