@@ -252,6 +252,70 @@ std::string json_u64(uint64_t x) {
     return out.str();
 }
 
+std::string hex_bits(double value) {
+    uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof bits);
+    char text[19] = {};
+    std::snprintf(text, sizeof text, "0x%016llx", static_cast<unsigned long long>(bits));
+    return json_escape(text);
+}
+
+std::string new_intent_json(const Request& request) {
+    const auto& intent = request.intent;
+    if (const auto* reverse = std::get_if<pineforge::native_order::ReverseTo>(&intent)) {
+        return "{\"type\":\"ReverseTo\",\"signedUnitsBits\":"
+            + hex_bits(reverse->signed_units) + "}";
+    }
+    if (const auto* sized = std::get_if<pineforge::native_order::HostSized>(&intent)) {
+        std::ostringstream out;
+        out << "{\"type\":\"HostSized\",\"kind\":"
+            << json_u64(static_cast<uint64_t>(sized->kind));
+        if (sized->side) out << ",\"side\":" << json_u64(static_cast<uint64_t>(*sized->side));
+        else out << ",\"sideUnspecified\":true";
+        out << "}";
+        return out.str();
+    }
+    return "{}";
+}
+
+bool has_new_intent(const Request& request) {
+    return std::holds_alternative<pineforge::native_order::ReverseTo>(request.intent)
+        || std::holds_alternative<pineforge::native_order::HostSized>(request.intent);
+}
+
+std::string execution_terms_json(const pineforge::native_order::ExecutionTerms& terms) {
+    std::ostringstream out;
+    out << "{\"resolvedPriceBits\":" << hex_bits(terms.resolved_price);
+    if (terms.units) out << ",\"unitsBits\":" << hex_bits(*terms.units);
+    out << ",\"shape\":" << json_u64(static_cast<uint64_t>(terms.shape)) << "}";
+    return out.str();
+}
+
+std::string terms_receipt_json(const pineforge::native_order::TermsResolvedEvent& event) {
+    std::ostringstream out;
+    out << "{\"definitionIncarnation\":" << json_u64(event.handle().incarnation)
+        << ",\"cursorOrdinal\":" << json_u64(event.cursor.point.ordinal)
+        << ",\"cursorTBits\":" << hex_bits(event.cursor.t)
+        << ",\"priceKind\":" << json_u64(static_cast<uint64_t>(event.input.price_kind))
+        << ",\"sharedCursorCollision\":"
+        << (event.input.shared_cursor_collision ? "true" : "false")
+        << ",\"rawPriceBits\":" << hex_bits(event.input.raw_price)
+        << ",\"defaultResolvedPriceBits\":" << hex_bits(event.input.default_resolved_price)
+        << ",\"terms\":" << execution_terms_json(event.input.terms)
+        << ",\"pendingTotalBits\":" << hex_bits(event.pending_total)
+        << ",\"effectiveDeductionBits\":" << hex_bits(event.effective_deduction)
+        << ",\"remainingBeforeIndex\":" << json_u64(event.remaining_before.index())
+        << ",\"remainingAfterIndex\":" << json_u64(event.remaining_after.index())
+        << ",\"allowanceAfterIndex\":" << json_u64(event.allowance_after.index())
+        << ",\"priorIds\":[";
+    for (std::size_t i = 0; i < event.prior_adjustment_ids.size(); ++i) {
+        if (i) out << ",";
+        out << json_u64(event.prior_adjustment_ids[i].ordinal);
+    }
+    out << "]}";
+    return out.str();
+}
+
 [[maybe_unused]] bool is_sha256_hex(const char* s) {
     if (!s) return false;
     std::size_t n = 0;
@@ -290,6 +354,9 @@ const char* event_kind_name(const CommandEvent& event) {
             return "QuantityBound";
         }
         if constexpr (std::is_same_v<T, pineforge::native_order::ArmedEvent>) return "Armed";
+        if constexpr (std::is_same_v<T, pineforge::native_order::TermsResolvedEvent>) {
+            return "TermsResolved";
+        }
         return "Unknown";
     }, event);
 }
@@ -305,7 +372,8 @@ bool r1_command_event(const CommandEvent& event) {
         || std::strcmp(kind, "InvalidHandle") == 0
         || std::strcmp(kind, "NoEffect") == 0
         || std::strcmp(kind, "MatchRejected") == 0
-        || std::strcmp(kind, "ExecutionApplied") == 0;
+        || std::strcmp(kind, "ExecutionApplied") == 0
+        || std::strcmp(kind, "TermsResolved") == 0;
 }
 
 uint64_t event_ordinal(const CommandEvent& event) {
@@ -400,6 +468,28 @@ std::string lifecycle_json(const std::vector<CommandEvent>& events) {
         }
         if (const auto* mr = as_event<MatchRejectedEvent>(event)) {
             out << ",\"reason\":" << json_u64(static_cast<uint64_t>(mr->reason));
+            if (mr->attempted_terms) {
+                out << ",\"attemptedTerms\":" << execution_terms_json(*mr->attempted_terms);
+            }
+        }
+        if (const auto* receipt = as_event<pineforge::native_order::TermsResolvedEvent>(event)) {
+            out << ",\"termsReceipt\":" << terms_receipt_json(*receipt);
+            if (has_new_intent(receipt->request())) {
+                out << ",\"declaredIntent\":" << new_intent_json(receipt->request());
+            }
+        }
+        if (const auto* applied = as_event<ExecutionAppliedEvent>(event)) {
+            if (has_new_intent(applied->request())) {
+                out << ",\"nativeEffects\":{\"closedUnitsBits\":"
+                    << hex_bits(applied->closed_units)
+                    << ",\"openedUnitsBits\":" << hex_bits(applied->opened_units)
+                    << ",\"filledWorkingBits\":" << hex_bits(applied->filled_working)
+                    << ",\"remainingBeforeIndex\":" << json_u64(applied->remaining_before.index())
+                    << ",\"remainingAfterIndex\":" << json_u64(applied->remaining_after.index())
+                    << ",\"allowanceBeforeIndex\":" << json_u64(applied->allowance_before.index())
+                    << ",\"allowanceAfterIndex\":" << json_u64(applied->allowance_after.index())
+                    << "}";
+            }
         }
         out << "}";
     }
