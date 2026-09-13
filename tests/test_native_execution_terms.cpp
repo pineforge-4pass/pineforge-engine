@@ -126,6 +126,19 @@ void zero_units_ignore_nonpositive_price_on_both_paths() {
     const auto queued_hash = queued.native_continuation_hash();
     CHECK(queued.native_continuation_hash() == queued_hash);
 
+    TermsHost queued_limit;
+    configure(queued_limit);
+    queued_limit.beginning = [](Host& base) {
+        auto request = host_open(no::Side::Short, "queued-zero-limit");
+        request.trigger = no::Limit{100.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    run(queued_limit, spec("zero-nonpositive-limit"), {100});
+    completed(queued_limit);
+    CHECK(last_event<no::TermsResolvedEvent>(queued_limit).has_value());
+    CHECK(last_event<no::NoEffectEvent>(queued_limit).has_value());
+    CHECK(events<no::MatchRejectedEvent>(queued_limit).empty());
+
     TermsHost current;
     configure(current);
     bool reached = false;

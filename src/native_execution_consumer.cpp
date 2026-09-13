@@ -2143,8 +2143,9 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                                 nonidentity_attempt);
             }
         }
-        if (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
-            || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state)) {
+        if (!zero_units_terminal
+            && (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
+            || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state))) {
             std::optional<double> level;
             if (const auto* limit = std::get_if<native_order::Limit>(&live->request().trigger)) {
                 level = limit->price;
