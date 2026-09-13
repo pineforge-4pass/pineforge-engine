@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Driver control-flow, config, aggregation, and receipt-reuse tests for ci_verify.
 
-Source guards, tool help, git object presence, compiler identity, and VERSION
-are real. Full engine configure/build/CTest is not substituted as a passing
+Source guards, tool help, compiler identity, and VERSION are real. The scripted
+driver has an explicit Git object inventory; a separate tiny Git fixture checks
+real object discovery. Full engine configure/build/CTest is not substituted as a passing
 root verification — those stages are scripted here so failure aggregation and
 ordering can be asserted. Root must still run the actual profiles.
 """
@@ -93,11 +94,16 @@ class Scripted:
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'cat-file' in argv:
-            key = 'prior-cat-file' if PRIOR_COMMIT + '^{commit}' in argv else 'cat-file'
-            if key in self.exits:
-                return Completed(int(self.exits[key]), b'', b'')
-            return default_runner(argv, extra_env=None, timeout=timeout,
-                                  combine_stderr=True, stream_output=False)
+            if PRIOR_COMMIT + '^{commit}' in argv:
+                key = 'prior-cat-file'
+            elif BASE_COMMIT + '^{commit}' in argv:
+                key = 'cat-file'
+            else:
+                return Completed(128, b'', b'unknown fixture object\n')
+            # Control-flow tests start with both providers present; individual
+            # tests explicitly remove one. Never depend on checkout depth or
+            # on a previous full verifier run having fetched old commits.
+            return Completed(int(self.exits.get(key, 0)), b'', b'')
         if argv[0] == 'git' and 'fetch' in argv:
             key = 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch'
             return Completed(int(self.exits.get(key, 0)), b'fetched\n', b'')
@@ -531,6 +537,31 @@ class ReceiptReuse(unittest.TestCase):
 def read_cache_for_test(path: Path) -> dict[str, str]:
     from prepare_settlement_cpp_abi_base import read_cache
     return read_cache(path)
+
+
+class GitObjectDiscovery(unittest.TestCase):
+    def test_real_object_lookup_uses_the_supplied_repository(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            def git(*args):
+                result = default_runner(['git', '-C', temporary, *args], stream_output=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                return result.stdout.decode().strip()
+            git('init', '--quiet')
+            self.assertFalse(ci_verify.pinned_object_present(source, default_runner, '0' * 40))
+            git('-c', 'user.name=CI fixture', '-c', 'user.email=ci@example.invalid',
+                '-c', 'commit.gpgsign=false', 'commit', '--quiet', '--allow-empty', '-m', 'fixture')
+            commit = git('rev-parse', 'HEAD')
+            self.assertTrue(ci_verify.pinned_object_present(source, default_runner, commit))
+            self.assertFalse(ci_verify.pinned_object_present(source, default_runner, BASE_COMMIT))
+
+    def test_scripted_inventory_does_not_read_ambient_git_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)  # deliberately not a Git repository
+            scripted = Scripted(source / 'build', source)
+            for commit in (BASE_COMMIT, PRIOR_COMMIT):
+                self.assertTrue(ci_verify.pinned_object_present(source, scripted, commit))
+            self.assertFalse(ci_verify.pinned_object_present(source, scripted, '0' * 40))
 
 
 class DriverOrderingAndAggregation(unittest.TestCase):
