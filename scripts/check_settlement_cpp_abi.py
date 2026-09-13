@@ -282,7 +282,8 @@ def defined_symbols(library: Path) -> str:
     return '\n'.join(line for line in raw.splitlines() if re.search(r'\b[TWtw]\s+', line))
 
 
-def validate_rejection(diagnostic: str, missing, domain=None, engine=ENGINE) -> list[str]:
+def validate_rejection(diagnostic: str, missing, domain=None, engine=ENGINE, *,
+                       allow_engine_typeinfo=False) -> list[str]:
     symbols = re.findall(r'^\s*"(.+)", referenced from:', diagnostic, re.M)
     symbols += re.findall(r"undefined reference to [`'](.+)'", diagnostic)
     symbols += re.findall(r'undefined symbol:\s*(.+)', diagnostic)
@@ -294,7 +295,12 @@ def validate_rejection(diagnostic: str, missing, domain=None, engine=ENGINE) -> 
             raise RuntimeError('link failure omits expected undefined method: '+method)
         if domain and ('selected' in method or 'reversal' in method) and any(domain not in symbol for symbol in matching):
             raise RuntimeError('method has wrong/missing parameter namespace: '+method)
-    unrelated = [symbol for symbol in symbols if not any(symbol.startswith(engine+method+'(') for method in missing)]
+    # A cross-epoch instrumented caller also references its exact engine RTTI.
+    # Keep all expected method/domain checks above; RTTI alone is never proof.
+    owner_typeinfo = 'typeinfo for ' + engine.removesuffix('::')
+    unrelated = [symbol for symbol in symbols
+                 if not any(symbol.startswith(engine+method+'(') for method in missing)
+                 and not (allow_engine_typeinfo and symbol == owner_typeinfo)]
     if unrelated:
         raise RuntimeError('link failure includes unrelated undefined symbols: '+', '.join(unrelated))
     return symbols
@@ -481,7 +487,10 @@ def main() -> int:
                         if any(not undefined_mentions(diagnostic, needle) for needle in needles):
                             raise RuntimeError(name+' lacks expected epoch symbol: '+str(symbol_missing)+'\n'+diagnostic)
                     else:
-                        validate_rejection(diagnostic,missing,domain,engine)
+                        provider_engine = ENGINE if runtime == library else OLD_ENGINE
+                        validate_rejection(diagnostic,missing,domain,engine,
+                            allow_engine_typeinfo=(engine != provider_engine
+                                and cache.get('PINEFORGE_ENABLE_SANITIZERS') == 'ON'))
                 report['links'].append({'name':name,'argv':argv,'exitCode':result.returncode,
                     'outcome':'expected-rejection' if missing or symbol_missing else 'linked','requiredMissing':list(missing),
                     'engineDomain':engine,'requiredEpochSymbol':symbol_missing,

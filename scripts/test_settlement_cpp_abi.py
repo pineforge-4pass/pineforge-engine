@@ -32,6 +32,35 @@ class AbiToolingTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'namespace'):
                 validate_rejection(text,[method],'close_selection_v2::SelectedOpeningSet')
 
+    def test_cross_epoch_rtti_is_exact_and_never_replaces_required_methods(self):
+        method = 'project_native_settlement_v1'
+        for engine in (ENGINE, OLD_ENGINE):
+            owner = engine.removesuffix('::')
+            for style in ('mac', 'gnu', 'lld'):
+                def diagnostic(symbol):
+                    if style == 'mac':
+                        return '  "' + symbol + '", referenced from:\n _main\n'
+                    if style == 'gnu':
+                        return "caller.cpp: undefined reference to `" + symbol + "'\n"
+                    return 'ld.lld: error: undefined symbol: ' + symbol + '\n'
+                methods = diagnostic(engine + method + '(int) const')
+                rtti = diagnostic('typeinfo for ' + owner)
+                with self.subTest(engine=engine, style=style):
+                    self.assertEqual(len(validate_rejection(methods+rtti, [method],
+                        engine=engine, allow_engine_typeinfo=True)), 2)
+                    with self.assertRaisesRegex(RuntimeError, 'unrelated'):
+                        validate_rejection(methods+rtti, [method], engine=engine)
+                    with self.assertRaisesRegex(RuntimeError, 'omits expected'):
+                        validate_rejection(rtti, [method], engine=engine,
+                                           allow_engine_typeinfo=True)
+                    for wrong in ('typeinfo for '+owner+'Other',
+                                  'typeinfo for other::BacktestEngine',
+                                  'typeinfo for '+(OLD_ENGINE if engine==ENGINE else ENGINE).removesuffix('::'),
+                                  'vtable for '+owner, 'other_dependency()'):
+                        with self.assertRaisesRegex(RuntimeError, 'unrelated'):
+                            validate_rejection(methods+rtti+diagnostic(wrong), [method],
+                                engine=engine, allow_engine_typeinfo=True)
+
     def test_generic_failure_or_missing_one_method_cannot_pass(self):
         with self.assertRaisesRegex(RuntimeError,'no recognized'):
             validate_rejection('linker error: file not found',['project_native_settlement_v1'])
