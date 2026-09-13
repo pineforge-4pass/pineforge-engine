@@ -2,12 +2,19 @@
 """Mutation controls for native C++ ABI ownership; no compiler or engine runs."""
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from check_native_cpp_versions import DRIVER_FORWARD, FILES, check_texts, load
+from check_aggregate_cpp_versions import body
+from check_native_cpp_versions import (
+    DRIVER_FORWARD, FILES, NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE,
+    ROOT, authenticate_historical_host_manifests, check, check_fx_curve_introduced_at,
+    check_texts, load,
+)
 
 DATA = load()
 
@@ -358,6 +365,172 @@ class NativeVersions(unittest.TestCase):
         self.assertNotIn('engine_script_run_v14', v15)
         with self.assertRaises(RuntimeError):
             render_current_execution_caller('engine_script_run_v13')
+
+
+class NativeFxCurveVersions(unittest.TestCase):
+    def reject(self, path, before, after):
+        self.assertIn(before, DATA[path])
+        changed = dict(DATA)
+        changed[path] = changed[path].replace(before, after, 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+
+    def test_new_paths_append_without_reindexing_existing_pins(self):
+        self.assertEqual(FILES[-2:], (NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE))
+        self.assertEqual(FILES[11], 'include/pineforge/native_order_identity.hpp')
+        self.assertEqual(FILES.count(NATIVE_FX_CURVE_HEADER), 1)
+        self.assertEqual(FILES.count(NATIVE_FX_CURVE_SOURCE), 1)
+
+    def test_standard_includes_are_exact_and_format_independent(self):
+        header = NATIVE_FX_CURVE_HEADER
+        for before, after in (
+            ('#include <cstddef>', ''),
+            ('#include <cstdint>', '// #include <cstdint>'),
+            ('#include <vector>', '#include <vector>\n#include <vector>'),
+            ('#include <vector>', '#include <vector>\n#include <pineforge/engine.hpp>'),
+            ('#include <vector>', '#include <vector>\n#include "pineforge/native_host.hpp"'),
+            ('#include <vector>', '#include <vector>\n#include <limits>'),
+            ('#include <vector>', '#include <vector>\n#include_next <pineforge/engine.hpp>'),
+        ):
+            with self.subTest(after=after):
+                self.reject(header, before, after)
+        changed = dict(DATA)
+        changed[header] = changed[header].replace('#include ', '#  include')
+        check_texts(changed)
+
+    def test_wrappers_are_real_unique_current_owners(self):
+        for path in (NATIVE_FX_CURVE_HEADER, NATIVE_FX_CURVE_SOURCE):
+            for replacement in (
+                'inline namespace native_fx_curve_v2 {',
+                'inline namespace native_fx_curve_v1 {} namespace misplaced {',
+                'inline namespace native_fx_curve_v1 { /* NativeFxCurve validate_native_fx_curve */ } namespace misplaced {',
+                'inline namespace native_fx_curve_v1 {} inline namespace native_fx_curve_v1 {',
+            ):
+                with self.subTest(path=path, replacement=replacement):
+                    self.reject(path, 'inline namespace native_fx_curve_v1 {', replacement)
+
+    def test_three_public_types_are_required_once_in_order(self):
+        header = NATIVE_FX_CURVE_HEADER
+        for declaration in ('struct NativeFxCurve {',
+                            'enum class NativeFxCurveError : std::uint8_t {',
+                            'struct NativeFxCurveValidation {'):
+            with self.subTest(declaration=declaration):
+                self.reject(header, declaration, '} ' + declaration)
+                self.reject(header, declaration, declaration.replace('NativeFxCurve', 'MissingFxCurve', 1))
+        curve = re.search(r'struct NativeFxCurve \{.*?\};', DATA[header], re.S).group()
+        validation = re.search(r'struct NativeFxCurveValidation \{.*?\};', DATA[header], re.S).group()
+        self.reject(header, curve, curve + '\n' + curve)
+        changed = dict(DATA)
+        changed[header] = changed[header].replace(curve, '', 1).replace(validation, validation + '\n' + curve, 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+        self.reject(header, curve, '/* ' + curve + ' */')
+
+    def test_host_pairing_type_cannot_enter_value_header(self):
+        self.reject(NATIVE_FX_CURVE_HEADER, 'struct NativeFxCurve {',
+                    'struct NativeFxCurveSetupResult {};\nstruct NativeFxCurve {')
+        self.reject(NATIVE_FX_CURVE_HEADER, '#pragma once',
+                    '#pragma once\nstruct NativeFxCurveSetupResult {};')
+        self.reject(NATIVE_FX_CURVE_HEADER, 'struct NativeFxCurve {',
+                    'using NativeFxCurveSetupResult = int;\nstruct NativeFxCurve {')
+        self.reject(NATIVE_FX_CURVE_HEADER, 'struct NativeFxCurve {',
+                    'struct NativeFxCurveSetupResult;\nstruct NativeFxCurve {')
+
+    def test_curve_array_members_keep_their_types_and_order(self):
+        header = NATIVE_FX_CURVE_HEADER
+        first = 'std::vector<std::int64_t> effective_from_ms;'
+        second = 'std::vector<double> account_per_quote;'
+        for before, after in ((first, ''), (second, '/* ' + second + ' */'),
+                              (first, first + first), (first, first.replace('int64_t', 'int32_t'))):
+            with self.subTest(after=after):
+                self.reject(header, before, after)
+        changed = dict(DATA)
+        changed[header] = DATA[header].replace(first, '@FIRST@', 1).replace(second, first, 1).replace('@FIRST@', second, 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+
+    def test_error_values_keep_width_names_numbers_and_order(self):
+        header = NATIVE_FX_CURVE_HEADER
+        self.reject(header, 'NativeFxCurveError : std::uint8_t', 'NativeFxCurveError : std::uint16_t')
+        for entry in ('None = 0', 'LengthMismatch = 1', 'NotStrictlyIncreasing = 2',
+                      'NotFinitePositive = 3', 'AllocationFailure = 4', 'WrongPhase = 5'):
+            with self.subTest(entry=entry):
+                self.reject(header, entry, '/* ' + entry + ' */')
+                self.reject(header, entry, entry + ', ' + entry)
+                self.reject(header, entry, entry[:-1] + '9')
+        changed = dict(DATA)
+        changed[header] = changed[header].replace('None = 0', '@NONE@', 1).replace(
+            'LengthMismatch = 1', 'None = 0', 1).replace('@NONE@', 'LengthMismatch = 1', 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+
+    def test_validation_fields_keep_defaults_types_and_order(self):
+        header = NATIVE_FX_CURVE_HEADER
+        error = 'NativeFxCurveError error = NativeFxCurveError::None;'
+        index = 'std::size_t index = 0;'
+        for before, after in ((error, ''), (index, index + index),
+                              (error, error.replace('::None', '::WrongPhase')),
+                              (index, 'std::uint64_t index = 0;'), (index, 'std::size_t index = 1;')):
+            with self.subTest(after=after):
+                self.reject(header, before, after)
+        changed = dict(DATA)
+        changed[header] = changed[header].replace(error, '@ERROR@', 1).replace(
+            index, error, 1).replace('@ERROR@', index, 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+
+    def test_value_functions_require_declarations_and_real_definitions(self):
+        for return_type, name in (('NativeFxCurveValidation', 'validate_native_fx_curve'),
+                                  ('std::uint64_t', 'native_fx_curve_digest')):
+            signature = return_type + ' ' + name + '(const NativeFxCurve& curve) noexcept'
+            declaration = signature + ';'
+            definition = signature + ' {' + body(
+                DATA[NATIVE_FX_CURVE_SOURCE], re.escape(signature) + r'\s*\{', name) + '}'
+            with self.subTest(name=name):
+                self.reject(NATIVE_FX_CURVE_HEADER, declaration, '')
+                self.reject(NATIVE_FX_CURVE_HEADER, declaration, '/* ' + declaration + ' */')
+                self.reject(NATIVE_FX_CURVE_HEADER, declaration, declaration + '\n' + declaration)
+                self.reject(NATIVE_FX_CURVE_HEADER, declaration, declaration.replace(' noexcept', ''))
+                self.reject(NATIVE_FX_CURVE_HEADER, declaration, declaration.replace('const NativeFxCurve&', 'NativeFxCurve&'))
+                self.reject(NATIVE_FX_CURVE_SOURCE, definition, '')
+                self.reject(NATIVE_FX_CURVE_SOURCE, definition, declaration)
+                self.reject(NATIVE_FX_CURVE_SOURCE, signature + ' {', signature.replace(name, name + '_removed') + ' {')
+                self.reject(NATIVE_FX_CURVE_SOURCE, signature + ' {', signature + ' { }\n' + signature + ' {')
+                self.reject(NATIVE_FX_CURVE_SOURCE, signature + ' {', 'namespace misplaced {\n' + signature + ' {')
+        header = NATIVE_FX_CURVE_HEADER
+        declaration = 'NativeFxCurveValidation validate_native_fx_curve(const NativeFxCurve& curve) noexcept;'
+        changed = dict(DATA)
+        changed[header] = changed[header].replace(declaration, '', 1).replace(
+            '} // inline namespace native_fx_curve_v1',
+            '} // inline namespace native_fx_curve_v1\n' + declaration, 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+
+    def test_introduced_at_authenticates_historical_host_closures(self):
+        manifests = authenticate_historical_host_manifests()
+        self.assertEqual(set(manifests), {'v13', 'v14'})
+        check_fx_curve_introduced_at(manifests)
+        for label in manifests:
+            poisoned = {name: {**manifest, 'files': dict(manifest['files'])}
+                        for name, manifest in manifests.items()}
+            poisoned[label]['files'][NATIVE_FX_CURVE_HEADER] = {}
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError):
+                    check_fx_curve_introduced_at(poisoned)
+                with mock.patch('check_native_cpp_versions.authenticate_historical_host_manifests',
+                                return_value=poisoned) as authenticate:
+                    with self.assertRaises(ValueError):
+                        check()
+                    authenticate.assert_called_once_with(ROOT)
+
+    def test_introduced_at_cannot_skip_authentication_or_accept_wrong_identity(self):
+        from prepare_settlement_cpp_abi_base import PROVIDERS
+        with self.assertRaises(ValueError):
+            authenticate_historical_host_manifests(providers={})
+        providers = {label: dict(provider) for label, provider in PROVIDERS.items()}
+        providers['v14']['commit'] = '0' * 40
+        with self.assertRaises(RuntimeError):
+            authenticate_historical_host_manifests(providers=providers)
 
 
 class FixtureAuthentication(unittest.TestCase):

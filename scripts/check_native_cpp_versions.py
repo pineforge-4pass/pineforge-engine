@@ -2,8 +2,10 @@
 """Source-only native C++ ABI ownership guard; no compiler or engine runs."""
 from pathlib import Path
 import re
+import tempfile
 
 from check_aggregate_cpp_versions import body, clean, standalone_scope
+from prepare_settlement_cpp_abi_base import PROVIDERS, authenticate_headers, extract_tar
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
@@ -19,7 +21,13 @@ FILES = (
     "src/native_execution_consumer.hpp",
     "src/native_execution_consumer.cpp",
     "include/pineforge/native_order_identity.hpp",
+    "include/pineforge/native_fx_curve.hpp",
+    "src/native_fx_curve.cpp",
 )
+
+NATIVE_FX_CURVE_HEADER = "include/pineforge/native_fx_curve.hpp"
+NATIVE_FX_CURVE_SOURCE = "src/native_fx_curve.cpp"
+NATIVE_FX_CURVE_NAMESPACE = "native_fx_curve_v1"
 
 DRIVER_FORWARD = (
     "inline namespace native_run_spec_v1 { struct NativeRunSpec; }"
@@ -100,7 +108,86 @@ def versioned(text, outer, version):
     return value
 
 
+def check_native_fx_curve(files):
+    header = clean(files[NATIVE_FX_CURVE_HEADER])
+    includes = re.findall(r'^\s*#\s*(include(?:_next)?)\b\s*([^\n]*)', header, re.M)
+    if sorted((directive, target.strip()) for directive, target in includes) != [
+            ('include', '<cstddef>'), ('include', '<cstdint>'), ('include', '<vector>')]:
+        raise ValueError('native_fx_curve.hpp includes exactly cstddef, cstdint and vector')
+    if re.search(r'\bNativeFxCurveSetupResult\b', header):
+        raise ValueError('NativeFxCurveSetupResult belongs to the host surface, not the value header')
+    curve = versioned(header, 'pineforge', NATIVE_FX_CURVE_NAMESPACE)
+    same_names(header, curve, TYPE_DEF, 'FX-curve public type', NATIVE_FX_CURVE_NAMESPACE)
+    same_names(header, curve, ALIAS_DEF, 'FX-curve public alias', NATIVE_FX_CURVE_NAMESPACE)
+    if namespace_functions(header) != namespace_functions(curve):
+        raise ValueError('FX-curve public functions must belong to native_fx_curve_v1')
+    if re.findall(TYPE_DEF, curve) != [
+            'NativeFxCurve', 'NativeFxCurveError', 'NativeFxCurveValidation']:
+        raise ValueError('native_fx_curve_v1 requires exactly its three ordered value types')
+    if re.findall(ALIAS_DEF, curve) or namespace_functions(curve) != [
+            'validate_native_fx_curve', 'native_fx_curve_digest']:
+        raise ValueError('native_fx_curve_v1 requires exactly its two ordered value functions')
+    shapes = (
+        (r'struct\s+NativeFxCurve\s*\{', 'NativeFxCurve',
+         'std::vector<std::int64_t>effective_from_ms;'
+         'std::vector<double>account_per_quote;'),
+        (r'enum\s+class\s+NativeFxCurveError\s*:\s*std::uint8_t\s*\{',
+         'NativeFxCurveError',
+         'None=0,LengthMismatch=1,NotStrictlyIncreasing=2,'
+         'NotFinitePositive=3,AllocationFailure=4,WrongPhase=5'),
+        (r'struct\s+NativeFxCurveValidation\s*\{', 'NativeFxCurveValidation',
+         'NativeFxCurveErrorerror=NativeFxCurveError::None;std::size_tindex=0;'),
+    )
+    for pattern, name, expected in shapes:
+        shape = re.sub(r'\s+', '', body(curve, pattern, name))
+        if shape.rstrip(',') != expected:
+            raise ValueError(name + ' must preserve its native_fx_curve_v1 member order and shape')
+
+    source = versioned(files[NATIVE_FX_CURVE_SOURCE], 'pineforge', NATIVE_FX_CURVE_NAMESPACE)
+    functions = (
+        ('NativeFxCurveValidation', 'validate_native_fx_curve'),
+        ('std::uint64_t', 'native_fx_curve_digest'),
+    )
+    for return_type, name in functions:
+        signature = (r'\b' + re.escape(return_type) + r'\s+' + name
+                     + r'\s*\(\s*const\s+NativeFxCurve\s*&\s*(?:\w+\s*)?\)\s*noexcept\s*')
+        for text, ending in ((curve, ';'), (blank_compound_bodies(source), r'\{')):
+            matches = list(re.finditer(signature + ending, text))
+            if len(matches) != 1:
+                raise ValueError(name + ' requires exactly one native_fx_curve_v1 declaration/definition')
+            prefix = text[:matches[0].start()]
+            if prefix.count('{') != prefix.count('}'):
+                raise ValueError(name + ' must be at native_fx_curve_v1 namespace scope')
+
+
+def check_fx_curve_introduced_at(manifests):
+    """The value header is new in its current owner, never part of an old host closure."""
+    for label, manifest in manifests.items():
+        if NATIVE_FX_CURVE_HEADER in manifest['files']:
+            raise ValueError(NATIVE_FX_CURVE_HEADER + ' predates its introduction in '
+                             + NATIVE_FX_CURVE_NAMESPACE + ': ' + label)
+
+
+def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
+    """Reuse authenticated provider closures without injecting current-only values."""
+    manifests = {}
+    with tempfile.TemporaryDirectory(prefix='.native-fx-introduced-', dir=root) as temporary:
+        for label, provider in providers.items():
+            manifest_path = provider['manifest']
+            if not manifest_path.parent.name.startswith('host-'):
+                continue
+            manifest_path = root / manifest_path.relative_to(ROOT)
+            destination = Path(temporary) / label
+            extract_tar((manifest_path.parent / provider['headers_name']).read_bytes(), destination)
+            manifests[label] = authenticate_headers(
+                destination, manifest_path, commit=provider['commit'], tree=provider['tree'])
+    if not manifests:
+        raise ValueError('native FX introduced-at check requires authenticated historical host closures')
+    return manifests
+
+
 def check_texts(files):
+    check_native_fx_curve(files)
     identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
     require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
@@ -257,9 +344,10 @@ def load(root=ROOT):
 
 def check(root=ROOT):
     check_texts(load(root))
+    check_fx_curve_introduced_at(authenticate_historical_host_manifests(root))
 
 
 if __name__ == "__main__":
     check()
     print("native_order identity v1 / values v4, native_calendar_v2, native_run_spec_v1, "
-          "native_driver_v4 and host engine_script_run_v15 ownership verified")
+          "native_driver_v4, native_fx_curve_v1 and host engine_script_run_v15 ownership verified")
