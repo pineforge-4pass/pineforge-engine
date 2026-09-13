@@ -2124,6 +2124,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
 
         const double resolved_price = terms.resolved_price;
+        const bool zero_units_terminal = unresolved && *terms.units == 0.0;
         // Price rejection is deliberately ahead of receipt installation. The
         // sole finite-current exception needs a stack-only plan inspection to
         // distinguish a pure close from an opening plan.
@@ -2131,10 +2132,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             if (current) throw std::overflow_error("native current price is not finite");
             return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         }
-        if (!current && resolved_price <= 0.0) {
+        if (!current && resolved_price <= 0.0 && !zero_units_terminal) {
             return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         }
-        if (current && resolved_price <= 0.0) {
+        if (current && resolved_price <= 0.0 && !zero_units_terminal) {
             const auto provisional = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
                                                        plan ? &*plan : nullptr);
             if (provisional.inspect.would_open) {
@@ -2473,6 +2474,20 @@ void NativeExecutionConsumer::match_path(
         (void)kind;
         return std::nullopt;
     };
+    auto erase_provenance_for = [&](const native_order::RequestHandle& handle) {
+        candidate_provenance.erase(
+            std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
+                [&](const CandidateProvenance& row) { return row.handle == handle; }),
+            candidate_provenance.end());
+    };
+    auto provenance_still_matches = [&](const CandidateProvenance& row) {
+        const auto* live = requests_.find_live(row.handle);
+        if (!live) return false;
+        const bool buy = requests_.working_is_buy(*live);
+        return row.is_buy == buy
+            && row.trigger_state_index == live->trigger_state.index()
+            && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
+    };
 
     auto cause_floor = [&](const native_order::LiveRequest& live) {
         double t_min = t_cursor;
@@ -2514,7 +2529,7 @@ void NativeExecutionConsumer::match_path(
             std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
                 [&](const CandidateProvenance& row) {
                     return row.point_ordinal != P || row.t < t_cursor
-                        || requests_.find_live(row.handle) == nullptr;
+                        || !provenance_still_matches(row);
                 }),
             candidate_provenance.end());
         if (skip_t != t_cursor) {
@@ -2533,9 +2548,15 @@ void NativeExecutionConsumer::match_path(
             const auto* live = requests_.find_live(handle);
             if (!live) continue;
             const auto facts = requests_.eligibility_facts(*live, eval);
-            if (!facts.birth_ok || facts.waiting || !facts.driver_ok) continue;
+            if (!facts.birth_ok || facts.waiting || !facts.driver_ok) {
+                erase_provenance_for(handle);
+                continue;
+            }
             const double t_min = cause_floor(*live);
-            if (t_min > 1.0) continue;
+            if (t_min > 1.0) {
+                erase_provenance_for(handle);
+                continue;
+            }
             const native_matching::GeometricHit start{
                 t_min, t_min == t_cursor ? cursor_price
                                         : native_matching::price_at(from_price, to_price, t_min)};
@@ -2543,6 +2564,7 @@ void NativeExecutionConsumer::match_path(
             row.handle = handle;
             row.incarnation = handle.incarnation;
             if (needs_evaluation(*live, facts)) {
+                erase_provenance_for(handle);
                 row.t = t_min;
                 row.price = start.price;
                 row.kind = Kind::Evaluate;
@@ -2603,7 +2625,10 @@ void NativeExecutionConsumer::match_path(
                 } else if (std::holds_alternative<native_order::MarketReady>(state)
                            || std::holds_alternative<native_order::StopActive>(state)
                            || std::holds_alternative<native_order::TrailActive>(state)) {
-                    if (!facts.ready_to_match) continue;
+                    if (!facts.ready_to_match) {
+                        erase_provenance_for(handle);
+                        continue;
+                    }
                     if (std::holds_alternative<native_order::MarketReady>(state) && continuous) {
                         continue;
                     }
@@ -2615,9 +2640,13 @@ void NativeExecutionConsumer::match_path(
                 if (!hit) continue;
                 if (kind == Kind::Fill) {
                     if (const auto* units = std::get_if<native_order::AllowanceUnits>(&live->allowance)) {
-                        if (units->point_ordinal == P && units->left == 0.0) continue;
+                        if (units->point_ordinal == P && units->left == 0.0) {
+                            erase_provenance_for(handle);
+                            continue;
+                        }
                     }
                     if (std::holds_alternative<native_order::RemainingUnbound>(live->remaining)) {
+                        erase_provenance_for(handle);
                         continue;
                     }
                 }
@@ -2627,8 +2656,14 @@ void NativeExecutionConsumer::match_path(
                 row.trigger_level = level_for(*live, kind, buy);
                 row.at_level = hit->at_level;
             }
-            if (!std::isfinite(row.price) || row.t < t_cursor || row.t > 1.0) continue;
-            if (skipped.count(skip_key(row.incarnation, row.kind))) continue;
+            if (!std::isfinite(row.price) || row.t < t_cursor || row.t > 1.0) {
+                erase_provenance_for(handle);
+                continue;
+            }
+            if (skipped.count(skip_key(row.incarnation, row.kind))) {
+                erase_provenance_for(handle);
+                continue;
+            }
             if (row.kind != Kind::Evaluate) {
                 const bool buy = requests_.working_is_buy(*live);
                 if (!row.trigger_level) row.trigger_level = level_for(*live, row.kind, buy);
@@ -3154,6 +3189,8 @@ void NativeExecutionConsumer::invoke_applied_callback(
         callback_context_ = notification.point.decision;
         callback_context_.decision_floor_ms = decision_floor();
         current_frame_->point.decision.decision_floor_ms = decision_floor();
+        engine.current_bar_.timestamp = std::max(
+            notification.point.decision.coordinate.effective_time_ms, decision_floor());
         in_callback_ = true;
         const auto presented = callback_context_;
         host->on_native_applied(applied, presented);

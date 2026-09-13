@@ -152,6 +152,8 @@ NativeRunSpec spec_for(const std::string& key, uint64_t run) {
 class FixtureHost final : public NativeStrategyHost {
 public:
     std::function<void(FixtureHost&, const Bar&, const NativeDecisionContext&)> script;
+    mutable std::function<pineforge::native_order::ExecutionTerms(
+        const pineforge::NativeExecutionTermsFacts&)> resolver;
     int callbacks = 0;
     RequestHandle live{};
     RequestHandle predecessor{};
@@ -183,6 +185,13 @@ public:
     const auto& physical_lots() const { return pyramid_entries_; }
     int64_t position_cycle() const { return position_cycle_seq_; }
     double realized_balance() const { return initial_capital_ + net_profit_sum_; }
+
+    pineforge::native_order::ExecutionTerms resolve_execution_terms(
+            const pineforge::NativeExecutionTermsFacts& facts) const override {
+        if (resolver) return resolver(facts);
+        return {facts.default_resolved_price, std::nullopt,
+                pineforge::native_order::OpeningShape::Transact};
+    }
 
     void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         ++callbacks;
@@ -255,9 +264,67 @@ std::string json_u64(uint64_t x) {
 std::string hex_bits(double value) {
     uint64_t bits = 0;
     std::memcpy(&bits, &value, sizeof bits);
-    char text[19] = {};
-    std::snprintf(text, sizeof text, "0x%016llx", static_cast<unsigned long long>(bits));
+    char text[17] = {};
+    std::snprintf(text, sizeof text, "%016llx", static_cast<unsigned long long>(bits));
     return json_escape(text);
+}
+
+std::string terms_run_json(const pineforge::native_order::RunIdentity& run) {
+    return "{\"sessionKey\":" + json_escape(run.session_key)
+        + ",\"runNumber\":" + json_u64(run.run_number) + "}";
+}
+
+std::string terms_handle_json(const pineforge::native_order::RequestHandle& handle) {
+    return "{\"run\":" + terms_run_json(handle.run)
+        + ",\"incarnation\":" + json_u64(handle.incarnation) + "}";
+}
+
+std::string terms_event_id_json(const pineforge::native_order::EventId& id) {
+    return "{\"run\":" + terms_run_json(id.run)
+        + ",\"ordinal\":" + json_u64(id.ordinal) + "}";
+}
+
+std::string terms_coordinate_json(const pineforge::NativeCoordinate& point) {
+    std::ostringstream out;
+    out << "{\"ordinal\":" << json_u64(point.ordinal)
+        << ",\"intervalIndex\":" << point.interval_index
+        << ",\"openMs\":" << json_i64(point.open_ms)
+        << ",\"eligibleOpenMs\":" << json_i64(point.eligible_open_ms)
+        << ",\"lastTradedCloseMs\":" << json_i64(point.last_traded_close_ms)
+        << ",\"nextPeriodOpenMs\":" << json_i64(point.next_period_open_ms)
+        << ",\"nextInputOpenMs\":" << json_i64(point.next_input_open_ms)
+        << ",\"effectiveTimeMs\":" << json_i64(point.effective_time_ms)
+        << ",\"sourcePriceTimeMs\":" << json_i64(point.source_price_time_ms)
+        << ",\"provenance\":" << json_u64(static_cast<uint64_t>(point.provenance))
+        << ",\"pathPhase\":" << json_u64(static_cast<uint64_t>(point.path_phase))
+        << ",\"completion\":" << json_u64(static_cast<uint64_t>(point.completion)) << "}";
+    return out.str();
+}
+
+std::string terms_projection_json(const pineforge::native_order::RemainingProjection& value) {
+    std::ostringstream out;
+    out << "{\"index\":" << json_u64(value.index());
+    if (const auto* units = std::get_if<pineforge::native_order::RemainingProjectionUnits>(&value)) {
+        out << ",\"unitsBits\":" << hex_bits(units->q);
+    }
+    out << "}";
+    return out.str();
+}
+
+std::string terms_allowance_json(const pineforge::native_order::Allowance& value) {
+    std::ostringstream out;
+    out << "{\"index\":" << json_u64(value.index());
+    if (const auto* units = std::get_if<pineforge::native_order::AllowanceUnits>(&value)) {
+        out << ",\"pointOrdinal\":" << json_u64(units->point_ordinal)
+            << ",\"initialBits\":" << hex_bits(units->initial)
+            << ",\"leftBits\":" << hex_bits(units->left);
+    } else if (const auto* all = std::get_if<pineforge::native_order::AllowanceAllScope>(&value)) {
+        out << ",\"pointOrdinal\":" << json_u64(all->point_ordinal);
+    } else if (const auto* deferred = std::get_if<pineforge::native_order::AllowanceDeferred>(&value)) {
+        out << ",\"pointOrdinal\":" << json_u64(deferred->point_ordinal);
+    }
+    out << "}";
+    return out.str();
 }
 
 std::string new_intent_json(const Request& request) {
@@ -293,9 +360,14 @@ std::string execution_terms_json(const pineforge::native_order::ExecutionTerms& 
 
 std::string terms_receipt_json(const pineforge::native_order::TermsResolvedEvent& event) {
     std::ostringstream out;
-    out << "{\"definitionIncarnation\":" << json_u64(event.handle().incarnation)
-        << ",\"cursorOrdinal\":" << json_u64(event.cursor.point.ordinal)
+    out << "{\"definitionHandle\":" << terms_handle_json(event.handle())
+        << ",\"definitionBirth\":{\"acceptanceOrdinal\":"
+        << json_u64(event.birth().acceptance_ordinal)
+        << ",\"decisionTimeLowerBound\":" << json_i64(event.birth().decision_time_lower_bound)
+        << "}"
+        << ",\"cursor\":{\"coordinate\":" << terms_coordinate_json(event.cursor.point)
         << ",\"cursorTBits\":" << hex_bits(event.cursor.t)
+        << "}"
         << ",\"priceKind\":" << json_u64(static_cast<uint64_t>(event.input.price_kind))
         << ",\"sharedCursorCollision\":"
         << (event.input.shared_cursor_collision ? "true" : "false")
@@ -304,13 +376,13 @@ std::string terms_receipt_json(const pineforge::native_order::TermsResolvedEvent
         << ",\"terms\":" << execution_terms_json(event.input.terms)
         << ",\"pendingTotalBits\":" << hex_bits(event.pending_total)
         << ",\"effectiveDeductionBits\":" << hex_bits(event.effective_deduction)
-        << ",\"remainingBeforeIndex\":" << json_u64(event.remaining_before.index())
-        << ",\"remainingAfterIndex\":" << json_u64(event.remaining_after.index())
-        << ",\"allowanceAfterIndex\":" << json_u64(event.allowance_after.index())
+        << ",\"remainingBefore\":" << terms_projection_json(event.remaining_before)
+        << ",\"remainingAfter\":" << terms_projection_json(event.remaining_after)
+        << ",\"allowanceAfter\":" << terms_allowance_json(event.allowance_after)
         << ",\"priorIds\":[";
     for (std::size_t i = 0; i < event.prior_adjustment_ids.size(); ++i) {
         if (i) out << ",";
-        out << json_u64(event.prior_adjustment_ids[i].ordinal);
+        out << terms_event_id_json(event.prior_adjustment_ids[i]);
     }
     out << "]}";
     return out.str();
@@ -717,7 +789,7 @@ void terms_serializer_branch() {
     const std::string json = lifecycle_json({CommandEvent{receipt}});
     CHECK(json.find("TermsResolved") != std::string::npos);
     CHECK(json.find("sharedCursorCollision") != std::string::npos);
-    CHECK(json.find("0x4000000000000000") != std::string::npos);
+    CHECK(json.find("4000000000000000") != std::string::npos);
     CHECK(json.find("HostSized") != std::string::npos);
 }
 
@@ -773,6 +845,50 @@ int main() {
         {"confirmedBar", 2, kT2, 103.0},
         {"confirmedBar", 3, kT3, kRawOffTick},
     };
+
+    // R4-B serializer fixture: a genuine HostSized execution emits the
+    // TermsResolved event consumed by lifecycle_json/physical_json.
+    {
+        const int before = failures;
+        FixtureHost host;
+        auto spec = spec_for("R4B-native-terms-lifecycle", 1);
+        host.resolver = [](const pineforge::NativeExecutionTermsFacts& facts) {
+            if (std::holds_alternative<pineforge::native_order::HostSized>(
+                    facts.definition->request.intent)) {
+                return pineforge::native_order::ExecutionTerms{facts.default_resolved_price, 1.0,
+                    pineforge::native_order::OpeningShape::Transact};
+            }
+            return pineforge::native_order::ExecutionTerms{facts.default_resolved_price,
+                std::nullopt, pineforge::native_order::OpeningShape::Transact};
+        };
+        host.script = [](FixtureHost& h, const Bar&, const NativeDecisionContext&) {
+            if (h.callbacks != 1) return;
+            Request request;
+            request.intent = pineforge::native_order::HostSized{
+                pineforge::native_order::HostSizedKind::Open,
+                pineforge::native_order::Side::Long};
+            request.label = "market-terms";
+            h.submitted = h.submit(request);
+            CHECK(h.submitted.status == SubmitStatus::Accepted);
+        };
+        require_applied_setup(host, spec);
+        host.run(two_long, 2);
+        expect_completed(host);
+        const auto events = copy_commands(host);
+        bool found = false;
+        for (const auto& event : events) {
+            if (const auto* receipt = as_event<pineforge::native_order::TermsResolvedEvent>(event)) {
+                found = true;
+                const auto encoded = terms_receipt_json(*receipt);
+                CHECK(encoded.find("definitionHandle") != std::string::npos);
+                CHECK(encoded.find("remainingAfter") != std::string::npos);
+                CHECK(encoded.find("allowanceAfter") != std::string::npos);
+            }
+        }
+        CHECK(found);
+        arts.push_back(make_art("R4B-native-terms-lifecycle", spec, host,
+                                fed_two, kOpen102, before));
+    }
 
     // F1 long: queued Transact{+1} fills exactly once at next eligible open 102.
     {

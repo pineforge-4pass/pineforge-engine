@@ -192,6 +192,42 @@ void a_f7_candidate_timestamp_sink_pin() {
     CHECK(no_effect.engine_timestamp() == terminal->cursor.point.effective_time_ms);
 }
 
+void d1_applied_callback_uses_activation_timestamp() {
+    TermsHost host;
+    std::vector<double> observed_fx;
+    int notifications = 0;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        observed_fx.push_back(facts.active_fx);
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), tx(1, "queued-open"));
+    };
+    host.notification = [&](Host& base, const no::ExecutionAppliedEvent& event) {
+        auto& h = static_cast<TermsHost&>(base);
+        ++notifications;
+        const auto expected = std::max(event.cursor.point.effective_time_ms,
+                                       h.native_decision_floor());
+        CHECK(h.engine_timestamp() == expected);
+        if (event.request().label == "queued-open") {
+            const auto close = put(h, reduce(1, "current-caused-close"));
+            const auto result = h.execute_current(command(close));
+            REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(result));
+        }
+    };
+    auto configuration = spec("fx-applied-activation");
+    REQUIRE(host.configure_native(configuration).status == NativeSetupStatus::Applied);
+    REQUIRE(host.configure_native_fx_curve(NativeFxCurve{{T}, {1.75}}).status
+            == NativeSetupStatus::Applied);
+    const Bar bar{100, 100, 100, 100, 1, T};
+    host.run(&bar, 1);
+    completed(host);
+    CHECK(notifications == 2);
+    REQUIRE(observed_fx.size() >= 2);
+    for (double fx : observed_fx) CHECK(fx == 1.75);
+}
+
 }  // namespace
 
 int main() {
@@ -203,6 +239,7 @@ int main() {
     test("A-F2 curve boundary and A-F6 reset clock", a_f2_curve_boundaries_hash_and_a_f6_reset_clock);
     test("A-F3 fee and A-F4 batch facts", a_f3_fee_and_a_f4_batch_rate_facts);
     test("A-F7 candidate timestamp sink", a_f7_candidate_timestamp_sink_pin);
+    test("D1 applied callback activation timestamp", d1_applied_callback_uses_activation_timestamp);
     std::printf("R4-B FX: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -423,11 +423,57 @@ std::string terms_json(const native_order::ExecutionTerms& terms) {
     return out.str();
 }
 
+std::string terms_run_json(const native_order::RunIdentity& run) {
+    return "{\"sessionKey\":" + json_escape(run.session_key)
+        + ",\"runNumber\":" + json_u64(run.run_number) + "}";
+}
+
+std::string terms_handle_json(const native_order::RequestHandle& handle) {
+    return "{\"run\":" + terms_run_json(handle.run)
+        + ",\"incarnation\":" + json_u64(handle.incarnation) + "}";
+}
+
+std::string terms_event_id_json(const native_order::EventId& id) {
+    return "{\"run\":" + terms_run_json(id.run)
+        + ",\"ordinal\":" + json_u64(id.ordinal) + "}";
+}
+
+std::string terms_projection_json(const native_order::RemainingProjection& value) {
+    std::ostringstream out;
+    out << "{\"index\":" << json_u64(value.index());
+    if (const auto* units = std::get_if<native_order::RemainingProjectionUnits>(&value)) {
+        out << ",\"unitsBits\":" << json_escape(hex64(f64_bits(units->q)));
+    }
+    out << "}";
+    return out.str();
+}
+
+std::string terms_allowance_json(const native_order::Allowance& value) {
+    std::ostringstream out;
+    out << "{\"index\":" << json_u64(value.index());
+    if (const auto* units = std::get_if<native_order::AllowanceUnits>(&value)) {
+        out << ",\"pointOrdinal\":" << json_u64(units->point_ordinal)
+            << ",\"initialBits\":" << json_escape(hex64(f64_bits(units->initial)))
+            << ",\"leftBits\":" << json_escape(hex64(f64_bits(units->left)));
+    } else if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&value)) {
+        out << ",\"pointOrdinal\":" << json_u64(all->point_ordinal);
+    } else if (const auto* deferred = std::get_if<native_order::AllowanceDeferred>(&value)) {
+        out << ",\"pointOrdinal\":" << json_u64(deferred->point_ordinal);
+    }
+    out << "}";
+    return out.str();
+}
+
 std::string terms_receipt_json(const native_order::TermsResolvedEvent& event) {
     std::ostringstream out;
-    out << "{\"definitionIncarnation\":" << json_u64(event.handle().incarnation)
-        << ",\"cursorOrdinal\":" << json_u64(event.cursor.point.ordinal)
+    out << "{\"definitionHandle\":" << terms_handle_json(event.handle())
+        << ",\"definitionBirth\":{\"acceptanceOrdinal\":"
+        << json_u64(event.birth().acceptance_ordinal)
+        << ",\"decisionTimeLowerBound\":" << json_i64(event.birth().decision_time_lower_bound)
+        << "}"
+        << ",\"cursor\":{\"coordinate\":" << coordinate_json(event.cursor.point)
         << ",\"cursorTBits\":" << json_escape(hex64(f64_bits(event.cursor.t)))
+        << "}"
         << ",\"priceKind\":" << json_u64(static_cast<uint64_t>(event.input.price_kind))
         << ",\"sharedCursorCollision\":" << json_bool(event.input.shared_cursor_collision)
         << ",\"rawPriceBits\":" << json_escape(hex64(f64_bits(event.input.raw_price)))
@@ -437,13 +483,13 @@ std::string terms_receipt_json(const native_order::TermsResolvedEvent& event) {
         << ",\"pendingTotalBits\":" << json_escape(hex64(f64_bits(event.pending_total)))
         << ",\"effectiveDeductionBits\":"
         << json_escape(hex64(f64_bits(event.effective_deduction)))
-        << ",\"remainingBeforeIndex\":" << json_u64(event.remaining_before.index())
-        << ",\"remainingAfterIndex\":" << json_u64(event.remaining_after.index())
-        << ",\"allowanceAfterIndex\":" << json_u64(event.allowance_after.index())
+        << ",\"remainingBefore\":" << terms_projection_json(event.remaining_before)
+        << ",\"remainingAfter\":" << terms_projection_json(event.remaining_after)
+        << ",\"allowanceAfter\":" << terms_allowance_json(event.allowance_after)
         << ",\"priorIds\":[";
     for (std::size_t i = 0; i < event.prior_adjustment_ids.size(); ++i) {
         if (i) out << ",";
-        out << json_u64(event.prior_adjustment_ids[i].ordinal);
+        out << terms_event_id_json(event.prior_adjustment_ids[i]);
     }
     out << "]}";
     return out.str();
@@ -478,12 +524,20 @@ public:
     std::vector<NativeDecisionContext> contexts;
     std::vector<double> callback_positions;
     std::function<void(TraceHost&)> callback;
+    mutable std::function<native_order::ExecutionTerms(const NativeExecutionTermsFacts&)> resolver;
 
     TraceHost() {
         if (proof_capture) host_ordinal_ = next_host_ordinal++;
     }
 
     ~TraceHost() override { snapshot(); }
+
+    native_order::ExecutionTerms resolve_execution_terms(
+            const NativeExecutionTermsFacts& facts) const override {
+        if (resolver) return resolver(facts);
+        return {facts.default_resolved_price, std::nullopt,
+                native_order::OpeningShape::Transact};
+    }
 
     NativeSetupResult configure_native(const NativeRunSpec& value) {
         attempted_spec_ = value;
@@ -594,12 +648,17 @@ public:
         const bool new_intent = std::holds_alternative<native_order::ReverseTo>(request.intent)
             || std::holds_alternative<native_order::HostSized>(request.intent);
         if (proof_capture && new_intent) {
+            const auto quantity = request_quantity(request);
             std::ostringstream out;
             out << "{\"kind\":\"request\",\"ordinal\":"
-                << json_u64(input_ordinal_++)
-                << ",\"requestQuantityUnresolved\":"
-                << json_bool(!request_quantity(request).has_value())
-                << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+                << json_u64(input_ordinal_++);
+            if (quantity) {
+                out << ",\"requestQuantityBits\":"
+                    << json_escape(hex64(f64_bits(*quantity)));
+            } else {
+                out << ",\"requestQuantityUnresolved\":true";
+            }
+            out << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
                 << ",\"label\":" << json_escape(request.label)
                 << ",\"comment\":" << json_escape(request.comment)
                 << ",\"action\":" << action_json(request)
@@ -1733,6 +1792,46 @@ void partial_end_does_not_seal_coarser_script() {
     }
 }
 
+void terms_resolved_lifecycle_fixture() {
+    TraceHost host;
+    bool submitted = false;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
+            return native_order::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                                 native_order::OpeningShape::Transact};
+        }
+        return native_order::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                             native_order::OpeningShape::Transact};
+    };
+    host.callback = [&](TraceHost& h) {
+        if (submitted) return;
+        submitted = true;
+        Request request;
+        request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
+                                                  native_order::Side::Long};
+        request.label = "calendar-terms";
+        const auto result = h.submit(request);
+        CHECK(result.status == SubmitStatus::Accepted);
+    };
+    CHECK(host.configure_native(spec()).status == NativeSetupStatus::Applied);
+    const Bar bars[] = {{100, 100, 100, 100, 1, 0},
+                        {100, 100, 100, 100, 1, 60000}};
+    host.run(bars, 2);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    bool found_terms = false;
+    for (const auto& event : host.native_events(0)) {
+        if (!event.command) continue;
+        if (const auto* receipt = std::get_if<native_order::TermsResolvedEvent>(&*event.command)) {
+            found_terms = true;
+            const auto encoded = terms_receipt_json(*receipt);
+            CHECK(encoded.find("definitionHandle") != std::string::npos);
+            CHECK(encoded.find("cursorTBits") != std::string::npos);
+            CHECK(encoded.find("allowanceAfter") != std::string::npos);
+        }
+    }
+    CHECK(found_terms);
+}
+
 ScenarioArt assemble_group(const char* id, bool passed) {
     ScenarioArt art;
     art.id = id;
@@ -1870,6 +1969,9 @@ int main() {
     }
 
     a_h3_calendar_new_value_serializers();
+
+    run_case("R4B-terms-resolved-lifecycle",
+             "R4-B TermsResolved lifecycle serializers", terms_resolved_lifecycle_fixture);
 
     run_case("C1-equal-timeframe-families-and-final-monthly-bars",
              "C1 equal timeframe families and final monthly bars",

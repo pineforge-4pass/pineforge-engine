@@ -102,6 +102,53 @@ void zero_terms_are_a_receipt_then_no_effect() {
     CHECK(host.validator_calls == 0);
 }
 
+void zero_units_ignore_nonpositive_price_on_both_paths() {
+    auto configure = [](TermsHost& host) {
+        host.resolver = [](const NativeExecutionTermsFacts&) {
+            return no::ExecutionTerms{0.0, from_bits(0x8000000000000000ULL),
+                                       no::OpeningShape::Transact};
+        };
+    };
+    TermsHost queued;
+    configure(queued);
+    queued.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "queued-zero-price"));
+    };
+    run(queued, spec("zero-nonpositive-queued"), {100});
+    completed(queued);
+    const auto queued_receipt = last_event<no::TermsResolvedEvent>(queued);
+    const auto queued_terminal = last_event<no::NoEffectEvent>(queued);
+    REQUIRE(queued_receipt && queued_terminal);
+    REQUIRE(queued_receipt->input.terms.units);
+    CHECK(bits(*queued_receipt->input.terms.units) == 0x8000000000000000ULL);
+    CHECK(queued_terminal->ordinal == queued_receipt->ordinal + 1);
+    CHECK(queued.lots().empty() && queued.rows().empty() && accounts(queued) == 0);
+    const auto queued_hash = queued.native_continuation_hash();
+    CHECK(queued.native_continuation_hash() == queued_hash);
+
+    TermsHost current;
+    configure(current);
+    bool reached = false;
+    current.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, host_open(no::Side::Long, "current-zero-price"));
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::NoEffectEvent>(result));
+        const auto receipt = last_event<no::TermsResolvedEvent>(h);
+        const auto terminal = last_event<no::NoEffectEvent>(h);
+        REQUIRE(receipt && terminal && receipt->input.terms.units);
+        CHECK(bits(*receipt->input.terms.units) == 0x8000000000000000ULL);
+        CHECK(terminal->ordinal == receipt->ordinal + 1);
+        CHECK(h.lots().empty() && h.rows().empty() && accounts(h) == 0);
+        const auto hash = h.native_continuation_hash();
+        CHECK(h.native_continuation_hash() == hash);
+        reached = true;
+    };
+    run(current, spec("zero-nonpositive-current"), {100});
+    completed(current);
+    CHECK(reached);
+}
+
 void overridden_price_is_durable_before_settlement() {
     TermsHost host;
     host.resolver = [](const NativeExecutionTermsFacts& facts) {
@@ -1065,6 +1112,7 @@ int main() {
     test("test-only facts oracle", test_only_oracle_host_uses_facts);
     test("queued host-sized opening", queued_host_sized_open);
     test("zero host-sized receipt", zero_terms_are_a_receipt_then_no_effect);
+    test("zero units with nonpositive price", zero_units_ignore_nonpositive_price_on_both_paths);
     test("queued price receipt", overridden_price_is_durable_before_settlement);
     test("current typed preview outcomes", current_preview_has_typed_terms_outcomes_without_writes);
     test("current deferred group cancellation", current_group_deduction_returns_cancelled);
