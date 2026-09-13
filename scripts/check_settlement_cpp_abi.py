@@ -282,6 +282,23 @@ def defined_symbols(library: Path) -> str:
     return '\n'.join(line for line in raw.splitlines() if re.search(r'\b[TWtw]\s+', line))
 
 
+def archive_engine(symbols: str) -> str:
+    """The exact BacktestEngine owner prefix an archive's defined symbols declare.
+
+    Provider epoch is derived from the authenticated archive bytes, never from
+    which command-line role (--library or a provider receipt) named the path.
+    """
+    epochs = sorted(set(re.findall(r'pineforge::engine_script_run_v(\d+)::BacktestEngine::', symbols)), key=int)
+    if len(epochs) != 1:
+        raise RuntimeError('archive declares ' + ('no' if not epochs else 'several') + ' BacktestEngine epoch(s): ' + ', '.join(epochs))
+    return 'pineforge::engine_script_run_v' + epochs[0] + '::BacktestEngine::'
+
+
+def cross_epoch_rtti_allowed(caller_engine: str, provider_engine: str, sanitizers_on: bool) -> bool:
+    """Exact caller-owner RTTI is tolerated only for a sanitized cross-epoch negative link."""
+    return sanitizers_on and caller_engine != provider_engine
+
+
 def validate_rejection(diagnostic: str, missing, domain=None, engine=ENGINE, *,
                        allow_engine_typeinfo=False) -> list[str]:
     symbols = re.findall(r'^\s*"(.+)", referenced from:', diagnostic, re.M)
@@ -473,6 +490,8 @@ def main() -> int:
                 report['compiles'].append({'name':name,'argv':argv,'sourceSha256':identity(path)['sha256'],'objectSha256':identity(obj)['sha256']})
                 return obj
 
+            provider_engines: dict[Path, str] = {}
+
             def link(name,obj,runtime,missing=(),domain=None,engine=ENGINE, symbol_missing=None):
                 argv=[*common,str(obj),str(runtime),'-pthread','-o',str(log_root/name)]
                 result=subprocess.run(argv,capture_output=True,text=True,timeout=120)
@@ -487,10 +506,11 @@ def main() -> int:
                         if any(not undefined_mentions(diagnostic, needle) for needle in needles):
                             raise RuntimeError(name+' lacks expected epoch symbol: '+str(symbol_missing)+'\n'+diagnostic)
                     else:
-                        provider_engine = ENGINE if runtime == library else OLD_ENGINE
+                        provider_engine = provider_engines.setdefault(
+                            Path(runtime).resolve(), archive_engine(defined_symbols(Path(runtime))))
                         validate_rejection(diagnostic,missing,domain,engine,
-                            allow_engine_typeinfo=(engine != provider_engine
-                                and cache.get('PINEFORGE_ENABLE_SANITIZERS') == 'ON'))
+                            allow_engine_typeinfo=cross_epoch_rtti_allowed(
+                                engine, provider_engine, cache.get('PINEFORGE_ENABLE_SANITIZERS') == 'ON'))
                 report['links'].append({'name':name,'argv':argv,'exitCode':result.returncode,
                     'outcome':'expected-rejection' if missing or symbol_missing else 'linked','requiredMissing':list(missing),
                     'engineDomain':engine,'requiredEpochSymbol':symbol_missing,

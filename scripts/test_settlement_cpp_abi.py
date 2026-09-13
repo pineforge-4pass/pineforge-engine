@@ -10,8 +10,8 @@ from types import SimpleNamespace
 import unittest
 
 from check_settlement_cpp_abi import (
-    ENGINE, OLD_ENGINE, ROOT, REVERSAL_METHODS, REVERSAL_DOMAIN, frozen_shape, load_prior,
-    storage_declarations, validate_rejection,
+    ENGINE, OLD_ENGINE, ROOT, REVERSAL_METHODS, REVERSAL_DOMAIN, archive_engine,
+    cross_epoch_rtti_allowed, frozen_shape, load_prior, storage_declarations, validate_rejection,
 )
 from prepare_settlement_cpp_abi_base import BASE_COMMIT, BASE_TREE, extract_tar, read_cache, PROVIDERS, authenticate_headers
 
@@ -60,6 +60,26 @@ class AbiToolingTests(unittest.TestCase):
                         with self.assertRaisesRegex(RuntimeError, 'unrelated'):
                             validate_rejection(methods+rtti+diagnostic(wrong), [method],
                                 engine=engine, allow_engine_typeinfo=True)
+
+    def test_provider_epoch_comes_from_archive_symbols_not_command_line_role(self):
+        v13 = '0000000000000100 T ' + OLD_ENGINE + 'inspect_native_settlement(int) const\n'
+        v14 = '0000000000000100 T ' + ENGINE + 'inspect_native_settlement_selected(int) const\n'
+        other = '0000000000000200 T pineforge::native_order::WorkingRequestCore::reset()\n'
+        self.assertEqual(archive_engine(v13 + other), OLD_ENGINE)
+        self.assertEqual(archive_engine(other + v14), ENGINE)
+        with self.assertRaisesRegex(RuntimeError, 'no BacktestEngine epoch'):
+            archive_engine(other)
+        with self.assertRaisesRegex(RuntimeError, 'several BacktestEngine epoch'):
+            archive_engine(v13 + v14)
+        # An authenticated old archive supplied as --library in a partial mode is still v13:
+        # the current caller (v14) linking against it is a cross-epoch pair, so sanitized
+        # exact-owner RTTI is tolerated exactly as when the same archive arrives by receipt.
+        self.assertTrue(cross_epoch_rtti_allowed(ENGINE, archive_engine(v13), True))
+        self.assertTrue(cross_epoch_rtti_allowed(OLD_ENGINE, archive_engine(v14), True))
+        self.assertFalse(cross_epoch_rtti_allowed(ENGINE, archive_engine(v14), True))
+        self.assertFalse(cross_epoch_rtti_allowed(OLD_ENGINE, archive_engine(v13), True))
+        for caller, provider in ((ENGINE, v13), (ENGINE, v14), (OLD_ENGINE, v14)):
+            self.assertFalse(cross_epoch_rtti_allowed(caller, archive_engine(provider), False))
 
     def test_generic_failure_or_missing_one_method_cannot_pass(self):
         with self.assertRaisesRegex(RuntimeError,'no recognized'):
