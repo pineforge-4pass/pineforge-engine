@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace pineforge { inline namespace engine_script_run_v14 { struct PendingOrder; } }
+namespace pineforge { inline namespace engine_script_run_v15 { struct PendingOrder; } }
 namespace pineforge::compat::pine {
 
 struct OrderPriorityContext {

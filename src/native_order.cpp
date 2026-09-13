@@ -9,7 +9,7 @@
 #include <variant>
 
 namespace pineforge::native_order {
-inline namespace native_order_v3 {
+inline namespace native_order_v4 {
 namespace {
 
 constexpr std::uint8_t kLivePush = 1;
@@ -2341,5 +2341,5 @@ static_assert(std::variant_size_v<Owner> == 4);
 static_assert(std::variant_size_v<Authority> == 7);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 
-}  // inline namespace native_order_v3
+}  // inline namespace native_order_v4
 }  // namespace pineforge::native_order

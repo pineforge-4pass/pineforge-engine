@@ -16,10 +16,18 @@ The third provider is the native host epoch-13 commit
 `../native_cpp_abi/host-c3ed455/manifest.json` (shared with the native ABI
 checker) and prepared under `native-abi-v13/`. It supplies the epoch-13 side of
 the constructor/vtable, host observation, return-only `native_events()`, core
-request, driver and current-execution pairings.
+request and driver pairings. It has no current-execution declarations.
 
-All three real historical providers remain required in the full matrix; the
-selected-method rejection uses R2.
+The fourth provider is native host epoch 14 at commit
+`f736676ea9a558dc664b18f099a488b3a2c0067f`, tree
+`c69421f0f86d23aa48eeb2c79bf7f475a4db0e83`. Its 55-header closure is frozen at
+`../native_cpp_abi/host-f736676/manifest.json` with `headers.tar` SHA-256
+`37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e`, and its
+full archive is prepared under `native-abi-v14/`.
+
+All four historical providers and current v15 remain required in the
+five-archive matrix. e60/0e retain engine-only roles; v13/v14/v15 supply
+the host/order/driver domains. The selected-method rejection uses R2.
 
 The new settlement checker supplements `check_native_cpp_abi.py` and
 `check_script_cpp_abi.py`; retain those existing checks and their old epoch
@@ -52,6 +60,13 @@ python3 scripts/prepare_settlement_cpp_abi_base.py \
   --commit c3ed45516721d3185fcd2f50bb293793304bc6e6 \
   --tree bb80c4767dddc0e5c9ae172672edd955ad344890 \
   --header-manifest tests/fixtures/native_cpp_abi/host-c3ed455/manifest.json
+git fetch --no-tags --depth=1 origin f736676ea9a558dc664b18f099a488b3a2c0067f
+python3 scripts/prepare_settlement_cpp_abi_base.py \
+  --source-repo . --current-build build \
+  --output build/native-abi-v14 --jobs 4 \
+  --commit f736676ea9a558dc664b18f099a488b3a2c0067f \
+  --tree c69421f0f86d23aa48eeb2c79bf7f475a4db0e83 \
+  --header-manifest tests/fixtures/native_cpp_abi/host-f736676/manifest.json
 ```
 
 For the sanitizer lane, replace the build paths with `build-asan`; for the
@@ -79,19 +94,22 @@ python3 scripts/check_settlement_cpp_abi.py \
   --base-receipt build/settlement-abi-base/receipt.json \
   --prior-receipt build/settlement-abi-prior/receipt.json \
   --v13-receipt build/native-abi-v13/receipt.json \
+  --v14-receipt build/native-abi-v14/receipt.json \
   --receipt build/settlement-abi-receipt.json
 ```
 
-`--v13-receipt` is mandatory in the full matrix; only the partial development
-modes below may omit it. Pass `--extra-flag=-fsanitize=address,undefined` for
+`--v13-receipt` and `--v14-receipt` are mandatory in the full matrix; only the
+partial development modes below may omit them. CMake supplies these through
+`PINEFORGE_NATIVE_ABI_V13_RECEIPT` and `PINEFORGE_NATIVE_ABI_V14_RECEIPT`.
+Pass `--extra-flag=-fsanitize=address,undefined` for
 an instrumented archive, as the existing CMake ABI guards do. The compiler must
-match the current build and all three prepared providers. A preserved Mac Release archive cannot stand
+match the current build and all four prepared providers. A preserved Mac Release archive cannot stand
 in for a Linux, Debug or sanitizer provider. Missing artifacts fail with the preparation
 command; no skip, stub or implicit network fallback is available.
 
 The checker:
 
-* authenticates all three historical header inventories and all four archives, checks old defined symbols,
+* authenticates all four historical header inventories and all five archives, checks old defined symbols,
   and requires current archive freshness against all `src`, `include`,
   `cmake` files and `CMakeLists.txt`;
 * freezes execution aggregate field/order/type/status encodings, Action and CloseScope
@@ -108,18 +126,21 @@ The checker:
   entry and no layout word; `layout.comparedWords` and
   `priorLayout.comparedWords` always equal their `wordCount`;
 * compares every frozen native header's text. Across the reviewed
-  `engine_script_run_v13` → `engine_script_run_v14` transition — and only that
-  transition, enumerated in one module constant in the checker — exactly four
+  `engine_script_run_v13` → `engine_script_run_v15` and
+  `engine_script_run_v14` → `engine_script_run_v15` transitions — and only
+  those transitions, enumerated in one module constant in the checker — exactly four
   headers may differ: `native_order.hpp`, `native_host.hpp`,
-  `market_driver.hpp` and `execution_consumer.hpp`, which advance with
-  `native_order_v3`, host v14, `native_driver_v4` and consumer v5. Each actual
+  `market_driver.hpp` and `execution_consumer.hpp`. Current epochs are
+  `native_order_v4`, host v15, unchanged `native_driver_v4` and consumer v6. Each actual
   difference is recorded in `frozenShape.exemptedHeaders` with both digests and
   its transition; an exempted header that did not change records nothing, and
   any other differing header raises. `native_order_identity.hpp`,
-  `native_run_spec.hpp` and `native_calendar.hpp` stay frozen throughout. A
-  future v14→v15 transition must be added to that constant explicitly, and a
-  frozen v14 provider added after merge restores the header-text fence for all
-  seven;
+  `native_run_spec.hpp` and `native_calendar.hpp` stay comment-stripped frozen
+  throughout; only the identity header's stale namespace comment is renamed.
+  The four exempted current headers also have reviewed byte pins. Those pins
+  change in the same landing as their bytes. Provider-relative order assertions
+  keep old providers at CommandEvent/OrderIntent 16/3; current remains 16/3
+  through native-terms phase 1a and moves to 17/5 with the phase-1b order surface;
 * compiles each old/new caller before any link result is interpreted;
 * links old Book/singleton/lifecycle, old private F8/F11 wrappers and old
   return-only host event callers against both full providers;
@@ -136,17 +157,35 @@ The checker:
   is not demanded in ordinary projection method mangling;
 * rejects synthetic reversal `_v2` methods and `reverse_to_v2::ReverseTo`
   parameters against current, supplementing the real historical rejection;
-* links epoch-13 constructor/vtable, host observation, return-only
-  `native_events()`, core request, driver and current-execution callers against
-  the real c3ed455 archive, the matching v14 callers against the current
-  archive, and rejects each across the two epochs at its exact namespaced
-  symbol;
+* links constructor/vtable, host observation, return-only `native_events()`
+  and core request callers to their matching v13/v14/v15 archives, then
+  rejects every cross-epoch host/order pair at its exact namespaced symbol;
+* compiles shape-agnostic current-execution callers only from v14 and v15
+  headers, links each to its matching archive, and rejects it against the other
+  epoch and v13;
+* links driver callers to their matching archives, rejects v13↔v14 and
+  v13↔v15 pairs, and requires positive v14→v15 and v15→v14 links because
+  both own `native_driver_v4`. These per-domain outcomes govern over the
+  frozen v14 fixture README's historical blanket-rejection wording;
 * records in each link the provider engine owner derived from that archive's
   own defined symbols (`providerEngine`), never from which command-line role
-  named the path; exact-owner RTTI is tolerated only for a sanitized
+  named the path, and verifies that owner against its authenticated headers and
+  pinned provider role. Mixed, missing or mislabeled epochs are errors.
+  Exact-owner RTTI is tolerated only for a sanitized
   cross-epoch rejection;
 * refuses unrelated undefined symbols, retains full compiler/link logs and
   records `executedBinaries: 0`.
+
+The full phase-0 receipt retains `CURRENT_EXECUTION_V15_CALLER` and
+`NATIVE_FX_CURVE_CALLER` as pending-surface rows while
+`CURRENT_TERMS_SURFACE_READY = False`. Their complete templates require the
+phase-1c host members and are not compiled before those members exist. Once
+active, both link to v15 and reject v14/v13 at the configure/FX-value symbols.
+CTest also writes `native-abi-receipt.json`, with the active
+`v14_current_execution_shape_agnostic_compile` using the frozen authenticated
+tar closure. Its named good-v15 and missing-Cancelled negative compilation
+controls are staged pending until phase 1c; ordinary compiler failures remain
+hard failures and do not count as link rejections.
 
 Private/protected member access uses explicit test-only `-fno-access-control`
 on the pairing TUs. Product visibility is unchanged. Callers reinterpret an
@@ -159,7 +198,8 @@ Three development modes return labeled partial receipts:
 new public declarations against the real old provider before the new archive
 exists; `--public-only` runs all public pairings before new private provenance
 helpers are integrated. These partial modes do not include the reversal matrix
-or the c3ed455 pairings, and may omit `--prior-receipt` and `--v13-receipt`.
+or the v13/v14/v15 domain pairings, and may omit `--prior-receipt`,
+`--v13-receipt` and `--v14-receipt`.
 None returns `status: passed` or
 `newArchivePairingComplete: true`. Do not use these modes in CI acceptance.
 

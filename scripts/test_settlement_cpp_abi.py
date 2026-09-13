@@ -9,18 +9,159 @@ import tempfile
 import tarfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
+import check_settlement_cpp_abi as checker
 from check_settlement_cpp_abi import (
-    ENGINE, EPOCH_TRANSITION_HEADER_EXEMPTIONS, FROZEN_NATIVE_HEADERS, OLD_ENGINE, ROOT,
+    ENGINE, CURRENT_EPOCH, OLD_EPOCHS, PROVIDER_ORDER_SHAPES,
+    EPOCH_TRANSITION_HEADER_EXEMPTIONS, FROZEN_NATIVE_HEADERS, OLD_ENGINE, ROOT,
     REVERSAL_METHODS, REVERSAL_DOMAIN, archive_engine, compare_layout_words,
     cross_epoch_rtti_allowed, frozen_native_header_exemptions, frozen_shape, link_outcome,
-    load_prior, provider_engine_for, storage_declarations, validate_rejection,
+    load_prior, load_provider, provider_engine_for, storage_declarations, validate_rejection,
     EXEMPTED_HEADER_SHA256, verify_exempted_header_pins,
+    COMMON, provider_order_shape, render_provider_caller, native_domain_callers,
+    pending_surface_rows, normalized,
 )
 from prepare_settlement_cpp_abi_base import BASE_COMMIT, BASE_TREE, extract_tar, read_cache, PROVIDERS, authenticate_headers
 
 
 class AbiToolingTests(unittest.TestCase):
+    def test_current_epoch_and_provider_relative_variant_pins(self):
+        self.assertEqual(CURRENT_EPOCH, 'engine_script_run_v15')
+        self.assertEqual(OLD_EPOCHS, ('engine_script_run_v13','engine_script_run_v14'))
+        self.assertEqual(PROVIDER_ORDER_SHAPES, {
+            'engine_script_run_v13': (16,3), 'engine_script_run_v14': (16,3),
+            CURRENT_EPOCH: (checker.CURRENT_ORDER_VARIANT,checker.CURRENT_ORDER_INTENT_VARIANT)})
+        self.assertEqual(provider_order_shape(ROOT/'include'), (16,3))
+        rendered = render_provider_caller(COMMON, ROOT/'include')
+        self.assertIn('CommandEvent> == 16',rendered)
+        self.assertIn('OrderIntent> == 3',rendered)
+        self.assertNotIn('COMMAND_EVENT_ALTERNATIVES',rendered)
+        self.assertNotIn('ORDER_INTENT_ALTERNATIVES',rendered)
+
+    def test_all_frozen_host_epochs_authenticate_and_keep_their_own_shapes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for role in ('v13','v14'):
+                provider = PROVIDERS[role]
+                fixture = provider['manifest'].parent
+                old = root/role
+                extract_tar((fixture/provider['headers_name']).read_bytes(),old)
+                authenticate_headers(old,provider['manifest'],commit=provider['commit'],tree=provider['tree'])
+                self.assertEqual(provider_order_shape(old/'include'),(16,3))
+                rendered = render_provider_caller(COMMON,old/'include')
+                self.assertIn('CommandEvent> == 16',rendered)
+                self.assertIn('OrderIntent> == 3',rendered)
+                _,shape = frozen_shape(old/'include',ROOT/'include',selected=True)
+                self.assertEqual(shape['oldEpoch'],[provider['engine_epoch']]*2)
+                self.assertEqual(shape['currentEpoch'],[CURRENT_EPOCH]*2)
+                if role == 'v14':
+                    before = (old/'include/pineforge/native_order_identity.hpp').read_text()
+                    after = (ROOT/'include/pineforge/native_order_identity.hpp').read_text()
+                    self.assertNotEqual(before,after)
+                    self.assertEqual(normalized(before),normalized(after))
+                # Counts come from the provider's header and cannot self-authorize
+                # a changed layout merely because the epoch token remains intact.
+                header = old/'include/pineforge/native_order.hpp'
+                header.write_text(header.read_text().replace('std::variant<Flatten, Reduce, Transact>',
+                                                              'std::variant<Flatten, Reduce>'))
+                with self.assertRaisesRegex(RuntimeError,'unreviewed provider order shape'):
+                    provider_order_shape(old/'include')
+
+    def test_domain_pairs_preserve_both_unchanged_driver_cross_links(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            domains = {'v15':native_domain_callers(ROOT/'include')}
+            for role in ('v13','v14'):
+                provider = PROVIDERS[role]
+                extract_tar((provider['manifest'].parent/'headers.tar').read_bytes(),root/role)
+                domains[role] = native_domain_callers(root/role/'include')
+            self.assertIn('native_order_v3',domains['v14']['order'][1])
+            self.assertIn('native_order_v4',domains['v15']['order'][1])
+            for caller in domains:
+                for provider in domains:
+                    for domain in domains[caller]:
+                        actual = domains[caller][domain][2] == domains[provider][domain][2]
+                        expected = caller == provider or (domain == 'driver' and {caller,provider} == {'v14','v15'})
+                        self.assertEqual(actual,expected,(caller,provider,domain))
+
+    def test_pending_surface_rows_are_complete_and_current_only(self):
+        self.assertFalse(checker.CURRENT_TERMS_SURFACE_READY)
+        rows = pending_surface_rows('v15',('v13','v14','v15'),False)
+        self.assertEqual({row['name'] for row in rows}, {
+            'v15-'+caller+'-'+provider for caller in ('current-execution-terms','native-fx-curve')
+            for provider in ('v13','v14','v15')})
+        self.assertTrue(all(row['status']=='pending-surface' and row['caller']=='v15' for row in rows))
+        self.assertTrue(all(len(row['sourceSha256'])==64 for row in rows))
+        self.assertEqual(pending_surface_rows('v15',('v13','v14','v15'),True),[])
+        from check_native_cpp_abi import render_current_execution_caller, control_applicability
+        for epoch in ('engine_script_run_v14',CURRENT_EPOCH):
+            self.assertIn(epoch+'::NativeStrategyHost',render_current_execution_caller(epoch))
+        with self.assertRaises((RuntimeError,ValueError)):
+            render_current_execution_caller('engine_script_run_v13')
+        controls = {row['name']:row for row in control_applicability(False)}
+        self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'],'required')
+        for name in ('v15_current_execution_surface_compile','v15_current_result_missing_cancelled_compile_reject',
+                     'v15_native_fx_curve_surface_compile'):
+            self.assertEqual(controls[name]['status'],'pending_surface')
+        self.assertTrue(all(row['status']=='required' for row in control_applicability(True)))
+
+    def test_loader_authenticates_then_checks_actual_owner_present_and_absent_symbols(self):
+        # These deliberately fake archive bytes exercise loader refusals only;
+        # the registered C++ matrix still requires four full historical builds.
+        for role in ('v13','v14'):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                provider = PROVIDERS[role]
+                library = root/'lib.a'
+                library.write_bytes(b'!<arch>\nunit-test-only')
+                headers = root/'headers.tar'
+                shutil.copyfile(provider['manifest'].parent/'headers.tar',headers)
+                generated = root/'generated/pineforge'
+                generated.mkdir(parents=True)
+                (generated/'version.h').write_text('// unit-test generated version\n')
+                identity = checker.identity
+                compiler = {'target':'test','sha256':'compiler-test','version':'test'}
+                receipt = root/'receipt.json'
+                receipt_data = {
+                    'schemaVersion':'pineforge-settlement-abi-base/v1',
+                    'commit':provider['commit'],'tree':provider['tree'],
+                    'archive':library.name,'archiveSha256':identity(library)['sha256'],
+                    'headers':headers.name,'headersSha256':identity(headers)['sha256'],
+                    'compiler':compiler,'copiedCurrentCache':{},'generatedInclude':'generated',
+                    'generatedHeaderSha256':identity(generated/'version.h')['sha256']}
+                receipt.write_text(json.dumps(receipt_data))
+                owner = 'pineforge::'+provider['engine_epoch']+'::BacktestEngine::'
+                other = ENGINE
+                symbols = '0000 T '+owner+'present()\n'
+                cases = [
+                    ('present',symbols,None,provider),
+                    ('absent',symbols+'0001 T '+owner+'forbidden()\n','already exports new method',provider),
+                    ('missing-method','0001 T '+owner+'other()\n','omits original symbol',provider),
+                    ('mixed',symbols+'0002 T '+other+'other()\n','several BacktestEngine epoch',provider),
+                    ('missing-epoch','0002 T other_dependency()\n','no BacktestEngine epoch',provider),
+                    ('wrong-archive','0002 T '+other+'present()\n','archive owner differs',provider),
+                    ('mislabeled',symbols,'header epoch differs',{**provider,'engine_epoch':CURRENT_EPOCH}),
+                ]
+                for name,defined,error,role_pin in cases:
+                    with self.subTest(case=name), mock.patch.object(checker,'defined_symbols',return_value=defined), \
+                            mock.patch.object(checker,'compiler_identity',return_value=compiler), \
+                            mock.patch.object(checker,'run',return_value=b'product.o\n'*20):
+                        arguments = (SimpleNamespace(compiler='test'),root/name,{},receipt,role_pin)
+                        if error:
+                            with self.assertRaisesRegex(RuntimeError,error):
+                                load_provider(*arguments,expect_present=('present',),expect_absent=('forbidden',))
+                        else:
+                            result = load_provider(*arguments,expect_present=('present',),expect_absent=('forbidden',))
+                            self.assertEqual(result[0],library.resolve())
+                # Receipt and header authentication must fail before symbol inspection.
+                receipt.write_text(json.dumps({**receipt_data,'headersSha256':'0'*64}))
+                with mock.patch.object(checker,'defined_symbols') as reader:
+                    with self.assertRaisesRegex(RuntimeError,'bytes do not match receipt'):
+                        load_provider(SimpleNamespace(),root/'corrupt',{},receipt,provider,
+                                      expect_present=(),expect_absent=())
+                    reader.assert_not_called()
+
     def test_mac_link_diagnostic_requires_only_named_method(self):
         method='project_native_settlement_v1'
         valid=f'Undefined symbols for architecture arm64:\n  "{ENGINE}{method}(int) const", referenced from:\n _main\n'
@@ -67,22 +208,22 @@ class AbiToolingTests(unittest.TestCase):
 
     def test_provider_epoch_comes_from_archive_symbols_not_command_line_role(self):
         v13 = '0000000000000100 T ' + OLD_ENGINE + 'inspect_native_settlement(int) const\n'
-        v14 = '0000000000000100 T ' + ENGINE + 'inspect_native_settlement_selected(int) const\n'
+        v15 = '0000000000000100 T ' + ENGINE + 'inspect_native_settlement_selected(int) const\n'
         other = '0000000000000200 T pineforge::native_order::WorkingRequestCore::reset()\n'
         self.assertEqual(archive_engine(v13 + other), OLD_ENGINE)
-        self.assertEqual(archive_engine(other + v14), ENGINE)
+        self.assertEqual(archive_engine(other + v15), ENGINE)
         with self.assertRaisesRegex(RuntimeError, 'no BacktestEngine epoch'):
             archive_engine(other)
         with self.assertRaisesRegex(RuntimeError, 'several BacktestEngine epoch'):
-            archive_engine(v13 + v14)
+            archive_engine(v13 + v15)
         # An authenticated old archive supplied as --library in a partial mode is still v13:
-        # the current caller (v14) linking against it is a cross-epoch pair, so sanitized
+        # the current caller (v15) linking against it is a cross-epoch pair, so sanitized
         # exact-owner RTTI is tolerated exactly as when the same archive arrives by receipt.
         self.assertTrue(cross_epoch_rtti_allowed(ENGINE, archive_engine(v13), True))
-        self.assertTrue(cross_epoch_rtti_allowed(OLD_ENGINE, archive_engine(v14), True))
-        self.assertFalse(cross_epoch_rtti_allowed(ENGINE, archive_engine(v14), True))
+        self.assertTrue(cross_epoch_rtti_allowed(OLD_ENGINE, archive_engine(v15), True))
+        self.assertFalse(cross_epoch_rtti_allowed(ENGINE, archive_engine(v15), True))
         self.assertFalse(cross_epoch_rtti_allowed(OLD_ENGINE, archive_engine(v13), True))
-        for caller, provider in ((ENGINE, v13), (ENGINE, v14), (OLD_ENGINE, v14)):
+        for caller, provider in ((ENGINE, v13), (ENGINE, v15), (OLD_ENGINE, v15)):
             self.assertFalse(cross_epoch_rtti_allowed(caller, archive_engine(provider), False))
 
     def test_generic_failure_or_missing_one_method_cannot_pass(self):
@@ -150,7 +291,7 @@ class AbiToolingTests(unittest.TestCase):
             members,shape=frozen_shape(old/'include',ROOT/'include',selected=True)
             self.assertTrue(shape['epochBreak'])
             self.assertEqual(shape['oldEpoch'],['engine_script_run_v13']*2)
-            self.assertEqual(shape['currentEpoch'],['engine_script_run_v14']*2)
+            self.assertEqual(shape['currentEpoch'],['engine_script_run_v15']*2)
             self.assertGreater(len(members),100)
 
     def test_action_alternative_changes_are_frozen(self):
@@ -192,10 +333,10 @@ class AbiToolingTests(unittest.TestCase):
         # review-2's exact configuration: a sanitized build running
         # --old-rejections-only, where --library is an alias for the real base
         # (epoch 13) archive. Nothing but the archive's own defined symbols may
-        # decide that the v14 caller is a cross-epoch pair.
+        # decide that the v15 caller is a cross-epoch pair.
         method = 'project_native_settlement_v1'
         v13_symbols = '0000000000000100 T ' + OLD_ENGINE + 'inspect_native_settlement(int) const\n'
-        v14_symbols = '0000000000000100 T ' + ENGINE + method + '(int) const\n'
+        v15_symbols = '0000000000000100 T ' + ENGINE + method + '(int) const\n'
         reads = []
 
         def reader(symbols):
@@ -211,8 +352,8 @@ class AbiToolingTests(unittest.TestCase):
         self.assertEqual(provider_engine_for(aliased, cache, v13_reader), OLD_ENGINE)
         self.assertEqual(provider_engine_for(aliased, cache, v13_reader), OLD_ENGINE)
         self.assertEqual(reads, [aliased])  # memoized: one archive read per runtime path
-        self.assertEqual(provider_engine_for(current, cache, reader(v14_symbols)), ENGINE)
-        self.assertEqual(provider_engine_for(current, cache, reader(v14_symbols)), ENGINE)
+        self.assertEqual(provider_engine_for(current, cache, reader(v15_symbols)), ENGINE)
+        self.assertEqual(provider_engine_for(current, cache, reader(v15_symbols)), ENGINE)
         self.assertEqual(reads, [aliased, current])
 
         diagnostic = self.mac_undefined(ENGINE + method + '(int) const',
@@ -256,11 +397,11 @@ class AbiToolingTests(unittest.TestCase):
         return root
 
     def test_exempted_headers_are_pinned_to_their_reviewed_bytes(self):
-        transition = ('engine_script_run_v13', 'engine_script_run_v14')
+        transition = ('engine_script_run_v13', 'engine_script_run_v15')
         self.assertEqual(set(EXEMPTED_HEADER_SHA256), set(EPOCH_TRANSITION_HEADER_EXEMPTIONS[transition]))
         for name, expected in EXEMPTED_HEADER_SHA256.items():
             self.assertEqual(hashlib.sha256((ROOT/'include'/'pineforge'/name).read_bytes()).hexdigest(), expected,
-                             name + ' changed since the reviewed transition; bump the epoch and re-record the pin')
+                             name + ' changed since the reviewed transition; land reviewed bytes and pin together')
         recorded = [{'name': name, 'oldSha256': '0'*64, 'currentSha256': sha, 'reason': 'x'}
                     for name, sha in EXEMPTED_HEADER_SHA256.items()]
         verify_exempted_header_pins(recorded)
@@ -270,11 +411,15 @@ class AbiToolingTests(unittest.TestCase):
             verify_exempted_header_pins([{'name': 'native_run_spec.hpp', 'oldSha256': '0'*64, 'currentSha256': '1'*64, 'reason': 'x'}])
 
     def test_every_frozen_native_header_is_compared_and_exemptions_are_recorded(self):
-        transition = ('engine_script_run_v13', 'engine_script_run_v14')
-        self.assertEqual(set(EPOCH_TRANSITION_HEADER_EXEMPTIONS), {transition})
+        transition = ('engine_script_run_v13', 'engine_script_run_v15')
+        self.assertEqual(set(EPOCH_TRANSITION_HEADER_EXEMPTIONS), {
+            ('engine_script_run_v13', 'engine_script_run_v15'),
+            ('engine_script_run_v14', 'engine_script_run_v15')})
         self.assertEqual(set(EPOCH_TRANSITION_HEADER_EXEMPTIONS[transition]),
                          {'native_order.hpp', 'native_host.hpp', 'market_driver.hpp',
                           'execution_consumer.hpp'})
+        self.assertEqual(EPOCH_TRANSITION_HEADER_EXEMPTIONS[('engine_script_run_v14','engine_script_run_v15')],
+                         EPOCH_TRANSITION_HEADER_EXEMPTIONS[transition])
         exempted, guarded = 'native_order.hpp', 'native_run_spec.hpp'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -286,7 +431,7 @@ class AbiToolingTests(unittest.TestCase):
             # A comment-only difference is not a difference.
             commented = self.native_headers(root/'commented')
             path = commented/'pineforge'/exempted
-            path.write_text(path.read_text()+'// native_order_v3 note\n')
+            path.write_text(path.read_text()+'// native_order_v4 note\n')
             self.assertEqual(frozen_native_header_exemptions(old, commented, transition), [])
             # A changed exempted header under the reviewed transition is recorded.
             changed = self.native_headers(root/'changed',
@@ -295,9 +440,9 @@ class AbiToolingTests(unittest.TestCase):
             self.assertEqual([item['name'] for item in recorded], [exempted])
             self.assertNotEqual(recorded[0]['oldSha256'], recorded[0]['currentSha256'])
             self.assertEqual(recorded[0]['reason'],
-                             'reviewed engine_script_run_v13->engine_script_run_v14 transition')
+                             'reviewed engine_script_run_v13->engine_script_run_v15 transition')
             # The same change outside that exact transition raises.
-            for other in (None, ('engine_script_run_v14', 'engine_script_run_v15')):
+            for other in (None, ('engine_script_run_v15', 'engine_script_run_v16')):
                 with self.subTest(transition=other):
                     with self.assertRaisesRegex(RuntimeError, exempted):
                         frozen_native_header_exemptions(old, changed, other)

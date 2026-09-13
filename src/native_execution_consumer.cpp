@@ -17,7 +17,7 @@
 #include <variant>
 
 namespace pineforge {
-inline namespace engine_script_run_v14 {
+inline namespace engine_script_run_v15 {
 namespace {
 
 template<class T>
@@ -3440,5 +3440,5 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
         .continuation_hash();
 }
 
-}  // inline namespace engine_script_run_v14
+}  // inline namespace engine_script_run_v15
 }  // namespace pineforge

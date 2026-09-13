@@ -112,27 +112,31 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. R4-A selected/current execution advances `PendingOrder`,
+runtime. The R4-B Phase 0 epoch bootstrap advances `PendingOrder`,
 `BacktestEngine`, `NativeStrategyHost`, and the private consumer to
-`engine_script_run_v14`. The host capability macro is
-`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V14`. Native order/core/event values are
-`native_order_v3`; driver types are `native_driver_v4`.
+`engine_script_run_v15`. The host capability macro is
+`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V15`. Native order/core/event values are
+`native_order_v4`; driver types are `native_driver_v4`.
 
-The authenticated c3ed455 epoch-13 header closure is tracked under
-`tests/fixtures/native_cpp_abi/host-c3ed455`. The verifier prepares a full real
-archive from that immutable source with the current profile's compiler and
+The authenticated c3ed455 epoch-13 and f736676 epoch-14 header closures are
+tracked under `tests/fixtures/native_cpp_abi/host-c3ed455` and
+`tests/fixtures/native_cpp_abi/host-f736676`. The verifier prepares full real
+archives from those immutable sources with the current profile's compiler and
 settings. Constructor/vtable, return-only `native_events()`, host observation,
 core request, driver and current-execution method callers compile before links
-are interpreted. Old-old and new-new controls link; cross-epoch callers reject
-at the expected namespace. No ABI caller executable is run.
+are interpreted. Matching host and order epochs link; cross-epoch callers reject
+at the expected namespace. Driver v4 callers link between the epoch-14 and
+epoch-15 archives in both directions. Current-execution callers use only epochs
+14 and 15. The v15 execution-terms and FX-curve templates are recorded as pending
+until the Phase 1c host surface lands. No ABI caller executable is run.
 
 The real e60 R2 and 0e R3 providers remain mandatory. Their former epoch-13 to
 current positive pairs are now explicit epoch rejections, with historical
 old-old and current-current sanity retained.
 
-The `engine_script_run_v13` to `engine_script_run_v14` transition drops no
-check. Against each epoch-13 provider the checker still compares, in full and
-unconditionally:
+The transitions from the two frozen host epochs to `engine_script_run_v15`
+drop no check. Against each historical provider the checker still compares,
+in full and unconditionally:
 
 * every engine named data declaration in source order (252 declarations, 251
   of them non-static data members) and the entire virtual method inventory —
@@ -148,17 +152,18 @@ unconditionally:
 * every frozen native header's text, with exactly four enumerated exemptions —
   `native_order.hpp`, `native_host.hpp`, `market_driver.hpp` and
   `execution_consumer.hpp`, the headers that legitimately advance with
-  `native_order_v3`, host v14, `native_driver_v4` and consumer v5. Each actual
+  `native_order_v4`, host v15, `native_driver_v4` and consumer v6. Each actual
   difference is recorded in `frozenShape.exemptedHeaders` with both digests and
   its transition; an exempted header that did not change records nothing, and
   any other differing header still raises. The exemption table lives in one
-  module constant keyed by the exact transition it belongs to, so a future
-  v14→v15 transition must be added explicitly rather than inherited.
+  module constant keyed by the two reviewed transitions, v13→v15 and v14→v15.
+  Every recorded exemption must also match the pinned current header bytes.
 
 `native_order_identity.hpp`, `native_run_spec.hpp` and `native_calendar.hpp`
-stay byte-frozen across the transition. Once a frozen v14 provider is added
-after merge, that provider's pairing carries no exemptions at all and the
-header-text fence is restored for those four headers too.
+remain frozen after comment stripping and whitespace normalization. The identity
+header's request/core/event namespace comment is renamed in Phase 0; its
+normalized text is unchanged. No other differences in these three headers are
+exempted.
 
 Earlier v2–v10 and v12 controls remain. Reusing an uninstrumented historical
 Release archive in a sanitizer profile is refused; preparation never overwrites
@@ -202,11 +207,11 @@ its creating strategy module. A fully self-contained old module can still use
 its own matching runtime; this check does not turn it into a v11 module.
 
 The integrated representation advances the broker fingerprint domain to
-`pineforge-broker-state/v14` and stream fingerprint version to 14. Native
-consumer identity is `native-consumer/v5`; driver v4 appends CurrentExecution=8, while `close_scope_v1`,
+`pineforge-broker-state/v15` and stream fingerprint version to 15. Native
+consumer identity is `native-consumer/v6`; driver v4 appends CurrentExecution=8, while `close_scope_v1`,
 and `native_run_spec_v1` stay. Stable `RunIdentity` / `RequestHandle` / `Birth`
 remain `native_order_v1`; new request, core, and event values own
-`native_order_v3`. The original admission observation and prior-book direction
+`native_order_v4`. The original admission observation and prior-book direction
 are hashed as canonical facts; the three derived placement views add no
 redundant folds. Lifecycle definitions, generations, obligations and replay
 receipts, plus causal journal state remain represented. Existing
@@ -214,7 +219,7 @@ reservation, Pine instruction, activation, quantity, predecessor and birth facts
 remain represented. Selected cohorts, their executed live scopes, current callback quote/cutoff facts
 and queued notification order contribute to native continuation identity.
 The Pine component schema remains 1; it is
-independent of the aggregate fingerprint version. Prior v2–v13 fingerprints are
+independent of the aggregate fingerprint version. Prior v2–v14 fingerprints are
 not comparable. Fingerprints are replay checks, not serialized checkpoints or
 complete hashes of private strategy state. The native runner already binds
 its strategy-library SHA; its ledger format and Python provenance fingerprints

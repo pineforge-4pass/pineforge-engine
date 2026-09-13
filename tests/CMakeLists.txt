@@ -352,6 +352,7 @@ add_test(
             --library $<TARGET_FILE:pineforge>
             --include ${PROJECT_SOURCE_DIR}/include
             --generated-include ${PROJECT_BINARY_DIR}/include
+            --receipt ${PROJECT_BINARY_DIR}/native-abi-receipt.json
             ${_pf_script_cpp_abi_flags}
 )
 set_tests_properties(test_native_cpp_abi PROPERTIES TIMEOUT 240)
@@ -367,6 +368,9 @@ set(PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT
 set(PINEFORGE_NATIVE_ABI_V13_RECEIPT
     "${PROJECT_BINARY_DIR}/native-abi-v13/receipt.json"
     CACHE FILEPATH "Prepared actual c3ed455 epoch 13 ABI provider receipt")
+set(PINEFORGE_NATIVE_ABI_V14_RECEIPT
+    "${PROJECT_BINARY_DIR}/native-abi-v14/receipt.json"
+    CACHE FILEPATH "Prepared actual f736676 epoch 14 ABI provider receipt")
 add_test(NAME test_settlement_cpp_abi
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
         --compiler ${CMAKE_CXX_COMPILER}
@@ -376,6 +380,7 @@ add_test(NAME test_settlement_cpp_abi
         --base-receipt ${PINEFORGE_SETTLEMENT_ABI_BASE_RECEIPT}
         --prior-receipt ${PINEFORGE_SETTLEMENT_ABI_PRIOR_RECEIPT}
         --v13-receipt ${PINEFORGE_NATIVE_ABI_V13_RECEIPT}
+        --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
         ${_pf_script_cpp_abi_flags})
 set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)

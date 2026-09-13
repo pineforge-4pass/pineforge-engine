@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Mutation controls for native C++ ABI ownership; no compiler or engine runs."""
+import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,29 +41,29 @@ class NativeVersions(unittest.TestCase):
 
     def test_stale_wrapper(self):
         for path, namespace, stale in (
-            (FILES[0], "native_order_v3", "native_order_v1"),
-            (FILES[1], "native_order_v3", "native_order_v1"),
-            (FILES[11], "native_order_v1", "native_order_v3"),
+            (FILES[0], "native_order_v4", "native_order_v1"),
+            (FILES[1], "native_order_v4", "native_order_v1"),
+            (FILES[11], "native_order_v1", "native_order_v4"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
             (FILES[4], "native_run_spec_v1", "native_run_spec_v2"),
             (FILES[5], "native_run_spec_v1", "native_run_spec_v2"),
             (FILES[6], "native_driver_v4", "native_driver_v2"),
             (FILES[7], "native_driver_v4", "native_driver_v3"),
-            (FILES[8], "engine_script_run_v14", "engine_script_run_v12"),
-            (FILES[9], "engine_script_run_v14", "engine_script_run_v12"),
-            (FILES[10], "engine_script_run_v14", "engine_script_run_v12"),
+            (FILES[8], "engine_script_run_v15", "engine_script_run_v12"),
+            (FILES[9], "engine_script_run_v15", "engine_script_run_v12"),
+            (FILES[10], "engine_script_run_v15", "engine_script_run_v12"),
         ):
             with self.subTest(path=path, namespace=namespace):
                 self.reject(path, namespace, stale)
 
     def test_duplicate_wrapper(self):
         for path, namespace in (
-            (FILES[0], "native_order_v3"),
+            (FILES[0], "native_order_v4"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
             (FILES[6], "native_driver_v4"),
-            (FILES[8], "engine_script_run_v14"),
+            (FILES[8], "engine_script_run_v15"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -70,11 +72,11 @@ class NativeVersions(unittest.TestCase):
 
     def test_empty_namespace_is_not_ownership(self):
         for path, namespace in (
-            (FILES[0], "native_order_v3"),
+            (FILES[0], "native_order_v4"),
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
             (FILES[6], "native_driver_v4"),
-            (FILES[8], "engine_script_run_v14"),
+            (FILES[8], "engine_script_run_v15"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -83,10 +85,10 @@ class NativeVersions(unittest.TestCase):
 
     def test_comment_only_namespace_is_not_ownership(self):
         for path, namespace, decoy in (
-            (FILES[0], "native_order_v3", "struct WorkingRequestCore"),
+            (FILES[0], "native_order_v4", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
-            (FILES[8], "engine_script_run_v14", "class NativeStrategyHost"),
+            (FILES[8], "engine_script_run_v15", "class NativeStrategyHost"),
         ):
             with self.subTest(path=path):
                 self.reject(
@@ -196,8 +198,8 @@ class NativeVersions(unittest.TestCase):
         needle = "WorkingRequestCore::reset("
         self.assertIn(needle, changed[src])
         changed[src] = changed[src].replace(
-            "}  // inline namespace native_order_v3",
-            "}  // inline namespace native_order_v3\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
+            "}  // inline namespace native_order_v4",
+            "}  // inline namespace native_order_v4\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
             1)
         with self.assertRaises(ValueError):
             check_texts(changed)
@@ -213,7 +215,7 @@ class NativeVersions(unittest.TestCase):
             DRIVER_FORWARD,
             "inline namespace native_run_spec_v1 { struct NativeRunSpec {}; }")
 
-    def test_host_public_values_cannot_leave_v14(self):
+    def test_host_public_values_cannot_leave_v15(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")
         self.reject(FILES[8], "struct NativeFailure {", "} struct NativeFailure {")
         self.reject(FILES[8], "struct NativeFailureContext {", "} struct NativeFailureContext {")
@@ -225,8 +227,137 @@ class NativeVersions(unittest.TestCase):
             "")
         self.reject(
             FILES[6],
-            'kNativeConsumerSemanticVersion = "native-consumer/v5"',
+            'kNativeConsumerSemanticVersion = "native-consumer/v6"',
             'kNativeConsumerSemanticVersion = "native-consumer/v3"')
+
+    def test_phase0_native_abi_templates_are_staged(self):
+        from check_native_cpp_abi import (
+            CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER,
+            CURRENT_TERMS_SURFACE_READY, control_applicability,
+        )
+        self.assertFalse(CURRENT_TERMS_SURFACE_READY)
+        self.assertIn('R4B_CURRENT_RESULT_ALTERNATIVES', CURRENT_EXECUTION_V15_CALLER)
+        self.assertIn('configure_native_fx_curve', CURRENT_EXECUTION_V15_CALLER)
+        self.assertIn('validate_native_fx_curve', NATIVE_FX_CURVE_CALLER)
+        controls = {row['name']: row for row in control_applicability()}
+        self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'], 'required')
+        for name in ('v15_current_execution_surface_compile',
+                     'v15_current_result_missing_cancelled_compile_reject',
+                     'v15_native_fx_curve_surface_compile'):
+            self.assertEqual(controls[name]['status'], 'pending_surface')
+
+    def test_order_namespace_is_derived_not_literal(self):
+        from check_native_cpp_abi import current_order_namespace
+        self.assertEqual(current_order_namespace(
+            'inline namespace native_order_v4 { struct X {}; }'), 'native_order_v4')
+        with self.assertRaises(RuntimeError):
+            current_order_namespace(
+                'inline namespace native_order_v4 { }\n'
+                'inline namespace native_order_v3 { }')
+
+    def test_missing_cancelled_mutation_is_exactly_one(self):
+        from check_native_cpp_abi import remove_current_result_cancelled
+        source = ('using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal, '
+                  'native_order::ExecutionAppliedEvent, native_order::NoEffectEvent, '
+                  'native_order::MatchRejectedEvent, native_order::CancelledEvent>;\n')
+        changed = remove_current_result_cancelled(source)
+        prefix, marker, suffix = source.partition(', native_order::CancelledEvent')
+        self.assertTrue(marker)
+        self.assertEqual(changed, prefix + suffix)
+        self.assertNotIn('CancelledEvent', changed)
+        with self.assertRaises(RuntimeError):
+            remove_current_result_cancelled(source.replace('CancelledEvent', 'NoEffectEvent'))
+        with self.assertRaises(RuntimeError):
+            remove_current_result_cancelled(source.replace(
+                'native_order::CancelledEvent>;',
+                'native_order::CancelledEvent, native_order::CancelledEvent>;'))
+
+    def test_compile_rejection_requires_named_diagnostic(self):
+        from check_native_cpp_abi import (
+            CURRENT_EXECUTION_V15_CALLER, expect_compile_rejection,
+            remove_current_result_cancelled,
+        )
+        self.assertIn('R4B_CURRENT_RESULT_ALTERNATIVES', CURRENT_EXECUTION_V15_CALLER)
+        compiler = shutil.which('c++') or shutil.which('clang++')
+        if not compiler:
+            self.fail('the named compile-rejection mirror requires a C++ compiler')
+        with tempfile.TemporaryDirectory(prefix='pf-native-reject-mirror-') as temp:
+            root = Path(temp)
+            include = root / 'include'
+            header = include / 'pineforge/native_host.hpp'
+            header.parent.mkdir(parents=True)
+            original = ('#include <variant>\nnamespace pineforge { struct NativeCurrentRefusal {}; '
+                        'namespace native_order { struct ExecutionAppliedEvent {}; '
+                        'struct NoEffectEvent {}; struct MatchRejectedEvent {}; struct CancelledEvent {}; }\n'
+                        'using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal, '
+                        'native_order::ExecutionAppliedEvent, native_order::NoEffectEvent, '
+                        'native_order::MatchRejectedEvent, native_order::CancelledEvent>; }\n')
+            header.write_text(original)
+            mutated = remove_current_result_cancelled(original)
+            header.write_text(mutated)
+            source = ('#include <pineforge/native_host.hpp>\n#include <variant>\n'
+                      'static_assert(std::variant_size_v<pineforge::NativeCurrentExecutionResult> == 5, '
+                      '"R4B_CURRENT_RESULT_ALTERNATIVES");\n')
+            receipt = expect_compile_rejection(
+                'named-negative', source, include,
+                compiler_flags=[compiler, '-std=c++17'], generated_include=str(root),
+                scratch=root, original_header_sha256=hashlib.sha256(
+                    original.encode()).hexdigest())
+            self.assertEqual(receipt['outcome'], 'expected_compile_rejection')
+            self.assertIn('R4B_CURRENT_RESULT_ALTERNATIVES', receipt['diagnostics'])
+            self.assertEqual(receipt['source_sha256'], hashlib.sha256(source.encode()).hexdigest())
+            self.assertEqual(receipt['original_header_sha256'], hashlib.sha256(
+                original.encode()).hexdigest())
+            self.assertEqual(receipt['header_sha256'], hashlib.sha256(
+                mutated.encode()).hexdigest())
+            header.write_text(original)
+            with self.assertRaises(RuntimeError):
+                expect_compile_rejection(
+                    'unexpected-success', source, include,
+                    compiler_flags=[compiler, '-std=c++17'], generated_include=str(root),
+                    scratch=root, original_header_sha256='x')
+            bad = source.replace('static_assert', 'static_assertion', 1)
+            header.write_text(mutated)
+            with self.assertRaises(RuntimeError):
+                expect_compile_rejection(
+                    'unnamed-negative', bad, include,
+                    compiler_flags=[compiler, '-std=c++17'], generated_include=str(root),
+                    scratch=root, original_header_sha256='x')
+
+    def test_v14_tar_authentication_rejects_archive_and_manifest_tampering(self):
+        from check_native_cpp_abi import FIXTURE, authenticate_v14_fixture
+        fixture = FIXTURE / 'host-f736676'
+        with tempfile.TemporaryDirectory(prefix='pf-native-v14-auth-') as temp:
+            root = Path(temp)
+            valid = root / 'valid'
+            manifest = root / 'manifest-copy'
+            shutil.copytree(fixture, manifest)
+            authenticate_v14_fixture(manifest, valid)
+            tampered = root / 'tampered'
+            shutil.copytree(fixture, tampered)
+            archive = bytearray((tampered / 'headers.tar').read_bytes())
+            archive[-1] ^= 1
+            (tampered / 'headers.tar').write_bytes(archive)
+            with self.assertRaises(RuntimeError):
+                authenticate_v14_fixture(tampered, root / 'bad-archive')
+            mislabeled = root / 'mislabeled'
+            shutil.copytree(fixture, mislabeled)
+            data = json.loads((mislabeled / 'manifest.json').read_text())
+            data['tree'] = '0' * 40
+            (mislabeled / 'manifest.json').write_text(json.dumps(data))
+            with self.assertRaises(RuntimeError):
+                authenticate_v14_fixture(mislabeled, root / 'bad-manifest')
+
+    def test_current_execution_caller_is_rendered_per_provider(self):
+        from check_native_cpp_abi import render_current_execution_caller
+        v14 = render_current_execution_caller('engine_script_run_v14')
+        v15 = render_current_execution_caller('engine_script_run_v15')
+        self.assertIn('engine_script_run_v14', v14)
+        self.assertNotIn('engine_script_run_v15', v14)
+        self.assertIn('engine_script_run_v15', v15)
+        self.assertNotIn('engine_script_run_v14', v15)
+        with self.assertRaises(RuntimeError):
+            render_current_execution_caller('engine_script_run_v13')
 
 
 class FixtureAuthentication(unittest.TestCase):

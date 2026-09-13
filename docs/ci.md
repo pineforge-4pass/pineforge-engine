@@ -19,7 +19,7 @@ python3 scripts/ci_verify.py release --build-dir build --jobs 4
 ```
 
 The command runs source guards, configures and rebuilds every enabled target,
-prepares the real historical ABI provider, runs CTest, installs the package,
+prepares the real historical ABI providers, runs CTest, installs the package,
 and builds and runs the `find_package` consumer. The smoke test compares the
 installed library's reported version with `VERSION`. After a successful build,
 a failing test suite does not hide a separate install or package failure.
@@ -76,16 +76,32 @@ Ordinary CMake builds retain `AUTO`, the existing git-describe-first behavior.
 No release tag or VERSION value is rewritten by verification.
 
 The verifier fetches the pinned historical ABI commits `e60e571` (R2),
-`0e18690` (selected settlement, before exact reversal), and `c3ed455` (native
-host v13) without tags only when each object is missing. It builds all three
-full historical static libraries with tests disabled, or validates and reuses
+`0e18690` (selected settlement, before exact reversal), `c3ed455` (native
+host v13), and `f736676` (native host v14) without tags only when each object
+is missing. It builds all four full historical static libraries with tests
+disabled, or validates and reuses
 their matching prepared receipts under `settlement-abi-base/`,
-`settlement-abi-prior/`, and `native-abi-v13/`. Compiler, configuration and
-version-source mismatches refuse reuse without deleting the old evidence.
+`settlement-abi-prior/`, `native-abi-v13/`, and `native-abi-v14/`. Compiler,
+configuration and version-source mismatches refuse reuse without deleting the old evidence.
 Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.
+The full settlement matrix uses these four archives plus current v15. Its
+host/order matrix rejects cross-epoch links among v13, v14 and v15; the
+unchanged driver v4 requires positive links in both v14→v15 and v15→v14
+directions. Current-execution callers compile only from v14 and v15 headers.
 The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
 actual old/new library pairs and their immutable inputs.
+
+CTest writes `settlement-abi-receipt.json` for the five-archive matrix and
+`native-abi-receipt.json` for native controls. The native receipt includes the
+active `v14_current_execution_shape_agnostic_compile` against the authenticated
+frozen v14 tar closure. During native-terms phase 0 through phase 1b,
+`CURRENT_TERMS_SURFACE_READY = False` retains the complete
+`CURRENT_EXECUTION_V15_CALLER` and `NATIVE_FX_CURVE_CALLER` templates as pending
+surface rows. The named good v15 compile and missing-Cancelled compile rejection
+also remain pending. Phase 1c activates every row with the actual host surface;
+the good caller must compile before its intentional negative compile control.
+Ordinary compile failures remain failures, separate from ABI link rejections.
 
 ## Failure evidence
 

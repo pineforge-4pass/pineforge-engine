@@ -176,26 +176,26 @@ class PhysicalLotCoverage(unittest.TestCase):
                 self.assertIn(old, QUANTITY)
                 self.assertEqual(self.check(quantity=QUANTITY.replace(old, new))[0], 1)
 
-    def test_layout_and_hash_versions_must_match_v14_contract(self):
-        self.assertIn("engine_script_run_v14", HEADER)
-        self.assertIn('f.s("pineforge-broker-state/v14");', SOURCE)
-        self.assertIn("integer(14); integer(broker_state_hash());", STREAM)
-        self.assertEqual(self.check(header=HEADER.replace("engine_script_run_v14", "engine_script_run_v12"))[0], 1)
+    def test_layout_and_hash_versions_must_match_v15_contract(self):
+        self.assertIn("engine_script_run_v15", HEADER)
+        self.assertIn('f.s("pineforge-broker-state/v15");', SOURCE)
+        self.assertIn("integer(15); integer(broker_state_hash());", STREAM)
+        self.assertEqual(self.check(header=HEADER.replace("engine_script_run_v15", "engine_script_run_v12"))[0], 1)
         for replacement in ['f.s("pineforge-broker-state/v12");', '',
-                            '// f.s("pineforge-broker-state/v14");']:
+                            '// f.s("pineforge-broker-state/v15");']:
             self.assertEqual(self.check(source=SOURCE.replace(
-                'f.s("pineforge-broker-state/v14");', replacement))[0], 1)
+                'f.s("pineforge-broker-state/v15");', replacement))[0], 1)
         for replacement in ["integer(12); integer(broker_state_hash());",
                             "integer(broker_state_hash());",
-                            "if (false) { integer(14); integer(broker_state_hash()); }"]:
+                            "if (false) { integer(15); integer(broker_state_hash()); }"]:
             self.assertEqual(self.check(stream=STREAM.replace(
-                "integer(14); integer(broker_state_hash());", replacement))[0], 1)
+                "integer(15); integer(broker_state_hash());", replacement))[0], 1)
 
     def test_version_folds_in_unrelated_helpers_do_not_cover_entry_points(self):
-        broker_fold = 'f.s("pineforge-broker-state/v14");'
+        broker_fold = 'f.s("pineforge-broker-state/v15");'
         altered = SOURCE.replace(broker_fold, '') + '\nvoid other() { ' + broker_fold + ' }\n'
         self.assertEqual(self.check(source=altered)[0], 1)
-        stream_fold = "integer(14); integer(broker_state_hash());"
+        stream_fold = "integer(15); integer(broker_state_hash());"
         altered = STREAM.replace(stream_fold, '') + '\nvoid other() { ' + stream_fold + ' }\n'
         self.assertEqual(self.check(stream=altered)[0], 1)
 

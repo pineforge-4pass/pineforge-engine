@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -44,9 +45,14 @@ from prepare_settlement_cpp_abi_base import (
     PRIOR_TREE,
     V13_COMMIT,
     V13_TREE,
+    V14_COMMIT,
+    V14_TREE,
+    PROVIDERS,
     COPY_CACHE,
+    authenticate_headers,
     compiler_identity,
     copied_cache,
+    extract_tar,
     identity,
     receipt_matches_current,
     reusable_prepared_base,
@@ -97,7 +103,9 @@ class Scripted:
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'cat-file' in argv:
-            if V13_COMMIT + '^{commit}' in argv:
+            if V14_COMMIT + '^{commit}' in argv:
+                key = 'v14-cat-file'
+            elif V13_COMMIT + '^{commit}' in argv:
                 key = 'v13-cat-file'
             elif PRIOR_COMMIT + '^{commit}' in argv:
                 key = 'prior-cat-file'
@@ -105,15 +113,15 @@ class Scripted:
                 key = 'cat-file'
             else:
                 return Completed(128, b'', b'unknown fixture object\n')
-            # Control-flow tests start with both providers present; individual
+            # Control-flow tests start with all providers present; individual
             # tests explicitly remove one. Never depend on checkout depth or
             # on a previous full verifier run having fetched old commits.
             return Completed(int(self.exits.get(key, 0)), b'', b'')
         if argv[0] == 'git' and 'fetch' in argv:
-            key = 'v13-fetch' if V13_COMMIT in argv else 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch'
+            key = self.provider_command_name(argv, 'fetch')
             return Completed(int(self.exits.get(key, 0)), b'fetched\n', b'')
         if any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
-            key = 'v13-prepare' if V13_COMMIT in argv else 'prior-prepare' if PRIOR_COMMIT in argv else 'prepare'
+            key = self.provider_command_name(argv, 'prepare')
             return Completed(int(self.exits.get(key, 0)), b'prepared\n', b'')
         if any(Path(part).suffix == '.py' for part in argv):
             needles = {
@@ -203,8 +211,8 @@ class Scripted:
             if self.exits.get('sanitizer_flag') == 'absent':
                 commands[0]['command'] = f'{self.cxx} -c src/matrix.cpp'
             (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
-        self._maybe_seed_abi_base()
-        self._maybe_seed_abi_base(prior=True)
+        for role in ('e60', '0e', 'v13', 'v14'):
+            self._maybe_seed_abi_base(role)
         return Completed(0, b'configured\n', b'')
 
     def _build(self) -> Completed:
@@ -240,17 +248,19 @@ class Scripted:
         (self.build_dir / 'ci-smoke' / 'smoke_version').write_bytes(b'smoke')
         return Completed(0, b'installed\n', b'')
 
-    def _maybe_seed_abi_base(self, *, prior=False) -> None:
-        kind = self.exits.get('preexisting_prior' if prior else 'preexisting_base')
+    def _maybe_seed_abi_base(self, role: str) -> None:
+        key = {'e60': 'base', '0e': 'prior', 'v13': 'v13', 'v14': 'v14'}[role]
+        kind = self.exits.get('preexisting_' + key)
         if not kind:
             return
-        output = self.build_dir / ('settlement-abi-prior' if prior else 'settlement-abi-base')
+        provider = PROVIDERS[role]
+        output = self.build_dir / provider['default_output']
         output.mkdir(parents=True, exist_ok=True)
         (output / 'sentinel').write_text('keep\n')
         if kind == 'no-receipt':
             return
         archive = output / 'build' / 'lib' / 'libpineforge.a'
-        headers = output / ('headers.tar' if prior else 'r2-headers.tar')
+        headers = output / provider['headers_name']
         generated = output / 'build' / 'include' / 'pineforge' / 'version.h'
         archive.parent.mkdir(parents=True, exist_ok=True)
         generated.parent.mkdir(parents=True, exist_ok=True)
@@ -264,8 +274,8 @@ class Scripted:
             cache['PINEFORGE_VERSION_SOURCE'] = 'AUTO'
         receipt = {
             'schemaVersion': 'pineforge-settlement-abi-base/v1',
-            'commit': PRIOR_COMMIT if prior else BASE_COMMIT,
-            'tree': PRIOR_TREE if prior else BASE_TREE,
+            'commit': provider['commit'],
+            'tree': provider['tree'],
             'archive': 'build/lib/libpineforge.a',
             'archiveSha256': identity(archive)['sha256'],
             'headers': headers.name,
@@ -277,6 +287,14 @@ class Scripted:
         }
         (output / 'receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
 
+    @staticmethod
+    def provider_command_name(argv: list[str], suffix: str) -> str:
+        for commit, prefix in ((V14_COMMIT, 'v14-'), (V13_COMMIT, 'v13-'),
+                               (PRIOR_COMMIT, 'prior-')):
+            if commit in argv:
+                return prefix + suffix
+        return suffix
+
     def names(self) -> list[str]:
         names = []
         for argv in self.calls:
@@ -287,9 +305,9 @@ class Scripted:
             elif argv[0] == 'ctest' and '--test-dir' in argv:
                 names.append('ctest')
             elif argv[0] == 'git' and 'fetch' in argv:
-                names.append('v13-fetch' if V13_COMMIT in argv else 'prior-fetch' if PRIOR_COMMIT in argv else 'fetch')
+                names.append(self.provider_command_name(argv, 'fetch'))
             elif any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
-                names.append('v13-prepare' if V13_COMMIT in argv else 'prior-prepare' if PRIOR_COMMIT in argv else 'prepare')
+                names.append(self.provider_command_name(argv, 'prepare'))
             elif argv[0] == 'cmake' and '-S' in argv and 'smoke_consumer' in ''.join(argv):
                 names.append('smoke-configure')
             elif Path(argv[0]).name == 'smoke_version':
@@ -448,6 +466,69 @@ class CopyCacheIdentity(unittest.TestCase):
         receipt_matches_current(receipt, cache, compiler)
 
 
+class HistoricalProviderPins(unittest.TestCase):
+    def test_v14_preparation_uses_the_frozen_f736676_header_closure(self):
+        provider = PROVIDERS['v14']
+        self.assertEqual(provider['commit'], V14_COMMIT)
+        self.assertEqual(provider['tree'], V14_TREE)
+        self.assertEqual(provider['manifest'],
+                         ROOT / 'tests/fixtures/native_cpp_abi/host-f736676/manifest.json')
+        self.assertEqual(provider['default_output'], 'native-abi-v14')
+        self.assertEqual(provider['headers_name'], 'headers.tar')
+        archive = provider['manifest'].parent / provider['headers_name']
+        self.assertEqual(identity(archive)['sha256'],
+                         '37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e')
+
+    def test_all_historical_roles_pin_their_own_engine_epoch(self):
+        self.assertEqual({role: provider['engine_epoch'] for role, provider in PROVIDERS.items()}, {
+            'e60': 'engine_script_run_v13', '0e': 'engine_script_run_v13',
+            'v13': 'engine_script_run_v13', 'v14': 'engine_script_run_v14',
+        })
+
+    def test_host_provider_epoch_matches_its_authenticated_header_owner(self):
+        for role in ('v13', 'v14'):
+            provider = PROVIDERS[role]
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / 'headers'
+                extract_tar((provider['manifest'].parent / provider['headers_name']).read_bytes(), source)
+                authenticate_headers(source, provider['manifest'],
+                                     commit=provider['commit'], tree=provider['tree'])
+                epochs = set(re.findall(r'inline namespace (engine_script_run_v\d+)',
+                                        (source / 'include/pineforge/engine.hpp').read_text()))
+                self.assertEqual(epochs, {provider['engine_epoch']})
+
+    def test_v14_header_authentication_rejects_changed_missing_and_extra_files(self):
+        provider = PROVIDERS['v14']
+        raw = (provider['manifest'].parent / provider['headers_name']).read_bytes()
+        for mutation in ('changed', 'missing', 'extra'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                source = Path(temporary) / 'headers'
+                extract_tar(raw, source)
+                header = source / 'include/pineforge/native_host.hpp'
+                if mutation == 'changed':
+                    header.write_bytes(header.read_bytes() + b'\n// changed\n')
+                    message = 'header bytes differ'
+                elif mutation == 'missing':
+                    header.unlink()
+                    message = 'header closure differs'
+                else:
+                    (source / 'include/pineforge/untracked.hpp').write_text('// extra\n')
+                    message = 'header closure differs'
+                with self.assertRaisesRegex(RuntimeError, message):
+                    authenticate_headers(source, provider['manifest'],
+                                         commit=V14_COMMIT, tree=V14_TREE)
+
+    def test_v14_header_authentication_rejects_wrong_commit_or_tree(self):
+        provider = PROVIDERS['v14']
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'headers'
+            extract_tar((provider['manifest'].parent / provider['headers_name']).read_bytes(), source)
+            for commit, tree in ((V13_COMMIT, V14_TREE), (V14_COMMIT, V13_TREE)):
+                with self.subTest(commit=commit, tree=tree):
+                    with self.assertRaisesRegex(RuntimeError, 'header pin changed'):
+                        authenticate_headers(source, provider['manifest'], commit=commit, tree=tree)
+
+
 class ReceiptReuse(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -461,9 +542,10 @@ class ReceiptReuse(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def seed(self, *, version='FILE', corrupt=False, receipt=True, prior=False):
+    def seed(self, *, version='FILE', corrupt=False, receipt=True, prior=False, provider=None):
+        pin = PROVIDERS[provider or ('0e' if prior else 'e60')]
         archive = self.output / 'build' / 'lib' / 'libpineforge.a'
-        headers = self.output / 'r2-headers.tar'
+        headers = self.output / pin['headers_name']
         generated = self.output / 'build' / 'include' / 'pineforge' / 'version.h'
         archive.parent.mkdir(parents=True, exist_ok=True)
         generated.parent.mkdir(parents=True, exist_ok=True)
@@ -480,11 +562,11 @@ class ReceiptReuse(unittest.TestCase):
         current = copied_cache(read_cache_for_test(self.build / 'CMakeCache.txt'))
         payload = {
             'schemaVersion': 'pineforge-settlement-abi-base/v1',
-            'commit': PRIOR_COMMIT if prior else BASE_COMMIT,
-            'tree': PRIOR_TREE if prior else BASE_TREE,
+            'commit': pin['commit'],
+            'tree': pin['tree'],
             'archive': 'build/lib/libpineforge.a',
             'archiveSha256': identity(archive)['sha256'],
-            'headers': 'r2-headers.tar',
+            'headers': headers.name,
             'headersSha256': identity(headers)['sha256'],
             'generatedInclude': 'build/include',
             'generatedHeaderSha256': identity(generated)['sha256'],
@@ -538,6 +620,26 @@ class ReceiptReuse(unittest.TestCase):
             reusable_prepared_base(self.output, self.build, commit=PRIOR_COMMIT, tree=PRIOR_TREE)
         self.assertTrue((self.output / 'sentinel').is_file())
 
+    def test_v14_reuse_pins_its_own_commit_and_tree(self):
+        self.seed(provider='v14')
+        receipt = reusable_prepared_base(self.output, self.build, commit=V14_COMMIT, tree=V14_TREE)
+        self.assertEqual(receipt['commit'], V14_COMMIT)
+        self.assertEqual(receipt['headers'], 'headers.tar')
+        for commit, tree in ((V13_COMMIT, V14_TREE), (V14_COMMIT, V13_TREE)):
+            with self.subTest(commit=commit, tree=tree):
+                with self.assertRaisesRegex(RuntimeError, 'does not pin'):
+                    reusable_prepared_base(self.output, self.build, commit=commit, tree=tree)
+        self.assertTrue((self.output / 'sentinel').is_file())
+
+    def test_v14_reuse_refuses_changed_header_or_generated_header_bytes(self):
+        for relative in ('headers.tar', 'build/include/pineforge/version.h'):
+            with self.subTest(relative=relative):
+                self.seed(provider='v14')
+                (self.output / relative).write_bytes(b'changed')
+                with self.assertRaisesRegex(RuntimeError, 'fresh --build-dir'):
+                    reusable_prepared_base(self.output, self.build, commit=V14_COMMIT, tree=V14_TREE)
+                self.assertTrue((self.output / 'sentinel').is_file())
+
 
 def read_cache_for_test(path: Path) -> dict[str, str]:
     from prepare_settlement_cpp_abi_base import read_cache
@@ -564,7 +666,7 @@ class GitObjectDiscovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)  # deliberately not a Git repository
             scripted = Scripted(source / 'build', source)
-            for commit in (BASE_COMMIT, PRIOR_COMMIT, V13_COMMIT):
+            for commit in (BASE_COMMIT, PRIOR_COMMIT, V13_COMMIT, V14_COMMIT):
                 self.assertTrue(ci_verify.pinned_object_present(source, scripted, commit))
             self.assertFalse(ci_verify.pinned_object_present(source, scripted, '0' * 40))
 
@@ -697,10 +799,15 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(summary['versionSource'], 'FILE')
         self.assertIn('abi-base', stage_names(summary))
         self.assertIn('abi-prior', stage_names(summary))
+        self.assertIn('abi-v13', stage_names(summary))
+        self.assertIn('abi-v14', stage_names(summary))
         names = stage_names(summary)
         self.assertLess(names.index('build'), names.index('abi-base'))
         self.assertLess(names.index('abi-base'), names.index('abi-prior'))
         self.assertLess(names.index('abi-prior'), names.index('ctest'))
+        self.assertLess(names.index('abi-prior'), names.index('abi-v13'))
+        self.assertLess(names.index('abi-v13'), names.index('abi-v14'))
+        self.assertLess(names.index('abi-v14'), names.index('ctest'))
         self.assertIn('ctest', scripted.names())
         self.assertIn('install', scripted.names())
         self.assertTrue((build_dir / 'ci-logs' / 'ctest.log').is_file())
@@ -800,6 +907,77 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(summary['abiV13']['action'], 'failed')
         self.assertIn('abi-v13', failure_stages(summary))
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
+
+    def test_v14_provider_uses_its_own_pinned_profile_preparation(self):
+        code, summary, scripted, build_dir = self.run_profile(**{'v14-cat-file': 1})
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['abiV14']['action'], 'prepared')
+        fetches = [argv for argv in scripted.calls if argv[0] == 'git' and 'fetch' in argv]
+        self.assertEqual(fetches, [['git', '-C', str(ROOT), 'fetch', '--no-tags', '--depth=1',
+                                    'origin', V14_COMMIT]])
+        self.assertIn('abi-v14-fetch', stage_names(summary))
+        prepare = next(argv for argv in scripted.calls if V14_COMMIT in argv and '--tree' in argv)
+        self.assertEqual(prepare[prepare.index('--tree') + 1], V14_TREE)
+        self.assertEqual(Path(prepare[prepare.index('--output') + 1]).resolve(),
+                         (build_dir / 'native-abi-v14').resolve())
+        self.assertEqual(prepare[prepare.index('--header-manifest') + 1],
+                         str(ROOT / 'tests/fixtures/native_cpp_abi/host-f736676/manifest.json'))
+        self.assertEqual(Path(prepare[prepare.index('--current-build') + 1]).resolve(),
+                         build_dir.resolve())
+        self.assertEqual(prepare[prepare.index('--jobs') + 1], '2')
+
+    def test_present_v14_object_does_not_fetch(self):
+        code, summary, scripted, _ = self.run_profile(**{'v14-cat-file': 0})
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertNotIn('v14-fetch', scripted.names())
+        self.assertIn('v14-prepare', scripted.names())
+
+    def test_matching_v14_is_reused_without_fetch_or_prepare(self):
+        code, summary, scripted, _ = self.run_profile(preexisting_v14='match')
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['abiV14']['action'], 'reused')
+        self.assertNotIn('v14-fetch', scripted.names())
+        self.assertNotIn('v14-prepare', scripted.names())
+
+    def test_mismatch_v14_refuses_without_deletion_and_keeps_other_checks(self):
+        code, summary, scripted, build_dir = self.run_profile(preexisting_v14='mismatch')
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiV14']['action'], 'refused')
+        self.assertIn('abi-v14', failure_stages(summary))
+        self.assertIn('fresh --build-dir', summary['failures'][0]['error'])
+        self.assertTrue((build_dir / 'native-abi-v14/sentinel').is_file())
+        self.assertTrue((build_dir / 'native-abi-v14/receipt.json').is_file())
+        self.assertNotIn('v14-prepare', scripted.names())
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
+
+    def test_v14_directory_without_receipt_is_preserved_and_refused(self):
+        code, summary, scripted, build_dir = self.run_profile(preexisting_v14='no-receipt')
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiV14']['action'], 'refused')
+        self.assertIn('abi-v14', failure_stages(summary))
+        self.assertIn('without a receipt', summary['failures'][0]['error'])
+        self.assertTrue((build_dir / 'native-abi-v14/sentinel').is_file())
+        self.assertNotIn('v14-prepare', scripted.names())
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
+
+    def test_v14_provider_failure_is_reported_without_hiding_checks(self):
+        code, summary, scripted, _ = self.run_profile(**{'v14-prepare': 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiV14']['action'], 'failed')
+        self.assertIn('abi-v14', failure_stages(summary))
+        self.assertIn('ctest', scripted.names())
+        self.assertIn('install', scripted.names())
+
+    def test_v14_fetch_failure_does_not_prepare_and_keeps_other_checks(self):
+        code, summary, scripted, _ = self.run_profile(**{'v14-cat-file': 1, 'v14-fetch': 1})
+        self.assertEqual(code, 1)
+        self.assertEqual(summary['abiV14']['action'], 'failed')
+        self.assertIn('abi-v14-fetch', failure_stages(summary))
+        self.assertNotIn('v14-prepare', scripted.names())
         self.assertIn('ctest', scripted.names())
         self.assertIn('install', scripted.names())
 
@@ -937,6 +1115,62 @@ class DiagnosticsCollection(unittest.TestCase):
             self.assertIn('native-abi-v13/receipt.json', missing)
             self.assertIn('native-abi-v13/build.log', missing)
             self.assertNotIn('native-abi-v13/configure.log', missing)
+
+    def test_v14_provider_diagnostics_survive_without_binaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = root / 'build/native-abi-v14'
+            provider.mkdir(parents=True)
+            files = {
+                'receipt.json': json.dumps({'commit': V14_COMMIT, 'archiveSha256': 'a' * 64}),
+                'configure.log': 'v14 provider configured\n',
+                'build.log': 'v14 provider built\n',
+            }
+            for name, content in files.items():
+                (provider / name).write_text(content)
+            (provider / 'libpineforge.a').write_bytes(b'!<arch>\nexcluded library\n')
+            (provider / 'source.tar').write_bytes(b'excluded source archive\n')
+            output = root / 'diagnostics'
+            self.collect(root / 'build', output)
+            for name, content in files.items():
+                self.assertEqual((output / ('native-abi-v14-' + name)).read_text(), content)
+            missing = json.loads((output / 'missing.json').read_text())
+            self.assertFalse(any(name.startswith('native-abi-v14/') for name in missing))
+            retained = [path.name for path in output.rglob('*') if path.is_file()]
+            self.assertNotIn('libpineforge.a', retained)
+            self.assertNotIn('source.tar', retained)
+
+    def test_failed_v14_preparation_retains_partial_logs_and_records_missing_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = root / 'build/native-abi-v14'
+            provider.mkdir(parents=True)
+            (provider / 'configure.log').write_text('v14 configure failure details\n')
+            output = root / 'diagnostics'
+            self.collect(root / 'build', output)
+            self.assertEqual((output / 'native-abi-v14-configure.log').read_text(),
+                             'v14 configure failure details\n')
+            missing = json.loads((output / 'missing.json').read_text())
+            self.assertIn('native-abi-v14/receipt.json', missing)
+            self.assertIn('native-abi-v14/build.log', missing)
+            self.assertNotIn('native-abi-v14/configure.log', missing)
+
+    def test_native_abi_control_receipt_is_retained_or_recorded_missing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build = root / 'build'
+            build.mkdir()
+            output = root / 'missing-diagnostics'
+            self.collect(build, output)
+            self.assertIn('native-abi-receipt.json', json.loads((output / 'missing.json').read_text()))
+            receipt = {'status': 'passed', 'executedBinaries': 0,
+                       'control': 'v14_current_execution_shape_agnostic_compile'}
+            (build / 'native-abi-receipt.json').write_text(json.dumps(receipt))
+            output = root / 'complete-diagnostics'
+            self.collect(build, output)
+            self.assertEqual(json.loads((output / 'native-abi-receipt.json').read_text()), receipt)
+            self.assertNotIn('native-abi-receipt.json',
+                             json.loads((output / 'missing.json').read_text()))
 
 
 if __name__ == '__main__':

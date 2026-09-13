@@ -22,7 +22,11 @@ ARTIFACTS = {
     "native-abi-v13/receipt.json": "native-abi-v13-receipt.json",
     "native-abi-v13/configure.log": "native-abi-v13-configure.log",
     "native-abi-v13/build.log": "native-abi-v13-build.log",
+    "native-abi-v14/receipt.json": "native-abi-v14-receipt.json",
+    "native-abi-v14/configure.log": "native-abi-v14-configure.log",
+    "native-abi-v14/build.log": "native-abi-v14-build.log",
     "settlement-abi-receipt.json": "settlement-abi-receipt.json",
+    "native-abi-receipt.json": "native-abi-receipt.json",
 }
 DEPENDENCY_ARTIFACTS = ('environment.txt', 'curl-configure.log',
                         'curl-build.log', 'curl-install.log')

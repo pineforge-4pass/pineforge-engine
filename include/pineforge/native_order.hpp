@@ -19,7 +19,7 @@
 #include <vector>
 
 namespace pineforge::native_order {
-inline namespace native_order_v3 {
+inline namespace native_order_v4 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
@@ -1046,5 +1046,5 @@ static_assert(std::is_nothrow_move_constructible_v<MatchRejectedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<ExecutionAppliedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchCursor>);
 
-}  // inline namespace native_order_v3
+}  // inline namespace native_order_v4
 }  // namespace pineforge::native_order

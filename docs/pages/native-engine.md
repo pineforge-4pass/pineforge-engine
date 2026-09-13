@@ -149,7 +149,7 @@ Serialized external C++ calls may command only **between realtime inputs**,
 never reentrantly during input processing. There is no C request API in this
 slice.
 
-`native_order::Request` values belong to `native_order_v3`; identity types stay
+`native_order::Request` values belong to `native_order_v4`; identity types stay
 `native_order_v1`. Label/comment remain inert text. The market default path
 still constructs from:
 

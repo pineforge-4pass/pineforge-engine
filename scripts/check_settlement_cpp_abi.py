@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual old/new settlement ABI pairings. Compile and link; NEVER run callers.
 
-Requires separately prepared real e60 R2 and 0e R3 archives. No Git/network/build fallback
+Requires separately prepared real e60 R2, 0e R3, v13 and v14 archives. No Git/network/build fallback
 is performed by this CTest-time checker. Existing native/script ABI guards stay
 separate and mandatory, including their old epoch and sanitizer RTTI controls.
 """
@@ -17,15 +17,37 @@ import subprocess
 import tempfile
 
 from check_aggregate_cpp_versions import clean, body
-from check_native_cpp_abi import HOST_EVENTS_CALLER, HOST_CALLER, HOST_CONSTRUCTOR_CALLER, CURRENT_EXECUTION_CALLER, ORDER_CALLER, BAR_CALLER, assembly_layout_values, undefined_mentions
+from check_native_cpp_abi import (
+    HOST_EVENTS_CALLER, HOST_CALLER, HOST_CONSTRUCTOR_CALLER, CURRENT_EXECUTION_CALLER,
+    CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER, CURRENT_TERMS_SURFACE_READY,
+    CURRENT_ORDER_VARIANT, CURRENT_ORDER_INTENT_VARIANT, ORDER_CALLER, BAR_CALLER,
+    assembly_layout_values, undefined_mentions, render_current_execution_caller,
+)
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT, BASE_TREE, COPY_CACHE, PROVIDERS, authenticate_headers, compiler_identity,
     extract_tar, identity, read_cache, run,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-ENGINE = 'pineforge::engine_script_run_v14::BacktestEngine::'
+
+
+def engine_epoch(include: Path) -> str:
+    epochs = re.findall(r'inline\s+namespace\s+(engine_script_run_v\d+)',
+                        clean((include/'pineforge/engine.hpp').read_text()))
+    if len(epochs) != 2 or len(set(epochs)) != 1:
+        raise RuntimeError('engine header must declare one PendingOrder/BacktestEngine epoch twice')
+    return epochs[0]
+
+
+CURRENT_EPOCH = engine_epoch(ROOT/'include')
+OLD_EPOCHS = ('engine_script_run_v13', 'engine_script_run_v14')
+ENGINE = f'pineforge::{CURRENT_EPOCH}::BacktestEngine::'
 OLD_ENGINE = 'pineforge::engine_script_run_v13::BacktestEngine::'
+PROVIDER_ORDER_SHAPES = {
+    'engine_script_run_v13': (16, 3),
+    'engine_script_run_v14': (16, 3),
+    CURRENT_EPOCH: (CURRENT_ORDER_VARIANT, CURRENT_ORDER_INTENT_VARIANT),
+}
 OLD_METHODS = ('inspect_native_settlement', 'inspect_native_settlement_scoped',
                'settle_native_execution_at', 'settle_native_execution_scoped_at',
                'settle_resolved_execution','settle_execution_with_lifecycle','settle_with_context')
@@ -45,23 +67,29 @@ FROZEN_NATIVE_HEADERS = ('native_order.hpp', 'native_order_identity.hpp', 'nativ
                          'execution_consumer.hpp')
 # The ONLY frozen native headers whose text may differ, and only across the exact
 # reviewed epoch transition that owns them. Every difference is still recorded in
-# the receipt; a later transition (v14->v15) must be enumerated here explicitly.
+# the receipt; no later transition inherits these exemptions.
 EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
-    ('engine_script_run_v13', 'engine_script_run_v14'): (
-        'native_order.hpp',        # native_order_v3 request/core/event values
-        'native_host.hpp',         # NativeStrategyHost v14
+    ('engine_script_run_v13', 'engine_script_run_v15'): (
+        'native_order.hpp',        # native_order_v4 request/core/event values
+        'native_host.hpp',         # NativeStrategyHost v15
         'market_driver.hpp',       # native_driver_v4 bar types
-        'execution_consumer.hpp',  # private consumer v5
+        'execution_consumer.hpp',  # private consumer v6
+    ),
+    ('engine_script_run_v14', 'engine_script_run_v15'): (
+        'native_order.hpp',
+        'native_host.hpp',
+        'market_driver.hpp',
+        'execution_consumer.hpp',
     ),
 }
-# The exact reviewed bytes of every exempted header. An exemption is a reviewed
-# identity, not an open licence: a later change to one of these headers within
-# the same epoch fails until the epoch is bumped and the pin re-recorded.
+# Provisional Phase-0 bytes of every exempted header. Pins change atomically
+# with the reviewed Phase-1b order and Phase-1c host landings. An exemption
+# never permits unpinned bytes or another epoch transition.
 EXEMPTED_HEADER_SHA256 = {
-    'native_order.hpp': '1192bb7d2b18cbbc7d98f7582dd3b2c117d83a4eab469ad6877669405fe52e4e',
-    'native_host.hpp': '329deede384c3e19b4984397899b335ece4843502c6ffb00401c5f9e0f1cdbca',
-    'market_driver.hpp': '14df02a794d1119f0f9624b35a2d2955a54e9a1d2d87d27e5ec1ff6066a53e23',
-    'execution_consumer.hpp': 'f4cd9c86a4d2e80e2becc698d40645c3af5c44f79917d8b3d14a81de2292fbda',
+    'native_order.hpp': '81c8ce7ba0ef7c640470449ccecba7909e4ed56dad5c6a0077426ee83636effb',
+    'native_host.hpp': '2ff544de31a1d7460556efa553f34b2936374c7a26b5ec87366113b6c4a2ebbc',
+    'market_driver.hpp': '30b99e7a67ace08fc2e38158dc5eb697473a54e9149836d2c896a3ca189be39b',
+    'execution_consumer.hpp': 'c32489bf16b276e216a57732a095385bef37bbb1f8dc83ac4fc61969ea26a0ac',
 }
 
 COMMON = '''#include <pineforge/native_host.hpp>
@@ -80,8 +108,8 @@ using L = ex::LifecycleEffects;
 static_assert(std::is_same_v<E, pineforge::BacktestEngine>);
 static_assert(std::variant_size_v<A> == 3);
 static_assert(std::variant_size_v<S> == 2);
-static_assert(std::variant_size_v<pineforge::native_order::CommandEvent> == 16);
-static_assert(std::variant_size_v<pineforge::native_order::OrderIntent> == 3);
+static_assert(std::variant_size_v<pineforge::native_order::CommandEvent> == COMMAND_EVENT_ALTERNATIVES);
+static_assert(std::variant_size_v<pineforge::native_order::OrderIntent> == ORDER_INTENT_ALTERNATIVES);
 '''
 OLD_CALLER = COMMON + '''
 static_assert(std::is_same_v<decltype(&E::inspect_native_settlement), I(E::*)(const A&,const F&) const>);
@@ -187,6 +215,68 @@ def normalized(text: str) -> str:
     return re.sub(r'\s+', ' ', clean(text)).strip()
 
 
+def provider_order_shape(headers: Path) -> tuple[int, int]:
+    """Derive each caller's counts from its headers and check its epoch's pins."""
+    epoch = engine_epoch(headers)
+    text = clean((headers/'pineforge/native_order.hpp').read_text())
+    counts = []
+    for alias in ('CommandEvent', 'OrderIntent'):
+        matches = re.findall(r'using\s+'+alias+r'\s*=\s*std::variant<([^;]+)>\s*;', text)
+        if len(matches) != 1:
+            raise RuntimeError('provider must declare one '+alias+' variant')
+        counts.append(len(matches[0].split(',')))
+    shape = tuple(counts)
+    if shape != PROVIDER_ORDER_SHAPES.get(epoch):
+        raise RuntimeError('unreviewed provider order shape: '+epoch+' '+str(shape))
+    return shape
+
+
+def render_provider_caller(text: str, headers: Path) -> str:
+    epoch = engine_epoch(headers)
+    command_count, intent_count = provider_order_shape(headers)
+    if text == CURRENT_EXECUTION_CALLER:
+        text = render_current_execution_caller(epoch)
+    text = text.replace(CURRENT_EPOCH, epoch)
+    return text.replace('COMMAND_EVENT_ALTERNATIVES', str(command_count)).replace(
+        'ORDER_INTENT_ALTERNATIVES', str(intent_count))
+
+
+def native_domain_callers(headers: Path) -> dict[str, tuple[str, str, str]]:
+    """Caller source, symbol needle and actual owner for each independent domain."""
+    epoch = engine_epoch(headers)
+    namespaces = {}
+    for name, stem in (('native_order.hpp', 'native_order'), ('market_driver.hpp', 'native_driver')):
+        found = re.findall(r'inline\s+namespace\s+('+stem+r'_v\d+)\b',
+                           clean((headers/'pineforge'/name).read_text()))
+        if len(found) != 1:
+            raise RuntimeError('provider must declare one '+stem+' namespace')
+        namespaces[stem] = found[0]
+    host = 'pineforge::'+epoch+'::NativeStrategyHost::'
+    order = 'pineforge::native_order::'+namespaces['native_order']+'::WorkingRequestCore::'
+    driver = 'pineforge::'+namespaces['native_driver']+'::'
+    return {
+        'host': (HOST_CALLER, host+'native_state(', epoch),
+        'events': (HOST_EVENTS_CALLER, host+'native_events(', epoch),
+        'constructor': (HOST_CONSTRUCTOR_CALLER, host+'NativeStrategyHost(', epoch),
+        'order': (ORDER_CALLER, order+'submit(', namespaces['native_order']),
+        'driver': (BAR_CALLER, driver+'native_bar_structurally_valid(', namespaces['native_driver']),
+    }
+
+
+def pending_surface_rows(current_label: str, provider_labels, ready: bool) -> list[dict]:
+    if ready:
+        return []
+    return [
+        {'name': current_label+'-'+name+'-'+provider,
+         'caller': current_label, 'provider': provider, 'status': 'pending-surface',
+         'sourceSha256': hashlib.sha256(source.encode()).hexdigest(),
+         'reason': 'CURRENT_TERMS_SURFACE_READY is false until the phase-1c host surface'}
+        for name, source in (('current-execution-terms', CURRENT_EXECUTION_V15_CALLER),
+                             ('native-fx-curve', NATIVE_FX_CURVE_CALLER))
+        for provider in provider_labels
+    ]
+
+
 def storage_declarations(header: str) -> list[str]:
     """Read top-level named data declarations; skip method bodies/declarations.
 
@@ -251,7 +341,7 @@ def verify_exempted_header_pins(exempted: list[dict], pins=EXEMPTED_HEADER_SHA25
         expected = pins.get(entry['name'])
         if expected is None or entry['currentSha256'] != expected:
             raise RuntimeError('exempted native header changed since the reviewed transition: ' + entry['name']
-                               + '; bump the engine epoch and re-record EXEMPTED_HEADER_SHA256')
+                               + '; apply the reviewed header and EXEMPTED_HEADER_SHA256 change together')
 
 
 def compare_layout_words(name: str, old_values: list[int], current_values: list[int],
@@ -280,10 +370,10 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
             raise RuntimeError('frozen execution aggregate/enum changed: ' + name)
     old_engine = (old_include/'pineforge/engine.hpp').read_text()
     cur_engine = (current_include/'pineforge/engine.hpp').read_text()
-    old_epoch = re.findall(r'inline namespace (engine_script_run_v\d+)', clean(old_engine))
-    new_epoch = re.findall(r'inline namespace (engine_script_run_v\d+)', clean(cur_engine))
+    old_epoch = [engine_epoch(old_include)] * 2
+    new_epoch = [engine_epoch(current_include)] * 2
     epoch_break = old_epoch != new_epoch
-    if epoch_break and (old_epoch != ['engine_script_run_v13'] * 2 or new_epoch != ['engine_script_run_v14'] * 2):
+    if epoch_break and (old_epoch[0] not in OLD_EPOCHS or new_epoch[0] != CURRENT_EPOCH):
         raise RuntimeError('unreviewed engine epoch transition')
     transition = (old_epoch[0], new_epoch[0]) if epoch_break else None
     exempted = frozen_native_header_exemptions(old_include, current_include, transition)
@@ -497,11 +587,17 @@ def load_provider(args, destination: Path, current_cache: dict, receipt_path: Pa
         if identity(generated.parent/'lib/libpineforge.a')['sha256'] != receipt['archiveSha256']:
             raise RuntimeError('preserved base cache/header directory no longer belongs to its archive')
     symbols = defined_symbols(library)
+    owner = archive_engine(symbols)
+    authenticated_epoch = engine_epoch(destination/'include')
+    if authenticated_epoch != provider['engine_epoch']:
+        raise RuntimeError('authenticated provider header epoch differs from pinned role: '+label)
+    if owner != f'pineforge::{authenticated_epoch}::BacktestEngine::':
+        raise RuntimeError('archive owner differs from authenticated provider epoch: '+label)
     for method in expect_present:
-        if OLD_ENGINE + method + '(' not in symbols:
+        if owner + method + '(' not in symbols:
             raise RuntimeError('real old archive omits original symbol: ' + method)
     for method in expect_absent:
-        if OLD_ENGINE + method + '(' in symbols:
+        if owner + method + '(' in symbols:
             raise RuntimeError('supplied old archive already exports new method: ' + method)
     return library, destination/'include', generated, receipt
 
@@ -516,6 +612,7 @@ def main() -> int:
     parser.add_argument('--prior-receipt', type=Path,
                         help='required for full proof: prepared real 0e18690 provider receipt')
     parser.add_argument('--v13-receipt', type=Path, help='prepared real c3ed455 epoch 13 provider; mandatory in full matrix')
+    parser.add_argument('--v14-receipt', type=Path, help='prepared real f736676 epoch 14 provider; mandatory in full matrix')
     parser.add_argument('--base-generated-include', type=Path)
     parser.add_argument('--extra-flag', action='append', default=[])
     parser.add_argument('--receipt', type=Path, required=True)
@@ -554,7 +651,9 @@ def main() -> int:
               'privateAccessScaffolding':'-fno-access-control only for ABI TUs; product visibility unchanged',
               'artifactsDirectory':str(log_root),'newArchivePairingComplete':False,
               'sourceSha256':{str(path.relative_to(source)):identity(path)['sha256'] for path in source_files},
-              'compiles':[],'links':[],'executedBinaries':0,'networkFetches':0}
+              'compiles':[],'links':[],'pendingSurface':[],
+              'currentEpoch':CURRENT_EPOCH,'currentTermsSurfaceReady':CURRENT_TERMS_SURFACE_READY,
+              'executedBinaries':0,'networkFetches':0}
     try:
         with tempfile.TemporaryDirectory(prefix='pineforge-settlement-abi-') as temporary:
             scratch = Path(temporary)
@@ -578,20 +677,31 @@ def main() -> int:
                 report['v13']={'receiptSha256':identity(args.v13_receipt)['sha256'],
                                'archiveSha256':identity(v13_library)['sha256'],
                                'commit':v13_receipt['commit'],'tree':v13_receipt['tree']}
-
+                v13_members,v13_shape = frozen_shape(v13_include,include,selected=True)
+                report['v13FrozenShape']=v13_shape
+                v14_library,v14_include,v14_generated,v14_receipt = load_provider(
+                    args,scratch/'v14',cache,args.v14_receipt,PROVIDERS['v14'],
+                    expect_present=(*OLD_METHODS,*OLD_PRIVATE,*NEW_METHODS,*NEW_PRIVATE,*REVERSAL_METHODS),
+                    expect_absent=())
+                report['v14']={'receiptSha256':identity(args.v14_receipt)['sha256'],
+                               'archiveSha256':identity(v14_library)['sha256'],
+                               'commit':v14_receipt['commit'],'tree':v14_receipt['tree']}
+                v14_members,v14_shape = frozen_shape(v14_include,include,selected=True)
+                report['v14FrozenShape']=v14_shape
 
             def compile_tu(name,text,headers,generated):
                 # Each caller must name its actual header epoch, including return-only APIs.
-                epoch = re.search(r'inline namespace (engine_script_run_v\d+)',
-                                  (headers/'pineforge/engine.hpp').read_text()).group(1)
-                text = text.replace('engine_script_run_v14', epoch)
+                epoch = engine_epoch(headers)
+                text = render_provider_caller(text,headers)
                 text = '#include <pineforge/native_host.hpp>\n#include <type_traits>\n' + text
                 text += '\nstatic_assert(std::is_same_v<pineforge::BacktestEngine, pineforge::'+epoch+'::BacktestEngine>);\n'
                 path=log_root/(name+'.cpp');path.write_text(text)
                 obj=log_root/(name+'.o')
                 argv=[*common,'-I',str(headers),'-I',str(generated),'-c',str(path),'-o',str(obj)]
                 run(argv,timeout=120,log=log_root/(name+'.compile.log'))
-                report['compiles'].append({'name':name,'argv':argv,'sourceSha256':identity(path)['sha256'],'objectSha256':identity(obj)['sha256']})
+                report['compiles'].append({'name':name,'argv':argv,'providerEpoch':epoch,
+                    'orderShape':list(provider_order_shape(headers)),
+                    'sourceSha256':identity(path)['sha256'],'objectSha256':identity(obj)['sha256']})
                 return obj
 
             provider_engines: dict[Path, str] = {}
@@ -610,13 +720,13 @@ def main() -> int:
                 layout_text,word_count=layout_source(layout_members,selected=selected)
                 layouts=[]
                 for label,layout_headers,layout_generated in [(name,headers,generated),
-                        ('current' if name == 'old' else 'current-selected',include,args.generated_include)]:
+                        ('current' if name == 'old' else 'current-'+name,include,args.generated_include)]:
                     compile_tu(label+'-layout',layout_text,layout_headers,layout_generated)
                     src=log_root/(label+'-layout.cpp');asm=log_root/(label+'-layout.s')
                     run([*common,'-I',str(layout_headers),'-I',str(layout_generated),'-S',str(src),'-o',str(asm)],timeout=120,
                         log=log_root/(label+'-layout.assembly.log'))
                     layouts.append(assembly_layout_values(asm.read_text(),word_count))
-                epoch_break = 'engine_script_run_v13' in (headers/'pineforge/engine.hpp').read_text() and 'engine_script_run_v14' in (include/'pineforge/engine.hpp').read_text()
+                epoch_break = engine_epoch(headers) != engine_epoch(include)
                 return compare_layout_words(name,layouts[0],layouts[1],word_count,epoch_break,layout_members)
 
             # Compile every actual caller before interpreting any link outcome.
@@ -629,6 +739,8 @@ def main() -> int:
             report['layout']=compare_layout('old',old_include,old_generated,members)
             if full_matrix:
                 report['priorLayout']=compare_layout('prior',prior_include,prior_generated,prior_members,selected=True)
+                report['v13Layout']=compare_layout('v13',v13_include,v13_generated,v13_members,selected=True)
+                report['v14Layout']=compare_layout('v14',v14_include,v14_generated,v14_members,selected=True)
             if not args.base_only:
                 current_header=clean((include/'pineforge/engine.hpp').read_text())
                 for method in (*NEW_METHODS,*(REVERSAL_METHODS if full_matrix else ())):
@@ -677,33 +789,87 @@ def main() -> int:
                     header.write_text(changed.replace('reverse_to_v1','reverse_to_v2'))
                     wrong_reverse_to=compile_tu('synthetic-reverse-to-v2',REVERSAL_CALLER.replace('reverse_to_v1','reverse_to_v2'),wrong_target,args.generated_include)
             if full_matrix:
-                v13_host = compile_tu('v13-host',HOST_CALLER,v13_include,v13_generated)
-                v13_ctor = compile_tu('v13-ctor',HOST_CONSTRUCTOR_CALLER,v13_include,v13_generated)
-                current_ctor = compile_tu('v14-ctor',HOST_CONSTRUCTOR_CALLER,include,args.generated_include)
-                current_execution = compile_tu('v14-current-execution',CURRENT_EXECUTION_CALLER,include,args.generated_include)
-                v13_events = compile_tu('v13-events',HOST_EVENTS_CALLER,v13_include,v13_generated)
-                v13_order = compile_tu('v13-order',ORDER_CALLER,v13_include,v13_generated)
-                v13_driver = compile_tu('v13-driver',BAR_CALLER,v13_include,v13_generated)
-                current_host = compile_tu('v14-host',HOST_CALLER,include,args.generated_include)
-                current_order = compile_tu('v14-order',ORDER_CALLER,include,args.generated_include)
-                current_driver = compile_tu('v14-driver',BAR_CALLER,include,args.generated_include)
-                link('v13-constructor-v13-real',v13_ctor,v13_library)
-                link('v14-constructor-v14-real',current_ctor,library)
-                link('v13-constructor-v14-rejected',v13_ctor,library,symbol_missing='pineforge::engine_script_run_v13::NativeStrategyHost::NativeStrategyHost(')
-                link('v14-constructor-v13-rejected',current_ctor,v13_library,symbol_missing='pineforge::engine_script_run_v14::NativeStrategyHost::NativeStrategyHost(')
-                link('v14-current-execution-v14-real',current_execution,library)
-                link('v14-current-execution-v13-rejected',current_execution,v13_library,
-                     symbol_missing=['pineforge::engine_script_run_v14::NativeStrategyHost::'+method+'(' for method in
-                         ('current_execution_point','inspect_current_execution','execute_current')])
-                for name,old_obj,new_obj,old_symbol,new_symbol in (
-                    ('host',v13_host,current_host,'pineforge::engine_script_run_v13::NativeStrategyHost::native_state(', 'pineforge::engine_script_run_v14::NativeStrategyHost::native_state('),
-                    ('events',v13_events,current_events,'pineforge::engine_script_run_v13::NativeStrategyHost::native_events(', 'pineforge::engine_script_run_v14::NativeStrategyHost::native_events('),
-                    ('order',v13_order,current_order,'pineforge::native_order::native_order_v2::WorkingRequestCore::submit(', 'pineforge::native_order::native_order_v3::WorkingRequestCore::submit('),
-                    ('driver',v13_driver,current_driver,'pineforge::native_driver_v3::native_bar_structurally_valid(', 'pineforge::native_driver_v4::native_bar_structurally_valid(')):
-                    link('v13-'+name+'-v13-real',old_obj,v13_library)
-                    link('v14-'+name+'-v14-real',new_obj,library)
-                    link('v13-'+name+'-v14-rejected',old_obj,library,symbol_missing=old_symbol)
-                    link('v14-'+name+'-v13-rejected',new_obj,v13_library,symbol_missing=new_symbol)
+                current_label = CURRENT_EPOCH.removeprefix('engine_script_run_')
+                native_providers = {
+                    'v13': (v13_library, v13_include, v13_generated),
+                    'v14': (v14_library, v14_include, v14_generated),
+                    current_label: (library, include, args.generated_include),
+                }
+                report['archiveProviders'] = {
+                    role: {'path': str(runtime), 'sha256': identity(runtime)['sha256'],
+                           'engineOwner': provider_engine_for(runtime,provider_engines),
+                           'domains': ['engine'] if role in ('e60','0e') else ['engine','host','order','driver']}
+                    for role, runtime in [('e60',old_library),('0e',prior_library),
+                                          *[(role,values[0]) for role,values in native_providers.items()]]
+                }
+                domains = {role: native_domain_callers(headers)
+                           for role, (_,headers,_) in native_providers.items()}
+                # Compile all three epochs, then decide every pair by its domain's
+                # owner. In particular, driver v4 has positive v14/v15 cross pairs.
+                objects = {
+                    role: {name: compile_tu(role+'-'+name,text,headers,generated)
+                           for name,(text,_,_) in domains[role].items()}
+                    for role,(_,headers,generated) in native_providers.items()
+                }
+                for caller, callers in objects.items():
+                    for provider,(runtime,_,_) in native_providers.items():
+                        for name,obj in callers.items():
+                            _,needle,owner = domains[caller][name]
+                            positive = owner == domains[provider][name][2]
+                            link(caller+'-'+name+'-'+provider+('-real' if positive else '-rejected'),
+                                 obj,runtime,engine='pineforge::'+engine_epoch(native_providers[caller][1])+'::BacktestEngine::',
+                                 symbol_missing=None if positive else needle)
+                for caller in ('v14',current_label):
+                    _,headers,generated = native_providers[caller]
+                    epoch = engine_epoch(headers)
+                    obj = compile_tu(caller+'-current-execution',CURRENT_EXECUTION_CALLER,headers,generated)
+                    for provider,(runtime,_,_) in native_providers.items():
+                        positive = caller == provider
+                        link(caller+'-current-execution-'+provider+('-real' if positive else '-rejected'),
+                             obj,runtime,engine='pineforge::'+epoch+'::BacktestEngine::',
+                             symbol_missing=None if positive else [
+                                 'pineforge::'+epoch+'::NativeStrategyHost::'+method+'(' for method in
+                                 ('current_execution_point','inspect_current_execution','execute_current')])
+                report['pendingSurface'] = pending_surface_rows(
+                    current_label,native_providers,CURRENT_TERMS_SURFACE_READY)
+                if CURRENT_TERMS_SURFACE_READY:
+                    for name,text in (('current-execution-terms',CURRENT_EXECUTION_V15_CALLER),
+                                      ('native-fx-curve',NATIVE_FX_CURVE_CALLER)):
+                        obj = compile_tu(current_label+'-'+name,text,include,args.generated_include)
+                        for provider,(runtime,_,_) in native_providers.items():
+                            positive = provider == current_label
+                            link(current_label+'-'+name+'-'+provider+('-real' if positive else '-rejected'),
+                                 obj,runtime,symbol_missing=None if positive else
+                                 'pineforge::'+CURRENT_EPOCH+'::NativeStrategyHost::configure_native_fx_curve(')
+                # The historical host providers also own the full settlement API.
+                # Retain the e60/0e introduction controls below and check these
+                # callers against each of the three modern engine owners.
+                engine_callers = {
+                    'old-api': OLD_CALLER, 'old-private': PRIVATE_OLD_CALLER,
+                    'selected': NEW_CALLER, 'new-private': PRIVATE_NEW_CALLER,
+                    'reversal': REVERSAL_CALLER,
+                }
+                method_sets = {
+                    'old-api': (OLD_METHODS,None), 'old-private': (OLD_PRIVATE,None),
+                    'selected': (NEW_METHODS,'close_selection_v1::SelectedOpeningSet'),
+                    'new-private': (NEW_PRIVATE,None), 'reversal': (REVERSAL_METHODS,REVERSAL_DOMAIN),
+                }
+                engine_objects = {current_label: {
+                    'old-api':cur_old, 'old-private':current_private_old,
+                    'selected':new, 'new-private':private_new, 'reversal':reversal}}
+                for caller in ('v13','v14'):
+                    _,headers,generated = native_providers[caller]
+                    engine_objects[caller] = {name:compile_tu(caller+'-engine-'+name,text,headers,generated)
+                                              for name,text in engine_callers.items()}
+                for caller,callers in engine_objects.items():
+                    epoch = engine_epoch(native_providers[caller][1])
+                    for provider,(runtime,_,_) in native_providers.items():
+                        positive = caller == provider
+                        for name,obj in callers.items():
+                            methods,parameter_domain = method_sets[name]
+                            link(caller+'-engine-'+name+'-'+provider+('-real' if positive else '-rejected'),
+                                 obj,runtime,missing=() if positive else methods,domain=parameter_domain,
+                                 engine='pineforge::'+epoch+'::BacktestEngine::')
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)
