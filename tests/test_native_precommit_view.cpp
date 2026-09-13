@@ -106,6 +106,23 @@ void post_hook_latch_prevents_effects() {
     CHECK(accounts(host) == 0);
 }
 
+void a2_queued_validator_latch_barrier() {
+    TermsHost host;
+    bool hook_called = false;
+    host.validator = [&](const NativePrecommitView& view) {
+        hook_called = true;
+        CHECK(!view.current);
+        CHECK(!host.stream_push_bar(Bar{100, 100, 100, 100, 1, T + 1}));
+        return NativePrecommitVerdict::Proceed;
+    };
+    host.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1)); };
+    run(host, spec("precommit-queued-latch"), {100});
+    CHECK(hook_called);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(host.native_state().failure.code == NativeFailureCode::Contract);
+    CHECK(host.rows().empty() && host.lots().empty() && accounts(host) == 0);
+}
+
 void a_p2_opening_only_and_a_p3_noeffect_skip() {
     TermsHost opening;
     bool opening_seen = false;
@@ -202,6 +219,7 @@ int main() {
     test("preview excludes validator", preview_never_calls_validator);
     test("typed reentrant current refusal", reentrant_current_is_typed_and_nonmutating);
     test("post-hook barrier", post_hook_latch_prevents_effects);
+    test("A2 queued validator barrier", a2_queued_validator_latch_barrier);
     test("A-P2 opening-only and A-P3 no-effect", a_p2_opening_only_and_a_p3_noeffect_skip);
     test("A-P5 validator and A-P6b preview", a_p5_validator_exception_and_a_p6b_preview_exception);
     test("A-P6 submit exception split", a_p6_submit_exception_is_callback_failure);

@@ -210,12 +210,17 @@ void same_str(const std::string& a, const std::string& b) { CHECK(a == b); }
 struct Host final : NativeStrategyHost {
     std::function<void(Host&)> beginning;
     std::function<void(Host&)> calculation;
+    mutable std::function<no::ExecutionTerms(const NativeExecutionTermsFacts&)> resolver;
     int calculations = 0;
     uint64_t sequence = 0;
     void on_native_run_begin() override { if (beginning) beginning(*this); }
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {
         ++calculations;
         if (calculation) calculation(*this);
+    }
+    no::ExecutionTerms resolve_execution_terms(const NativeExecutionTermsFacts& facts) const override {
+        if (resolver) return resolver(facts);
+        return {facts.default_resolved_price, std::nullopt, no::OpeningShape::Transact};
     }
     bool input(int64_t offset, double price) {
         return stream_push_tick(TradeTick{T + offset + 1, ++sequence, price, 1});
@@ -262,6 +267,12 @@ no::Request reduce(double q, const char* label = "", const char* comment = "") {
 }
 no::Request flat(const char* label = "", const char* comment = "") {
     return {no::Flatten{}, label, comment};
+}
+no::Request host_open(const char* label = "") {
+    no::Request request;
+    request.intent = no::HostSized{no::HostSizedKind::Open, no::Side::Long};
+    request.label = label;
+    return request;
 }
 // A selected (cohort) close: Flatten bound to an explicit opening set of the
 // live cycle. Mirrors the helper the selected-request acceptance uses.
@@ -1645,6 +1656,57 @@ void terms_predicate_mutations() {
     CHECK(!equal_terms_resolved_bits(receipt_a, receipt_b, true));
 }
 
+void a_h1_h2_fresh_terms_replay_and_hash_mutations() {
+    auto run_terms = [](Host& host, const char* key, double price_delta) {
+        host.resolver = [price_delta](const NativeExecutionTermsFacts& facts) {
+            if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+                return no::ExecutionTerms{facts.default_resolved_price + price_delta, 1.0,
+                                           no::OpeningShape::Transact};
+            }
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& h) { put(h, host_open("hash-host")); };
+        start(host, key);
+        host.tick(1, 100);
+        finish(host);
+    };
+    Host first, replay, changed;
+    run_terms(first, "H2-terms", 0.0);
+    run_terms(replay, "H2-terms", 0.0);
+    run_terms(changed, "H2-terms", 1.0);
+    CHECK(first.native_continuation_hash() == replay.native_continuation_hash());
+    CHECK(first.native_continuation_hash() != changed.native_continuation_hash());
+    const auto first_receipts = events_of<no::TermsResolvedEvent>(first);
+    const auto replay_receipts = events_of<no::TermsResolvedEvent>(replay);
+    REQUIRE(first_receipts.size() == 1 && replay_receipts.size() == 1);
+    CHECK(first_receipts[0].input.price_kind == replay_receipts[0].input.price_kind);
+    CHECK(equal_terms_resolved_bits(first_receipts[0], replay_receipts[0], true));
+
+    Host nan_a, nan_b;
+    const auto nan_one = bits_to(0x7ff8000000000001ULL);
+    const auto nan_two = bits_to(0x7ff8000000000002ULL);
+    auto run_nan = [](Host& host, const char* key, double payload) {
+        host.resolver = [payload](const NativeExecutionTermsFacts& facts) {
+            return no::ExecutionTerms{payload, std::nullopt, no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& h) { put(h, tx(1, "hash-nan")); };
+        start(host, key);
+        host.tick(1, 100);
+        finish(host);
+    };
+    run_nan(nan_a, "H1-nan", nan_one);
+    run_nan(nan_b, "H1-nan", nan_two);
+    CHECK(nan_a.native_continuation_hash() != nan_b.native_continuation_hash());
+    const auto rejection_a = events_of<no::MatchRejectedEvent>(nan_a);
+    const auto rejection_b = events_of<no::MatchRejectedEvent>(nan_b);
+    REQUIRE(rejection_a.size() == 1 && rejection_b.size() == 1);
+    CHECK(equal_attempted_terms_bits(rejection_a[0].attempted_terms,
+                                     rejection_a[0].attempted_terms));
+    CHECK(!equal_attempted_terms_bits(rejection_a[0].attempted_terms,
+                                      rejection_b[0].attempted_terms));
+}
+
 void run_case(const char* name, const std::function<void()>& body) {
     scenario = name; boundary = ""; ++cases;
     const int previous = failures;
@@ -1692,6 +1754,8 @@ int main() {
     }
     run_case("IEEE rejection payloads", [] { ieee_rejection_payloads(); });
     run_case("terms replay predicates and mutations", [] { terms_predicate_mutations(); });
+    run_case("A-H1/A-H2 fresh terms replay and hashes",
+             [] { a_h1_h2_fresh_terms_replay_and_hash_mutations(); });
     std::printf("%s native resting replay: %d cases, %d checks, %d failures\n",
                 failures ? "FAIL" : "PASS", cases, checks, failures);
     return failures ? 1 : 0;

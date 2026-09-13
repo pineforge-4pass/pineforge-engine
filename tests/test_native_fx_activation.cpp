@@ -155,7 +155,8 @@ void a_f3_fee_and_a_f4_batch_rate_facts() {
     REQUIRE(host.configure_native(configuration).status == NativeSetupStatus::Applied);
     REQUIRE(host.configure_native_fx_curve(NativeFxCurve{{T}, {2.0}}).status
             == NativeSetupStatus::Applied);
-    host.run(std::vector<Bar>{{100, 100, 100, 100, 1, T}}.data(), 1);
+    const Bar bar{100, 100, 100, 100, 1, T};
+    host.run(&bar, 1);
     completed(host);
     REQUIRE(rates.size() >= 2);
     CHECK(rates[0] == 2.0 && rates[1] == 2.0);
