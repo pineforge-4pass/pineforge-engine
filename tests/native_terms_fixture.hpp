@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 namespace r4_terms {
@@ -31,6 +32,12 @@ struct TermsHost : Host {
     std::vector<NativePrecommitView> precommit_views;
     mutable int resolver_calls = 0;
     int validator_calls = 0;
+
+    std::tuple<bool, std::size_t, double> fx_clock_state() const {
+        return {account_currency_fx_broker_epoch_initialized_,
+                account_currency_fx_broker_epoch_, account_currency_fx_broker_rate_};
+    }
+    std::int64_t engine_timestamp() const { return current_bar_.timestamp; }
 
     no::ExecutionTerms resolve_execution_terms(
             const NativeExecutionTermsFacts& facts) const override {

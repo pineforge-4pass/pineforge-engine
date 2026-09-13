@@ -237,6 +237,588 @@ void host_price_cannot_breach_active_limit() {
     CHECK(events<no::TermsResolvedEvent>(host).empty());
 }
 
+void a_t4d_authenticated_unrepresentable_deduction() {
+    auto configure_terms = [](TermsHost& host) {
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+                return no::ExecutionTerms{facts.default_resolved_price, 1e16,
+                                           no::OpeningShape::Transact};
+            }
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+    };
+
+    // The queued path obtains its error only through prepare_terms after an
+    // authentic deferred-group receipt has been installed.
+    TermsHost queued;
+    configure_terms(queued);
+    no::RequestHandle queued_b;
+    queued.beginning = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto a = tx(0.1, "queued-a");
+        a.group = no::Member{41, 1, no::GroupEffect::Reduce};
+        auto b = host_open(no::Side::Long, "queued-b");
+        b.group = no::Member{41, 2, no::GroupEffect::Reduce};
+        put(h, a);
+        queued_b = put(h, b);
+    };
+    run(queued, spec("terms-numeric-queued"), {100});
+    CHECK(queued.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(queued.native_state().failure.code == NativeFailureCode::SettlementFailure);
+    CHECK(queued.native_state().failure.discriminator
+          == static_cast<std::uint32_t>(no::CoreFailure::UnrepresentableReservation));
+    const auto deferred = last_event<no::DeferredGroupAdjustmentEvent>(queued);
+    REQUIRE(deferred);
+    CHECK(deferred->recipient == queued_b);
+    CHECK(bits(deferred->pending_after.total) == bits(0.1));
+    CHECK(events<no::TermsResolvedEvent>(queued).empty());
+    CHECK(events<no::ExecutionAppliedEvent>(queued).size() == 1);
+    CHECK(accounts(queued) == 1);
+
+    // The current preview throws unlatched, then execution follows the same
+    // hard-failure mapping and leaves the pending chain intact.
+    TermsHost current;
+    configure_terms(current);
+    bool reached = false;
+    current.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto a = tx(0.1, "current-a");
+        a.group = no::Member{42, 1, no::GroupEffect::Reduce};
+        auto b = host_open(no::Side::Long, "current-b");
+        b.group = no::Member{42, 2, no::GroupEffect::Reduce};
+        const auto a_target = put(h, a);
+        const auto b_target = put(h, b);
+        (void)apply(h, a_target);
+        const auto pending = last_event<no::DeferredGroupAdjustmentEvent>(h);
+        REQUIRE(pending);
+        CHECK(bits(pending->pending_after.total) == bits(0.1));
+        const auto hash = h.native_continuation_hash();
+        bool preview_threw = false;
+        try {
+            (void)h.inspect_current_execution(command(b_target));
+        } catch (const std::overflow_error& error) {
+            preview_threw = std::string(error.what())
+                == "native host-sized deduction is not representable";
+        }
+        CHECK(preview_threw);
+        CHECK(h.native_state().kind == NativeLifecycleKind::Running);
+        CHECK(h.native_continuation_hash() == hash);
+        CHECK(h.validator_calls == 1);
+        bool execute_threw = false;
+        try {
+            (void)h.execute_current(command(b_target));
+        } catch (const std::runtime_error& error) {
+            execute_threw = std::string(error.what()) == "native current execution failed";
+        }
+        CHECK(execute_threw);
+        CHECK(h.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(h.native_state().failure.code == NativeFailureCode::SettlementFailure);
+        CHECK(h.native_state().failure.discriminator
+              == static_cast<std::uint32_t>(no::CoreFailure::UnrepresentableReservation));
+        CHECK(h.validator_calls == 1);
+        reached = true;
+    };
+    run(current, spec("terms-numeric-current"), {100});
+    CHECK(reached);
+}
+
+void a_t5_terms_rejections_retain_attempted_terms() {
+    TermsHost host;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        const auto& label = facts.definition->request.label;
+        if (label == "unresolved") return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                                                no::OpeningShape::Transact};
+        if (label == "negative") return no::ExecutionTerms{facts.default_resolved_price, -1.0,
+                                                              no::OpeningShape::Transact};
+        if (label == "nan-units") return no::ExecutionTerms{facts.default_resolved_price,
+            from_bits(0x7ff8000000000002ULL), no::OpeningShape::Transact};
+        if (label == "off-grid") return no::ExecutionTerms{facts.default_resolved_price, 0.3,
+                                                              no::OpeningShape::Transact};
+        if (label == "explicit-units") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                                                    no::OpeningShape::Transact};
+        if (label == "explicit-shape") return no::ExecutionTerms{facts.default_resolved_price,
+                                                                    std::nullopt,
+                                                                    no::OpeningShape::ReverseTo};
+        if (label == "limit-breach") return no::ExecutionTerms{101.0, std::nullopt,
+                                                                  no::OpeningShape::Transact};
+        if (label == "no-opposite") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                                                 no::OpeningShape::ReverseTo};
+        if (label == "bad-close-shape") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                                                     no::OpeningShape::CloseOpposite};
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        put(h, host_open(no::Side::Long, "unresolved"));
+        put(h, host_open(no::Side::Long, "negative"));
+        put(h, host_open(no::Side::Long, "nan-units"));
+        put(h, host_open(no::Side::Long, "off-grid"));
+        put(h, tx(1, "explicit-units"));
+        put(h, tx(1, "explicit-shape"));
+        auto limit = tx(1, "limit-breach");
+        limit.trigger = no::Limit{100};
+        put(h, limit);
+        put(h, host_open(no::Side::Long, "no-opposite"));
+    };
+    auto configuration = spec("terms-rejections");
+    configuration.quantity_grid = 0.5;
+    run(host, configuration, {100});
+    completed(host);
+    const auto rejected = events<no::MatchRejectedEvent>(host);
+    CHECK(rejected.size() == 8);
+    for (const auto& event : rejected) {
+        CHECK(event.attempted_terms.has_value());
+        REQUIRE(event.attempted_terms);
+        if (event.request().label == "unresolved") {
+            CHECK(event.reason == no::MatchRejectReason::TermsUnresolved);
+        } else if (event.request().label == "no-opposite") {
+            CHECK(event.reason == no::MatchRejectReason::NoOppositeExposure);
+        } else {
+            CHECK(event.reason == no::MatchRejectReason::InvalidTerms);
+        }
+    }
+    CHECK(host.lots().empty());
+    CHECK(events<no::TermsResolvedEvent>(host).empty());
+
+    TermsHost close_shape;
+    close_shape.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (facts.definition->request.label == "bad-close-shape") {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::CloseOpposite};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    close_shape.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        put(h, tx(1, "seed"));
+        put(h, host_close("bad-close-shape"));
+    };
+    run(close_shape, spec("terms-close-shape"), {100});
+    completed(close_shape);
+    const auto close_rejected = last_event<no::MatchRejectedEvent>(close_shape);
+    REQUIRE(close_rejected && close_rejected->attempted_terms);
+    CHECK(close_rejected->request().label == "bad-close-shape");
+    CHECK(close_rejected->reason == no::MatchRejectReason::InvalidTerms);
+}
+
+void a_t10_callback_exception_mapping() {
+    TermsHost queued;
+    queued.resolver = [](const NativeExecutionTermsFacts&) -> no::ExecutionTerms {
+        throw std::runtime_error("queued resolver exception");
+    };
+    queued.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1)); };
+    run(queued, spec("terms-callback-queued"), {100});
+    CHECK(queued.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(queued.native_state().failure.code == NativeFailureCode::CallbackException);
+    CHECK(queued.rows().empty() && queued.lots().empty());
+
+    TermsHost current;
+    current.resolver = [](const NativeExecutionTermsFacts&) -> no::ExecutionTerms {
+        throw std::runtime_error("current resolver exception");
+    };
+    bool reached = false;
+    current.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, tx(1));
+        bool threw = false;
+        try {
+            (void)h.execute_current(command(target));
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        CHECK(threw);
+        CHECK(h.native_state().failure.code == NativeFailureCode::CallbackException);
+        CHECK(h.rows().empty() && h.lots().empty());
+        reached = true;
+    };
+    run(current, spec("terms-callback-current"), {100});
+    CHECK(reached);
+}
+
+void a_t7_scope_facts_and_flat_close_shortcut() {
+    TermsHost host;
+    std::vector<NativeExecutionTermsFacts> close_facts;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            close_facts.push_back(facts);
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool reached = false;
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto opening = put(h, tx(3, "scope-opening"));
+        (void)apply(h, opening);
+        const auto book = put(h, host_close("book-close"));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(h.execute_current(command(book))));
+        REQUIRE(!close_facts.empty());
+        CHECK(std::holds_alternative<execution::Book>(close_facts.back().scope));
+        CHECK(close_facts.back().scope_exposure_units == 3.0);
+        CHECK(close_facts.back().opposite_book_units == 3.0);
+
+        auto child = host_close("opening-close");
+        child.owner = no::BindOpening{opening, h.cycle()};
+        const auto child_handle = put(h, child);
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(
+            h.execute_current(command(child_handle))));
+        REQUIRE(close_facts.size() >= 2);
+        CHECK(std::holds_alternative<execution::OpeningExposure>(close_facts.back().scope));
+        CHECK(close_facts.back().scope_exposure_units == 2.0);
+        reached = true;
+    };
+    run(host, spec("terms-scope"), {100});
+    completed(host);
+    CHECK(reached);
+
+    TermsHost flat;
+    bool resolver_called = false;
+    flat.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        resolver_called = true;
+        return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                   no::OpeningShape::Transact};
+    };
+    bool flat_reached = false;
+    flat.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, host_close("flat-close"));
+        const auto preview = h.inspect_current_execution(command(target));
+        CHECK(!preview.refusal && preview.settlement_readiness == execution::Status::NoEffect);
+        CHECK(!resolver_called);
+        const auto result = h.execute_current(command(target));
+        CHECK(std::holds_alternative<no::NoEffectEvent>(result));
+        CHECK(!resolver_called);
+        flat_reached = true;
+    };
+    run(flat, spec("terms-flat-close"), {100});
+    completed(flat);
+    CHECK(flat_reached);
+}
+
+void a_t8_point_budget_binding_and_price_rematch() {
+    TermsHost host;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        const bool bound = std::holds_alternative<no::RemainingUnits>(facts.remaining);
+        return no::ExecutionTerms{facts.default_resolved_price + (bound ? 1.0 : 0.0),
+                                   bound ? std::optional<double>{} : std::optional<double>{2.5},
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        auto request = host_open(no::Side::Long, "budget-open");
+        request.capacity = no::PointBudget{1.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    run(host, spec("terms-point-budget"), {100, 100, 100});
+    completed(host);
+    const auto applied = events<no::ExecutionAppliedEvent>(host);
+    const auto receipts = events<no::TermsResolvedEvent>(host);
+    REQUIRE(applied.size() == 3);
+    CHECK(applied[0].opened_units == 1.0 && applied[1].opened_units == 1.0
+          && applied[2].opened_units == 0.5);
+    REQUIRE(receipts.size() == 3);
+    CHECK(receipts[0].input.terms.units == 2.5);
+    CHECK(!receipts[1].input.terms.units && !receipts[2].input.terms.units);
+    CHECK(receipts[1].remaining_before.index() == receipts[1].remaining_after.index());
+    CHECK(host.resolver_calls == 3);
+    CHECK(host.physical_position().signed_units == 2.5);
+}
+
+void a_t8b_explicit_equivalent_allowance_and_t8c_identity_control() {
+    auto run_one = [](bool host_sized) {
+        TermsHost host;
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+                const auto units = std::holds_alternative<no::RemainingDeferred>(facts.remaining)
+                    ? std::optional<double>{2.0} : std::optional<double>{};
+                return no::ExecutionTerms{facts.default_resolved_price, units,
+                                           no::OpeningShape::Transact};
+            }
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [host_sized](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            auto request = host_sized ? host_open(no::Side::Long, "host") : tx(2, "explicit");
+            request.capacity = no::PointBudget{1.0};
+            put(h, request);
+        };
+        run(host, spec(host_sized ? "terms-allowance-host" : "terms-allowance-explicit"),
+            {100, 100});
+        completed(host);
+        return events<no::ExecutionAppliedEvent>(host);
+    };
+    const auto explicit_rows = run_one(false);
+    const auto host_rows = run_one(true);
+    REQUIRE(explicit_rows.size() == 2 && host_rows.size() == 2);
+    for (std::size_t i = 0; i < 2; ++i) {
+        CHECK(explicit_rows[i].allowance_before.index() == host_rows[i].allowance_before.index());
+        CHECK(explicit_rows[i].allowance_after.index() == host_rows[i].allowance_after.index());
+        CHECK(explicit_rows[i].filled_working == host_rows[i].filled_working);
+    }
+}
+
+void a_t11b_queued_notification_uses_final_terms_price() {
+    TermsHost host;
+    auto configuration = spec("terms-anchor");
+    configuration.price_tick = 0.1;
+    configuration.slippage_ticks = 1;
+    bool observed = false;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (facts.definition->request.label == "anchor") {
+            return no::ExecutionTerms{101.0, std::nullopt, no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        auto request = tx(-1, "anchor");
+        request.trigger = no::Limit{100.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    host.notification = [&](Host& base, const no::ExecutionAppliedEvent& event) {
+        auto& h = static_cast<TermsHost&>(base);
+        if (event.request().label != "anchor") return;
+        const auto point = h.current_execution_point();
+        REQUIRE(point);
+        CHECK(point->quote_kind == NativeCurrentQuoteKind::ExecutionAnchor);
+        CHECK(point->price == 101.0);
+        CHECK(point->quote_origin_ordinal == event.ordinal);
+        const auto close = put(h, reduce(1, "anchor-close"));
+        const auto result = h.execute_current(command(close));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(result));
+        const auto& applied = std::get<no::ExecutionAppliedEvent>(result);
+        CHECK(applied.raw_price == 101.0);
+        CHECK(applied.resolved_price == 101.1);
+        observed = true;
+    };
+    run(host, configuration, {100});
+    completed(host);
+    CHECK(observed);
+    CHECK(host.physical_position().signed_units == 0.0);
+}
+
+void a_t11_identity_infinity_and_nan_attempts() {
+    for (const double sign : {1.0, -1.0}) {
+        TermsHost host;
+        auto configuration = spec(sign > 0 ? "terms-inf-buy" : "terms-inf-sell");
+        configuration.price_tick = std::numeric_limits<double>::max();
+        configuration.slippage_ticks = 2;
+        host.beginning = [sign](Host& base) {
+            auto request = tx(sign, sign > 0 ? "inf-buy" : "inf-sell");
+            request.trigger = no::Limit{100.0};
+            put(static_cast<TermsHost&>(base), request);
+        };
+        run(host, configuration, {100});
+        completed(host);
+        const auto rejected = last_event<no::MatchRejectedEvent>(host);
+        REQUIRE(rejected);
+        CHECK(rejected->reason == no::MatchRejectReason::NonpositivePrice);
+        CHECK(!rejected->attempted_terms);
+        CHECK(events<no::TermsResolvedEvent>(host).empty());
+    }
+}
+
+void a_t6_matcher_price_kind_limit_stop_gap_and_market() {
+    auto collect = [](const char* key, no::Request request, const Bar& bar) {
+        TermsHost host;
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [request = std::move(request)](Host& base) {
+            put(static_cast<TermsHost&>(base), request);
+        };
+        REQUIRE(host.configure_native(spec(key)).status == NativeSetupStatus::Applied);
+        host.run(&bar, 1);
+        completed(host);
+        return host.resolved_facts;
+    };
+
+    auto limit = host_open(no::Side::Short, "limit-cross");
+    limit.trigger = no::Limit{100.0};
+    const auto crossed_limit = collect("terms-limit-cross", limit,
+        Bar{99, 101, 99, 101, 1, T});
+    REQUIRE(crossed_limit.size() == 1);
+    CHECK(crossed_limit[0].price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+    REQUIRE(crossed_limit[0].trigger_level);
+    CHECK(bits(crossed_limit[0].raw_price) == bits(100.0));
+    CHECK(bits(*crossed_limit[0].trigger_level) == bits(100.0));
+
+    auto gap_limit = host_open(no::Side::Short, "limit-gap");
+    gap_limit.trigger = no::Limit{100.0};
+    const auto gap = collect("terms-limit-gap", gap_limit,
+        Bar{101, 101, 101, 101, 1, T});
+    REQUIRE(gap.size() == 1);
+    CHECK(gap[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+    CHECK(gap[0].raw_price == 101.0);
+
+    auto exact_gap = host_open(no::Side::Short, "limit-exact-gap");
+    exact_gap.trigger = no::Limit{100.0};
+    const auto exact = collect("terms-limit-exact-gap", exact_gap,
+        Bar{100, 100, 100, 100, 1, T});
+    REQUIRE(exact.size() == 1);
+    CHECK(exact[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+    CHECK(bits(exact[0].raw_price) == bits(100.0));
+
+    auto stop = host_open(no::Side::Long, "stop-cross");
+    stop.trigger = no::Stop{100.0};
+    const auto crossed_stop = collect("terms-stop-cross", stop,
+        Bar{99, 101, 99, 101, 1, T});
+    REQUIRE(crossed_stop.size() == 1);
+    CHECK(crossed_stop[0].price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+    REQUIRE(crossed_stop[0].trigger_level);
+    CHECK(bits(crossed_stop[0].raw_price) == bits(100.0));
+    CHECK(bits(*crossed_stop[0].trigger_level) == bits(100.0));
+
+    auto stop_gap = host_open(no::Side::Long, "stop-gap");
+    stop_gap.trigger = no::Stop{100.0};
+    const auto gap_stop = collect("terms-stop-gap", stop_gap,
+        Bar{101, 101, 101, 101, 1, T});
+    REQUIRE(gap_stop.size() == 1);
+    CHECK(gap_stop[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+
+    const auto market = collect("terms-market", host_open(no::Side::Long, "market"),
+        Bar{100, 100, 100, 100, 1, T});
+    REQUIRE(market.size() == 1);
+    CHECK(market[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+    CHECK(!market[0].trigger_level);
+}
+
+void a_t15_price_boundary_and_a_t16_flat_preview() {
+    TermsHost current;
+    current.resolver = [](const NativeExecutionTermsFacts& facts) {
+        const auto& label = facts.definition->request.label;
+        if (label == "pure-close" || label == "would-open") {
+            return no::ExecutionTerms{0.0, std::nullopt, no::OpeningShape::Transact};
+        }
+        if (label == "host-pure-close") {
+            return no::ExecutionTerms{0.0, facts.opposite_book_units,
+                                       no::OpeningShape::CloseOpposite};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool reached = false;
+    current.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        (void)apply(h, put(h, tx(1, "seed-close")));
+        const auto pure = put(h, reduce(1, "pure-close"));
+        const auto pure_result = h.execute_current(command(pure));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(pure_result));
+        CHECK(std::get<no::ExecutionAppliedEvent>(pure_result).resolved_price == 0.0);
+        CHECK(h.physical_position().signed_units == 0.0);
+
+        (void)apply(h, put(h, tx(1, "seed-host-close")));
+        const auto host_close = put(h, host_open(no::Side::Short, "host-pure-close"));
+        const auto host_result = h.execute_current(command(host_close));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(host_result));
+        CHECK(std::get<no::ExecutionAppliedEvent>(host_result).resolved_price == 0.0);
+        CHECK(h.physical_position().signed_units == 0.0);
+
+        const auto open = put(h, tx(1, "would-open"));
+        const auto before_terms = events<no::TermsResolvedEvent>(h).size();
+        const auto open_result = h.execute_current(command(open));
+        REQUIRE(std::holds_alternative<no::MatchRejectedEvent>(open_result));
+        CHECK(std::get<no::MatchRejectedEvent>(open_result).reason
+              == no::MatchRejectReason::NonpositivePrice);
+        CHECK(events<no::TermsResolvedEvent>(h).size() == before_terms);
+        reached = true;
+    };
+    run(current, spec("terms-current-price-boundary"), {100});
+    completed(current);
+    CHECK(reached);
+
+    TermsHost queued;
+    queued.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{0.0, std::nullopt, no::OpeningShape::Transact};
+    };
+    queued.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1, "queued-zero")); };
+    run(queued, spec("terms-queued-price-boundary"), {100});
+    completed(queued);
+    const auto queued_rejection = last_event<no::MatchRejectedEvent>(queued);
+    REQUIRE(queued_rejection);
+    CHECK(queued_rejection->reason == no::MatchRejectReason::NonpositivePrice);
+    CHECK(events<no::TermsResolvedEvent>(queued).empty());
+
+    TermsHost flat;
+    bool called = false;
+    flat.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        called = true;
+        return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                   no::OpeningShape::Transact};
+    };
+    bool flat_reached = false;
+    flat.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, host_close("flat-preview"));
+        const auto hash = h.native_continuation_hash();
+        const auto preview = h.inspect_current_execution(command(target));
+        CHECK(!preview.refusal && preview.settlement_readiness == execution::Status::NoEffect);
+        CHECK(!called && h.native_continuation_hash() == hash);
+        flat_reached = true;
+    };
+    run(flat, spec("terms-flat-preview"), {100});
+    completed(flat);
+    CHECK(flat_reached);
+}
+
+void a_t14_preview_outcome_table_without_mutation() {
+    TermsHost host;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        const auto& label = facts.definition->request.label;
+        if (label == "negative") return no::ExecutionTerms{facts.default_resolved_price, -1.0,
+                                                              no::OpeningShape::Transact};
+        if (label == "zero") return no::ExecutionTerms{facts.default_resolved_price, 0.0,
+                                                          no::OpeningShape::Transact};
+        if (label == "reverse-flat") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                                                  no::OpeningShape::ReverseTo};
+        if (label == "positive") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                                              no::OpeningShape::Transact};
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool reached = false;
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto inspect = [&](const no::RequestHandle& target) {
+            const auto hash = h.native_continuation_hash();
+            const auto history = h.native_events(0).size();
+            const auto preview = h.inspect_current_execution(command(target));
+            CHECK(h.native_continuation_hash() == hash);
+            CHECK(h.native_events(0).size() == history);
+            CHECK(h.validator_calls == 0);
+            return preview;
+        };
+        const auto unresolved = put(h, host_open(no::Side::Long, "unresolved"));
+        CHECK(inspect(unresolved).terms_rejection == no::MatchRejectReason::TermsUnresolved);
+        h.cancel(unresolved);
+        const auto negative = put(h, host_open(no::Side::Long, "negative"));
+        CHECK(inspect(negative).terms_rejection == no::MatchRejectReason::InvalidTerms);
+        h.cancel(negative);
+        const auto reverse = put(h, host_open(no::Side::Long, "reverse-flat"));
+        CHECK(inspect(reverse).terms_rejection == no::MatchRejectReason::NoOppositeExposure);
+        h.cancel(reverse);
+        const auto zero = put(h, host_open(no::Side::Long, "zero"));
+        const auto zero_preview = inspect(zero);
+        CHECK(zero_preview.settlement_readiness == execution::Status::NoEffect);
+        h.cancel(zero);
+        const auto positive = put(h, host_open(no::Side::Long, "positive"));
+        const auto positive_preview = inspect(positive);
+        CHECK(positive_preview.settlement_readiness == execution::Status::Applied);
+        CHECK(positive_preview.account.status == execution::Status::Applied);
+        h.cancel(positive);
+        reached = true;
+    };
+    run(host, spec("terms-preview-table"), {100});
+    completed(host);
+    CHECK(reached);
+}
+
 void current_preview_and_execute_see_same_terms_facts() {
     TermsHost host;
     bool reached = false;
@@ -315,6 +897,54 @@ void rounded_crossing_collision_keeps_request_origin() {
     CHECK(first.native_continuation_hash() == second.native_continuation_hash());
 }
 
+void a_t6b_c_t6e_sibling_control_and_gap_provenance() {
+    auto run_limits = [](const char* key, double open, double high, double level_a,
+                         double level_b) {
+        TermsHost host;
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [=](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            auto a = host_open(no::Side::Short, "sibling-a");
+            a.trigger = no::Limit{level_a};
+            auto b = host_open(no::Side::Short, "sibling-b");
+            b.trigger = no::Limit{level_b};
+            put(h, a); put(h, b);
+        };
+        REQUIRE(host.configure_native(spec(key)).status == NativeSetupStatus::Applied);
+        const Bar bar{open, high, open, high, 1, T};
+        host.run(&bar, 1);
+        completed(host);
+        return host.resolved_facts;
+    };
+
+    const auto control = run_limits("terms-control-one", 0.25, 3.5,
+                                    1.9999999999999998, 4.0);
+    REQUIRE(control.size() == 1);
+    CHECK(control.front().price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+    CHECK(!control.front().shared_cursor_collision);
+    REQUIRE(control.front().trigger_level);
+    CHECK(bits(control.front().raw_price) == bits(*control.front().trigger_level));
+
+    const auto siblings = run_limits("terms-sibling-cross", 99, 101, 100, 100);
+    REQUIRE(siblings.size() == 2);
+    for (const auto& facts : siblings) {
+        CHECK(facts.price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+        REQUIRE(facts.trigger_level);
+        CHECK(bits(facts.raw_price) == bits(100.0));
+        CHECK(bits(*facts.trigger_level) == bits(100.0));
+    }
+
+    const auto gaps = run_limits("terms-sibling-gap", 101, 101, 100, 100);
+    REQUIRE(gaps.size() == 2);
+    for (const auto& facts : gaps) {
+        CHECK(facts.price_kind == no::NativeCandidatePriceKind::PointPrice);
+        CHECK(bits(facts.raw_price) == bits(101.0));
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -327,8 +957,20 @@ int main() {
     test("current deferred group cancellation", current_group_deduction_returns_cancelled);
     test("host NaN attempted terms", host_nan_price_is_rejected_without_a_receipt);
     test("host price limit fence", host_price_cannot_breach_active_limit);
+    test("A-T4d authenticated unrepresentable deduction", a_t4d_authenticated_unrepresentable_deduction);
+    test("A-T5 terms rejections retain attempts", a_t5_terms_rejections_retain_attempted_terms);
+    test("A-T10 resolver callback exception mapping", a_t10_callback_exception_mapping);
+    test("A-T7 scoped facts and flat close", a_t7_scope_facts_and_flat_close_shortcut);
+    test("A-T8 host-sized PointBudget rematch", a_t8_point_budget_binding_and_price_rematch);
+    test("A-T8b explicit allowance equivalence", a_t8b_explicit_equivalent_allowance_and_t8c_identity_control);
+    test("A-T11b queued notification anchor price", a_t11b_queued_notification_uses_final_terms_price);
+    test("A-T11 identity infinity rows", a_t11_identity_infinity_and_nan_attempts);
+    test("A-T6 matcher price-kind cases", a_t6_matcher_price_kind_limit_stop_gap_and_market);
+    test("A-T15 price boundary and A-T16 flat preview", a_t15_price_boundary_and_a_t16_flat_preview);
+    test("A-T14 preview outcome table", a_t14_preview_outcome_table_without_mutation);
     test("current preview/execute terms facts", current_preview_and_execute_see_same_terms_facts);
     test("rounded crossing provenance collision", rounded_crossing_collision_keeps_request_origin);
+    test("A-T6b/c/e sibling provenance controls", a_t6b_c_t6e_sibling_control_and_gap_provenance);
     std::printf("R4-B terms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

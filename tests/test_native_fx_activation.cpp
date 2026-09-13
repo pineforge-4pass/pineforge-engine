@@ -102,6 +102,67 @@ void preview_projection_barrier_is_a_typed_refusal() {
     CHECK(host.lots().empty());
 }
 
+void a_f2_curve_boundaries_hash_and_a_f6_reset_clock() {
+    auto run_with_curve = [](const char* key, const NativeFxCurve& curve,
+                             double account_fx, double expected_fx) {
+        TermsHost host;
+        NativeExecutionTermsFacts seen{};
+        host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+            seen = facts;
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1)); };
+        auto configuration = spec(key);
+        configuration.account_fx = account_fx;
+        REQUIRE(host.configure_native(configuration).status == NativeSetupStatus::Applied);
+        const auto before = host.native_continuation_hash();
+        REQUIRE(host.configure_native_fx_curve(curve).status == NativeSetupStatus::Applied);
+        CHECK(host.native_continuation_hash() != before);
+        const Bar bar{100, 100, 100, 100, 1, T};
+        host.run(&bar, 1);
+        completed(host);
+        CHECK(seen.active_fx == expected_fx);
+        const auto [initialized, epoch, rate] = host.fx_clock_state();
+        CHECK(!initialized);
+        CHECK(epoch == 0);
+        CHECK(rate == account_fx);
+        return host.native_continuation_hash();
+    };
+    const auto fallback = run_with_curve("fx-fallback", NativeFxCurve{{T + 1}, {2.0}}, 1.5, 1.5);
+    const auto boundary = run_with_curve("fx-boundary", NativeFxCurve{{T}, {2.0}}, 1.5, 2.0);
+    CHECK(fallback != boundary);
+}
+
+void a_f3_fee_and_a_f4_batch_rate_facts() {
+    TermsHost host;
+    std::vector<double> rates;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        rates.push_back(facts.active_fx);
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.calculation = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto open = put(h, tx(1, "fx-open"));
+        (void)h.execute_current(command(open));
+        const auto close = put(h, reduce(1, "fx-close"));
+        (void)h.execute_current(command(close));
+    };
+    auto configuration = spec("fx-forward", 2.0);
+    configuration.fee_kind = NativeFeeKind::CashPerExecution;
+    configuration.fee_value = 1.0;
+    REQUIRE(host.configure_native(configuration).status == NativeSetupStatus::Applied);
+    REQUIRE(host.configure_native_fx_curve(NativeFxCurve{{T}, {2.0}}).status
+            == NativeSetupStatus::Applied);
+    host.run(std::vector<Bar>{{100, 100, 100, 100, 1, T}}.data(), 1);
+    completed(host);
+    REQUIRE(rates.size() >= 2);
+    CHECK(rates[0] == 2.0 && rates[1] == 2.0);
+    CHECK(host.rows().size() == 1);
+    CHECK(host.rows().front().commission > 0.0);
+}
+
 }  // namespace
 
 int main() {
@@ -110,6 +171,8 @@ int main() {
     test("resolver projection barrier", post_resolver_projection_guard_blocks_effects);
     test("wrong phase staging", wrong_phase_is_side_effect_free);
     test("preview projection barrier", preview_projection_barrier_is_a_typed_refusal);
+    test("A-F2 curve boundary and A-F6 reset clock", a_f2_curve_boundaries_hash_and_a_f6_reset_clock);
+    test("A-F3 fee and A-F4 batch facts", a_f3_fee_and_a_f4_batch_rate_facts);
     std::printf("R4-B FX: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -124,6 +124,88 @@ void host_sized_close_opposite_uses_flatten() {
     CHECK(reached);
 }
 
+void a_r1_exact_queued_reverse_both_signs() {
+    const double target = from_bits(0x3fb999999999999aULL);
+    for (const double sign : {1.0, -1.0}) {
+        TermsHost host;
+        no::RequestHandle reverse_target;
+        bool submitted = false;
+        host.calculation = [&](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            if (submitted) return;
+            submitted = true;
+            // Two lots make the closing leg FIFO-visible; the requested
+            // target is the exact binary64 opening magnitude.
+            h.seed(-sign * 0.7, 99.7, 71);
+            h.seed(-sign * 0.6, 100.3, 72);
+            reverse_target = put(h, reverse(sign * target, sign > 0 ? "r-long" : "r-short"));
+        };
+        run(host, spec(sign > 0 ? "reverse-exact-long" : "reverse-exact-short"), {100});
+        completed(host);
+        const auto rows = events<no::ExecutionAppliedEvent>(host);
+        REQUIRE(rows.size() == 1);
+        const auto& applied = rows.front();
+        CHECK(applied.handle() == reverse_target);
+        CHECK(bits(applied.opened_units) == bits(sign * target));
+        near(applied.closed_units, 1.3);
+        CHECK(applied.filled_working == applied.closed_units + std::abs(applied.opened_units));
+        CHECK(host.physical_position().signed_units == sign * target);
+        CHECK(host.validator_calls == 1);
+        REQUIRE(!host.precommit_views.empty());
+        CHECK(std::holds_alternative<execution::ReverseTo>(host.precommit_views.front().plan));
+    }
+}
+
+void a_r2_priced_stop_reverse_and_r4_no_opposite() {
+    TermsHost host;
+    host.beginning = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(-1.0, 100, 91);
+        auto request = reverse(0.5, "stop-reverse");
+        request.trigger = no::Stop{101};
+        put(h, request);
+    };
+    REQUIRE(host.configure_native(spec("reverse-stop")).status == NativeSetupStatus::Applied);
+    const Bar bar{100, 102, 100, 102, 1, T};
+    host.run(&bar, 1);
+    completed(host);
+    const auto applied = last_event<no::ExecutionAppliedEvent>(host);
+    REQUIRE(applied);
+    CHECK(applied->request().label == "stop-reverse");
+    CHECK(applied->raw_price == 101.0);
+    CHECK(bits(applied->opened_units) == bits(0.5));
+
+    TermsHost flat;
+    flat.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), reverse(1.0, "flat")); };
+    run(flat, spec("reverse-flat"), {100});
+    completed(flat);
+    const auto rejected = last_event<no::MatchRejectedEvent>(flat);
+    REQUIRE(rejected);
+    CHECK(rejected->reason == no::MatchRejectReason::NoOppositeExposure);
+    CHECK(flat.lots().empty() && flat.rows().empty());
+}
+
+void a_r3_preview_rows_match_current_reverse() {
+    TermsHost host;
+    bool reached = false;
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(1.0, 100, 111);
+        const auto target = put(h, reverse(-0.5, "preview-reverse"));
+        const auto preview = h.inspect_current_execution(command(target));
+        REQUIRE(preview.settlement_readiness == execution::Status::Applied);
+        REQUIRE(preview.closed_row_pnl.size() == 1);
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(result));
+        CHECK(h.rows().size() == 1);
+        CHECK(h.rows().back().pnl == preview.closed_row_pnl.front());
+        reached = true;
+    };
+    run(host, spec("reverse-preview"), {100});
+    completed(host);
+    CHECK(reached);
+}
+
 }  // namespace
 
 int main() {
@@ -131,6 +213,9 @@ int main() {
     test("current ReverseTo preview/execute", current_reverse_preview_and_execute);
     test("host-sized ReverseTo", host_sized_reverse_shape);
     test("host-sized CloseOpposite Flatten", host_sized_close_opposite_uses_flatten);
+    test("A-R1 exact queued reverse both signs", a_r1_exact_queued_reverse_both_signs);
+    test("A-R2/A-R4 priced and flat reverse", a_r2_priced_stop_reverse_and_r4_no_opposite);
+    test("A-R3 current reversal preview", a_r3_preview_rows_match_current_reverse);
     std::printf("R4-B reverse: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
