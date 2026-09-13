@@ -74,6 +74,34 @@ void wrong_phase_is_side_effect_free() {
     CHECK(host.native_continuation_hash() == before);
 }
 
+void preview_projection_barrier_is_a_typed_refusal() {
+    TermsHost host;
+    bool reached = false;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        host.poison_fee();
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, tx(1));
+        const auto hash = h.native_continuation_hash();
+        const auto preview = h.inspect_current_execution(command(target));
+        CHECK(preview.refusal == NativeCurrentRefusal::ConfigurationMismatch);
+        CHECK(!preview.settlement_readiness);
+        CHECK(h.native_state().kind == NativeLifecycleKind::Running);
+        CHECK(h.native_continuation_hash() == hash);
+        CHECK(h.lots().empty());
+        reached = true;
+    };
+    run(host, spec("fx-preview-projection"), {100});
+    // The callback leaves an intentionally poisoned projected configuration;
+    // end-of-callback guard owns the native failure, not the preview itself.
+    CHECK(reached);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(host.lots().empty());
+}
+
 }  // namespace
 
 int main() {
@@ -81,6 +109,7 @@ int main() {
     test("native stream curve refusal", staged_curve_refuses_native_streaming);
     test("resolver projection barrier", post_resolver_projection_guard_blocks_effects);
     test("wrong phase staging", wrong_phase_is_side_effect_free);
+    test("preview projection barrier", preview_projection_barrier_is_a_typed_refusal);
     std::printf("R4-B FX: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

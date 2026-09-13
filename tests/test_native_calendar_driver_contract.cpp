@@ -583,6 +583,29 @@ public:
         return result;
     }
 
+    SubmitResult submit(const Request& request) {
+        const auto result = NativeStrategyHost::submit(request);
+        const bool new_intent = std::holds_alternative<native_order::ReverseTo>(request.intent)
+            || std::holds_alternative<native_order::HostSized>(request.intent);
+        if (proof_capture && new_intent) {
+            std::ostringstream out;
+            out << "{\"kind\":\"request\",\"ordinal\":"
+                << json_u64(input_ordinal_++)
+                << ",\"requestQuantityUnresolved\":"
+                << json_bool(!request_quantity(request).has_value())
+                << ",\"calendar\":{\"hostOrdinal\":" << host_ordinal_
+                << ",\"label\":" << json_escape(request.label)
+                << ",\"comment\":" << json_escape(request.comment)
+                << ",\"action\":" << action_json(request)
+                << ",\"admitted\":" << json_bool(result.status == SubmitStatus::Accepted)
+                << ",\"submitStatus\":"
+                << json_u64(static_cast<uint64_t>(result.status))
+                << ",\"eventOrdinal\":" << json_u64(result.event_ordinal) << "}}";
+            input_items_.push_back(out.str());
+        }
+        return result;
+    }
+
     void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         bars.push_back(bar);
         contexts.push_back(context);

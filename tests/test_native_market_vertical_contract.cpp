@@ -698,9 +698,33 @@ void bind_pair(std::vector<ScenarioArt>& arts, const char* name,
     return static_cast<bool>(out);
 }
 
+void terms_serializer_branch() {
+    auto definition = std::make_shared<pineforge::native_order::RequestDefinition>();
+    definition->handle.run = {"market-terms", 1};
+    definition->handle.incarnation = 7;
+    definition->request.intent = pineforge::native_order::HostSized{
+        pineforge::native_order::HostSizedKind::Open, pineforge::native_order::Side::Long};
+    definition->birth = {1, kT0};
+    pineforge::native_order::TermsResolvedEvent receipt;
+    receipt.ordinal = 9;
+    receipt.definition = definition;
+    receipt.cursor.point.ordinal = 9;
+    receipt.input.price_kind = pineforge::native_order::NativeCandidatePriceKind::TriggerLevel;
+    receipt.input.shared_cursor_collision = true;
+    receipt.input.raw_price = 2.0;
+    receipt.input.default_resolved_price = 2.0;
+    receipt.input.terms = {2.0, 1.0, pineforge::native_order::OpeningShape::Transact};
+    const std::string json = lifecycle_json({CommandEvent{receipt}});
+    CHECK(json.find("TermsResolved") != std::string::npos);
+    CHECK(json.find("sharedCursorCollision") != std::string::npos);
+    CHECK(json.find("0x4000000000000000") != std::string::npos);
+    CHECK(json.find("HostSized") != std::string::npos);
+}
+
 }  // namespace
 
 int main() {
+    terms_serializer_branch();
     const char* proof_dir = std::getenv("PINEFORGE_NATIVE_PROOF_OUTPUT");
     const char* proof_sha = nullptr;
     if (proof_dir && *proof_dir) {
