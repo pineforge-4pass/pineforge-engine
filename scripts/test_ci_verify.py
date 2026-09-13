@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -886,6 +887,56 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(help_text.returncode, 0)
         self.assertEqual(ctest_supports_junit(default_runner),
                          '--output-junit' in help_text.stdout.decode())
+
+
+class DiagnosticsCollection(unittest.TestCase):
+    def collect(self, build: Path, output: Path) -> None:
+        env = os.environ.copy()
+        env.pop('GITHUB_STEP_SUMMARY', None)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts/collect_ci_diagnostics.py'),
+             '--build-dir', str(build), '--profile', 'release', '--output', str(output)],
+            capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_v13_provider_diagnostics_survive_without_binaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = root / 'build/native-abi-v13'
+            provider.mkdir(parents=True)
+            files = {
+                'receipt.json': json.dumps({'commit': V13_COMMIT, 'archiveSha256': 'a' * 64}),
+                'configure.log': 'v13 provider configured\n',
+                'build.log': 'v13 provider built\n',
+            }
+            for name, content in files.items():
+                (provider / name).write_text(content)
+            (provider / 'libpineforge.a').write_bytes(b'!<arch>\nexcluded library\n')
+            (provider / 'source.tar').write_bytes(b'excluded source archive\n')
+            output = root / 'diagnostics'
+            self.collect(root / 'build', output)
+            for name, content in files.items():
+                self.assertEqual((output / ('native-abi-v13-' + name)).read_text(), content)
+            missing = json.loads((output / 'missing.json').read_text())
+            self.assertFalse(any(name.startswith('native-abi-v13/') for name in missing))
+            retained = [path.name for path in output.rglob('*') if path.is_file()]
+            self.assertNotIn('libpineforge.a', retained)
+            self.assertNotIn('source.tar', retained)
+
+    def test_failed_v13_preparation_retains_partial_logs_and_records_missing_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = root / 'build/native-abi-v13'
+            provider.mkdir(parents=True)
+            (provider / 'configure.log').write_text('v13 configure failure details\n')
+            output = root / 'diagnostics'
+            self.collect(root / 'build', output)
+            self.assertEqual((output / 'native-abi-v13-configure.log').read_text(),
+                             'v13 configure failure details\n')
+            missing = json.loads((output / 'missing.json').read_text())
+            self.assertIn('native-abi-v13/receipt.json', missing)
+            self.assertIn('native-abi-v13/build.log', missing)
+            self.assertNotIn('native-abi-v13/configure.log', missing)
 
 
 if __name__ == '__main__':

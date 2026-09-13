@@ -97,6 +97,7 @@ private:
     };
     std::optional<NativeCurrentRefusal> validate_current_execution(
         const BacktestEngine& engine, const NativeCurrentExecution& command) const;
+    NativeCoordinate current_execution_coordinate(uint64_t ordinal) const;
     double current_price(const BacktestEngine& engine, const native_order::LiveRequest& live,
                          NativeCurrentPriceRule rule) const;
     ResolvedCandidate inspect_candidate(const BacktestEngine& engine,

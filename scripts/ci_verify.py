@@ -2,7 +2,7 @@
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
 Profiles: release, debug, sanitizers, native. Default build dir build-ci-PROFILE.
-Source guards, explicit configure, full rebuild, pinned e60 and 0e ABI prepare/reuse,
+Source guards, explicit configure, full rebuild, pinned e60/0e/v13 ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent
 CTest and package failures in the same run. Never deletes source, tests, or

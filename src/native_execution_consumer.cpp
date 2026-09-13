@@ -2146,6 +2146,17 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     return std::nullopt;
 }
 
+NativeCoordinate NativeExecutionConsumer::current_execution_coordinate(uint64_t ordinal) const {
+    auto coordinate = current_frame_->point.decision.coordinate;
+    coordinate.ordinal = ordinal;
+    coordinate.provenance = NativePriceProvenance::CurrentExecution;
+    // A modeled-open/interior fill can be notified after confirmed input has
+    // advanced the decision floor. Keep its quote and interval as cause facts,
+    // but consume a newly born command at the current authorized time.
+    coordinate.effective_time_ms = std::max(coordinate.effective_time_ms, decision_floor());
+    return coordinate;
+}
+
 double NativeExecutionConsumer::current_price(const BacktestEngine& engine,
         const native_order::LiveRequest& live, NativeCurrentPriceRule rule) const {
     const double basis = rule == NativeCurrentPriceRule::NearestTick
@@ -2165,9 +2176,7 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     if (out.refusal) return out;
     const auto* live = requests_.find_live(command.target);
     native_order::MatchCursor cursor;
-    cursor.point = current_frame_->point.decision.coordinate;
-    cursor.point.ordinal = next_timeline_ordinal_;
-    cursor.point.provenance = NativePriceProvenance::CurrentExecution;
+    cursor.point = current_execution_coordinate(next_timeline_ordinal_);
     const double resolved = current_price(engine, *live, command.price_rule);
     const auto candidate = inspect_candidate(engine, *live, cursor, resolved);
     execution::PhysicalExecutionContext context;
@@ -2192,10 +2201,9 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         if (auto refusal = validate_current_execution(engine, command)) return *refusal;
         consuming_request_ = true;
         NativeDriverPoint point;
-        point.coordinate = current_frame_->point.decision.coordinate;
-        point.coordinate.ordinal = take_ordinal(engine);
+        const auto ordinal = take_ordinal(engine);
         if (failed()) throw std::runtime_error("native current point allocation failed");
-        point.coordinate.provenance = NativePriceProvenance::CurrentExecution;
+        point.coordinate = current_execution_coordinate(ordinal);
         point.raw_price = current_frame_->point.price;
         point.matching = true;
         record_driver(point);

@@ -43,6 +43,11 @@ for different profiles and toolchains. The verifier never deletes a build tree
 or replaces an incompatible historical ABI receipt. Use a fresh directory when
 its configuration no longer matches.
 
+Run Release, Debug and sanitizer profiles sequentially in one checkout, or use
+separate worktrees for parallel runs. Their tutorial targets write shared `.so`
+files under `tutorial/`, even with separate build directories. Hosted CI jobs
+already use separate checkouts.
+
 ```sh
 python3 scripts/ci_verify.py debug --jobs 4
 python3 scripts/ci_verify.py sanitizers --jobs 4
@@ -70,11 +75,12 @@ separate. Git tags and checkout depth cannot change the smoke-test expectation.
 Ordinary CMake builds retain `AUTO`, the existing git-describe-first behavior.
 No release tag or VERSION value is rewritten by verification.
 
-The verifier fetches the pinned historical ABI commits `e60e571` (R2) and
-`0e18690` (selected settlement, before exact reversal) without tags only when
-each object is missing. It builds both full historical static libraries with
-tests disabled, or validates and reuses their matching prepared receipts under
-`settlement-abi-base/` and `settlement-abi-prior/`. Compiler, configuration and
+The verifier fetches the pinned historical ABI commits `e60e571` (R2),
+`0e18690` (selected settlement, before exact reversal), and `c3ed455` (native
+host v13) without tags only when each object is missing. It builds all three
+full historical static libraries with tests disabled, or validates and reuses
+their matching prepared receipts under `settlement-abi-base/`,
+`settlement-abi-prior/`, and `native-abi-v13/`. Compiler, configuration and
 version-source mismatches refuse reuse without deleting the old evidence.
 Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.

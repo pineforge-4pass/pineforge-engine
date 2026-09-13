@@ -150,6 +150,93 @@ void ordinary_anchor() {
     };
     run(h,s,{100.04});completed(h);CHECK(h.notified.size()==3);
 }
+void ordinary_anchor_before_floor(bool interior,bool forward) {
+    Host h;auto s=spec();s.price_tick=.1;s.slippage_ticks=2;
+    no::RequestHandle opening,unrelated;
+    std::optional<NativeCurrentPointView> anchor;
+    std::vector<uint64_t> expected_notifications;
+    const double anchor_price=(interior?105.0:100.0)+.2;
+    auto submit_opening=[&](Host& b){
+        auto request=tx(2,"floor-opening");
+        if(interior)request.trigger=no::Stop{105};
+        opening=put(b,request);
+    };
+    if(!forward)h.beginning=submit_opening;
+    auto check_anchor=[&](Host& b){
+        const auto frame=b.current_execution_point();REQUIRE(frame&&anchor);
+        CHECK(frame->quote_kind==NativeCurrentQuoteKind::ExecutionAnchor);
+        CHECK(frame->quote_origin_ordinal==anchor->quote_origin_ordinal);
+        near(frame->price,anchor_price);
+        CHECK(frame->decision.coordinate.effective_time_ms==T);
+        CHECK(frame->decision.coordinate.source_price_time_ms==T);
+        CHECK(frame->decision.coordinate.ordinal==anchor->decision.coordinate.ordinal);
+        CHECK(frame->decision.coordinate.provenance==anchor->decision.coordinate.provenance);
+        CHECK(frame->decision.decision_floor_ms==b.native_decision_floor());
+    };
+    auto current_close=[&](Host& b,const no::Request& request){
+        const auto target=put(b,request);
+        const auto floor=b.native_decision_floor();
+        const auto before=b.native_continuation_hash();
+        const auto preview=b.inspect_current_execution(command(target));
+        CHECK(!preview.refusal);CHECK(preview.settlement_readiness==ex::Status::Applied);
+        REQUIRE(preview.closed_row_pnl.size()==1);
+        CHECK(b.native_continuation_hash()==before);
+        const auto applied=apply(b,target);
+        expected_notifications.push_back(applied.ordinal);
+        CHECK(applied.cursor.point.provenance==NativePriceProvenance::CurrentExecution);
+        CHECK(applied.cursor.point.ordinal>applied.birth().acceptance_ordinal);
+        CHECK(applied.birth().decision_time_lower_bound==floor);
+        CHECK(applied.effective_time_ms()>=applied.birth().decision_time_lower_bound);
+        CHECK(applied.effective_time_ms()>=floor);
+        CHECK(applied.effective_time_ms()==T+60000);
+        CHECK(applied.cursor.point.source_price_time_ms==T);
+        CHECK(applied.cursor.point.open_ms==anchor->decision.coordinate.open_ms);
+        CHECK(applied.cursor.point.interval_index==anchor->decision.coordinate.interval_index);
+        near(applied.raw_price,anchor_price);near(applied.resolved_price,anchor_price-.2);
+        near(b.rows().back().pnl,preview.closed_row_pnl.front());
+        CHECK(b.native_decision_floor()==floor);check_anchor(b);
+        return applied;
+    };
+    h.notification=[&](Host& b,const no::ExecutionAppliedEvent& event){
+        if(forward)CHECK(b.native_state().phase==NativeRunPhase::Realtime);
+        if(event.handle()==opening){
+            anchor=b.current_execution_point();REQUIRE(anchor);
+            CHECK(event.effective_time_ms()==T);
+            CHECK(event.effective_time_ms()<b.native_decision_floor());
+            CHECK(event.cursor.point.provenance==(interior?NativePriceProvenance::Confirmed
+                :NativePriceProvenance::ModeledOHLCOpen));
+            if(interior)CHECK(event.cursor.t>0&&event.cursor.t<1);
+            CHECK(anchor->quote_origin_ordinal==event.ordinal);check_anchor(b);
+            expected_notifications.push_back(event.ordinal);
+            unrelated=put(b,tx(7,"floor-unrelated"));
+            current_close(b,reduce(1,"floor-reduce"));
+            near(b.physical_position().signed_units,1);CHECK(accounts(b)==2);
+            CHECK(b.notified.size()==1);
+        }else if(event.request().label=="floor-reduce"){
+            check_anchor(b);current_close(b,flat("floor-flatten"));
+            near(b.physical_position().signed_units,0);CHECK(accounts(b)==3);
+            CHECK(b.notified.size()==2);
+        }else{
+            CHECK(event.request().label=="floor-flatten");check_anchor(b);
+            near(b.physical_position().signed_units,0);
+            // Neither explicit close grants this queued request a matching point.
+            CHECK(b.cancel(unrelated).status==no::CancelStatus::Cancelled);
+        }
+    };
+    REQUIRE(h.configure_native(s).status==NativeSetupStatus::Applied);
+    const Bar bar{100,110,90,100,1,T};
+    if(!forward)h.run(&bar,1);
+    else{
+        const Bar warmup{100,100,100,100,1,T-60000};
+        REQUIRE(h.stream_begin(&warmup,1,"1","1"));CHECK(h.notified.empty());
+        submit_opening(h);
+        REQUIRE(h.stream_push_bar(bar));REQUIRE(h.stream_end(false));
+    }
+    completed(h);CHECK(h.notified==expected_notifications);
+    CHECK(h.notified.size()==3);CHECK(accounts(h)==3);CHECK(h.rows().size()==2);
+    near(h.physical_position().signed_units,0);
+    CHECK(events<no::ExecutionAppliedEvent>(h).size()==3);
+}
 void nonpositive(double tick,double expected) {
     Host h;auto s=spec();s.price_tick=tick;s.slippage_ticks=1;
     h.calculation=[&](Host& b){
@@ -250,6 +337,10 @@ int main() {
     test("AsPresented inherited quote",[]{prices(NativeCurrentPriceRule::AsPresented,100.24);});
     test("NearestTick inherited quote",[]{prices(NativeCurrentPriceRule::NearestTick,100.2);});
     test("ordinary execution anchor",ordinary_anchor);
+    test("modeled-open current floor and nested anchor",[]{ordinary_anchor_before_floor(false,false);});
+    test("OHLC-interior current floor and nested anchor",[]{ordinary_anchor_before_floor(true,false);});
+    test("realtime modeled-open current floor and nested anchor",[]{ordinary_anchor_before_floor(false,true);});
+    test("realtime OHLC-interior current floor and nested anchor",[]{ordinary_anchor_before_floor(true,true);});
     test("zero pure close",[]{nonpositive(1,0);});test("negative pure close",[]{nonpositive(2,-1);});
     test("round-to-zero pure close",rounded_zero);
     test("initial margin crossing rejection",[]{initial_margin(199,false);});

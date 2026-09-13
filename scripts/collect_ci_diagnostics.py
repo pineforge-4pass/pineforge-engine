@@ -19,6 +19,9 @@ ARTIFACTS = {
     "settlement-abi-prior/receipt.json": "settlement-abi-prior-receipt.json",
     "settlement-abi-prior/configure.log": "settlement-abi-prior-configure.log",
     "settlement-abi-prior/build.log": "settlement-abi-prior-build.log",
+    "native-abi-v13/receipt.json": "native-abi-v13-receipt.json",
+    "native-abi-v13/configure.log": "native-abi-v13-configure.log",
+    "native-abi-v13/build.log": "native-abi-v13-build.log",
     "settlement-abi-receipt.json": "settlement-abi-receipt.json",
 }
 DEPENDENCY_ARTIFACTS = ('environment.txt', 'curl-configure.log',
