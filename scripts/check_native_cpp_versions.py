@@ -94,6 +94,16 @@ def require_namespace_functions(value, names, version):
             raise ValueError(name + " must be a namespace-scope declaration in " + version)
 
 
+def require_exact_alias(value, name, expected, version):
+    aliases = list(re.finditer(
+        r'\busing\s+' + re.escape(name) + r'\s*=\s*(.*?)\s*;', value, re.S))
+    if len(aliases) != 1:
+        raise ValueError(name + " requires exactly one alias in " + version)
+    actual = re.sub(r'\s+', '', aliases[0].group(1))
+    if actual != expected:
+        raise ValueError(name + " must preserve its exact alias shape in " + version)
+
+
 def versioned(text, outer, version):
     value = standalone_scope(text, outer, version)
     owner = body(clean(text), r'namespace\s+' + re.escape(outer) + r'\s*\{', outer)
@@ -194,14 +204,49 @@ def check_texts(files):
     order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v4")
     require(order, ("WorkingRequestCore", "Request", "SubmitResult",
                     "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
-                    "ExecutionAppliedEvent"),
-            "native_order_v4", r'\b(?:class|struct)\s+NAME\s*\{')
-    if "CommandEvent" not in re.findall(ALIAS_DEF, order):
-        raise ValueError("CommandEvent must belong to native_order_v4")
+                    "ExecutionAppliedEvent", "HostSized", "HostSizedKind", "ReverseTo",
+                    "RemainingDeferred", "RemainingProjectionDeferred", "AllowanceDeferred",
+                    "OpeningShape", "ExecutionTerms", "TermsResolvedInput",
+                    "TermsResolvedEvent", "NativeCandidatePriceKind"),
+            "native_order_v4", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
+                    "RemainingProjection", "Allowance"),
+            "native_order_v4", r'\busing\s+NAME\s*=')
+    require_exact_alias(
+        order, "OrderIntent", "std::variant<Flatten,Reduce,Transact,ReverseTo,HostSized>",
+        "native_order_v4")
+    require_exact_alias(
+        order, "Remaining",
+        "std::variant<RemainingUnbound,RemainingFlattenAll,RemainingUnits,RemainingDeferred>",
+        "native_order_v4")
+    require_exact_alias(
+        order, "RemainingProjection",
+        "std::variant<RemainingProjectionUnbound,RemainingProjectionFlattenAll,"
+        "RemainingProjectionUnits,RemainingProjectionDeferred>", "native_order_v4")
+    require_exact_alias(
+        order, "Allowance",
+        "std::variant<AllowanceUnset,AllowanceUnits,AllowanceAllScope,AllowanceDeferred>",
+        "native_order_v4")
+    require_exact_alias(
+        order, "ExecutionPlan",
+        "std::variant<execution::Flatten,order_action::Reduce,order_action::Transact,"
+        "execution::ReverseTo>", "native_order_v4")
+    require_namespace_functions(order, ("to_execution_plan",), "native_order_v4")
+    required_order_members = (
+        (r'\bPreparation<PreparedMutation>\s+prepare_terms\s*\(', "prepare_terms"),
+        (r'\bstatic\s+Allowance\s+evaluated_allowance\s*\(', "evaluated_allowance"),
+        (r'\bstatic\s+bool\s+effective_host_units\s*\(', "effective_host_units"),
+    )
+    for pattern, name in required_order_members:
+        if len(re.findall(pattern, order)) != 1:
+            raise ValueError(name + " must be a native_order_v4 WorkingRequestCore member")
     if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
         raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v4")
     order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v4")
-    require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live"),
+    require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live",
+                        "WorkingRequestCore::prepare_terms",
+                        "WorkingRequestCore::evaluated_allowance",
+                        "WorkingRequestCore::effective_host_units"),
             "native_order_v4", r'\bNAME\s*\(')
 
     calendar = versioned(files[FILES[2]], "pineforge::native_calendar", "native_calendar_v2")
@@ -277,9 +322,18 @@ def check_texts(files):
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
                    "NativeSetupResult", "NativePhysicalPosition", "NativeAccountObservation",
                    "NativeCurrentPriceRule", "NativeCurrentQuoteKind", "NativeCurrentPointView",
-                   "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview"),
+                   "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
+                   "NativeExecutionTermsFacts", "NativePrecommitView",
+                   "NativePrecommitVerdict", "NativeFxCurveSetupResult"),
             "engine_script_run_v15",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v15",
+            r'\busing\s+NAME\s*=')
+    require_exact_alias(
+        host, "NativeCurrentExecutionResult",
+        "std::variant<NativeCurrentRefusal,native_order::ExecutionAppliedEvent,"
+        "native_order::NoEffectEvent,native_order::MatchRejectedEvent,"
+        "native_order::CancelledEvent>", "engine_script_run_v15")
     current_command = body(host, r'struct\s+NativeCurrentExecution\s*\{', 'current command')
     if re.sub(r'\s+', '', current_command) != 'native_order::RequestHandletarget;NativeCurrentPriceRuleprice_rule=NativeCurrentPriceRule::AsPresented;':
         raise ValueError('current command has exactly target and price_rule, no competing selected authority')
@@ -292,6 +346,17 @@ def check_texts(files):
         'std::optional<native_order::CancelReason>terms_cancellation;')
     if compact_preview != expected_preview:
         raise ValueError('preview must preserve independent readiness immediately after refusal')
+    required_host_methods = (
+        (r'\bvirtual\s+native_order::ExecutionTerms\s+resolve_execution_terms\s*\('
+         r'\s*const\s+NativeExecutionTermsFacts\s*&', "resolve_execution_terms"),
+        (r'\bvirtual\s+NativePrecommitVerdict\s+validate_execution_precommit\s*\('
+         r'\s*const\s+NativePrecommitView\s*&', "validate_execution_precommit"),
+        (r'\bNativeFxCurveSetupResult\s+configure_native_fx_curve\s*\('
+         r'\s*const\s+NativeFxCurve\s*&', "configure_native_fx_curve"),
+    )
+    for pattern, name in required_host_methods:
+        if len(re.findall(pattern, host)) != 1:
+            raise ValueError(name + " must be a v15 NativeStrategyHost member")
     for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution', 'execute_current'):
         if name not in host:
             raise ValueError('missing current host contract: ' + name)
@@ -312,7 +377,8 @@ def check_texts(files):
     consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v15")
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
-             "NativeStrategyHost::native_events"),
+             "NativeStrategyHost::native_events",
+             "NativeStrategyHost::configure_native_fx_curve"),
             "engine_script_run_v15", r'\bNAME\s*\(')
 
 

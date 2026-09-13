@@ -240,6 +240,80 @@ class NativeVersions(unittest.TestCase):
             'kNativeConsumerSemanticVersion = "native-consumer/v6"',
             'kNativeConsumerSemanticVersion = "native-consumer/v3"')
 
+    def test_terms_ownership_and_alias_shapes_are_exact(self):
+        for path, before, after in (
+            (FILES[0], "struct HostSized {", "struct MissingHostSized {"),
+            (FILES[0], "enum class HostSizedKind", "enum class MissingHostSizedKind"),
+            (FILES[0], "struct ReverseTo {", "struct MissingReverseTo {"),
+            (FILES[0], "struct RemainingDeferred {}", "struct MissingRemainingDeferred {}"),
+            (FILES[0], "struct RemainingProjectionDeferred {}", "struct MissingRemainingProjectionDeferred {}"),
+            (FILES[0], "struct AllowanceDeferred {", "struct MissingAllowanceDeferred {"),
+            (FILES[0], "enum class OpeningShape", "enum class MissingOpeningShape"),
+            (FILES[0], "struct ExecutionTerms {", "struct MissingExecutionTerms {"),
+            (FILES[0], "struct TermsResolvedInput {", "struct MissingTermsResolvedInput {"),
+            (FILES[0], "struct TermsResolvedEvent {", "struct MissingTermsResolvedEvent {"),
+            (FILES[0], "enum class NativeCandidatePriceKind", "enum class MissingNativeCandidatePriceKind"),
+            (FILES[0], "prepare_terms(const RequestHandle& target,", "prepare_terms_missing(const RequestHandle& target,"),
+            (FILES[0], "evaluated_allowance(const LiveRequest& live, uint64_t point)",
+             "evaluated_allowance_missing(const LiveRequest& live, uint64_t point)"),
+            (FILES[0], "effective_host_units(const PendingAdjustments& pending,",
+             "effective_host_units_missing(const PendingAdjustments& pending,"),
+            (FILES[8], "struct NativeExecutionTermsFacts {", "struct MissingNativeExecutionTermsFacts {"),
+            (FILES[8], "struct NativePrecommitView {", "struct MissingNativePrecommitView {"),
+            (FILES[8], "enum class NativePrecommitVerdict", "enum class MissingNativePrecommitVerdict"),
+            (FILES[8], "struct NativeFxCurveSetupResult {", "struct MissingNativeFxCurveSetupResult {"),
+            (FILES[8], "resolve_execution_terms(\n", "resolve_execution_terms_missing(\n"),
+            (FILES[8], "validate_execution_precommit(\n", "validate_execution_precommit_missing(\n"),
+            (FILES[8], "configure_native_fx_curve(const NativeFxCurve& curve)",
+             "configure_native_fx_curve_missing(const NativeFxCurve& curve)"),
+        ):
+            with self.subTest(before=before):
+                self.reject(path, before, after)
+
+        aliases = (
+            ("using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>;",
+             "using OrderIntent = std::variant<Flatten, Reduce, Transact, HostSized, ReverseTo>;"),
+            ("using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits,\n"
+             "                               RemainingDeferred>;",
+             "using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingDeferred,\n"
+             "                               RemainingUnits>;"),
+            ("using RemainingProjection =\n        std::variant<RemainingProjectionUnbound, RemainingProjectionFlattenAll,\n"
+             "                     RemainingProjectionUnits, RemainingProjectionDeferred>;",
+             "using RemainingProjection =\n        std::variant<RemainingProjectionUnbound, RemainingProjectionFlattenAll,\n"
+             "                     RemainingProjectionDeferred, RemainingProjectionUnits>;"),
+            ("using Allowance = std::variant<AllowanceUnset, AllowanceUnits, AllowanceAllScope,\n"
+             "                               AllowanceDeferred>;",
+             "using Allowance = std::variant<AllowanceUnset, AllowanceUnits, AllowanceDeferred,\n"
+             "                               AllowanceAllScope>;"),
+            ("using ExecutionPlan = std::variant<execution::Flatten, order_action::Reduce,\n"
+             "                                   order_action::Transact, execution::ReverseTo>;",
+             "using ExecutionPlan = std::variant<execution::Flatten, order_action::Reduce,\n"
+             "                                   execution::ReverseTo, order_action::Transact>;"),
+        )
+        for before, after in aliases:
+            with self.subTest(alias=before.split('=', 1)[0]):
+                self.reject(FILES[0], before, after)
+
+        result = ("using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,\n"
+                  "    native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,\n"
+                  "    native_order::MatchRejectedEvent, native_order::CancelledEvent>;")
+        self.reject(FILES[8], result,
+                    result.replace(", native_order::CancelledEvent", ""))
+        self.reject(FILES[8], result,
+                    result.replace("native_order::NoEffectEvent,\n    native_order::MatchRejectedEvent",
+                                   "native_order::MatchRejectedEvent,\n    native_order::NoEffectEvent"))
+        self.reject(FILES[8], "native_order::CancelledEvent", "/* native_order::CancelledEvent */")
+
+        rejection = "std::optional<native_order::MatchRejectReason> terms_rejection;"
+        cancellation = "std::optional<native_order::CancelReason> terms_cancellation;"
+        self.reject(FILES[8], rejection, "")
+        self.reject(FILES[8], cancellation, "/* " + cancellation + " */")
+        changed = dict(DATA)
+        changed[FILES[8]] = changed[FILES[8]].replace(rejection, "@REJECTION@", 1).replace(
+            cancellation, rejection, 1).replace("@REJECTION@", cancellation, 1)
+        with self.assertRaises(ValueError):
+            check_texts(changed)
+
     def test_phase1c_native_abi_templates_are_active(self):
         from check_native_cpp_abi import (
             CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER,

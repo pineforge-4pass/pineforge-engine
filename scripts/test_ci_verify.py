@@ -529,6 +529,27 @@ class HistoricalProviderPins(unittest.TestCase):
                         authenticate_headers(source, provider['manifest'], commit=commit, tree=tree)
 
 
+class CAbiRuntimeInventory(unittest.TestCase):
+    def test_public_and_runtime_export_counts_are_exact(self):
+        from check_c_abi_runtime import (
+            EXPECTED_PUBLIC_DECLARATIONS,
+            EXPECTED_RUNTIME,
+            EXPECTED_RUNTIME_IMPLEMENTATIONS,
+            _pf_api_names,
+        )
+        header = _pf_api_names(ROOT / 'include/pineforge/pineforge.h')
+        runtime = _pf_api_names(ROOT / 'src/c_abi.cpp')
+        self.assertEqual(EXPECTED_PUBLIC_DECLARATIONS, 65)
+        self.assertEqual(EXPECTED_RUNTIME_IMPLEMENTATIONS, 57)
+        self.assertEqual(len(EXPECTED_RUNTIME), EXPECTED_RUNTIME_IMPLEMENTATIONS)
+        self.assertEqual(len(header), EXPECTED_PUBLIC_DECLARATIONS)
+        self.assertEqual(len(header), len(set(header)))
+        self.assertEqual(len(runtime), EXPECTED_RUNTIME_IMPLEMENTATIONS)
+        self.assertEqual(set(runtime), EXPECTED_RUNTIME)
+        self.assertIn('strategy_configure_native_fx_curve_v1', header)
+        self.assertIn('strategy_configure_native_fx_curve_v1', runtime)
+
+
 class ReceiptReuse(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

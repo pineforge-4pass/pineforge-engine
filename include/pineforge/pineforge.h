@@ -93,6 +93,10 @@
  *  When defined, #strategy_set_native_security_feed is available. */
 #define PINEFORGE_HAS_NATIVE_SECURITY_FEED_V1 1
 
+/** Feature probe for immutable native-run account-currency FX curves.
+ *  When defined, #strategy_configure_native_fx_curve_v1 is available. */
+#define PINEFORGE_HAS_NATIVE_FX_CURVE_V1 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -459,6 +463,27 @@ typedef struct pf_native_run_spec_v1 {
 /** Apply a native v1 specification. Returns 0 on success, -1 on failure.
  *  Legacy handles refuse without native state mutation. */
 PF_API int strategy_configure_native_v1(pf_strategy_t s, const pf_native_run_spec_v1* spec);
+
+/** Immutable timestamped account-currency FX curve for a native run.
+ *  The two arrays have exactly @c n elements and are copied by the runtime. */
+typedef struct pf_native_fx_curve_v1 {
+    uint32_t struct_size;
+    uint32_t n;
+    const int64_t* effective_from_ms;
+    const double* account_per_quote;
+} pf_native_fx_curve_v1;
+
+/** Stage an immutable account-currency FX curve on a Ready native handle.
+ *
+ *  Timestamps must be strictly increasing and rates finite and positive.
+ *  Pass @c n == 0 to clear the staged curve; the scalar @c account_fx remains
+ *  the pre-first fallback. Curves are applied when the native run begins.
+ *  Legacy handles and non-Ready native handles refuse without mutation.
+ *
+ *  @return 0 only when staging is applied; -1 for invalid input, an invalid
+ *  handle, a non-native or non-host native handle, or a non-Ready host. */
+PF_API int strategy_configure_native_fx_curve_v1(
+    pf_strategy_t s, const pf_native_fx_curve_v1* curve);
 
 #ifndef PINEFORGE_NO_STRATEGY_DECLS
 

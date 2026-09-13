@@ -72,7 +72,11 @@ EXPECTED_RUNTIME = frozenset({
     "pf_abi_version",
     "strategy_execution_contract",
     "strategy_configure_native_v1",
+    "strategy_configure_native_fx_curve_v1",
 })
+
+EXPECTED_PUBLIC_DECLARATIONS = 65
+EXPECTED_RUNTIME_IMPLEMENTATIONS = 57
 
 _PF_API_DECL = re.compile(r"^\s*PF_API\b.+\b(\w+)\s*\(")
 
@@ -99,8 +103,36 @@ def main() -> int:
     hdr_set = set(header_funcs)
     abi_set = set(c_abi_funcs)
 
+    if len(EXPECTED_RUNTIME) != EXPECTED_RUNTIME_IMPLEMENTATIONS:
+        print(
+            "check_c_abi_runtime: EXPECTED_RUNTIME count "
+            f"{len(EXPECTED_RUNTIME)} != {EXPECTED_RUNTIME_IMPLEMENTATIONS}",
+            file=sys.stderr,
+        )
+        return 1
+
     if len(header_funcs) != len(hdr_set):
         print("check_c_abi_runtime: duplicate PF_API lines in pineforge.h", file=sys.stderr)
+        return 1
+
+    if len(c_abi_funcs) != len(abi_set):
+        print("check_c_abi_runtime: duplicate PF_API lines in c_abi.cpp", file=sys.stderr)
+        return 1
+
+    if len(header_funcs) != EXPECTED_PUBLIC_DECLARATIONS:
+        print(
+            "check_c_abi_runtime: pineforge.h PF_API declaration count "
+            f"{len(header_funcs)} != {EXPECTED_PUBLIC_DECLARATIONS}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if len(c_abi_funcs) != EXPECTED_RUNTIME_IMPLEMENTATIONS:
+        print(
+            "check_c_abi_runtime: c_abi.cpp runtime implementation count "
+            f"{len(c_abi_funcs)} != {EXPECTED_RUNTIME_IMPLEMENTATIONS}",
+            file=sys.stderr,
+        )
         return 1
 
     if abi_set != EXPECTED_RUNTIME:

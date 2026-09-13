@@ -52,6 +52,7 @@ using abi_fn = int (*)();
 using version_fn = pf_version_t (*)();
 using contract_fn = int (*)(pf_strategy_t);
 using configure_fn = int (*)(pf_strategy_t, const pf_native_run_spec_v1*);
+using configure_fx_curve_fn = int (*)(pf_strategy_t, const pf_native_fx_curve_v1*);
 using last_error_fn = const char* (*)(pf_strategy_t);
 using last_status_fn = int (*)(pf_strategy_t);
 using position_fn = double (*)(pf_strategy_t);
@@ -93,6 +94,7 @@ struct Abi {
     version_fn version_get = nullptr;
     contract_fn contract = nullptr;
     configure_fn configure = nullptr;
+    configure_fx_curve_fn configure_fx_curve = nullptr;
     last_error_fn last_error = nullptr;
     last_status_fn last_status = nullptr;
     position_fn position_size = nullptr;
@@ -159,6 +161,8 @@ Abi load_library(const char* path) {
     abi.version_get = load<version_fn>(abi.handle, "pf_version_get");
     abi.contract = load<contract_fn>(abi.handle, "strategy_execution_contract");
     abi.configure = load<configure_fn>(abi.handle, "strategy_configure_native_v1");
+    abi.configure_fx_curve = load<configure_fx_curve_fn>(
+        abi.handle, "strategy_configure_native_fx_curve_v1");
     abi.last_error = load<last_error_fn>(abi.handle, "strategy_get_last_error");
     abi.last_status = load<last_status_fn>(abi.handle, "strategy_last_run_status");
     abi.position_size = load<position_fn>(abi.handle, "strategy_position_size");
@@ -376,6 +380,7 @@ void apply_native_feed(const Abi& abi, pf_strategy_t s) {
 bool ready(const Abi& abi) {
     return abi.handle && abi.create && abi.free_strategy && abi.run && abi.run_full
         && abi.report_free && abi.configure && abi.contract && abi.last_error
+        && abi.configure_fx_curve
         && abi.position_size && abi.stream_begin && abi.stream_push_bar
         && abi.stream_end && abi.stream_fill_report && abi.set_input
         && abi.set_override && abi.set_magnifier_vw && abi.set_trace
@@ -400,9 +405,28 @@ int main(int argc, char** argv) {
     CHECK(abi.abi_version() == PF_ABI_VERSION);
     CHECK(abi.stream_api_version() == 1);
     CHECK(abi.example_abi() == PF_ABI_VERSION);
+    CHECK(PINEFORGE_HAS_NATIVE_FX_CURVE_V1 == 1);
 
     pf_bar_t bars[5];
     five_minute_bars(bars);
+
+    {
+        // This is the dynamically loaded C caller. The direct staging/error
+        // matrix lives in test_native_fx_curve_c.
+        pf_strategy_t s = abi.create(nullptr);
+        CHECK(s != nullptr);
+        auto spec = complete_spec("native-example-fx-curve-c-entry", 1);
+        CHECK(abi.configure(s, &spec) == 0);
+        const int64_t timestamps[] = {0, 300000};
+        const double rates[] = {1.0, 1.25};
+        const pf_native_fx_curve_v1 staged{
+            static_cast<uint32_t>(sizeof(pf_native_fx_curve_v1)), 2, timestamps, rates};
+        const pf_native_fx_curve_v1 clear{
+            static_cast<uint32_t>(sizeof(pf_native_fx_curve_v1)), 0, nullptr, nullptr};
+        CHECK(abi.configure_fx_curve(s, &staged) == 0);
+        CHECK(abi.configure_fx_curve(s, &clear) == 0);
+        abi.free_strategy(s);
+    }
 
     {
         // Malformed transport arrays still reach the engine's documented
