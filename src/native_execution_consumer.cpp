@@ -124,8 +124,54 @@ void hash_optional_execution_terms(Fnv& f,
     if (terms) hash_execution_terms(f, *terms);
 }
 
+bool same_double_bits(double left, double right) noexcept {
+    return native_matching::double_bits(left) == native_matching::double_bits(right);
+}
+
+bool identity_terms(const native_order::ExecutionTerms& terms, double default_price) noexcept {
+    return same_double_bits(terms.resolved_price, default_price)
+        && !terms.units.has_value()
+        && terms.shape == native_order::OpeningShape::Transact;
+}
+
+double allowance_left_at(const native_order::Allowance& allowance, uint64_t point) noexcept {
+    if (const auto* units = std::get_if<native_order::AllowanceUnits>(&allowance)) {
+        return units->point_ordinal == point ? units->left : 0.0;
+    }
+    if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&allowance)) {
+        return all->point_ordinal == point ? std::numeric_limits<double>::infinity() : 0.0;
+    }
+    return 0.0;
+}
+
+bool same_allowance_bits(const native_order::Allowance& left,
+                         const native_order::Allowance& right) noexcept {
+    if (left.index() != right.index()) return false;
+    if (const auto* a = std::get_if<native_order::AllowanceUnits>(&left)) {
+        const auto& b = std::get<native_order::AllowanceUnits>(right);
+        return a->point_ordinal == b.point_ordinal
+            && same_double_bits(a->initial, b.initial)
+            && same_double_bits(a->left, b.left);
+    }
+    if (const auto* a = std::get_if<native_order::AllowanceAllScope>(&left)) {
+        return a->point_ordinal
+            == std::get<native_order::AllowanceAllScope>(right).point_ordinal;
+    }
+    if (const auto* a = std::get_if<native_order::AllowanceDeferred>(&left)) {
+        return a->point_ordinal
+            == std::get<native_order::AllowanceDeferred>(right).point_ordinal;
+    }
+    return true;
+}
+
+const native_order::HostSized* host_sized_intent(
+        const native_order::LiveRequest& live) noexcept {
+    return std::get_if<native_order::HostSized>(&live.request().intent);
+}
+
 void hash_terms_input(Fnv& f, const native_order::TermsResolvedInput& input) noexcept {
     f.u(static_cast<uint64_t>(input.price_kind));
+    f.b(input.shared_cursor_collision);
     f.d(input.raw_price);
     f.d(input.default_resolved_price);
     hash_execution_terms(f, input.terms);
@@ -836,6 +882,13 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     engine.initial_capital_ = spec.initial_capital;
     engine.syminfo_.pointvalue = spec.point_value;
     engine.account_currency_fx_ = spec.account_fx;
+    if (staged_fx_curve_) {
+        engine.account_currency_fx_timestamps_ = staged_fx_curve_->effective_from_ms;
+        engine.account_currency_fx_rates_ = staged_fx_curve_->account_per_quote;
+    } else {
+        engine.account_currency_fx_timestamps_.clear();
+        engine.account_currency_fx_rates_.clear();
+    }
     engine.syminfo_.mintick = spec.price_tick;
     engine.syminfo_mintick_ = spec.price_tick;
     engine.commission_type_ = fee_to_commission(spec.fee_kind);
@@ -872,6 +925,15 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
     if (engine.initial_capital_ != spec->initial_capital) return false;
     if (engine.syminfo_.pointvalue != spec->point_value) return false;
     if (engine.account_currency_fx_ != spec->account_fx) return false;
+    if (staged_fx_curve_) {
+        if (engine.account_currency_fx_timestamps_ != staged_fx_curve_->effective_from_ms
+            || engine.account_currency_fx_rates_ != staged_fx_curve_->account_per_quote) {
+            return false;
+        }
+    } else if (!engine.account_currency_fx_timestamps_.empty()
+               || !engine.account_currency_fx_rates_.empty()) {
+        return false;
+    }
     if (engine.syminfo_.mintick != spec->price_tick) return false;
     if (engine.commission_type_ != fee_to_commission(spec->fee_kind)) return false;
     if (engine.commission_value_ != spec->fee_value) return false;
@@ -1663,9 +1725,147 @@ void NativeExecutionConsumer::refresh_openings(const BacktestEngine& engine,
     }
 }
 
+execution::Action NativeExecutionConsumer::narrow_action(
+        const native_order::ExecutionPlan& plan) {
+    return std::visit([](const auto& payload) -> execution::Action {
+        using T = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<T, execution::Flatten>
+                      || std::is_same_v<T, order_action::Reduce>
+                      || std::is_same_v<T, order_action::Transact>) {
+            return payload;
+        } else {
+            throw std::logic_error("native reversal plan reached an action-only settlement");
+        }
+    }, plan);
+}
+
+NativeExecutionTermsFacts NativeExecutionConsumer::build_terms_facts(
+        const BacktestEngine& engine, const native_order::LiveRequest& live,
+        const native_order::EvaluationContext& evaluation,
+        native_order::NativeCandidatePriceKind price_kind,
+        NativeCurrentPriceRule price_rule, double raw_price,
+        double default_resolved_price, bool shared_cursor_collision) const {
+    NativeExecutionTermsFacts out;
+    out.target = live.handle();
+    out.definition = live.definition;
+    out.cursor = evaluation.cursor;
+    out.driver_class = evaluation.driver_class;
+    out.trigger_state = live.trigger_state;
+    out.remaining = live.remaining;
+    out.allowance = evaluation.driver_class == native_order::DriverEligibilityClass::CurrentExecution
+        ? native_order::WorkingRequestCore::evaluated_allowance(
+              live, evaluation.cursor.point.ordinal)
+        : live.allowance;
+    out.position = position(engine);
+    out.is_buy = std::holds_alternative<native_order::UnboundBookClose>(live.authority)
+        ? engine.position_side_ == PositionSide::SHORT : requests_.working_is_buy(live);
+    out.price_kind = price_kind;
+    out.shared_cursor_collision = shared_cursor_collision;
+    out.raw_price = raw_price;
+    out.default_resolved_price = default_resolved_price;
+    out.price_rule = price_rule;
+    out.quote_kind = evaluation.driver_class == native_order::DriverEligibilityClass::CurrentExecution
+        && current_frame_ ? current_frame_->point.quote_kind
+        : NativeCurrentQuoteKind::MarketDecision;
+    out.fx_effective_time_ms = evaluation.cursor.point.effective_time_ms;
+    out.active_fx = engine.account_currency_fx_at(out.fx_effective_time_ms);
+    if (const auto* pending = std::get_if<native_order::PendingDeferred>(&live.pending)) {
+        out.pending_group_deduction = pending->total;
+    }
+
+    double roster_units = 0.0;
+    for (const auto& lot : engine.pyramid_entries_) {
+        roster_units += lot.qty;
+        if (!std::isfinite(roster_units)) {
+            throw std::logic_error("native terms roster units are not finite");
+        }
+    }
+    const bool opposite = (out.is_buy && engine.position_side_ == PositionSide::SHORT)
+        || (!out.is_buy && engine.position_side_ == PositionSide::LONG);
+    out.opposite_book_units = opposite ? roster_units : 0.0;
+
+    const auto target = read_target(engine, &live);
+    if (const auto* opening = std::get_if<native_order::OpeningClose>(&live.authority)) {
+        const execution::OpeningExposure scope{opening->opening.incarnation, opening->cycle};
+        out.scope = scope;
+        for (const auto& lot : engine.pyramid_entries_) {
+            if (lot.entry_incarnation == opening->opening.incarnation) {
+                out.scope_exposure_units += lot.qty;
+            }
+        }
+    } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live.authority)) {
+        native_order::SelectedExposure scope;
+        scope.cycle = openings->cycle;
+        for (const auto& row : target.openings) {
+            if (row.has_live_matching_lot) scope.incarnations.push_back(row.queried_opening.incarnation);
+        }
+        out.scope = scope;
+        for (const auto& lot : engine.pyramid_entries_) {
+            if (std::find(scope.incarnations.begin(), scope.incarnations.end(),
+                          lot.entry_incarnation) != scope.incarnations.end()) {
+                out.scope_exposure_units += lot.qty;
+            }
+        }
+    } else {
+        out.scope = execution::Book{};
+        out.scope_exposure_units = roster_units;
+    }
+
+    const auto& trigger = live.request().trigger;
+    if (std::holds_alternative<native_order::LimitReady>(live.trigger_state)
+        || std::holds_alternative<native_order::StopLimitLive>(live.trigger_state)) {
+        if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) {
+            out.trigger_level = limit->price;
+        } else if (const auto* stop_limit = std::get_if<native_order::StopLimit>(&trigger)) {
+            out.trigger_level = stop_limit->limit;
+        } else {
+            throw std::logic_error("native limit state has no limit trigger");
+        }
+    } else if (std::holds_alternative<native_order::StopActive>(live.trigger_state)) {
+        const auto* stop = std::get_if<native_order::Stop>(&trigger);
+        if (!stop) throw std::logic_error("native stop state has no stop trigger");
+        out.trigger_level = stop->price;
+    } else if (const auto* active = std::get_if<native_order::TrailActive>(&live.trigger_state)) {
+        const auto* trail = std::get_if<native_order::Trail>(&trigger);
+        double stop = 0.0;
+        if (!trail || !native_matching::checked_trail_stop(
+                active->best_at_trigger, trail->offset, out.is_buy, &stop)) {
+            throw std::logic_error("native active trail has no representable trigger");
+        }
+        out.trigger_level = stop;
+    } else if (!std::holds_alternative<native_order::MarketReady>(live.trigger_state)
+               && evaluation.driver_class != native_order::DriverEligibilityClass::CurrentExecution) {
+        throw std::logic_error("native nonfillable state reached terms coordinator");
+    }
+    return out;
+}
+
+native_order::ExecutionPlan NativeExecutionConsumer::plan_from_terms(
+        native_order::HostSizedKind kind, std::optional<native_order::Side> side,
+        native_order::OpeningShape shape, double after, double allowance_left,
+        double opposite_book_units) {
+    if (kind == native_order::HostSizedKind::Close) {
+        return order_action::Reduce{std::min(after, allowance_left)};
+    }
+    if (!side) throw std::logic_error("native host-sized opening has no side");
+    const double signed_after = *side == native_order::Side::Long ? after : -after;
+    switch (shape) {
+    case native_order::OpeningShape::Transact:
+        return order_action::Transact{*side == native_order::Side::Long
+            ? std::min(after, allowance_left) : -std::min(after, allowance_left)};
+    case native_order::OpeningShape::ReverseTo:
+        return execution::ReverseTo{signed_after};
+    case native_order::OpeningShape::CloseOpposite:
+        if (after == opposite_book_units) return execution::Flatten{};
+        return order_action::Reduce{after};
+    }
+    throw std::logic_error("native host-sized opening shape is unknown");
+}
+
 NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_candidate(
         const BacktestEngine& engine, const native_order::LiveRequest& live,
-        const native_order::MatchCursor& cursor, double resolved) const {
+        const native_order::MatchCursor& cursor, double resolved,
+        const native_order::ExecutionPlan* plan_override) const {
     ResolvedCandidate candidate;
     candidate.target = read_target(engine, &live);
     if (const auto* opening = std::get_if<native_order::OpeningClose>(&live.authority)) {
@@ -1691,7 +1891,9 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
                && !std::holds_alternative<native_order::UnboundBookClose>(live.authority)) {
         throw std::logic_error("native unresolved execution authority");
     }
-    if (!std::holds_alternative<native_order::RemainingFlattenAll>(live.remaining)
+    if (plan_override) {
+        candidate.physical = *plan_override;
+    } else if (!std::holds_alternative<native_order::RemainingFlattenAll>(live.remaining)
         && !std::holds_alternative<native_order::Flatten>(live.request().intent)) {
         const auto* remaining = std::get_if<native_order::RemainingUnits>(&live.remaining);
         if (!remaining) throw std::logic_error("native unresolved execution quantity");
@@ -1701,14 +1903,21 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
         }
         if (std::holds_alternative<native_order::Transact>(live.request().intent))
             candidate.physical = native_order::Transact{requests_.working_is_buy(live) ? qty : -qty};
+        else if (const auto* reverse = std::get_if<native_order::ReverseTo>(&live.request().intent))
+            candidate.physical = execution::ReverseTo{reverse->signed_units};
         else
             candidate.physical = order_action::Reduce{qty};
     }
     candidate.fill = execution::Fill{resolved, live.request().label, live.request().comment,
                                     live.handle().incarnation, std::nullopt};
-    candidate.inspect = candidate.selected
-        ? engine.inspect_native_settlement_selected(candidate.physical, candidate.fill, *candidate.selected)
-        : engine.inspect_native_settlement_scoped(candidate.physical, candidate.fill, candidate.financial_scope);
+    if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
+        candidate.inspect = engine.inspect_native_reversal_v1(*reversal, candidate.fill);
+    } else {
+        const auto action = narrow_action(candidate.physical);
+        candidate.inspect = candidate.selected
+            ? engine.inspect_native_settlement_selected(action, candidate.fill, *candidate.selected)
+            : engine.inspect_native_settlement_scoped(action, candidate.fill, candidate.financial_scope);
+    }
     // The real commit pins this ticket; every preview must use its allocation too.
     candidate.fill.commission_account = candidate.inspect.current_ticket;
     return candidate;
@@ -1728,19 +1937,49 @@ NativeCurrentPointView NativeExecutionConsumer::execution_anchor(
     return out;
 }
 
+std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::terminal_from_history(
+        BacktestEngine& engine, const native_order::RequestHandle& cause_handle,
+        NativeFailureOperation operation) {
+    if (requests_.history().empty()) {
+        throw std::logic_error("native terminal history is empty");
+    }
+    const auto event = requests_.history().back();
+    NativeCurrentExecutionResult outcome;
+    if (const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&event)) {
+        outcome = *rejected;
+    } else if (const auto* no_effect = std::get_if<native_order::NoEffectEvent>(&event)) {
+        outcome = *no_effect;
+    } else if (const auto* cancelled = std::get_if<native_order::CancelledEvent>(&event)) {
+        outcome = *cancelled;
+    } else {
+        throw std::logic_error("native terminal outcome missing");
+    }
+    const native_order::EventId cause{cause_handle.run, command_ordinal(event)};
+    drain_parent_terminal(engine, cause, cause_handle, operation);
+    if (failed()) return std::nullopt;
+    return outcome;
+}
+
 std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_matched_request(
         BacktestEngine& engine, const native_order::RequestHandle& handle,
         const native_order::EvaluationContext& evaluation, double raw_price,
-        double resolved_price, const NativeCurrentPointView& notification_point) {
+        double default_resolved_price, const NativeCurrentPointView& notification_point,
+        native_order::NativeCandidatePriceKind price_kind,
+        NativeCurrentPriceRule price_rule, bool shared_cursor_collision) {
     const auto P = evaluation.cursor.point.ordinal;
     const bool current = evaluation.driver_class == native_order::DriverEligibilityClass::CurrentExecution;
     try {
-        const auto* live = requests_.find_live(handle);
+        auto* live = requests_.find_live(handle);
         if (!live) return std::nullopt;
-        auto terminal = [&](std::optional<native_order::MatchRejectReason> rejection)
+        // All resolver, inspection, admission and financial reads see the
+        // execution coordinate's FX activation instant.
+        engine.current_bar_.timestamp = evaluation.cursor.point.effective_time_ms;
+        auto terminal = [&](std::optional<native_order::MatchRejectReason> rejection,
+                            std::optional<native_order::ExecutionTerms> attempted = std::nullopt)
                 -> std::optional<NativeCurrentExecutionResult> {
             auto prep = rejection
-                ? requests_.prepare_match_rejected(handle, evaluation, *rejection, next_timeline_ordinal_)
+                ? requests_.prepare_match_rejected(
+                    handle, evaluation, *rejection, std::move(attempted), next_timeline_ordinal_)
                 : requests_.prepare_no_effect(handle, evaluation, next_timeline_ordinal_);
             if (const auto* error = std::get_if<native_order::PreparationError>(&prep)) {
                 fail_preparation(engine, *error, NativeFailureOperation::Settlement);
@@ -1750,24 +1989,199 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             if (!mutation) return std::nullopt;
             if (!install_mutation(engine, std::move(*mutation), NativeFailureOperation::Settlement, P))
                 return std::nullopt;
-            // Copy before dependency drains can reallocate the history.
-            const auto& event = requests_.history().back();
-            NativeCurrentExecutionResult outcome;
-            if (const auto* rejected = std::get_if<native_order::MatchRejectedEvent>(&event)) outcome = *rejected;
-            else if (const auto* no_effect = std::get_if<native_order::NoEffectEvent>(&event)) outcome = *no_effect;
-            else throw std::logic_error("native terminal outcome missing");
-            const native_order::EventId cause{handle.run, command_ordinal(event)};
-            drain_parent_terminal(engine, cause, handle, NativeFailureOperation::Settlement);
-            if (failed()) return std::nullopt;
-            return outcome;
+            return terminal_from_history(engine, handle, NativeFailureOperation::Settlement);
         };
+
+        const auto* host_sized = host_sized_intent(*live);
+        const bool unresolved = host_sized
+            && std::holds_alternative<native_order::RemainingDeferred>(live->remaining);
+        // This is the lone terms pre-resolver shortcut. The ordinary queued
+        // evaluation path already owns the equivalent terminal.
+        if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+            && std::holds_alternative<native_order::UnboundBookClose>(live->authority)
+            && engine.position_side_ == PositionSide::FLAT) {
+            return terminal(std::nullopt);
+        }
+
+        const auto terms_facts = build_terms_facts(engine, *live, evaluation, price_kind,
+                                                   price_rule, raw_price, default_resolved_price,
+                                                   shared_cursor_collision);
+        native_order::ExecutionTerms terms;
+        try {
+            auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+            if (!host) throw std::logic_error("native terms require a native host");
+            terms = host->resolve_execution_terms(terms_facts);
+        } catch (const std::exception& e) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Settlement, P});
+            render(engine, e.what());
+            return std::nullopt;
+        } catch (...) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Settlement, P});
+            render(engine, "native terms callback exception");
+            return std::nullopt;
+        }
+        // A virtual can invoke a guarded public entry point and latch the run,
+        // request abort, or perturb projection state without throwing.
+        if (!check_abort_or_projection(engine, NativeFailureOperation::Settlement, P)) {
+            return std::nullopt;
+        }
+
+        const bool identity = identity_terms(terms, default_resolved_price);
+        const auto nonidentity_attempt = identity
+            ? std::optional<native_order::ExecutionTerms>{}
+            : std::optional<native_order::ExecutionTerms>{terms};
+        if (!unresolved && (terms.units || terms.shape != native_order::OpeningShape::Transact)) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+        }
+        if (unresolved && !terms.units) {
+            return terminal(native_order::MatchRejectReason::TermsUnresolved, terms);
+        }
+        if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+            && terms.shape != native_order::OpeningShape::Transact) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+        }
+        if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+        }
+        if (terms.units && *terms.units > 0.0) {
+            const auto* spec = spec_ptr();
+            if (!spec || (spec->quantity_grid
+                          && !native_order::quantity_on_grid(*terms.units,
+                                                              *spec->quantity_grid))) {
+                return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+            }
+        }
+
+        double after = 0.0;
+        double deduction = 0.0;
+        bool exhausted = false;
+        double binding_allowance = 0.0;
+        if (unresolved) {
+            if (!native_order::WorkingRequestCore::effective_host_units(
+                    live->pending, *terms.units, &deduction, &after, &exhausted)) {
+                native_order::TermsResolvedInput probe;
+                probe.price_kind = price_kind;
+                probe.shared_cursor_collision = shared_cursor_collision;
+                probe.raw_price = raw_price;
+                probe.default_resolved_price = default_resolved_price;
+                probe.terms = terms;
+                auto prepared = requests_.prepare_terms(handle, evaluation, probe,
+                                                        next_timeline_ordinal_);
+                if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+                    fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+                } else {
+                    fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, "native host-sized arithmetic probe did not fail");
+                }
+                return std::nullopt;
+            }
+            if (const auto* budget = std::get_if<native_order::PointBudget>(&live->request().capacity)) {
+                binding_allowance = std::min(after, budget->units);
+            } else {
+                binding_allowance = after;
+            }
+        }
+
+        const bool explicit_reversal = std::holds_alternative<native_order::ReverseTo>(
+            live->request().intent);
+        const bool shape_requires_opposite = explicit_reversal || (unresolved
+            && (terms.shape == native_order::OpeningShape::ReverseTo
+                || terms.shape == native_order::OpeningShape::CloseOpposite));
+        if (shape_requires_opposite && terms_facts.opposite_book_units == 0.0) {
+            return terminal(native_order::MatchRejectReason::NoOppositeExposure, terms);
+        }
+        if (unresolved && terms.shape == native_order::OpeningShape::CloseOpposite
+            && *terms.units > terms_facts.opposite_book_units) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+        }
+        if (unresolved && terms.shape != native_order::OpeningShape::Transact
+            && after > binding_allowance) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+        }
+
+        std::optional<native_order::ExecutionPlan> plan;
+        if (host_sized) {
+            if (unresolved) {
+                if (after > 0.0) {
+                    plan = plan_from_terms(host_sized->kind, host_sized->side, terms.shape,
+                                           after, binding_allowance, terms_facts.opposite_book_units);
+                }
+            } else if (const auto* remaining = std::get_if<native_order::RemainingUnits>(
+                           &live->remaining)) {
+                plan = plan_from_terms(host_sized->kind, host_sized->side,
+                    native_order::OpeningShape::Transact, remaining->q,
+                    allowance_left_at(terms_facts.allowance, P),
+                terms_facts.opposite_book_units);
+            }
+        }
+
+        const double resolved_price = terms.resolved_price;
+        // Price rejection is deliberately ahead of receipt installation. The
+        // sole finite-current exception needs a stack-only plan inspection to
+        // distinguish a pure close from an opening plan.
         if (!std::isfinite(resolved_price)) {
             if (current) throw std::overflow_error("native current price is not finite");
-            return terminal(native_order::MatchRejectReason::NonpositivePrice);
+            return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         }
-        if (!current && resolved_price <= 0.0)
-            return terminal(native_order::MatchRejectReason::NonpositivePrice);
-        auto candidate = inspect_candidate(engine, *live, evaluation.cursor, resolved_price);
+        if (!current && resolved_price <= 0.0) {
+            return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
+        }
+        if (current && resolved_price <= 0.0) {
+            const auto provisional = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
+                                                       plan ? &*plan : nullptr);
+            if (provisional.inspect.would_open) {
+                return terminal(native_order::MatchRejectReason::NonpositivePrice,
+                                nonidentity_attempt);
+            }
+        }
+
+        native_order::TermsResolvedInput terms_input;
+        terms_input.price_kind = price_kind;
+        terms_input.shared_cursor_collision = shared_cursor_collision;
+        terms_input.raw_price = raw_price;
+        terms_input.default_resolved_price = default_resolved_price;
+        terms_input.terms = terms;
+        if (unresolved || !identity) {
+            auto prepared = requests_.prepare_terms(handle, evaluation, terms_input,
+                                                    next_timeline_ordinal_);
+            if (const auto* error = std::get_if<native_order::PreparationError>(&prepared)) {
+                fail_preparation(engine, *error, NativeFailureOperation::Settlement);
+                return std::nullopt;
+            }
+            auto* mutation = std::get_if<native_order::PreparedMutation>(&prepared);
+            if (!mutation) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, "native terms preparation did not produce a mutation");
+                return std::nullopt;
+            }
+            if (!install_mutation(engine, std::move(*mutation),
+                                  NativeFailureOperation::Settlement, P)) {
+                return std::nullopt;
+            }
+            live = requests_.find_live(handle);
+            if (!live) {
+                return terminal_from_history(engine, handle, NativeFailureOperation::Settlement);
+            }
+            if (host_sized && !plan) {
+                const auto* remaining = std::get_if<native_order::RemainingUnits>(&live->remaining);
+                if (!remaining) {
+                    fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, "native bound terms have no remaining quantity");
+                    return std::nullopt;
+                }
+                plan = plan_from_terms(host_sized->kind, host_sized->side,
+                    native_order::OpeningShape::Transact, remaining->q,
+                    allowance_left_at(live->allowance, P), terms_facts.opposite_book_units);
+            }
+        }
+
+        auto candidate = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
+                                           plan ? &*plan : nullptr);
         const auto& inspect = candidate.inspect;
         if (inspect.status == execution::Status::NoEffect) return terminal(std::nullopt);
         if (inspect.status != execution::Status::Applied) {
@@ -1777,16 +2191,16 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return std::nullopt;
         }
         if (inspect.would_open && resolved_price <= 0.0)
-            return terminal(native_order::MatchRejectReason::NonpositivePrice);
+            return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         native_order::MatchRejectReason reason{};
         if (inspect.would_open && !admit_opening_inspect(engine, resolved_price, inspect, &reason))
-            return terminal(reason);
+            return terminal(reason, nonidentity_attempt);
 
         native_order::ExecutionProposal proposal;
         proposal.cursor = evaluation.cursor;
         proposal.raw_price = raw_price;
         proposal.resolved_price = resolved_price;
-        proposal.physical_action = native_order::to_execution_plan(candidate.physical);
+        proposal.physical_action = candidate.physical;
         proposal.scope = candidate.scope;
         proposal.pre_fill = read_position(engine);
         proposal.pre_target = candidate.target;
@@ -1801,7 +2215,64 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return std::nullopt;
         }
         auto* token = std::get_if<native_order::PreparedExecution>(&prepared);
-        if (!token) return std::nullopt;
+        if (!token) {
+            if (host_sized) {
+                fail(engine, NativeFailure{NativeFailureCode::Contract,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, "native host-sized candidate silently skipped after binding");
+            }
+            return std::nullopt;
+        }
+        execution::PhysicalExecutionContext ctx;
+        ctx.effective_time_ms = evaluation.cursor.point.effective_time_ms;
+        ctx.interval_index = evaluation.cursor.point.interval_index;
+        NativePrecommitView view;
+        view.target = handle;
+        view.definition = live->definition;
+        view.cursor = evaluation.cursor;
+        view.plan = candidate.physical;
+        view.scope = candidate.scope;
+        view.raw_price = raw_price;
+        view.resolved_price = resolved_price;
+        view.inspected_closed_units = inspect.closed_units;
+        view.inspected_opened_units = inspect.opened_units;
+        view.inspected_current_ticket = inspect.current_ticket;
+        view.current = current;
+        if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
+            view.settlement_readiness = engine.preview_native_settlement_commit(
+                *reversal, candidate.fill, ctx, view.account, view.closed_row_pnl);
+        } else {
+            const auto action = narrow_action(candidate.physical);
+            view.settlement_readiness = engine.preview_native_settlement_commit(
+                action, candidate.fill, ctx, candidate.financial_scope,
+                candidate.selected ? &*candidate.selected : nullptr,
+                view.account, view.closed_row_pnl);
+        }
+        if (view.settlement_readiness == execution::Status::Applied) {
+            NativePrecommitVerdict verdict = NativePrecommitVerdict::Proceed;
+            try {
+                auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+                if (!host) throw std::logic_error("native precommit requires a native host");
+                verdict = host->validate_execution_precommit(view);
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return std::nullopt;
+            } catch (...) {
+                fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, "native precommit callback exception");
+                return std::nullopt;
+            }
+            if (!check_abort_or_projection(engine, NativeFailureOperation::Settlement, P)) {
+                return std::nullopt;
+            }
+            if (verdict == NativePrecommitVerdict::Refuse) {
+                return terminal(native_order::MatchRejectReason::HostPrecommit,
+                                nonidentity_attempt);
+            }
+        }
         // Allocate before financial effects, with geometric growth rather than
         // recopying the complete observation/notification prefix on each fill.
         reserve_next(account_log_);
@@ -1810,13 +2281,18 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         notification.history_index = requests_.history().size();
         notification.ordinal = applied_id.ordinal;
         notification.point = notification_point;
-        if (!current) notification.point.quote_origin_ordinal = applied_id.ordinal;
-        execution::PhysicalExecutionContext ctx;
-        ctx.effective_time_ms = evaluation.cursor.point.effective_time_ms;
-        ctx.interval_index = evaluation.cursor.point.interval_index;
-        const auto settled = candidate.selected
-            ? engine.settle_native_execution_selected_at(candidate.physical, candidate.fill, ctx, *candidate.selected)
-            : engine.settle_native_execution_scoped_at(candidate.physical, candidate.fill, ctx, candidate.financial_scope);
+        if (!current) {
+            notification.point.price = resolved_price;
+            notification.point.quote_origin_ordinal = applied_id.ordinal;
+        }
+        const auto settled = std::get_if<execution::ReverseTo>(&candidate.physical)
+            ? engine.settle_native_reversal_at_v1(*std::get_if<execution::ReverseTo>(
+                  &candidate.physical), candidate.fill, ctx)
+            : candidate.selected
+                ? engine.settle_native_execution_selected_at(
+                    narrow_action(candidate.physical), candidate.fill, ctx, *candidate.selected)
+                : engine.settle_native_execution_scoped_at(
+                    narrow_action(candidate.physical), candidate.fill, ctx, candidate.financial_scope);
         if (settled.status != execution::Status::Applied) {
             fail(engine, NativeFailure{NativeFailureCode::SettlementFailure,
                 NativeFailureOperation::Settlement, P, static_cast<uint32_t>(settled.status)});
@@ -1824,13 +2300,13 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             return std::nullopt;
         }
         refresh_target_scalars(engine, candidate.target);
-        native_order::CommittedExecutionFacts facts;
-        facts.result = settled;
-        facts.cycle_before = cycle_before;
-        facts.cycle_after = engine.position_cycle_seq_;
-        facts.post_target = std::move(candidate.target);
-        facts.committed_action = native_order::to_execution_plan(candidate.physical);
-        if (!install_execution(engine, std::move(*token), facts, P)) return std::nullopt;
+        native_order::CommittedExecutionFacts committed;
+        committed.result = settled;
+        committed.cycle_before = cycle_before;
+        committed.cycle_after = engine.position_cycle_seq_;
+        committed.post_target = std::move(candidate.target);
+        committed.committed_action = candidate.physical;
+        if (!install_execution(engine, std::move(*token), committed, P)) return std::nullopt;
         const auto& applied = std::get<native_order::ExecutionAppliedEvent>(
             requests_.history().at(notification.history_index));
         if (applied.ordinal != applied_id.ordinal || (current && !applied.terminal))
@@ -1845,7 +2321,6 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (engine.position_side_ == PositionSide::SHORT) observation.signed_units = -observation.signed_units;
         account_log_.push_back(observation);
         fold_account_digest(observation);
-        engine.current_bar_.timestamp = ctx.effective_time_ms;
         engine.bar_index_ = ctx.interval_index;
         drain_after_applied(engine, applied_id, handle);
         if (failed()) return std::nullopt;
@@ -1897,6 +2372,87 @@ void NativeExecutionConsumer::match_path(
         double t = 0.0;
         double price = 0.0;
         Kind kind = Kind::Fill;
+        std::optional<double> trigger_level;
+        bool at_level = false;
+        bool shared_cursor_collision = false;
+    };
+    struct CandidateProvenance {
+        native_order::RequestHandle handle;
+        std::uint64_t point_ordinal = 0;
+        Kind kind = Kind::Fill;
+        std::size_t trigger_state_index = 0;
+        bool is_buy = false;
+        std::optional<double> trigger_level;
+        double t = 0.0;
+        double raw_price = 0.0;
+        bool at_level = false;
+    };
+    std::vector<CandidateProvenance> candidate_provenance;
+
+    auto same_optional_bits = [](const std::optional<double>& left,
+                                 const std::optional<double>& right) {
+        return left.has_value() == right.has_value()
+            && (!left || native_matching::double_bits(*left)
+                         == native_matching::double_bits(*right));
+    };
+    auto same_provenance_key = [&](const CandidateProvenance& row,
+                                   const native_order::LiveRequest& live,
+                                   Kind kind, bool buy,
+                                   const std::optional<double>& level,
+                                   double t) {
+        return row.handle == live.handle()
+            && row.point_ordinal == P
+            && row.kind == kind
+            && row.trigger_state_index == live.trigger_state.index()
+            && row.is_buy == buy
+            && same_optional_bits(row.trigger_level, level)
+            && native_matching::double_bits(row.t) == native_matching::double_bits(t);
+    };
+    auto retained_origin = [&](const native_order::LiveRequest& live, Kind kind, bool buy,
+                               const std::optional<double>& level, double t)
+            -> const CandidateProvenance* {
+        for (auto it = candidate_provenance.rbegin(); it != candidate_provenance.rend(); ++it) {
+            if (same_provenance_key(*it, live, kind, buy, level, t)) return &*it;
+        }
+        return nullptr;
+    };
+    auto level_for = [&](const native_order::LiveRequest& live, Kind kind,
+                         bool buy) -> std::optional<double> {
+        const auto& trigger = live.request().trigger;
+        const auto& state = live.trigger_state;
+        if (std::holds_alternative<native_order::LimitReady>(state)
+            || std::holds_alternative<native_order::StopLimitLive>(state)) {
+            if (const auto* limit = std::get_if<native_order::Limit>(&trigger)) return limit->price;
+            if (const auto* stop_limit = std::get_if<native_order::StopLimit>(&trigger)) {
+                return stop_limit->limit;
+            }
+        }
+        if (std::holds_alternative<native_order::StopIdle>(state)
+            || std::holds_alternative<native_order::StopActive>(state)) {
+            if (const auto* stop = std::get_if<native_order::Stop>(&trigger)) return stop->price;
+        }
+        if (std::holds_alternative<native_order::StopLimitPending>(state)) {
+            if (const auto* stop_limit = std::get_if<native_order::StopLimit>(&trigger)) {
+                return stop_limit->stop;
+            }
+        }
+        if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
+            if (const auto* trail = std::get_if<native_order::Trail>(&trigger)) return trail->arm_price;
+        }
+        if (const auto* tracking = std::get_if<native_order::TrailTrack>(&state)) {
+            const auto* trail = std::get_if<native_order::Trail>(&trigger);
+            double stop = 0.0;
+            if (trail && native_matching::checked_trail_stop(
+                    tracking->best, trail->offset, buy, &stop)) return stop;
+        }
+        if (const auto* active = std::get_if<native_order::TrailActive>(&state)) {
+            const auto* trail = std::get_if<native_order::Trail>(&trigger);
+            double stop = 0.0;
+            if (trail && native_matching::checked_trail_stop(
+                    active->best_at_trigger, trail->offset, buy, &stop)) return stop;
+        }
+        (void)kind;
+        return std::nullopt;
     };
 
     auto cause_floor = [&](const native_order::LiveRequest& live) {
@@ -1922,6 +2478,9 @@ void NativeExecutionConsumer::match_path(
         if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&live.allowance)) {
             return all->point_ordinal != P;
         }
+        if (const auto* deferred = std::get_if<native_order::AllowanceDeferred>(&live.allowance)) {
+            return deferred->point_ordinal != P;
+        }
         return false;
     };
 
@@ -1932,6 +2491,13 @@ void NativeExecutionConsumer::match_path(
     };
 
     while (!failed()) {
+        candidate_provenance.erase(
+            std::remove_if(candidate_provenance.begin(), candidate_provenance.end(),
+                [&](const CandidateProvenance& row) {
+                    return row.point_ordinal != P || row.t < t_cursor
+                        || requests_.find_live(row.handle) == nullptr;
+                }),
+            candidate_provenance.end());
         if (skip_t != t_cursor) {
             skipped.clear();
             skip_t = t_cursor;
@@ -2039,9 +2605,37 @@ void NativeExecutionConsumer::match_path(
                 row.t = hit->t;
                 row.price = hit->price;
                 row.kind = kind;
+                row.trigger_level = level_for(*live, kind, buy);
+                row.at_level = hit->at_level;
             }
             if (!std::isfinite(row.price) || row.t < t_cursor || row.t > 1.0) continue;
             if (skipped.count(skip_key(row.incarnation, row.kind))) continue;
+            if (row.kind != Kind::Evaluate) {
+                const bool buy = requests_.working_is_buy(*live);
+                if (!row.trigger_level) row.trigger_level = level_for(*live, row.kind, buy);
+                if (!row.at_level) {
+                    if (const auto* retained = retained_origin(
+                            *live, row.kind, buy, row.trigger_level, row.t)) {
+                        row.at_level = retained->at_level;
+                        row.trigger_level = retained->trigger_level;
+                    }
+                }
+                CandidateProvenance provenance;
+                provenance.handle = handle;
+                provenance.point_ordinal = P;
+                provenance.kind = row.kind;
+                provenance.trigger_state_index = live->trigger_state.index();
+                provenance.is_buy = buy;
+                provenance.trigger_level = row.trigger_level;
+                provenance.t = row.t;
+                provenance.raw_price = row.price;
+                provenance.at_level = row.at_level;
+                candidate_provenance.push_back(std::move(provenance));
+                if (row.at_level && row.trigger_level) {
+                    row.shared_cursor_collision = native_matching::double_bits(row.price)
+                        != native_matching::double_bits(*row.trigger_level);
+                }
+            }
             if (!winner
                 || row.t < winner->t
                 || (row.t == winner->t && row.incarnation < winner->incarnation)
@@ -2136,6 +2730,23 @@ void NativeExecutionConsumer::match_path(
                                                NativeFailureOperation::Settlement, P)) {
                 return;
             }
+            if (winner->kind == Kind::ActivateStop || winner->kind == Kind::ActivateTrail) {
+                const auto* activated = requests_.find_live(winner->handle);
+                if (activated) {
+                    const bool buy = requests_.working_is_buy(*activated);
+                    CandidateProvenance transfer;
+                    transfer.handle = winner->handle;
+                    transfer.point_ordinal = P;
+                    transfer.kind = Kind::Fill;
+                    transfer.trigger_state_index = activated->trigger_state.index();
+                    transfer.is_buy = buy;
+                    transfer.trigger_level = level_for(*activated, Kind::Fill, buy);
+                    transfer.t = winner->t;
+                    transfer.raw_price = winner->price;
+                    transfer.at_level = winner->at_level;
+                    candidate_provenance.push_back(std::move(transfer));
+                }
+            }
             continue;
         }
 
@@ -2155,10 +2766,24 @@ void NativeExecutionConsumer::match_path(
             else if (const auto* sl = std::get_if<native_order::StopLimit>(&trigger)) level = sl->limit;
             resolved = native_matching::protect_limit(resolved, level, buy);
         }
+        native_order::NativeCandidatePriceKind price_kind =
+            native_order::NativeCandidatePriceKind::PointPrice;
+        if (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
+            || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state)
+            || std::holds_alternative<native_order::StopActive>(live->trigger_state)
+            || std::holds_alternative<native_order::TrailActive>(live->trigger_state)) {
+            price_kind = winner->at_level
+                ? native_order::NativeCandidatePriceKind::TriggerLevel
+                : native_order::NativeCandidatePriceKind::PointPrice;
+        } else if (!std::holds_alternative<native_order::MarketReady>(live->trigger_state)) {
+            throw std::logic_error("native nonfillable state reached matched coordinator");
+        }
         const auto anchor = execution_anchor(path_cursor, resolved);
         consuming_request_ = true;
         auto outcome = consume_matched_request(engine, winner->handle, eval, winner->price,
-            resolved, anchor);
+            resolved, anchor, price_kind, NativeCurrentPriceRule::AsPresented,
+            price_kind == native_order::NativeCandidatePriceKind::TriggerLevel
+                && winner->shared_cursor_collision);
         consuming_request_ = false;
         if (failed()) return;
         if (!outcome) skipped.insert(skip_key(winner->incarnation, winner->kind));
@@ -2206,6 +2831,14 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     } else if (std::holds_alternative<native_order::Transact>(request.intent)) {
         if (!std::holds_alternative<native_order::Independent>(request.owner))
             return Refusal::UnsupportedRequest;
+    } else if (std::holds_alternative<native_order::ReverseTo>(request.intent)) {
+        if (!std::holds_alternative<native_order::Independent>(request.owner))
+            return Refusal::UnsupportedRequest;
+    } else if (const auto* sized = std::get_if<native_order::HostSized>(&request.intent)) {
+        if (sized->kind == native_order::HostSizedKind::Open
+            && !std::holds_alternative<native_order::Independent>(request.owner)) {
+            return Refusal::UnsupportedRequest;
+        }
     } else if (!std::holds_alternative<native_order::Flatten>(request.intent)) {
         return Refusal::UnsupportedRequest;
     }
@@ -2256,14 +2889,136 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     const auto* live = requests_.find_live(command.target);
     native_order::MatchCursor cursor;
     cursor.point = current_execution_coordinate(next_timeline_ordinal_);
-    const double resolved = current_price(engine, *live, command.price_rule);
-    const auto candidate = inspect_candidate(engine, *live, cursor, resolved);
+    native_order::EvaluationContext evaluation;
+    evaluation.cursor = cursor;
+    evaluation.driver_class = native_order::DriverEligibilityClass::CurrentExecution;
+    evaluation.existing_matching_bit = true;
+    const auto* host_sized = host_sized_intent(*live);
+    const bool unresolved = host_sized
+        && std::holds_alternative<native_order::RemainingDeferred>(live->remaining);
+    if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+        && std::holds_alternative<native_order::UnboundBookClose>(live->authority)
+        && engine.position_side_ == PositionSide::FLAT) {
+        out.settlement_readiness = execution::Status::NoEffect;
+        return out;
+    }
+    const double raw_price = current_frame_->point.price;
+    const double default_resolved = current_price(engine, *live, command.price_rule);
+    const auto facts = build_terms_facts(engine, *live, evaluation,
+        native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule,
+        raw_price, default_resolved);
+    native_order::ExecutionTerms terms;
+    struct PreviewSeal {
+        bool& value;
+        explicit PreviewSeal(bool& v) : value(v) { value = true; }
+        ~PreviewSeal() { value = false; }
+    };
+    {
+        PreviewSeal seal(consuming_request_);
+        const auto* host = dynamic_cast<const NativeStrategyHost*>(&engine);
+        if (!host) throw std::logic_error("native terms require a native host");
+        terms = host->resolve_execution_terms(facts);
+    }
+    // A hook-owned public call may latch or perturb configuration. Preview
+    // reports the refusal without adding another mutation of its own.
+    if (failed() || engine.abort_requested_.load(std::memory_order_relaxed)
+        || !projection_ok(engine)) {
+        out.refusal = NativeCurrentRefusal::ConfigurationMismatch;
+        return out;
+    }
+    if (!unresolved && (terms.units || terms.shape != native_order::OpeningShape::Transact)) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
+    }
+    if (unresolved && !terms.units) {
+        out.terms_rejection = native_order::MatchRejectReason::TermsUnresolved;
+        return out;
+    }
+    if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
+        && terms.shape != native_order::OpeningShape::Transact) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
+    }
+    if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
+    }
+    if (terms.units && *terms.units > 0.0) {
+        const auto* spec = spec_ptr();
+        if (!spec || (spec->quantity_grid
+                      && !native_order::quantity_on_grid(*terms.units, *spec->quantity_grid))) {
+            out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+            return out;
+        }
+    }
+    double after = 0.0;
+    double deduction = 0.0;
+    bool exhausted = false;
+    double binding_allowance = 0.0;
+    if (unresolved) {
+        if (!native_order::WorkingRequestCore::effective_host_units(
+                live->pending, *terms.units, &deduction, &after, &exhausted)) {
+            throw std::overflow_error("native host-sized deduction is not representable");
+        }
+        if (const auto* budget = std::get_if<native_order::PointBudget>(&live->request().capacity)) {
+            binding_allowance = std::min(after, budget->units);
+        } else {
+            binding_allowance = after;
+        }
+    }
+    const bool explicit_reversal = std::holds_alternative<native_order::ReverseTo>(
+        live->request().intent);
+    const bool requires_opposite = explicit_reversal || (unresolved
+        && (terms.shape == native_order::OpeningShape::ReverseTo
+            || terms.shape == native_order::OpeningShape::CloseOpposite));
+    if (requires_opposite && facts.opposite_book_units == 0.0) {
+        out.terms_rejection = native_order::MatchRejectReason::NoOppositeExposure;
+        return out;
+    }
+    if (unresolved && terms.shape == native_order::OpeningShape::CloseOpposite
+        && *terms.units > facts.opposite_book_units) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
+    }
+    if (unresolved && terms.shape != native_order::OpeningShape::Transact
+        && after > binding_allowance) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
+    }
+    if (unresolved && *terms.units == 0.0) {
+        out.settlement_readiness = execution::Status::NoEffect;
+        return out;
+    }
+    if (unresolved && after == 0.0 && deduction > 0.0) {
+        out.terms_cancellation = native_order::CancelReason::Group;
+        return out;
+    }
+    std::optional<native_order::ExecutionPlan> plan;
+    if (host_sized) {
+        if (unresolved) {
+            plan = plan_from_terms(host_sized->kind, host_sized->side, terms.shape,
+                                   after, binding_allowance, facts.opposite_book_units);
+        } else if (const auto* remaining = std::get_if<native_order::RemainingUnits>(
+                       &live->remaining)) {
+            plan = plan_from_terms(host_sized->kind, host_sized->side,
+                native_order::OpeningShape::Transact, remaining->q,
+                allowance_left_at(facts.allowance, cursor.point.ordinal),
+                facts.opposite_book_units);
+        }
+    }
+    const auto candidate = inspect_candidate(engine, *live, cursor, terms.resolved_price,
+                                             plan ? &*plan : nullptr);
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = cursor.point.effective_time_ms;
     context.interval_index = cursor.point.interval_index;
-    out.settlement_readiness = engine.preview_native_settlement_commit(
-        candidate.physical, candidate.fill, context, candidate.financial_scope,
-        candidate.selected ? &*candidate.selected : nullptr, out.account, out.closed_row_pnl);
+    if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
+        out.settlement_readiness = engine.preview_native_settlement_commit(
+            *reversal, candidate.fill, context, out.account, out.closed_row_pnl);
+    } else {
+        out.settlement_readiness = engine.preview_native_settlement_commit(
+            narrow_action(candidate.physical), candidate.fill, context, candidate.financial_scope,
+            candidate.selected ? &*candidate.selected : nullptr, out.account, out.closed_row_pnl);
+    }
     return out;
 }
 
@@ -2304,6 +3059,11 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
                 throw std::runtime_error("native current evaluation install failed");
         }
         live = requests_.find_live(command.target);
+        if (live && !same_allowance_bits(
+                native_order::WorkingRequestCore::evaluated_allowance(
+                    *live, point.coordinate.ordinal), live->allowance)) {
+            throw std::logic_error("native current evaluated allowance mismatch");
+        }
         if (!live) {
             // Flat Independent closes terminate during the existing evaluation.
             if (requests_.history().size() <= history_before)
@@ -2320,7 +3080,8 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         const auto anchor = current_frame_->point;
         const double resolved = current_price(engine, *live, command.price_rule);
         auto outcome = consume_matched_request(engine, command.target, evaluation,
-            anchor.price, resolved, anchor);
+            anchor.price, resolved, anchor,
+            native_order::NativeCandidatePriceKind::CurrentQuote, command.price_rule);
         if (failed() || !outcome) throw std::runtime_error("native current execution failed");
         consuming_request_ = false;
         return std::move(*outcome);
@@ -2787,6 +3548,11 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
     try {
         if (!timeframe_args_ok(input_tf, script_tf)) {
             present_refusal(engine, "native timeframe arguments must be empty or match the spec");
+            return false;
+        }
+        if (staged_fx_curve_) {
+            present_refusal(engine,
+                "timestamped account-currency FX is not supported by streaming");
             return false;
         }
         const auto* spec = spec_ptr();

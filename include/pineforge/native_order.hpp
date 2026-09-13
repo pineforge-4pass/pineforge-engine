@@ -424,6 +424,7 @@ inline ExecutionPlan to_execution_plan(const execution::Action& action) {
 
 struct TermsResolvedInput {
     NativeCandidatePriceKind price_kind = NativeCandidatePriceKind::PointPrice;
+    bool shared_cursor_collision = false;
     double raw_price = 0.0;
     double default_resolved_price = 0.0;
     ExecutionTerms terms;

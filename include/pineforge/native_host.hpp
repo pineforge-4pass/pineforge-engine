@@ -278,6 +278,9 @@ struct NativeExecutionTermsFacts {
     bool is_buy = false;
     native_order::NativeCandidatePriceKind price_kind =
         native_order::NativeCandidatePriceKind::PointPrice;
+    // A retained crossing can share a rounded cursor quote with another
+    // request's level. The receipt keeps this distinction durable.
+    bool shared_cursor_collision = false;
     double raw_price = 0.0;
     std::optional<double> trigger_level;
     NativeCurrentQuoteKind quote_kind = NativeCurrentQuoteKind::MarketDecision;

@@ -88,7 +88,7 @@ private:
         NativeCurrentPointView point;
     };
     struct ResolvedCandidate {
-        execution::Action physical = execution::Flatten{};
+        native_order::ExecutionPlan physical = execution::Flatten{};
         native_order::ExecutionScope scope = execution::Book{};
         execution::CloseScope financial_scope = execution::Book{};
         std::optional<execution::SelectedOpeningSet> selected;
@@ -101,13 +101,29 @@ private:
     NativeCoordinate current_execution_coordinate(uint64_t ordinal) const;
     double current_price(const BacktestEngine& engine, const native_order::LiveRequest& live,
                          NativeCurrentPriceRule rule) const;
+    static execution::Action narrow_action(const native_order::ExecutionPlan& plan);
     ResolvedCandidate inspect_candidate(const BacktestEngine& engine,
         const native_order::LiveRequest& live, const native_order::MatchCursor& cursor,
-        double resolved) const;
+        double resolved, const native_order::ExecutionPlan* plan_override = nullptr) const;
+    NativeExecutionTermsFacts build_terms_facts(
+        const BacktestEngine& engine, const native_order::LiveRequest& live,
+        const native_order::EvaluationContext& evaluation,
+        native_order::NativeCandidatePriceKind price_kind,
+        NativeCurrentPriceRule price_rule, double raw_price,
+        double default_resolved_price, bool shared_cursor_collision = false) const;
+    static native_order::ExecutionPlan plan_from_terms(
+        native_order::HostSizedKind kind, std::optional<native_order::Side> side,
+        native_order::OpeningShape shape, double after, double allowance_left,
+        double opposite_book_units);
     std::optional<NativeCurrentExecutionResult> consume_matched_request(
         BacktestEngine& engine, const native_order::RequestHandle& handle,
         const native_order::EvaluationContext& evaluation, double raw_price,
-        double resolved_price, const NativeCurrentPointView& notification_point);
+        double default_resolved_price, const NativeCurrentPointView& notification_point,
+        native_order::NativeCandidatePriceKind price_kind,
+        NativeCurrentPriceRule price_rule, bool shared_cursor_collision = false);
+    std::optional<NativeCurrentExecutionResult> terminal_from_history(
+        BacktestEngine& engine, const native_order::RequestHandle& cause_handle,
+        NativeFailureOperation operation);
     NativeCurrentPointView execution_anchor(const native_order::MatchCursor& cursor,
                                             double resolved) const;
     void enqueue_applied_notification(AppliedNotification notification);
@@ -267,7 +283,7 @@ private:
     NativeRunSpec applied_{};
     std::optional<NativeFxCurve> staged_fx_curve_;
     bool in_callback_ = false;
-    bool consuming_request_ = false;
+    mutable bool consuming_request_ = false;
     bool draining_notifications_ = false;
     std::optional<CurrentExecutionFrame> current_frame_;
     std::vector<AppliedNotification> applied_notifications_;

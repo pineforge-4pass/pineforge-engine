@@ -5,6 +5,8 @@
 // state, fees, or settlement.
 
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
 
@@ -15,7 +17,15 @@ namespace native_matching {
 struct GeometricHit {
     double t = 0.0;
     double price = 0.0;
+    bool at_level = false;
 };
+
+inline std::uint64_t double_bits(double value) noexcept {
+    static_assert(sizeof(double) == sizeof(std::uint64_t), "native binary64 width");
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
 
 inline bool finite_positive(double v) noexcept {
     return std::isfinite(v) && v > 0.0;
@@ -59,7 +69,7 @@ inline std::optional<GeometricHit> first_region_entry(
     const double current = start.price;
     if (!std::isfinite(current)) return std::nullopt;
     if (include_current && in_region(current, level, le)) {
-        return GeometricHit{t_start, current};
+        return GeometricHit{t_start, current, false};
     }
     if (from == to) return std::nullopt;
     const auto t_cross = t_for_price(from, to, level);
@@ -69,7 +79,7 @@ inline std::optional<GeometricHit> first_region_entry(
     if (!in_region(crossed, level, le) && !in_region(level, level, le)) {
         return std::nullopt;
     }
-    return GeometricHit{*t_cross, level};
+    return GeometricHit{*t_cross, level, true};
 }
 
 inline double apply_slippage(double raw, double slip, bool buy) noexcept {

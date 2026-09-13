@@ -675,6 +675,22 @@ execution::Status BacktestEngine::preview_native_settlement_commit(
     return readiness;
 }
 
+execution::Status BacktestEngine::preview_native_settlement_commit(
+        const execution::ReverseTo& reversal, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const {
+    NativeSettlementStage stage;
+    stage_native_settlement(stage, reversal, fill, nullptr);
+    NativeSettlementRows rows;
+    const auto readiness = prepare_native_settlement_commit(stage, fill, context, rows);
+    account = project_native_settlement_stage(stage, fill);
+    row_pnl.clear();
+    if (readiness == execution::Status::Applied) {
+        for (const auto& row : rows.closed_trades) row_pnl.push_back(row.pnl);
+    }
+    return readiness;
+}
+
 execution::Status BacktestEngine::preflight_native_settlement_effects(
         const NativeSettlementStage& stage,
         const execution::LifecycleEffects& lifecycle,

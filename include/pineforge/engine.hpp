@@ -3919,6 +3919,10 @@ private:
         const execution::PhysicalExecutionContext& context,
         execution::CloseScope scope, const execution::SelectedOpeningSet* selected,
         execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const;
+    execution::Status preview_native_settlement_commit(
+        const execution::ReverseTo& reversal, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        execution::AccountEffectProjection& account, std::vector<double>& row_pnl) const;
     struct NativeSettlementStage;
     struct NativeSettlementRows;
     execution::Status validate_native_settlement_book(double& held) const;
