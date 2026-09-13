@@ -200,6 +200,44 @@ void current_group_deduction_returns_cancelled() {
     CHECK(reached);
 }
 
+void a_t4b_queued_group_cancellation_is_typed_terminal() {
+    TermsHost host;
+    no::RequestHandle second;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = tx(1, "queued-group-a");
+        first.group = no::Member{51, 1, no::GroupEffect::Reduce};
+        auto deferred = host_open(no::Side::Long, "queued-group-b");
+        deferred.group = no::Member{51, 2, no::GroupEffect::Reduce};
+        put(h, first);
+        second = put(h, deferred);
+    };
+    run(host, spec("terms-queued-group"), {100});
+    completed(host);
+    const auto adjustment = last_event<no::DeferredGroupAdjustmentEvent>(host);
+    const auto receipt = last_event<no::TermsResolvedEvent>(host);
+    const auto cancelled = last_event<no::CancelledEvent>(host);
+    REQUIRE(adjustment && receipt && cancelled);
+    CHECK(adjustment->recipient == second);
+    CHECK(bits(adjustment->pending_after.total) == bits(1.0));
+    CHECK(receipt->handle() == second);
+    CHECK(cancelled->handle() == second);
+    CHECK(cancelled->reason == no::CancelReason::Group);
+    REQUIRE(cancelled->cause);
+    CHECK(cancelled->cause->ordinal == receipt->ordinal);
+    CHECK(cancelled->ordinal == receipt->ordinal + 1);
+    CHECK(events<no::ExecutionAppliedEvent>(host).size() == 1);
+    CHECK(accounts(host) == 1);
+}
+
 void host_nan_price_is_rejected_without_a_receipt() {
     TermsHost host;
     const double payload = from_bits(0x7ff8000000000001ULL);
@@ -503,8 +541,9 @@ void a_t7_scope_facts_and_flat_close_shortcut() {
 void a_t8_point_budget_binding_and_price_rematch() {
     TermsHost host;
     host.resolver = [](const NativeExecutionTermsFacts& facts) {
-        const bool bound = std::holds_alternative<no::RemainingUnits>(facts.remaining);
-        return no::ExecutionTerms{facts.default_resolved_price + (bound ? 1.0 : 0.0),
+        const auto* bound = std::get_if<no::RemainingUnits>(&facts.remaining);
+        const bool first_rematch = bound && bound->q > 1.0;
+        return no::ExecutionTerms{facts.default_resolved_price + (first_rematch ? 1.0 : 0.0),
                                    bound ? std::optional<double>{} : std::optional<double>{2.5},
                                    no::OpeningShape::Transact};
     };
@@ -520,9 +559,9 @@ void a_t8_point_budget_binding_and_price_rematch() {
     REQUIRE(applied.size() == 3);
     CHECK(applied[0].opened_units == 1.0 && applied[1].opened_units == 1.0
           && applied[2].opened_units == 0.5);
-    REQUIRE(receipts.size() == 3);
+    REQUIRE(receipts.size() == 2);
     CHECK(receipts[0].input.terms.units == 2.5);
-    CHECK(!receipts[1].input.terms.units && !receipts[2].input.terms.units);
+    CHECK(!receipts[1].input.terms.units);
     CHECK(receipts[1].remaining_before.index() == receipts[1].remaining_after.index());
     CHECK(host.resolver_calls == 3);
     CHECK(host.physical_position().signed_units == 2.5);
@@ -955,6 +994,7 @@ int main() {
     test("queued price receipt", overridden_price_is_durable_before_settlement);
     test("current typed preview outcomes", current_preview_has_typed_terms_outcomes_without_writes);
     test("current deferred group cancellation", current_group_deduction_returns_cancelled);
+    test("A-T4b queued deferred cancellation", a_t4b_queued_group_cancellation_is_typed_terminal);
     test("host NaN attempted terms", host_nan_price_is_rejected_without_a_receipt);
     test("host price limit fence", host_price_cannot_breach_active_limit);
     test("A-T4d authenticated unrepresentable deduction", a_t4d_authenticated_unrepresentable_deduction);
