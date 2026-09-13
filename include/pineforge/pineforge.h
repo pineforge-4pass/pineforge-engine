@@ -1156,9 +1156,9 @@ PF_API void strategy_set_syminfo_metadata(pf_strategy_t s, const char* key,
  *  Arrays are copied. Timestamps must be strictly increasing and rates
  *  positive and finite. Pass `n == 0` to clear the curve and restore scalar
  *  behavior. Timestamped curves currently support ordinary historical runs.
- *  Broker-open rate changes on margin-call-enabled carried positions are
- *  TV-pinned for 1x longs; carried shorts and leveraged positions fail closed
- *  at the crossing. Streaming, calc-on-order-fills, and bar-magnifier runs
+ *  Broker-open rate changes: carried 1× longs and 1× shorts are supported;
+ *  leveraged positions fail closed at the crossing. Streaming,
+ *  calc-on-order-fills, and bar-magnifier runs
  *  also fail closed.
  *
  *  @return 0 on success, -1 for a null strategy or invalid arrays. */
