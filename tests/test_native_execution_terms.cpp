@@ -984,6 +984,29 @@ void a_t6b_c_t6e_sibling_control_and_gap_provenance() {
     }
 }
 
+void a_t6d_newly_eligible_wait_child_is_point_price() {
+    TermsHost host;
+    std::optional<NativeExecutionTermsFacts> child_facts;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        if (facts.definition->request.label == "wait-child") child_facts = facts;
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto parent = put(h, tx(1, "wait-parent"));
+        auto child = tx(1, "wait-child");
+        child.owner = no::WaitForApplied{parent};
+        child.trigger = no::Limit{100.0};
+        put(h, child);
+    };
+    run(host, spec("terms-newly-eligible"), {100});
+    completed(host);
+    REQUIRE(child_facts);
+    CHECK(child_facts->price_kind == no::NativeCandidatePriceKind::PointPrice);
+    CHECK(bits(child_facts->raw_price) == bits(100.0));
+}
+
 }  // namespace
 
 int main() {
@@ -1011,6 +1034,7 @@ int main() {
     test("current preview/execute terms facts", current_preview_and_execute_see_same_terms_facts);
     test("rounded crossing provenance collision", rounded_crossing_collision_keeps_request_origin);
     test("A-T6b/c/e sibling provenance controls", a_t6b_c_t6e_sibling_control_and_gap_provenance);
+    test("A-T6d newly eligible point provenance", a_t6d_newly_eligible_wait_child_is_point_price);
     std::printf("R4-B terms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -206,6 +206,54 @@ void a_r3_preview_rows_match_current_reverse() {
     CHECK(reached);
 }
 
+void a_s4_point_budget_shape_requires_whole_execution() {
+    TermsHost accepted;
+    accepted.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::ReverseTo};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    accepted.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(1.0, 100, 131);
+        auto request = host_open(no::Side::Short, "budget-reverse");
+        request.capacity = no::PointBudget{1.0};
+        put(h, request);
+    };
+    run(accepted, spec("shape-budget-accepted"), {100});
+    completed(accepted);
+    const auto accepted_event = last_event<no::ExecutionAppliedEvent>(accepted);
+    REQUIRE(accepted_event);
+    CHECK(accepted_event->opened_units == -1.0);
+
+    TermsHost rejected;
+    rejected.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price, 2.0,
+                                       no::OpeningShape::ReverseTo};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    rejected.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(1.0, 100, 132);
+        auto request = host_open(no::Side::Short, "budget-reject");
+        request.capacity = no::PointBudget{1.0};
+        put(h, request);
+    };
+    run(rejected, spec("shape-budget-reject"), {100});
+    completed(rejected);
+    const auto event = last_event<no::MatchRejectedEvent>(rejected);
+    REQUIRE(event && event->attempted_terms);
+    CHECK(event->reason == no::MatchRejectReason::InvalidTerms);
+    CHECK(event->attempted_terms->shape == no::OpeningShape::ReverseTo);
+    CHECK(rejected.physical_position().signed_units == 1.0);
+}
+
 }  // namespace
 
 int main() {
@@ -216,6 +264,7 @@ int main() {
     test("A-R1 exact queued reverse both signs", a_r1_exact_queued_reverse_both_signs);
     test("A-R2/A-R4 priced and flat reverse", a_r2_priced_stop_reverse_and_r4_no_opposite);
     test("A-R3 current reversal preview", a_r3_preview_rows_match_current_reverse);
+    test("A-S4 PointBudget shape rule", a_s4_point_budget_shape_requires_whole_execution);
     std::printf("R4-B reverse: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

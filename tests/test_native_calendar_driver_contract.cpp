@@ -159,6 +159,12 @@ uint64_t f64_bits(double x) {
     return bits;
 }
 
+double bits_to(uint64_t bits) {
+    double value = 0.0;
+    std::memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
 std::string unsupported_number(double x) {
     const char* tag = "nonfinite";
     if (std::isnan(x)) tag = "NaN";
@@ -1814,6 +1820,31 @@ void run_case(const char* id, const char* name, void (*body)()) {
     std::printf("%s [%s]\n", passed ? "PASS" : "FAIL", name);
     if (proof_capture) arts.push_back(assemble_group(id, passed));
 }
+
+void a_h3_calendar_new_value_serializers() {
+    Request reverse;
+    reverse.intent = native_order::ReverseTo{bits_to(0x3fb999999999999aULL)};
+    const auto reverse_action = action_json(reverse);
+    CHECK(reverse_action.find("ReverseTo") != std::string::npos);
+    CHECK(reverse_action.find("3fb999999999999a") != std::string::npos);
+    CHECK(request_quantity(reverse).has_value());
+    CHECK(f64_bits(*request_quantity(reverse)) == 0x3fb999999999999aULL);
+
+    Request sized;
+    sized.intent = native_order::HostSized{native_order::HostSizedKind::Open,
+                                            native_order::Side::Long};
+    const auto sized_action = action_json(sized);
+    CHECK(sized_action.find("HostSized") != std::string::npos);
+    CHECK(!request_quantity(sized));
+
+    native_order::ExecutionTerms terms;
+    terms.resolved_price = bits_to(0x7ff8000000000001ULL);
+    terms.units = bits_to(0x8000000000000000ULL);
+    terms.shape = native_order::OpeningShape::CloseOpposite;
+    const auto encoded = terms_json(terms);
+    CHECK(encoded.find("7ff8000000000001") != std::string::npos);
+    CHECK(encoded.find("8000000000000000") != std::string::npos);
+}
 } // namespace
 
 int main() {
@@ -1837,6 +1868,8 @@ int main() {
         proof_capture = true;
 #endif
     }
+
+    a_h3_calendar_new_value_serializers();
 
     run_case("C1-equal-timeframe-families-and-final-monthly-bars",
              "C1 equal timeframe families and final monthly bars",
