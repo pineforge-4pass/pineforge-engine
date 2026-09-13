@@ -128,8 +128,38 @@ at the expected namespace. No ABI caller executable is run.
 
 The real e60 R2 and 0e R3 providers remain mandatory. Their former epoch-13 to
 current positive pairs are now explicit epoch rejections, with historical
-old-old and current-current sanity retained. Financial Action/CloseScope,
-Result/Inspection and selected/projection layouts remain checked separately.
+old-old and current-current sanity retained.
+
+The `engine_script_run_v13` to `engine_script_run_v14` transition drops no
+check. Against each epoch-13 provider the checker still compares, in full and
+unconditionally:
+
+* every engine named data declaration in source order (252 declarations, 251
+  of them non-static data members) and the entire virtual method inventory —
+  an epoch transition is never a licence to change engine storage or the
+  vtable;
+* every compiler-emitted layout word — all 789 against e60 R2 and all 793
+  against 0e R3, covering `sizeof`/`alignof` of `BacktestEngine`,
+  `PendingOrder`, the native aggregates and the selected/projection types, plus
+  the offset/size/alignment triple of each of the 251 engine data members, not
+  only the leading financial `Result`/`SettlementInspection`, status and
+  Action/CloseScope words. The receipt's `layout.comparedWords` and
+  `priorLayout.comparedWords` therefore equal their `wordCount`;
+* every frozen native header's text, with exactly four enumerated exemptions —
+  `native_order.hpp`, `native_host.hpp`, `market_driver.hpp` and
+  `execution_consumer.hpp`, the headers that legitimately advance with
+  `native_order_v3`, host v14, `native_driver_v4` and consumer v5. Each actual
+  difference is recorded in `frozenShape.exemptedHeaders` with both digests and
+  its transition; an exempted header that did not change records nothing, and
+  any other differing header still raises. The exemption table lives in one
+  module constant keyed by the exact transition it belongs to, so a future
+  v14→v15 transition must be added explicitly rather than inherited.
+
+`native_order_identity.hpp`, `native_run_spec.hpp` and `native_calendar.hpp`
+stay byte-frozen across the transition. Once a frozen v14 provider is added
+after merge, that provider's pairing carries no exemptions at all and the
+header-text fence is restored for those four headers too.
+
 Earlier v2–v10 and v12 controls remain. Reusing an uninstrumented historical
 Release archive in a sanitizer profile is refused; preparation never overwrites
 an existing provider directory or substitutes a symbol stub for a real archive.

@@ -107,6 +107,17 @@ no::Request tx(double q, const char* label = "", const char* comment = "") {
 no::Request reduce(double q, const char* label = "", const char* comment = "") {
     return {no::Reduce{no::ExplicitUnits{q}}, label, comment};
 }
+no::Request flat(const char* label = "", const char* comment = "") {
+    return {no::Flatten{}, label, comment};
+}
+// A selected (cohort) close: Flatten bound to an explicit opening set of the
+// live cycle. Mirrors the helper the selected-request acceptance uses.
+no::Request selected(std::vector<no::RequestHandle> openings, std::int64_t cycle,
+                     const char* label = "", const char* comment = "") {
+    auto request = flat(label, comment);
+    request.owner = no::BindOpenings{std::move(openings), cycle};
+    return request;
+}
 no::RequestHandle put(Host& h, const no::Request& request) {
     auto result = h.submit(request);
     REQUIRE(result.status == no::SubmitStatus::Accepted);
@@ -871,6 +882,95 @@ void replay_deferred_bind(double sign) {
     same_hosts("end", a, b);
 }
 
+// A resting BindOpenings (cohort) close: three market provenances open, a
+// Limit-triggered selected close binds two of them, the third is untouched.
+// Drives SelectedExposure / OpeningsClose / BindOpenings through the two-host
+// replay equivalence (same_hosts compares the continuation hash at each step).
+void replay_selected_bind_close(double sign) {
+    Host a, b;
+    const char* key = sign > 0 ? "P2-selected-L" : "P2-selected-S";
+    start(a, key); start(b, key);
+    same_hosts("start", a, b);
+    const auto a1 = put(a, tx(sign * 1, "A")), b1 = put(b, tx(sign * 1, "A"));
+    const auto a2 = put(a, tx(sign * 3, "B")), b2 = put(b, tx(sign * 3, "B"));
+    const auto a3 = put(a, tx(sign * 2, "C")), b3 = put(b, tx(sign * 2, "C"));
+    CHECK(b1.incarnation == a1.incarnation);
+    CHECK(b2.incarnation == a2.incarnation);
+    CHECK(b3.incarnation == a3.incarnation);
+    same_hosts("submitted", a, b);
+    a.tick(0, 100); b.tick(0, 100);
+    same_hosts("opened", a, b);
+    REQUIRE(fills(a, a1).size() == 1);
+    REQUIRE(fills(a, a2).size() == 1);
+    REQUIRE(fills(a, a3).size() == 1);
+    same_d(a.physical_position().signed_units, sign * 6);
+    REQUIRE(a.lots().size() == 3);
+    const auto cycle = a.position_cycle_seq();
+    CHECK(cycle != 0);
+    same_i64(cycle, b.position_cycle_seq());
+    const double limit = 100 + sign * 10;
+    auto close = selected({a1, a3}, cycle, "cohort");
+    close.trigger = no::Limit{limit};
+    auto close_b = selected({b1, b3}, cycle, "cohort");
+    close_b.trigger = no::Limit{limit};
+    const auto ca = put(a, close), cb = put(b, close_b);
+    CHECK(cb.incarnation == ca.incarnation);
+    same_hosts("cohort-working", a, b);
+    a.tick(1, 100); b.tick(1, 100);
+    same_hosts("quiet", a, b);
+    CHECK(fills(a, ca).empty());
+    same_d(a.physical_position().signed_units, sign * 6);
+    // A second cohort close, cancelled while resting, carries the OpeningsClose
+    // authority into the cancellation comparator on both hosts.
+    auto spare = selected({a2}, cycle, "spare");
+    spare.trigger = no::Limit{100 + sign * 50};
+    auto spare_b = selected({b2}, cycle, "spare");
+    spare_b.trigger = no::Limit{100 + sign * 50};
+    const auto sa = put(a, spare), sb = put(b, spare_b);
+    CHECK(sb.incarnation == sa.incarnation);
+    same_hosts("spare-working", a, b);
+    CHECK(a.cancel(sa).status == no::CancelStatus::Cancelled);
+    CHECK(b.cancel(sb).status == no::CancelStatus::Cancelled);
+    same_hosts("spare-cancelled", a, b);
+    const auto sc = cancellations(a, sa);
+    REQUIRE(sc.size() == 1);
+    CHECK(sc[0].reason == no::CancelReason::User);
+    const auto* prior = std::get_if<no::OpeningsClose>(&sc[0].prior_authority);
+    REQUIRE(prior);
+    same_i64(prior->cycle, cycle);
+    REQUIRE(prior->openings.size() == 1);
+    same_u64(prior->openings[0].incarnation, a2.incarnation);
+    same_d(a.physical_position().signed_units, sign * 6);
+    a.tick(2, limit); b.tick(2, limit);
+    same_hosts("cohort-fill", a, b);
+    const auto cf = fills(a, ca);
+    REQUIRE(cf.size() == 1);
+    CHECK(cf[0].terminal);
+    same_d(cf[0].closed_units, 3);
+    same_d(cf[0].raw_price, limit);
+    CHECK(cf[0].cursor.point.provenance == NativePriceProvenance::ObservedPrint);
+    const auto* scope = std::get_if<no::SelectedExposure>(&cf[0].scope);
+    REQUIRE(scope);
+    same_i64(scope->cycle, cycle);
+    REQUIRE(scope->incarnations.size() == 2);
+    same_u64(scope->incarnations[0], a1.incarnation);
+    same_u64(scope->incarnations[1], a3.incarnation);
+    REQUIRE(cf[0].definition);
+    const auto* bound = std::get_if<no::BindOpenings>(&cf[0].definition->request.owner);
+    REQUIRE(bound);
+    same_i64(bound->cycle, cycle);
+    REQUIRE(bound->openings.size() == 2);
+    same_u64(bound->openings[0].incarnation, a1.incarnation);
+    same_u64(bound->openings[1].incarnation, a3.incarnation);
+    // Only the bound subset closed; the unrelated opening keeps its whole lot.
+    same_d(a.physical_position().signed_units, sign * 3);
+    REQUIRE(a.lots().size() == 1);
+    same_u64(a.lots()[0].entry_incarnation, a2.incarnation);
+    same_d(a.lots()[0].qty, 3);
+    finish(a); finish(b);
+    same_hosts("end", a, b);
+}
+
 void replay_owner_expiry_replace(double sign) {
     Host a, b;
     const char* key = sign > 0 ? "P2-owner-L" : "P2-owner-S";
@@ -1335,6 +1435,8 @@ int main() {
                  [&] { replay_stop_stoplimit_trail(sign); });
         run_case(sign > 0 ? "identical deferred bind long" : "identical deferred bind short",
                  [&] { replay_deferred_bind(sign); });
+        run_case(sign > 0 ? "identical selected bind close long" : "identical selected bind close short",
+                 [&] { replay_selected_bind_close(sign); });
         run_case(sign > 0 ? "identical owner expiry/replace long" : "identical owner expiry/replace short",
                  [&] { replay_owner_expiry_replace(sign); });
         run_case(sign > 0 ? "identical confirmed-bar long" : "identical confirmed-bar short",

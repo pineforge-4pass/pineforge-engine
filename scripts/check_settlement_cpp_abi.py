@@ -43,6 +43,26 @@ PRESERVED_HEADERS_SHA = '1001102a496ae927ae98e111dd7dc68ab6c23ecc41a9eba00995144
 FROZEN_NATIVE_HEADERS = ('native_order.hpp', 'native_order_identity.hpp', 'native_host.hpp',
                          'native_run_spec.hpp', 'market_driver.hpp', 'native_calendar.hpp',
                          'execution_consumer.hpp')
+# The ONLY frozen native headers whose text may differ, and only across the exact
+# reviewed epoch transition that owns them. Every difference is still recorded in
+# the receipt; a later transition (v14->v15) must be enumerated here explicitly.
+EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
+    ('engine_script_run_v13', 'engine_script_run_v14'): (
+        'native_order.hpp',        # native_order_v3 request/core/event values
+        'native_host.hpp',         # NativeStrategyHost v14
+        'market_driver.hpp',       # native_driver_v4 bar types
+        'execution_consumer.hpp',  # private consumer v5
+    ),
+}
+# The exact reviewed bytes of every exempted header. An exemption is a reviewed
+# identity, not an open licence: a later change to one of these headers within
+# the same epoch fails until the epoch is bumped and the pin re-recorded.
+EXEMPTED_HEADER_SHA256 = {
+    'native_order.hpp': '1192bb7d2b18cbbc7d98f7582dd3b2c117d83a4eab469ad6877669405fe52e4e',
+    'native_host.hpp': '329deede384c3e19b4984397899b335ece4843502c6ffb00401c5f9e0f1cdbca',
+    'market_driver.hpp': '14df02a794d1119f0f9624b35a2d2955a54e9a1d2d87d27e5ec1ff6066a53e23',
+    'execution_consumer.hpp': 'f4cd9c86a4d2e80e2becc698d40645c3af5c44f79917d8b3d14a81de2292fbda',
+}
 
 COMMON = '''#include <pineforge/native_host.hpp>
 #include <cstddef>
@@ -201,6 +221,53 @@ def storage_declarations(header: str) -> list[str]:
     return statements
 
 
+def frozen_native_header_exemptions(old_include: Path, current_include: Path,
+                                    transition: tuple[str, str] | None,
+                                    headers=FROZEN_NATIVE_HEADERS) -> list[dict]:
+    """Compare EVERY frozen native header; return the recorded transition exemptions.
+
+    An epoch transition exempts nothing implicitly: only the headers enumerated
+    for that exact transition may differ, each recorded with both digests, and an
+    exempted header that did not actually change records nothing. Any other
+    difference raises, transition or not.
+    """
+    exempt = EPOCH_TRANSITION_HEADER_EXEMPTIONS.get(transition, ())
+    recorded = []
+    for name in headers:
+        old_path, current_path = old_include/'pineforge'/name, current_include/'pineforge'/name
+        if normalized(old_path.read_text()) == normalized(current_path.read_text()):
+            continue
+        if name not in exempt:
+            raise RuntimeError('R3 must preserve native header layout/contracts: ' + name)
+        recorded.append({'name': name, 'oldSha256': identity(old_path)['sha256'],
+                         'currentSha256': identity(current_path)['sha256'],
+                         'reason': f'reviewed {transition[0]}->{transition[1]} transition'})
+    return recorded
+
+
+def verify_exempted_header_pins(exempted: list[dict], pins=EXEMPTED_HEADER_SHA256) -> None:
+    """Every recorded exemption must carry the exact reviewed current bytes."""
+    for entry in exempted:
+        expected = pins.get(entry['name'])
+        if expected is None or entry['currentSha256'] != expected:
+            raise RuntimeError('exempted native header changed since the reviewed transition: ' + entry['name']
+                               + '; bump the engine epoch and re-record EXEMPTED_HEADER_SHA256')
+
+
+def compare_layout_words(name: str, old_values: list[int], current_values: list[int],
+                         word_count: int, epoch_break: bool, members: list[str]) -> dict:
+    """Compare EVERY emitted layout word. An epoch transition exempts no word."""
+    if len(old_values) != word_count or len(current_values) != word_count:
+        raise RuntimeError('actual compiler '+name+'/current layout arrays are not the expected width')
+    if old_values != current_values:
+        differing = [str(index) for index, (old, current) in enumerate(zip(old_values, current_values))
+                     if old != current]
+        raise RuntimeError('actual compiler '+name+'/current layout/offset/type-size arrays differ'
+                           ' at words: '+', '.join(differing))
+    return {'wordCount': word_count, 'values': old_values, 'currentValues': current_values,
+            'expectedEpochBreak': epoch_break, 'comparedWords': word_count, 'members': members}
+
+
 def frozen_shape(old_include: Path, current_include: Path, *, selected=False) -> tuple[list[str], dict]:
     old_exec = (old_include/'pineforge/execution.hpp').read_text()
     cur_exec = (current_include/'pineforge/execution.hpp').read_text()
@@ -218,10 +285,9 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     epoch_break = old_epoch != new_epoch
     if epoch_break and (old_epoch != ['engine_script_run_v13'] * 2 or new_epoch != ['engine_script_run_v14'] * 2):
         raise RuntimeError('unreviewed engine epoch transition')
-    frozen_native = ('native_order_identity.hpp', 'native_run_spec.hpp', 'native_calendar.hpp') if epoch_break else FROZEN_NATIVE_HEADERS
-    for name in frozen_native:
-        if normalized((old_include/'pineforge'/name).read_text()) != normalized((current_include/'pineforge'/name).read_text()):
-            raise RuntimeError('R3 must preserve native header layout/contracts: ' + name)
+    transition = (old_epoch[0], new_epoch[0]) if epoch_break else None
+    exempted = frozen_native_header_exemptions(old_include, current_include, transition)
+    verify_exempted_header_pins(exempted)
     if selected:
         for name in ('execution_close_selection.hpp', 'execution_projection.hpp'):
             if normalized((old_include/'pineforge'/name).read_text()) != normalized((current_include/'pineforge'/name).read_text()):
@@ -238,14 +304,17 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     old_engine = (old_include/'pineforge/engine.hpp').read_text()
     cur_engine = (current_include/'pineforge/engine.hpp').read_text()
     old_storage, current_storage = storage_declarations(old_engine), storage_declarations(cur_engine)
-    if not epoch_break and old_storage != current_storage:
+    # Storage and virtual inventories are compared unconditionally: an epoch
+    # transition is never a licence to change engine storage or the vtable.
+    if old_storage != current_storage:
         raise RuntimeError('engine named data declarations/order changed')
     virtuals = lambda text: re.findall(r'\bvirtual\b[^;{]*(?:;|\{)', clean(text))
-    if not epoch_break and [normalized(v) for v in virtuals(old_engine)] != [normalized(v) for v in virtuals(cur_engine)]:
+    if [normalized(v) for v in virtuals(old_engine)] != [normalized(v) for v in virtuals(cur_engine)]:
         raise RuntimeError('engine virtual method inventory changed')
     members = [re.search(r'\b([A-Za-z_]\w*)\s*(?:\[[^]]*\])?\s*$', declaration).group(1)
                for declaration in old_storage if not declaration.startswith('static ')]
     return members, {'epochBreak': epoch_break, 'oldEpoch': old_epoch, 'currentEpoch': new_epoch,
+                     'exemptedHeaders': exempted,
                      'engineStorage': old_storage, 'currentEngineStorage': current_storage,
                      'virtuals': [normalized(v) for v in virtuals(old_engine)],
                      'currentVirtuals': [normalized(v) for v in virtuals(cur_engine)]}
@@ -297,6 +366,41 @@ def archive_engine(symbols: str) -> str:
 def cross_epoch_rtti_allowed(caller_engine: str, provider_engine: str, sanitizers_on: bool) -> bool:
     """Exact caller-owner RTTI is tolerated only for a sanitized cross-epoch negative link."""
     return sanitizers_on and caller_engine != provider_engine
+
+
+def provider_engine_for(runtime, cache: dict, symbols_reader=defined_symbols) -> str:
+    """The archive's own declared BacktestEngine owner, read once per runtime path.
+
+    Really memoized: `dict.setdefault(key, archive_engine(defined_symbols(...)))`
+    evaluates its default eagerly and re-reads the archive on every single link.
+    """
+    key = Path(runtime).resolve()
+    if key not in cache:
+        cache[key] = archive_engine(symbols_reader(key))
+    return cache[key]
+
+
+def link_outcome(name: str, returncode: int, diagnostic: str, missing, domain, engine: str,
+                 symbol_missing, provider_engine: str, sanitizers_on: bool) -> dict:
+    """The complete decision for one link: expectation, epoch symbols, rejection shape."""
+    if not missing and not symbol_missing:
+        if returncode:
+            raise RuntimeError(name+' positive pair failed:\n'+diagnostic)
+    else:
+        if returncode == 0:
+            raise RuntimeError(name+' unexpectedly linked')
+        if symbol_missing:
+            needles = [symbol_missing] if isinstance(symbol_missing, str) else symbol_missing
+            if any(not undefined_mentions(diagnostic, needle) for needle in needles):
+                raise RuntimeError(name+' lacks expected epoch symbol: '+str(symbol_missing)+'\n'+diagnostic)
+        else:
+            validate_rejection(diagnostic, missing, domain, engine,
+                allow_engine_typeinfo=cross_epoch_rtti_allowed(engine, provider_engine, sanitizers_on))
+    return {'name': name, 'exitCode': returncode,
+            'outcome': 'expected-rejection' if missing or symbol_missing else 'linked',
+            'requiredMissing': list(missing), 'engineDomain': engine,
+            'requiredEpochSymbol': symbol_missing, 'providerEngine': provider_engine,
+            'selectionDomain': domain, 'parameterDomain': domain, 'executed': False}
 
 
 def validate_rejection(diagnostic: str, missing, domain=None, engine=ENGINE, *,
@@ -497,24 +601,10 @@ def main() -> int:
                 result=subprocess.run(argv,capture_output=True,text=True,timeout=120)
                 diagnostic=result.stdout+result.stderr
                 (log_root/(name+'.link.log')).write_text(diagnostic)
-                if not missing and not symbol_missing:
-                    if result.returncode: raise RuntimeError(name+' positive pair failed:\n'+diagnostic)
-                else:
-                    if result.returncode == 0: raise RuntimeError(name+' unexpectedly linked')
-                    if symbol_missing:
-                        needles = [symbol_missing] if isinstance(symbol_missing,str) else symbol_missing
-                        if any(not undefined_mentions(diagnostic, needle) for needle in needles):
-                            raise RuntimeError(name+' lacks expected epoch symbol: '+str(symbol_missing)+'\n'+diagnostic)
-                    else:
-                        provider_engine = provider_engines.setdefault(
-                            Path(runtime).resolve(), archive_engine(defined_symbols(Path(runtime))))
-                        validate_rejection(diagnostic,missing,domain,engine,
-                            allow_engine_typeinfo=cross_epoch_rtti_allowed(
-                                engine, provider_engine, cache.get('PINEFORGE_ENABLE_SANITIZERS') == 'ON'))
-                report['links'].append({'name':name,'argv':argv,'exitCode':result.returncode,
-                    'outcome':'expected-rejection' if missing or symbol_missing else 'linked','requiredMissing':list(missing),
-                    'engineDomain':engine,'requiredEpochSymbol':symbol_missing,
-                    'selectionDomain':domain,'parameterDomain':domain,'executed':False})
+                provider_engine=provider_engine_for(runtime,provider_engines)
+                report['links'].append({**link_outcome(name,result.returncode,diagnostic,missing,domain,
+                    engine,symbol_missing,provider_engine,
+                    cache.get('PINEFORGE_ENABLE_SANITIZERS') == 'ON'),'argv':argv})
 
             def compare_layout(name,headers,generated,layout_members,*,selected=False):
                 layout_text,word_count=layout_source(layout_members,selected=selected)
@@ -527,14 +617,7 @@ def main() -> int:
                         log=log_root/(label+'-layout.assembly.log'))
                     layouts.append(assembly_layout_values(asm.read_text(),word_count))
                 epoch_break = 'engine_script_run_v13' in (headers/'pineforge/engine.hpp').read_text() and 'engine_script_run_v14' in (include/'pineforge/engine.hpp').read_text()
-                # The leading words cover the unchanged financial Result/Inspection,
-                # status and Action/CloseScope. Native aggregate changes are fenced.
-                financial_words = sum(2 + len(fields) for fields in FIELDS.values()) + 7
-                compared = [values[:financial_words] if epoch_break else values for values in layouts]
-                if compared[0]!=compared[1]:
-                    raise RuntimeError('actual compiler '+name+'/current layout/offset/type-size arrays differ')
-                return {'wordCount':word_count,'values':layouts[0],'currentValues':layouts[1],
-                        'expectedEpochBreak':epoch_break,'comparedWords':len(compared[0]),'members':layout_members}
+                return compare_layout_words(name,layouts[0],layouts[1],word_count,epoch_break,layout_members)
 
             # Compile every actual caller before interpreting any link outcome.
             old=compile_tu('old-book-singleton',OLD_CALLER,old_include,old_generated)

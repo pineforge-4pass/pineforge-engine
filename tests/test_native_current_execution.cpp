@@ -78,9 +78,7 @@ void cutoff_and_shapes() {
         refusal(b,q,NativeCurrentRefusal::UnsupportedRequest);b.cancel(q);
         auto parent=tx(1);parent.trigger=no::Limit{50};const auto parent_h=put(b,parent);
         auto wait=reduce(1);wait.owner=no::WaitForApplied{parent_h};const auto w=put(b,wait);
-        const auto wp=b.inspect_current_execution(command(w));
-        CHECK(wp.refusal==NativeCurrentRefusal::UnreadyOwner || wp.refusal==NativeCurrentRefusal::UnsupportedRequest);
-        CHECK(!wp.settlement_readiness);b.cancel(w);b.cancel(parent_h);
+        refusal(b,w,NativeCurrentRefusal::UnreadyOwner);b.cancel(w);b.cancel(parent_h);
         const auto predecessor=put(b,tx(1));const auto replaced=b.replace(predecessor,tx(2));
         REQUIRE(replaced.successor);refusal(b,predecessor,NativeCurrentRefusal::NotWorking);
         apply(b,*replaced.successor);near(b.physical_position().signed_units,3);
