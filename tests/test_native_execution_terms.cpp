@@ -217,6 +217,26 @@ void host_nan_price_is_rejected_without_a_receipt() {
     CHECK(host.lots().empty());
 }
 
+void host_price_cannot_breach_active_limit() {
+    TermsHost host;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price + 1.0, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        auto request = tx(1);
+        request.trigger = no::Limit{100.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    run(host, spec("terms-limit-fence"), {100});
+    completed(host);
+    const auto rejected = last_event<no::MatchRejectedEvent>(host);
+    REQUIRE(rejected && rejected->attempted_terms);
+    CHECK(rejected->reason == no::MatchRejectReason::InvalidTerms);
+    CHECK(rejected->attempted_terms->resolved_price == 101.0);
+    CHECK(events<no::TermsResolvedEvent>(host).empty());
+}
+
 void current_preview_and_execute_see_same_terms_facts() {
     TermsHost host;
     bool reached = false;
@@ -306,6 +326,7 @@ int main() {
     test("current typed preview outcomes", current_preview_has_typed_terms_outcomes_without_writes);
     test("current deferred group cancellation", current_group_deduction_returns_cancelled);
     test("host NaN attempted terms", host_nan_price_is_rejected_without_a_receipt);
+    test("host price limit fence", host_price_cannot_breach_active_limit);
     test("current preview/execute terms facts", current_preview_and_execute_see_same_terms_facts);
     test("rounded crossing provenance collision", rounded_crossing_collision_keeps_request_origin);
     std::printf("R4-B terms: %d checks, %d failures\n", checks, failures);

@@ -2042,6 +2042,11 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             && terms.shape != native_order::OpeningShape::Transact) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
+        if (unresolved && terms.shape != native_order::OpeningShape::Transact
+            && terms.shape != native_order::OpeningShape::ReverseTo
+            && terms.shape != native_order::OpeningShape::CloseOpposite) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
+        }
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
@@ -2135,6 +2140,20 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             if (provisional.inspect.would_open) {
                 return terminal(native_order::MatchRejectReason::NonpositivePrice,
                                 nonidentity_attempt);
+            }
+        }
+        if (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
+            || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state)) {
+            std::optional<double> level;
+            if (const auto* limit = std::get_if<native_order::Limit>(&live->request().trigger)) {
+                level = limit->price;
+            } else if (const auto* stop_limit = std::get_if<native_order::StopLimit>(
+                           &live->request().trigger)) {
+                level = stop_limit->limit;
+            }
+            if (!level || (terms_facts.is_buy && resolved_price > *level)
+                || (!terms_facts.is_buy && resolved_price < *level)) {
+                return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
             }
         }
 
@@ -2936,6 +2955,12 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     }
     if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
         && terms.shape != native_order::OpeningShape::Transact) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
+    }
+    if (unresolved && terms.shape != native_order::OpeningShape::Transact
+        && terms.shape != native_order::OpeningShape::ReverseTo
+        && terms.shape != native_order::OpeningShape::CloseOpposite) {
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
