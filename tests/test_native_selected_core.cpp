@@ -111,8 +111,9 @@ struct Fixture {
         result.cursor = context.cursor;
         result.raw_price = 110;
         result.resolved_price = 110;
-        result.physical_action = flatten ? ex::Action{ex::Flatten{}}
-                                        : ex::Action{pineforge::order_action::Reduce{closed}};
+        result.physical_action = flatten
+            ? pineforge::native_order::ExecutionPlan{ex::Flatten{}}
+            : pineforge::native_order::ExecutionPlan{pineforge::order_action::Reduce{closed}};
         result.scope = SelectedExposure{7, std::move(scope)};
         result.pre_fill = before.current_position;
         result.pre_target = before;

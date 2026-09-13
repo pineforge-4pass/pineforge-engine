@@ -3,6 +3,7 @@ set(TEST_SOURCES
     test_resolved_execution
     test_native_current_execution
     test_native_fx_curve
+    test_native_order_terms_core
     test_native_selected_requests
     test_native_selected_core
     test_native_scoped_close

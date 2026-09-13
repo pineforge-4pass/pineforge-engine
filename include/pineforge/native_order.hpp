@@ -1,6 +1,7 @@
 #pragma once
 
 #include "execution.hpp"
+#include "execution_reverse_to.hpp"
 #include "execution_close_scope.hpp"
 #include "market_driver.hpp"
 #include "native_order_identity.hpp"
@@ -25,12 +26,26 @@ inline namespace native_order_v4 {
 // command history. It does not own positions, cash, paid fees, matching,
 // calendar, host phase, or a second physical book.
 //
-// Identity types remain native_order_v1. Request/core/event values are v3.
+// Identity types remain native_order_v1. Request/core/event values are v4.
 // Physical execution::Action is unchanged; native Reduce uses a typed size
-// source instead of a dummy units field.
+// source instead of a dummy units field. ExecutionPlan is a transient widening
+// used at the core/consumer boundary.
 
 using Flatten = execution::Flatten;
 using Transact = order_action::Transact;
+
+// Exact target exposure for an explicit reversal request. This is distinct
+// from execution::ReverseTo, which is the transient resolved execution plan.
+struct ReverseTo {
+    double signed_units = 0.0;
+};
+
+enum class HostSizedKind : std::uint8_t { Open = 0, Close = 1 };
+enum class Side : std::uint8_t { Long = 0, Short = 1 };
+struct HostSized {
+    HostSizedKind kind = HostSizedKind::Open;
+    std::optional<Side> side;
+};
 
 struct ExplicitUnits {
     double units = 0.0;
@@ -40,7 +55,7 @@ using ReductionSize = std::variant<ExplicitUnits, OwnerOpenedUnits>;
 struct Reduce {
     ReductionSize size;
 };
-using OrderIntent = std::variant<Flatten, Reduce, Transact>;
+using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>;
 
 struct Market {};
 struct Limit {
@@ -156,23 +171,24 @@ inline std::uint8_t display_waypoint(const MatchCursor& cursor) noexcept {
     return static_cast<std::uint8_t>(cursor.point.path_phase);
 }
 
-enum class Side : std::uint8_t { Long = 0, Short = 1 };
-
 struct RemainingUnbound {};
 struct RemainingFlattenAll {};
 struct RemainingUnits {
     double q = 0.0;
 };
-using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits>;
+struct RemainingDeferred {};
+using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits,
+                               RemainingDeferred>;
 
 struct RemainingProjectionUnbound {};
 struct RemainingProjectionFlattenAll {};
 struct RemainingProjectionUnits {
     double q = 0.0;
 };
+struct RemainingProjectionDeferred {};
 using RemainingProjection =
         std::variant<RemainingProjectionUnbound, RemainingProjectionFlattenAll,
-                     RemainingProjectionUnits>;
+                     RemainingProjectionUnits, RemainingProjectionDeferred>;
 
 struct BookTransaction {};
 struct Wait {
@@ -248,7 +264,11 @@ struct AllowanceUnits {
 struct AllowanceAllScope {
     uint64_t point_ordinal = 0;
 };
-using Allowance = std::variant<AllowanceUnset, AllowanceUnits, AllowanceAllScope>;
+struct AllowanceDeferred {
+    uint64_t point_ordinal = 0;
+};
+using Allowance = std::variant<AllowanceUnset, AllowanceUnits, AllowanceAllScope,
+                               AllowanceDeferred>;
 
 struct PendingNone {};
 struct PendingDeferred {
@@ -369,6 +389,44 @@ enum class MatchRejectReason : std::uint8_t {
     MaxAbsUnits = 2,
     MaxOpenLots = 3,
     InitialMargin = 4,
+    TermsUnresolved = 5,
+    InvalidTerms = 6,
+    NoOppositeExposure = 7,
+    HostPrecommit = 8,
+};
+
+enum class NativeCandidatePriceKind : std::uint8_t {
+    PointPrice = 0,
+    TriggerLevel = 1,
+    CurrentQuote = 2,
+};
+
+enum class OpeningShape : std::uint8_t {
+    Transact = 0,
+    ReverseTo = 1,
+    CloseOpposite = 2,
+};
+
+struct ExecutionTerms {
+    double resolved_price = 0.0;
+    std::optional<double> units;
+    OpeningShape shape = OpeningShape::Transact;
+};
+
+using ExecutionPlan = std::variant<execution::Flatten, order_action::Reduce,
+                                   order_action::Transact, execution::ReverseTo>;
+
+inline ExecutionPlan to_execution_plan(const execution::Action& action) {
+    return std::visit([](const auto& alternative) -> ExecutionPlan {
+        return alternative;
+    }, action);
+}
+
+struct TermsResolvedInput {
+    NativeCandidatePriceKind price_kind = NativeCandidatePriceKind::PointPrice;
+    double raw_price = 0.0;
+    double default_resolved_price = 0.0;
+    ExecutionTerms terms;
 };
 
 enum class CancelReason : std::uint8_t {
@@ -492,6 +550,22 @@ struct NoEffectEvent {
     const Birth& birth() const noexcept { return definition->birth; }
 };
 
+struct TermsResolvedEvent {
+    uint64_t ordinal = 0;
+    DefinitionRef definition;
+    MatchCursor cursor{};
+    TermsResolvedInput input;
+    std::vector<EventId> prior_adjustment_ids;
+    double pending_total = 0.0;
+    double effective_deduction = 0.0;
+    RemainingProjection remaining_before = RemainingProjectionDeferred{};
+    RemainingProjection remaining_after = RemainingProjectionUnits{};
+    Allowance allowance_after = AllowanceUnset{};
+    const RequestHandle& handle() const noexcept { return definition->handle; }
+    const Request& request() const noexcept { return definition->request; }
+    const Birth& birth() const noexcept { return definition->birth; }
+};
+
 struct MatchRejectedEvent {
     uint64_t ordinal = 0;
     MatchRejectReason reason = MatchRejectReason::OpeningDirection;
@@ -499,6 +573,7 @@ struct MatchRejectedEvent {
     RemainingProjection remaining = RemainingProjectionUnbound{};
     Authority authority = UnboundBookClose{};
     MatchCursor cursor{};
+    std::optional<ExecutionTerms> attempted_terms;
     const RequestHandle& handle() const noexcept { return definition->handle; }
     const Request& request() const noexcept { return definition->request; }
     const Birth& birth() const noexcept { return definition->birth; }
@@ -619,7 +694,8 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   ReservationReducedEvent,
                                   DeferredGroupAdjustmentEvent,
                                   QuantityBoundEvent,
-                                  ArmedEvent>;
+                                  ArmedEvent,
+                                  TermsResolvedEvent>;
 
 struct CommandContext {
     int64_t decision_time_ms = 0;
@@ -662,7 +738,7 @@ struct ExecutionProposal {
     MatchCursor cursor{};
     double raw_price = 0.0;
     double resolved_price = 0.0;
-    execution::Action physical_action{};
+    ExecutionPlan physical_action{};
     ExecutionScope scope = execution::Book{};
     PositionIdentity pre_fill = PositionFlat{};
     double inspected_closed_units = 0.0;
@@ -676,7 +752,7 @@ struct CommittedExecutionFacts {
     int64_t cycle_before = 0;
     int64_t cycle_after = 0;
     TargetObservation post_target{};
-    execution::Action committed_action{};
+    ExecutionPlan committed_action{};
 };
 
 struct EventRange {
@@ -824,6 +900,26 @@ public:
                                                          const EvaluationContext& context,
                                                          MatchRejectReason reason,
                                                          uint64_t& next_timeline_ordinal);
+    Preparation<PreparedMutation> prepare_match_rejected(
+            const RequestHandle& target,
+            const EvaluationContext& context,
+            MatchRejectReason reason,
+            std::optional<ExecutionTerms> attempted_terms,
+            uint64_t& next_timeline_ordinal);
+    Preparation<PreparedMutation> prepare_terms(const RequestHandle& target,
+                                                 const EvaluationContext& context,
+                                                 const TermsResolvedInput& input,
+                                                 uint64_t& next_timeline_ordinal);
+
+    // The allowance that prepare_evaluation would install for this point.
+    static Allowance evaluated_allowance(const LiveRequest& live, uint64_t point) noexcept;
+    // Pure arithmetic over the cached pending total. Outputs are assigned only
+    // after every validation and subtraction succeeds.
+    static bool effective_host_units(const PendingAdjustments& pending,
+                                     double resolved_units,
+                                     double* deduction,
+                                     double* after,
+                                     bool* exhausted) noexcept;
 
     std::vector<RequestHandle> group_recipients(const EventId& applied) const;
     std::vector<RequestHandle> waiting_children(const RequestHandle& parent) const;
@@ -1045,6 +1141,14 @@ static_assert(std::is_nothrow_move_constructible_v<NoEffectEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchRejectedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<ExecutionAppliedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchCursor>);
+static_assert(std::variant_size_v<OrderIntent> == 5);
+static_assert(std::variant_size_v<Remaining> == 4);
+static_assert(std::variant_size_v<RemainingProjection> == 4);
+static_assert(std::variant_size_v<Allowance> == 4);
+static_assert(std::variant_size_v<CommandEvent> == 17);
+static_assert(std::variant_size_v<ExecutionPlan> == 4);
+static_assert(std::variant_size_v<ExecutionScope> == 3);
+static_assert(std::variant_size_v<TriggerState> == 9);
 
 }  // inline namespace native_order_v4
 }  // namespace pineforge::native_order

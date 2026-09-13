@@ -58,6 +58,12 @@ const Reduce* as_reduce(const OrderIntent& intent) noexcept {
 const Transact* as_transact(const OrderIntent& intent) noexcept {
     return std::get_if<Transact>(&intent);
 }
+const ReverseTo* as_reverse_to(const OrderIntent& intent) noexcept {
+    return std::get_if<ReverseTo>(&intent);
+}
+const HostSized* as_host_sized(const OrderIntent& intent) noexcept {
+    return std::get_if<HostSized>(&intent);
+}
 
 const ExplicitUnits* explicit_size(const Reduce& reduce) noexcept {
     return std::get_if<ExplicitUnits>(&reduce.size);
@@ -76,6 +82,9 @@ RemainingProjection project_remaining(const Remaining& remaining) {
     if (std::holds_alternative<RemainingUnbound>(remaining)) return RemainingProjectionUnbound{};
     if (std::holds_alternative<RemainingFlattenAll>(remaining)) {
         return RemainingProjectionFlattenAll{};
+    }
+    if (std::holds_alternative<RemainingDeferred>(remaining)) {
+        return RemainingProjectionDeferred{};
     }
     return RemainingProjectionUnits{working_units(remaining)};
 }
@@ -233,6 +242,11 @@ bool current_shape(const LiveRequest& live) noexcept {
         || !std::holds_alternative<MarketReady>(live.trigger_state)
         || !std::holds_alternative<ImmediateRemaining>(request.capacity)) return false;
     if (std::holds_alternative<Independent>(request.owner)) return true;
+    if (const auto* sized = as_host_sized(request.intent)) {
+        if (sized->kind != HostSizedKind::Close) return false;
+        return std::holds_alternative<BindOpening>(request.owner)
+            || std::holds_alternative<BindOpenings>(request.owner);
+    }
     const auto* reduce = as_reduce(request.intent);
     if (!as_flatten(request.intent) && !(reduce && explicit_size(*reduce))) return false;
     return std::holds_alternative<BindOpening>(request.owner)
@@ -828,6 +842,8 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         const CommandContext& context,
         const std::optional<RequestHandle>& replace_target) const {
     require_grid(context.quantity_grid);
+    const auto* reverse_to = as_reverse_to(request.intent);
+    const auto* host_sized = as_host_sized(request.intent);
     if (as_flatten(request.intent)) {
     } else if (const auto* reduce = as_reduce(request.intent)) {
         if (const auto* units = explicit_size(*reduce)) {
@@ -841,11 +857,27 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         if (!on_optional_grid(transact->signed_units, context.quantity_grid)) {
             return RequestRejectReason::OffGrid;
         }
+    } else if (reverse_to) {
+        if (!finite_nonzero(reverse_to->signed_units)) return RequestRejectReason::InvalidQuantity;
+        if (!on_optional_grid(reverse_to->signed_units, context.quantity_grid)) {
+            return RequestRejectReason::OffGrid;
+        }
+    } else if (host_sized) {
+        if ((host_sized->kind != HostSizedKind::Open && host_sized->kind != HostSizedKind::Close)
+            || (host_sized->kind == HostSizedKind::Open && !host_sized->side)
+            || (host_sized->kind == HostSizedKind::Close && host_sized->side)
+            || (host_sized->side && *host_sized->side != Side::Long
+                && *host_sized->side != Side::Short)) {
+            return RequestRejectReason::InvalidQuantity;
+        }
     } else {
         return RequestRejectReason::InvalidQuantity;
     }
 
     const bool market_only = context.surface == CommandSurface::MarketOnly;
+    // The market-only surface mirrors execution::Action, which cannot carry
+    // either of the late-resolution request forms.
+    if (market_only && (reverse_to || host_sized)) return RequestRejectReason::InvalidQuantity;
     if (market_only && !std::holds_alternative<Market>(request.trigger)) {
         return RequestRejectReason::InvalidTrigger;
     }
@@ -858,11 +890,22 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         return RequestRejectReason::InvalidCapacity;
     }
     if (const auto* budget = std::get_if<PointBudget>(&request.capacity)) {
-        if (flatten) return RequestRejectReason::InvalidCapacity;
+        if (flatten || reverse_to) return RequestRejectReason::InvalidCapacity;
         if (!finite_positive(budget->units)) return RequestRejectReason::InvalidCapacity;
         if (!on_optional_grid(budget->units, context.quantity_grid)) {
             return RequestRejectReason::OffGrid;
         }
+    }
+
+    if (reverse_to && !std::holds_alternative<Independent>(request.owner)) {
+        return RequestRejectReason::InvalidOwner;
+    }
+    if (host_sized
+        && ((host_sized->kind == HostSizedKind::Open
+             && !std::holds_alternative<Independent>(request.owner))
+            || (host_sized->kind == HostSizedKind::Close
+                && std::holds_alternative<WaitForApplied>(request.owner)))) {
+        return RequestRejectReason::InvalidOwner;
     }
 
     if (market_only && !std::holds_alternative<Independent>(request.owner)) {
@@ -918,6 +961,9 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
     if (market_only && !std::holds_alternative<NoGroup>(request.group)) {
         return RequestRejectReason::InvalidGroup;
     }
+    if (reverse_to && !std::holds_alternative<NoGroup>(request.group)) {
+        return RequestRejectReason::InvalidGroup;
+    }
     if (const auto* member = std::get_if<Member>(&request.group)) {
         if (member->group == 0) return RequestRejectReason::InvalidGroup;
         if (member->effect != GroupEffect::Cancel && member->effect != GroupEffect::Reduce) {
@@ -939,6 +985,14 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
         if (const auto* transact = as_transact(request.intent)) {
             live.remaining = RemainingUnits{std::abs(transact->signed_units)};
             live.authority = BookTransaction{};
+        } else if (const auto* reverse_to = as_reverse_to(request.intent)) {
+            live.remaining = RemainingUnits{std::abs(reverse_to->signed_units)};
+            live.authority = BookTransaction{};
+        } else if (const auto* sized = as_host_sized(request.intent)) {
+            live.remaining = RemainingDeferred{};
+            live.authority = sized->kind == HostSizedKind::Open
+                ? Authority{BookTransaction{}}
+                : Authority{UnboundBookClose{}};
         } else if (const auto* reduce = as_reduce(request.intent)) {
             live.remaining = RemainingUnits{explicit_size(*reduce)->units};
             live.authority = UnboundBookClose{};
@@ -970,7 +1024,11 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
         live.authority = OpeningsClose{selected.openings, selected.cycle, nonflat.side,
                                        EnrollmentFromCommand{accepted}};
     }
-    if (const auto* reduce = as_reduce(request.intent)) {
+    if (const auto* sized = as_host_sized(request.intent)) {
+        live.remaining = sized->kind == HostSizedKind::Close
+            ? Remaining{RemainingDeferred{}}
+            : Remaining{RemainingUnbound{}};
+    } else if (const auto* reduce = as_reduce(request.intent)) {
         live.remaining = RemainingUnits{explicit_size(*reduce)->units};
     } else {
         live.remaining = RemainingFlattenAll{};
@@ -1011,6 +1069,14 @@ bool WorkingRequestCore::trigger_permits_driver(const Trigger& trigger,
 bool WorkingRequestCore::working_is_buy(const LiveRequest& live) const noexcept {
     if (const auto* transact = as_transact(live.request().intent)) {
         return transact->signed_units > 0.0;
+    }
+    if (const auto* reverse_to = as_reverse_to(live.request().intent)) {
+        return reverse_to->signed_units > 0.0;
+    }
+    if (const auto* sized = as_host_sized(live.request().intent)) {
+        if (sized->kind == HostSizedKind::Open && sized->side) {
+            return *sized->side == Side::Long;
+        }
     }
     if (const auto* close = std::get_if<BookClose>(&live.authority)) {
         return close->side == Side::Short;
@@ -1349,6 +1415,7 @@ namespace {
 Allowance initialize_allowance(const Remaining& remaining, const Capacity& capacity, uint64_t point) {
     if (std::holds_alternative<RemainingFlattenAll>(remaining)) return AllowanceAllScope{point};
     if (std::holds_alternative<RemainingUnbound>(remaining)) return AllowanceUnset{};
+    if (std::holds_alternative<RemainingDeferred>(remaining)) return AllowanceDeferred{point};
     const double q = working_units(remaining);
     double initial = q;
     if (const auto* budget = std::get_if<PointBudget>(&capacity)) initial = std::min(q, budget->units);
@@ -1362,10 +1429,51 @@ bool same_point_allowance(const Allowance& allowance, uint64_t point) noexcept {
     if (const auto* all = std::get_if<AllowanceAllScope>(&allowance)) {
         return all->point_ordinal == point;
     }
+    if (const auto* deferred = std::get_if<AllowanceDeferred>(&allowance)) {
+        return deferred->point_ordinal == point;
+    }
     return false;
 }
 
 }  // namespace
+
+Allowance WorkingRequestCore::evaluated_allowance(const LiveRequest& live,
+                                                  uint64_t point) noexcept {
+    return initialize_allowance(live.remaining, live.request().capacity, point);
+}
+
+bool WorkingRequestCore::effective_host_units(const PendingAdjustments& pending,
+                                              double resolved_units,
+                                              double* deduction,
+                                              double* after,
+                                              bool* exhausted) noexcept {
+    if (!deduction || !after || !exhausted || !std::isfinite(resolved_units)
+        || resolved_units < 0.0) {
+        return false;
+    }
+    double pending_total = 0.0;
+    if (const auto* deferred = std::get_if<PendingDeferred>(&pending)) {
+        pending_total = deferred->total;
+        if (!std::isfinite(pending_total) || pending_total < 0.0) return false;
+    }
+
+    const double computed_deduction = std::min(pending_total, resolved_units);
+    double computed_after = resolved_units;
+    bool computed_exhausted = computed_deduction == resolved_units;
+    if (resolved_units == 0.0 || computed_exhausted) {
+        computed_after = 0.0;
+    } else if (computed_deduction > 0.0) {
+        if (!checked_sub_cap(resolved_units, computed_deduction, &computed_after,
+                             &computed_exhausted)) {
+            return false;
+        }
+    }
+
+    *deduction = computed_deduction;
+    *after = computed_after;
+    *exhausted = computed_exhausted;
+    return true;
+}
 
 Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
         const RequestHandle& target,
@@ -1420,8 +1528,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
         bound_event.before = live.authority;
         bound_event.after = bound;
         updated.authority = bound;
-        updated.allowance = initialize_allowance(live.remaining, live.request().capacity,
-                                                 context.cursor.point.ordinal);
+        updated.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
         plan.events.emplace_back(std::move(bound_event));
         plan.live_change = kLiveUpdate;
         plan.live_index = live_index;
@@ -1472,8 +1579,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
         return NoChange{NoChangeReason::NoTransition};
     }
     LiveRequest updated = live;
-    updated.allowance = initialize_allowance(live.remaining, live.request().capacity,
-                                             context.cursor.point.ordinal);
+    updated.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
     MutationPlan plan = begin_plan();
     plan.live_change = kLiveUpdate;
     plan.live_index = live_index;
@@ -1651,6 +1757,16 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_match_rejected(
         const EvaluationContext& context,
         MatchRejectReason reason,
         uint64_t& next_timeline_ordinal) {
+    return prepare_match_rejected(target, context, reason, std::nullopt,
+                                  next_timeline_ordinal);
+}
+
+Preparation<PreparedMutation> WorkingRequestCore::prepare_match_rejected(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        MatchRejectReason reason,
+        std::optional<ExecutionTerms> attempted_terms,
+        uint64_t& next_timeline_ordinal) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -1666,9 +1782,137 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_match_rejected(
     rejected.remaining = project_remaining(live.remaining);
     rejected.authority = live.authority;
     rejected.cursor = context.cursor;
+    rejected.attempted_terms = std::move(attempted_terms);
     plan.events.emplace_back(std::move(rejected));
     plan.live_change = kLiveErase;
     plan.live_index = live_index;
+    return finish_mutation(std::move(plan));
+}
+
+Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
+        const RequestHandle& target,
+        const EvaluationContext& context,
+        const TermsResolvedInput& input,
+        uint64_t& next_timeline_ordinal) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) {
+        return NoChange{NoChangeReason::NotWorking};
+    }
+    const LiveRequest& live = live_[live_index];
+    const bool deferred = std::holds_alternative<RemainingDeferred>(live.remaining);
+    const bool has_units = input.terms.units.has_value();
+
+    // A price-only receipt is meaningful only after a target has a concrete
+    // remaining quantity. It deliberately does not authenticate an unrelated
+    // pending chain or rewrite any live state.
+    if (!deferred) {
+        if (has_units || input.terms.shape != OpeningShape::Transact) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+        const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+        MutationPlan plan = begin_plan();
+        TermsResolvedEvent receipt;
+        receipt.ordinal = ordinal;
+        receipt.definition = live.definition;
+        receipt.cursor = context.cursor;
+        receipt.input = input;
+        receipt.remaining_before = project_remaining(live.remaining);
+        receipt.remaining_after = project_remaining(live.remaining);
+        receipt.allowance_after = live.allowance;
+        plan.events.emplace_back(std::move(receipt));
+        return finish_mutation(std::move(plan));
+    }
+
+    if (!has_units || !std::isfinite(*input.terms.units) || *input.terms.units < 0.0) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    const auto* sized = as_host_sized(live.request().intent);
+    if (!sized || (input.terms.shape != OpeningShape::Transact
+                   && input.terms.shape != OpeningShape::ReverseTo
+                   && input.terms.shape != OpeningShape::CloseOpposite)
+        || (sized->kind == HostSizedKind::Close
+                   && input.terms.shape != OpeningShape::Transact)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
+    std::vector<EventId> prior_adjustment_ids;
+    double pending_total = 0.0;
+    if (!collect_pending_chain(live.pending, target, &prior_adjustment_ids, &pending_total)) {
+        return PreparationError{CoreFailure::ConflictingReceipt, EventId{identity_, 0}, target};
+    }
+
+    double deduction = 0.0;
+    double after = 0.0;
+    bool exhausted = false;
+    if (!effective_host_units(live.pending, *input.terms.units, &deduction, &after, &exhausted)) {
+        return PreparationError{CoreFailure::UnrepresentableReservation, EventId{identity_, 0},
+                                target};
+    }
+
+    const Allowance bound_allowance = initialize_allowance(
+        RemainingUnits{after}, live.request().capacity, context.cursor.point.ordinal);
+    if (input.terms.shape != OpeningShape::Transact) {
+        const auto* allowance = std::get_if<AllowanceUnits>(&bound_allowance);
+        if (!allowance || after > allowance->left) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    }
+
+    const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
+    LiveRequest updated = live;
+    updated.remaining = RemainingUnits{after};
+    updated.allowance = bound_allowance;
+    updated.pending = PendingNone{};
+
+    TermsResolvedEvent receipt;
+    receipt.ordinal = ordinal;
+    receipt.definition = live.definition;
+    receipt.cursor = context.cursor;
+    receipt.input = input;
+    receipt.prior_adjustment_ids = std::move(prior_adjustment_ids);
+    receipt.pending_total = pending_total;
+    receipt.effective_deduction = deduction;
+    receipt.remaining_before = project_remaining(live.remaining);
+    receipt.remaining_after = project_remaining(updated.remaining);
+    receipt.allowance_after = updated.allowance;
+
+    MutationPlan plan = begin_plan();
+    plan.events.emplace_back(std::move(receipt));
+    if (*input.terms.units == 0.0) {
+        const uint64_t terminal_ordinal = ordinal + 1;
+        if (terminal_ordinal == 0 || terminal_ordinal == std::numeric_limits<uint64_t>::max()
+            || terminal_ordinal <= last_ordinal_) {
+            throw std::invalid_argument("native timeline ordinal reused or regressed");
+        }
+        NoEffectEvent none;
+        none.ordinal = terminal_ordinal;
+        none.definition = live.definition;
+        none.remaining = project_remaining(updated.remaining);
+        none.authority = updated.authority;
+        none.cursor = context.cursor;
+        plan.events.emplace_back(std::move(none));
+        plan.live_change = kLiveErase;
+        plan.live_index = live_index;
+        return finish_mutation(std::move(plan));
+    }
+    if (after == 0.0 && deduction > 0.0) {
+        const uint64_t terminal_ordinal = ordinal + 1;
+        if (terminal_ordinal == 0 || terminal_ordinal == std::numeric_limits<uint64_t>::max()
+            || terminal_ordinal <= last_ordinal_) {
+            throw std::invalid_argument("native timeline ordinal reused or regressed");
+        }
+        plan.events.emplace_back(make_cancelled(terminal_ordinal, updated, CancelReason::Group,
+                                                EventId{identity_, ordinal}));
+        plan.live_change = kLiveErase;
+        plan.live_index = live_index;
+        return finish_mutation(std::move(plan));
+    }
+
+    (void) exhausted;
+    plan.live_change = kLiveUpdate;
+    plan.live_index = live_index;
+    plan.live_row = std::move(updated);
     return finish_mutation(std::move(plan));
 }
 
@@ -1682,6 +1926,10 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         return NoChange{NoChangeReason::NotWorking};
     }
     const LiveRequest& live = live_[live_index];
+    if (std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<AllowanceDeferred>(live.allowance)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
     if (std::holds_alternative<Wait>(live.authority)
         || std::holds_alternative<UnboundBookClose>(live.authority)) {
         return NoChange{NoChangeReason::NotEligible};
@@ -1716,23 +1964,70 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     const bool flatten = as_flatten(live.request().intent) != nullptr;
     const bool reduce = as_reduce(live.request().intent) != nullptr;
     const auto* transact = as_transact(live.request().intent);
+    const auto* reverse_to = as_reverse_to(live.request().intent);
+    const auto* host_sized = as_host_sized(live.request().intent);
+    const bool plan_flatten = std::holds_alternative<execution::Flatten>(proposal.physical_action);
+    const auto* plan_reduce = std::get_if<order_action::Reduce>(&proposal.physical_action);
+    const auto* plan_transact = std::get_if<order_action::Transact>(&proposal.physical_action);
+    const auto* plan_reverse = std::get_if<execution::ReverseTo>(&proposal.physical_action);
     double cap = flatten ? 0.0 : working_units(live.remaining);
     if (has_units_allowance) cap = std::min(cap, allowance_left);
 
     if (flatten) {
-        if (!std::holds_alternative<execution::Flatten>(proposal.physical_action)) {
+        if (!plan_flatten) {
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
         }
     } else if (reduce) {
-        const auto* phys = std::get_if<order_action::Reduce>(&proposal.physical_action);
-        if (!phys || !finite_positive(phys->units) || phys->units > cap) {
+        if (!plan_reduce || !finite_positive(plan_reduce->units) || plan_reduce->units > cap) {
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
         }
     } else if (transact) {
-        const auto* phys = std::get_if<order_action::Transact>(&proposal.physical_action);
-        if (!phys || !finite_nonzero(phys->signed_units)
-            || ((phys->signed_units > 0.0) != (transact->signed_units > 0.0))
-            || std::abs(phys->signed_units) > cap) {
+        if (!plan_transact || !finite_nonzero(plan_transact->signed_units)
+            || ((plan_transact->signed_units > 0.0) != (transact->signed_units > 0.0))
+            || std::abs(plan_transact->signed_units) > cap) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (reverse_to) {
+        if (!plan_reverse || !finite_nonzero(plan_reverse->signed_units)
+            || plan_reverse->signed_units != reverse_to->signed_units) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (host_sized) {
+        if (host_sized->kind == HostSizedKind::Close) {
+            if (!plan_reduce || !finite_positive(plan_reduce->units) || plan_reduce->units > cap) {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else if (host_sized->kind == HostSizedKind::Open && host_sized->side) {
+            const bool long_side = *host_sized->side == Side::Long;
+            if (plan_transact) {
+                if (!finite_nonzero(plan_transact->signed_units)
+                    || ((plan_transact->signed_units > 0.0) != long_side)
+                    || std::abs(plan_transact->signed_units) > cap) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else if (plan_reverse) {
+                if (!finite_nonzero(plan_reverse->signed_units)
+                    || ((plan_reverse->signed_units > 0.0) != long_side)
+                    || !has_units_allowance
+                    || std::abs(plan_reverse->signed_units) != working_units(live.remaining)
+                    || std::abs(plan_reverse->signed_units) != allowance_left) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else if (plan_reduce) {
+                if (!finite_positive(plan_reduce->units) || !has_units_allowance
+                    || plan_reduce->units != working_units(live.remaining)
+                    || plan_reduce->units != allowance_left) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else if (plan_flatten) {
+                if (!has_units_allowance
+                    || working_units(live.remaining) != allowance_left) {
+                    return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+                }
+            } else {
+                return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+            }
+        } else {
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
         }
     } else {
@@ -1786,6 +2081,15 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
     }
 
+    const bool reversal_plan = plan_reverse != nullptr;
+    const bool host_open = host_sized && host_sized->kind == HostSizedKind::Open;
+    const bool whole_host_flatten = host_open && plan_flatten;
+    if ((reversal_plan || (host_open && !plan_transact))
+        && (!std::holds_alternative<BookTransaction>(live.authority)
+            || !std::holds_alternative<execution::Book>(canonical_scope))) {
+        return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+    }
+
     if (!std::isfinite(proposal.inspected_closed_units) || proposal.inspected_closed_units < 0.0
         || !std::isfinite(proposal.inspected_opened_units)
         || !std::isfinite(proposal.resolved_price)
@@ -1793,10 +2097,35 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
             && !(current && proposal.inspected_opened_units == 0.0))) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
+
+    if (reversal_plan) {
+        if (!has_units_allowance || !finite_nonzero(plan_reverse->signed_units)
+            || ((proposal.inspected_opened_units > 0.0) != (plan_reverse->signed_units > 0.0))
+            || proposal.inspected_opened_units != plan_reverse->signed_units
+            || std::abs(proposal.inspected_opened_units) != working_units(live.remaining)
+            || std::abs(proposal.inspected_opened_units) != allowance_left) {
+            return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    }
+    if (host_open && plan_reduce
+        && (proposal.inspected_opened_units != 0.0
+            || proposal.inspected_closed_units != plan_reduce->units)) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+    if (whole_host_flatten && proposal.inspected_opened_units != 0.0) {
+        return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+    }
+
     double filled = proposal.inspected_closed_units;
-    if (transact) {
+    if (plan_transact) {
         if (!checked_add_positive(proposal.inspected_closed_units,
                                   std::abs(proposal.inspected_opened_units), &filled)) {
+            return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                    target};
+        }
+    } else if (reversal_plan) {
+        filled = proposal.inspected_closed_units + std::abs(proposal.inspected_opened_units);
+        if (!std::isfinite(filled)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         }
@@ -1804,27 +2133,34 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     if (!(filled > 0.0) || !std::isfinite(filled)) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
-    if (!flatten && filled > working_units(live.remaining)) {
+    const bool special_turnover = reversal_plan || whole_host_flatten;
+    if (!flatten && !special_turnover && filled > working_units(live.remaining)) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
-    if (has_units_allowance && filled > allowance_left) {
+    if (has_units_allowance && !special_turnover && filled > allowance_left) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
 
-    RemainingProjection remaining_after = RemainingProjectionFlattenAll{};
-    bool units_exhausted = flatten;
+    RemainingProjection remaining_after = RemainingProjectionUnits{};
+    if (flatten) remaining_after = RemainingProjectionFlattenAll{};
+    bool units_exhausted = flatten || special_turnover;
     if (!flatten) {
-        double after = 0.0;
-        if (!checked_sub_cap(working_units(live.remaining), std::min(filled, working_units(live.remaining)),
-                             &after, &units_exhausted)) {
-            if (filled != working_units(live.remaining)) {
-                return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
-                                        target};
+        if (special_turnover) {
+            remaining_after = RemainingProjectionUnits{0.0};
+        } else {
+            double after = 0.0;
+            if (!checked_sub_cap(working_units(live.remaining),
+                                 std::min(filled, working_units(live.remaining)),
+                                 &after, &units_exhausted)) {
+                if (filled != working_units(live.remaining)) {
+                    return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
+                                            target};
+                }
+                units_exhausted = true;
+                after = 0.0;
             }
-            units_exhausted = true;
-            after = 0.0;
+            remaining_after = RemainingProjectionUnits{after};
         }
-        remaining_after = RemainingProjectionUnits{after};
     }
 
     Allowance allowance_after = live.allowance;
@@ -1832,9 +2168,12 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         auto units = std::get<AllowanceUnits>(live.allowance);
         bool allow_ex = false;
         double left = 0.0;
-        if (filled == units.left) {
+        const double allowance_deduction = reversal_plan
+            ? std::abs(proposal.inspected_opened_units)
+            : (whole_host_flatten ? working_units(live.remaining) : filled);
+        if (allowance_deduction == units.left) {
             units.left = 0.0;
-        } else if (!checked_sub_cap(units.left, filled, &left, &allow_ex)) {
+        } else if (!checked_sub_cap(units.left, allowance_deduction, &left, &allow_ex)) {
             return PreparationError{CoreFailure::NonrepresentableQuantity, EventId{identity_, 0},
                                     target};
         } else {
@@ -2010,7 +2349,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     plan.receipt_recipient = recipient;
     plan.receipt_effect = member->effect;
 
-    if (std::holds_alternative<RemainingUnbound>(live.remaining)) {
+    if (std::holds_alternative<RemainingUnbound>(live.remaining)
+        || std::holds_alternative<RemainingDeferred>(live.remaining)) {
         if (member->effect == GroupEffect::Cancel) {
             const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
             plan.events.emplace_back(make_cancelled(ordinal, live, CancelReason::Group, applied));

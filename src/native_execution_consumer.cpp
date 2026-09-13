@@ -89,15 +89,46 @@ void hash_surface(Fnv& f, native_order::CommandSurface surface) noexcept {
 
 void hash_intent(Fnv& f, const native_order::OrderIntent& intent) noexcept {
     f.u(intent.index());
-    if (const auto* reduce = std::get_if<native_order::Reduce>(&intent)) {
-        f.u(reduce->size.index());
-        if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) {
-            f.d(units->units);
+    std::visit([&](const auto& payload) {
+        using T = std::decay_t<decltype(payload)>;
+        if constexpr (std::is_same_v<T, native_order::Flatten>) {
+        } else if constexpr (std::is_same_v<T, native_order::Reduce>) {
+            f.u(payload.size.index());
+            if (const auto* units = std::get_if<native_order::ExplicitUnits>(&payload.size)) {
+                f.d(units->units);
+            }
+        } else if constexpr (std::is_same_v<T, native_order::Transact>) {
+            f.d(payload.signed_units);
+        } else if constexpr (std::is_same_v<T, native_order::ReverseTo>) {
+            f.d(payload.signed_units);
+        } else if constexpr (std::is_same_v<T, native_order::HostSized>) {
+            f.u(static_cast<uint64_t>(payload.kind));
+            f.b(payload.side.has_value());
+            if (payload.side) f.u(static_cast<uint64_t>(*payload.side));
+        } else {
+            static_assert(!sizeof(T), "unhashed native order intent");
         }
-    }
-    if (const auto* transact = std::get_if<native_order::Transact>(&intent)) {
-        f.d(transact->signed_units);
-    }
+    }, intent);
+}
+
+void hash_execution_terms(Fnv& f, const native_order::ExecutionTerms& terms) noexcept {
+    f.d(terms.resolved_price);
+    f.b(terms.units.has_value());
+    if (terms.units) f.d(*terms.units);
+    f.u(static_cast<uint64_t>(terms.shape));
+}
+
+void hash_optional_execution_terms(Fnv& f,
+                                   const std::optional<native_order::ExecutionTerms>& terms) noexcept {
+    f.b(terms.has_value());
+    if (terms) hash_execution_terms(f, *terms);
+}
+
+void hash_terms_input(Fnv& f, const native_order::TermsResolvedInput& input) noexcept {
+    f.u(static_cast<uint64_t>(input.price_kind));
+    f.d(input.raw_price);
+    f.d(input.default_resolved_price);
+    hash_execution_terms(f, input.terms);
 }
 
 void hash_trigger(Fnv& f, const native_order::Trigger& trigger) noexcept {
@@ -221,6 +252,9 @@ void hash_allowance(Fnv& f, const native_order::Allowance& allowance) noexcept {
     }
     if (const auto* all = std::get_if<native_order::AllowanceAllScope>(&allowance)) {
         f.u(all->point_ordinal);
+    }
+    if (const auto* deferred = std::get_if<native_order::AllowanceDeferred>(&allowance)) {
+        f.u(deferred->point_ordinal);
     }
 }
 
@@ -375,6 +409,7 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
             hash_remaining_projection(f, payload.remaining);
             hash_authority(f, payload.authority);
             hash_cursor(f, payload.cursor);
+            hash_optional_execution_terms(f, payload.attempted_terms);
         } else if constexpr (std::is_same_v<T, native_order::ExecutionAppliedEvent>) {
             f.u(10);
             hash_definition(f, payload.definition);
@@ -466,6 +501,18 @@ void hash_command(Fnv& f, const native_order::CommandEvent& event) noexcept {
             }
             f.b(payload.quantity_resolution.has_value());
             if (payload.quantity_resolution) hash_event_id(f, *payload.quantity_resolution);
+        } else if constexpr (std::is_same_v<T, native_order::TermsResolvedEvent>) {
+            f.u(17);
+            hash_definition(f, payload.definition);
+            hash_cursor(f, payload.cursor);
+            hash_terms_input(f, payload.input);
+            f.u(payload.prior_adjustment_ids.size());
+            for (const auto& id : payload.prior_adjustment_ids) hash_event_id(f, id);
+            f.d(payload.pending_total);
+            f.d(payload.effective_deduction);
+            hash_remaining_projection(f, payload.remaining_before);
+            hash_remaining_projection(f, payload.remaining_after);
+            hash_allowance(f, payload.allowance_after);
         } else {
             static_assert(!sizeof(T), "unhashed native command event");
         }
@@ -1707,7 +1754,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         proposal.cursor = evaluation.cursor;
         proposal.raw_price = raw_price;
         proposal.resolved_price = resolved_price;
-        proposal.physical_action = candidate.physical;
+        proposal.physical_action = native_order::to_execution_plan(candidate.physical);
         proposal.scope = candidate.scope;
         proposal.pre_fill = read_position(engine);
         proposal.pre_target = candidate.target;
@@ -1750,7 +1797,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         facts.cycle_before = cycle_before;
         facts.cycle_after = engine.position_cycle_seq_;
         facts.post_target = std::move(candidate.target);
-        facts.committed_action = candidate.physical;
+        facts.committed_action = native_order::to_execution_plan(candidate.physical);
         if (!install_execution(engine, std::move(*token), facts, P)) return std::nullopt;
         const auto& applied = std::get<native_order::ExecutionAppliedEvent>(
             requests_.history().at(notification.history_index));

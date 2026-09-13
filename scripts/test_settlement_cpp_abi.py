@@ -32,10 +32,10 @@ class AbiToolingTests(unittest.TestCase):
         self.assertEqual(PROVIDER_ORDER_SHAPES, {
             'engine_script_run_v13': (16,3), 'engine_script_run_v14': (16,3),
             CURRENT_EPOCH: (checker.CURRENT_ORDER_VARIANT,checker.CURRENT_ORDER_INTENT_VARIANT)})
-        self.assertEqual(provider_order_shape(ROOT/'include'), (16,3))
+        self.assertEqual(provider_order_shape(ROOT/'include'), (17,5))
         rendered = render_provider_caller(COMMON, ROOT/'include')
-        self.assertIn('CommandEvent> == 16',rendered)
-        self.assertIn('OrderIntent> == 3',rendered)
+        self.assertIn('CommandEvent> == 17',rendered)
+        self.assertIn('OrderIntent> == 5',rendered)
         self.assertNotIn('COMMAND_EVENT_ALTERNATIVES',rendered)
         self.assertNotIn('ORDER_INTENT_ALTERNATIVES',rendered)
 
