@@ -34,9 +34,10 @@ The executable targets POSIX macOS/Linux. Python is used only by one optional
 integration-test receiver/orchestrator, never by the running executable.
 
 The build includes `build-live/lib/native-live-example.so`, a hand-written
-C++ example, and `native-live-parser-example.so`, an illustrative parser.
-The platform's CMake module suffix may differ. A strategy's factory returns
-a `BacktestEngine`-derived instance, exports `strategy_create/free` and the
+C++ example, `native-market-example.so`, `native-selected-example.so`, and
+`native-live-parser-example.so`, an illustrative parser. The platform's CMake
+module suffix may differ. A strategy's factory returns a
+`BacktestEngine`-derived instance, exports `strategy_create/free` and the
 input/override setters, and links the engine's C ABI object. See
 [examples/strategy.cpp](examples/strategy.cpp). Codegen-generated libraries
 already provide their strategy factory and setters; no codegen-specific live
@@ -78,8 +79,9 @@ Native strategies use `--native-config FILE` instead of `--input` /
 `clock`, `instrument` and `execution` keys. Explicit CLI clock/symbol flags
 must equal the file; omitted CLI clock values take the file. Monthly stream
 input is refused before the ledger is bound. Legacy 1m identity bytes are
-unchanged when `--native-config` is absent. The additional example is
-`native-market-example`.
+unchanged when `--native-config` is absent. The native examples are
+`native-market-example` and `native-selected-example`; the latter demonstrates
+host-sized terms, exact reversal, and a selected current-point close.
 
 Keep symbol metadata consistent with the corresponding backtest. `--syminfo`
 supports `type`, `currency`, `basecurrency`, `description`, `volumetype`,
@@ -143,8 +145,9 @@ engine actions, not broker execution acknowledgments. Native close-only
 execution requires strategies that calculate only on bar close. Do not use
 strategies that require `calc_on_every_tick`: the runner rejects an explicit
 true override, but cannot detect that declaration in every compiled strategy.
-Order-fill recalculation, timestamped account-FX curves and separately installed
-native/auxiliary security feeds are refused by the native stream configuration.
+Order-fill recalculation, a nonempty staged account-FX curve, and separately
+installed native/auxiliary security feeds are refused by the native stream
+configuration.
 Ordinary security evaluations derived from the input stream retain the
 existing native engine behavior.
 

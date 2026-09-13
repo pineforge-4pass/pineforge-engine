@@ -31,8 +31,8 @@ consumption.
   end-to-end working example.
 
 - <b class="tab-title">I'm writing a native strategy</b>
-  Read **[Native market host](@ref native-market)** for `NativeStrategyHost`,
-  `configure_native`, and the C ABI contract query.
+  Read **[Native engine](@ref native_engine)** for `NativeStrategyHost`,
+  `configure_native`, execution terms, and the C ABI contract query.
 
 - <b class="tab-title">I'm integrating from CMake</b>
   Jump straight to **[Install](@ref install)** and
@@ -89,7 +89,9 @@ End-to-end, runnable examples that go beyond the MACD tutorial:
 
 ## API at a glance
 
-The entire public surface fits in **one header** and **56 functions**:
+The entire public surface fits in **one header** and **65 public `PF_API`
+declarations** (57 runtime implementations plus eight per-strategy generated
+exports):
 
 | Group | Symbols | Reference |
 | --- | --- | --- |
@@ -101,8 +103,8 @@ The entire public surface fits in **one header** and **56 functions**:
 | Version | `pf_version_get`, `pf_abi_version`, `pf_version_string` | @ref pf_version |
 | Types | `pf_bar_t`, `pf_trade_tick_t`, `pf_trade_t`, `pf_report_t`, metrics, diagnostics, trace, equity, version, and `pf_magnifier_distribution_t` | @ref pf_types |
 
-Every PineForge-generated strategy `.so` exports exactly these 56 symbols
-and zero internal C++ symbols — see
+Every PineForge-generated strategy `.so` exports all 65 public symbols and
+zero internal C++ symbols — see
 **[ABI stability](@ref abi_stability)** for the full guarantee.
 
 ---

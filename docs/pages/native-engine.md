@@ -4,16 +4,12 @@
 
 Hand-written C++ strategies can run a **standalone native** path: one
 `NativeRunSpec`, one working request roster, one physical lot book, and
-close-only callbacks. Pine `strategy.*` commands, cap/priority adapters, default
-source sizing, and complete Pine policy extraction are **not** this surface.
+close-only calculation callbacks. Pine `strategy.*` commands, cap/priority
+adapters, default source sizing, and complete Pine policy extraction are **not**
+this surface.
 Codegen and source adapters select those policies separately. Resting requests
 use the general host commands; request-value members live in
 `<pineforge/native_order.hpp>` and are not restated here.
-
-The resting-order lifecycle is implemented in the current R2 candidate;
-final merge acceptance, compatibility and CI verification are still
-pending. [Refactor progress](../native-refactor-progress.md) separates this
-candidate from the completed R2a scoped-settlement prerequisite.
 
 Subclass `pineforge::NativeStrategyHost`. Configure with `configure_native`,
 then `run` or `stream_*`. Submit from native begin/bar callbacks, or between
@@ -22,7 +18,8 @@ the inherited `on_bar` (it is `final` and refused). Do not write protected
 engine fields.
 
 Headers: `<pineforge/native_host.hpp>`, `<pineforge/native_run_spec.hpp>`,
-`<pineforge/native_order.hpp>`, `<pineforge/native_calendar.hpp>`,
+`<pineforge/native_fx_curve.hpp>`, `<pineforge/native_order.hpp>`,
+`<pineforge/native_calendar.hpp>`,
 `<pineforge/market_driver.hpp>`, `<pineforge/order_action.hpp>`,
 `<pineforge/execution.hpp>`. Enumeration members live in those headers; this
 page does not re-list every enumerator.
@@ -92,7 +89,8 @@ Required:
 - `tickerid`
 - scheduling `timezone` (must resolve; empty is not UTC)
 - `initial_capital`, `point_value`, `account_fx`, `price_tick`: finite, strictly
-  positive. `account_fx` is one scalar, not a timestamped FX series.
+  positive. `account_fx` is the pre-first-rate fallback; an optional immutable
+  native FX curve is staged separately below.
 
 Always set, with documented defaults in the header:
 
@@ -102,7 +100,9 @@ Always set, with documented defaults in the header:
 - `chart_timezone`: optional observation metadata; empty stays empty and is
   not the scheduling calendar
 - `slippage_ticks`: `0` .. `INT_MAX`. Buy adds, sell subtracts
-  `ticks * price_tick` **once**. No mintick snap.
+  `ticks * price_tick` **once** to form the kernel default price. A v15 terms
+  resolver receives that default; an accepted override is final and is not
+  slipped a second time. No mintick snap.
 - `fee_kind` / `fee_value`: `Percent`, `CashPerUnit`, `CashPerExecution`;
   `fee_value` finite and ≥ 0. A percent fee is
   `abs(units) × price × point_value × account_fx × fee_value / 100`.
@@ -165,6 +165,14 @@ cycle identity through scoped settlement. Group cancellation/reduction is
 caused by committed execution events. See the request header for the exact
 value types; source-specific Pine lowering remains codegen/adapter work.
 
+At host epoch v15, general requests also support explicit
+`native_order::ReverseTo{signed_units}` and `HostSized`. A `HostSized{Open,
+Side}` request binds its units at a matching candidate through the host's
+`resolve_execution_terms` override. The host may choose `Transact`, exact
+`ReverseTo`, or whole-opposite-book close shape there; it does not supply a
+second matcher, book, or cash path. `submit_market` remains the deliberately
+narrow market-default convenience surface.
+
 ### Selected exposure and current execution (R4-A)
 
 `BindOpenings{{first, last}, cycle}` on a Flatten or explicit-unit Reduce binds
@@ -220,7 +228,9 @@ positive-price restriction. Native opening admission still decides separately.
 `NativeCurrentExecutionPreview::settlement_readiness` reports the financial
 pre-source preparation boundary. It is independent of the account projection's
 status and excludes later counter/lifecycle checks and opening admission.
-Refusals leave readiness absent. Invalid/NoEffect readiness skips source
+Refusals leave readiness absent. A HostSized preview can instead report typed
+`terms_rejection` or `terms_cancellation`; those are facts about the proposed
+terms, not a saved host verdict. Invalid/NoEffect readiness skips source
 preflight. Applied readiness requires source preflight even for opening-only
 commands whose account projection overflows. Ordered `closed_row_pnl` values
 exist only for Applied readiness and use execution's pinned ticket allocation.
@@ -401,8 +411,9 @@ These are existing refusals, not implied future features:
 - In-session gaps on stream/warmup
 - `calc_on_every_tick` / `calc_on_order_fills` enabled (runner rejects an
   explicit true override; compiled strategies must still be close-only)
-- Timestamped account-FX series, auxiliary/native security feeds, source
-  magnifier/tail/probe/hash/trace setters, `set_input`, and Pine
+- A nonempty staged native FX curve on `stream_begin`; batch runs may use one.
+- Auxiliary/native security feeds, source magnifier/tail/probe/hash/trace
+  setters, `set_input`, and Pine
   entry/exit/cancel commands — native hosts latch `Failed`
   (`UnsupportedSource`) before mutation
 - C-level native request submit/replace/cancel
@@ -585,10 +596,151 @@ events and `ExecutionAppliedEvent` are separate rows in `native_events`.
 Empty timeframe strings are also valid (`run(bars, n)` and
 `stream_begin(bars, n, "", "")`). `"5"` / `"5"` must match the spec bytes.
 
+## Terms, reversal, precommit, FX curve
+
+Epoch v15 adds two const host hooks. `resolve_execution_terms` sees read-only
+candidate facts and returns a resolved price plus units only for an unresolved
+`HostSized` request. Its default is the identity price with no units. A
+`NativePrecommitView` is then available to
+`validate_execution_precommit` after the ordinary execution is prepared and
+before any physical effect; returning `Refuse` records a nonfinancial
+`HostPrecommit` rejection. The validator runs once only for an Applied-ready
+physical attempt and never during `inspect_current_execution`.
+
+`ReverseTo` names an exact signed target exposure. Its receipt records target
+units separately from `filled_working` turnover, so a reversal remains one
+ticket and one settlement cycle. A `HostSized{Open}` is sized once; later
+candidate rematches may re-resolve price but not size. `CloseOpposite` uses the
+existing whole-book Flatten path when it must close an absorbed roster.
+
+The second runner module is a deliberately small example of those public
+seams. It contains no Pine command calls, formula, or protected engine write:
+
+```cpp
+#include <pineforge/native_host.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <variant>
+
+namespace {
+namespace no = pineforge::native_order;
+
+class NativeSelectedExample final : public pineforge::NativeStrategyHost {
+    std::optional<no::RequestHandle> opening_;
+    std::optional<std::int64_t> opening_cycle_;
+    int bars_ = 0;
+
+    no::ExecutionTerms resolve_execution_terms(
+            const pineforge::NativeExecutionTermsFacts& facts) const override {
+        if (std::holds_alternative<no::RemainingDeferred>(facts.remaining)) {
+            return {facts.default_resolved_price, 2.0, no::OpeningShape::Transact};
+        }
+        return {facts.default_resolved_price, std::nullopt, no::OpeningShape::Transact};
+    }
+
+    pineforge::NativePrecommitVerdict validate_execution_precommit(
+            const pineforge::NativePrecommitView&) const override {
+        return pineforge::NativePrecommitVerdict::Proceed;
+    }
+
+    void on_native_bar(const pineforge::Bar&,
+                       const pineforge::NativeDecisionContext&) override {
+        ++bars_;
+        if (bars_ == 1) {
+            no::Request open;
+            open.intent = no::HostSized{no::HostSizedKind::Open, no::Side::Long};
+            open.label = "sized-limit";
+            open.trigger = no::Limit{101.0};
+            opening_ = submit(open).handle;
+            return;
+        }
+        if (bars_ == 2 && opening_ && opening_cycle_) {
+            no::Request child;
+            child.intent = no::Reduce{no::OwnerOpenedUnits{}};
+            child.label = "bound-stop";
+            child.trigger = no::Stop{99.0};
+            child.owner = no::BindOpening{*opening_, *opening_cycle_};
+            submit(child);
+            return;
+        }
+        if (bars_ == 3) {
+            no::Request reverse;
+            reverse.intent = no::ReverseTo{-1.0};
+            reverse.label = "exact-reverse";
+            reverse.trigger = no::Stop{99.0};
+            submit(reverse);
+            return;
+        }
+        if (bars_ == 4 && opening_ && opening_cycle_) {
+            no::Request selected{no::Flatten{}, "selected-flatten", ""};
+            selected.owner = no::BindOpenings{{*opening_}, *opening_cycle_};
+            const auto accepted = submit(selected);
+            if (accepted.handle) {
+                const pineforge::NativeCurrentExecution current{
+                    *accepted.handle, pineforge::NativeCurrentPriceRule::NearestTick};
+                const auto preview = inspect_current_execution(current);
+                if (!preview.refusal &&
+                    preview.settlement_readiness == pineforge::execution::Status::Applied) {
+                    execute_current(current);
+                }
+            }
+        }
+    }
+
+    void on_native_applied(const no::ExecutionAppliedEvent& event,
+                           const pineforge::NativeDecisionContext&) override {
+        if (opening_ && event.handle() == *opening_) opening_cycle_ = event.cycle_after;
+    }
+};
+
+}  // namespace
+```
+
+This is the shape of
+`runner/examples/native_selected_strategy.cpp`. The accompanying runner test
+executes it once in batch and once through `stream_begin` / `stream_push_bar` /
+`stream_end`; its selected close uses the current-point preview only as a
+readiness observation before `execute_current`.
+
+An immutable `NativeFxCurve` is staged only while the host is Ready, after
+`configure_native` and before a batch `run`. Its parallel timestamp/rate arrays
+must have equal length, strictly increasing timestamps, and finite positive
+rates; an empty curve clears the staged value. `account_fx` remains the
+fallback before the first curve point.
+
+```cpp
+pineforge::NativeFxCurve curve{{0, 900000}, {1.0, 1.01}};
+const auto fx = host.configure_native_fx_curve(curve);
+if (fx.status != pineforge::NativeSetupStatus::Applied) {
+    // Read fx.validation; engine storage was not changed.
+}
+```
+
+### Known limits
+
+The test-only Pine oracle is a comparison aid and earns no native-independence
+or adapter credit. There is no generic native FX broker-open epoch clock in
+this slice: the O7 clock work is deferred to slice B. Native streaming refuses
+a nonempty staged FX curve. The precommit verdict is not previewed; preview
+terms outcomes are typed facts, not the host's verdict. Generated Pine code
+remains on its compatibility route until the later adapter slice.
+
+### What still requires Pine compatibility to build
+
+The standalone native host has no Pine decision path at runtime, but the
+current `BacktestEngine` build still includes Pine-compatibility headers and
+objects. Its protected native constructor takes a `CapAttachment`, and retained
+`OrderPriority` and `IntradayCap` members remain in the base object; the root
+CMake target still compiles the corresponding `src/compat/pine/` sources. That
+build-level dependency is deliberately outside this slice. Slice B owns the
+header/constructor/member cut; this example does not claim it has removed it.
+
 ## Runner JSON and command
 
 `pineforge-live` is optional (`-DPINEFORGE_BUILD_LIVE_RUNNER=ON`, default
-**OFF**). That option also builds `native-market-example`. Native modules
+**OFF**). That option also builds `native-market-example` and
+`native-selected-example`. Native modules
 need `--native-config FILE` instead of `--input` / `--override` / `--syminfo`
 (those flags are refused). The file is a strict JSON object: unknown and
 duplicate keys fail; every listed key is required; there are **no**
@@ -690,10 +842,14 @@ Other CMake options (unchanged defaults): `PINEFORGE_BUILD_TESTS` ON,
 `PINEFORGE_ENABLE_SANITIZERS` OFF, `PINEFORGE_STRICT_WARNINGS` OFF. The
 runner also needs SQLite3, libcurl 7.86+, and OpenSSL Crypto.
 
-The C ABI (`strategy_execution_contract` → NativeMarketV1,
-`strategy_configure_native_v1`) is what the runner uses to load
-`native-market-example`. Prefer the C++ `NativeRunSpec` and this JSON over
-hand-maintaining the versioned C struct.
+The C ABI query `strategy_execution_contract` identifies `NativeMarketV1`; the
+runner then uses `strategy_configure_native_v1` to apply its versioned run
+specification. `strategy_configure_native_fx_curve_v1` additionally stages an
+immutable curve on a Ready native handle (or clears it with `n == 0`); invalid
+pointer/size/phase/curve input returns `-1` without mutation. The legacy
+`strategy_set_account_currency_fx_series` remains unavailable on a native
+handle. Prefer the C++ `NativeRunSpec` and `NativeFxCurve` shown here over
+hand-maintaining either versioned C struct.
 
 For enumerator payloads, pairing names, session grammar, and failure codes,
 read the headers cited above.
