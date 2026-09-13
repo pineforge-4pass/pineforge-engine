@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <limits>
+#include <stdexcept>
 
 #include "engine_internal.hpp"
 #include "timezone.hpp"
@@ -52,6 +54,57 @@ BacktestEngine::BarTime BacktestEngine::_decompose_bar_time_chart_tz() const {
     bt.dayofweek = tm_buf.tm_wday + 1;
     bt.weekofyear = (tm_buf.tm_yday + 7 - ((tm_buf.tm_wday + 6) % 7)) / 7;
     return bt;
+}
+
+execution::Status BacktestEngine::preflight_source_close_observation(
+        const Trade* rows, size_t count, std::optional<int>& loss_day) const {
+    loss_day.reset();
+    // Complete this pass before walking day counters: a later row can overflow
+    // intraday PnL even when the first row would exhaust the source day count.
+    // Ready opening-only source executions also validate the starting value.
+    double next_intraday = intraday_pnl_;
+    for (size_t i = 0; i < count; ++i) next_intraday += rows[i].pnl;
+    if (!std::isfinite(next_intraday)) return execution::Status::InvalidAccounting;
+
+    int64_t loss_days = cons_loss_day_count_;
+    int last_day = last_loss_day_;
+    for (size_t i = 0; i < count; ++i) {
+        const double pnl = rows[i].pnl;
+        if (pnl > 0.0) {
+            loss_days = 0;
+        } else if (pnl < 0.0) {
+            if (!loss_day) {
+                const BarTime time = _decompose_bar_time_chart_tz();
+                loss_day = time.dayofmonth * 100 + time.month;
+            }
+            if (*loss_day != last_day) {
+                last_day = *loss_day;
+                ++loss_days;
+            }
+        }
+        if (loss_days > std::numeric_limits<int>::max())
+            throw std::overflow_error("closed trade counter exhausted");
+    }
+    return execution::Status::Applied;
+}
+
+void BacktestEngine::observe_source_close_rows(
+        const Trade* rows, size_t count, std::optional<int> loss_day) {
+    // The source coordinator preflighted these exact rows before committing
+    // them. Only its newly committed slice is observed, using the day already
+    // captured before effects rather than performing fallible timezone work.
+    for (size_t i = 0; i < count; ++i) {
+        const double pnl = rows[i].pnl;
+        intraday_pnl_ += pnl;
+        if (pnl < 0.0) {
+            if (*loss_day != last_loss_day_) {
+                last_loss_day_ = *loss_day;
+                ++cons_loss_day_count_;
+            }
+        } else if (pnl > 0.0) {
+            cons_loss_day_count_ = 0;
+        }
+    }
 }
 
 bool BacktestEngine::check_risk_allow_entry(bool is_long) const {

@@ -1807,16 +1807,17 @@ protected:
     // --- Per-trade extreme tracking ---
     void update_per_trade_extremes();
 
-    // Trusted native matching-adapter extension: settle an already resolved
-    // execution into this engine's one physical book. This does not place an
-    // order, perform admission/slippage, or provide cancellation/replay. The
-    // owning run must abort on an exception; failed commits are not retryable
-    // in place. A saved arithmetic plan is not execution authority.
+    // Source compatibility extension: settle an already resolved execution
+    // using the current chart context and source-day preflight/observation.
+    // This does not place an order, perform admission/slippage, or provide
+    // cancellation/replay. Explicit native/context seams below are source-day
+    // independent. The owning run must abort on an exception; failed commits
+    // are not retryable in place. A saved plan is not execution authority.
     // Empty lifecycle effects. Member-pointer type is the original two-argument
     // symbol; it forwards to settle_execution_with_lifecycle.
     execution::Result settle_resolved_execution(
         const execution::Action& action, const execution::Fill& fill);
-    // Trusted matching-adapter extension for one execution plus lifecycle effects.
+    // Source coordinator for one execution plus lifecycle effects and source days.
     // Pre-close operations, then close observations and old-cycle unbind, then
     // the listed pending removals, then the quoted opening path which binds
     // only remaining exits. Native settlement does not call compat::pine
@@ -1853,7 +1854,8 @@ protected:
         const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context,
         const execution::SelectedOpeningSet& selection);
-    // Legacy lifecycle copy of current_bar_/fold flags, then selected commit.
+    // Source lifecycle coordinator: current_bar_/fold context, source-day
+    // preflight, selected commit, then observation of its committed close rows.
     // Empty lifecycle is valid. Do not fold selection into LifecycleEffects.
     execution::Result settle_execution_selected_with_lifecycle(
         const execution::Action& action,
@@ -1886,6 +1888,7 @@ protected:
         const execution::ReverseTo& reversal,
         const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context);
+    // Source reversal coordinator with current chart context and source days.
     execution::Result settle_reversal_with_lifecycle_v1(
         const execution::ReverseTo& reversal,
         const execution::Fill& fill,
@@ -3910,6 +3913,7 @@ private:
         execution::CloseScope book_or_opening,
         const execution::SelectedOpeningSet* selected);
     struct NativeSettlementStage;
+    struct NativeSettlementRows;
     execution::Status validate_native_settlement_book(double& held) const;
     execution::Status allocate_native_settlement_closes(
         NativeSettlementStage& stage,
@@ -3922,6 +3926,27 @@ private:
     execution::AccountEffectProjection project_native_settlement_stage(
         const NativeSettlementStage& stage, const execution::Fill& fill) const;
     execution::Result commit_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context);
+    void build_native_settlement_close_rows(
+        const NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        NativeSettlementRows& rows) const;
+    execution::Status prepare_native_settlement_commit(
+        const NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        NativeSettlementRows& rows) const;
+    execution::Status preflight_native_settlement_effects(
+        const NativeSettlementStage& stage,
+        const execution::LifecycleEffects& lifecycle,
+        const NativeSettlementRows& rows);
+    execution::Result commit_prepared_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        NativeSettlementRows& rows);
+    execution::Result settle_source_staged_execution(
         NativeSettlementStage& stage, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle,
         const execution::PhysicalExecutionContext& context);
@@ -4339,6 +4364,10 @@ private:
                           double fill_price, bool was_long);
     void record_close_trade(Trade trade);
     void validate_close_trade_counters(const Trade* rows, size_t count) const;
+    execution::Status preflight_source_close_observation(
+        const Trade* rows, size_t count, std::optional<int>& loss_day) const;
+    void observe_source_close_rows(
+        const Trade* rows, size_t count, std::optional<int> loss_day);
     // Quote one resolved execution's current charges. Entry costs on the
     // closed rows are historical allocations. Returns close shares in FIFO
     // order followed by the opening share (zero when there is no opening).

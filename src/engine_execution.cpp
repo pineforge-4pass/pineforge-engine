@@ -156,6 +156,12 @@ struct BacktestEngine::NativeSettlementStage {
     std::unordered_set<std::uint64_t> selected_ids;
 };
 
+// Only this synchronous call's prospective closes; never stored on the engine
+// or returned as authority to apply an earlier inspection/projection.
+struct BacktestEngine::NativeSettlementRows {
+    std::vector<Trade> closed_trades;
+};
+
 execution::Status BacktestEngine::validate_native_settlement_book(double& held) const {
     using execution::Status;
     held = 0.0;
@@ -459,7 +465,7 @@ execution::Result BacktestEngine::settle_reversal_with_lifecycle_v1(
     }
     NativeSettlementStage stage;
     stage_native_settlement(stage, reversal, fill, &lifecycle);
-    return commit_native_settlement_stage(stage, fill, lifecycle, context);
+    return settle_source_staged_execution(stage, fill, lifecycle, context);
 }
 
 execution::Result BacktestEngine::settle_resolved_execution(
@@ -477,7 +483,10 @@ execution::Result BacktestEngine::settle_execution_with_lifecycle(
     if (!std::isnan(fold_exit_trail_peak_)) {
         context.preceding_exit_trail_peak = fold_exit_trail_peak_;
     }
-    return settle_with_context(action, fill, lifecycle, context);
+    NativeSettlementStage stage;
+    stage_native_settlement(
+        stage, action, fill, execution::Book{}, nullptr, &lifecycle);
+    return settle_source_staged_execution(stage, fill, lifecycle, context);
 }
 
 execution::Result BacktestEngine::settle_native_execution_at(
@@ -518,7 +527,10 @@ execution::Result BacktestEngine::settle_execution_selected_with_lifecycle(
     if (!std::isnan(fold_exit_trail_peak_)) {
         context.preceding_exit_trail_peak = fold_exit_trail_peak_;
     }
-    return settle_with_context_selected(action, fill, lifecycle, context, selection);
+    NativeSettlementStage stage;
+    stage_native_settlement(
+        stage, action, fill, execution::Book{}, &selection, &lifecycle);
+    return settle_source_staged_execution(stage, fill, lifecycle, context);
 }
 
 execution::Result BacktestEngine::settle_with_context_scoped(
@@ -554,16 +566,48 @@ execution::Result BacktestEngine::commit_native_settlement_stage(
         NativeSettlementStage& stage, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle,
         const execution::PhysicalExecutionContext& context) {
-    using execution::Status;
-    if (stage.phase != NativeSettlementStage::Phase::Ready)
-        return {stage.status};
-    const auto no_effect = [&]() -> execution::Result {
-        return {fill.commission_account && *fill.commission_account != 0.0
-            ? Status::InvalidAccounting : Status::NoEffect};
-    };
-    if (stage.scoped && stage.closed == 0.0) return no_effect();
+    NativeSettlementRows rows;
+    if (const auto status = prepare_native_settlement_commit(stage, fill, context, rows);
+        status != execution::Status::Applied)
+        return {status};
+    if (const auto status = preflight_native_settlement_effects(stage, lifecycle, rows);
+        status != execution::Status::Applied)
+        return {status};
+    return commit_prepared_native_settlement_stage(stage, fill, lifecycle, context, rows);
+}
 
-    std::vector<Trade> closed_trades;
+execution::Result BacktestEngine::settle_source_staged_execution(
+        NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context) {
+    NativeSettlementRows rows;
+    if (const auto status = prepare_native_settlement_commit(stage, fill, context, rows);
+        status != execution::Status::Applied)
+        return {status};
+    // Source intraday readiness precedes all close-counter checks, including
+    // Ready opening-only calls. Invalid/NoEffect returned before this point.
+    std::optional<int> loss_day;
+    if (const auto status = preflight_source_close_observation(
+            rows.closed_trades.data(), rows.closed_trades.size(), loss_day);
+        status != execution::Status::Applied)
+        return {status};
+    if (const auto status = preflight_native_settlement_effects(stage, lifecycle, rows);
+        status != execution::Status::Applied)
+        return {status};
+    const auto result = commit_prepared_native_settlement_stage(
+        stage, fill, lifecycle, context, rows);
+    if (result.status == execution::Status::Applied && result.closed_trade_count != 0) {
+        observe_source_close_rows(trades_.data() + result.first_trade_index,
+                                  result.closed_trade_count, loss_day);
+    }
+    return result;
+}
+
+void BacktestEngine::build_native_settlement_close_rows(
+        const NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        NativeSettlementRows& rows) const {
+    auto& closed_trades = rows.closed_trades;
     closed_trades.reserve(stage.closing_indices.size());
     for (size_t i = 0; i < stage.closing_indices.size(); ++i) {
         const auto& lot = pyramid_entries_[stage.closing_indices[i]];
@@ -575,29 +619,49 @@ execution::Result BacktestEngine::commit_native_settlement_stage(
         trade.exit_comment = fill.comment;
         closed_trades.push_back(std::move(trade));
     }
+}
+
+execution::Status BacktestEngine::prepare_native_settlement_commit(
+        const NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::PhysicalExecutionContext& context,
+        NativeSettlementRows& rows) const {
+    using execution::Status;
+    if (stage.phase != NativeSettlementStage::Phase::Ready)
+        return stage.status;
+    if (stage.scoped && stage.closed == 0.0)
+        return fill.commission_account && *fill.commission_account != 0.0
+            ? Status::InvalidAccounting : Status::NoEffect;
+
+    build_native_settlement_close_rows(stage, fill, context, rows);
     if (stage.opening > 0.0
         && (position_side_ == PositionSide::FLAT || stage.survivors.empty())
         && (next_position_cycle_seq_ <= 0
             || next_position_cycle_seq_ == std::numeric_limits<int64_t>::max()))
         throw std::overflow_error("position cycle sequence exhausted");
     if (!std::isfinite(stage.after_qty) || !std::isfinite(stage.after_price))
-        return {Status::InvalidAccounting};
+        return Status::InvalidAccounting;
 
     double next_profit = net_profit_sum_;
     double next_gross_profit = gross_profit_sum_;
     double next_gross_loss = gross_loss_sum_;
-    double next_intraday = intraday_pnl_;
-    for (const auto& trade : closed_trades) {
+    for (const auto& trade : rows.closed_trades) {
         if (!std::isfinite(trade.pnl) || !std::isfinite(trade.commission))
-            return {Status::InvalidAccounting};
+            return Status::InvalidAccounting;
         next_profit += trade.pnl;
-        next_intraday += trade.pnl;
         if (trade.pnl > 0.0) next_gross_profit += trade.pnl;
         if (trade.pnl < 0.0) next_gross_loss += trade.pnl;
     }
     if (!std::isfinite(next_profit) || !std::isfinite(next_gross_profit)
-        || !std::isfinite(next_gross_loss) || !std::isfinite(next_intraday))
-        return {Status::InvalidAccounting};
+        || !std::isfinite(next_gross_loss))
+        return Status::InvalidAccounting;
+    return Status::Applied;
+}
+
+execution::Status BacktestEngine::preflight_native_settlement_effects(
+        const NativeSettlementStage& stage,
+        const execution::LifecycleEffects& lifecycle,
+        const NativeSettlementRows& rows) {
+    const auto& closed_trades = rows.closed_trades;
     validate_close_trade_counters(closed_trades.data(), closed_trades.size());
     if (stage.opening > 0.0 && !stage.survivors.empty()
         && position_entry_count_ == std::numeric_limits<int>::max())
@@ -608,10 +672,8 @@ execution::Result BacktestEngine::commit_native_settlement_stage(
         && (position_side_ == PositionSide::FLAT || stage.survivors.empty());
     if (auto invalid = preflight_settlement_lifecycle(
             lifecycle, will_reset, will_open_quoted))
-        return {*invalid};
+        return *invalid;
 
-    const size_t first_trade = trades_.size();
-    const size_t first_action = stream_order_actions_.size();
     const size_t events = closed_trades.size() + (stage.opening > 0.0 ? 1 : 0);
     if (stream_observe_actions_) {
         if (events > std::numeric_limits<uint64_t>::max() - stream_action_sequence_)
@@ -620,6 +682,17 @@ execution::Result BacktestEngine::commit_native_settlement_stage(
     }
     reserve_effects(trades_, closed_trades.size());
     if (stage.opening > 0.0) reserve_effects(pyramid_entries_, 1);
+    return execution::Status::Applied;
+}
+
+execution::Result BacktestEngine::commit_prepared_native_settlement_stage(
+        NativeSettlementStage& stage, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::PhysicalExecutionContext& context,
+        NativeSettlementRows& rows) {
+    auto& closed_trades = rows.closed_trades;
+    const size_t first_trade = trades_.size();
+    const size_t first_action = stream_order_actions_.size();
 
     // Commit through the existing accounting/observation sinks. Allocation or
     // lifecycle exceptions still abort the owning engine run; this internal
@@ -654,7 +727,7 @@ execution::Result BacktestEngine::commit_native_settlement_stage(
     }
     if (stream_observe_actions_) stream_refresh_action_metadata(first_action, first_trade);
     execution::Result applied;
-    applied.status = Status::Applied;
+    applied.status = execution::Status::Applied;
     applied.closed_units = stage.closed;
     applied.opened_units = stage.incoming == PositionSide::SHORT
         ? -stage.opening : stage.opening;
@@ -802,19 +875,11 @@ execution::AccountEffectProjection BacktestEngine::project_native_settlement_sta
         throw std::overflow_error("position cycle sequence exhausted");
 
     execution::PhysicalExecutionContext context;
-    std::vector<Trade> closed_trades;
-    closed_trades.reserve(stage.closing_indices.size());
-    for (size_t i = 0; i < stage.closing_indices.size(); ++i) {
-        const auto& lot = pyramid_entries_[stage.closing_indices[i]];
-        auto trade = build_close_trade_with_costs(lot, stage.closing_quantities[i],
-            fill.price, stage.was_long,
-            allocated_entry_commission(lot, stage.closing_quantities[i]),
-            stage.current_costs[i], context);
-        closed_trades.push_back(std::move(trade));
-    }
+    NativeSettlementRows rows;
+    build_native_settlement_close_rows(stage, fill, context, rows);
 
     double realized = net_profit_sum_;
-    for (const auto& trade : closed_trades) {
+    for (const auto& trade : rows.closed_trades) {
         if (!std::isfinite(trade.pnl) || !std::isfinite(trade.commission))
             return invalid_projection(Status::InvalidAccounting);
         realized += trade.pnl;

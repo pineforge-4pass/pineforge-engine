@@ -26,6 +26,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 
 #include <pineforge/bar.hpp>
@@ -83,23 +84,21 @@ public:
     void set_position_qty(double v) { position_qty_ = v; }
     void set_bar(const Bar& b) { current_bar_ = b; }
 
-    // --- direct halt-state injectors mirroring engine_orders.cpp's exit path ---
-    // Replicates the cons-loss-day accounting that execute_market_exit applies
-    // when a trade closes negative/positive, so the day-rollover gate can be
-    // exercised without running a full fill cycle.
+    // Produce a real committed close through the source coordinator. The risk
+    // fixture must exercise the production observer, not copy its day walk.
     void record_trade_pnl_for_day(double pnl, const Bar& bar) {
         current_bar_ = bar;
-        intraday_pnl_ += pnl;
-        if (pnl < 0.0) {
-            BarTime bt = _decompose_bar_time_chart_tz();
-            int cur_day = bt.dayofmonth * 100 + bt.month;
-            if (cur_day != last_loss_day_) {
-                last_loss_day_ = cur_day;
-                cons_loss_day_count_++;
-            }
-        } else if (pnl > 0.0) {
-            cons_loss_day_count_ = 0;
-        }
+        const execution::PhysicalExecutionContext context{
+            current_bar_.timestamp, bar_index_, {}, {}};
+        const auto opened = settle_native_execution_at(order_action::Transact{1},
+            execution::Fill{1000, "risk-day", "", 0, 0}, context);
+        if (opened.status != execution::Status::Applied)
+            throw std::runtime_error("risk fixture native opening failed");
+        const auto closed = settle_execution_with_lifecycle(execution::Flatten{},
+            execution::Fill{1000 + pnl, "risk-day-close", "", 0, 0}, {});
+        if (closed.status != execution::Status::Applied || closed.closed_trade_count != 1
+            || trades_.back().pnl != pnl)
+            throw std::runtime_error("risk fixture source close failed");
     }
 
     // --- intraday-loss surface (TradingView's day-scoped rule) ---

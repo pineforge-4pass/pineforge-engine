@@ -719,13 +719,9 @@ void BacktestEngine::purge_exit_orders(bool retain_for_pending_entries) {
 // Shared close-side / position-state helpers
 // ────────────────────────────────────────────────────────────────────
 
-// Emit one Trade record for closing close_qty of pyramid entry pe at
-// fill_price (already slippage-adjusted). Updates trades_, profit/loss
-// aggregates, intraday PnL, and consecutive-loss-day tracking exactly the
-// same way every closing path does — the body was previously inlined in
-// execute_market_exit, execute_partial_exit_qty, execute_partial_exit_by_entry,
-// execute_partial_exit_by_entry_percent, and the flip branch of
-// execute_market_entry. Mirrors TradingView's per-pyramid trade reporting.
+// Build a close row using the current source context and resolved price.
+// This does not book cash, emit a live trade or update source-day observations;
+// range-end reporting also uses this non-mutating row builder.
 Trade BacktestEngine::build_close_trade(const PyramidEntry& pe, double close_qty,
                                         double fill_price, bool was_long) const {
     execution::PhysicalExecutionContext context;
@@ -867,7 +863,6 @@ void BacktestEngine::emit_close_trade(const PyramidEntry& pe, double close_qty,
 
 void BacktestEngine::record_close_trade(Trade trade) {
     validate_close_trade_counters(&trade, 1);
-    const double pnl = trade.pnl;
     const double trade_pnl = trade.pnl;
     trades_.push_back(std::move(trade));
     if (stream_observe_actions_) stream_observe_exit(trades_.size() - 1);
@@ -901,54 +896,30 @@ void BacktestEngine::record_close_trade(Trade trade) {
     if (trade_pnl > 0) { gross_profit_sum_ += trade_pnl; win_trades_count_++; }
     else if (trade_pnl < 0) { gross_loss_sum_ += trade_pnl; loss_trades_count_++; }
     else { ++eventrades_count_; }  // strategy.eventrades: exact zero P&L (TV uses == 0)
-
-    // Update risk state: intraday PnL and consecutive loss day tracking
-    intraday_pnl_ += pnl;
-    if (pnl < 0.0) {
-        BarTime bt = _decompose_bar_time_chart_tz();
-        int cur_day = bt.dayofmonth * 100 + bt.month;
-        if (cur_day != last_loss_day_) {
-            last_loss_day_ = cur_day;
-            cons_loss_day_count_++;
-        }
-    } else if (pnl > 0.0) {
-        cons_loss_day_count_ = 0;
-    }
 }
 
 void BacktestEngine::validate_close_trade_counters(const Trade* rows, size_t count) const {
     const int maximum = std::numeric_limits<int>::max();
     // In an ordinary run each counter can advance at most once per row.
-    // Only an exhausted/near-exhausted counter needs the exact risk-day walk.
+    // Only an exhausted/near-exhausted counter needs the exact financial walk.
     if (count <= static_cast<size_t>(maximum)) {
         const int room = maximum - static_cast<int>(count);
         if (win_trades_count_ <= room && loss_trades_count_ <= room
-            && eventrades_count_ <= room && cons_loss_day_count_ <= room)
+            && eventrades_count_ <= room)
             return;
     }
     int64_t wins = win_trades_count_, losses = loss_trades_count_;
-    int64_t evens = eventrades_count_, loss_days = cons_loss_day_count_;
-    int last_day = last_loss_day_;
-    std::optional<int> current_day;
+    int64_t evens = eventrades_count_;
     for (size_t i = 0; i < count; ++i) {
         const double pnl = rows[i].pnl;
         if (pnl > 0.0) {
             ++wins;
-            loss_days = 0;
         } else if (pnl < 0.0) {
             ++losses;
-            if (!current_day) {
-                const BarTime time = _decompose_bar_time_chart_tz();
-                current_day = time.dayofmonth * 100 + time.month;
-            }
-            if (*current_day != last_day) {
-                last_day = *current_day;
-                ++loss_days;
-            }
         } else {
             ++evens;
         }
-        if (wins > maximum || losses > maximum || evens > maximum || loss_days > maximum)
+        if (wins > maximum || losses > maximum || evens > maximum)
             throw std::overflow_error("closed trade counter exhausted");
     }
 }

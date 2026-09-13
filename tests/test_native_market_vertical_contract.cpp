@@ -4,6 +4,7 @@
 
 #include <pineforge/native_host.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -17,6 +18,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -166,6 +168,21 @@ public:
     bool source_caught = false;
 
     void invoke_source_entry() { strategy_entry("legacy", true); }
+    void poison_source_observation() {
+        intraday_pnl_ = kNaN;
+        cons_loss_day_count_ = std::numeric_limits<int>::max();
+        last_loss_day_ = -1;
+        intraday_pnl_day_ = 42;
+    }
+    auto source_observation() const {
+        uint64_t intraday_bits;
+        std::memcpy(&intraday_bits, &intraday_pnl_, sizeof intraday_bits);
+        return std::make_tuple(intraday_bits, cons_loss_day_count_,
+                               last_loss_day_, intraday_pnl_day_);
+    }
+    const auto& physical_lots() const { return pyramid_entries_; }
+    int64_t position_cycle() const { return position_cycle_seq_; }
+    double realized_balance() const { return initial_capital_ + net_profit_sum_; }
 
     void on_native_bar(const Bar& bar, const NativeDecisionContext& context) override {
         ++callbacks;
@@ -310,6 +327,25 @@ std::vector<CommandEvent> copy_commands(const FixtureHost& host) {
     return out;
 }
 
+std::vector<pineforge::NativeAccountObservation> copy_accounts_after_applied(
+        const FixtureHost& host) {
+    std::vector<pineforge::NativeAccountObservation> out;
+    std::vector<uint64_t> applied;
+    for (const auto& event : host.native_events(0)) {
+        if (event.command && as_event<ExecutionAppliedEvent>(*event.command))
+            applied.push_back(event_ordinal(*event.command));
+        if (event.kind == NativeEventKind::Account) {
+            CHECK(event.account.has_value());
+            if (!event.account) continue;
+            CHECK(event.account->ordinal == event.ordinal);
+            CHECK(std::find(applied.begin(), applied.end(), event.ordinal) != applied.end());
+            out.push_back(*event.account);
+        }
+    }
+    CHECK(out.size() == applied.size());
+    return out;
+}
+
 int count_applied(const std::vector<CommandEvent>& events) {
     int n = 0;
     for (const auto& e : events) if (as_event<ExecutionAppliedEvent>(e)) ++n;
@@ -429,9 +465,12 @@ std::string inputs_json(const std::vector<FedBar>& inputs) {
     return out.str();
 }
 
-std::string default_calendar_json() {
-    return "{\"timezone\":\"UTC\",\"session\":\"24x7\",\"inputTf\":\"1\","
-           "\"scriptTf\":\"1\",\"chartTimezone\":\"\"}";
+std::string calendar_json(const NativeRunSpec& spec) {
+    return "{\"timezone\":" + json_escape(spec.timezone)
+        + ",\"session\":" + json_escape(spec.session)
+        + ",\"inputTf\":" + json_escape(spec.input_tf)
+        + ",\"scriptTf\":" + json_escape(spec.script_tf)
+        + ",\"chartTimezone\":" + json_escape(spec.chart_timezone) + "}";
 }
 
 std::string config_json(const NativeRunSpec& spec) {
@@ -442,7 +481,10 @@ std::string config_json(const NativeRunSpec& spec) {
         << ",\"priceTick\":" << json_num(spec.price_tick)
         << ",\"pointValue\":" << json_num(spec.point_value)
         << ",\"accountFx\":" << json_num(spec.account_fx)
-        << ",\"slippageTicks\":" << json_u64(spec.slippage_ticks) << "}";
+        << ",\"slippageTicks\":" << json_u64(spec.slippage_ticks);
+    if (spec.initial_margin_fraction)
+        out << ",\"initialMarginFraction\":" << json_num(*spec.initial_margin_fraction);
+    out << "}";
     return out.str();
 }
 
@@ -478,7 +520,7 @@ ScenarioArt make_art(const std::string& id, const NativeRunSpec& spec,
     s.status = (failures == fail_before) ? "passed" : "failed";
     s.native_configuration = config_json(spec);
     s.run_identity = identity_json(spec);
-    s.calendar = default_calendar_json();
+    s.calendar = calendar_json(spec);
     s.logical_inputs = inputs_json(inputs);
     s.lifecycle_events = lifecycle_json(events);
     s.physical_effects = physical_json(host, events);
@@ -493,6 +535,8 @@ void require_applied_setup(FixtureHost& host, const NativeRunSpec& spec) {
 }
 
 void expect_completed(const FixtureHost& host) {
+    if (!host.last_error().empty())
+        std::printf("native host error: %s\n", host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
 }
@@ -947,6 +991,110 @@ int main() {
         near(host.native_marked_equity(kOpen104), 9992.0);
         arts.push_back(make_art("R1-native-contract-F4-units-reject-crossing", spec, host,
                                 fed_three, kOpen104, before));
+    }
+
+    // F4 InitialMargin is checked before either leg of a crossing settles.
+    // Equality uses the same actual host path with unrelated source state poisoned.
+    for (bool equality : {false, true}) {
+        const int before = failures;
+        FixtureHost host;
+        const char* id = equality ? "R3-native-InitialMargin-equality-source-inert"
+                                  : "R3-native-InitialMargin-reject-crossing";
+        auto spec = spec_for(id, 1);
+        spec.initial_capital = equality ? 222.0 : 210.0;
+        spec.initial_margin_fraction = 1.0;
+        spec.chart_timezone = "America/New_York";
+        pineforge::PyramidEntry old_lot;
+        int64_t old_cycle = 0;
+        double old_balance = 0;
+        bool captured = false;
+        auto poisoned = host.source_observation();
+        host.script = [&](FixtureHost& h, const Bar&, const NativeDecisionContext&) {
+            if (h.callbacks == 1)
+                CHECK(h.submit_market(tx(-1.0, "short")).status == SubmitStatus::Accepted);
+            if (h.callbacks == 2) {
+                CHECK(h.physical_lots().size() == 1);
+                if (h.physical_lots().size() == 1) old_lot = h.physical_lots().front();
+                old_cycle = h.position_cycle();
+                old_balance = h.realized_balance();
+                captured = true;
+                if (equality) {
+                    h.poison_source_observation();
+                    poisoned = h.source_observation();
+                }
+                CHECK(h.submit_market(tx(3.0, "cross")).status == SubmitStatus::Accepted);
+            }
+        };
+        require_applied_setup(host, spec);
+        host.run(three_cross, 3);
+        expect_completed(host);
+        CHECK(captured);
+        const auto events = copy_commands(host);
+        const auto accounts = copy_accounts_after_applied(host);
+        const auto position = host.physical_position();
+        CHECK(position.lot_count == 1);
+        CHECK(host.physical_lots().size() == 1);
+        if (equality) {
+            CHECK(count_kind(events, "MatchRejected") == 0);
+            CHECK(count_applied(events) == 2);
+            CHECK(accounts.size() == 2);
+            CHECK(host.trade_count() == 1);
+            near(position.signed_units, 2.0);
+            near(position.average_price, 104.0);
+            CHECK(host.position_cycle() == old_cycle + 1);
+            near(host.realized_balance(), 212.0);
+            near(host.native_marked_equity(104.0), 208.0);
+            near(sum_tickets(events), 12.0);
+            CHECK(host.source_observation() == poisoned);
+            if (host.physical_lots().size() == 1)
+                near(host.physical_lots().front().entry_commission_account, 4.0);
+            if (host.trade_count() == 1) {
+                const auto& trade = host.get_trade(0);
+                near(trade.qty, 1.0); near(trade.entry_price, 102.0);
+                near(trade.exit_price, 104.0); near(trade.commission, 8.0);
+                near(trade.pnl, -10.0);
+            }
+            if (accounts.size() == 2) {
+                near(accounts[0].realized_balance, 222.0);
+                near(accounts[0].marked_equity, 216.0);
+                near(accounts[1].realized_balance, 212.0);
+                near(accounts[1].marked_equity, 208.0);
+                near(accounts[1].signed_units, 2.0);
+                CHECK(accounts[1].effective_time_ms == kT2);
+            }
+        } else {
+            CHECK(count_applied(events) == 1);
+            CHECK(count_kind(events, "MatchRejected") == 1);
+            bool initial_margin = false;
+            for (const auto& event : events)
+                if (const auto* rejected = as_event<MatchRejectedEvent>(event))
+                    initial_margin = rejected->reason == MatchRejectReason::InitialMargin;
+            CHECK(initial_margin);
+            CHECK(accounts.size() == 1);
+            CHECK(host.trade_count() == 0);
+            near(position.signed_units, -1.0);
+            near(position.average_price, 102.0);
+            CHECK(host.position_cycle() == old_cycle);
+            CHECK(host.realized_balance() == old_balance);
+            near(host.realized_balance(), 210.0);
+            near(host.native_marked_equity(104.0), 202.0);
+            near(sum_tickets(events), 6.0);
+            if (host.physical_lots().size() == 1) {
+                const auto& kept = host.physical_lots().front();
+                CHECK(kept.qty == old_lot.qty && kept.price == old_lot.price);
+                CHECK(kept.entry_incarnation == old_lot.entry_incarnation);
+                CHECK(kept.time == old_lot.time);
+                CHECK(kept.entry_commission_account == old_lot.entry_commission_account);
+                near(kept.entry_commission_account, 6.0);
+            }
+            if (accounts.size() == 1) {
+                near(accounts[0].realized_balance, 210.0);
+                near(accounts[0].marked_equity, 204.0);
+                near(accounts[0].signed_units, -1.0);
+                CHECK(accounts[0].effective_time_ms == kT1);
+            }
+        }
+        arts.push_back(make_art(id, spec, host, fed_three, kOpen104, before));
     }
 
     // F4: adding a same-side lot would exceed the resulting-book lot limit.

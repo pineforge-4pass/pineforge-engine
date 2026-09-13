@@ -9,6 +9,7 @@ set(TEST_SOURCES
     test_native_reverse_to
     test_source_exact_reversal
     test_source_fifo_endpoints
+    test_settlement_observation_boundary
     test_order_action
     test_native_order_core
     test_native_order_terminal

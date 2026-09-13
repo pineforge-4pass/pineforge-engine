@@ -1,12 +1,17 @@
 # Native resolved execution settlement
 
-`BacktestEngine::settle_resolved_execution` is a protected C++ extension for
-trusted matching adapters. It applies an already admitted, matched execution
-to the engine's existing physical lot book and emits the resulting close and
-open observations. It adds no second position ledger or persistent selector.
-Callers that supply transient EXIT lifecycle effects use the separately named
-`settle_execution_with_lifecycle` seam; the two-argument symbol is unchanged
-and forwards empty effects.
+`BacktestEngine::settle_native_execution_at` is a protected C++ extension for
+trusted native matching adapters. It applies an already admitted, matched
+execution using a supplied `PhysicalExecutionContext` and the engine's one
+physical lot book. Scoped and selected variants use the same financial owner.
+Use `PhysicalExecutionContext{}` when zero time/index and no preceding-path
+facts are appropriate; native settlement has no implicit source chart clock.
+
+The original two-argument `settle_resolved_execution` symbol is a source
+compatibility alias of `settle_execution_with_lifecycle` with empty effects.
+It uses current chart context and preserves source-day checks and observations.
+It is distinct from the explicit native/context seams, which do not depend on
+those source fields. Both routes book physical and financial effects once.
 
 The caller supplies an `execution::Action` and `execution::Fill` from
 `<pineforge/execution.hpp>`. These values describe immediate effects:
@@ -65,7 +70,7 @@ nonvirtual methods:
 | `inspect_native_reversal_v1(reversal, fill)` | Non-mutating `SettlementInspection` of physical effects and the current ticket. |
 | `project_native_reversal_v1(reversal, fill)` | Non-mutating `AccountEffectProjection`, including account effects and the next cycle without consuming it. |
 | `settle_native_reversal_at_v1(reversal, fill, context)` | `Result` from settlement using the supplied `PhysicalExecutionContext` and empty lifecycle effects. |
-| `settle_reversal_with_lifecycle_v1(reversal, fill, lifecycle)` | `Result` from settlement using the engine's current time, interval and preceding exit-path facts with supplied transient lifecycle effects. |
+| `settle_reversal_with_lifecycle_v1(reversal, fill, lifecycle)` | Source-coordinated `Result` using current chart context, supplied lifecycle effects and source-day preflight/observation. |
 
 For example, reversing a held long position of `1` unit to a short target of
 `0.1` opens the exact binary64 quantity supplied as `-0.1`. The opening quantity
@@ -162,6 +167,49 @@ and paid cost in roster order. A projection is data, not commit authority: later
 settlement revalidates against the current book. Source percent sizing can consume
 a close-only projection's equity before resolving one reversal opening quantity.
 
+## Source-day observation boundary
+
+Native Book/scoped/selected/ReverseTo settlement and the generic
+`settle_with_context` seam do not read or update Pine intraday PnL or
+consecutive-loss-day counters. Their inspection and account projection methods
+are likewise independent of these source fields. An exhausted source day count
+or nonfinite cached source intraday value cannot refuse an otherwise valid
+native execution. Financial win/loss/even, entry/cycle/stream capacity and
+lifecycle checks remain generic and still run before physical effects.
+
+Three source coordinators preserve the existing source behavior:
+`settle_execution_with_lifecycle`, `settle_execution_selected_with_lifecycle`
+and `settle_reversal_with_lifecycle_v1`. They share the native stage and quote,
+prepare this execution's close rows once, validate source observations before
+effects, and use the same physical/financial commit. Only after Applied do they
+observe the newly committed slice identified by the Result. Historical and
+range-end report rows are not observed again.
+
+Source preflight first completes the full ordered intraday-PnL sum and checks
+that it is finite. It then simulates consecutive-loss-day counters, using the
+existing chart timezone and `dayofmonth * 100 + month` key. That day is captured
+before effects, so the committed-row observer performs no timezone work. A loss
+increments the count only on a different last-loss day; a win resets the count
+without clearing the last-loss-day key; zero PnL leaves the count unchanged.
+The observer updates source fields only and never applies cash or fees again.
+
+Source intraday invalidity remains `InvalidAccounting`, before source or
+financial close-counter overflow. Source day exhaustion retains
+`"closed trade counter exhausted"` before later lifecycle/stream checks.
+Generic cycle readiness still precedes source preflight. A Ready opening-only
+source call also requires finite cached intraday PnL, despite having no close
+rows; it performs no observer writes. Invalid and NoEffect stages return before
+source preflight. These checks and observations are private to the synchronous
+call and introduce no saved settlement plan or persistent state.
+
+Source risk/halt evaluation stays at its existing fill-loop call sites after
+the coordinator returns. Native admission remains its own direction, resulting
+position and initial-margin gate; Pine entry/risk/quota rules stay in source
+adapters. Physical positions and marked equity continue to follow actual lots,
+while the existing script/C position view may remain frozen. Range-end reporting
+can update report rows/equity-curve state without committing physical closes or
+source-day observations. Existing source fields remain represented in hashes.
+
 ## Integration and limits
 
 The kernel serves native execution and the source adapters' full, partial,
@@ -209,6 +257,7 @@ run rather than retry a partially committed execution in place. Strong
 rollback on allocation failure is not promised.
 
 The work retains `ShortSeedCollisionRole` while its source-policy consumers
-remain. Admission, source day/quota counters, script-visible observations and
-complete Pine lowering remain separate refactor work. Existing executable state
-remains represented in ABI projections and fingerprints.
+remain. Source quota, TV-money/day-loss policy and complete Pine lowering remain
+separate refactor work. Source-day observation ownership is separated from the
+native financial owner; existing executable state remains represented in ABI
+projections and fingerprints.

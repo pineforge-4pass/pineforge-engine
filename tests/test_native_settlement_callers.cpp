@@ -1,10 +1,12 @@
 // R3 live adapter helpers: actual source selection/sizing followed by the one book owner.
 // Private member access uses the same explicit-instantiation pattern as R3a tests.
-#include <pineforge/engine.hpp>
+#include <pineforge/pineforge.h>
+#include <pineforge/native_host.hpp>
 #include <pineforge/execution_projection.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -68,9 +70,6 @@ struct Book final:BacktestEngine{
         (this->*access(Raw{}))(o,p,trail,closed_bar,closed_inc,closed_long);}
     void exit(PendingOrder& o,double p){int closed_bar=-1;uint64_t closed_inc=0;bool closed_long=false;
         (this->*access(Exit{}))(o,p,closed_bar,closed_inc,closed_long);}
-    void range(){record_equity_point(current_bar_.timestamp);(this->*access(Range{}))();}
-    void freeze(){freeze_script_position_view();} void unfreeze(){clear_script_position_view();}
-    double source_position()const{return signed_position_size();}
     double size50(double p)const{return calc_qty_for_type(p,50,static_cast<int>(QtyType::PERCENT_OF_EQUITY));}
     x::AccountEffectProjection flatten_quote(double p)const{return project_native_settlement_v1(x::Flatten{},x::Fill{p,"quote","",90,{}});}
     double physical()const{return position_side_==PositionSide::SHORT?-position_qty_:position_qty_;}
@@ -228,15 +227,99 @@ void direction_blocked_one_slip(double sign){
     CHECK(b.rows()[0].exit_price==100-sign*.5);near(b.rows()[0].pnl,-6.5);
 }
 
+// One authoritative freeze proof. The native observer is the real consumer
+// bound by NativeStrategyHost; direct settlement keeps the chart index stable.
+struct ObservationHost final : NativeStrategyHost {
+    ObservationHost() {
+        initial_capital_=1000;
+        commission_type_=CommissionType::CASH_PER_ORDER;
+        commission_value_=6;
+        syminfo_.pointvalue=1;account_currency_fx_=1;
+        syminfo_.mintick=.25;syminfo_mintick_=.25;slippage_=2;
+        stream_observe_actions_=true;
+        bar_index_=3;
+        current_bar_={100,120,80,100,1,1736121780000LL};
+    }
+    void on_native_bar(const Bar&,const NativeDecisionContext&) override {}
+    void open(double quantity,uint64_t incarnation,double paid) {
+        const auto result=settle_native_execution_at(order_action::Transact{quantity},
+            x::Fill{100,"seed","",incarnation,paid},
+            {current_bar_.timestamp,bar_index_,{}, {}});
+        REQUIRE(result.status==x::Status::Applied);
+    }
+    void source_sentinels() {
+        intraday_pnl_=17.25;cons_loss_day_count_=7;last_loss_day_=104;intraday_pnl_day_=42;
+    }
+    void freeze(){freeze_script_position_view();}
+    void unfreeze(){clear_script_position_view();}
+    double source_position()const{return signed_position_size();}
+    int chart_index()const{return bar_index_;}
+    x::Result reduce() {
+        current_bar_.close=110; // Same source interval: the freeze remains active.
+        return settle_native_execution_at(order_action::Reduce{1},x::Fill{110,"reduce","",99,{}},
+            {current_bar_.timestamp,bar_index_,{}, {}});
+    }
+    void range(){record_equity_point(current_bar_.timestamp);(this->*access(Range{}))();}
+    static uint64_t raw(double value){uint64_t out;std::memcpy(&out,&value,sizeof out);return out;}
+    auto source_snapshot()const {
+        return std::make_tuple(raw(intraday_pnl_),cons_loss_day_count_,last_loss_day_,intraday_pnl_day_);
+    }
+    std::vector<uint64_t> financial_snapshot()const {
+        return {raw(net_profit_sum_),raw(net_profit_roundoff_value_),raw(net_profit_roundoff_bound_),
+            raw(gross_profit_sum_),raw(gross_loss_sum_),static_cast<uint64_t>(win_trades_count_),
+            static_cast<uint64_t>(loss_trades_count_),static_cast<uint64_t>(eventrades_count_),
+            static_cast<uint64_t>(position_cycle_seq_),static_cast<uint64_t>(next_position_cycle_seq_),
+            stream_action_sequence_,static_cast<uint64_t>(trades_.size()),
+            static_cast<uint64_t>(stream_order_actions_.size())};
+    }
+    size_t account_count()const {
+        const auto events=native_events(0);
+        return static_cast<size_t>(std::count_if(events.begin(),events.end(),[](const auto& event){
+            return event.kind==NativeEventKind::Account;
+        }));
+    }
+    const auto& lots()const{return pyramid_entries_;}
+    const auto& rows()const{return trades_;}
+};
+
 void nonphysical_observations(){
-    scenario="range-end and frozen source view do not settle exposure";Book b;b.open(1,100,11,"A",2);b.open(3,100,22,"B",6);
-    const auto lots=b.lots();const auto rows=b.rows().size(),actions=b.actions().size();const auto cycle=b.cycle(),next=b.next_cycle();
-    const double balance=b.balance();b.freeze();CHECK(b.source_position()==4);CHECK(b.physical()==4);b.unfreeze();
-    b.bar(4,110);b.range();CHECK(b.rows().size()==rows&&b.actions().size()==actions);
-    CHECK(b.report_trade_count()==2&&b.get_report_trade(0).open_at_end&&b.get_report_trade(1).open_at_end);
-    CHECK(b.cycle()==cycle&&b.next_cycle()==next&&b.balance()==balance&&b.lots().size()==lots.size());
-    for(size_t i=0;i<lots.size();++i){CHECK(b.lots()[i].qty==lots[i].qty&&b.lots()[i].price==lots[i].price);
-        CHECK(b.lots()[i].entry_incarnation==lots[i].entry_incarnation&&b.lots()[i].entry_commission_account==lots[i].entry_commission_account);}
+    scenario="physical reduction preserves frozen source/C ABI view; range-end is nonphysical";
+    ObservationHost b;b.open(1,11,2);b.open(3,22,6);b.source_sentinels();
+    const auto source=b.source_snapshot();
+    const auto handle=static_cast<pf_strategy_t>(static_cast<BacktestEngine*>(&b));
+    b.freeze();CHECK(b.source_position()==4);CHECK(strategy_position_size(handle)==4);
+    CHECK(b.physical_position().signed_units==4&&b.physical_position().lot_count==2);
+    const int frozen_index=b.chart_index();
+    const auto reduced=b.reduce();REQUIRE(reduced.status==x::Status::Applied);
+    CHECK(b.chart_index()==frozen_index);
+    REQUIRE(b.rows().size()==1&&b.lots().size()==1);
+    near(b.rows()[0].pnl,2);CHECK(b.rows()[0].exit_price==110);near(b.rows()[0].commission,8);
+    const auto physical=b.physical_position();
+    CHECK(physical.signed_units==3&&physical.lot_count==1);near(physical.average_price,100);
+    CHECK(b.source_position()==4&&strategy_position_size(handle)==4);
+    near(strategy_current_equity(handle),1002);near(b.native_marked_equity(110),1026);
+    CHECK(b.source_snapshot()==source);
+
+    const auto lot=b.lots().front();const auto trade=b.rows().front();
+    const auto financial=b.financial_snapshot();const auto range_source=b.source_snapshot();
+    const auto accounts=b.account_count();
+    b.range();
+    CHECK(b.chart_index()==frozen_index);
+    CHECK(b.financial_snapshot()==financial&&b.source_snapshot()==range_source);
+    CHECK(b.account_count()==accounts);
+    REQUIRE(b.rows().size()==1&&b.lots().size()==1);
+    CHECK(b.rows()[0].qty==trade.qty&&b.rows()[0].pnl==trade.pnl&&b.rows()[0].commission==trade.commission);
+    CHECK(b.rows()[0].entry_time==trade.entry_time&&b.rows()[0].exit_time==trade.exit_time);
+    const auto& kept=b.lots().front();
+    CHECK(kept.qty==lot.qty&&kept.price==lot.price&&kept.time==lot.time);
+    CHECK(kept.entry_incarnation==lot.entry_incarnation&&kept.entry_commission_account==lot.entry_commission_account);
+    CHECK(b.report_trade_count()==2);
+    CHECK(!b.get_report_trade(0).open_at_end&&b.get_report_trade(1).open_at_end);
+    CHECK(b.get_report_trade(1).qty==3&&b.get_report_trade(1).exit_price==110); // No source slippage.
+    CHECK(b.physical_position().signed_units==3&&b.physical_position().lot_count==1);
+    CHECK(b.source_position()==4&&strategy_position_size(handle)==4);
+    near(strategy_current_equity(handle),1002);near(b.native_marked_equity(110),1026);
+    b.unfreeze();CHECK(b.source_position()==3&&strategy_position_size(handle)==3);
 }
 template<class F>void run(F fn){try{fn();}catch(const Abort&){}catch(const std::exception& e){++failures;std::printf("FAIL %s exception %s\n",scenario,e.what());}}
 }
