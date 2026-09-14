@@ -136,7 +136,7 @@ public:
     }
     void fee(double cash) { commission_value_ = cash; }
     void fx(double value) { account_currency_fx_ = value; }
-    double position() const { return signed_position_size(); }
+    double position() const { return live_position_size(); }
     double average() const { return position_entry_price_; }
     double net() const { return net_profit_sum_; }
     double marked(double price) const { return marked_equity(price); }

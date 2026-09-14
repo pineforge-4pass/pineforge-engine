@@ -89,6 +89,7 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/pine_orders.cpp
     src/source/pine_execution_lifecycle.cpp
     src/source/pine_policy_members.cpp
+    src/source/pine_state_hash.cpp
 )
 
 add_library(pineforge STATIC

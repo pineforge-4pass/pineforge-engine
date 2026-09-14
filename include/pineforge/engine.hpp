@@ -1009,6 +1009,7 @@ struct StrategyOverrides {
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
 inline namespace engine_script_run_v15 {
+class BrokerStateHashSink;
 class BacktestEngine {
 protected:
     friend class LegacyCompatibilityConsumer;
@@ -1020,6 +1021,7 @@ protected:
                                 compat::pine::CapAttachment::None);
     IExecutionConsumer& execution_consumer();
     const IExecutionConsumer& execution_consumer() const;
+    virtual void hash_source_extension(BrokerStateHashSink&) const;
     // --- Position state ---
     // @broker-state begin
     PositionSide position_side_ = PositionSide::FLAT;

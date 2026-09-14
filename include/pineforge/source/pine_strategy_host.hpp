@@ -56,22 +56,22 @@ public:
     int pine_bar_index() const;
     int pine_last_bar_index() const;
     double prev_chart_close() const;
-    double live_position_size() const;
+    double live_position_size() const override;
     int pending_order_count() const;
     const MarketAdmissionJournal& market_admission_journal() const;
     const PendingOrder& pending_order_at(int index) const;
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
     void set_syminfo_metadata(const std::string& key, double value) override;
-    int observe_last_bar_dual_entry_path_v1() const;
-    int observe_pending_count_v1() const;
-    int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;
+    int observe_last_bar_dual_entry_path_v1() const override;
+    int observe_pending_count_v1() const override;
+    int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const override;
     int observe_probe_fill_qty(int index, double fill_price, double* qty,
-                               int* close_only, int* partition) const;
-    int observe_pending_level_resolved(int index) const;
+                               int* close_only, int* partition) const override;
+    int observe_pending_level_resolved(int index) const override;
     int observe_pending_effective_levels(int index, double* stop, double* limit,
-                                         double* trail_activation) const;
-    double observe_trail_best_price_v1() const;
+                                         double* trail_activation) const override;
+    double observe_trail_best_price_v1() const override;
 
 protected:
     PineExecutionAdapter adapter_;
@@ -113,6 +113,7 @@ protected:
     // @source-state end
 
     bool history_advances_new_bar() const;
+    void hash_source_extension(BrokerStateHashSink&) const override;
     void _push_source_series();
     double signed_position_size() const;
     void freeze_script_position_view();
