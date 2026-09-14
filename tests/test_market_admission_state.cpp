@@ -14,8 +14,8 @@ int checks=0,failures=0;
 #define CHECK(x) do{++checks;if(!(x)){++failures;std::fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);}}while(0)
 class ModelBook:public Book {
 public:
-    Journal& journal(){return market_admission_journal_;}
-    const Journal& journal()const{return market_admission_journal_;}
+    Journal& journal(){return market_admission_journal();}
+    const Journal& journal()const{return market_admission_journal();}
     void trading_after(int64_t value){trade_start_time_=value;}
     void view_context_fill(){coof_scheduler_active_=true;coof_fill_recalc_active_=true;calc_on_order_fills_=true;}
 };

@@ -252,10 +252,10 @@ public:
         default_qty_value_ = pct;
     }
     double close_now() const { return current_bar_.close; }
-    using BacktestEngine::strategy_entry;
-    using BacktestEngine::strategy_exit;
-    using BacktestEngine::strategy_close;
-    using BacktestEngine::strategy_close_all;
+    using pineforge::source::PineStrategyHost::strategy_entry;
+    using pineforge::source::PineStrategyHost::strategy_exit;
+    using pineforge::source::PineStrategyHost::strategy_close;
+    using pineforge::source::PineStrategyHost::strategy_close_all;
     const std::vector<PyramidEntry>& pyramid_entries() const {
         return pyramid_entries_;
     }

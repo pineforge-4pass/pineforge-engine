@@ -26,8 +26,8 @@ template<class Tag, auto Member> struct Access {
 };
 struct FlipTag { friend auto access(FlipTag); };
 struct SequentialTag { friend auto access(SequentialTag); };
-template struct Access<FlipTag, &BacktestEngine::flip_market_position_to>;
-template struct Access<SequentialTag, &BacktestEngine::sequential_same_tick_reversal_fill>;
+template struct Access<FlipTag, &pineforge::source::PineStrategyHost::flip_market_position_to>;
+template struct Access<SequentialTag, &pineforge::source::PineStrategyHost::sequential_same_tick_reversal_fill>;
 
 uint64_t bits(double value) {
     uint64_t result;

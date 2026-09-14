@@ -83,7 +83,6 @@ set(PINEFORGE_SOURCE_LAYER_SOURCES
     src/source/pine_market_admission.cpp
     src/source/pine_scheduler.cpp
     src/source/pine_stream.cpp
-    src/source/pine_security.cpp
     src/source/pine_aux_security.cpp
     src/source/pine_fills.cpp
     src/source/pine_orders.cpp

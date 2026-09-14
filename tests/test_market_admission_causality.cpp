@@ -246,7 +246,7 @@ void named_batch_review() {
 
 class ReflectedBook : public admission_test::Book {
 public:
-    Journal& journal() { return market_admission_journal_; }
+    Journal& journal() { return market_admission_journal(); }
 };
 Configuration default_scope() {
     Configuration c;

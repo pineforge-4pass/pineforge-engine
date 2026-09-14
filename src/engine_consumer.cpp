@@ -181,8 +181,7 @@ bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
 }
 
 [[noreturn]] void BacktestEngine::throw_native_only_route(const char* seam) {
-    throw std::runtime_error(std::string("native host refuses source mutation: ")
-                             + (seam ? seam : ""));
+    execution_consumer().refuse_source_mutation(seam);
 }
 
 void BacktestEngine::legacy_run_simple(const Bar*, int) {
@@ -263,13 +262,13 @@ bool BacktestEngine::opening_admission_eligible(const MarketAdmissionDraft&) con
 void BacktestEngine::record_market_sizing_revision(
         PendingOrder&, admission::SizingObservation, double) {}
 
-execution::Status BacktestEngine::preflight_source_close_observation(
+execution::Status BacktestEngine::on_source_close_preflight(
         const Trade*, size_t, std::optional<int>& loss_day) const {
     loss_day.reset();
     return execution::Status::Applied;
 }
 
-void BacktestEngine::observe_source_close_rows(
+void BacktestEngine::on_source_close_observed(
         const Trade*, size_t, std::optional<int>) {}
 
 std::optional<execution::Status> BacktestEngine::validate_source_lifecycle(
@@ -314,7 +313,7 @@ double BacktestEngine::observe_trail_best_price_v1() const {
     return std::numeric_limits<double>::quiet_NaN();
 }
 
-void BacktestEngine::stream_dispatch_script_bar(const Bar&, bool) {
+void BacktestEngine::dispatch_source_stream_script_bar(const Bar&, bool) {
     throw_native_only_route("stream_dispatch_script_bar");
 }
 
@@ -323,24 +322,9 @@ bool BacktestEngine::set_aux_security_feed(const Bar*, int, const std::string&) 
     guard_native_mutation("set_aux_security_feed");
     return false;
 }
+bool BacktestEngine::source_aux_security_feed_enabled() const { return false; }
+void BacktestEngine::source_aux_security_input_view(const Bar*&, int&) const {}
 #endif
-
-void BacktestEngine::register_security_eval(int, const std::string&,
-                                            const std::string&, bool, bool, bool) {}
-bool BacktestEngine::session_template_knows_early_close() const { return false; }
-void BacktestEngine::register_security_lower_tf_eval(
-        int, const std::string&, const std::string&) {}
-int BacktestEngine::security_lower_tf_sub_bar_index(int) const { return 0; }
-void BacktestEngine::validate_security_timeframes(const std::string&) {}
-bool BacktestEngine::security_series_slot_is_new(int) const { return false; }
-void BacktestEngine::dispatch_security_eval(SecurityEvalState&, const Bar&, bool, int64_t) {}
-bool BacktestEngine::security_input_precedes_range_start(
-        const SecurityEvalState&, int64_t) const { return false; }
-#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-bool BacktestEngine::aux_security_traded_between(int64_t, int64_t) const { return false; }
-#endif
-void BacktestEngine::feed_security_eval_state(SecurityEvalState&, const Bar&, bool) {}
-void BacktestEngine::publish_security_eval_state_at_calling_boundary(SecurityEvalState&) {}
 
 }  // inline namespace engine_script_run_v16
 }  // namespace pineforge

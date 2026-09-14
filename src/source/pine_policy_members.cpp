@@ -42,6 +42,26 @@ using namespace source;
         return liq;
     }
 
+    double source::PineStrategyHost::apply_slippage(double price, bool is_buy) const {
+        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
+        if (slippage_ == 0) {
+            return round_to_mintick_directional(price, /*is_long_stop=*/is_buy);
+        }
+        double slip = slippage_ * syminfo_mintick_;
+        double slipped = is_buy ? price + slip : price - slip;
+        return round_to_mintick_directional(slipped, /*is_long_stop=*/is_buy);
+    }
+
+    double source::PineStrategyHost::apply_limit_fill(double price, bool is_buy) const {
+        if (std::isnan(price) || syminfo_mintick_ <= 0.0) return price;
+        return round_to_mintick_directional(price, /*is_long_stop=*/!is_buy);
+    }
+
+    double source::PineStrategyHost::apply_fill_slippage(double price, bool is_buy) const {
+        return current_fill_is_limit_ ? apply_limit_fill(price, is_buy)
+                                      : apply_slippage(price, is_buy);
+    }
+
 
 
     compat::pine::CapClock source::PineStrategyHost::pine_cap_clock() const {

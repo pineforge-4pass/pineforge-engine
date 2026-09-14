@@ -5,12 +5,17 @@
 #include <pineforge/pending_order_mirror.hpp>
 #include <algorithm>
 #include <stdexcept>
-namespace pineforge { void fill_pending_order_mirror(const PendingOrder&,pf_pending_order_v1_t*); }
+namespace pineforge {
+void fill_pending_order_mirror(const source::PendingOrder&, const MarketAdmissionJournal*,
+                               pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
+}
 namespace admission_test {
 using namespace pineforge;
+using source::PendingOrder;
 constexpr double missing=std::numeric_limits<double>::quiet_NaN();
 template<class Tag,auto Member>struct Access{friend auto access(Tag){return Member;}};
-#define POINT(Tag, method) struct Tag{friend auto access(Tag);};template struct Access<Tag,&BacktestEngine::method>
+#define POINT(Tag, method) struct Tag{friend auto access(Tag);};template struct Access<Tag,&source::PineStrategyHost::method>
 POINT(PairReview,finalize_pending_flat_market_pairs);
 POINT(DefaultReview,finalize_default_flat_market_gross_admission);
 POINT(TerminalReview,apply_pooc_coof_explicit_flat_market_gross_admission);

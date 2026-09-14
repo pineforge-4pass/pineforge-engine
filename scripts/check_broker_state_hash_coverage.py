@@ -643,7 +643,9 @@ def main(root: Path = ROOT) -> int:
         return 1
 
     # --- struct PendingOrder: every scalar/string member, o.<name> in the loop ---
-    po_members = [n for _t, n in struct_members()]
+    pending_header = (root / "include/pineforge/source/pine_pending_intent.hpp").read_text(
+        encoding="utf-8")
+    po_members = [n for _t, n in struct_members(pending_header)]
     po_orphans = sorted(w for w in po_waivers if w not in po_members)
     if po_orphans:
         print("check_broker_state_hash_coverage: pending_order.* waiver(s) naming a "

@@ -75,16 +75,16 @@ public:
     // Pure literal serialization state; mutable views are confined to this
     // test and never change the production policy's mutation interface.
     pine_cap::CapConfiguration& literal_cap_configuration() {
-        return const_cast<pine_cap::CapConfiguration&>(max_intraday_filled_orders_.configuration());
+        return const_cast<pine_cap::CapConfiguration&>(adapter_.cap.configuration());
     }
     pine_cap::IntradayOrderBudget& literal_budget() {
-        return const_cast<pine_cap::IntradayOrderBudget&>(max_intraday_filled_orders_.budget());
+        return const_cast<pine_cap::IntradayOrderBudget&>(adapter_.cap.budget());
     }
     void seed_intraday(pine_cap::CapAttachment attachment = pine_cap::CapAttachment::LegacySource) {
-        max_intraday_filled_orders_ = pine_cap::IntradayCap(attachment);
+        adapter_.cap = pine_cap::IntradayCap(attachment);
         literal_cap_configuration() = {9, false, true, false};
         // Construct due-cause/action state with the real value transition.
-        max_intraday_filled_orders_.post_dispatch(
+        adapter_.cap.post_dispatch(
             {pine_cap::Dispatch::Allow, pine_cap::QuotaTrigger{{41}, 1}},
             {true, false, false, false, false, true, true, 3},
             {pine_cap::OrderKind::Market, 23, 3, true, pine_cap::Side::Long, 1, 0},
@@ -99,7 +99,7 @@ public:
         mutate(const_cast<pine_cap::CloseQuotaTransfer&>(*literal_budget().transfer()));
     }
     void mutate_literal_due(const std::function<void(pine_cap::CloseCause&)>& mutate) {
-        mutate(const_cast<pine_cap::CloseCause&>(*max_intraday_filled_orders_.due_cause()));
+        mutate(const_cast<pine_cap::CloseCause&>(*adapter_.cap.due_cause()));
     }
     void mutate_literal_request(const std::function<void(broker::PositionCloseRequest&)>& mutate) {
         auto request = *position_close_obligation_.peek();
@@ -144,7 +144,7 @@ public:
             }},
             {"due_cause.presence", [](Probe& s) {
                 const_cast<std::optional<pine_cap::CloseCause>&>(
-                    s.max_intraday_filled_orders_.due_cause()).reset();
+                    s.adapter_.cap.due_cause()).reset();
             }},
             {"due_cause.action_id", [](Probe& s) {
                 s.mutate_literal_due([](auto& due) { ++due.action_id; });
@@ -164,7 +164,7 @@ public:
             {"next_action", [](Probe& s) {
                 // Immediate decision advances the action counter without
                 // altering existing due cause, quota or generic obligation.
-                s.max_intraday_filled_orders_.post_dispatch(
+                s.adapter_.cap.post_dispatch(
                     {pine_cap::Dispatch::Allow, pine_cap::QuotaTrigger{{41}, 1}},
                     {false, false, false, false, false, true, true, 3},
                     {pine_cap::OrderKind::Market, 23, 3, true, pine_cap::Side::Long, 1, 0},

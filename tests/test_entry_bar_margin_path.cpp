@@ -293,7 +293,7 @@ public:
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
         default_qty_value_ = 100.0;
     }
-    using BacktestEngine::strategy_close;
+    using pineforge::source::PineStrategyHost::strategy_close;
     bool flat() const { return position_side_ == PositionSide::FLAT; }
     int margin_call_rows() const {
         int n = 0;

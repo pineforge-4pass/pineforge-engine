@@ -57,7 +57,7 @@ source::PineStrategyHost::BarTime source::PineStrategyHost::_decompose_bar_time_
     return bt;
 }
 
-execution::Status source::PineStrategyHost::preflight_source_close_observation(
+execution::Status source::PineStrategyHost::on_source_close_preflight(
         const Trade* rows, size_t count, std::optional<int>& loss_day) const {
     loss_day.reset();
     // Complete this pass before walking day counters: a later row can overflow
@@ -89,7 +89,7 @@ execution::Status source::PineStrategyHost::preflight_source_close_observation(
     return execution::Status::Applied;
 }
 
-void source::PineStrategyHost::observe_source_close_rows(
+void source::PineStrategyHost::on_source_close_observed(
         const Trade* rows, size_t count, std::optional<int> loss_day) {
     // The source coordinator preflighted these exact rows before committing
     // them. Only its newly committed slice is observed, using the day already

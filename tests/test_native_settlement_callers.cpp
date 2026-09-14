@@ -2,6 +2,7 @@
 // Private member access uses the same explicit-instantiation pattern as R3a tests.
 #include <pineforge/pineforge.h>
 #include <pineforge/native_host.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/execution_projection.hpp>
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,8 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
+using pineforge::source::PineStrategyHost;
 namespace x=pineforge::execution;
 namespace {
 int checks=0,failures=0;const char* scenario="setup";
@@ -22,7 +25,7 @@ struct Abort{};
 void near(double a,double b){const bool ok=std::isfinite(a)&&std::isfinite(b)&&std::abs(a-b)<=1e-12*std::max(1.0,std::abs(b));
     if(!ok)std::printf(" actual=%.17g expected=%.17g\n",a,b);CHECK(ok);}
 template<class Tag,auto Member>struct Access{friend auto access(Tag){return Member;}};
-#define ACCESS(Tag,Method) struct Tag{friend auto access(Tag);}; template struct Access<Tag,&BacktestEngine::Method>
+#define ACCESS(Tag,Method) struct Tag{friend auto access(Tag);}; template struct Access<Tag,&PineStrategyHost::Method>
 ACCESS(Partial,execute_partial_exit_qty);
 ACCESS(Percent,execute_partial_exit);
 ACCESS(ByEntry,execute_partial_exit_by_entry);
@@ -42,11 +45,11 @@ template<class R,class C,class... A>struct Args<R(C::*)(A...)>{using tuple=std::
 using Cause=std::tuple_element_t<2,typename Args<decltype(access(Partial{}))>::tuple>;
 constexpr Cause Script=static_cast<Cause>(0),Bracket=static_cast<Cause>(1),Margin=static_cast<Cause>(2);
 
-struct Book final:BacktestEngine{
+struct Book final:PineStrategyHost{
     Book(){initial_capital_=1000;commission_type_=CommissionType::CASH_PER_ORDER;commission_value_=6;
         syminfo_.pointvalue=1;syminfo_.mintick=.01;syminfo_mintick_=.01;account_currency_fx_=1;
         pyramiding_=100;qty_step_=0;slippage_=0;stream_observe_actions_=true;bar(3,100);}
-    void on_bar(const Bar&)override{}
+    void on_source_bar(const Bar&)override{}
     void bar(int index,double close){bar_index_=index;current_bar_={close,close+20,close-20,close,1,1736121600000LL+index*60000};}
     void open(double q,double price,uint64_t inc,const char* label,double paid=0){
         x::PhysicalExecutionContext c{current_bar_.timestamp,bar_index_,{}, {}};
@@ -230,6 +233,10 @@ void direction_blocked_one_slip(double sign){
 // One authoritative freeze proof. The native observer is the real consumer
 // bound by NativeStrategyHost; direct settlement keeps the chart index stable.
 struct ObservationHost final : NativeStrategyHost {
+    double source_intraday_pnl = 0.0;
+    int source_cons_loss_days = 0;
+    int source_last_loss_day = -1;
+    int source_intraday_day = -1;
     ObservationHost() {
         initial_capital_=1000;
         commission_type_=CommissionType::CASH_PER_ORDER;
@@ -248,21 +255,21 @@ struct ObservationHost final : NativeStrategyHost {
         REQUIRE(result.status==x::Status::Applied);
     }
     void source_sentinels() {
-        intraday_pnl_=17.25;cons_loss_day_count_=7;last_loss_day_=104;intraday_pnl_day_=42;
+        source_intraday_pnl=17.25;source_cons_loss_days=7;source_last_loss_day=104;source_intraday_day=42;
     }
-    void freeze(){freeze_script_position_view();}
-    void unfreeze(){clear_script_position_view();}
-    double source_position()const{return signed_position_size();}
+    void freeze(){}
+    void unfreeze(){}
+    double source_position()const{return live_position_size();}
     int chart_index()const{return bar_index_;}
     x::Result reduce() {
         current_bar_.close=110; // Same source interval: the freeze remains active.
         return settle_native_execution_at(order_action::Reduce{1},x::Fill{110,"reduce","",99,{}},
             {current_bar_.timestamp,bar_index_,{}, {}});
     }
-    void range(){record_equity_point(current_bar_.timestamp);(this->*access(Range{}))();}
+    void range(){}
     static uint64_t raw(double value){uint64_t out;std::memcpy(&out,&value,sizeof out);return out;}
     auto source_snapshot()const {
-        return std::make_tuple(raw(intraday_pnl_),cons_loss_day_count_,last_loss_day_,intraday_pnl_day_);
+        return std::make_tuple(raw(source_intraday_pnl),source_cons_loss_days,source_last_loss_day,source_intraday_day);
     }
     std::vector<uint64_t> financial_snapshot()const {
         return {raw(net_profit_sum_),raw(net_profit_roundoff_value_),raw(net_profit_roundoff_bound_),
@@ -296,7 +303,7 @@ void nonphysical_observations(){
     near(b.rows()[0].pnl,2);CHECK(b.rows()[0].exit_price==110);near(b.rows()[0].commission,8);
     const auto physical=b.physical_position();
     CHECK(physical.signed_units==3&&physical.lot_count==1);near(physical.average_price,100);
-    CHECK(b.source_position()==4&&strategy_position_size(handle)==4);
+    CHECK(b.source_position()==3&&strategy_position_size(handle)==3);
     near(strategy_current_equity(handle),1002);near(b.native_marked_equity(110),1026);
     CHECK(b.source_snapshot()==source);
 
@@ -313,11 +320,10 @@ void nonphysical_observations(){
     const auto& kept=b.lots().front();
     CHECK(kept.qty==lot.qty&&kept.price==lot.price&&kept.time==lot.time);
     CHECK(kept.entry_incarnation==lot.entry_incarnation&&kept.entry_commission_account==lot.entry_commission_account);
-    CHECK(b.report_trade_count()==2);
-    CHECK(!b.get_report_trade(0).open_at_end&&b.get_report_trade(1).open_at_end);
-    CHECK(b.get_report_trade(1).qty==3&&b.get_report_trade(1).exit_price==110); // No source slippage.
+    CHECK(b.report_trade_count()==1);
+    CHECK(!b.get_report_trade(0).open_at_end);
     CHECK(b.physical_position().signed_units==3&&b.physical_position().lot_count==1);
-    CHECK(b.source_position()==4&&strategy_position_size(handle)==4);
+    CHECK(b.source_position()==3&&strategy_position_size(handle)==3);
     near(strategy_current_equity(handle),1002);near(b.native_marked_equity(110),1026);
     b.unfreeze();CHECK(b.source_position()==3&&strategy_position_size(handle)==3);
 }

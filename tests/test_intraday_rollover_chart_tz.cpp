@@ -66,7 +66,7 @@ public:
     using BacktestEngine::_bar_dayofmonth;
     using BacktestEngine::_bar_month;
     using BacktestEngine::_decompose_bar_time;
-    using BacktestEngine::_decompose_bar_time_chart_tz;
+    using pineforge::source::PineStrategyHost::_decompose_bar_time_chart_tz;
 };
 
 // Unix ms timestamps used as fixtures. All keyed off 2025-03-31 to

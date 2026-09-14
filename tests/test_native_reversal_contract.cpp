@@ -9,6 +9,7 @@
 // contract and must remain stable while the seam is introduced.
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -18,6 +19,8 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
+using pineforge::source::PineStrategyHost;
 
 namespace {
 
@@ -51,18 +54,18 @@ struct SelectPreCloseAccess { friend auto access(SelectPreCloseAccess); };
 struct LegRevisionAccess { friend auto access(LegRevisionAccess); };
 
 template struct Access<CloseOppositeAccess,
-                       &BacktestEngine::close_opposite_then_enter>;
+                       &PineStrategyHost::close_opposite_then_enter>;
 template struct Access<MarketEntryAccess,
-                       &BacktestEngine::execute_market_entry>;
+                       &PineStrategyHost::execute_market_entry>;
 template struct Access<SettleAccess,
                        &BacktestEngine::settle_resolved_execution>;
 template struct Access<EffectsSettleAccess,
                        &BacktestEngine::settle_execution_with_lifecycle>;
 template struct Access<SelectPreCloseAccess,
-                       &BacktestEngine::select_declined_reversal_pre_close>;
+                       &PineStrategyHost::select_declined_reversal_pre_close>;
 template struct Access<LegRevisionAccess, &exit_legs::Lifecycle::revision_>;
 
-class Book final : public BacktestEngine {
+class Book final : public PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 10'000.0;
@@ -74,7 +77,7 @@ public:
         bar_index_ = 1;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     // A two-lot LONG book with historical entry tickets already paid.  The
     // physical roster is authoritative; the aggregate fields are projections

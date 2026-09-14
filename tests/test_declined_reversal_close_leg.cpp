@@ -124,7 +124,7 @@ public:
     using BacktestEngine::position_side_;
     using BacktestEngine::calc_on_order_fills_;
     using BacktestEngine::process_orders_on_close_;
-    using BacktestEngine::id_unclosed_qty_;
+    using pineforge::source::PineStrategyHost::id_unclosed_qty_;
 };
 
 // Canonical LONG-then-reversal bars. The LONG opens at 100 all-in (qty 100),

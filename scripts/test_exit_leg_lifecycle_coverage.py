@@ -4,7 +4,7 @@ import unittest
 import check_exit_leg_lifecycle as c
 ROOT=Path(__file__).resolve().parents[1]
 HEADER=(ROOT/'include/pineforge/exit_leg_lifecycle.hpp').read_text()
-HASH=(ROOT/'src/engine_state_hash.cpp').read_text()
+HASH=(ROOT/'src/source/pine_state_hash.cpp').read_text()
 class Coverage(unittest.TestCase):
     def test_current(self): c.check(HEADER,HASH)
     def test_each_struct_addition_is_refused(self):

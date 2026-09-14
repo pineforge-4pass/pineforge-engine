@@ -93,7 +93,6 @@ public:
         stream_observe_actions_ = true;
         slippage_ = 9;
         qty_step_ = 10;
-        pyramiding_ = 1;
     }
     void on_bar(const Bar&) override {}
 
@@ -114,11 +113,8 @@ public:
         for (const auto& entry : pyramid_entries_) {
             position_qty_ += entry.qty;
             weighted += entry.qty * entry.price;
-            id_unclosed_qty_[entry.entry_id] += entry.qty;
-            cycle_filled_entry_ids_.insert(entry.entry_id);
         }
         position_entry_price_ = weighted / position_qty_;
-        trail_best_price_ = position_entry_price_;
     }
 
     execution::SettlementInspection inspect(const execution::Action& action,

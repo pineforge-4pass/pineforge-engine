@@ -679,7 +679,7 @@ static void test_blocked_entry_does_not_consume_intraday_fill_quota() {
             pyramiding_ = 10;
             risk_direction_ = RiskDirection::LONG_ONLY;
             risk_max_position_size_ = 2.0;
-            max_intraday_filled_orders_ = 3;
+            adapter_.cap = 3;
         }
         void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) strategy_entry("L1", true);

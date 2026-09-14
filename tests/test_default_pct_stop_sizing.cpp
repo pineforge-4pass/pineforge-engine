@@ -493,10 +493,10 @@ public:
         return n;
     }
     void enable_margin_call() { set_margin_call_enabled(true); }
-    using BacktestEngine::strategy_entry;
-    using BacktestEngine::strategy_exit;
-    using BacktestEngine::strategy_close;
-    using BacktestEngine::strategy_close_all;
+    using pineforge::source::PineStrategyHost::strategy_entry;
+    using pineforge::source::PineStrategyHost::strategy_exit;
+    using pineforge::source::PineStrategyHost::strategy_close;
+    using pineforge::source::PineStrategyHost::strategy_close_all;
 };
 
 // The four tapes' script: while flat a buy stop 0.20 above and/or a sell

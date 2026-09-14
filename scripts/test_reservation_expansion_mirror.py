@@ -13,14 +13,15 @@ HEADER = (ROOT / 'include/pineforge/reservation_expansion.hpp').read_text()
 
 class ReservationMirror(unittest.TestCase):
     def test_complete_schema_and_generated_output(self):
-        header, source = mirror.generate()
+        header, descriptor, projection = mirror.generate_parts()
         self.assertEqual(header, mirror.OUT_H.read_text())
-        self.assertEqual(source, mirror.OUT_C.read_text())
+        self.assertEqual(descriptor, mirror.OUT_C.read_text())
+        self.assertEqual(projection, mirror.OUT_SOURCE_C.read_text())
         self.assertIn('#define PF_PENDING_ORDER_FIELD_COUNT 406', header)
         self.assertIn('406 POD fields', header)
 
     def test_every_nested_mapping_is_observable(self):
-        original = mirror.generate()
+        original = mirror.generate_parts()
         for typename in ['ReservationExpansion', 'ReservationGrowthSource']:
             values = mirror.COMPOSITE_MAP[typename]
             for index, (name, kind, expression) in enumerate(values):
@@ -32,7 +33,7 @@ class ReservationMirror(unittest.TestCase):
                         if mutation == 'type': changed[index] = (name, 'double' if kind != 'double' else 'int64_t', expression)
                         if mutation == 'value': changed[index] = (name, kind, '0')
                         with patch.dict(mirror.COMPOSITE_MAP, {typename:changed}):
-                            self.assertNotEqual(mirror.generate(), original)
+                            self.assertNotEqual(mirror.generate_parts(), original)
                             with redirect_stdout(StringIO()): self.assertEqual(mirror.main(['--check']), 1)
 
     def test_legacy_projection_mutations_are_observable(self):

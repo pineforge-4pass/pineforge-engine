@@ -191,9 +191,8 @@ void BacktestEngine::prepare_native_security_feeds(const Bar* input_bars,
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // The evaluators are fed the auxiliary slice on the split-feed path: the
     // period's last chart bar is the last auxiliary bar.
-    if (aux_security_feed_enabled()) {
-        input_bars = aux_security_bars_.data();
-        n_input = static_cast<int>(aux_security_bars_.size());
+    if (source_aux_security_feed_enabled()) {
+        source_aux_security_input_view(input_bars, n_input);
     }
 #endif
     if (input_bars == nullptr || n_input < 0) n_input = 0;

@@ -26,6 +26,10 @@ int failures = 0;
 
 class NativeWitness final : public NativeStrategyHost {
 public:
+    int source_loss_days = 0;
+    int source_loss_day = -1;
+    double source_intraday_pnl = 0.0;
+    int source_intraday_day = -1;
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 
     x::PhysicalExecutionContext context() const {
@@ -42,16 +46,16 @@ public:
     }
 
     void poison_source_close_state() {
-        cons_loss_day_count_ = std::numeric_limits<int>::max();
-        last_loss_day_ = 17;
-        intraday_pnl_ = std::numeric_limits<double>::quiet_NaN();
-        intraday_pnl_day_ = 29;
+        source_loss_days = std::numeric_limits<int>::max();
+        source_loss_day = 17;
+        source_intraday_pnl = std::numeric_limits<double>::quiet_NaN();
+        source_intraday_day = 29;
     }
 
-    int loss_days() const { return cons_loss_day_count_; }
-    int loss_day() const { return last_loss_day_; }
-    double intraday_pnl() const { return intraday_pnl_; }
-    int intraday_day() const { return intraday_pnl_day_; }
+    int loss_days() const { return source_loss_days; }
+    int loss_day() const { return source_loss_day; }
+    double intraday_pnl() const { return source_intraday_pnl; }
+    int intraday_day() const { return source_intraday_day; }
     double metadata(const std::string& key) const { return get_syminfo_metadata(key); }
 };
 

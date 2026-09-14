@@ -274,6 +274,19 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.d(coof_cursor_price_);
     f.u(coof_direct_fill_events_remaining_);
 
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    f.u(aux_security_bars_.size());
+    for (const auto& bar : aux_security_bars_) {
+        f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close);
+        f.d(bar.volume); f.i(bar.timestamp);
+    }
+    f.s(aux_security_input_tf_);
+    f.u(aux_security_chart_begin_.size());
+    for (std::size_t value : aux_security_chart_begin_) f.u(value);
+    f.u(aux_security_chart_end_.size());
+    for (std::size_t value : aux_security_chart_end_) f.u(value);
+#endif
+
     f.b(_src_series_active_);
     hash_source_series(f, _src_open_);
     hash_source_series(f, _src_high_);

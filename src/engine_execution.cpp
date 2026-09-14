@@ -596,7 +596,7 @@ execution::Result BacktestEngine::settle_source_staged_execution(
     // Source intraday readiness precedes all close-counter checks, including
     // Ready opening-only calls. Invalid/NoEffect returned before this point.
     std::optional<int> loss_day;
-    if (const auto status = preflight_source_close_observation(
+    if (const auto status = on_source_close_preflight(
             rows.closed_trades.data(), rows.closed_trades.size(), loss_day);
         status != execution::Status::Applied)
         return {status};
@@ -606,7 +606,7 @@ execution::Result BacktestEngine::settle_source_staged_execution(
     const auto result = commit_prepared_native_settlement_stage(
         stage, fill, lifecycle, context, rows);
     if (result.status == execution::Status::Applied && result.closed_trade_count != 0) {
-        observe_source_close_rows(trades_.data() + result.first_trade_index,
+        on_source_close_observed(trades_.data() + result.first_trade_index,
                                   result.closed_trade_count, loss_day);
     }
     return result;

@@ -51,7 +51,7 @@ public:
         process_orders_on_close_ = true;
         calc_on_order_fills_ = coof;
         if (guard == Guard::Fee) commission_value_ = 1e-12;
-        if (guard == Guard::Risk) max_intraday_filled_orders_ = 100;
+        if (guard == Guard::Risk) adapter_.cap = 100;
         if (guard == Guard::Pyramiding) pyramiding_ = 2;
         if (guard == Guard::Fx) {
             const int64_t times[] = {1000};

@@ -158,7 +158,7 @@ public:
         strategy_exit(id, from, limit, kNaN, kNaN, kNaN, kNaN, kNaN, "",
                       kNaN, "", kNaN, kNaN);
     }
-    using BacktestEngine::strategy_close;
+    using pineforge::source::PineStrategyHost::strategy_close;
     bool flat() const { return position_side_ == PositionSide::FLAT; }
     bool is_short() const { return position_side_ == PositionSide::SHORT; }
     bool is_long_pos() const { return position_side_ == PositionSide::LONG; }

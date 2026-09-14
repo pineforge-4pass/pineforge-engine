@@ -305,6 +305,10 @@ const MarketAdmissionJournal& source::PineStrategyHost::market_admission_journal
     return adapter_.admission_journal;
 }
 
+MarketAdmissionJournal& source::PineStrategyHost::market_admission_journal() {
+    return adapter_.admission_journal;
+}
+
 const source::PendingOrder& source::PineStrategyHost::pending_order_at(int index) const {
     return pending_orders_[static_cast<size_t>(index)];
 }

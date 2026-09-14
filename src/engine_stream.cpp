@@ -83,7 +83,7 @@ void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
         for (auto& state : security_eval_states_) {
             feed_security_eval_state(state, bar);
         }
-        stream_dispatch_script_bar(bar, had_tick);
+        dispatch_source_stream_script_bar(bar, had_tick);
         return;
     }
 
@@ -105,7 +105,7 @@ void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
         // The current input opened the next caller. Dispatch the completed
         // caller while its actual final requested child is still visible,
         // then evaluate the retained input for the next caller.
-        stream_dispatch_script_bar(ab.bar, stream_script_bar_had_tick_);
+        dispatch_source_stream_script_bar(ab.bar, stream_script_bar_had_tick_);
         stream_script_bar_had_tick_ = had_tick;
         for (auto& state : security_eval_states_) {
             if (state.publish_gate_tf_seconds > 0) {
@@ -122,12 +122,12 @@ void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
         // The current input bar opened the next bucket; the aggregator emitted
         // the preceding partial bucket before retaining this bar as its new
         // current state.
-        stream_dispatch_script_bar(ab.bar, stream_script_bar_had_tick_);
+        dispatch_source_stream_script_bar(ab.bar, stream_script_bar_had_tick_);
         stream_script_bar_had_tick_ = had_tick;
     } else {
         stream_script_bar_had_tick_ = stream_script_bar_had_tick_ || had_tick;
         if (ab.is_complete) {
-            stream_dispatch_script_bar(ab.bar, stream_script_bar_had_tick_);
+            dispatch_source_stream_script_bar(ab.bar, stream_script_bar_had_tick_);
             stream_script_bar_had_tick_ = false;
         }
     }

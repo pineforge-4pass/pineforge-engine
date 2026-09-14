@@ -52,8 +52,6 @@ struct TermsHost : Host {
         pyramid_entries_.push_back(lot);
         position_qty_ += quantity;
         ++position_entry_count_;
-        id_unclosed_qty_[lot.entry_id] += quantity;
-        cycle_filled_entry_ids_.insert(lot.entry_id);
     }
 
     std::uint64_t stream_hash_at_timestamp(std::int64_t timestamp) {

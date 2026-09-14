@@ -56,6 +56,16 @@ bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
     return true;
 }
 
+bool source::PineStrategyHost::source_aux_security_feed_enabled() const {
+    return !aux_security_bars_.empty();
+}
+
+void source::PineStrategyHost::source_aux_security_input_view(
+        const Bar*& bars, int& n) const {
+    bars = aux_security_bars_.data();
+    n = static_cast<int>(aux_security_bars_.size());
+}
+
 void source::PineStrategyHost::clear_aux_security_chart_ranges() {
     aux_security_chart_begin_.clear();
     aux_security_chart_end_.clear();

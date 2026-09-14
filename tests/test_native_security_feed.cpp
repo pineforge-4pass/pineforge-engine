@@ -10,6 +10,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -29,7 +30,7 @@ constexpr int64_t kMinute = 60000;
 constexpr int64_t kQuarter = 15 * kMinute;
 constexpr int64_t kDay = 86400000;
 
-class DailyProbe final : public BacktestEngine {
+class DailyProbe final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<double> chart_closes;
     std::vector<double> daily_closes;        // sec 0: "D", completed buckets
@@ -58,7 +59,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         chart_closes.push_back(bar.close);
         daily_at_chart_close.push_back(latest_daily);
         if (bar_index_ == 0) strategy_entry("L", true);
@@ -399,7 +400,7 @@ const Bar kNativeApr23{9.835, 10.0054, 9.71, 9.78, 158691527.0, kApr23_1330Z};
 // evaluator assigning the five members from the bucket it is handed, the
 // timeframe string an input value ("D" is input.timeframe's default; "1D"
 // is what an exported inputs.json spells).
-class TupleProbe final : public BacktestEngine {
+class TupleProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit TupleProbe(std::string tf) : tf_(std::move(tf)) {}
     struct Row { double o, h, l, c, v; };
@@ -415,7 +416,7 @@ public:
         if (sec_id != 0) return;
         o_ = bar.open; h_ = bar.high; l_ = bar.low; c_ = bar.close; v_ = bar.volume;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         at_chart_close.push_back({o_, h_, l_, c_, v_});
     }
 

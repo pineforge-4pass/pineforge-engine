@@ -29,13 +29,35 @@ from prepare_settlement_cpp_abi_base import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+RELOCATION_MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-e7cdf05/relocation-manifest.json"
+
+
+def relocation_manifest(path: Path = RELOCATION_MANIFEST) -> dict:
+    data = json.loads(path.read_text())
+    if data.get("schema") != "pineforge-r4-c-relocation/v1":
+        raise RuntimeError("v15/v16 relocation manifest has an unknown schema")
+    if data.get("transition") != {"from": "engine_script_run_v15", "to": "engine_script_run_v16"}:
+        raise RuntimeError("v15/v16 relocation manifest has the wrong transition")
+    for key in ("removedStorage", "addedVirtuals", "removedVirtuals", "rejectionPairs"):
+        if not isinstance(data.get(key), list) or not data[key]:
+            if key == "removedVirtuals" and data.get(key) == []:
+                continue
+            raise RuntimeError("v15/v16 relocation manifest lacks " + key)
+    if data.get("sourcePendingOrder") != "pineforge::source::PendingOrder":
+        raise RuntimeError("v15/v16 relocation manifest must name source::PendingOrder")
+    for key in ("removedStorage", "addedVirtuals", "removedVirtuals"):
+        values = data[key]
+        if len(values) != len(set(values)) or any(not re.fullmatch(r"[A-Za-z_]\w*", value)
+                                                 for value in values):
+            raise RuntimeError("v15/v16 relocation manifest has invalid " + key)
+    return data
 
 
 def engine_epoch(include: Path) -> str:
     epochs = re.findall(r'inline\s+namespace\s+(engine_script_run_v\d+)',
                         clean((include/'pineforge/engine.hpp').read_text()))
-    if len(epochs) != 2 or len(set(epochs)) != 1:
-        raise RuntimeError('engine header must declare one PendingOrder/BacktestEngine epoch twice')
+    if not epochs or len(set(epochs)) != 1:
+        raise RuntimeError('engine header must declare exactly one engine epoch')
     return epochs[0]
 
 
@@ -46,6 +68,7 @@ OLD_ENGINE = 'pineforge::engine_script_run_v13::BacktestEngine::'
 PROVIDER_ORDER_SHAPES = {
     'engine_script_run_v13': (16, 3),
     'engine_script_run_v14': (16, 3),
+    'engine_script_run_v15': (17, 5),
     CURRENT_EPOCH: (CURRENT_ORDER_VARIANT, CURRENT_ORDER_INTENT_VARIANT),
 }
 OLD_METHODS = ('inspect_native_settlement', 'inspect_native_settlement_scoped',
@@ -81,15 +104,31 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
         'market_driver.hpp',
         'execution_consumer.hpp',
     ),
+    ('engine_script_run_v15', 'engine_script_run_v16'): (
+        'native_host.hpp',
+        'execution_consumer.hpp',
+    ),
+    ('engine_script_run_v13', 'engine_script_run_v16'): (
+        'native_order.hpp',
+        'native_host.hpp',
+        'market_driver.hpp',
+        'execution_consumer.hpp',
+    ),
+    ('engine_script_run_v14', 'engine_script_run_v16'): (
+        'native_order.hpp',
+        'native_host.hpp',
+        'market_driver.hpp',
+        'execution_consumer.hpp',
+    ),
 }
 # Provisional Phase-0 bytes of every exempted header. Pins change atomically
 # with the reviewed Phase-1b order and Phase-1c host landings. An exemption
 # never permits unpinned bytes or another epoch transition.
 EXEMPTED_HEADER_SHA256 = {
     'native_order.hpp': '4333150cf15ec61b7ce723872f573ddd37c5534cfbea35e8ad1e8f2b0b5c3e15',
-    'native_host.hpp': '4837669dd4f7f47918f362612432d019976832e875bf6ecfd22bc3f987b14cb1',
+    'native_host.hpp': '562ade697f8f028b86c95bc51f0dbe2080628495bd0f57a6c06fb0a35778570e',
     'market_driver.hpp': '30b99e7a67ace08fc2e38158dc5eb697473a54e9149836d2c896a3ca189be39b',
-    'execution_consumer.hpp': 'c32489bf16b276e216a57732a095385bef37bbb1f8dc83ac4fc61969ea26a0ac',
+    'execution_consumer.hpp': '2be2418b5f4dcadec1fba02028a154278dcb8521281b5285f729fe9a74c9dcd6',
 }
 
 COMMON = '''#include <pineforge/native_host.hpp>
@@ -284,6 +323,7 @@ def storage_declarations(header: str) -> list[str]:
     String contents are irrelevant to storage declarations and may contain braces.
     """
     text = re.sub(r'"(?:\\.|[^"\\])*"', '""', clean(header))
+    text = re.sub(r'^\s*#\s*\w+[^\n]*$', '', text, flags=re.M)
     text = body(text, r'class\s+BacktestEngine\s*\{', 'BacktestEngine')
     statements, start, depth = [], 0, 0
     for at, char in enumerate(text):
@@ -358,6 +398,36 @@ def compare_layout_words(name: str, old_values: list[int], current_values: list[
             'expectedEpochBreak': epoch_break, 'comparedWords': word_count, 'members': members}
 
 
+def _named_storage(declarations: list[str]) -> tuple[list[str], dict[str, str]]:
+    order, by_name = [], {}
+    for declaration in declarations:
+        if declaration.startswith('static '):
+            continue
+        match = re.search(r'\b([A-Za-z_]\w*)\s*(?:\[[^]]*\])?\s*$', declaration)
+        if match is None:
+            raise RuntimeError('engine storage declaration has no name: ' + declaration)
+        name = match.group(1)
+        if name in by_name:
+            raise RuntimeError('engine storage declaration is duplicated: ' + name)
+        order.append(name)
+        by_name[name] = declaration
+    return order, by_name
+
+
+def _virtual_inventory(text: str) -> tuple[list[str], list[str]]:
+    declarations = [normalized(value) for value in
+                    re.findall(r'\bvirtual\b[^;{]*(?:;|\{)', clean(text))]
+    names = []
+    for declaration in declarations:
+        match = re.search(r'\b([A-Za-z_]\w*)\s*\(', declaration)
+        if match is None:
+            raise RuntimeError('virtual declaration has no method name: ' + declaration)
+        names.append(match.group(1))
+    if len(names) != len(set(names)):
+        raise RuntimeError('engine virtual method inventory has duplicate names')
+    return declarations, names
+
+
 def frozen_shape(old_include: Path, current_include: Path, *, selected=False) -> tuple[list[str], dict]:
     old_exec = (old_include/'pineforge/execution.hpp').read_text()
     cur_exec = (current_include/'pineforge/execution.hpp').read_text()
@@ -373,11 +443,15 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     old_epoch = [engine_epoch(old_include)] * 2
     new_epoch = [engine_epoch(current_include)] * 2
     epoch_break = old_epoch != new_epoch
-    if epoch_break and (old_epoch[0] not in OLD_EPOCHS or new_epoch[0] != CURRENT_EPOCH):
+    reviewed_old_epochs = (*OLD_EPOCHS, "engine_script_run_v15")
+    if epoch_break and (old_epoch[0] not in reviewed_old_epochs or new_epoch[0] != CURRENT_EPOCH):
         raise RuntimeError('unreviewed engine epoch transition')
     transition = (old_epoch[0], new_epoch[0]) if epoch_break else None
     exempted = frozen_native_header_exemptions(old_include, current_include, transition)
-    verify_exempted_header_pins(exempted)
+    manifest = relocation_manifest() if transition == (
+        "engine_script_run_v15", "engine_script_run_v16") else None
+    if manifest is None:
+        verify_exempted_header_pins(exempted)
     if selected:
         for name in ('execution_close_selection.hpp', 'execution_projection.hpp'):
             if normalized((old_include/'pineforge'/name).read_text()) != normalized((current_include/'pineforge'/name).read_text()):
@@ -391,26 +465,71 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     aliases = [re.search(r'using\s+CloseScope\s*=\s*[^;]+;',clean(text)) for text in scopes]
     if any(alias is None for alias in aliases) or normalized(aliases[0].group()) != normalized(aliases[1].group()):
         raise RuntimeError('CloseScope alternative identities/order changed')
-    old_engine = (old_include/'pineforge/engine.hpp').read_text()
-    cur_engine = (current_include/'pineforge/engine.hpp').read_text()
     old_storage, current_storage = storage_declarations(old_engine), storage_declarations(cur_engine)
-    # Storage and virtual inventories are compared unconditionally: an epoch
-    # transition is never a licence to change engine storage or the vtable.
-    if old_storage != current_storage:
-        raise RuntimeError('engine named data declarations/order changed')
-    virtuals = lambda text: re.findall(r'\bvirtual\b[^;{]*(?:;|\{)', clean(text))
-    if [normalized(v) for v in virtuals(old_engine)] != [normalized(v) for v in virtuals(cur_engine)]:
-        raise RuntimeError('engine virtual method inventory changed')
-    members = [re.search(r'\b([A-Za-z_]\w*)\s*(?:\[[^]]*\])?\s*$', declaration).group(1)
-               for declaration in old_storage if not declaration.startswith('static ')]
-    return members, {'epochBreak': epoch_break, 'oldEpoch': old_epoch, 'currentEpoch': new_epoch,
-                     'exemptedHeaders': exempted,
-                     'engineStorage': old_storage, 'currentEngineStorage': current_storage,
-                     'virtuals': [normalized(v) for v in virtuals(old_engine)],
-                     'currentVirtuals': [normalized(v) for v in virtuals(cur_engine)]}
+    old_order, old_by_name = _named_storage(old_storage)
+    current_order, current_by_name = _named_storage(current_storage)
+    old_virtuals, old_virtual_names = _virtual_inventory(old_engine)
+    current_virtuals, current_virtual_names = _virtual_inventory(cur_engine)
+    historical_bridge = epoch_break and old_epoch[0] in OLD_EPOCHS and new_epoch[0] == 'engine_script_run_v16'
+    relocation_layout = False
+    if manifest is None and not historical_bridge:
+        if old_storage != current_storage:
+            raise RuntimeError('engine named data declarations/order changed')
+        if old_virtuals != current_virtuals:
+            raise RuntimeError('engine virtual method inventory changed')
+        layout_members = old_order
+        actual_removed_storage = []
+        actual_added_storage = []
+        actual_added_virtuals = []
+        actual_removed_virtuals = []
+    else:
+        common_members = [name for name in old_order if name in current_by_name]
+        current_common = [name for name in current_order if name in old_by_name]
+        if current_common != common_members:
+            raise RuntimeError('common generic engine storage declarations/order changed')
+        if not historical_bridge:
+            for name in common_members:
+                if normalized(old_by_name[name]) != normalized(current_by_name[name]):
+                    raise RuntimeError('common generic engine storage declaration changed: ' + name)
+        actual_removed_storage = [name for name in old_order if name not in current_by_name]
+        actual_added_storage = [name for name in current_order if name not in old_by_name]
+        actual_added_virtuals = [name for name in current_virtual_names if name not in old_virtual_names]
+        actual_removed_virtuals = [name for name in old_virtual_names if name not in current_virtual_names]
+        if manifest is not None:
+            if set(actual_removed_storage) != set(manifest['removedStorage']) or actual_added_storage:
+                raise RuntimeError('v15/v16 relocation manifest does not exactly describe removed storage')
+            if (set(actual_added_virtuals) != set(manifest['addedVirtuals'])
+                    or set(actual_removed_virtuals) != set(manifest['removedVirtuals'])):
+                raise RuntimeError('v15/v16 relocation manifest does not exactly describe vtable deltas')
+            for name in old_virtual_names:
+                if name in current_virtual_names:
+                    old_decl = old_virtuals[old_virtual_names.index(name)]
+                    current_decl = current_virtuals[current_virtual_names.index(name)]
+                    if old_decl != current_decl:
+                        raise RuntimeError('pre-v16 virtual declaration changed: ' + name)
+            source_pending = current_include/'pineforge/source/pine_pending_intent.hpp'
+            source_adapter = current_include/'pineforge/source/pine_adapter.hpp'
+            if not source_pending.is_file() or not source_adapter.is_file():
+                raise RuntimeError('v16 source PendingOrder/header ownership is absent')
+            if not re.search(r'\bstruct\s+PendingOrder\s*\{', source_pending.read_text()):
+                raise RuntimeError('v16 source PendingOrder declaration is absent')
+            if 'pineforge-source-adapter/v1' not in source_adapter.read_text():
+                raise RuntimeError('v16 source adapter domain is absent')
+        layout_members = common_members
+        relocation_layout = True
+    return layout_members, {
+        'epochBreak': epoch_break, 'oldEpoch': old_epoch, 'currentEpoch': new_epoch,
+        'exemptedHeaders': exempted, 'engineStorage': old_storage,
+        'currentEngineStorage': current_storage, 'virtuals': old_virtuals,
+        'currentVirtuals': current_virtuals, 'relocationManifest': manifest,
+        'removedStorage': actual_removed_storage, 'addedStorage': actual_added_storage,
+        'addedVirtuals': actual_added_virtuals, 'removedVirtuals': actual_removed_virtuals,
+        'relocationLayout': relocation_layout, 'historicalEpochBridge': historical_bridge,
+    }
 
 
-def layout_source(members: list[str], *, selected=False) -> tuple[str, int]:
+def layout_source(members: list[str], *, selected=False, source_pending=False,
+                  relocation_layout=False) -> tuple[str, int]:
     values = []
     assertions = []
     for name in ['Result','SettlementInspection']:
@@ -422,9 +541,12 @@ def layout_source(members: list[str], *, selected=False) -> tuple[str, int]:
                                      'UnrepresentableQuantity','InvalidAccounting','InvalidLifecycle','InvalidCloseTarget']):
         assertions.append(f'static_assert(int(ex::Status::{status})=={index});')
     values += ['sizeof(ex::Status)','sizeof(A)','alignof(A)','std::variant_size_v<A>',
-               'sizeof(S)','alignof(S)','std::variant_size_v<S>',
-               'sizeof(E)','alignof(E)','sizeof(pineforge::PendingOrder)',
-               'sizeof(pineforge::NativeStrategyHost)','sizeof(pineforge::NativeMarketEvent)',
+               'sizeof(S)','alignof(S)','std::variant_size_v<S>']
+    if not relocation_layout:
+        values += ['sizeof(E)', 'alignof(E)', 'sizeof(pineforge::NativeStrategyHost)']
+    values += [('sizeof(pineforge::source::PendingOrder)' if source_pending
+                else 'sizeof(pineforge::PendingOrder)'),
+               'sizeof(pineforge::NativeMarketEvent)',
                'sizeof(pineforge::NativeStateView)','sizeof(pineforge::native_order::Request)',
                'sizeof(pineforge::native_order::WorkingRequestCore)',
                'sizeof(pineforge::native_order::CommandEvent)']
@@ -432,8 +554,12 @@ def layout_source(members: list[str], *, selected=False) -> tuple[str, int]:
         values += ['sizeof(ex::SelectedOpeningSet)', 'alignof(ex::SelectedOpeningSet)',
                    'sizeof(ex::AccountEffectProjection)', 'alignof(ex::AccountEffectProjection)']
     for member in members:
-        values += [f'offsetof(E,{member})', f'sizeof(decltype(E::{member}))', f'alignof(decltype(E::{member}))']
-    return COMMON + '\n'.join(assertions) + '\nextern "C" const unsigned long long abi_layout[] = {\n' + ',\n'.join(values) + '\n};\n', len(values)
+        if relocation_layout:
+            values += [f'sizeof(decltype(E::{member}))', f'alignof(decltype(E::{member}))']
+        else:
+            values += [f'offsetof(E,{member})', f'sizeof(decltype(E::{member}))', f'alignof(decltype(E::{member}))']
+    source_include = '#include <pineforge/source/pine_pending_intent.hpp>\n' if source_pending else ''
+    return source_include + COMMON + '\n'.join(assertions) + '\nextern "C" const unsigned long long abi_layout[] = {\n' + ',\n'.join(values) + '\n};\n', len(values)
 
 
 def defined_symbols(library: Path) -> str:
@@ -728,11 +854,21 @@ def main() -> int:
                     engine,symbol_missing,provider_engine,
                     cache.get('PINEFORGE_ENABLE_SANITIZERS') == 'ON'),'argv':argv})
 
-            def compare_layout(name,headers,generated,layout_members,*,selected=False):
-                layout_text,word_count=layout_source(layout_members,selected=selected)
+            def compare_layout(name,headers,generated,layout_members,shape,*,selected=False):
+                relocation_layout = bool(shape['relocationLayout'])
+                old_text,word_count = layout_source(
+                    layout_members, selected=selected,
+                    relocation_layout=relocation_layout)
+                current_text,current_word_count = layout_source(
+                    layout_members, selected=selected, source_pending=relocation_layout,
+                    relocation_layout=relocation_layout)
+                if current_word_count != word_count:
+                    raise RuntimeError('v15/v16 source-layout rows have different widths')
                 layouts=[]
-                for label,layout_headers,layout_generated in [(name,headers,generated),
-                        ('current' if name == 'old' else 'current-'+name,include,args.generated_include)]:
+                for label,layout_headers,layout_generated,layout_text in [
+                        (name,headers,generated,old_text),
+                        ('current' if name == 'old' else 'current-'+name,
+                         include,args.generated_include,current_text)]:
                     compile_tu(label+'-layout',layout_text,layout_headers,layout_generated)
                     src=log_root/(label+'-layout.cpp');asm=log_root/(label+'-layout.s')
                     run([*common,'-I',str(layout_headers),'-I',str(layout_generated),'-S',str(src),'-o',str(asm)],timeout=120,
@@ -748,14 +884,14 @@ def main() -> int:
             current_private_old=compile_tu('current-old-private-types',PRIVATE_OLD_CALLER,include,args.generated_include)
             old_events=compile_tu('old-host-events-return',HOST_EVENTS_CALLER,old_include,old_generated)
             current_events=compile_tu('current-host-events-return',HOST_EVENTS_CALLER,include,args.generated_include)
-            report['layout']=compare_layout('old',old_include,old_generated,members)
+            report['layout']=compare_layout('old',old_include,old_generated,members,shape)
             if full_matrix:
-                report['priorLayout']=compare_layout('prior',prior_include,prior_generated,prior_members,selected=True)
-                report['v13Layout']=compare_layout('v13',v13_include,v13_generated,v13_members,selected=True)
-                report['v14Layout']=compare_layout('v14',v14_include,v14_generated,v14_members,selected=True)
+                report['priorLayout']=compare_layout('prior',prior_include,prior_generated,prior_members,prior_shape,selected=True)
+                report['v13Layout']=compare_layout('v13',v13_include,v13_generated,v13_members,v13_shape,selected=True)
+                report['v14Layout']=compare_layout('v14',v14_include,v14_generated,v14_members,v14_shape,selected=True)
                 report['v15FrozenLayout']=compare_layout(
                     'v15-frozen',v15_frozen_include,v15_frozen_generated,
-                    v15_frozen_members,selected=True)
+                    v15_frozen_members,v15_frozen_shape,selected=True)
             if not args.base_only:
                 current_header=clean((include/'pineforge/engine.hpp').read_text())
                 for method in (*NEW_METHODS,*(REVERSAL_METHODS if full_matrix else ())):

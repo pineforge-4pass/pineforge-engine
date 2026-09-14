@@ -262,10 +262,10 @@ public:
         }
     }
 
-    bool priority_attached() const { return pine_order_priority_.attached(); }
-    bool priority_enabled() const { return pine_order_priority_.retained_parent_first(); }
+    bool priority_attached() const { return adapter_.priority.attached(); }
+    bool priority_enabled() const { return adapter_.priority.retained_parent_first(); }
     bool cap_attached() const {
-        return max_intraday_filled_orders_.attachment() != compat::pine::CapAttachment::None;
+        return adapter_.cap.attachment() != compat::pine::CapAttachment::None;
     }
     uint64_t fills() const { return broker_fill_event_seq_; }
     double position() const { return signed_position_size(); }

@@ -4,8 +4,8 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
-hash_source = (ROOT / "src/engine_state_hash.cpp").read_text()
-mirror_source = (ROOT / "src/pending_order_mirror.cpp").read_text()
+hash_source = (ROOT / "src/source/pine_state_hash.cpp").read_text()
+mirror_source = (ROOT / "src/source/pine_pending_mirror.cpp").read_text()
 leaves = [
     "cause", "state", "close_claim_release", "source_incarnation",
     "source_sequence", "target_incarnation", "target_owner", "target_revision",

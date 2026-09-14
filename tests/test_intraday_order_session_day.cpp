@@ -22,7 +22,7 @@ public:
         initial_capital_ = 1000000;
         default_qty_type_ = QtyType::FIXED;
         default_qty_value_ = 1;
-        max_intraday_filled_orders_ = 6;
+        adapter_.cap = 6;
         process_orders_on_close_ = true;
         commission_value_ = 0;
         slippage_ = 0;
@@ -87,16 +87,16 @@ class LegacyClock : public pineforge::source::PineStrategyHost {
 public:
     void on_source_bar(const Bar&) override {}
     void exhaust_at(int64_t time) {
-        max_intraday_filled_orders_ = 6;
+        adapter_.cap = 6;
         current_bar_.timestamp = time;
         _intraday_cap_currently_latched();
         for (int i = 0; i < 6; ++i) {
-            max_intraday_filled_orders_.pre_dispatch(pine_cap_clock(),
+            adapter_.cap.pre_dispatch(pine_cap_clock(),
                 pine_cap_calculation(),
                 {compat::pine::OrderKind::Market, 0, 0, true,
                  compat::pine::Side::Flat, 0, 0}, 0);
         }
-        max_intraday_filled_orders_.after_immediate_close_attempt();
+        adapter_.cap.after_immediate_close_attempt();
     }
     bool latched_at(int64_t time) {
         current_bar_.timestamp = time;

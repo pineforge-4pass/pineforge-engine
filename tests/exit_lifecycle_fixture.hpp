@@ -1,5 +1,6 @@
 #pragma once
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include <stdexcept>
 namespace lifecycle_fixture {
 inline void apply(pineforge::PendingOrder& o, pineforge::exit_legs::Operation op, int64_t bar = 0) {

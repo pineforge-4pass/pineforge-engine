@@ -27,15 +27,18 @@ struct Abort {};
     std::printf("FAIL %s:%d %s\n", scenario, __LINE__, #value); throw Abort{}; } } while (0)
 
 template<class Tag, auto Member> struct Access { friend auto access(Tag) { return Member; } };
-#define ACCESS(Tag, Member) struct Tag { friend auto access(Tag); }; \
-    template struct Access<Tag, &BacktestEngine::Member>
-ACCESS(Partial, execute_partial_exit_qty);
-ACCESS(ByQuantity, execute_partial_exit_by_entry_qty);
-ACCESS(Drain, fifo_drain);
-ACCESS(ComputeClose, compute_close_target_qty);
-ACCESS(ImmediateClose, execute_immediate_close);
-ACCESS(ExitFill, apply_exit_order_fill);
-#undef ACCESS
+struct Partial { friend auto access(Partial); };
+struct ByQuantity { friend auto access(ByQuantity); };
+struct Drain { friend auto access(Drain); };
+struct ComputeClose { friend auto access(ComputeClose); };
+struct ImmediateClose { friend auto access(ImmediateClose); };
+struct ExitFill { friend auto access(ExitFill); };
+template struct Access<Partial, &pineforge::source::PineStrategyHost::execute_partial_exit_qty>;
+template struct Access<ByQuantity, &pineforge::source::PineStrategyHost::execute_partial_exit_by_entry_qty>;
+template struct Access<Drain, &BacktestEngine::fifo_drain>;
+template struct Access<ComputeClose, &pineforge::source::PineStrategyHost::compute_close_target_qty>;
+template struct Access<ImmediateClose, &pineforge::source::PineStrategyHost::execute_immediate_close>;
+template struct Access<ExitFill, &pineforge::source::PineStrategyHost::apply_exit_order_fill>;
 template<class> struct Args;
 template<class R, class C, class... A> struct Args<R(C::*)(A...)> { using tuple = std::tuple<A...>; };
 using Cause = std::tuple_element_t<2, typename Args<decltype(access(Partial{}))>::tuple>;

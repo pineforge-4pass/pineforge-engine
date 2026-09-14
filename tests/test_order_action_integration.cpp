@@ -21,10 +21,10 @@ struct PartialExitAccess { friend auto access(PartialExitAccess); };
 struct SameSideAccess { friend auto access(SameSideAccess); };
 struct SameBarTransactionAccess { friend auto access(SameBarTransactionAccess); };
 struct MarketFillAccess { friend auto access(MarketFillAccess); };
-template struct Access<PartialExitAccess, &BacktestEngine::execute_partial_exit_qty>;
+template struct Access<PartialExitAccess, &pineforge::source::PineStrategyHost::execute_partial_exit_qty>;
 template struct Access<SameSideAccess, &BacktestEngine::append_same_side_fill>;
-template struct Access<SameBarTransactionAccess, &BacktestEngine::apply_same_bar_market_tx_reversal>;
-template struct Access<MarketFillAccess, &BacktestEngine::apply_market_order_fill>;
+template struct Access<SameBarTransactionAccess, &pineforge::source::PineStrategyHost::apply_same_bar_market_tx_reversal>;
+template struct Access<MarketFillAccess, &pineforge::source::PineStrategyHost::apply_market_order_fill>;
 
 template<class T> struct MemberArguments;
 template<class C, class R, class A, class B, class D>

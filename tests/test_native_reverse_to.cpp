@@ -1,5 +1,6 @@
 // Literal tests of the actual resolved ReverseTo seam; no strategy/tape loop.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/execution_projection.hpp>
 #include <pineforge/execution_reverse_to.hpp>
 
@@ -14,6 +15,8 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
+using pineforge::source::PineStrategyHost;
 namespace x = pineforge::execution;
 using ReverseTo = x::reverse_to_v1::ReverseTo;
 
@@ -46,7 +49,7 @@ void near(double actual, double expected) {
     CHECK(ok);
 }
 
-struct Book final : BacktestEngine {
+struct Book final : PineStrategyHost {
     Book() {
         initial_capital_ = 1000;
         commission_type_ = CommissionType::CASH_PER_ORDER;
@@ -57,7 +60,7 @@ struct Book final : BacktestEngine {
         current_bar_ = {100, 130, 70, 100, 1, 1736121600000LL};
         bar_index_ = 3;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     x::PhysicalExecutionContext context() const {
         // Native execution coordinates intentionally differ from chart state.
         return {1736121660000LL, 7, {}, {}};

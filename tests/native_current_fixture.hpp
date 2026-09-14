@@ -31,6 +31,7 @@ struct Host : NativeStrategyHost {
     std::function<void(Host&,const no::ExecutionAppliedEvent&)> notification;
     int calculations = 0, depth = 0, max_depth = 0;
     std::vector<uint64_t> notified;
+    double source_pnl_value = 0.0;
     void enter() { ++depth; max_depth=std::max(max_depth,depth); }
     void on_native_run_begin() override { enter(); if(beginning) beginning(*this); --depth; }
     void on_native_bar(const Bar&,const NativeDecisionContext&) override {
@@ -52,8 +53,8 @@ struct Host : NativeStrategyHost {
     void poison_loss(double value) { gross_loss_sum_=value; }
     void poison_counter() { win_trades_count_=std::numeric_limits<int>::max(); }
     void poison_fee() { commission_value_+=1; }
-    double source_pnl() const { return intraday_pnl_; }
-    void poison_source() { intraday_pnl_=std::numeric_limits<double>::max(); }
+    double source_pnl() const { return source_pnl_value; }
+    void poison_source() { source_pnl_value=std::numeric_limits<double>::max(); }
     ex::AccountEffectProjection project_quote(const ex::Fill& fill, const ex::SelectedOpeningSet& selected) const {
         return project_native_settlement_selected_v1(ex::Flatten{},fill,selected);
     }

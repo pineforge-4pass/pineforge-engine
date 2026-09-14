@@ -67,12 +67,25 @@ public:
     double trail_best_price() const;
     double live_position_size() const override;
     int pending_order_count() const;
+    MarketAdmissionJournal& market_admission_journal();
     const MarketAdmissionJournal& market_admission_journal() const;
     std::vector<admission::Field> market_admission_fields() const;
     const PendingOrder& pending_order_at(int index) const;
+    int probe_fill_qty(int index, double fill_price, double* qty,
+                       int* close_only, int* partition) const;
+    int pending_order_level_resolved(int index) const;
+    int pending_order_effective_levels(int index, double* stop,
+                                       double* limit,
+                                       double* trail_activation) const;
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
     void set_syminfo_metadata(const std::string& key, double value) override;
+    bool set_aux_security_feed(const Bar* bars, int n,
+                               const std::string& input_tf) override;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    bool source_aux_security_feed_enabled() const override;
+    void source_aux_security_input_view(const Bar*& bars, int& n) const override;
+#endif
     int observe_last_bar_dual_entry_path_v1() const override;
     int observe_pending_count_v1() const override;
     int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const override;
@@ -161,12 +174,6 @@ protected:
     int pyramiding_ = 1;
     bool margin_zero_cover_full_liquidation_ = false;
     bool close_entries_rule_any_ = false;
-    double margin_long_ = 100.0;
-    double margin_short_ = 100.0;
-    int last_margin_call_event_bar_ = -1;
-    int intrabar_exit_margin_call_bar_ = -1;
-    int open_margin_slice_bar_ = -1;
-    double pending_close_qty_in_bar_ = 0.0;
     int64_t next_order_seq_ = 1;
     uint64_t exit_leg_event_seq_ = 0;
     int priced_entry_activity_bar_ = -1;
@@ -190,7 +197,6 @@ protected:
     int64_t trail_best_before_bar_position_cycle_ = 0;
     uint64_t trail_best_before_bar_fill_seq_ = 0;
     bool last_exit_fill_was_trail_ = false;
-    bool current_fill_is_limit_ = false;
     enum class RiskDirection { BOTH, LONG_ONLY, SHORT_ONLY };
     RiskDirection risk_direction_ = RiskDirection::BOTH;
     int risk_max_cons_loss_days_ = 0;
@@ -225,6 +231,12 @@ protected:
     bool coof_cascade_force_wp_gap_ = false;
     double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
     uint64_t coof_direct_fill_events_remaining_ = 0;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    std::vector<Bar> aux_security_bars_;
+    std::string aux_security_input_tf_;
+    std::vector<std::size_t> aux_security_chart_begin_;
+    std::vector<std::size_t> aux_security_chart_end_;
+#endif
     // @source-state end
 
     bool history_advances_new_bar() const;
@@ -233,6 +245,9 @@ protected:
     Bar broker_trigger_bar(const Bar& bar) const;
     double compute_liquidation_price() const;
     double margin_liquidation_price() const;
+    double apply_slippage(double price, bool is_buy) const;
+    double apply_limit_fill(double price, bool is_buy) const;
+    double apply_fill_slippage(double price, bool is_buy) const;
     double signed_position_size() const;
     void freeze_script_position_view();
     void clear_script_position_view();
@@ -340,34 +355,8 @@ protected:
     bool legacy_stream_push_ticks(const TradeTick* ticks, int n);
     bool legacy_stream_advance_time(int64_t timestamp_ms);
     bool legacy_stream_end(bool finalize_partial_input_bar);
-    void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
+    void dispatch_source_stream_script_bar(const Bar& bar, bool had_tick);
     void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
-    void register_security_eval(int sec_id, const std::string& requested_tf,
-                                const std::string& input_tf, bool lookahead_on,
-                                bool gaps_on = false, bool heikinashi = false);
-    bool session_template_knows_early_close() const;
-    void register_security_lower_tf_eval(
-        int sec_id,
-        const std::string& requested_tf,
-        const std::string& input_tf
-    );
-    int security_lower_tf_sub_bar_index(int sec_id) const;
-    void validate_security_timeframes(const std::string& input_tf);
-    void dispatch_security_eval(SecurityEvalState& state,
-                                                const Bar& bar, bool publish,
-                                                int64_t bar_index);
-    bool security_series_slot_is_new(int sec_id) const;
-    void publish_security_eval_state_at_calling_boundary(
-            SecurityEvalState& state);
-    bool security_input_precedes_range_start(
-            const SecurityEvalState& state, int64_t input_ts) const;
-    bool aux_security_traded_between(int64_t from_ms,
-                                                     int64_t to_ms) const;
-    void feed_security_eval_state(
-            SecurityEvalState& state, const Bar& input_bar,
-            bool calling_bar_complete = false);
-    bool set_aux_security_feed(const Bar* bars, int n,
-                                               const std::string& input_tf);
     void clear_aux_security_chart_ranges();
     void prepare_aux_security_chart_ranges(
             const Bar* chart_bars, int n_chart, const std::string& chart_tf);
@@ -445,12 +434,6 @@ protected:
     bool use_default_stop_placement_qty(
             const PendingOrder& order, double fill_price,
             bool flat_dual_stop_pair = false) const;
-    int probe_fill_qty(int index, double fill_price, double* qty,
-                                       int* close_only, int* partition) const;
-    int pending_order_level_resolved(int index) const;
-    int pending_order_effective_levels(int index, double* stop,
-                                                       double* limit,
-                                                       double* trail_activation) const;
     bool stop_entry_margin_admission_declines(
             const PendingOrder& order, double fill_price, const Bar& /*bar*/,
             bool flat_dual_stop_pair) const;
@@ -697,9 +680,9 @@ protected:
                                                    bool& is_partial_io,
                                                    double& reserved_qty_out);
     BacktestEngine::BarTime _decompose_bar_time_chart_tz() const;
-    execution::Status preflight_source_close_observation(
+    execution::Status on_source_close_preflight(
             const Trade* rows, size_t count, std::optional<int>& loss_day) const;
-    void observe_source_close_rows(
+    void on_source_close_observed(
             const Trade* rows, size_t count, std::optional<int> loss_day);
     bool check_risk_allow_entry(bool is_long) const;
     void update_risk_state();

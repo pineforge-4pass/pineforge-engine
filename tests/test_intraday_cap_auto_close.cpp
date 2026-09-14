@@ -66,9 +66,9 @@ void test_intraday_candidate_metadata_preserves_default_off_policies() {
     public:
         void on_source_bar(const Bar&) override {}
         bool policy(int index) const {
-            if (index == 0) return max_intraday_filled_orders_.configuration().skip_noop_market;
-            if (index == 1) return max_intraday_filled_orders_.configuration().defer_pooc_close;
-            return max_intraday_filled_orders_.configuration().count_pooc_full_close;
+            if (index == 0) return adapter_.cap.configuration().skip_noop_market;
+            if (index == 1) return adapter_.cap.configuration().defer_pooc_close;
+            return adapter_.cap.configuration().count_pooc_full_close;
         }
     };
     const char* keys[] = {
@@ -168,7 +168,7 @@ void test_cap_latches_until_day_rollover() {
             commission_value_ = 0.0;
             slippage_ = 0;
             pyramiding_ = 10;
-            max_intraday_filled_orders_ = 2;
+            adapter_.cap = 2;
         }
         int queued_count = 0;
         void on_source_bar(const Bar&) override {
@@ -250,7 +250,7 @@ void test_cap_disabled_does_not_inject_auto_close() {
             commission_value_ = 0.0;
             slippage_ = 0;
             pyramiding_ = 10;
-            // Leave max_intraday_filled_orders_ at 0 (unlimited).
+            // Leave adapter_.cap at 0 (unlimited).
         }
         void on_source_bar(const Bar&) override {
             std::string id = "L" + std::to_string(bar_index_);
@@ -294,7 +294,7 @@ void test_noop_market_attempt_does_not_consume_cap(bool is_long) {
             slippage_ = 0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 2;
+            adapter_.cap = 2;
             if (skip_noop)
                 set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
         }
@@ -307,8 +307,8 @@ void test_noop_market_attempt_does_not_consume_cap(bool is_long) {
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
-        int charged_slots() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int charged_slots() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
         uint64_t broker_fills() const { return broker_fill_event_seq_; }
     };
 
@@ -363,7 +363,7 @@ void test_pooc_cap_close_defers_to_next_open(bool is_long) {
             slippage_ = 0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 1;
+            adapter_.cap = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         bool is_long;
@@ -408,7 +408,7 @@ void test_due_pooc_cap_close_survives_day_gap(bool is_long) {
             slippage_ = 0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 1;
+            adapter_.cap = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         bool is_long;
@@ -420,13 +420,13 @@ void test_due_pooc_cap_close_survives_day_gap(bool is_long) {
             if (bar_index_ == 1) {
                 flat_at_reopen = std::fabs(signed_position_size()) < 1e-9;
                 latched_at_reopen = _intraday_cap_currently_latched();
-                quota_at_reopen = max_intraday_filled_orders_.budget().charged_slots();
+                quota_at_reopen = adapter_.cap.budget().charged_slots();
                 strategy_entry("NEW", is_long);
             }
             if (bar_index_ >= 2) strategy_entry("LATE", is_long);
         }
-        int charged_slots() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int charged_slots() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
         bool due_pending() const { return position_close_obligation_.pending(); }
         uint64_t broker_fills() const { return broker_fill_event_seq_; }
         double position_size() const { return signed_position_size(); }
@@ -479,7 +479,7 @@ void test_new_run_discards_old_due_close_and_quota(bool is_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 1;
+            adapter_.cap = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         bool is_long;
@@ -489,11 +489,11 @@ void test_new_run_discards_old_due_close_and_quota(bool is_long) {
         void on_source_bar(const Bar&) override {
             if (bar_index_ != 0) return;
             due_on_first_callback = position_close_obligation_.pending();
-            slots_on_first_callback = max_intraday_filled_orders_.budget().charged_slots();
+            slots_on_first_callback = adapter_.cap.budget().charged_slots();
             if (place_entry) strategy_entry("E", is_long);
         }
-        int charged_slots() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int charged_slots() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
         bool due_pending() const { return position_close_obligation_.pending(); }
         uint64_t broker_fills() const { return broker_fill_event_seq_; }
         double position_size() const { return signed_position_size(); }
@@ -539,7 +539,7 @@ void test_noop_filter_preserves_same_tick_close_then_reentry(bool is_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 10;
+            adapter_.cap = 10;
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
         }
         bool is_long;
@@ -579,7 +579,7 @@ void test_noop_filter_preserves_same_tick_reversal(bool starts_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 10;
+            adapter_.cap = 10;
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
         }
         bool starts_long;
@@ -621,7 +621,7 @@ void test_pooc_strategy_close_consumes_cap(bool is_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 2;
+            adapter_.cap = 2;
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
@@ -665,7 +665,7 @@ void test_pooc_close_coqueued_with_reversal_counts_once(bool starts_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 2;
+            adapter_.cap = 2;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
@@ -678,7 +678,7 @@ void test_pooc_close_coqueued_with_reversal_counts_once(bool starts_long) {
             }
         }
         double get_signed_position_size() const { return signed_position_size(); }
-        int charged_slots() const { return max_intraday_filled_orders_.budget().charged_slots(); }
+        int charged_slots() const { return adapter_.cap.budget().charged_slots(); }
         uint64_t broker_fills() const { return broker_fill_event_seq_; }
     };
 
@@ -718,7 +718,7 @@ void test_pooc_full_close_counts_one_fill_for_two_fifo_rows(bool is_long) {
             slippage_ = 0;
             pyramiding_ = 2;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 4;
+            adapter_.cap = 4;
             if (count_close)
                 set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
@@ -727,8 +727,8 @@ void test_pooc_full_close_counts_one_fill_for_two_fifo_rows(bool is_long) {
             if (bar_index_ < 2) strategy_entry("E", is_long);
             if (bar_index_ == 2) strategy_close("E");
         }
-        int charged_slots() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int charged_slots() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
         uint64_t broker_fills() const { return broker_fill_event_seq_; }
         double position_size() const { return signed_position_size(); }
     };
@@ -777,7 +777,7 @@ void test_pooc_close_count_survives_rejected_reversal(bool starts_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 2;
+            adapter_.cap = 2;
             risk_direction_ = starts_long
                 ? RiskDirection::LONG_ONLY : RiskDirection::SHORT_ONLY;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
@@ -794,8 +794,8 @@ void test_pooc_close_count_survives_rejected_reversal(bool starts_long) {
             }
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat(starts_long);
@@ -827,7 +827,7 @@ void test_pooc_close_count_survives_cancelled_reversal(bool starts_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 4;
+            adapter_.cap = 4;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
@@ -844,8 +844,8 @@ void test_pooc_close_count_survives_cancelled_reversal(bool starts_long) {
             }
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat(starts_long);
@@ -877,7 +877,7 @@ void test_pooc_close_count_survives_noop_reversal(bool starts_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 4;
+            adapter_.cap = 4;
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
@@ -892,8 +892,8 @@ void test_pooc_close_count_survives_noop_reversal(bool starts_long) {
             }
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat(starts_long);
@@ -926,7 +926,7 @@ void test_intervening_fill_expires_pooc_close_inheritance(bool starts_long) {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 3;
+            adapter_.cap = 3;
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
@@ -941,8 +941,8 @@ void test_intervening_fill_expires_pooc_close_inheritance(bool starts_long) {
             }
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat(starts_long);
@@ -983,15 +983,15 @@ void test_pooc_close_count_candidate_excludes_magnifier() {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 2;
+            adapter_.cap = 2;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("FIRST", true);
             if (bar_index_ == 1) strategy_close("FIRST");
         }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat;
@@ -1021,7 +1021,7 @@ void test_pooc_deferred_cap_candidate_excludes_magnifier() {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 1;
+            adapter_.cap = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         void on_source_bar(const Bar&) override {
@@ -1059,7 +1059,7 @@ void test_pooc_deferred_cap_candidate_excludes_coof() {
             pyramiding_ = 0;
             process_orders_on_close_ = true;
             calc_on_order_fills_ = true;
-            max_intraday_filled_orders_ = 1;
+            adapter_.cap = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         void on_source_bar(const Bar&) override {
@@ -1095,7 +1095,7 @@ void test_pooc_close_count_candidate_excludes_coof() {
             pyramiding_ = 0;
             process_orders_on_close_ = true;
             calc_on_order_fills_ = true;
-            max_intraday_filled_orders_ = 3;
+            adapter_.cap = 3;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         void on_source_bar(const Bar&) override {
@@ -1107,8 +1107,8 @@ void test_pooc_close_count_candidate_excludes_coof() {
             }
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat;
@@ -1137,7 +1137,7 @@ void test_pooc_close_count_candidate_excludes_any_mode() {
             pyramiding_ = 0;
             process_orders_on_close_ = true;
             close_entries_rule_any_ = true;
-            max_intraday_filled_orders_ = 3;
+            adapter_.cap = 3;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         void on_source_bar(const Bar&) override {
@@ -1145,8 +1145,8 @@ void test_pooc_close_count_candidate_excludes_any_mode() {
             if (bar_index_ == 1) strategy_close("FIRST");
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat;
@@ -1173,7 +1173,7 @@ void test_pooc_close_count_candidate_excludes_stream_realtime() {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 3;
+            adapter_.cap = 3;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         void on_source_bar(const Bar&) override {
@@ -1181,8 +1181,8 @@ void test_pooc_close_count_candidate_excludes_stream_realtime() {
             if (bar_index_ == 1) strategy_close("FIRST");
         }
         double position_size() const { return signed_position_size(); }
-        int fill_count() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-        bool cap_hit() const { return max_intraday_filled_orders_.budget().latched(); }
+        int fill_count() const { return adapter_.cap.budget().charged_slots(); }
+        bool cap_hit() const { return adapter_.cap.budget().latched(); }
     };
 
     Strat strat;
@@ -1214,7 +1214,7 @@ void test_pooc_deferred_cap_candidate_excludes_stream_warmup() {
             default_qty_value_ = 1.0;
             pyramiding_ = 0;
             process_orders_on_close_ = true;
-            max_intraday_filled_orders_ = 1;
+            adapter_.cap = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         void on_source_bar(const Bar&) override {

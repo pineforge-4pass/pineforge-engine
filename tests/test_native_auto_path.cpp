@@ -1,4 +1,5 @@
 #include <pineforge/native_host.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <vector>
 using namespace pineforge;
@@ -16,11 +17,11 @@ NativeRunSpec configuration() {
 }
 // A separate legacy host installs its own forced path in thread-local state.
 // Native AUTO must remain independent while nested inside that callback.
-struct Outer final : BacktestEngine {
+struct Outer final : source::PineStrategyHost {
   Native& native;
   Bar input{100,110,99,100,1,1736121600000LL};
   explicit Outer(Native& n, const Bar& b):native(n),input(b) {}
-  void on_bar(const Bar&) override { native.run(&input,1); }
+  void on_source_bar(const Bar&) override { native.run(&input,1); }
 };
 std::vector<int> phases(const Native& n) {
   std::vector<int> out;

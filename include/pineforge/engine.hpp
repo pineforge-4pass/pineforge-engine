@@ -1013,18 +1013,18 @@ protected:
     // loop's safe point (finish_intraday_loss_cancel); the loop itself
     // removes every order it has not yet applied.
     // @broker-state end
-    virtual int intraday_loss_day_key() const;
-    virtual void intraday_loss_begin_bar(const Bar& bar);
-    virtual bool intraday_loss_orders_blocked() const;
-    virtual bool evaluate_max_intraday_loss(double mark_price, double excluded_realized);
-    virtual void evaluate_max_intraday_loss_over_path(const Bar& bar);
-    virtual void finish_intraday_loss_cancel();
+    int intraday_loss_day_key() const;
+    void intraday_loss_begin_bar(const Bar& bar);
+    bool intraday_loss_orders_blocked() const;
+    bool evaluate_max_intraday_loss(double mark_price, double excluded_realized);
+    void evaluate_max_intraday_loss_over_path(const Bar& bar);
+    void finish_intraday_loss_cancel();
 
-    virtual bool check_risk_allow_entry(bool is_long) const;
-    virtual void update_risk_state();
+    bool check_risk_allow_entry(bool is_long) const;
+    void update_risk_state();
 
     // --- Per-trade extreme tracking ---
-    virtual void update_per_trade_extremes();
+    void update_per_trade_extremes();
 
     // Source compatibility extension: settle an already resolved execution
     // using the current chart context and source-day preflight/observation.
@@ -2044,7 +2044,7 @@ protected:
     // Defined out-of-line in src/engine_risk.cpp so we can use the
     // private ``ScopedTimezone`` helper without leaking its header into
     // the public engine.hpp surface.
-    virtual BarTime _decompose_bar_time_chart_tz() const;
+    BarTime _decompose_bar_time_chart_tz() const;
 
     int _bar_hour() const { return _decompose_bar_time().hour; }
     int _bar_minute() const { return _decompose_bar_time().minute; }
@@ -2436,15 +2436,6 @@ protected:
     // BacktestEngine offsets.
     bool security_history_publication_replay_ = false;
 
-#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-    // Optional immutable finer feed for request.security. Native chart bars
-    // remain the sole source for current_bar_, broker execution and
-    // bar_index_. Per-run ranges map each chart bar to its auxiliary slice.
-    std::vector<Bar> aux_security_bars_;
-    std::string aux_security_input_tf_;
-    std::vector<std::size_t> aux_security_chart_begin_;
-    std::vector<std::size_t> aux_security_chart_end_;
-#endif
     // The raw feed used by security aggregators in the active run. This is the
     // chart input TF on the legacy path and the auxiliary TF on the split path.
     std::string security_input_tf_;
@@ -2542,7 +2533,7 @@ protected:
     // unwinds a C++ exception across the extern "C" boundary.
     std::string last_error_;
 
-    virtual void register_security_eval(int sec_id, const std::string& requested_tf,
+    void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false, bool heikinashi = false);
     // ``request.security_lower_tf`` registers the same per-sec_id eval
@@ -2552,15 +2543,15 @@ protected:
     // can throw a precise error if the chart's input TF turns out to be
     // <= the requested TF (mirroring TradingView's "lower timeframe
     // required" error for ``request.security_lower_tf``).
-    virtual void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
+    void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
                                          const std::string& input_tf);
     // Sub-bar index (0-based) of the current ``request.security_lower_tf``
     // synthesis within the current chart bar. Returns 0 outside the
     // synthesis loop. Used by codegen to clear its per-call vector at
     // sub-bar 0 and push one element per sub-bar after.
-    virtual int security_lower_tf_sub_bar_index(int sec_id) const;
-    virtual void validate_security_timeframes(const std::string& input_tf);
-    virtual bool security_series_slot_is_new(int sec_id) const;
+    int security_lower_tf_sub_bar_index(int sec_id) const;
+    void validate_security_timeframes(const std::string& input_tf);
+    bool security_series_slot_is_new(int sec_id) const;
     // The one path to evaluate_security(): installs the requested context's
     // bar index for the evaluator's TA members (ta::bar_context()) for the
     // duration of the dispatch. `bar_index` is the 0-based index of the
@@ -2570,7 +2561,7 @@ protected:
     // compute()/recompute() dispatch of one requested bar rewrites the same
     // ring slot, and a conditional window call inside the security expression
     // is addressed exactly like TradingView addresses it.
-    virtual void dispatch_security_eval(SecurityEvalState& state, const Bar& bar,
+    void dispatch_security_eval(SecurityEvalState& state, const Bar& bar,
                                 bool publish, int64_t bar_index);
     // KI-55 range-start gate for one evaluator: true when the input bar at
     // `input_ts` belongs to an HTF bucket that opened before the cut --
@@ -2582,18 +2573,18 @@ protected:
     // progressive feed and the historical lookahead projection builder must
     // agree on this predicate so projected child indexes line up with the
     // per-state feed cursor.
-    virtual bool security_input_precedes_range_start(const SecurityEvalState& state,
+    bool security_input_precedes_range_start(const SecurityEvalState& state,
                                              int64_t input_ts) const;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // True when the auxiliary request.security feed holds a bar in
     // [from_ms, to_ms): the evidence that an HTF bucket whose nominal open
     // precedes the run's first chart bar was in progress at the range start.
-    virtual bool aux_security_traded_between(int64_t from_ms, int64_t to_ms) const;
+    bool aux_security_traded_between(int64_t from_ms, int64_t to_ms) const;
 #endif
-    virtual void feed_security_eval_state(
+    void feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar,
         bool calling_bar_complete = false);
-    virtual void publish_security_eval_state_at_calling_boundary(
+    void publish_security_eval_state_at_calling_boundary(
         SecurityEvalState& state);
 
     // A new batch run (including stream_begin's historical warmup) starts a
@@ -2804,7 +2795,7 @@ protected:
     // Internal sizing helper; protected (alongside calc_qty) so the sizing-guard
     // test can exercise the fill_price<=0 / NaN rejection path directly. See
     // tests/test_adversarial_ohlcv.cpp.
-    virtual double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
+    double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
 
 private:
 protected:
@@ -2979,8 +2970,8 @@ protected:
     // source-owned seam.  The Pine compatibility adapter is implemented in
     // engine_market_admission.cpp and is deliberately absent from this
     // public engine header.
-    virtual bool opening_admission_eligible(const MarketAdmissionDraft& draft) const;
-    virtual void record_market_sizing_revision(PendingOrder& order, admission::SizingObservation before,
+    bool opening_admission_eligible(const MarketAdmissionDraft& draft) const;
+    void record_market_sizing_revision(PendingOrder& order, admission::SizingObservation before,
                                       double affordability_before);
     bool pending_flat_market_pair_scope_is_live() const;
     bool default_flat_market_gross_scope_is_live() const;
@@ -3278,9 +3269,9 @@ protected:
                           double fill_price, bool was_long);
     void record_close_trade(Trade trade);
     void validate_close_trade_counters(const Trade* rows, size_t count) const;
-    virtual execution::Status preflight_source_close_observation(
+    virtual execution::Status on_source_close_preflight(
         const Trade* rows, size_t count, std::optional<int>& loss_day) const;
-    virtual void observe_source_close_rows(
+    virtual void on_source_close_observed(
         const Trade* rows, size_t count, std::optional<int> loss_day);
     // Quote one resolved execution's current charges. Entry costs on the
     // closed rows are historical allocations. Returns close shares in FIFO
@@ -3380,10 +3371,10 @@ protected:
         const std::string& id, bool is_long, double fill_price, double explicit_qty,
         int explicit_qty_type, bool explicit_qty_prequantized,
         uint64_t entry_incarnation);
-    virtual double calc_default_qty_from_equity(double fill_price, double equity) const;
-    virtual double calc_qty_for_type_from_equity(
+    double calc_default_qty_from_equity(double fill_price, double equity) const;
+    double calc_qty_for_type_from_equity(
         double fill_price, double qty_value, int qty_type, double equity) const;
-    virtual double source_reversal_qty(double fill_price, double explicit_qty,
+    double source_reversal_qty(double fill_price, double explicit_qty,
                                int explicit_qty_type, bool prequantized) const;
     virtual void reset_source_exit_activations_before_flatten();
     virtual void reset_source_trail_after_flatten();
@@ -3419,20 +3410,11 @@ protected:
         const std::string& effective_input_tf);
     void clear_historical_security_lookahead_projections();
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
-    bool aux_security_feed_enabled() const { return !aux_security_bars_.empty(); }
-    void prepare_aux_security_chart_ranges(const Bar* chart_bars, int n_chart,
-                                           const std::string& chart_tf);
-    void feed_aux_security_for_chart_bar(int chart_index);
-    // The calling chart bar's nominal close on the split-feed path (the
-    // value feed_aux_security_for_chart_bar installs as
-    // security_calling_close_ms_ while the slice is fed).
-    int64_t aux_security_calling_close_ms() const;
-    // After dispatch_bar: feed the auxiliary bars a first-bucket-latched
-    // evaluator (calling_open_latches_first) held back from this chart
-    // bar's slice, in feed order, with the same next-input / calling-close
-    // context the slice loop would have given them.
-    void feed_deferred_aux_security_for_chart_bar(int chart_index);
-    void clear_aux_security_chart_ranges();
+    virtual bool source_aux_security_feed_enabled() const;
+    virtual void source_aux_security_input_view(const Bar*& bars, int& n) const;
+    bool aux_security_feed_enabled() const {
+        return source_aux_security_feed_enabled();
+    }
 
     // Neutral capability bridge for independent factorial patches. The
     // two-argument feed exists in the base engine. A completion-aware factor
@@ -3540,7 +3522,7 @@ protected:
     void stream_refresh_action_metadata(size_t first_action, size_t first_trade);
     bool stream_finalize_until(int64_t timestamp_ms);
     void stream_feed_input_bar(const Bar& bar, bool had_tick);
-    virtual void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
+    virtual void dispatch_source_stream_script_bar(const Bar& bar, bool had_tick);
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;

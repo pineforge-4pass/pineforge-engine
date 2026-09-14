@@ -1,5 +1,6 @@
 // Literal native action/definition contracts. No Pine source or external tape.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstdio>

@@ -150,8 +150,8 @@ public:
         return last_frozen_;
     }
     void set_step(double step) { qty_step_ = step; }
-    using BacktestEngine::pending_orders_;
-    using BacktestEngine::signed_position_size;
+    using pineforge::source::PineStrategyHost::pending_orders_;
+    using pineforge::source::PineStrategyHost::signed_position_size;
     using BacktestEngine::trade_count;
 private:
     const Signal* signals_;

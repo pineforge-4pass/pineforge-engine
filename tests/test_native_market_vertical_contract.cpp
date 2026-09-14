@@ -168,19 +168,23 @@ public:
     CancelResult stale{};
     CancelResult foreign_cancel{};
     bool source_caught = false;
+    double source_intraday_pnl = 0.0;
+    int source_cons_loss_days = 0;
+    int source_last_loss_day = -1;
+    int source_intraday_day = -1;
 
-    void invoke_source_entry() { strategy_entry("legacy", true); }
+    void invoke_source_entry() { throw_native_only_route("strategy_entry"); }
     void poison_source_observation() {
-        intraday_pnl_ = kNaN;
-        cons_loss_day_count_ = std::numeric_limits<int>::max();
-        last_loss_day_ = -1;
-        intraday_pnl_day_ = 42;
+        source_intraday_pnl = kNaN;
+        source_cons_loss_days = std::numeric_limits<int>::max();
+        source_last_loss_day = -1;
+        source_intraday_day = 42;
     }
     auto source_observation() const {
         uint64_t intraday_bits;
-        std::memcpy(&intraday_bits, &intraday_pnl_, sizeof intraday_bits);
-        return std::make_tuple(intraday_bits, cons_loss_day_count_,
-                               last_loss_day_, intraday_pnl_day_);
+        std::memcpy(&intraday_bits, &source_intraday_pnl, sizeof intraday_bits);
+        return std::make_tuple(intraday_bits, source_cons_loss_days,
+                               source_last_loss_day, source_intraday_day);
     }
     const auto& physical_lots() const { return pyramid_entries_; }
     int64_t position_cycle() const { return position_cycle_seq_; }

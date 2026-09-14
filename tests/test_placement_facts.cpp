@@ -5,6 +5,9 @@
 #include <cstdio>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
+using pineforge::source::placement_at_entry_capacity;
+using pineforge::source::placement_has_prior_close;
 namespace {
 int checks = 0, failures = 0;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; \
@@ -50,7 +53,7 @@ public:
     void capacity(int value) { pyramiding_=value; }
     void priced_mode() { process_orders_on_close_=true; }
     void close(const char* id) { strategy_close(id); }
-    const auto& journal() const { return market_admission_journal_; }
+    const auto& journal() const { return market_admission_journal(); }
 };
 
 void accepted_orders_keep_placement_facts() {

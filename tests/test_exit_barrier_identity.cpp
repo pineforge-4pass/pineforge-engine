@@ -1,4 +1,5 @@
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <cstdio>
 #include <functional>

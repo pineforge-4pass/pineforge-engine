@@ -228,7 +228,7 @@ static void test_two_sibling_exits_path_order() {
 //    the cap auto-close priced at the bar extreme for an intra-bar stop
 //    entry (lines 350-360, 481-485).
 //
-// max_intraday_filled_orders_ = 1: the FIRST fill of each chart-day is the
+// adapter_.cap = 1: the FIRST fill of each chart-day is the
 // cap-triggering one. We make that fill a LONG STOP entry that fires
 // INTRA-bar (stop > bar.open), so TV's synthetic cap-close exits at
 // bar.high (NOT the entry's stop price). The latch then blocks the second
@@ -242,7 +242,7 @@ public:
         default_qty_value_ = 1.0;
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 5;
         syminfo_mintick_ = 0.01;
-        max_intraday_filled_orders_ = 1;
+        adapter_.cap = 1;
     }
     void on_source_bar(const Bar&) override {
         // Place a fresh long STOP entry every bar (stop above the open so it

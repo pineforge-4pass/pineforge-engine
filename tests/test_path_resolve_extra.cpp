@@ -32,6 +32,7 @@
 #include <limits>
 #include <vector>
 
+#include <pineforge/source/pine_pending_intent.hpp>
 #include "../src/engine_internal.hpp"
 
 using namespace pineforge;

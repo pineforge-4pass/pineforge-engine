@@ -104,7 +104,7 @@ public:
     void pyramiding(int value) { pyramiding_ = value; }
     void scalar_fx(double value) { account_currency_fx_ = value; }
     void lot_step(double value) { qty_step_ = value; }
-    void intraday_cap(int value) { max_intraday_filled_orders_ = value; }
+    void intraday_cap(int value) { adapter_.cap = value; }
     double trigger_script_qty = kNaN;
     double trigger_script_equity = kNaN;
 

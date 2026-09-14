@@ -7,7 +7,7 @@
 #include <stdexcept>
 
 namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
 const pf_field_desc_t* pending_order_layout(int*);
 }
 
@@ -18,19 +18,23 @@ namespace reservation_test {
 template<class Tag, auto Member> struct Access {
     friend auto access(Tag) { return Member; }
 };
-#define CHECKPOINT(Tag, method) \
-    struct Tag { friend auto access(Tag); }; \
-    template struct Access<Tag, &pineforge::BacktestEngine::method>
-CHECKPOINT(Dispatch, apply_filled_order_to_state);
-CHECKPOINT(Compact, compact_filled_pending_orders);
-CHECKPOINT(Reduce, reduce_oca_group);
-CHECKPOINT(CancelGroup, cancel_oca_group);
-CHECKPOINT(Flat, reset_position_state_to_flat);
-CHECKPOINT(Open, open_fresh_position);
-CHECKPOINT(Revive, revive_position_brackets_after_margin_call_partial);
-#undef CHECKPOINT
+struct Dispatch { friend auto access(Dispatch); };
+struct Compact { friend auto access(Compact); };
+struct Reduce { friend auto access(Reduce); };
+struct CancelGroup { friend auto access(CancelGroup); };
+struct Flat { friend auto access(Flat); };
+struct Open { friend auto access(Open); };
+struct Revive { friend auto access(Revive); };
+template struct Access<Dispatch, &pineforge::source::PineStrategyHost::apply_filled_order_to_state>;
+template struct Access<Compact, &pineforge::source::PineStrategyHost::compact_filled_pending_orders>;
+template struct Access<Reduce, &pineforge::source::PineStrategyHost::reduce_oca_group>;
+template struct Access<CancelGroup, &pineforge::source::PineStrategyHost::cancel_oca_group>;
+template struct Access<Flat, &pineforge::BacktestEngine::reset_position_state_to_flat>;
+template struct Access<Open, &pineforge::source::PineStrategyHost::open_fresh_position>;
+template struct Access<Revive, &pineforge::source::PineStrategyHost::revive_position_brackets_after_margin_call_partial>;
 
 using namespace pineforge;
+using source::PendingOrder;
 constexpr double missing = std::numeric_limits<double>::quiet_NaN();
 class Book : public pineforge::source::PineStrategyHost {
 public:

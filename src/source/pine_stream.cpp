@@ -384,7 +384,7 @@ bool source::PineStrategyHost::legacy_stream_end(bool finalize_partial_input_bar
     }
 }
 
-void source::PineStrategyHost::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
+void source::PineStrategyHost::dispatch_source_stream_script_bar(const Bar& bar, bool had_tick) {
     if (script_tf_seconds_ > 0
         && bar.timestamp > std::numeric_limits<int64_t>::max()
             - static_cast<int64_t>(script_tf_seconds_) * 1000) {

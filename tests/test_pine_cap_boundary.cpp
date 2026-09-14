@@ -37,19 +37,19 @@ public:
         slippage_ = 0;
     }
     void on_source_bar(const Bar&) override {}
-    void limit(int value) { max_intraday_filled_orders_ = value; }
-    int limit() const { return max_intraday_filled_orders_.configuration().limit; }
+    void limit(int value) { adapter_.cap = value; }
+    int limit() const { return adapter_.cap.configuration().limit; }
     bool flag(int index) const {
-        const auto& c = max_intraday_filled_orders_.configuration();
+        const auto& c = adapter_.cap.configuration();
         return index == 0 ? c.skip_noop_market : index == 1 ? c.defer_pooc_close
                                                          : c.count_pooc_full_close;
     }
-    CapAttachment attachment() const { return max_intraday_filled_orders_.attachment(); }
-    int slots() const { return max_intraday_filled_orders_.budget().charged_slots(); }
-    bool latched() const { return max_intraday_filled_orders_.budget().latched(); }
+    CapAttachment attachment() const { return adapter_.cap.attachment(); }
+    int slots() const { return adapter_.cap.budget().charged_slots(); }
+    bool latched() const { return adapter_.cap.budget().latched(); }
     bool due() const { return position_close_obligation_.pending(); }
-    bool cause() const { return max_intraday_filled_orders_.due_cause().has_value(); }
-    uint64_t action() const { return max_intraday_filled_orders_.next_action(); }
+    bool cause() const { return adapter_.cap.due_cause().has_value(); }
+    uint64_t action() const { return adapter_.cap.next_action(); }
     uint64_t fills() const { return broker_fill_event_seq_; }
     double position() const { return signed_position_size(); }
     double metadata(const char* key) const { return get_syminfo_metadata(key); }

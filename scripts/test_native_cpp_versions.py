@@ -60,9 +60,9 @@ class NativeVersions(unittest.TestCase):
             (FILES[5], "native_run_spec_v1", "native_run_spec_v2"),
             (FILES[6], "native_driver_v4", "native_driver_v2"),
             (FILES[7], "native_driver_v4", "native_driver_v3"),
-            (FILES[8], "engine_script_run_v15", "engine_script_run_v12"),
-            (FILES[9], "engine_script_run_v15", "engine_script_run_v12"),
-            (FILES[10], "engine_script_run_v15", "engine_script_run_v12"),
+            (FILES[8], "engine_script_run_v16", "engine_script_run_v12"),
+            (FILES[9], "engine_script_run_v16", "engine_script_run_v12"),
+            (FILES[10], "engine_script_run_v16", "engine_script_run_v12"),
         ):
             with self.subTest(path=path, namespace=namespace):
                 self.reject(path, namespace, stale)
@@ -73,7 +73,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
             (FILES[6], "native_driver_v4"),
-            (FILES[8], "engine_script_run_v15"),
+            (FILES[8], "engine_script_run_v16"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -86,7 +86,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[2], "native_calendar_v2"),
             (FILES[4], "native_run_spec_v1"),
             (FILES[6], "native_driver_v4"),
-            (FILES[8], "engine_script_run_v15"),
+            (FILES[8], "engine_script_run_v16"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -98,7 +98,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[0], "native_order_v4", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
-            (FILES[8], "engine_script_run_v15", "class NativeStrategyHost"),
+            (FILES[8], "engine_script_run_v16", "class NativeStrategyHost"),
         ):
             with self.subTest(path=path):
                 self.reject(
@@ -225,7 +225,7 @@ class NativeVersions(unittest.TestCase):
             DRIVER_FORWARD,
             "inline namespace native_run_spec_v1 { struct NativeRunSpec {}; }")
 
-    def test_host_public_values_cannot_leave_v15(self):
+    def test_host_public_values_cannot_leave_v16(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")
         self.reject(FILES[8], "struct NativeFailure {", "} struct NativeFailure {")
         self.reject(FILES[8], "struct NativeFailureContext {", "} struct NativeFailureContext {")
@@ -325,11 +325,11 @@ class NativeVersions(unittest.TestCase):
         self.assertIn('validate_native_fx_curve', NATIVE_FX_CURVE_CALLER)
         controls = {row['name']: row for row in control_applicability()}
         self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'], 'required')
-        for name in ('v15_current_execution_surface_compile',
-                     'v15_current_result_missing_cancelled_compile_reject',
-                     'v15_native_fx_curve_surface_compile',
-                     'v15_frozen_current_execution_surface_compile',
-                     'v15_frozen_native_fx_curve_surface_compile'):
+        for name in ('v16_current_execution_surface_compile',
+                     'v16_current_result_missing_cancelled_compile_reject',
+                     'v16_native_fx_curve_surface_compile',
+                     'v16_to_v15_frozen_current_execution_compile_reject',
+                     'v16_to_v15_frozen_native_fx_curve_compile_reject'):
             self.assertEqual(controls[name]['status'], 'required')
 
     def test_order_namespace_is_derived_not_literal(self):
@@ -461,13 +461,15 @@ class NativeVersions(unittest.TestCase):
     def test_current_execution_caller_is_rendered_per_provider(self):
         from check_native_cpp_abi import render_current_execution_caller
         v14 = render_current_execution_caller('engine_script_run_v14')
-        v15 = render_current_execution_caller('engine_script_run_v15')
+        v16 = render_current_execution_caller('engine_script_run_v16')
         self.assertIn('engine_script_run_v14', v14)
-        self.assertNotIn('engine_script_run_v15', v14)
-        self.assertIn('engine_script_run_v15', v15)
-        self.assertNotIn('engine_script_run_v14', v15)
+        self.assertNotIn('engine_script_run_v16', v14)
+        self.assertIn('engine_script_run_v16', v16)
+        self.assertNotIn('engine_script_run_v14', v16)
         with self.assertRaises(RuntimeError):
             render_current_execution_caller('engine_script_run_v13')
+        with self.assertRaises(RuntimeError):
+            render_current_execution_caller('engine_script_run_v15')
 
 
 class NativeFxCurveVersions(unittest.TestCase):

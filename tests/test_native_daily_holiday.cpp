@@ -42,6 +42,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/timeframe.hpp>
 
 #include "test_native_daily_holiday_data.hpp"
@@ -118,7 +119,7 @@ struct Read {
 // Mirrors the generated security series: a dispatch opens a new history
 // slot exactly when the engine says so (security_series_slot_is_new) and
 // otherwise rewrites the current one; the chart body reads the slots.
-class DProbe final : public BacktestEngine {
+class DProbe final : public pineforge::source::PineStrategyHost {
 public:
     struct Site {
         std::string tf;
@@ -153,7 +154,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         std::vector<Read> reads(sites.size());
         for (std::size_t i = 0; i < sites.size(); ++i) {
             const Series& s = series[i];

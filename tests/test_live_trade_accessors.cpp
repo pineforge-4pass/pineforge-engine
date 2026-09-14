@@ -170,7 +170,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
         pyramiding_ = 10;
-        max_intraday_filled_orders_ = 1;
+        adapter_.cap = 1;
     }
     void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);

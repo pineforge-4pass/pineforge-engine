@@ -347,7 +347,7 @@ private:
     Shape shape_;
 };
 
-int find_market(const BacktestEngine& e, const std::string& id, bool is_long) {
+int find_market(const pineforge::source::PineStrategyHost& e, const std::string& id, bool is_long) {
     for (int i = 0; i < e.pending_order_count(); ++i) {
         const PendingOrder& o = e.pending_order_at(i);
         if (o.id == id && o.is_long == is_long && o.type == OrderType::MARKET) return i;

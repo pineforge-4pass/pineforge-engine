@@ -14,7 +14,9 @@
 #include <type_traits>
 
 namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, const MarketAdmissionJournal*,
+                               pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
 const pf_field_desc_t* pending_order_layout(int*);
 }
 
@@ -23,6 +25,7 @@ namespace frozen_prefix {
 }
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 using compat::pine::FrozenMarketInstruction;
 using compat::pine::FrozenMarketInstructionKind;
 #define PF_PREFIX_FIELD(name) \
@@ -301,7 +304,7 @@ void overflowed_total_retains_existing_finite_execution_guard() {
     CHECK(order.pine_frozen_market_instruction.active());
     CHECK(std::isinf(mirror(order).sbmt_tx_qty));
     double qty = 0; int close_only = -1, partition = -1;
-    CHECK(book.probe_fill_qty(0, 100, &qty, &close_only, &partition) == 0);
+    CHECK(book.observe_probe_fill_qty(0, 100, &qty, &close_only, &partition) == 0);
     CHECK(qty == 2 && partition == 0 && close_only == 0);
     // Positive source-total overflow cannot enable the expanded-transaction arm.
     book.step();

@@ -217,7 +217,7 @@ public:
                     double qty = kNaN) {
         strategy_entry(id, is_long, kNaN, level, qty, "");
     }
-    using BacktestEngine::strategy_close;
+    using pineforge::source::PineStrategyHost::strategy_close;
 
     // Every closed trade plus TV's range-end row for a position still open
     // after the last bar, in the tape's sort order.
