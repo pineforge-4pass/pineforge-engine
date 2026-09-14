@@ -36,6 +36,7 @@ set(TEST_SOURCES
     test_native_market_vertical_contract
     test_native_calendar_driver_contract
     test_native_host_repairs
+    test_source_layer_native_defaults
     test_order_action_integration
     test_placement_facts
     test_order_cancellation
