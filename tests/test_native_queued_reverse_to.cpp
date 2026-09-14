@@ -124,6 +124,119 @@ void host_sized_close_opposite_uses_flatten() {
     CHECK(reached);
 }
 
+void explicit_reverse_rejection_records_only_nonidentity_terms() {
+    TermsHost identity;
+    identity.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), reverse(1.0, "identity-flat-reverse"));
+    };
+    run(identity, spec("identity-flat-reverse"), {100});
+    completed(identity);
+    const auto identity_rejection = last_event<no::MatchRejectedEvent>(identity);
+    REQUIRE(identity_rejection);
+    CHECK(identity_rejection->reason == no::MatchRejectReason::NoOppositeExposure);
+    CHECK(!identity_rejection->attempted_terms);
+
+    TermsHost overridden;
+    constexpr double overridden_price = 101.0;
+    overridden.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price + 1.0, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    overridden.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), reverse(1.0, "overridden-flat-reverse"));
+    };
+    run(overridden, spec("overridden-flat-reverse"), {100});
+    completed(overridden);
+    const auto overridden_rejection = last_event<no::MatchRejectedEvent>(overridden);
+    REQUIRE(overridden_rejection && overridden_rejection->attempted_terms);
+    CHECK(overridden_rejection->reason == no::MatchRejectReason::NoOppositeExposure);
+    CHECK(bits(overridden_rejection->attempted_terms->resolved_price) == bits(overridden_price));
+    CHECK(!overridden_rejection->attempted_terms->units);
+    CHECK(overridden_rejection->attempted_terms->shape == no::OpeningShape::Transact);
+
+    TermsHost host_sized;
+    host_sized.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::ReverseTo};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host_sized.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "host-flat-reverse"));
+    };
+    run(host_sized, spec("host-flat-reverse"), {100});
+    completed(host_sized);
+    const auto host_sized_rejection = last_event<no::MatchRejectedEvent>(host_sized);
+    REQUIRE(host_sized_rejection && host_sized_rejection->attempted_terms);
+    CHECK(host_sized_rejection->reason == no::MatchRejectReason::NoOppositeExposure);
+    REQUIRE(host_sized_rejection->attempted_terms->units);
+    CHECK(bits(*host_sized_rejection->attempted_terms->units) == bits(1.0));
+    CHECK(host_sized_rejection->attempted_terms->shape == no::OpeningShape::ReverseTo);
+}
+
+void a_s2_absorbed_close_opposite_flattens_entire_roster() {
+    TermsHost whole;
+    whole.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price, facts.opposite_book_units,
+                                       no::OpeningShape::CloseOpposite};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool whole_reached = false;
+    whole.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(1e16, 100.0, 211);
+        h.append_absorbed_lot(.1, 100.0, 212);
+        const auto target = put(h, host_open(no::Side::Short, "absorbed-whole-close"));
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(result));
+        const auto& applied = std::get<no::ExecutionAppliedEvent>(result);
+        CHECK(bits(applied.closed_units) == bits(1e16));
+        CHECK(bits(applied.filled_working) == bits(1e16));
+        CHECK(applied.terminal);
+        CHECK(applied.terminal_reason == no::AppliedTerminalReason::WorkingUnitsSatisfied);
+        REQUIRE(h.rows().size() == 2);
+        CHECK(bits(h.rows()[0].qty) == bits(1e16));
+        CHECK(bits(h.rows()[1].qty) == bits(.1));
+        CHECK(h.lots().empty());
+        CHECK(h.physical_position().signed_units == 0.0);
+        REQUIRE(!h.precommit_views.empty());
+        CHECK(std::holds_alternative<execution::Flatten>(h.precommit_views.back().plan));
+        whole_reached = true;
+    };
+    run(whole, spec("absorbed-whole-close"), {100});
+    completed(whole);
+    CHECK(whole_reached);
+
+    TermsHost reduced;
+    bool reduce_reached = false;
+    reduced.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(1e16, 100.0, 221);
+        h.append_absorbed_lot(.1, 100.0, 222);
+        const auto target = put(h, reduce(1e16, "absorbed-explicit-reduce"));
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(result));
+        const auto& applied = std::get<no::ExecutionAppliedEvent>(result);
+        CHECK(bits(applied.closed_units) == bits(1e16));
+        CHECK(bits(applied.filled_working) == bits(1e16));
+        REQUIRE(h.rows().size() == 1);
+        CHECK(bits(h.rows().front().qty) == bits(1e16));
+        REQUIRE(h.lots().size() == 1);
+        CHECK(h.lots().front().entry_incarnation == 222);
+        CHECK(bits(h.lots().front().qty) == bits(.1));
+        CHECK(bits(h.physical_position().signed_units) == bits(.1));
+        reduce_reached = true;
+    };
+    run(reduced, spec("absorbed-explicit-reduce"), {100});
+    completed(reduced);
+    CHECK(reduce_reached);
+}
+
 void a_r1_exact_queued_reverse_both_signs() {
     const double target = from_bits(0x3fb999999999999aULL);
     for (const double sign : {1.0, -1.0}) {
@@ -261,6 +374,8 @@ int main() {
     test("current ReverseTo preview/execute", current_reverse_preview_and_execute);
     test("host-sized ReverseTo", host_sized_reverse_shape);
     test("host-sized CloseOpposite Flatten", host_sized_close_opposite_uses_flatten);
+    test("identity ReverseTo rejection terms", explicit_reverse_rejection_records_only_nonidentity_terms);
+    test("A-S2 absorbed CloseOpposite Flatten", a_s2_absorbed_close_opposite_flattens_entire_roster);
     test("A-R1 exact queued reverse both signs", a_r1_exact_queued_reverse_both_signs);
     test("A-R2/A-R4 priced and flat reverse", a_r2_priced_stop_reverse_and_r4_no_opposite);
     test("A-R3 current reversal preview", a_r3_preview_rows_match_current_reverse);

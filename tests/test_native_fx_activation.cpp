@@ -165,31 +165,81 @@ void a_f3_fee_and_a_f4_batch_rate_facts() {
 }
 
 void a_f7_candidate_timestamp_sink_pin() {
+    auto check_sinks = [](TermsHost& host, std::int64_t expected,
+                          std::int64_t contrasting_timestamp, const char* trace_name) {
+        CHECK(host.engine_timestamp() == expected);
+        const auto actual_hash = host.stream_state_hash();
+        CHECK(actual_hash == host.stream_hash_at_timestamp(expected));
+        CHECK(actual_hash != host.stream_hash_at_timestamp(contrasting_timestamp));
+        const auto trace_timestamp = host.emit_trace_timestamp(trace_name);
+        REQUIRE(trace_timestamp);
+        CHECK(*trace_timestamp == expected);
+    };
+
     TermsHost rejected;
     rejected.resolver = [](const NativeExecutionTermsFacts&) {
         return no::ExecutionTerms{0.0, std::nullopt, no::OpeningShape::Transact};
     };
-    rejected.beginning = [](Host& base) { put(static_cast<TermsHost&>(base), tx(1)); };
+    bool rejected_reached = false;
+    rejected.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, tx(1, "sink-rejected"));
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::MatchRejectedEvent>(result));
+        const auto& event = std::get<no::MatchRejectedEvent>(result);
+        CHECK(event.reason == no::MatchRejectReason::NonpositivePrice);
+        check_sinks(h, event.cursor.point.effective_time_ms,
+                    event.cursor.point.effective_time_ms + 1, "rejected-candidate");
+        rejected_reached = true;
+    };
+    rejected.enable_trace_for_sink_test();
     run(rejected, spec("fx-sink-reject"), {100});
     completed(rejected);
-    CHECK(rejected.engine_timestamp() == T);
-    const auto event = last_event<no::MatchRejectedEvent>(rejected);
-    REQUIRE(event);
-    CHECK(event->cursor.point.effective_time_ms == rejected.engine_timestamp());
+    CHECK(rejected_reached);
 
-    TermsHost no_effect;
-    no_effect.resolver = [](const NativeExecutionTermsFacts& facts) {
+    TermsHost candidate_no_effect;
+    candidate_no_effect.resolver = [](const NativeExecutionTermsFacts& facts) {
         return no::ExecutionTerms{facts.default_resolved_price, 0.0,
                                    no::OpeningShape::Transact};
     };
-    no_effect.beginning = [](Host& base) {
-        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "sink-noeffect"));
+    candidate_no_effect.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "sink-candidate-noeffect"));
     };
-    run(no_effect, spec("fx-sink-noeffect"), {100});
-    completed(no_effect);
-    const auto terminal = last_event<no::NoEffectEvent>(no_effect);
-    REQUIRE(terminal);
-    CHECK(no_effect.engine_timestamp() == terminal->cursor.point.effective_time_ms);
+    candidate_no_effect.enable_trace_for_sink_test();
+    REQUIRE(candidate_no_effect.configure_native(spec("fx-sink-candidate-noeffect")).status
+            == NativeSetupStatus::Applied);
+    const Bar warmup{100, 100, 100, 100, 1, T - 60000};
+    REQUIRE(candidate_no_effect.stream_begin(&warmup, 1, "1", "1"));
+    REQUIRE(candidate_no_effect.stream_push_tick(TradeTick{T, 1, 100.0, 1.0}));
+    const auto candidate_terminal = last_event<no::NoEffectEvent>(candidate_no_effect);
+    REQUIRE(candidate_terminal);
+    CHECK(candidate_no_effect.resolver_calls == 1);
+    check_sinks(candidate_no_effect, candidate_terminal->cursor.point.effective_time_ms,
+                candidate_terminal->cursor.point.effective_time_ms + 1, "candidate-noeffect");
+    REQUIRE(candidate_no_effect.stream_end(false));
+    completed(candidate_no_effect);
+
+    TermsHost evaluation_no_effect;
+    bool evaluation_reached = false;
+    evaluation_no_effect.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto frame_timestamp = h.engine_timestamp();
+        const auto target = put(h, reduce(1.0, "sink-evaluation-noeffect"));
+        const auto result = h.execute_current(command(target));
+        CHECK(std::holds_alternative<no::NoEffectEvent>(result));
+        if (std::holds_alternative<no::NoEffectEvent>(result)) {
+            const auto& event = std::get<no::NoEffectEvent>(result);
+            const auto contrasting_timestamp = event.cursor.point.effective_time_ms == frame_timestamp
+                ? frame_timestamp + 1 : event.cursor.point.effective_time_ms;
+            check_sinks(h, frame_timestamp, contrasting_timestamp, "evaluation-noeffect-frame");
+        }
+        evaluation_reached = true;
+    };
+    evaluation_no_effect.enable_trace_for_sink_test();
+    run(evaluation_no_effect, spec("fx-sink-evaluation-noeffect"), {100});
+    completed(evaluation_no_effect);
+    CHECK(evaluation_reached);
+    CHECK(evaluation_no_effect.resolver_calls == 0);
 }
 
 void d1_applied_callback_uses_activation_timestamp() {

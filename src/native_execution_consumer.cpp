@@ -2096,7 +2096,9 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             && (terms.shape == native_order::OpeningShape::ReverseTo
                 || terms.shape == native_order::OpeningShape::CloseOpposite));
         if (shape_requires_opposite && terms_facts.opposite_book_units == 0.0) {
-            return terminal(native_order::MatchRejectReason::NoOppositeExposure, terms);
+            return terminal(native_order::MatchRejectReason::NoOppositeExposure,
+                            unresolved ? std::optional<native_order::ExecutionTerms>{terms}
+                                       : nonidentity_attempt);
         }
         if (unresolved && terms.shape == native_order::OpeningShape::CloseOpposite
             && *terms.units > terms_facts.opposite_book_units) {

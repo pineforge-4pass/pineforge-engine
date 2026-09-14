@@ -3,11 +3,142 @@
 #include <cstdio>
 #include <stdexcept>
 #include <variant>
+#include <vector>
 
 using namespace r4_test;
 using namespace r4_terms;
 
 namespace {
+
+void check_queued_precommit_rows(const TermsHost& host, const no::RequestHandle& target) {
+    const NativePrecommitView* matched = nullptr;
+    std::size_t count = 0;
+    for (const auto& view : host.precommit_views) {
+        if (view.target == target) {
+            ++count;
+            matched = &view;
+        }
+    }
+    REQUIRE(count == 1);
+    REQUIRE(matched);
+    CHECK(!matched->current);
+    CHECK(matched->settlement_readiness == execution::Status::Applied);
+    REQUIRE(matched->closed_row_pnl.size() == host.rows().size());
+    for (std::size_t i = 0; i < host.rows().size(); ++i) {
+        CHECK(bits(matched->closed_row_pnl[i]) == bits(host.rows()[i].pnl));
+    }
+}
+
+void a_p1_every_queued_fill_precommits_once() {
+    auto check_seeded_close = [](const char* key, no::Request request,
+                                 std::vector<Bar> bars) {
+        TermsHost host;
+        no::RequestHandle target;
+        host.beginning = [&, request = std::move(request)](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            h.seed(1.0, 99.0, 301);
+            target = put(h, request);
+        };
+        REQUIRE(host.configure_native(spec(key)).status == NativeSetupStatus::Applied);
+        host.run(bars.data(), static_cast<int>(bars.size()));
+        completed(host);
+        check_queued_precommit_rows(host, target);
+        REQUIRE(host.rows().size() == 1);
+    };
+
+    check_seeded_close("precommit-market", reduce(1.0, "market-close"),
+                       {Bar{100, 100, 100, 100, 1, T}});
+
+    auto limit = reduce(1.0, "limit-close");
+    limit.trigger = no::Limit{100.0};
+    check_seeded_close("precommit-limit", limit, {Bar{100, 100, 100, 100, 1, T}});
+
+    auto stop = reduce(1.0, "stop-close");
+    stop.trigger = no::Stop{100.0};
+    check_seeded_close("precommit-stop", stop, {Bar{100, 100, 100, 100, 1, T}});
+
+    auto trail = reduce(1.0, "trail-close");
+    trail.trigger = no::Trail{1.0, std::nullopt};
+    check_seeded_close("precommit-trail", trail, {Bar{101, 101, 99, 99, 1, T}});
+
+    check_seeded_close("precommit-reversal", reverse(-1.0, "reverse-close"),
+                       {Bar{100, 100, 100, 100, 1, T}});
+
+    TermsHost selected;
+    no::RequestHandle opening_a;
+    no::RequestHandle opening_b;
+    no::RequestHandle selected_target;
+    selected.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        if (h.calculations == 1) {
+            opening_a = put(h, tx(1.0, "selected-a"));
+            opening_b = put(h, tx(1.0, "selected-b"));
+            return;
+        }
+        if (h.calculations == 2) {
+            auto request = reduce(2.0, "selected-close");
+            request.owner = no::BindOpenings{{opening_a, opening_b}, h.cycle()};
+            selected_target = put(h, request);
+        }
+    };
+    run(selected, spec("precommit-selected"), {100, 110});
+    completed(selected);
+    check_queued_precommit_rows(selected, selected_target);
+    REQUIRE(selected.rows().size() == 2);
+
+    TermsHost whole_close;
+    no::RequestHandle whole_target;
+    whole_close.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price, facts.opposite_book_units,
+                                       no::OpeningShape::CloseOpposite};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    whole_close.beginning = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(1.0, 99.0, 311);
+        whole_target = put(h, host_open(no::Side::Short, "whole-close"));
+    };
+    run(whole_close, spec("precommit-whole-close"), {100});
+    completed(whole_close);
+    check_queued_precommit_rows(whole_close, whole_target);
+    REQUIRE(whole_close.precommit_views.size() == 1);
+    CHECK(std::holds_alternative<execution::Flatten>(whole_close.precommit_views.front().plan));
+    REQUIRE(whole_close.rows().size() == 1);
+
+    TermsHost refused;
+    no::RequestHandle refused_parent;
+    no::RequestHandle refused_child;
+    refused.validator = [](const NativePrecommitView&) { return NativePrecommitVerdict::Refuse; };
+    refused.beginning = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        refused_parent = put(h, tx(1.0, "refused-parent"));
+        auto child = tx(1.0, "refused-child");
+        child.owner = no::WaitForApplied{refused_parent};
+        refused_child = put(h, child);
+    };
+    run(refused, spec("precommit-refused-parent"), {100});
+    completed(refused);
+    check_queued_precommit_rows(refused, refused_parent);
+    const auto parent_rejection = last_event<no::MatchRejectedEvent>(refused);
+    REQUIRE(parent_rejection);
+    CHECK(parent_rejection->handle() == refused_parent);
+    CHECK(parent_rejection->reason == no::MatchRejectReason::HostPrecommit);
+    CHECK(!parent_rejection->attempted_terms);
+    CHECK(refused.lots().empty() && refused.rows().empty() && accounts(refused) == 0);
+    bool drained_child = false;
+    for (const auto& event : events<no::CancelledEvent>(refused)) {
+        if (event.handle() == refused_child) {
+            drained_child = true;
+            CHECK(event.reason == no::CancelReason::OwnerGone);
+            REQUIRE(event.cause);
+            CHECK(event.cause->ordinal == parent_rejection->ordinal);
+        }
+    }
+    CHECK(drained_child);
+}
 
 void queued_refusal_is_nonfinancial_terminal() {
     TermsHost host;
@@ -239,6 +370,7 @@ void a_p4_cycle_exhaustion_precedes_effects_and_validator() {
 }  // namespace
 
 int main() {
+    test("A-P1 queued precommit matrix", a_p1_every_queued_fill_precommits_once);
     test("queued precommit refusal", queued_refusal_is_nonfinancial_terminal);
     test("preview excludes validator", preview_never_calls_validator);
     test("typed reentrant current refusal", reentrant_current_is_typed_and_nonmutating);

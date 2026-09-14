@@ -39,6 +39,40 @@ struct TermsHost : Host {
     }
     std::int64_t engine_timestamp() const { return current_bar_.timestamp; }
     void poison_next_cycle() { next_position_cycle_seq_ = std::numeric_limits<std::int64_t>::max(); }
+    void enable_trace_for_sink_test() { trace_enabled_ = true; }
+
+    // Construct the deliberately absorbed second physical lot used by the
+    // whole-book Flatten witness. Its aggregate contribution is intentionally
+    // invisible in binary64, but the roster and per-entry accounting remain
+    // authoritative.
+    void append_absorbed_lot(double quantity, double price, std::uint64_t incarnation) {
+        PyramidEntry lot{price, current_bar_.timestamp, quantity, "absorbed-tiny", 3};
+        lot.entry_incarnation = incarnation;
+        lot.entry_commission_account = 0.0;
+        pyramid_entries_.push_back(lot);
+        position_qty_ += quantity;
+        ++position_entry_count_;
+        id_unclosed_qty_[lot.entry_id] += quantity;
+        cycle_filled_entry_ids_.insert(lot.entry_id);
+    }
+
+    std::uint64_t stream_hash_at_timestamp(std::int64_t timestamp) {
+        const auto saved = current_bar_.timestamp;
+        current_bar_.timestamp = timestamp;
+        const auto hash = stream_state_hash();
+        current_bar_.timestamp = saved;
+        return hash;
+    }
+
+    std::optional<std::int64_t> emit_trace_timestamp(const char* name) {
+        trace(name, 0.0);
+        ReportC report{};
+        fill_report(&report);
+        std::optional<std::int64_t> timestamp;
+        if (report.trace_len > 0) timestamp = report.trace[report.trace_len - 1].timestamp;
+        BacktestEngine::free_report(&report);
+        return timestamp;
+    }
 
     no::ExecutionTerms resolve_execution_terms(
             const NativeExecutionTermsFacts& facts) const override {

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <type_traits>
 #include <variant>
+#include <vector>
 
 using namespace r4_test;
 using namespace r4_terms;
@@ -43,6 +44,103 @@ void bit_helper_controls() {
     CHECK(native_matching::double_bits(nan_a) != native_matching::double_bits(nan_b));
     CHECK(native_matching::double_bits(0.0) == 0x0000000000000000ULL);
     CHECK(native_matching::double_bits(-0.0) == 0x8000000000000000ULL);
+}
+
+bool same_coordinate_bits(const NativeCoordinate& a, const NativeCoordinate& b) {
+    return a.ordinal == b.ordinal
+        && a.interval_index == b.interval_index
+        && a.open_ms == b.open_ms
+        && a.eligible_open_ms == b.eligible_open_ms
+        && a.last_traded_close_ms == b.last_traded_close_ms
+        && a.next_period_open_ms == b.next_period_open_ms
+        && a.next_input_open_ms == b.next_input_open_ms
+        && a.effective_time_ms == b.effective_time_ms
+        && a.source_price_time_ms == b.source_price_time_ms
+        && a.provenance == b.provenance
+        && a.path_phase == b.path_phase
+        && a.completion == b.completion;
+}
+
+bool same_trigger_state_bits(const no::TriggerState& a, const no::TriggerState& b) {
+    if (a.index() != b.index()) return false;
+    if (const auto* left = std::get_if<no::TrailTrack>(&a)) {
+        return bits(left->best) == bits(std::get<no::TrailTrack>(b).best);
+    }
+    if (const auto* left = std::get_if<no::TrailActive>(&a)) {
+        return bits(left->best_at_trigger) == bits(std::get<no::TrailActive>(b).best_at_trigger);
+    }
+    return true;
+}
+
+bool same_remaining_bits(const no::Remaining& a, const no::Remaining& b) {
+    if (a.index() != b.index()) return false;
+    if (const auto* left = std::get_if<no::RemainingUnits>(&a)) {
+        return bits(left->q) == bits(std::get<no::RemainingUnits>(b).q);
+    }
+    return true;
+}
+
+bool same_allowance_bits(const no::Allowance& a, const no::Allowance& b) {
+    if (a.index() != b.index()) return false;
+    if (const auto* left = std::get_if<no::AllowanceUnits>(&a)) {
+        const auto& right = std::get<no::AllowanceUnits>(b);
+        return left->point_ordinal == right.point_ordinal
+            && bits(left->initial) == bits(right.initial)
+            && bits(left->left) == bits(right.left);
+    }
+    if (const auto* left = std::get_if<no::AllowanceAllScope>(&a)) {
+        return left->point_ordinal == std::get<no::AllowanceAllScope>(b).point_ordinal;
+    }
+    if (const auto* left = std::get_if<no::AllowanceDeferred>(&a)) {
+        return left->point_ordinal == std::get<no::AllowanceDeferred>(b).point_ordinal;
+    }
+    return true;
+}
+
+bool same_scope_bits(const no::ExecutionScope& a, const no::ExecutionScope& b) {
+    if (a.index() != b.index()) return false;
+    if (const auto* left = std::get_if<execution::OpeningExposure>(&a)) {
+        const auto& right = std::get<execution::OpeningExposure>(b);
+        return left->incarnation == right.incarnation && left->cycle == right.cycle;
+    }
+    if (const auto* left = std::get_if<no::SelectedExposure>(&a)) {
+        const auto& right = std::get<no::SelectedExposure>(b);
+        return left->cycle == right.cycle && left->incarnations == right.incarnations;
+    }
+    return true;
+}
+
+bool same_optional_double_bits(const std::optional<double>& a, const std::optional<double>& b) {
+    return a.has_value() == b.has_value() && (!a || bits(*a) == bits(*b));
+}
+
+bool same_terms_facts_bits(const NativeExecutionTermsFacts& a,
+                           const NativeExecutionTermsFacts& b) {
+    return a.target == b.target
+        && a.definition == b.definition
+        && same_coordinate_bits(a.cursor.point, b.cursor.point)
+        && bits(a.cursor.t) == bits(b.cursor.t)
+        && a.driver_class == b.driver_class
+        && same_trigger_state_bits(a.trigger_state, b.trigger_state)
+        && same_remaining_bits(a.remaining, b.remaining)
+        && same_allowance_bits(a.allowance, b.allowance)
+        && same_scope_bits(a.scope, b.scope)
+        && bits(a.scope_exposure_units) == bits(b.scope_exposure_units)
+        && bits(a.position.signed_units) == bits(b.position.signed_units)
+        && bits(a.position.average_price) == bits(b.position.average_price)
+        && a.position.lot_count == b.position.lot_count
+        && bits(a.opposite_book_units) == bits(b.opposite_book_units)
+        && a.is_buy == b.is_buy
+        && a.price_kind == b.price_kind
+        && a.shared_cursor_collision == b.shared_cursor_collision
+        && bits(a.raw_price) == bits(b.raw_price)
+        && same_optional_double_bits(a.trigger_level, b.trigger_level)
+        && a.quote_kind == b.quote_kind
+        && a.price_rule == b.price_rule
+        && bits(a.default_resolved_price) == bits(b.default_resolved_price)
+        && a.fx_effective_time_ms == b.fx_effective_time_ms
+        && bits(a.active_fx) == bits(b.active_fx)
+        && bits(a.pending_group_deduction) == bits(b.pending_group_deduction);
 }
 
 void test_only_oracle_host_uses_facts() {
@@ -722,8 +820,8 @@ void a_t11_identity_infinity_and_nan_attempts() {
     }
 }
 
-void a_t6_matcher_price_kind_limit_stop_gap_and_market() {
-    auto collect = [](const char* key, no::Request request, const Bar& bar) {
+void a_t6_matcher_price_kind_all_ten_cases() {
+    auto collect = [](const char* key, no::Request request, std::vector<Bar> bars) {
         TermsHost host;
         host.resolver = [](const NativeExecutionTermsFacts& facts) {
             return no::ExecutionTerms{facts.default_resolved_price, 1.0,
@@ -733,7 +831,7 @@ void a_t6_matcher_price_kind_limit_stop_gap_and_market() {
             put(static_cast<TermsHost&>(base), request);
         };
         REQUIRE(host.configure_native(spec(key)).status == NativeSetupStatus::Applied);
-        host.run(&bar, 1);
+        host.run(bars.data(), static_cast<int>(bars.size()));
         completed(host);
         return host.resolved_facts;
     };
@@ -741,7 +839,7 @@ void a_t6_matcher_price_kind_limit_stop_gap_and_market() {
     auto limit = host_open(no::Side::Short, "limit-cross");
     limit.trigger = no::Limit{100.0};
     const auto crossed_limit = collect("terms-limit-cross", limit,
-        Bar{99, 101, 99, 101, 1, T});
+        {Bar{99, 101, 99, 101, 1, T}});
     REQUIRE(crossed_limit.size() == 1);
     CHECK(crossed_limit[0].price_kind == no::NativeCandidatePriceKind::TriggerLevel);
     REQUIRE(crossed_limit[0].trigger_level);
@@ -751,23 +849,27 @@ void a_t6_matcher_price_kind_limit_stop_gap_and_market() {
     auto gap_limit = host_open(no::Side::Short, "limit-gap");
     gap_limit.trigger = no::Limit{100.0};
     const auto gap = collect("terms-limit-gap", gap_limit,
-        Bar{101, 101, 101, 101, 1, T});
+        {Bar{101, 101, 101, 101, 1, T}});
     REQUIRE(gap.size() == 1);
     CHECK(gap[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
-    CHECK(gap[0].raw_price == 101.0);
+    CHECK(bits(gap[0].raw_price) == bits(101.0));
+    REQUIRE(gap[0].trigger_level);
+    CHECK(bits(*gap[0].trigger_level) == bits(100.0));
 
     auto exact_gap = host_open(no::Side::Short, "limit-exact-gap");
     exact_gap.trigger = no::Limit{100.0};
     const auto exact = collect("terms-limit-exact-gap", exact_gap,
-        Bar{100, 100, 100, 100, 1, T});
+        {Bar{100, 100, 100, 100, 1, T}});
     REQUIRE(exact.size() == 1);
     CHECK(exact[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
     CHECK(bits(exact[0].raw_price) == bits(100.0));
+    REQUIRE(exact[0].trigger_level);
+    CHECK(bits(*exact[0].trigger_level) == bits(100.0));
 
     auto stop = host_open(no::Side::Long, "stop-cross");
     stop.trigger = no::Stop{100.0};
     const auto crossed_stop = collect("terms-stop-cross", stop,
-        Bar{99, 101, 99, 101, 1, T});
+        {Bar{99, 101, 99, 101, 1, T}});
     REQUIRE(crossed_stop.size() == 1);
     CHECK(crossed_stop[0].price_kind == no::NativeCandidatePriceKind::TriggerLevel);
     REQUIRE(crossed_stop[0].trigger_level);
@@ -777,12 +879,76 @@ void a_t6_matcher_price_kind_limit_stop_gap_and_market() {
     auto stop_gap = host_open(no::Side::Long, "stop-gap");
     stop_gap.trigger = no::Stop{100.0};
     const auto gap_stop = collect("terms-stop-gap", stop_gap,
-        Bar{101, 101, 101, 101, 1, T});
+        {Bar{101, 101, 101, 101, 1, T}});
     REQUIRE(gap_stop.size() == 1);
     CHECK(gap_stop[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+    CHECK(bits(gap_stop[0].raw_price) == bits(101.0));
+    REQUIRE(gap_stop[0].trigger_level);
+    CHECK(bits(*gap_stop[0].trigger_level) == bits(100.0));
+
+    TermsHost later_stop;
+    later_stop.resolver = [](const NativeExecutionTermsFacts& facts) {
+        const bool binding = std::holds_alternative<no::RemainingDeferred>(facts.remaining);
+        return no::ExecutionTerms{facts.default_resolved_price,
+                                   binding ? std::optional<double>{2.0} : std::optional<double>{},
+                                   no::OpeningShape::Transact};
+    };
+    later_stop.beginning = [](Host& base) {
+        auto& host = static_cast<TermsHost&>(base);
+        host.seed(-1.0, 100.0, 151);
+        auto request = host_open(no::Side::Long, "stop-later-fill");
+        request.trigger = no::Stop{100.0};
+        request.capacity = no::PointBudget{1.0};
+        put(host, request);
+    };
+    const std::vector<Bar> later_stop_bars{
+        Bar{99, 101, 99, 101, 1, T},
+        Bar{99, 99, 99, 99, 1, T + 60000},
+    };
+    REQUIRE(later_stop.configure_native(spec("terms-stop-later")).status
+            == NativeSetupStatus::Applied);
+    later_stop.run(later_stop_bars.data(), static_cast<int>(later_stop_bars.size()));
+    completed(later_stop);
+    REQUIRE(later_stop.resolved_facts.size() == 2);
+    CHECK(later_stop.resolved_facts[0].price_kind
+          == no::NativeCandidatePriceKind::TriggerLevel);
+    CHECK(later_stop.resolved_facts[1].price_kind
+          == no::NativeCandidatePriceKind::PointPrice);
+    REQUIRE(later_stop.resolved_facts[1].trigger_level);
+    CHECK(bits(*later_stop.resolved_facts[1].trigger_level) == bits(100.0));
+
+    auto trail = host_open(no::Side::Short, "trail-cross");
+    trail.trigger = no::Trail{1.0, std::nullopt};
+    const auto crossed_trail = collect("terms-trail-cross", trail,
+        {Bar{101, 101, 99, 99, 1, T}});
+    REQUIRE(crossed_trail.size() == 1);
+    CHECK(crossed_trail[0].price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+    REQUIRE(crossed_trail[0].trigger_level);
+    CHECK(bits(crossed_trail[0].raw_price) == bits(100.0));
+    CHECK(bits(*crossed_trail[0].trigger_level) == bits(100.0));
+
+    auto gap_trail = host_open(no::Side::Short, "trail-gap");
+    gap_trail.trigger = no::Trail{1.0, std::nullopt};
+    const auto trailed_gap = collect("terms-trail-gap", gap_trail,
+        {Bar{101, 101, 101, 101, 1, T}, Bar{99, 99, 99, 99, 1, T + 60000}});
+    REQUIRE(trailed_gap.size() == 1);
+    CHECK(trailed_gap[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+    REQUIRE(trailed_gap[0].trigger_level);
+    CHECK(bits(trailed_gap[0].raw_price) == bits(99.0));
+    CHECK(bits(*trailed_gap[0].trigger_level) == bits(100.0));
+
+    auto stop_limit = host_open(no::Side::Long, "stop-limit-inside");
+    stop_limit.trigger = no::StopLimit{100.0, 101.0};
+    const auto inside_stop_limit = collect("terms-stop-limit-inside", stop_limit,
+        {Bar{100, 100, 100, 100, 1, T}});
+    REQUIRE(inside_stop_limit.size() == 1);
+    CHECK(inside_stop_limit[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
+    REQUIRE(inside_stop_limit[0].trigger_level);
+    CHECK(bits(inside_stop_limit[0].raw_price) == bits(100.0));
+    CHECK(bits(*inside_stop_limit[0].trigger_level) == bits(101.0));
 
     const auto market = collect("terms-market", host_open(no::Side::Long, "market"),
-        Bar{100, 100, 100, 100, 1, T});
+        {Bar{100, 100, 100, 100, 1, T}});
     REQUIRE(market.size() == 1);
     CHECK(market[0].price_kind == no::NativeCandidatePriceKind::PointPrice);
     CHECK(!market[0].trigger_level);
@@ -964,6 +1130,15 @@ void a_t9_all_current_fact_shapes_are_bitwise_identical() {
     host.calculation = [&](Host& base) {
         auto& h = static_cast<TermsHost&>(base);
         auto compare = [&](const no::RequestHandle& target, NativeCurrentPriceRule rule) {
+            std::optional<double> as_presented_default;
+            if (rule == NativeCurrentPriceRule::NearestTick) {
+                h.resolved_facts.clear();
+                const auto as_presented = h.inspect_current_execution(
+                    command(target, NativeCurrentPriceRule::AsPresented));
+                REQUIRE(!as_presented.refusal);
+                REQUIRE(h.resolved_facts.size() == 1);
+                as_presented_default = h.resolved_facts.front().default_resolved_price;
+            }
             h.resolved_facts.clear();
             const auto preview = h.inspect_current_execution(command(target, rule));
             REQUIRE(!preview.refusal);
@@ -972,16 +1147,13 @@ void a_t9_all_current_fact_shapes_are_bitwise_identical() {
             REQUIRE(h.resolved_facts.size() == 2);
             const auto& a = h.resolved_facts[0];
             const auto& b = h.resolved_facts[1];
-            CHECK(a.definition == b.definition && a.target == b.target);
-            CHECK(a.cursor.point.ordinal == b.cursor.point.ordinal);
-            CHECK(bits(a.cursor.t) == bits(b.cursor.t));
-            CHECK(a.remaining.index() == b.remaining.index());
-            CHECK(a.allowance.index() == b.allowance.index());
-            CHECK(a.scope.index() == b.scope.index());
-            CHECK(a.price_kind == b.price_kind && a.quote_kind == b.quote_kind
-                  && a.price_rule == b.price_rule);
-            CHECK(bits(a.raw_price) == bits(b.raw_price));
-            CHECK(bits(a.default_resolved_price) == bits(b.default_resolved_price));
+            CHECK(same_terms_facts_bits(a, b));
+            CHECK(a.definition == b.definition);
+            CHECK(a.price_rule == rule && b.price_rule == rule);
+            if (as_presented_default) {
+                CHECK(bits(a.default_resolved_price) == bits(*as_presented_default));
+                CHECK(bits(b.default_resolved_price) == bits(*as_presented_default));
+            }
         };
 
         h.seed(3.0, 100, 171);
@@ -995,7 +1167,7 @@ void a_t9_all_current_fact_shapes_are_bitwise_identical() {
     };
     auto configuration = spec("terms-fact-shapes");
     configuration.price_tick = 0.1;
-    run(host, configuration, {100.04});
+    run(host, configuration, {100.0});
     completed(host);
     CHECK(reached);
 }
@@ -1140,7 +1312,7 @@ int main() {
     test("A-T8b explicit allowance equivalence", a_t8b_explicit_equivalent_allowance_and_t8c_identity_control);
     test("A-T11b queued notification anchor price", a_t11b_queued_notification_uses_final_terms_price);
     test("A-T11 identity infinity rows", a_t11_identity_infinity_and_nan_attempts);
-    test("A-T6 matcher price-kind cases", a_t6_matcher_price_kind_limit_stop_gap_and_market);
+    test("A-T6 matcher price-kind cases", a_t6_matcher_price_kind_all_ten_cases);
     test("A-T15 price boundary and A-T16 flat preview", a_t15_price_boundary_and_a_t16_flat_preview);
     test("A-T14 preview outcome table", a_t14_preview_outcome_table_without_mutation);
     test("current preview/execute terms facts", current_preview_and_execute_see_same_terms_facts);
