@@ -86,7 +86,8 @@ class AbiToolingTests(unittest.TestCase):
     def test_all_frozen_host_epochs_authenticate_and_keep_their_own_shapes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for role, expected_order_shape in (('v13',(16,3)), ('v14',(16,3)), ('v15-frozen',(17,5))):
+            for role, expected_order_shape in (('v13',(16,3)), ('v14',(16,3)),
+                                               ('v15-frozen',(17,5)), ('v16-frozen',(17,5))):
                 provider = PROVIDERS[role]
                 fixture = provider['manifest'].parent
                 old = root/role
@@ -108,7 +109,7 @@ class AbiToolingTests(unittest.TestCase):
                 # a changed layout merely because the epoch token remains intact.
                 header = old/'include/pineforge/native_order.hpp'
                 original_variant = ('std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>'
-                                    if role == 'v15-frozen'
+                                    if role in ('v15-frozen','v16-frozen')
                                     else 'std::variant<Flatten, Reduce, Transact>')
                 header.write_text(header.read_text().replace(original_variant,
                                                               'std::variant<Flatten, Reduce>'))
@@ -119,7 +120,7 @@ class AbiToolingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             domains = {'v16':native_domain_callers(ROOT/'include')}
-            for role in ('v13','v14','v15-frozen'):
+            for role in ('v13','v14','v15-frozen','v16-frozen'):
                 provider = PROVIDERS[role]
                 extract_tar((provider['manifest'].parent/'headers.tar').read_bytes(),root/role)
                 domains[role] = native_domain_callers(root/role/'include')
@@ -130,21 +131,22 @@ class AbiToolingTests(unittest.TestCase):
                     for domain in domains[caller]:
                         actual = domains[caller][domain][2] == domains[provider][domain][2]
                         expected = (caller == provider
+                                    or {caller, provider} == {'v16', 'v16-frozen'}
                                     or (domain == 'order'
-                                        and {caller,provider} <= {'v16','v15-frozen'})
+                                        and {caller,provider} <= {'v16','v16-frozen','v15-frozen'})
                                     or (domain == 'driver'
-                                        and {caller,provider} <= {'v14','v16','v15-frozen'}))
+                                        and {caller,provider} <= {'v14','v16','v16-frozen','v15-frozen'}))
                         self.assertEqual(actual,expected,(caller,provider,domain))
 
     def test_pending_surface_rows_are_complete_and_current_only(self):
         self.assertTrue(checker.CURRENT_TERMS_SURFACE_READY)
-        rows = pending_surface_rows('v16',('v13','v14','v15-frozen','v16'),False)
+        rows = pending_surface_rows('v16',('v13','v14','v15-frozen','v16-frozen','v16'),False)
         self.assertEqual({row['name'] for row in rows}, {
             'v16-'+caller+'-'+provider for caller in ('current-execution-terms','native-fx-curve')
-            for provider in ('v13','v14','v15-frozen','v16')})
+            for provider in ('v13','v14','v15-frozen','v16-frozen','v16')})
         self.assertTrue(all(row['status']=='pending-surface' and row['caller']=='v16' for row in rows))
         self.assertTrue(all(len(row['sourceSha256'])==64 for row in rows))
-        self.assertEqual(pending_surface_rows('v16',('v13','v14','v15-frozen','v16'),True),[])
+        self.assertEqual(pending_surface_rows('v16',('v13','v14','v15-frozen','v16-frozen','v16'),True),[])
         from check_native_cpp_abi import render_current_execution_caller, control_applicability
         for epoch in ('engine_script_run_v14',CURRENT_EPOCH):
             self.assertIn(epoch+'::NativeStrategyHost',render_current_execution_caller(epoch))

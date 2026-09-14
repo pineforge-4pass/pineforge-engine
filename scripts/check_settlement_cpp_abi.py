@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual old/new settlement ABI pairings. Compile and link; NEVER run callers.
 
-Requires separately prepared real e60 R2, 0e R3, v13, v14 and frozen-v15 archives. No Git/network/build fallback
+Requires separately prepared real e60 R2, 0e R3, v13, v14, frozen-v15 and frozen-v16 archives. No Git/network/build fallback
 is performed by this CTest-time checker. Existing native/script ABI guards stay
 separate and mandatory, including their old epoch and sanitizer RTTI controls.
 """
@@ -741,6 +741,8 @@ def main() -> int:
     parser.add_argument('--v14-receipt', type=Path, help='prepared real f736676 epoch 14 provider; mandatory in full matrix')
     parser.add_argument('--v15-frozen-receipt', type=Path,
                         help='prepared real e7cdf052 frozen epoch 15 provider; mandatory in full matrix')
+    parser.add_argument('--v16-frozen-receipt', type=Path,
+                        help='prepared real ab9714b frozen epoch 16 provider; mandatory in full matrix')
     parser.add_argument('--base-generated-include', type=Path)
     parser.add_argument('--extra-flag', action='append', default=[])
     parser.add_argument('--receipt', type=Path, required=True)
@@ -826,6 +828,21 @@ def main() -> int:
                 v15_frozen_members,v15_frozen_shape = frozen_shape(
                     v15_frozen_include,include,selected=True)
                 report['v15FrozenShape']=v15_frozen_shape
+                v16_frozen_library,v16_frozen_include,v16_frozen_generated,v16_frozen_receipt = load_provider(
+                    args,scratch/'v16-frozen',cache,args.v16_frozen_receipt,PROVIDERS['v16-frozen'],
+                    # R4-C relocated the source-only private helpers out of
+                    # BacktestEngine before this v16 capture.  The frozen
+                    # provider must expose the complete generic settlement
+                    # surface, but must not be mislabeled as a v15 base that
+                    # still owns `add_to_pyramid_market`-style source helpers.
+                    expect_present=(*OLD_METHODS,*NEW_METHODS,*REVERSAL_METHODS),
+                    expect_absent=())
+                report['v16Frozen']={'receiptSha256':identity(args.v16_frozen_receipt)['sha256'],
+                                     'archiveSha256':identity(v16_frozen_library)['sha256'],
+                                     'commit':v16_frozen_receipt['commit'],'tree':v16_frozen_receipt['tree']}
+                v16_frozen_members,v16_frozen_shape = frozen_shape(
+                    v16_frozen_include,include,selected=True)
+                report['v16FrozenShape']=v16_frozen_shape
 
             def compile_tu(name,text,headers,generated):
                 # Each caller must name its actual header epoch, including return-only APIs.
@@ -856,11 +873,18 @@ def main() -> int:
 
             def compare_layout(name,headers,generated,layout_members,shape,*,selected=False):
                 relocation_layout = bool(shape['relocationLayout'])
+                # Spell PendingOrder according to *each* provider's genuine
+                # ownership. Pre-v16 archives have the engine type; v15 and
+                # the frozen/live same-epoch v16 pair own it in source/.
+                # `relocation_layout` independently controls which engine
+                # storage words are compared across the reviewed bridge.
+                old_source_pending = (headers / 'pineforge/source/pine_pending_intent.hpp').is_file()
+                current_source_pending = (include / 'pineforge/source/pine_pending_intent.hpp').is_file()
                 old_text,word_count = layout_source(
                     layout_members, selected=selected,
-                    relocation_layout=relocation_layout)
+                    source_pending=old_source_pending, relocation_layout=relocation_layout)
                 current_text,current_word_count = layout_source(
-                    layout_members, selected=selected, source_pending=relocation_layout,
+                    layout_members, selected=selected, source_pending=current_source_pending,
                     relocation_layout=relocation_layout)
                 if current_word_count != word_count:
                     raise RuntimeError('v15/v16 source-layout rows have different widths')
@@ -890,6 +914,9 @@ def main() -> int:
                 report['v15FrozenLayout']=compare_layout(
                     'v15-frozen',v15_frozen_include,v15_frozen_generated,
                     v15_frozen_members,v15_frozen_shape,selected=True)
+                report['v16FrozenLayout']=compare_layout(
+                    'v16-frozen',v16_frozen_include,v16_frozen_generated,
+                    v16_frozen_members,v16_frozen_shape,selected=True)
             if not args.base_only:
                 current_header=clean((include/'pineforge/engine.hpp').read_text())
                 for method in (*NEW_METHODS,*(REVERSAL_METHODS if full_matrix else ())):
@@ -941,6 +968,7 @@ def main() -> int:
                     'v13': (v13_library, v13_include, v13_generated),
                     'v14': (v14_library, v14_include, v14_generated),
                     'v15-frozen': (v15_frozen_library, v15_frozen_include, v15_frozen_generated),
+                    'v16-frozen': (v16_frozen_library, v16_frozen_include, v16_frozen_generated),
                     current_label: (library, include, args.generated_include),
                 }
                 report['archiveProviders'] = {
@@ -968,7 +996,7 @@ def main() -> int:
                             link(caller+'-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,engine='pineforge::'+engine_epoch(native_providers[caller][1])+'::BacktestEngine::',
                                  symbol_missing=None if positive else needle)
-                for caller in ('v14', current_label):
+                for caller in ('v14', 'v16-frozen', current_label):
                     _,headers,generated = native_providers[caller]
                     epoch = engine_epoch(headers)
                     caller_engine = 'pineforge::'+epoch+'::BacktestEngine::'
@@ -1005,7 +1033,7 @@ def main() -> int:
                 }
                 engine_objects = {current_label: {
                     'selected':new, 'reversal':reversal}}
-                for caller in ('v13','v14','v15-frozen'):
+                for caller in ('v13','v14','v15-frozen','v16-frozen'):
                     _,headers,generated = native_providers[caller]
                     engine_objects[caller] = {name:compile_tu(caller+'-engine-'+name,text,headers,generated)
                                               for name,text in engine_callers.items()}
@@ -1022,10 +1050,13 @@ def main() -> int:
                 required_v15_v16_rows = {
                     'v15-frozen-engine-old-api-'+current_label+'-rejected',
                     current_label+'-engine-selected-v15-frozen-rejected',
+                    'v16-frozen-host-'+current_label+'-real',
+                    current_label+'-engine-selected-v16-frozen-real',
+                    'v16-frozen-engine-selected-'+current_label+'-real',
                 }
                 actual_rows = {entry['name'] for entry in report['links']}
                 if not required_v15_v16_rows <= actual_rows:
-                    raise RuntimeError('v15/v16 rejection pairs are missing from the ABI matrix')
+                    raise RuntimeError('required v15/v16 rejection or same-epoch v16 pairs are missing from the ABI matrix')
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)

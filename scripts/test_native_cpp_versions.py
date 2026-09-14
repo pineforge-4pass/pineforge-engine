@@ -458,6 +458,30 @@ class NativeVersions(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 authenticate_v15_frozen_fixture(mislabeled, root / 'bad-manifest')
 
+    def test_v16_frozen_tar_authentication_rejects_archive_and_manifest_tampering(self):
+        from check_native_cpp_abi import FIXTURE, authenticate_v16_frozen_fixture
+        fixture = FIXTURE / 'host-ab9714b'
+        with tempfile.TemporaryDirectory(prefix='pf-native-v16-auth-') as temp:
+            root = Path(temp)
+            valid = root / 'valid'
+            manifest = root / 'manifest-copy'
+            shutil.copytree(fixture, manifest)
+            authenticate_v16_frozen_fixture(manifest, valid)
+            tampered = root / 'tampered'
+            shutil.copytree(fixture, tampered)
+            archive = bytearray((tampered / 'headers.tar').read_bytes())
+            archive[-1] ^= 1
+            (tampered / 'headers.tar').write_bytes(archive)
+            with self.assertRaises(RuntimeError):
+                authenticate_v16_frozen_fixture(tampered, root / 'bad-archive')
+            mislabeled = root / 'mislabeled'
+            shutil.copytree(fixture, mislabeled)
+            data = json.loads((mislabeled / 'manifest.json').read_text())
+            data['tree'] = '0' * 40
+            (mislabeled / 'manifest.json').write_text(json.dumps(data))
+            with self.assertRaises(RuntimeError):
+                authenticate_v16_frozen_fixture(mislabeled, root / 'bad-manifest')
+
     def test_current_execution_caller_is_rendered_per_provider(self):
         from check_native_cpp_abi import render_current_execution_caller
         v14 = render_current_execution_caller('engine_script_run_v14')

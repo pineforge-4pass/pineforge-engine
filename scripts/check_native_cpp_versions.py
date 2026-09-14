@@ -187,7 +187,10 @@ def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
     manifests = {}
     with tempfile.TemporaryDirectory(prefix='.native-fx-introduced-', dir=root) as temporary:
         for label, provider in providers.items():
-            if provider['engine_epoch'] == 'engine_script_run_v15':
+            # v15 is the old source-layer provider and frozen v16 is the
+            # same-epoch L0 pairing control. Neither can establish when the
+            # current FX value was introduced.
+            if provider['engine_epoch'] in ('engine_script_run_v15', 'engine_script_run_v16'):
                 continue
             manifest_path = provider['manifest']
             if not manifest_path.parent.name.startswith('host-'):

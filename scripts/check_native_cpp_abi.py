@@ -22,6 +22,7 @@ from check_native_cpp_versions import FILES, check as check_native_versions
 from check_aggregate_cpp_versions import clean
 from prepare_settlement_cpp_abi_base import (
     V14_COMMIT, V14_TREE, V15_FROZEN_COMMIT, V15_FROZEN_TREE,
+    V16_FROZEN_COMMIT, V16_FROZEN_TREE,
     authenticate_headers, extract_tar,
 )
 
@@ -47,6 +48,8 @@ V14_HEADERS_SHA256 = "37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f15782
 V14_ENGINE_EPOCH = "engine_script_run_v14"
 V15_FROZEN_HEADERS_SHA256 = "189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3"
 V15_FROZEN_ENGINE_EPOCH = "engine_script_run_v15"
+V16_FROZEN_HEADERS_SHA256 = "1a1ab85239ce1bca9022f879ecc0e88c2ee0af719c74cdfe9d8e9d5aaada8d98"
+V16_FROZEN_ENGINE_EPOCH = "engine_script_run_v16"
 CURRENT_TERMS_SURFACE_READY = True
 CURRENT_RESULT_DIAGNOSTIC = "R4B_CURRENT_RESULT_ALTERNATIVES"
 
@@ -334,6 +337,13 @@ def authenticate_v15_frozen_fixture(fixture: Path, destination: Path) -> dict:
         fixture, destination, archive_sha256=V15_FROZEN_HEADERS_SHA256,
         commit=V15_FROZEN_COMMIT, tree=V15_FROZEN_TREE,
         epoch=V15_FROZEN_ENGINE_EPOCH, label="v15")
+
+
+def authenticate_v16_frozen_fixture(fixture: Path, destination: Path) -> dict:
+    return authenticate_host_fixture(
+        fixture, destination, archive_sha256=V16_FROZEN_HEADERS_SHA256,
+        commit=V16_FROZEN_COMMIT, tree=V16_FROZEN_TREE,
+        epoch=V16_FROZEN_ENGINE_EPOCH, label="v16")
 
 
 def remove_current_result_cancelled(text: str) -> str:
@@ -693,6 +703,19 @@ def main() -> int:
             "files": v15_frozen_manifest["files"],
             "provider_epoch": V15_FROZEN_ENGINE_EPOCH,
         }
+        v16_frozen_name = "host-ab9714b"
+        v16_frozen_destination = root / v16_frozen_name
+        v16_frozen_manifest = authenticate_v16_frozen_fixture(
+            FIXTURE / v16_frozen_name, v16_frozen_destination)
+        v16_frozen_include = v16_frozen_destination / "include"
+        receipt["fixtures"][v16_frozen_name] = {
+            "source_commit": v16_frozen_manifest["commit"],
+            "source_tree": v16_frozen_manifest["tree"],
+            "archive_sha256": V16_FROZEN_HEADERS_SHA256,
+            "manifest_sha256": sha256((FIXTURE / v16_frozen_name / "manifest.json").read_bytes()),
+            "files": v16_frozen_manifest["files"],
+            "provider_epoch": V16_FROZEN_ENGINE_EPOCH,
+        }
 
         def compile_object(name, source, include_path, extra_source_dir=None):
             path = root / (name + ".cpp")
@@ -803,6 +826,12 @@ def main() -> int:
         current_host_events = compile_object("current_host_events_caller", HOST_EVENTS_CALLER, include)
         current_execution = compile_object("current_execution_caller",
                                            render_current_execution_caller("engine_script_run_v16"), include)
+        # The frozen L0 provider has the same published epoch and must accept
+        # every current caller at compile time. Link-time pairing with its
+        # real archive is enforced in the settlement matrix.
+        compile_object("v16_frozen_host_caller", HOST_CALLER, v16_frozen_include)
+        compile_object("v16_frozen_current_execution_caller",
+                       render_current_execution_caller("engine_script_run_v16"), v16_frozen_include)
         compile_object("v14_current_execution_shape_agnostic_compile",
                        render_current_execution_caller(V14_ENGINE_EPOCH), v14_include)
         current_surface = current_fx_curve = None

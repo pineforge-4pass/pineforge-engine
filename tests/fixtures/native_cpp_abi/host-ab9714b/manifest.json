@@ -1,0 +1,311 @@
+{
+  "commit": "ab9714beccb62b796c122cf68986ec9e7dbf4a67",
+  "tree": "8c75db9858e63e019a31dd90230eff7f16ce24eb",
+  "files": {
+    "include/pineforge/bar.hpp": {
+      "sha256": "665c2528dca64ac9474de622dfd7ffdb540ff91316f70317e39aada158d1e0de",
+      "bytes": 655,
+      "git_blob": "836f73daab382e9c8d5a6d03a942a921e39b756f"
+    },
+    "include/pineforge/broker_events.hpp": {
+      "sha256": "4f3d9948a4d1604750901fa3982d6ea49bd50dd15a86c4e5d690b83d1f5f23c0",
+      "bytes": 4343,
+      "git_blob": "2972d53c7b039af266f4da161301c01eec54c16d"
+    },
+    "include/pineforge/color.hpp": {
+      "sha256": "29eb9d4473e4dd488f959fb9f53999656e3feb6aa25255287e80855ecabe96d6",
+      "bytes": 1253,
+      "git_blob": "a4d54f37a1c9d8d10ff5423aca4d42814a666446"
+    },
+    "include/pineforge/compat/pine/exit_activation.hpp": {
+      "sha256": "18be4db8339ee306b9cae3aaddcc41f24c63ec06ca6a6593c831697c1a24e9ac",
+      "bytes": 3014,
+      "git_blob": "db00a9f367c58ae1de62d94cb27a071583aa1232"
+    },
+    "include/pineforge/compat/pine/exit_lifecycle.hpp": {
+      "sha256": "ab20fc9ece083df586796ff85ea31aee559eefe1926e1e61073f3960c22e8930",
+      "bytes": 887,
+      "git_blob": "253aeb2a5050ed4ca58f75d14027ddfa52e39230"
+    },
+    "include/pineforge/compat/pine/frozen_market_instruction.hpp": {
+      "sha256": "d5da797739cc8a0261b984eb781d90c6b28c9c7edfc68a66286f7e8e6f124c80",
+      "bytes": 3174,
+      "git_blob": "2a6dbe9ec65964290d3c02b0540c45612592d567"
+    },
+    "include/pineforge/compat/pine/intraday_cap.hpp": {
+      "sha256": "0ac0eab34625ab9a974037ff8c0217603a01deb81599350a4b24f7bf48ac0cbd",
+      "bytes": 10469,
+      "git_blob": "0aba76b6a78251df33e92f19290473adecf5a61e"
+    },
+    "include/pineforge/compat/pine/intraday_order_budget.hpp": {
+      "sha256": "43f7700f9c66c630ab8a9d8fd899eecb03c2fd9aabff11d2dc2b7fa85f92981b",
+      "bytes": 3878,
+      "git_blob": "730d941fffa3939e375489f40a50901ccea9ec87"
+    },
+    "include/pineforge/compat/pine/market_admission.hpp": {
+      "sha256": "83ce322f8864a569e197493cd2bcca23aa226997d3508caaa6a783ff1bb97b03",
+      "bytes": 1057,
+      "git_blob": "33cf82e5e53ae870c3665ede69d7cde2e9695752"
+    },
+    "include/pineforge/compat/pine/order_birth.hpp": {
+      "sha256": "6e40d1770b957743f87c781d413c55debaa604e1f3611b724627b9440836b407",
+      "bytes": 814,
+      "git_blob": "1980ed34e6b7b77eac0d323b9e20e485fa98044a"
+    },
+    "include/pineforge/compat/pine/order_priority.hpp": {
+      "sha256": "4a1ccfb0af0d366ff52403d9a6b4d0c7f86c97e7a34e79bb4daee20fa326eca9",
+      "bytes": 1550,
+      "git_blob": "3b340b198f2b90af569cc7036271668f5aa6058a"
+    },
+    "include/pineforge/compat/pine/reservation_expansion.hpp": {
+      "sha256": "6b058e39c964a3c6bf5fc16f4555b32c42ac93bbeab6d4444f22fc2c169452ab",
+      "bytes": 756,
+      "git_blob": "90179f04f3380695121f98fbc5e3f7b9854b2524"
+    },
+    "include/pineforge/drawing.hpp": {
+      "sha256": "1635cfc9e65a91369cc1491a64dc564944b6828333af62e3ecd80edb5ba74183",
+      "bytes": 17150,
+      "git_blob": "d04f12bb214b82c5d0b174824c25ff9f148ab090"
+    },
+    "include/pineforge/engine.hpp": {
+      "sha256": "1ba05aa78b81668815e632cb0e2e1b8611fa51f4180b9fcbb8d2c3621cc145e9",
+      "bytes": 214219,
+      "git_blob": "a6d8e29e2cdf13cbe996b3e8c3d986d8d710e3f2"
+    },
+    "include/pineforge/execution.hpp": {
+      "sha256": "e6e2440118f38a0eba5b75a0fb0cf03675f92939c154aaf8dc0837653a113895",
+      "bytes": 4294,
+      "git_blob": "f270b7c64544ee9188c22752d5e41eaa78bf01d1"
+    },
+    "include/pineforge/execution_close_scope.hpp": {
+      "sha256": "b319a176f7d3d0c668f2a1b5c607e3b2077088221e9196a1d490aa6cd548f0b6",
+      "bytes": 714,
+      "git_blob": "d4633524495566d68e7fba8e3244fa32f8bcc01e"
+    },
+    "include/pineforge/execution_close_selection.hpp": {
+      "sha256": "efb4c90fd058f71ef896e32c9e08db4400b79e7d138c1c5b5f6eda3275646c6e",
+      "bytes": 517,
+      "git_blob": "1a6e9e89444e5730d923356b290beddb121df2d8"
+    },
+    "include/pineforge/execution_consumer.hpp": {
+      "sha256": "2be2418b5f4dcadec1fba02028a154278dcb8521281b5285f729fe9a74c9dcd6",
+      "bytes": 3039,
+      "git_blob": "448c05e5087dc617946b5b0211985f6f99e5cbaf"
+    },
+    "include/pineforge/execution_projection.hpp": {
+      "sha256": "464f5f4a98cc83d78cbf769c2cc2c7e80e6934cf72ff24e0dd0496f4790d85f1",
+      "bytes": 1835,
+      "git_blob": "68abfa45dfc387243b66cb72a270b191ed7c894b"
+    },
+    "include/pineforge/execution_reverse_to.hpp": {
+      "sha256": "fd893658b7c27beea90f53f49859f1104e3dcca1925b8600af30ec12ca081b12",
+      "bytes": 444,
+      "git_blob": "7f9d0cc70fe8035eb37f378c359b8ff151483933"
+    },
+    "include/pineforge/exit_leg_lifecycle.hpp": {
+      "sha256": "9d785271511a350114adc7cf5bcb1600cf569f0a10559a8671b7e4b9cb9dc89a",
+      "bytes": 22622,
+      "git_blob": "91492ec22e05d7b6d9327f60ff5e239ae6906fcd"
+    },
+    "include/pineforge/generic_matrix.hpp": {
+      "sha256": "9c94a877b6f9e5965604b03f572ceea2ea3680de586d69ef0627c78208624150",
+      "bytes": 25438,
+      "git_blob": "8694e5577d56221498cca844aa14cddb9a15e84f"
+    },
+    "include/pineforge/leg_activation.hpp": {
+      "sha256": "859d75d0ae90ec3cc109765da066b37c3bbbff9c7c840368fbdd05dc7e178f3f",
+      "bytes": 1353,
+      "git_blob": "4160c841782800853bb574219b3dad2ca8aa0cc6"
+    },
+    "include/pineforge/live_parser.h": {
+      "sha256": "f1308086a66fe6a0636b8b2fc44c3fcb6b0c21ed0311654297ecc8ea5e959e1e",
+      "bytes": 3870,
+      "git_blob": "0d00afe0586477c69dea35a1bfef72f3acb491a3"
+    },
+    "include/pineforge/log.hpp": {
+      "sha256": "df5db36e01ddaa66c44c1b378e6b0c3b05e0c732c59fbcb5401e3606585d25a3",
+      "bytes": 496,
+      "git_blob": "6cc4c35ad1a902f05022fb11357dff86281b5301"
+    },
+    "include/pineforge/magnifier.hpp": {
+      "sha256": "c0ed220b6df054b44596a434d4f48b1c3e960ca329bb8644a405a608175e06ff",
+      "bytes": 3241,
+      "git_blob": "1bbc910a869d162900d7610fa0bd9a88776b7b0f"
+    },
+    "include/pineforge/map.hpp": {
+      "sha256": "772a4f6c79ea01af6ad057e361e821d79a7d9884e4aff8bac5a2f77565e55b9f",
+      "bytes": 14476,
+      "git_blob": "5dd59cbaad9b93138738d3f92b8c457c0ac92a7d"
+    },
+    "include/pineforge/market_admission.hpp": {
+      "sha256": "22914434a2c82f761b98c1b5a2ff9365c89bb802b584cdda2a3c30c5986ec6fe",
+      "bytes": 10221,
+      "git_blob": "70be6af6b556bf77cab6c9f823bb3492cf7c8294"
+    },
+    "include/pineforge/market_driver.hpp": {
+      "sha256": "30b99e7a67ace08fc2e38158dc5eb697473a54e9149836d2c896a3ca189be39b",
+      "bytes": 5400,
+      "git_blob": "69114a839327ba70e1f90b73dfa3162cff94bae9"
+    },
+    "include/pineforge/math.hpp": {
+      "sha256": "be95fa75d1e8d288ed49d62fa56257efe99435be7ba357fbb93cc36c0dc9eda3",
+      "bytes": 1316,
+      "git_blob": "9ec09d539dd0ba732449424e6a8c80c3f5454888"
+    },
+    "include/pineforge/matrix.hpp": {
+      "sha256": "f463ab76db92436fd818839c390e69462a794e07413d99fb49af4ed1b67bca6f",
+      "bytes": 4868,
+      "git_blob": "22b29448fb60dded446543b1940c1a1466986133"
+    },
+    "include/pineforge/metrics.hpp": {
+      "sha256": "9e35101f16c2717dbfde428ecc515802dd758056e080fd45ee6411e9d0ead5be",
+      "bytes": 1353,
+      "git_blob": "f468f485bbdd0512536e96390d2b411228c2f517"
+    },
+    "include/pineforge/na.hpp": {
+      "sha256": "0e8c256fcdeda94a0855458fa3b8c4ad4f9864dc2aecce969934f6bea82fd0a5",
+      "bytes": 1064,
+      "git_blob": "e98505aadc68a09cbe5a14aacf591a799a15ecd2"
+    },
+    "include/pineforge/native_calendar.hpp": {
+      "sha256": "5495cb007509937616255a9615dcc92c49e5115692c8375ef93b594a36e55860",
+      "bytes": 19589,
+      "git_blob": "742ecfabc3764d626617c2762d4b574d46d8ff46"
+    },
+    "include/pineforge/native_fx_curve.hpp": {
+      "sha256": "6584b931501dff39872e0d4b251bcc873d91b4c7e22cb23bd97d1bc11118a4db",
+      "bytes": 1241,
+      "git_blob": "4ff51eb2b7dcc32fcb6ec0b37676acdfb6583704"
+    },
+    "include/pineforge/native_host.hpp": {
+      "sha256": "562ade697f8f028b86c95bc51f0dbe2080628495bd0f57a6c06fb0a35778570e",
+      "bytes": 15122,
+      "git_blob": "f89769d4e5564d7f981eb075a374dbfafbf77b0a"
+    },
+    "include/pineforge/native_order.hpp": {
+      "sha256": "4333150cf15ec61b7ce723872f573ddd37c5534cfbea35e8ad1e8f2b0b5c3e15",
+      "bytes": 42099,
+      "git_blob": "39c1233a973dc7a29a72373f7c9dd7589b40a29d"
+    },
+    "include/pineforge/native_order_identity.hpp": {
+      "sha256": "1381a095ed322f746e77d280c54844b3398468f2080b26927182e6f936456cca",
+      "bytes": 1948,
+      "git_blob": "d7961f6add2df7a7c23633f588075f63a2dd54ef"
+    },
+    "include/pineforge/native_run_spec.hpp": {
+      "sha256": "e7be6d930c4eed13d9fa2358f529c98e5ad37b75ad72013f1ba65513cabb8da1",
+      "bytes": 5518,
+      "git_blob": "1b5ed883a71ed772e9f115415ab5c7acb1f920f0"
+    },
+    "include/pineforge/order_action.hpp": {
+      "sha256": "7d76ddc3f6ba76216d5feb34cdf28908e33a92a56757a707ac6bd94dca315001",
+      "bytes": 3470,
+      "git_blob": "d992472cbefefdf8e29704a21f04614d68d39a58"
+    },
+    "include/pineforge/order_birth.hpp": {
+      "sha256": "0eadb3e2a92248fbc8e6ba8f94285b15b0e83d7a0396f5904b40c216619604e4",
+      "bytes": 4833,
+      "git_blob": "ed4a4038e9d079c92b4ebd777a5f22f1f1256b0c"
+    },
+    "include/pineforge/order_cancellation.hpp": {
+      "sha256": "389eb3659f121351ad4b53b936d3a2c79f343ecdb6c0c4bb0bc13777596b90ee",
+      "bytes": 7172,
+      "git_blob": "a4f11409f19c7a85347879ecfd942bd7bae5c2eb"
+    },
+    "include/pineforge/order_priority.hpp": {
+      "sha256": "25bb7898972153b044675245db230c1171644856ef904f4dd02353b8968d433b",
+      "bytes": 694,
+      "git_blob": "3e9fa5ee4121971a7962db8a60859aba6fb9ec95"
+    },
+    "include/pineforge/pending_order_mirror.hpp": {
+      "sha256": "7921179f690dbb6f00ee8ab6ca71b3174fcc42a61ebc6786c3727c7f85a576a4",
+      "bytes": 21978,
+      "git_blob": "fc08bfd7328718de1c658bdcea1826c2fbc9eebe"
+    },
+    "include/pineforge/pine_float_compare.hpp": {
+      "sha256": "3d389142b8e4fbd899c6923c11a27447920a1c9e9db0338ff9abc8a9f4a06d1c",
+      "bytes": 2893,
+      "git_blob": "a3de0e9a2ef3517098be500880fda71bdcfe2260"
+    },
+    "include/pineforge/pineforge.h": {
+      "sha256": "5f97c2fcf2907bb90653b50fdc37818597ae4032be9e1cf95ad6f9ae4ee799dd",
+      "bytes": 75488,
+      "git_blob": "3ba8b1dfcbd554c06c977690dce50093a42af1bb"
+    },
+    "include/pineforge/position_close_obligation.hpp": {
+      "sha256": "6f6ad0aaca952dda7a9386cb78e57705b3494364dbd8970b0a051fe99d05b777",
+      "bytes": 1060,
+      "git_blob": "09576ee0f2a1d49becc46f5701f4369cf8f87bf6"
+    },
+    "include/pineforge/quantity_intent.hpp": {
+      "sha256": "c4cc0f1cd5d6ed1f248825712a5ba4b4f5a808b787c05c58971934b89d770b90",
+      "bytes": 3054,
+      "git_blob": "41262fee5aa2db4032fc008542c573032563629b"
+    },
+    "include/pineforge/reservation_expansion.hpp": {
+      "sha256": "27e514249f62aa7353ac084a6e59e25e338a867fe4d67ce4646446a1cf9f9dab",
+      "bytes": 2434,
+      "git_blob": "b4302c9eed97c3409d9911fd6cecdc64fa0aad86"
+    },
+    "include/pineforge/series.hpp": {
+      "sha256": "e7709f67df9046c9eba163c2dbe91f8161084a955265ccf6b163355856c0afde",
+      "bytes": 3439,
+      "git_blob": "61baaef2c351d37b0d6a5eb179e91ce670eb83c3"
+    },
+    "include/pineforge/session_time.hpp": {
+      "sha256": "f58c94bfae948e08fa21e52f20eae3940b31e398d83b800baf3a31f3a5fde669",
+      "bytes": 10337,
+      "git_blob": "af3a4472d852e0965947c006d0b6ad85304539e7"
+    },
+    "include/pineforge/source/pine_adapter.hpp": {
+      "sha256": "235529a0eabb77c07a1fe0ab4434cccc782734dde4ada9d26039e64f7604ffda",
+      "bytes": 1604,
+      "git_blob": "e8c6b542866d51274bd7b66ca919234527af0a99"
+    },
+    "include/pineforge/source/pine_language_state.hpp": {
+      "sha256": "276f49a5570fb2178bf59c5a3fe0fcba6230219e987dd12396791e8c6843ae44",
+      "bytes": 2404,
+      "git_blob": "1b215733a089c95661eef5d4fd671a7a8f680115"
+    },
+    "include/pineforge/source/pine_pending_intent.hpp": {
+      "sha256": "d50b33c269d8ba4da8c4de1dca44f0a844a04e260476f8c2799c49ed3479b4bf",
+      "bytes": 34974,
+      "git_blob": "8ee1316f1aa6bb8d7330a6035aeea2795a4e307c"
+    },
+    "include/pineforge/source/pine_policy_support.hpp": {
+      "sha256": "7ae9d6e1b2895fa3bb4b4987220a4b51cca18d8047264e46e5b43d0b655038a6",
+      "bytes": 1251,
+      "git_blob": "229af7065831b57bf7c9b50025a8113611f28134"
+    },
+    "include/pineforge/source/pine_strategy_host.hpp": {
+      "sha256": "943b523400a38e9fdd5d7f152b84396db7edcb0041543fde46422a5159d41f20",
+      "bytes": 43808,
+      "git_blob": "476085c9c1d96485eb98be9031afb46bca7fd75b"
+    },
+    "include/pineforge/str_utils.hpp": {
+      "sha256": "58e052a040da94f3824ec36db05b37dfe9e2219a32e843b56998fb1f0efe1393",
+      "bytes": 820,
+      "git_blob": "d44059f10b41872ea57a1abd9c246fadb3b7b3eb"
+    },
+    "include/pineforge/ta.hpp": {
+      "sha256": "7221324be971ef6de425253656327395d8a1ffd081b3c1eef0c8c5b96f51e6b6",
+      "bytes": 35301,
+      "git_blob": "3baeef801f44b938c16137fca5881784646760f9"
+    },
+    "include/pineforge/timeframe.hpp": {
+      "sha256": "5e4c312da463fdcff55e0887188523c8bbf85a2ae62f3317a2b23f22fe0161e2",
+      "bytes": 29534,
+      "git_blob": "3d1bc9d495ac7e5b39ea5bae57c9d9afe580192b"
+    },
+    "include/pineforge/version.h.in": {
+      "sha256": "9b9e81d5e0998441a82dbe15a4495182fdfe126baea1cf26bdaaf51e491ad99f",
+      "bytes": 893,
+      "git_blob": "27118bd81741597e187e3a49d04ac201f9508011"
+    },
+    "include/pineforge/window_sum.hpp": {
+      "sha256": "b5519f95d57d46e2a8045d380c1e1e1427ce744f4d53ee3a04ebfdaf942d3f68",
+      "bytes": 2828,
+      "git_blob": "1ea86860f6cb901fe79ff89ef46f1c77ce7e2b8c"
+    }
+  }
+}

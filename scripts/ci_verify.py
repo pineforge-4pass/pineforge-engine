@@ -2,7 +2,7 @@
 """Shared local/CI verification driver. Stdlib only. Not a command generator.
 
 Profiles: release, debug, sanitizers, native. Default build dir build-ci-PROFILE.
-Source guards, explicit configure, full rebuild, pinned e60/0e/v13/v14 ABI prepare/reuse,
+Source guards, explicit configure, full rebuild, pinned e60/0e/v13/v14/v15/v16 ABI prepare/reuse,
 CTest, install+find_package+VERSION smoke, native help / required WebSocket.
 Fail fast on configure/build. After a successful build collect independent
 CTest and package failures in the same run. Never deletes source, tests, or
@@ -348,6 +348,7 @@ class Driver:
         self.abi_v13_action = 'not-started'
         self.abi_v14_action = 'not-started'
         self.abi_v15_frozen_action = 'not-started'
+        self.abi_v16_frozen_action = 'not-started'
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -371,6 +372,7 @@ class Driver:
             'abiV13': {'action': self.abi_v13_action},
             'abiV14': {'action': self.abi_v14_action},
             'abiV15Frozen': {'action': self.abi_v15_frozen_action},
+            'abiV16Frozen': {'action': self.abi_v16_frozen_action},
             'stages': self.stages,
             'failures': self.failures,
         }
@@ -381,6 +383,7 @@ class Driver:
         self.summary['abiV13'] = {'action': self.abi_v13_action}
         self.summary['abiV14'] = {'action': self.abi_v14_action}
         self.summary['abiV15Frozen'] = {'action': self.abi_v15_frozen_action}
+        self.summary['abiV16Frozen'] = {'action': self.abi_v16_frozen_action}
         self.summary['actualVersion'] = self.actual_version
         self.summary['stages'] = self.stages
         self.summary['failures'] = self.failures
@@ -554,6 +557,15 @@ class Driver:
                         '--header-manifest', str(manifest)],
             stage='abi-v15-frozen', fetch_stage='abi-v15-frozen-fetch')
 
+    def ensure_abi_v16_frozen(self) -> None:
+        provider = PROVIDERS['v16-frozen']
+        manifest = self.cfg.source / provider['manifest'].relative_to(ROOT)
+        self.abi_v16_frozen_action = self.ensure_prepared_provider(
+            self.cfg.build_dir / provider['default_output'], provider['commit'], provider['tree'],
+            extra_argv=['--commit', provider['commit'], '--tree', provider['tree'],
+                        '--header-manifest', str(manifest)],
+            stage='abi-v16-frozen', fetch_stage='abi-v16-frozen-fetch')
+
     def ensure_prepared_provider(self, output: Path, commit: str, tree: str, *,
                                  extra_argv: list[str], stage: str, fetch_stage: str) -> str:
         prepare = [
@@ -715,6 +727,7 @@ class Driver:
         self.ensure_abi_v13()
         self.ensure_abi_v14()
         self.ensure_abi_v15_frozen()
+        self.ensure_abi_v16_frozen()
 
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
                  '--output-on-failure', '--no-tests=error', '--parallel', str(self.cfg.jobs)]

@@ -1,0 +1,1253 @@
+{
+  "schema": "pineforge-r4-d-pending-intent-view/v1",
+  "captured_at": {
+    "engine_commit": "ab9714beccb62b796c122cf68986ec9e7dbf4a67",
+    "route": "LegacyCompatibilityConsumer / source::PineStrategyHost",
+    "pending_order_members": 65,
+    "prefix_members": 98
+  },
+  "purpose": "Appendix C proposal for allocation-free pf_pending_order_v1_t projection after the all-or-nothing lowering switch.",
+  "conventions": {
+    "allocation": "Every view read is allocation-free: request definitions/live state are borrowed and PlacementSnapshot/receipt facts are looked up by RequestHandle.",
+    "no_write": "Observer reads never mutate a request, PlacementSnapshot, receipt, cohort, or native live state.",
+    "no_constant": "A compatibility field is never populated by a synthetic constant. Missing optional numeric facts use the named NaN convention; missing handles use 0 only where the legacy ABI already specifies it.",
+    "nan": "Absent price/quantity/optional floating facts are IEEE quiet NaN. A present NaN payload is preserved, not normalized.",
+    "minus_one": "Invalid index and no applicable integer fact return -1 and do not write output pointers.",
+    "booleans": "Boolean C fields are 0/1 derived from the named fact only.",
+    "strings": "id/from_entry/oca_name/comment use the existing 63-byte NUL copy plus full-string FNV-1a hash convention."
+  },
+  "request_handle_order": "PendingIntentView enumerates current live request handles in native WorkingRequestCore roster order; no source PendingOrder container is rebuilt.",
+  "source_pending_order_inventory": [
+    {
+      "member": "id",
+      "cpp_type": "std::string",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::request.label",
+      "no_write": true
+    },
+    {
+      "member": "from_entry",
+      "cpp_type": "std::string",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::from_entry",
+      "no_write": true
+    },
+    {
+      "member": "type",
+      "cpp_type": "OrderType",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::family",
+      "no_write": true
+    },
+    {
+      "member": "is_long",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::request.intent",
+      "no_write": true,
+      "derivation": "Read the named immutable definition/receipt; do not synthesize a source-order object."
+    },
+    {
+      "member": "legs",
+      "cpp_type": "ExitLegLifecycle",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "no_write": true
+    },
+    {
+      "member": "qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::requested_qty",
+      "no_write": true
+    },
+    {
+      "member": "qty_type",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::qty_type",
+      "no_write": true
+    },
+    {
+      "member": "qty_percent",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::qty_percent",
+      "no_write": true
+    },
+    {
+      "member": "oca_name",
+      "cpp_type": "std::string",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::oca_name",
+      "no_write": true
+    },
+    {
+      "member": "oca_type",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::oca_type",
+      "no_write": true
+    },
+    {
+      "member": "created_bar",
+      "cpp_type": "int",
+      "kind": "request-core definition",
+      "source": "OrderBirth::bar via native_order::RequestDefinition::birth",
+      "no_write": true
+    },
+    {
+      "member": "created_seq",
+      "cpp_type": "int64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::source_sequence",
+      "no_write": true
+    },
+    {
+      "member": "incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::handle.value",
+      "no_write": true
+    },
+    {
+      "member": "replaced_order_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::predecessor",
+      "no_write": true,
+      "derivation": "Read the named immutable definition/receipt; do not synthesize a source-order object."
+    },
+    {
+      "member": "replaced_default_market_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::predecessor plus PlacementSnapshot::family",
+      "no_write": true,
+      "derivation": "Read the named immutable definition/receipt; do not synthesize a source-order object."
+    },
+    {
+      "member": "cancellation",
+      "cpp_type": "OrderCancellationReceipt",
+      "kind": "receipt fact",
+      "source": "native_order::CancelledEvent plus PineExecutionAdapter::receipt_by_request",
+      "no_write": true
+    },
+    {
+      "member": "recreated_after_named_cancelled_entry_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact::recreated_after_named_cancelled_entry",
+      "no_write": true
+    },
+    {
+      "member": "named_cancel_surviving_exit_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact::named_cancel_surviving_exit",
+      "no_write": true
+    },
+    {
+      "member": "stop_limit_activated",
+      "cpp_type": "bool",
+      "kind": "live state",
+      "source": "native_order::LiveRequest::trigger_state",
+      "no_write": true
+    },
+    {
+      "member": "leg_activation",
+      "cpp_type": "ExitLegActivation",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_activation",
+      "no_write": true
+    },
+    {
+      "member": "pine_exit_activation",
+      "cpp_type": "PineExitActivationPolicy",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::pine_exit_activation",
+      "no_write": true
+    },
+    {
+      "member": "birth",
+      "cpp_type": "OrderBirth",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::birth",
+      "no_write": true
+    },
+    {
+      "member": "pine_birth_reach",
+      "cpp_type": "PineHistoricalBirthReach",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::historical_birth_reach",
+      "no_write": true
+    },
+    {
+      "member": "coof_cascade_seg_i",
+      "cpp_type": "int8_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_segment",
+      "no_write": true
+    },
+    {
+      "member": "coof_cascade_inflight_fires",
+      "cpp_type": "bool",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_inflight_fires",
+      "no_write": true
+    },
+    {
+      "member": "created_position_side",
+      "cpp_type": "PositionSide",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_side",
+      "no_write": true
+    },
+    {
+      "member": "created_position_cycle_seq",
+      "cpp_type": "int64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_cycle",
+      "no_write": true
+    },
+    {
+      "member": "same_id_stop_deferred_close_all_bar",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::same_id_stop_deferred_close_all_bar",
+      "no_write": true
+    },
+    {
+      "member": "same_id_stop_deferred_close_all_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::same_id_stop_deferred_close_all_request",
+      "no_write": true
+    },
+    {
+      "member": "market_admission",
+      "cpp_type": "MarketAdmissionDraft",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::market_admission",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_own_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.own_qty",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_signal_close",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_close",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_signal_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_equity",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_signal_margin_pct",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_margin_pct",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_signal_pointvalue",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_pointvalue",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_signal_fx",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_fx",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_peer_seq",
+      "cpp_type": "int64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.peer_sequence",
+      "no_write": true
+    },
+    {
+      "member": "paired_flat_market_transaction_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.transaction_qty",
+      "no_write": true
+    },
+    {
+      "member": "tv_carry_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::tv_carry_qty",
+      "no_write": true
+    },
+    {
+      "member": "frozen_default_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_default_qty",
+      "no_write": true
+    },
+    {
+      "member": "default_stop_placement_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.qty",
+      "no_write": true
+    },
+    {
+      "member": "default_stop_placement_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.equity",
+      "no_write": true
+    },
+    {
+      "member": "default_stop_placement_signal_close",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.signal_close",
+      "no_write": true
+    },
+    {
+      "member": "default_stop_sizing_price",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.sizing_price",
+      "no_write": true
+    },
+    {
+      "member": "sizing_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.equity",
+      "no_write": true
+    },
+    {
+      "member": "sizing_price",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.price",
+      "no_write": true
+    },
+    {
+      "member": "sizing_fx",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.fx",
+      "no_write": true
+    },
+    {
+      "member": "sizing_mark",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.mark",
+      "no_write": true
+    },
+    {
+      "member": "explicit_placement_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.equity",
+      "no_write": true
+    },
+    {
+      "member": "explicit_slipped_signal_close",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.slipped_signal_close",
+      "no_write": true
+    },
+    {
+      "member": "affordability_placement_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.equity",
+      "no_write": true
+    },
+    {
+      "member": "affordability_signal_price",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.signal_price",
+      "no_write": true
+    },
+    {
+      "member": "affordability_held_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.held_qty",
+      "no_write": true
+    },
+    {
+      "member": "affordability_close_only",
+      "cpp_type": "bool",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.close_only",
+      "no_write": true
+    },
+    {
+      "member": "rounded_signal_cost_close_only",
+      "cpp_type": "bool",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::rounded_signal_cost.close_only",
+      "no_write": true
+    },
+    {
+      "member": "signal_close_mc_bar",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.bar",
+      "no_write": true
+    },
+    {
+      "member": "signal_close_mc_entry_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.entry_request",
+      "no_write": true
+    },
+    {
+      "member": "signal_close_mc_fill_seq",
+      "cpp_type": "uint64_t",
+      "kind": "receipt fact",
+      "source": "native_order::ExecutionAppliedEvent::ordinal",
+      "no_write": true
+    },
+    {
+      "member": "signal_close_mc_remaining_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.remaining_qty",
+      "no_write": true
+    },
+    {
+      "member": "comment",
+      "cpp_type": "std::string",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::request.comment",
+      "no_write": true
+    },
+    {
+      "member": "quantity_request",
+      "cpp_type": "QuantityRequest",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::quantity_request",
+      "no_write": true
+    },
+    {
+      "member": "reservation_expansion",
+      "cpp_type": "ReservationExpansion",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::reservation_expansion",
+      "no_write": true
+    },
+    {
+      "member": "reservation_growth_source",
+      "cpp_type": "ReservationGrowthSource",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::ReservationReceiptFact::growth_source",
+      "no_write": true
+    },
+    {
+      "member": "pine_frozen_market_instruction",
+      "cpp_type": "PineFrozenMarketInstruction",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "no_write": true
+    },
+    {
+      "member": "short_seed_collision_role",
+      "cpp_type": "ShortSeedCollisionRole",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::ShortSeedPlan",
+      "no_write": true
+    }
+  ],
+  "prefix_fields": [
+    {
+      "field": "id",
+      "cpp_type": "std::string",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::request.label",
+      "no_write": true
+    },
+    {
+      "field": "from_entry",
+      "cpp_type": "std::string",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::from_entry",
+      "no_write": true
+    },
+    {
+      "field": "type",
+      "cpp_type": "OrderType",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::family",
+      "no_write": true
+    },
+    {
+      "field": "is_long",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::request.intent",
+      "no_write": true,
+      "derivation": "Use the source-member mapping above; no compatibility constant."
+    },
+    {
+      "field": "limit_price",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "derivation": "requested limit, or NaN when absent",
+      "no_write": true
+    },
+    {
+      "field": "stop_price",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "derivation": "requested stop, or NaN when absent",
+      "no_write": true
+    },
+    {
+      "field": "trail_points",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "derivation": "requested trail_points, or NaN when absent",
+      "no_write": true
+    },
+    {
+      "field": "trail_price",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "derivation": "requested trail arm price, or NaN when absent",
+      "no_write": true
+    },
+    {
+      "field": "trail_offset",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::request.trigger",
+      "derivation": "Trail::offset when trigger is Trail; otherwise NaN",
+      "no_write": true
+    },
+    {
+      "field": "profit_ticks",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "derivation": "relative profit ticks, or NaN",
+      "no_write": true
+    },
+    {
+      "field": "loss_ticks",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels",
+      "derivation": "relative loss ticks, or NaN",
+      "no_write": true
+    },
+    {
+      "field": "qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::requested_qty",
+      "no_write": true
+    },
+    {
+      "field": "qty_type",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::qty_type",
+      "no_write": true
+    },
+    {
+      "field": "qty_percent",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::qty_percent",
+      "no_write": true
+    },
+    {
+      "field": "oca_name",
+      "cpp_type": "std::string",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::oca_name",
+      "no_write": true
+    },
+    {
+      "field": "oca_type",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::oca_type",
+      "no_write": true
+    },
+    {
+      "field": "created_bar",
+      "cpp_type": "int",
+      "kind": "request-core definition",
+      "source": "OrderBirth::bar via native_order::RequestDefinition::birth",
+      "no_write": true
+    },
+    {
+      "field": "created_seq",
+      "cpp_type": "int64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::source_sequence",
+      "no_write": true
+    },
+    {
+      "field": "incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::handle.value",
+      "no_write": true
+    },
+    {
+      "field": "created_by_same_id_replacement",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::predecessor",
+      "derivation": "true iff a non-RAW source-family snapshot has a predecessor",
+      "no_write": true
+    },
+    {
+      "field": "replaced_default_market_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::predecessor plus PlacementSnapshot::family",
+      "no_write": true,
+      "derivation": "Use the source-member mapping above; no compatibility constant."
+    },
+    {
+      "field": "declined_by_replaced_short_market",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact::cause",
+      "derivation": "true iff the adapter-selected cancellation cause is replacement",
+      "no_write": true
+    },
+    {
+      "field": "replaced_exit_order_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::predecessor",
+      "derivation": "predecessor handle only for an exit-family PlacementSnapshot; 0 otherwise",
+      "no_write": true
+    },
+    {
+      "field": "recreated_after_named_cancelled_entry_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact::recreated_after_named_cancelled_entry",
+      "no_write": true
+    },
+    {
+      "field": "named_cancel_surviving_exit_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact::named_cancel_surviving_exit",
+      "no_write": true
+    },
+    {
+      "field": "stop_limit_activated",
+      "cpp_type": "bool",
+      "kind": "live state",
+      "source": "native_order::LiveRequest::trigger_state",
+      "no_write": true
+    },
+    {
+      "field": "coof_suppress_stop_on_entry_bar",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::pine_exit_activation",
+      "derivation": "holds_stop predicate",
+      "no_write": true
+    },
+    {
+      "field": "coof_suppress_limit_on_entry_bar",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::pine_exit_activation",
+      "derivation": "holds_limit predicate",
+      "no_write": true
+    },
+    {
+      "field": "created_during_coof_recalc",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::birth",
+      "derivation": "OrderBirth::from_fill",
+      "no_write": true
+    },
+    {
+      "field": "coof_born_at_close_recalc",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::birth",
+      "derivation": "OrderBirth::at_terminal_fill",
+      "no_write": true
+    },
+    {
+      "field": "coof_born_mid_bar",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::historical_birth_reach",
+      "derivation": "historical cascade reach",
+      "no_write": true
+    },
+    {
+      "field": "coof_cascade_seg_i",
+      "cpp_type": "int8_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_segment",
+      "no_write": true
+    },
+    {
+      "field": "coof_cascade_inflight_fires",
+      "cpp_type": "bool",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_inflight_fires",
+      "no_write": true
+    },
+    {
+      "field": "created_position_side",
+      "cpp_type": "PositionSide",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_side",
+      "no_write": true
+    },
+    {
+      "field": "created_position_cycle_seq",
+      "cpp_type": "int64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_cycle",
+      "no_write": true
+    },
+    {
+      "field": "created_after_position_close_in_bar",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_history",
+      "derivation": "prior-close receipt on this source evaluation",
+      "no_write": true
+    },
+    {
+      "field": "over_pyramiding_cap_at_placement",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_history",
+      "derivation": "entry-capacity predicate at placement",
+      "no_write": true
+    },
+    {
+      "field": "same_id_stop_deferred_close_all_bar",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::same_id_stop_deferred_close_all_bar",
+      "no_write": true
+    },
+    {
+      "field": "same_id_stop_deferred_close_all_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::same_id_stop_deferred_close_all_request",
+      "no_write": true
+    },
+    {
+      "field": "reverses_same_bar_market_from_flat",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::market_admission",
+      "derivation": "opposite-market-predecessor journal query",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_candidate",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::market_admission",
+      "derivation": "awaits_pair_review",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_own_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.own_qty",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_signal_close",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_close",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_signal_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_equity",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_signal_margin_pct",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_margin_pct",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_signal_pointvalue",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_pointvalue",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_signal_fx",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.signal_fx",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_peer_seq",
+      "cpp_type": "int64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.peer_sequence",
+      "no_write": true
+    },
+    {
+      "field": "paired_flat_market_transaction_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.transaction_qty",
+      "no_write": true
+    },
+    {
+      "field": "default_flat_market_gross_candidate",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::market_admission",
+      "derivation": "awaits_default_review",
+      "no_write": true
+    },
+    {
+      "field": "tv_carry_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::tv_carry_qty",
+      "no_write": true
+    },
+    {
+      "field": "frozen_default_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_default_qty",
+      "no_write": true
+    },
+    {
+      "field": "default_stop_placement_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.qty",
+      "no_write": true
+    },
+    {
+      "field": "default_stop_placement_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.equity",
+      "no_write": true
+    },
+    {
+      "field": "default_stop_placement_signal_close",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.signal_close",
+      "no_write": true
+    },
+    {
+      "field": "default_stop_sizing_price",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::default_stop.sizing_price",
+      "no_write": true
+    },
+    {
+      "field": "sizing_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.equity",
+      "no_write": true
+    },
+    {
+      "field": "sizing_price",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.price",
+      "no_write": true
+    },
+    {
+      "field": "sizing_fx",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.fx",
+      "no_write": true
+    },
+    {
+      "field": "sizing_mark",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::sizing.mark",
+      "no_write": true
+    },
+    {
+      "field": "opening_affordability_exemption_candidate",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::market_admission",
+      "derivation": "opening qualification",
+      "no_write": true
+    },
+    {
+      "field": "explicit_flat_admission_candidate",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::market_admission",
+      "derivation": "explicit qualification",
+      "no_write": true
+    },
+    {
+      "field": "explicit_placement_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.equity",
+      "no_write": true
+    },
+    {
+      "field": "explicit_slipped_signal_close",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.slipped_signal_close",
+      "no_write": true
+    },
+    {
+      "field": "affordability_placement_equity",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.equity",
+      "no_write": true
+    },
+    {
+      "field": "affordability_signal_price",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.signal_price",
+      "no_write": true
+    },
+    {
+      "field": "affordability_held_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.held_qty",
+      "no_write": true
+    },
+    {
+      "field": "affordability_close_only",
+      "cpp_type": "bool",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::affordability.close_only",
+      "no_write": true
+    },
+    {
+      "field": "rounded_signal_cost_close_only",
+      "cpp_type": "bool",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::rounded_signal_cost.close_only",
+      "no_write": true
+    },
+    {
+      "field": "signal_close_mc_bar",
+      "cpp_type": "int",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.bar",
+      "no_write": true
+    },
+    {
+      "field": "signal_close_mc_entry_incarnation",
+      "cpp_type": "uint64_t",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.entry_request",
+      "no_write": true
+    },
+    {
+      "field": "signal_close_mc_fill_seq",
+      "cpp_type": "uint64_t",
+      "kind": "receipt fact",
+      "source": "native_order::ExecutionAppliedEvent::ordinal",
+      "no_write": true
+    },
+    {
+      "field": "signal_close_mc_remaining_qty",
+      "cpp_type": "double",
+      "kind": "adapter placement snapshot",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.remaining_qty",
+      "no_write": true
+    },
+    {
+      "field": "comment",
+      "cpp_type": "std::string",
+      "kind": "request-core definition",
+      "source": "native_order::RequestDefinition::request.comment",
+      "no_write": true
+    },
+    {
+      "field": "requested_partial",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::quantity_request",
+      "derivation": "partial predicate over request/reservation",
+      "no_write": true
+    },
+    {
+      "field": "full_percent_exit_request",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::quantity_request",
+      "derivation": "requests_all predicate",
+      "no_write": true
+    },
+    {
+      "field": "pooc_global_full_exit_dynamic_qty",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::reservation_expansion",
+      "derivation": "population_open",
+      "no_write": true
+    },
+    {
+      "field": "pooc_global_full_exit_tracks_bound_adds",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::reservation_expansion",
+      "derivation": "capture present",
+      "no_write": true
+    },
+    {
+      "field": "pooc_global_full_exit_bound_add",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::ReservationReceiptFact::growth_source",
+      "derivation": "reservation_owner present",
+      "no_write": true
+    },
+    {
+      "field": "created_while_in_position",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_side",
+      "derivation": "exit family and non-flat side",
+      "no_write": true
+    },
+    {
+      "field": "sbmt_member",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "derivation": "instruction active",
+      "no_write": true
+    },
+    {
+      "field": "sbmt_own_qty",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "derivation": "transaction own_units, NaN if absent",
+      "no_write": true
+    },
+    {
+      "field": "sbmt_tx_qty",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "derivation": "transaction transaction_units, NaN if absent",
+      "no_write": true
+    },
+    {
+      "field": "sbmt_kept_over_cap",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "derivation": "transaction active and placement_at_entry_capacity",
+      "no_write": true
+    },
+    {
+      "field": "sbmt_close_qty",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "derivation": "targeted close quantity, NaN if absent",
+      "no_write": true
+    },
+    {
+      "field": "sbmt_close_buy",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::frozen_market_instruction",
+      "derivation": "targeted close and placement side short",
+      "no_write": true
+    },
+    {
+      "field": "suppress_as_declined_reversal_close",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact::cause",
+      "derivation": "true iff dependency cancellation",
+      "no_write": true
+    },
+    {
+      "field": "dormant_bracket",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "dormant predicate",
+      "no_write": true
+    },
+    {
+      "field": "dormant_reissue_pending",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "pending replacement predicate",
+      "no_write": true
+    },
+    {
+      "field": "dormant_original_stop_price",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "original_stop, NaN if absent",
+      "no_write": true
+    },
+    {
+      "field": "dormant_hold_bar",
+      "cpp_type": "int",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "hold_bar, -1 if absent",
+      "no_write": true
+    },
+    {
+      "field": "dormant_reversal_kill_bar",
+      "cpp_type": "int",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "excluded_bar, -1 if absent",
+      "no_write": true
+    },
+    {
+      "field": "dormant_trail_best",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "native_order::LiveRequest::trigger_state",
+      "derivation": "TrailTrack/TrailActive best, NaN if not tracking",
+      "no_write": true
+    },
+    {
+      "field": "dormant_trail_best_start",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "trail_prefix, NaN if absent",
+      "no_write": true
+    },
+    {
+      "field": "dormant_trail_leg_dead",
+      "cpp_type": "bool",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_lifecycle",
+      "derivation": "trail leg retired",
+      "no_write": true
+    },
+    {
+      "field": "suppressed_close_consumed_ledger_qty",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact",
+      "derivation": "close_claim_consumed",
+      "no_write": true
+    },
+    {
+      "field": "suppressed_close_retired_ledger_qty",
+      "cpp_type": "double",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::CancellationReceiptFact",
+      "derivation": "close_claim_retired",
+      "no_write": true
+    },
+    {
+      "field": "short_seed_collision_role",
+      "cpp_type": "ShortSeedCollisionRole",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::ShortSeedPlan",
+      "no_write": true
+    }
+  ],
+  "probes": [
+    {
+      "name": "probe_fill_qty",
+      "kind": "derived",
+      "source": "native_order::RequestDefinition::request + native_order::LiveRequest + source::PineExecutionAdapter::PlacementSnapshot + NativeStateView",
+      "derivation": "PineExecutionAdapter::project_probe_fill_qty(handle, fill_price) repeats the legacy partition order from immutable placement facts and live candidate facts. EXIT returns the legacy no-opening-size partition. No request/live-state mutation.",
+      "failure": "invalid index or null qty/close_only/partition => -1 with no output writes."
+    },
+    {
+      "name": "pending_order_level_resolved",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::from_entry + cohort receipts/live openings",
+      "derivation": "Return 1 for non-exit/no from_entry; for a bound exit return whether its source-id cohort has a filled/live opening in the current cycle. The query does not bind or reissue the request.",
+      "failure": "invalid index => -1."
+    },
+    {
+      "name": "pending_order_effective_levels",
+      "kind": "derived",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::exit_levels + NativeStateView::position_entry_price + NativeStateView::mintick",
+      "derivation": "Preserve explicit levels; derive relative profit/loss/trail activation only when the level-resolved query is 1, with the legacy directional tick snap. Unresolved relative values are quiet NaN.",
+      "failure": "invalid index or null stop/limit/trail_activation => -1 with no output writes."
+    },
+    {
+      "name": "last_bar_dual_entry_path",
+      "kind": "receipt fact",
+      "source": "source::PineExecutionAdapter::DecisionReceipt::last_bar_dual_entry_path",
+      "derivation": "The adapter records the final two-entry path decision once at the native applied boundary for the script bar and exposes its enum value; no request field is fabricated.",
+      "failure": "no decision for the completed bar => legacy zero enum value from the initialized receipt, not a projected order constant."
+    },
+    {
+      "name": "trail_best_price",
+      "kind": "live state",
+      "source": "BacktestEngine::trail_best_price_ / NativeStateView::trail_best_price",
+      "derivation": "Read the retained generic trailing extreme; return quiet NaN when the position is flat or no trail is active.",
+      "failure": "null strategy => quiet NaN."
+    }
+  ],
+  "open": []
+}

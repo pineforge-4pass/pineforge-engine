@@ -128,16 +128,19 @@ values remain `native_order_v4`, the private consumer identity remains
 | --- | --- |
 | Live engine/host library | `engine_script_run_v16` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` |
+| `host-ab9714b` immutable provider | `engine_script_run_v16` |
 | Source extension | `pineforge-source-adapter/v1` |
 
-The current v16 archive is checked with five archived provider inputs: the real
+The current v16 archive is checked with six archived provider inputs: the real
 e60 R2 and 0e R3 providers, authenticated c3ed455 v13 and f736676 v14 host
-closures, and the immutable e7cdf05 v15 source-layer-base closure. The verifier
+closures, the immutable e7cdf05 v15 source-layer-base closure, and the
+immutable ab9714b v16 adapter-lowering-base closure. The verifier
 prepares real archives from immutable sources with the current profile's
 compiler and settings. Constructor/vtable, return-only `native_events()`, host
 observation, core request, driver and current-execution callers compile before
 links are interpreted. The v15↔v16 host/source pair is a required rejection in
-both directions; v16↔v16 succeeds. Existing historical v13/v14/v15 verdicts,
+both directions; the frozen ab9714b v16 ↔ live v16 pair is a required positive
+pairing in both directions. Existing historical v13/v14/v15 verdicts,
 including the unchanged driver-v4 positive links where applicable, remain
 required. No ABI caller executable is run.
 

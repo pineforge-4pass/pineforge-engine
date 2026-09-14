@@ -395,6 +395,9 @@ set(PINEFORGE_NATIVE_ABI_V14_RECEIPT
 set(PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT
     "${PROJECT_BINARY_DIR}/native-abi-v15-frozen/receipt.json"
     CACHE FILEPATH "Prepared actual e7cdf052 frozen epoch 15 ABI provider receipt")
+set(PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT
+    "${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json"
+    CACHE FILEPATH "Prepared actual ab9714b frozen epoch 16 ABI provider receipt")
 add_test(NAME test_settlement_cpp_abi
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_settlement_cpp_abi.py
         --compiler ${CMAKE_CXX_COMPILER}
@@ -406,6 +409,7 @@ add_test(NAME test_settlement_cpp_abi
         --v13-receipt ${PINEFORGE_NATIVE_ABI_V13_RECEIPT}
         --v14-receipt ${PINEFORGE_NATIVE_ABI_V14_RECEIPT}
         --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
+        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
         ${_pf_script_cpp_abi_flags})
 set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)
@@ -501,6 +505,11 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/check_pending_order_prefix_compiler.py
 )
+add_test(
+    NAME test_pending_intent_view_schema
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_pending_intent_view.py
+)
 
 # Spec §3.4's reflection gate: every hashed-region struct member must be
 # either hashed by engine_state_hash.cpp or explicitly waived. Previously
@@ -551,6 +560,42 @@ foreach(test_name ${TEST_SOURCES})
     if(PINEFORGE_ENABLE_COVERAGE)
         target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
     endif()
+    add_test(NAME ${test_name} COMMAND ${test_name})
+endforeach()
+
+# R4-D L0 captures literal values from the ab9714be legacy source route in
+# dedicated translation units.  They intentionally live outside the ordinary
+# `tests/test_*.cpp` inventory so later lowering work cannot silently rewrite
+# a characterization test while porting a legacy fixture.
+set(ORACLE_TEST_SOURCES
+    test_oracle_deferred_any
+    test_oracle_fifo_cohort
+    test_oracle_deferred_birth
+    test_oracle_relative_exit
+    test_oracle_reversal
+    test_oracle_reversal_close_only
+    test_oracle_reversal_same_bar_tx
+    test_oracle_reversal_replaced_percent
+    test_oracle_reversal_later_tick
+    test_oracle_short_seed
+    test_oracle_short_seed_percent
+    test_oracle_fx
+    test_oracle_coof
+    test_oracle_coof_first_open
+    test_oracle_pooc_freeze
+    test_oracle_pooc_immediate
+    test_oracle_magnifier_distribution
+    test_oracle_day_key
+    test_oracle_stop_snapshot
+    test_oracle_frozen_size
+    test_oracle_deferred_any_witnesses
+    test_oracle_magnifier_barstate
+    test_oracle_more_than_64_fills
+)
+foreach(test_name ${ORACLE_TEST_SOURCES})
+    add_executable(${test_name} oracle/${test_name}.cpp)
+    target_link_libraries(${test_name} PRIVATE pineforge)
+    target_compile_options(${test_name} PRIVATE -ffp-contract=off -UNDEBUG)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
