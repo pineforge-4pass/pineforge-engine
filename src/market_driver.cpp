@@ -33,9 +33,29 @@ NativeInputPreflightResult preflight_native_inputs(
         out.error = NativeInputPreflightError::NullArray;
         return out;
     }
-    auto parsed_tf = native_calendar::parse_timeframe(spec.input_tf);
     auto parsed_session = native_calendar::parse_session(spec.session, spec.timezone);
-    if (!parsed_tf || !parsed_session) {
+    if (!parsed_session) {
+        out.error = NativeInputPreflightError::CalendarFailure;
+        return out;
+    }
+    if (spec.timeframe_undetected) {
+        for (int i = 0; i < n; ++i) {
+            const Bar& bar = bars[i];
+            if (!native_bar_structurally_valid(bar)) {
+                out.error = NativeInputPreflightError::StructuralInvalid;
+                out.index = i;
+                return out;
+            }
+            if (i > 0 && bar.timestamp <= bars[i - 1].timestamp) {
+                out.error = NativeInputPreflightError::NotStrictlyIncreasing;
+                out.index = i;
+                return out;
+            }
+        }
+        return out;
+    }
+    auto parsed_tf = native_calendar::parse_timeframe(spec.input_tf);
+    if (!parsed_tf) {
         out.error = NativeInputPreflightError::CalendarFailure;
         return out;
     }

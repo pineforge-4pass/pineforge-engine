@@ -46,6 +46,18 @@ class NativeVersions(unittest.TestCase):
             with self.subTest(fold=fold):
                 self.reject(FILES[10], fold, '')
 
+    def test_undetected_timeframe_spec_is_explicit_and_hashed(self):
+        for before, after in (
+            ('bool timeframe_undetected = false;', ''),
+            ('bool timeframe_undetected = false;', 'bool timeframe_undetected = true;'),
+            ('TimeframeUndetected,', 'MissingTimeframeUndetected,'),
+            ('InvalidUndetectedTimeframe,', 'MissingUndetectedTimeframe,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[10], 'f.b(spec.timeframe_undetected);', '')
+        self.reject(FILES[10], 'args.n >= 2', 'args.n > 2')
+
     def test_current(self):
         check_texts(DATA)
 

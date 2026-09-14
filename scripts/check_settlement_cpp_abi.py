@@ -162,7 +162,7 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
 EXEMPTED_HEADER_SHA256 = {
     'native_order.hpp': '9d9900d0d859678f20278cfa607d47631c18a8eb2d308e89849b86dbba80a15c',
     'native_host.hpp': '80e51af9df23352609212b2772e07d4e0719eff37c3038a79aea08fc23146aed',
-    'native_run_spec.hpp': '518a15af9e5b8e9a6be8577f07157515275228c0ba0816df0e806112a178aef9',
+    'native_run_spec.hpp': '9de2c9a148351a7c470bc233913cd8227eb54c926fee5cb7ef92f01afe8d6cc7',
     'market_driver.hpp': 'b22c7b5901a491b7456a229e47ea8a99988d3f0db7b482e3fd36f0ceec227c12',
     'execution_consumer.hpp': 'b9abc06c4fa4d625db19263ef1bf24427f7d82b1faa128861a43369112fac224',
 }

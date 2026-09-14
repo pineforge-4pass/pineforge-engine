@@ -296,6 +296,11 @@ public:
         const std::string input = args.input_tf.empty() ? "1" : args.input_tf;
         const std::string script = args.script_tf.empty() ? input : args.script_tf;
         NativeRunSpec configured = spec_for("provider", 1, input.c_str(), script.c_str());
+        if (args.n < 2 && args.input_tf.empty() && args.script_tf.empty()) {
+            configured.input_tf.clear();
+            configured.script_tf.clear();
+            configured.timeframe_undetected = true;
+        }
         if (copy_intrabar && args.bar_magnifier) {
             IntrabarPath::lower_tf lower;
             lower.tf = input;
@@ -334,6 +339,38 @@ public:
             applied = event;
             applied_contexts.push_back(context);
         }
+    }
+};
+
+class UndetectedTimeframeHost final : public ProviderHost {
+public:
+    bool ready_after_prepare = false;
+    int bar_calls = 0;
+    std::optional<no::RequestHandle> opening;
+    std::optional<no::RequestHandle> pending_reduction;
+
+    void prepare_native_begin(const NativeBeginArgs& args) override {
+        ProviderHost::prepare_native_begin(args);
+        ready_after_prepare = native_state().kind == NativeLifecycleKind::Ready;
+    }
+    void on_native_run_begin() override {}
+    void on_native_bar(const Bar& value, const NativeDecisionContext& context) override {
+        TermsHost::on_native_bar(value, context);
+        if (++bar_calls != 1) return;
+        const auto placed = submit(market(2.0, "undetected-opening"));
+        CHECK(placed.status == no::SubmitStatus::Accepted);
+        CHECK(placed.handle.has_value());
+        if (!placed.handle) return;
+        opening = *placed.handle;
+
+        no::Request reduction;
+        reduction.intent = no::Reduce{no::ExplicitUnits{2.0}};
+        reduction.owner = no::WaitForApplied{*opening};
+        reduction.label = "undetected-pending-reduction";
+        const auto waiting = submit(reduction);
+        CHECK(waiting.status == no::SubmitStatus::Accepted);
+        CHECK(waiting.handle.has_value());
+        if (waiting.handle) pending_reduction = *waiting.handle;
     }
 };
 
@@ -525,6 +562,122 @@ void provider_and_staged_fx_witness() {
     CHECK(run_host.native_state().kind == NativeLifecycleKind::Completed);
 }
 
+NativeRunSpec undetected_spec(const char* key) {
+    auto configured = spec_for(key);
+    configured.input_tf.clear();
+    configured.script_tf.clear();
+    configured.timeframe_undetected = true;
+    return configured;
+}
+
+void undetected_timeframe_witness() {
+    UndetectedTimeframeHost host;
+    const auto timestamp = kT + 12345;
+    const Bar bars[] = {bar(timestamp, 100.0, 103.0, 99.0, 101.0)};
+    host.run(bars, 1);
+    CHECK(host.prepares == 1);
+    CHECK(host.last_n == 1);
+    CHECK(host.last_input_tf.empty());
+    CHECK(host.last_script_tf.empty());
+    CHECK(host.ready_after_prepare);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.bar_calls == 1);
+    CHECK(host.opening.has_value());
+    CHECK(host.pending_reduction.has_value());
+    CHECK(host.physical_position().lot_count == 0);
+    CHECK(!applied_with_label(host, "undetected-opening").has_value());
+    CHECK(!applied_with_label(host, "undetected-pending-reduction").has_value());
+
+    int accepted = 0;
+    int driver_points = 0;
+    int open_points = 0;
+    int close_points = 0;
+    int middle_points = 0;
+    for (const auto& row : host.native_events(0)) {
+        if (row.command && std::visit([](const auto& event) {
+                using T = std::decay_t<decltype(event)>;
+                if constexpr (std::is_same_v<T, no::AcceptedEvent>) {
+                    return event.request().label == "undetected-opening"
+                        || event.request().label == "undetected-pending-reduction";
+                }
+                return false;
+            }, *row.command)) {
+            ++accepted;
+        }
+        if (!row.driver) continue;
+        ++driver_points;
+        CHECK(row.driver->coordinate.open_ms == timestamp);
+        CHECK(row.driver->coordinate.eligible_open_ms == timestamp);
+        CHECK(row.driver->coordinate.last_traded_close_ms == timestamp);
+        CHECK(row.driver->coordinate.next_period_open_ms == timestamp);
+        CHECK(row.driver->coordinate.next_input_open_ms == timestamp);
+        CHECK(row.driver->coordinate.effective_time_ms == timestamp);
+        if (row.driver->coordinate.path_phase == NativePathPhase::Open) ++open_points;
+        else if (row.driver->coordinate.path_phase == NativePathPhase::Close) ++close_points;
+        else ++middle_points;
+    }
+    CHECK(accepted == 2);
+    CHECK(driver_points == 4);
+    CHECK(open_points == 1);
+    CHECK(close_points == 1);
+    CHECK(middle_points == 2);
+    CHECK(host.contexts.size() == 1);
+    if (!host.contexts.empty()) {
+        const auto& context = host.contexts.front();
+        CHECK(context.input_interval.open_ms == timestamp);
+        CHECK(context.input_interval.next_period_open_ms == timestamp);
+        CHECK(context.script_interval.open_ms == timestamp);
+        CHECK(context.script_interval.next_period_open_ms == timestamp);
+        CHECK(context.sub_index == 0);
+        CHECK(context.sub_count == 1);
+        CHECK(context.is_terminal_sub_bar);
+        CHECK(context.sub_bar_open_ms == timestamp);
+        CHECK(context.script_bar_open_ms == timestamp);
+    }
+    CHECK(host.native_continuation_hash() != 0);
+}
+
+void undetected_timeframe_rejection_witness() {
+    auto nonempty = spec_for("undetected-nonempty");
+    nonempty.timeframe_undetected = true;
+    const auto nonempty_result = validate_native_run_spec(nonempty);
+    CHECK(nonempty_result.error == NativeRunSpecError::InvalidUndetectedTimeframe);
+    CHECK(nonempty_result.field == NativeRunSpecField::TimeframeUndetected);
+
+    auto with_path = undetected_spec("undetected-path");
+    IntrabarPath::lower_tf lower;
+    lower.tf = "1";
+    with_path.intrabar.value = std::move(lower);
+    const auto path_result = validate_native_run_spec(with_path);
+    CHECK(path_result.error == NativeRunSpecError::InvalidUndetectedTimeframe);
+    CHECK(path_result.field == NativeRunSpecField::TimeframeUndetected);
+
+    TermsHost too_many;
+    CHECK(too_many.configure_native(undetected_spec("undetected-two-bars")).status
+          == NativeSetupStatus::Applied);
+    const auto before = too_many.native_continuation_hash();
+    const Bar bars[] = {bar(kT), bar(kT + 1)};
+    too_many.run(bars, 2);
+    CHECK(too_many.native_state().kind == NativeLifecycleKind::Ready);
+    CHECK(too_many.last_run_status() != 0);
+    CHECK(too_many.native_consumed_high_water() == 0);
+    CHECK(too_many.native_continuation_hash() == before);
+
+    TermsHost zero;
+    CHECK(zero.configure_native(undetected_spec("undetected-zero-bars")).status
+          == NativeSetupStatus::Applied);
+    zero.run(nullptr, 0);
+    CHECK(zero.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(zero.native_consumed_high_water() == 1);
+
+    TermsHost stream;
+    CHECK(stream.configure_native(undetected_spec("undetected-stream")).status
+          == NativeSetupStatus::Applied);
+    const Bar warmup[] = {bar(kT)};
+    CHECK(!stream.stream_begin(warmup, 1, "", ""));
+    CHECK(stream.native_state().kind == NativeLifecycleKind::Ready);
+}
+
 void precommit_overflow_witness() {
     OverflowHost host;
     CHECK(host.configure_native(spec_for("precommit-overflow")).status == NativeSetupStatus::Applied);
@@ -543,6 +696,8 @@ int main() {
     pre_open_witness();
     intrabar_path_witness();
     provider_and_staged_fx_witness();
+    undetected_timeframe_witness();
+    undetected_timeframe_rejection_witness();
     precommit_overflow_witness();
     std::printf("R4-D L1 native lowering: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

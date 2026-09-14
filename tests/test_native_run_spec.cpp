@@ -85,6 +85,7 @@ std::string snapshot(const NativeRunSpec& s) {
     std::string out;
     append(out, s.identity.session_key); append(out, s.identity.run_number);
     append(out, s.input_tf); append(out, s.script_tf);
+    append(out, s.timeframe_undetected);
     append(out, s.ticker); append(out, s.tickerid); append(out, s.type);
     append(out, s.currency); append(out, s.basecurrency);
     append(out, s.description); append(out, s.volumetype);
@@ -365,6 +366,32 @@ void complete_clock_contract() {
     }
 }
 
+void undetected_timeframe_contract() {
+    auto spec = complete_spec();
+    spec.input_tf.clear();
+    spec.script_tf.clear();
+    spec.timeframe_undetected = true;
+    expect_acceptance(spec);
+
+    spec = complete_spec();
+    spec.timeframe_undetected = true;
+    expect_refusal(spec, Error::InvalidUndetectedTimeframe, Field::TimeframeUndetected);
+
+    spec = complete_spec();
+    spec.input_tf.clear();
+    spec.script_tf.clear();
+    spec.timeframe_undetected = true;
+    IntrabarPath::lower_tf lower;
+    lower.tf = "1";
+    spec.intrabar.value = std::move(lower);
+    expect_refusal(spec, Error::InvalidUndetectedTimeframe, Field::TimeframeUndetected);
+
+    spec = complete_spec();
+    spec.input_tf.clear();
+    spec.script_tf.clear();
+    expect_refusal(spec, Error::EmptyRequiredString, Field::InputTimeframe);
+}
+
 void failure_atomicity() {
     auto spec = complete_spec();
     spec.fee_value = -0.0;
@@ -394,6 +421,7 @@ int main() {
     strings_and_identity();
     financial_values_and_options();
     complete_clock_contract();
+    undetected_timeframe_contract();
     failure_atomicity();
     std::cout << (checks - failures) << '/' << checks << " checks passed; "
               << failures << " failed\n";

@@ -299,6 +299,21 @@ def check_texts(files):
     require_namespace_functions(
         spec_src, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
         "native_run_spec_v2")
+    run_spec = body(spec, r'struct\s+NativeRunSpec\s*\{', 'native run spec')
+    if ('std::stringinput_tf;std::stringscript_tf;booltimeframe_undetected=false;'
+            not in re.sub(r'\s+', '', run_spec)):
+        raise ValueError('native_run_spec_v2 requires its explicit undetected-timeframe field')
+    fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
+                  'native run spec fields')
+    if not re.search(r'\bTimeframeUndetected\b', fields):
+        raise ValueError('native_run_spec_v2 omits the undetected-timeframe field tag')
+    errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
+                  'native run spec errors')
+    if not re.search(r'\bInvalidUndetectedTimeframe\b', errors):
+        raise ValueError('native_run_spec_v2 omits the undetected-timeframe validation error')
+    if ('spec.timeframe_undetected' not in spec_src
+            or 'InvalidUndetectedTimeframe' not in spec_src):
+        raise ValueError('native run-spec validation omits undetected-timeframe rules')
 
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
@@ -445,6 +460,16 @@ def check_texts(files):
                  'callback_context_.script_bar_open_ms', 'hash_cohorts(f, requests_)'):
         if fact not in continuation:
             raise ValueError('native continuation omits current frame/queue fact: ' + fact)
+    spec_hash = body(consumer_src, r'void\s+hash_spec\s*\([^)]*\)\s*noexcept\s*\{',
+                     'native spec hash')
+    if 'f.b(spec.timeframe_undetected);' not in spec_hash:
+        raise ValueError('native continuation omits the undetected-timeframe spec fact')
+    begin_guard = body(consumer_src,
+                       r'bool\s+NativeExecutionConsumer::validate_undetected_begin\s*\([^)]*\)\s*\{',
+                       'undetected-timeframe begin guard')
+    for fact in ('has_undetected_timeframe()', 'args.n >= 2', 'args.is_stream'):
+        if fact not in begin_guard:
+            raise ValueError('undetected-timeframe begin guard omits: ' + fact)
 
 
 def load(root=ROOT):

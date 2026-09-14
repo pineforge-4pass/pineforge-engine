@@ -184,6 +184,11 @@ private:
     const NativeRunSpec* spec_ptr() const;
     bool commands_allowed() const;
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
+    bool has_undetected_timeframe() const noexcept;
+    static native_calendar::NativeInterval timestamp_partition(std::int64_t timestamp) noexcept;
+    std::optional<native_calendar::NativeInterval> input_interval_at(std::int64_t timestamp) const;
+    std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const;
+    bool validate_undetected_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
     bool projection_ok(const BacktestEngine& engine) const;
     bool begin_ready(BacktestEngine& engine, NativeRunPhase phase, int64_t initial_floor_ms);

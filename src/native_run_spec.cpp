@@ -73,14 +73,15 @@ bool valid_distribution(MagnifierDistribution distribution) noexcept {
 }
 
 Result validate_values(const NativeRunSpec& spec) noexcept {
+    const bool require_timeframes = !spec.timeframe_undetected;
     const struct {
         const std::string& value;
         Field field;
         bool required;
     } strings[] = {
         {spec.identity.session_key, Field::SessionKey, true},
-        {spec.input_tf, Field::InputTimeframe, true},
-        {spec.script_tf, Field::ScriptTimeframe, true},
+        {spec.input_tf, Field::InputTimeframe, require_timeframes},
+        {spec.script_tf, Field::ScriptTimeframe, require_timeframes},
         {spec.ticker, Field::Ticker, false},
         {spec.tickerid, Field::TickerId, true},
         {spec.type, Field::Type, false},
@@ -95,6 +96,10 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     for (const auto& value : strings) {
         const auto result = validate_string(value.value, value.field, value.required);
         if (!result) return result;
+    }
+    if (spec.timeframe_undetected
+        && (!spec.input_tf.empty() || !spec.script_tf.empty() || !spec.intrabar.is_none())) {
+        return {Error::InvalidUndetectedTimeframe, Field::TimeframeUndetected};
     }
     if (spec.identity.run_number == 0) return {Error::ZeroRunNumber, Field::RunNumber};
     const struct { double value; Field field; } financial[] = {
@@ -171,16 +176,30 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
 
     Field active_field = Field::InputTimeframe;
     try {
-        const auto input = native_calendar::parse_timeframe(spec.input_tf);
-        if (!input) return {Error::InvalidTimeframe, active_field};
-        active_field = Field::ScriptTimeframe;
-        const auto script = native_calendar::parse_timeframe(spec.script_tf);
-        if (!script) return {Error::InvalidTimeframe, active_field};
-        if (const auto* lower = spec.intrabar.lower()) {
-            active_field = Field::IntrabarTimeframe;
-            const auto path_tf = native_calendar::parse_timeframe(lower->tf);
-            if (!path_tf) return {Error::InvalidIntrabarPath, active_field};
-            switch (native_calendar::compatibility(*path_tf, *script).pairing) {
+        if (!spec.timeframe_undetected) {
+            const auto input = native_calendar::parse_timeframe(spec.input_tf);
+            if (!input) return {Error::InvalidTimeframe, active_field};
+            active_field = Field::ScriptTimeframe;
+            const auto script = native_calendar::parse_timeframe(spec.script_tf);
+            if (!script) return {Error::InvalidTimeframe, active_field};
+            if (const auto* lower = spec.intrabar.lower()) {
+                active_field = Field::IntrabarTimeframe;
+                const auto path_tf = native_calendar::parse_timeframe(lower->tf);
+                if (!path_tf) return {Error::InvalidIntrabarPath, active_field};
+                switch (native_calendar::compatibility(*path_tf, *script).pairing) {
+                case native_calendar::TimeframePairing::Passthrough:
+                case native_calendar::TimeframePairing::SameUnitMultiple:
+                case native_calendar::TimeframePairing::FixedDivisible:
+                case native_calendar::TimeframePairing::FixedToCalendar:
+                case native_calendar::TimeframePairing::CalendarToCalendar:
+                    break;
+                default:
+                    return {Error::InvalidIntrabarPath, active_field};
+                }
+            }
+            // Configure admits the complete batch contract, including monthly.
+            // The host must apply stream_compatibility separately at stream begin.
+            switch (native_calendar::compatibility(*input, *script).pairing) {
             case native_calendar::TimeframePairing::Passthrough:
             case native_calendar::TimeframePairing::SameUnitMultiple:
             case native_calendar::TimeframePairing::FixedDivisible:
@@ -188,20 +207,8 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
             case native_calendar::TimeframePairing::CalendarToCalendar:
                 break;
             default:
-                return {Error::InvalidIntrabarPath, active_field};
+                return {Error::IncompatibleTimeframes, active_field};
             }
-        }
-        // Configure admits the complete batch contract, including monthly.
-        // The host must apply stream_compatibility separately at stream begin.
-        switch (native_calendar::compatibility(*input, *script).pairing) {
-        case native_calendar::TimeframePairing::Passthrough:
-        case native_calendar::TimeframePairing::SameUnitMultiple:
-        case native_calendar::TimeframePairing::FixedDivisible:
-        case native_calendar::TimeframePairing::FixedToCalendar:
-        case native_calendar::TimeframePairing::CalendarToCalendar:
-            break;
-        default:
-            return {Error::IncompatibleTimeframes, active_field};
         }
         // Use calendar's timezone acceptance with an all-day literal first,
         // so malformed session syntax has its own stable failure field.

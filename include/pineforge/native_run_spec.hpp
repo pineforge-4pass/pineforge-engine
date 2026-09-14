@@ -67,6 +67,9 @@ struct NativeRunSpec {
     native_order::RunIdentity identity;
     std::string input_tf;
     std::string script_tf;
+    // A public begin with fewer than two bars may not establish a timeframe.
+    // This preserves that explicit state without inventing a clock literal.
+    bool timeframe_undetected = false;
 
     std::string ticker;
     std::string tickerid;
@@ -107,6 +110,7 @@ enum class NativeRunSpecField : std::uint8_t {
     FeeKind, FeeValue, QuantityGrid, CloseExecution, MaxAbsUnits, MaxOpenLots,
     AllowedOpenDirections, InitialMarginFraction,
     IntrabarTimeframe, IntrabarSamples, IntrabarDistribution, IntrabarVolumeSamples,
+    TimeframeUndetected,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -129,6 +133,7 @@ enum class NativeRunSpecError : std::uint8_t {
     AllocationFailure,
     CalendarFailure,
     InvalidIntrabarPath,
+    InvalidUndetectedTimeframe,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -143,7 +148,8 @@ struct NativeRunSpecValidation {
 
 // Complete validation, with deterministic first-error field order. Every
 // string is semantic UTF-8 without embedded NUL (all cross C-string v1).
-// Required: identity key, both timeframe literals, tickerid, scheduling timezone.
+// Required: identity key, tickerid, scheduling timezone, and both timeframe
+// literals unless timeframe_undetected is explicitly set.
 // Empty chart timezone is preserved as optional observation metadata.
 // Calendar parsing/compatibility remain in native_calendar. Batch monthly
 // pairings are accepted here; stream-only restrictions belong to begin.

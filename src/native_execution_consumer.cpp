@@ -52,6 +52,7 @@ void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandl
 void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.s(spec.identity.session_key); f.u(spec.identity.run_number);
     f.s(spec.input_tf); f.s(spec.script_tf);
+    f.b(spec.timeframe_undetected);
     f.s(spec.ticker); f.s(spec.tickerid); f.s(spec.type);
     f.s(spec.currency); f.s(spec.basecurrency); f.s(spec.description); f.s(spec.volumetype);
     f.s(spec.timezone); f.s(spec.session); f.s(spec.chart_timezone);
@@ -772,7 +773,8 @@ bool NativeExecutionConsumer::prepare_public_begin(
         return false;
     }
     preparing_begin_ = false;
-    return !failed() && apply_staged_ingress(engine);
+    if (failed() || !apply_staged_ingress(engine)) return false;
+    return validate_undetected_begin(engine, args);
 }
 
 bool NativeExecutionConsumer::admit_public_stream_input(BacktestEngine& engine,
@@ -992,8 +994,51 @@ bool NativeExecutionConsumer::timeframe_args_ok(const std::string& input_tf,
                                                 const std::string& script_tf) const {
     const auto* spec = spec_ptr();
     if (!spec) return false;
+    if (spec->timeframe_undetected) return input_tf.empty() && script_tf.empty();
     if (!input_tf.empty() && input_tf != spec->input_tf) return false;
     if (!script_tf.empty() && script_tf != spec->script_tf) return false;
+    return true;
+}
+
+bool NativeExecutionConsumer::has_undetected_timeframe() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec && spec->timeframe_undetected;
+}
+
+native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
+        std::int64_t timestamp) noexcept {
+    // No duration is available in this state. Each boundary is the current
+    // bar timestamp, so no inferred aggregation or clock grid is introduced.
+    return {timestamp, timestamp, timestamp, timestamp, timestamp};
+}
+
+std::optional<native_calendar::NativeInterval>
+NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
+    if (has_undetected_timeframe()) return timestamp_partition(timestamp);
+    return native_calendar::interval_containing(calendar_, input_tf_, timestamp);
+}
+
+std::optional<native_calendar::NativeInterval>
+NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
+    if (has_undetected_timeframe()) return timestamp_partition(timestamp);
+    return native_calendar::interval_containing(calendar_, script_tf_, timestamp);
+}
+
+bool NativeExecutionConsumer::validate_undetected_begin(
+        BacktestEngine& engine, const NativeBeginArgs& args) {
+    if (!has_undetected_timeframe()) return true;
+    if (!args.input_tf.empty() || !args.script_tf.empty()) {
+        present_refusal(engine, "native undetected timeframe requires empty timeframe arguments");
+        return false;
+    }
+    if (args.n >= 2) {
+        present_refusal(engine, "native undetected timeframe requires fewer than two bars");
+        return false;
+    }
+    if (args.is_stream) {
+        present_refusal(engine, "native stream requires a detected timeframe");
+        return false;
+    }
     return true;
 }
 
@@ -1026,20 +1071,27 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     engine.process_orders_on_close_ = false;
     engine.calc_on_order_fills_ = false;
     applied_ = spec;
-    auto parsed_input = native_calendar::parse_timeframe(spec.input_tf);
-    auto parsed_script = native_calendar::parse_timeframe(spec.script_tf);
     auto parsed_session = native_calendar::parse_session(spec.session, spec.timezone);
-    if (!parsed_input || !parsed_script || !parsed_session) return false;
+    if (!parsed_session) return false;
     intrabar_tf_.reset();
+    if (!spec.timeframe_undetected) {
+        auto parsed_input = native_calendar::parse_timeframe(spec.input_tf);
+        auto parsed_script = native_calendar::parse_timeframe(spec.script_tf);
+        if (!parsed_input || !parsed_script) return false;
+        input_tf_ = std::move(*parsed_input);
+        script_tf_ = std::move(*parsed_script);
+    } else {
+        input_tf_ = native_calendar::Timeframe{};
+        script_tf_ = native_calendar::Timeframe{};
+    }
     if (const auto* lower = spec.intrabar.lower()) {
         auto parsed_intrabar = native_calendar::parse_timeframe(lower->tf);
         if (!parsed_intrabar) return false;
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
-    input_tf_ = std::move(*parsed_input);
-    script_tf_ = std::move(*parsed_script);
     calendar_ = std::move(*parsed_session);
-    pairing_ = native_calendar::compatibility(input_tf_, script_tf_);
+    pairing_ = spec.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
+                                         : native_calendar::compatibility(input_tf_, script_tf_);
     tz_identity_ = native_calendar::timezone_identity_descriptor(spec.timezone);
     return true;
 }
@@ -1115,16 +1167,26 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
             return result;
         }
     }
-    auto parsed_input = native_calendar::parse_timeframe(candidate.input_tf);
-    auto parsed_script = native_calendar::parse_timeframe(candidate.script_tf);
     auto parsed_session = native_calendar::parse_session(candidate.session, candidate.timezone);
-    if (!parsed_input || !parsed_script || !parsed_session) {
+    if (!parsed_session) {
         fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
         render(engine, "native calendar parse failed at configure");
         return result;
     }
-    input_tf_ = std::move(*parsed_input);
-    script_tf_ = std::move(*parsed_script);
+    if (!candidate.timeframe_undetected) {
+        auto parsed_input = native_calendar::parse_timeframe(candidate.input_tf);
+        auto parsed_script = native_calendar::parse_timeframe(candidate.script_tf);
+        if (!parsed_input || !parsed_script) {
+            fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
+            render(engine, "native calendar parse failed at configure");
+            return result;
+        }
+        input_tf_ = std::move(*parsed_input);
+        script_tf_ = std::move(*parsed_script);
+    } else {
+        input_tf_ = native_calendar::Timeframe{};
+        script_tf_ = native_calendar::Timeframe{};
+    }
     intrabar_tf_.reset();
     if (const auto* lower = candidate.intrabar.lower()) {
         auto parsed_intrabar = native_calendar::parse_timeframe(lower->tf);
@@ -1136,7 +1198,8 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         intrabar_tf_ = std::move(*parsed_intrabar);
     }
     calendar_ = std::move(*parsed_session);
-    pairing_ = native_calendar::compatibility(input_tf_, script_tf_);
+    pairing_ = candidate.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
+                                              : native_calendar::compatibility(input_tf_, script_tf_);
     staged_fx_curve_.reset();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
@@ -2156,9 +2219,9 @@ NativeCurrentPointView NativeExecutionConsumer::execution_anchor(
     NativeCurrentPointView out;
     out.decision.coordinate = cursor.point;
     out.decision.decision_floor_ms = std::max(decision_floor(), cursor.point.effective_time_ms);
-    if (auto input = native_calendar::interval_containing(calendar_, input_tf_, cursor.point.open_ms))
+    if (auto input = input_interval_at(cursor.point.open_ms))
         out.decision.input_interval = *input;
-    if (auto script = native_calendar::interval_containing(calendar_, script_tf_, cursor.point.open_ms))
+    if (auto script = script_interval_at(cursor.point.open_ms))
         out.decision.script_interval = *script;
     out.decision.sub_index = callback_context_.sub_index;
     out.decision.sub_count = callback_context_.sub_count;
@@ -3500,12 +3563,10 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     if (!host) return;
     callback_context_.coordinate = point.coordinate;
     callback_context_.decision_floor_ms = decision_floor();
-    if (auto input = native_calendar::interval_containing(
-            calendar_, input_tf_, point.coordinate.open_ms)) {
+    if (auto input = input_interval_at(point.coordinate.open_ms)) {
         callback_context_.input_interval = *input;
     }
-    if (auto script = native_calendar::interval_containing(
-            calendar_, script_tf_, point.coordinate.open_ms)) {
+    if (auto script = script_interval_at(point.coordinate.open_ms)) {
         callback_context_.script_interval = *script;
     }
     if (callback_context_.sub_count <= 0) callback_context_.sub_count = 1;
@@ -3558,8 +3619,8 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     if (!host) return;
     callback_context_.coordinate = coordinate;
     callback_context_.decision_floor_ms = decision_floor_ms_;
-    auto input = native_calendar::interval_containing(calendar_, input_tf_, bar.timestamp);
-    auto script = native_calendar::interval_containing(calendar_, script_tf_, bar.timestamp);
+    auto input = input_interval_at(bar.timestamp);
+    auto script = script_interval_at(bar.timestamp);
     if (input) callback_context_.input_interval = *input;
     if (script) callback_context_.script_interval = *script;
     if (callback_context_.sub_count <= 0) callback_context_.sub_count = 1;
@@ -3871,8 +3932,7 @@ bool NativeExecutionConsumer::contribute_input(
         BacktestEngine& engine, const Bar& bar,
         const native_calendar::NativeInterval& interval,
         int index, InputContribution kind) {
-    auto script_interval = native_calendar::interval_containing(
-        calendar_, script_tf_, interval.open_ms);
+    auto script_interval = script_interval_at(interval.open_ms);
     if (!script_interval) {
         render(engine, "native script interval lookup failed");
         return false;
@@ -3933,7 +3993,7 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                                                       int index, bool last) {
     (void)last;
     processing_input_ = true;
-    auto interval = native_calendar::interval_containing(calendar_, input_tf_, bar.timestamp);
+    auto interval = input_interval_at(bar.timestamp);
     if (!interval) {
         processing_input_ = false;
         present_refusal(engine, "native input is not aligned");
