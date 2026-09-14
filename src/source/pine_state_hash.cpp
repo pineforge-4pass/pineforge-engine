@@ -450,6 +450,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
         f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
     }
+    f.u(pending_coof_requests_.size());
+    for (const auto& pending : pending_coof_requests_) {
+        hash_native_request(f, pending.request); hash_placement(f, pending.snapshot);
+        f.s(pending.replacement_key); f.b(pending.opening); f.u(pending.family_key);
+    }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
     hash_native_handle_vector(f, pending_view_handles_);
     std::vector<std::uint64_t> current_debit_ordinals;
@@ -463,6 +468,27 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(current_position_cycle_);
     f.i(current_position_sign_);
     f.u(next_sequential_group_);
+    f.b(coof_recalc_active_); f.b(coof_first_open_);
+    const auto& coof_coord = coof_context_.coordinate;
+    f.u(coof_coord.ordinal); f.i(coof_coord.interval_index); f.i(coof_coord.open_ms);
+    f.i(coof_coord.eligible_open_ms); f.i(coof_coord.last_traded_close_ms);
+    f.i(coof_coord.next_period_open_ms); f.i(coof_coord.next_input_open_ms);
+    f.i(coof_coord.effective_time_ms); f.i(coof_coord.source_price_time_ms);
+    f.i(static_cast<std::int64_t>(coof_coord.provenance));
+    f.i(static_cast<std::int64_t>(coof_coord.path_phase));
+    f.i(static_cast<std::int64_t>(coof_coord.completion)); f.i(coof_context_.decision_floor_ms);
+    const auto hash_coof_interval = [&](const native_calendar::NativeInterval& interval) {
+        f.i(interval.open_ms); f.i(interval.eligible_open_ms); f.i(interval.last_traded_close_ms);
+        f.i(interval.next_period_open_ms); f.i(interval.next_input_open_ms);
+    };
+    hash_coof_interval(coof_context_.input_interval);
+    hash_coof_interval(coof_context_.script_interval);
+    f.i(coof_context_.sub_index); f.i(coof_context_.sub_count);
+    f.b(coof_context_.is_terminal_sub_bar); f.i(coof_context_.sub_bar_open_ms);
+    f.i(coof_context_.script_bar_open_ms);
+    f.d(coof_script_bar_.open); f.d(coof_script_bar_.high); f.d(coof_script_bar_.low);
+    f.d(coof_script_bar_.close); f.d(coof_script_bar_.volume); f.i(coof_script_bar_.timestamp);
+    f.b(coof_script_bar_valid_);
     std::vector<std::int64_t> pooc_basis_keys;
     for (const auto& pair : pooc_close_basis_by_script_bar_) pooc_basis_keys.push_back(pair.first);
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
@@ -516,7 +542,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.u(coof_.size());
     for (const auto& interval : coof_) { f.u(interval.applied_ordinal); f.i(interval.script_open_ms); f.b(interval.first_open); }
     f.i(current_script_open_ms_); f.b(saw_open_fill_); f.i(source_bar_count_);
-    f.i(expected_source_bars_); f.u(applied_cursor_);
+    f.i(expected_source_bars_); f.u(applied_cursor_); f.i(coof_callback_script_open_);
 }
 
 void source::PineNativeHost::hash_source_extension(BrokerStateHashSink& f) const {

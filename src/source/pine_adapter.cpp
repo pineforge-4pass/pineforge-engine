@@ -88,6 +88,7 @@ void PineExecutionAdapter::reset_for_run() {
     pending_bracket_legs_.clear();
     pending_entries_.clear();
     pending_relative_exits_.clear();
+    pending_coof_requests_.clear();
     live_handles_.clear();
     first_open_newborns_.clear();
     pending_view_handles_.clear();
@@ -97,6 +98,11 @@ void PineExecutionAdapter::reset_for_run() {
     current_position_cycle_ = 0;
     current_position_sign_ = 0;
     next_sequential_group_ = 0;
+    coof_recalc_active_ = false;
+    coof_first_open_ = false;
+    coof_context_ = {};
+    coof_script_bar_ = {};
+    coof_script_bar_valid_ = false;
     pooc_close_basis_by_script_bar_.clear();
     pooc_open_basis_ = 0.0;
     pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
@@ -432,6 +438,38 @@ native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bo
     return native_order::BindOpenings{found->second.opened, found->second.cycle};
 }
 
+void PineExecutionAdapter::begin_coof_recalc(const NativeDecisionContext& context, bool first_open) {
+    coof_recalc_active_ = true;
+    coof_first_open_ = first_open;
+    coof_context_ = context;
+}
+
+void PineExecutionAdapter::end_coof_recalc() noexcept {
+    coof_recalc_active_ = false;
+    coof_first_open_ = false;
+    coof_context_ = {};
+}
+
+bool PineExecutionAdapter::defer_coof_tail() const noexcept {
+    if (!coof_recalc_active_ || coof_first_open_) return false;
+    const auto state = require_host().native_state();
+    if (state.spec && state.spec->intrabar.lower()) return false;
+    return coof_context_.coordinate.path_phase == NativePathPhase::Low
+        || coof_context_.coordinate.path_phase == NativePathPhase::Close
+        || coof_context_.coordinate.path_phase == NativePathPhase::None;
+}
+
+void PineExecutionAdapter::flush_coof_tail() {
+    auto queued = std::move(pending_coof_requests_);
+    pending_coof_requests_.clear();
+    for (auto& pending : queued) {
+        const auto accepted = submit_or_replace(std::move(pending.request), std::move(pending.snapshot),
+                                                pending.opening, pending.replacement_key);
+        if (accepted && pending.family_key != 0)
+            bracket_families_[pending.family_key].push_back(*accepted);
+    }
+}
+
 void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_price,
                                  double stop_price, double qty, const std::string& comment,
                                  const std::string& oca_name, int oca_type, int qty_type) {
@@ -479,6 +517,25 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     request.label = id; request.comment = comment;
     request.trigger = trigger_for(limit_price, stop_price, kNaN, kNaN);
+    if (coof_recalc_active_ && !coof_first_open_ && coof_script_bar_valid_
+        && std::holds_alternative<native_order::Market>(request.trigger) && !defer_coof_tail()) {
+        const auto phase = coof_context_.coordinate.path_phase;
+        const double next_extreme = phase == NativePathPhase::High ? coof_script_bar_.low
+            : (phase == NativePathPhase::Low ? coof_script_bar_.high : kNaN);
+        const auto point = require_host().current_execution_point();
+        const double current_quote = point ? point->price : kNaN;
+        if (finite_positive(next_extreme) && finite_positive(current_quote)
+            && next_extreme != current_quote) {
+            const bool falling = next_extreme < current_quote;
+            if (is_long) {
+                request.trigger = falling ? native_order::Trigger{native_order::Limit{next_extreme}}
+                                          : native_order::Trigger{native_order::Stop{next_extreme}};
+            } else {
+                request.trigger = falling ? native_order::Trigger{native_order::Stop{next_extreme}}
+                                          : native_order::Trigger{native_order::Limit{next_extreme}};
+            }
+        }
+    }
     request.group = group_for(oca_name, oca_type);
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Entry; snapshot.source_id = id; snapshot.comment = comment;
@@ -536,6 +593,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         PendingEntry pending{std::move(request), std::move(snapshot), id};
         if (queued == pending_entries_.end()) pending_entries_.push_back(std::move(pending));
         else *queued = std::move(pending);
+        return;
+    }
+    if (defer_coof_tail()) {
+        pending_coof_requests_.push_back({std::move(request), std::move(snapshot), id, true, 0});
         return;
     }
     submit_or_replace(std::move(request), std::move(snapshot), true, id);
@@ -720,6 +781,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.exit_levels = {limit_price, stop_price, trail_points, trail_offset,
                                     trail_price, profit_ticks, loss_ticks};
             snapshot.sizing = sizing_snapshot();
+            if (defer_coof_tail()) {
+                pending_coof_requests_.push_back({std::move(request), std::move(snapshot), replacement_key,
+                                                  false, family_key});
+                return;
+            }
             if (defer_new_instance && live_by_source_key_.find(key_for(replacement_key))
                 == live_by_source_key_.end()) {
                 auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
@@ -1015,6 +1081,9 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // generic receipt before the next matching point so their deferred
     // per-origin bracket legs cannot close a different cohort member.
     observe_terminal_receipts();
+    coof_script_bar_ = bar;
+    coof_script_bar_valid_ = true;
+    flush_coof_tail();
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
         close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     pooc_open_script_bar_ = context.script_bar_open_ms;

@@ -36,6 +36,7 @@ void PineScheduler::reset_language() {
     language_.coof_checkpoint_src_hlcc4_.clear();
     coof_.clear(); current_script_open_ms_ = 0; saw_open_fill_ = false;
     source_bar_count_ = 0; expected_source_bars_ = 0; applied_cursor_ = 0;
+    coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
 }
 
 void PineScheduler::run_begin(PineNativeHost& host) {
@@ -67,6 +68,7 @@ void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, P
     if (context.script_bar_open_ms != current_script_open_ms_) {
         current_script_open_ms_ = context.script_bar_open_ms;
         saw_open_fill_ = false;
+        coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
     }
 }
 
@@ -77,6 +79,12 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     language_.is_last_tick_ = context.is_terminal_sub_bar;
     language_.history_slot_is_new_ = context.is_terminal_sub_bar;
     if (!context.is_terminal_sub_bar) return;
+    // A COOF recalc at this script bar is the source evaluation for that bar;
+    // do not issue a second terminal callback with a new source-bar index.
+    if (host.scheduler_coof_enabled() && coof_callback_script_open_ == context.script_bar_open_ms) {
+        ++source_bar_count_;
+        return;
+    }
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
     publish_series(script_bar);
@@ -93,13 +101,21 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     const bool first_open = at_open && !saw_open_fill_;
     if (at_open) saw_open_fill_ = true;
     coof_.push_back({event.ordinal, context.script_bar_open_ms, first_open});
-    if (!first_open) return;
     const Bar point{event.resolved_price, event.resolved_price, event.resolved_price,
                     event.resolved_price, 0.0, context.script_bar_open_ms};
     language_.is_first_tick_ = true; language_.is_last_tick_ = false;
     language_.history_slot_is_new_ = false;
-    host.scheduler_publish_source_bar(point, true);
-    ++source_bar_count_;
+    host.adapter_.begin_coof_recalc(context, first_open);
+    try {
+        host.scheduler_publish_source_bar(point, true, first_open);
+    } catch (...) {
+        host.adapter_.end_coof_recalc();
+        throw;
+    }
+    host.adapter_.end_coof_recalc();
+    coof_callback_script_open_ = context.script_bar_open_ms;
+    if (first_open) ++source_bar_count_;
+    if (!first_open) return;
     auto newborns = host.adapter_.take_first_open_newborns();
     constexpr std::size_t kCoofLoopGuard = 1U << 20;
     if (newborns.size() > kCoofLoopGuard)

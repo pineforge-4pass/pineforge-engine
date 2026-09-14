@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,7 @@ private:
     int source_bar_count_ = 0;
     int expected_source_bars_ = 0;
     std::uint64_t applied_cursor_ = 0;
+    std::int64_t coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
     // @source-state end
 };
 

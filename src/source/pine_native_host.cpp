@@ -207,9 +207,10 @@ void PineNativeHost::scheduler_prepare_script_run(const std::vector<Bar>& bars, 
     source_last_bar_index_ = expected_script_bars - 1;
 }
 void PineNativeHost::scheduler_configure_security_evaluators() { configure_security_evaluators(); }
-void PineNativeHost::scheduler_publish_source_bar(const Bar& bar, bool) {
+void PineNativeHost::scheduler_publish_source_bar(const Bar& bar, bool, bool advance_source_index) {
     current_bar_ = bar;
-    ++source_bar_index_; ++source_callback_count_;
+    if (advance_source_index) ++source_bar_index_;
+    ++source_callback_count_;
     bar_index_ = source_bar_index_;
     barstate_islast_ = source_bar_index_ == source_last_bar_index_;
     on_source_bar(bar);

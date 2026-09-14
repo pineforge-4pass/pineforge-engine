@@ -128,7 +128,7 @@ private:
     void scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible,
                                       int expected_script_bars);
     void scheduler_configure_security_evaluators();
-    void scheduler_publish_source_bar(const Bar&, bool first_tick);
+    void scheduler_publish_source_bar(const Bar&, bool first_tick, bool advance_source_index = true);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     static PineStrategyConfig apply_overrides(PineStrategyConfig, const StrategyOverrides&);
 

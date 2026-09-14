@@ -257,6 +257,8 @@ public:
     // closes, so a later close_all in that same evaluation settles first and
     // the add opens the next source position at the same close point.
     void flush_pending_entries();
+    void begin_coof_recalc(const NativeDecisionContext&, bool first_open);
+    void end_coof_recalc() noexcept;
 
     void hash_state(BrokerStateHashSink&) const;
 
@@ -308,6 +310,14 @@ private:
         double loss_ticks = std::numeric_limits<double>::quiet_NaN();
     };
 
+    struct PendingCoofRequest {
+        native_order::Request request;
+        PlacementSnapshot snapshot;
+        SourceId replacement_key;
+        bool opening = false;
+        std::uint64_t family_key = 0;
+    };
+
     NativeStrategyHost& require_host() const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
@@ -324,6 +334,8 @@ private:
     void cancel_bracket_siblings(const native_order::RequestHandle&);
     void materialize_relative_exits(const PlacementSnapshot&,
                                    const native_order::ExecutionAppliedEvent&);
+    bool defer_coof_tail() const noexcept;
+    void flush_coof_tail();
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
@@ -346,6 +358,7 @@ private:
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
     std::vector<PendingRelativeExit> pending_relative_exits_;
+    std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     std::vector<native_order::RequestHandle> pending_view_handles_;
@@ -359,6 +372,11 @@ private:
     std::int64_t current_position_cycle_ = 0;
     int current_position_sign_ = 0;
     std::uint64_t next_sequential_group_ = 0;
+    bool coof_recalc_active_ = false;
+    bool coof_first_open_ = false;
+    NativeDecisionContext coof_context_{};
+    Bar coof_script_bar_{};
+    bool coof_script_bar_valid_ = false;
     std::unordered_map<std::int64_t, double> pooc_close_basis_by_script_bar_;
     double pooc_open_basis_ = 0.0;
     std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
