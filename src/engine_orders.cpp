@@ -251,7 +251,7 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
     position_entry_price_ = average_price;
     position_qty_ = total_qty;
     ++position_entry_count_;
-    on_source_append_quoted_lot_before_book(lot);
+    trail_best_price_ = lot.price;
     pyramid_entries_.push_back(std::move(lot));
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
     on_source_append_quoted_lot_after_book(pyramid_entries_.back());
@@ -515,7 +515,8 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_qty_ = 0.0;
     position_entry_count_ = 0;
     position_open_bar_ = -1;
-    reset_source_trail_after_flatten();
+    trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
+    trail_close_restart_bar_ = -1;
     pyramid_entries_.clear();
     reset_source_position_ledgers_after_book_clear();
 }
@@ -591,7 +592,7 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
     position_qty_ = lot.qty;
     position_entry_count_ = 1;
     position_open_bar_ = lot.entry_bar_index;
-    reset_source_open_position_trail_before_book_clear(lot);
+    trail_best_price_ = lot.price;
     pyramid_entries_.clear();
     reset_source_open_position_ledgers_before_book(lot);
     pyramid_entries_.push_back(std::move(lot));

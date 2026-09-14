@@ -56,6 +56,27 @@ public:
     void reset() { run(nullptr, 0); }
 };
 
+class GeneratedShapeMetadataOracle final : public pineforge::source::PineStrategyHost {
+public:
+    explicit GeneratedShapeMetadataOracle(double margin_long = 100.0,
+                                          double margin_short = 100.0) {
+        source::PineStrategyConfig config;
+        config.margin_long = margin_long;
+        config.margin_short = margin_short;
+        configure_pine_strategy(config);
+        // This is the generated-constructor ordering: attach both policy
+        // adapters before C metadata is transported through BacktestEngine*.
+        attach_pine_execution_adapter();
+    }
+
+    void on_source_bar(const Bar&) override {}
+    CapAttachment cap_attachment() const { return adapter_.cap.attachment(); }
+    bool priority_attached() const { return adapter_.priority.attached(); }
+    bool retained_parent_first() const { return adapter_.priority.retained_parent_first(); }
+    double margin_long() const { return margin_long_; }
+    double margin_short() const { return margin_short_; }
+};
+
 // This is the actual runtime export, whose handle dispatch is BacktestEngine*.
 // Calling a subclass's convenience method would miss a forwarding regression.
 void metadata(Probe& engine, const char* key, double value) {
@@ -64,6 +85,37 @@ void metadata(Probe& engine, const char* key, double value) {
 void configure(Probe& engine, int mask) {
     for (int index = 0; index < 3; ++index)
         metadata(engine, keys[index], (mask & (1 << index)) ? 1.0 : 0.0);
+}
+
+void test_generated_shape_metadata_oracle() {
+    GeneratedShapeMetadataOracle defaults;
+    CHECK(defaults.cap_attachment() == CapAttachment::LegacySource);
+    CHECK(defaults.priority_attached());
+    CHECK(defaults.retained_parent_first());
+
+    // The real C export receives a BacktestEngine* and must dispatch to the
+    // source override, first carrying priority/cap metadata and then applying
+    // the default-100 margin fallback.
+    strategy_set_syminfo_metadata(static_cast<BacktestEngine*>(&defaults),
+                                  "flat_retained_child_fresh_parent_order", 0.0);
+    CHECK(!defaults.retained_parent_first());
+    strategy_set_syminfo_metadata(static_cast<BacktestEngine*>(&defaults),
+                                  "intraday_cap_skip_noop_market_fills", 1.0);
+    CHECK(defaults.cap_attachment() == CapAttachment::LegacySource);
+    strategy_set_syminfo_metadata(static_cast<BacktestEngine*>(&defaults),
+                                  "margin_long", 25.0);
+    strategy_set_syminfo_metadata(static_cast<BacktestEngine*>(&defaults),
+                                  "margin_short", 50.0);
+    CHECK(defaults.margin_long() == 25.0);
+    CHECK(defaults.margin_short() == 50.0);
+
+    GeneratedShapeMetadataOracle explicit_margins(75.0, 80.0);
+    strategy_set_syminfo_metadata(static_cast<BacktestEngine*>(&explicit_margins),
+                                  "margin_long", 25.0);
+    strategy_set_syminfo_metadata(static_cast<BacktestEngine*>(&explicit_margins),
+                                  "margin_short", 50.0);
+    CHECK(explicit_margins.margin_long() == 75.0);
+    CHECK(explicit_margins.margin_short() == 80.0);
 }
 
 void test_real_c_abi_metadata_and_native_attachment() {
@@ -471,6 +523,7 @@ void test_copy_and_engine_reset_preserve_configuration_not_ownership() {
 } // namespace
 
 int main() {
+    test_generated_shape_metadata_oracle();
     test_real_c_abi_metadata_and_native_attachment();
     test_native_default_and_constructor_frontend_activation();
     test_all_eight_policy_combinations_on_engine_paths();

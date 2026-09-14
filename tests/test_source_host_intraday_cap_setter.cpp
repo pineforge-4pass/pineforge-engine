@@ -29,6 +29,11 @@ public:
 
     const Cap& cap() const { return adapter_.cap; }
 
+    bool allows_long() const { return check_risk_allow_entry(true); }
+    bool allows_short() const { return check_risk_allow_entry(false); }
+    bool drawdown_is_percent() const { return risk_max_drawdown_is_pct_; }
+    bool intraday_loss_is_percent() const { return risk_max_intraday_loss_is_pct_; }
+
     void seed_latched_day() {
         compat::pine::CapClock clock{};
         clock.timestamp = 1700000000000LL;
@@ -120,10 +125,40 @@ void test_setter_matches_integer_assignment() {
     CHECK(host.cap().budget().latched());
 }
 
+void test_direction_mapping_matches_pine_convention() {
+    Fixture host;
+
+    host.set_pine_risk_direction(-1);
+    CHECK(!host.allows_long());
+    CHECK(host.allows_short());
+
+    host.set_pine_risk_direction(0);
+    CHECK(host.allows_long());
+    CHECK(host.allows_short());
+
+    host.set_pine_risk_direction(1);
+    CHECK(host.allows_long());
+    CHECK(!host.allows_short());
+}
+
+void test_percent_flags_are_sticky() {
+    Fixture host;
+
+    host.set_pine_risk_max_drawdown(10.0, true);
+    host.set_pine_risk_max_drawdown(500.0, false);
+    CHECK(host.drawdown_is_percent());
+
+    host.set_pine_risk_max_intraday_loss(10.0, true);
+    host.set_pine_risk_max_intraday_loss(500.0, false);
+    CHECK(host.intraday_loss_is_percent());
+}
+
 } // namespace
 
 int main() {
     test_setter_matches_integer_assignment();
+    test_direction_mapping_matches_pine_convention();
+    test_percent_flags_are_sticky();
     std::printf("checks=%d failures=%d\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

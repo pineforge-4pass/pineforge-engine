@@ -39,6 +39,7 @@
 #include <pineforge/magnifier.hpp>
 
 #include "../src/engine_internal.hpp"
+#include "../src/source/pine_path_resolve_internal.hpp"
 
 using namespace pineforge;
 using pineforge::source::PendingOrder;

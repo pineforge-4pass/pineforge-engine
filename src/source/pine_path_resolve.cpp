@@ -1,5 +1,4 @@
-#include "../engine_internal.hpp"
-#include <pineforge/source/pine_pending_intent.hpp>
+#include "pine_path_resolve_internal.hpp"
 
 #include <cmath>
 #include <limits>

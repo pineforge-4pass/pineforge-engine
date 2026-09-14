@@ -58,6 +58,7 @@ uint64_t BacktestEngine::broker_state_hash() const {
     // A31 residue: these stage-coordinator inputs remain physical/generic.
     f.b(fold_exit_path_extremes_);
     f.d(fold_exit_trail_peak_);
+    f.d(trail_best_price_);
 
     f.b(position_close_obligation_.pending());
     if (const auto& request = position_close_obligation_.peek()) {

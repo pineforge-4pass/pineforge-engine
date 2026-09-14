@@ -8,6 +8,22 @@
 #include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
 
+// Generated constructors can explicitly select Pine cap compatibility before
+// any host metadata setter. These capability macros belong to the source host
+// surface; the generic engine header remains source-free.
+#define PINEFORGE_HAS_EXPLICIT_PINE_CAP_V1 1
+#define PINEFORGE_HAS_EXPLICIT_PINE_EXECUTION_ADAPTER_V1 1
+
+namespace pineforge {
+
+void fill_pending_order_mirror(const source::PendingOrder& src,
+                               const MarketAdmissionJournal* journal,
+                               pf_pending_order_v1_t* out);
+void fill_pending_order_mirror(const source::PendingOrder& src,
+                               pf_pending_order_v1_t* out);
+
+} // namespace pineforge
+
 namespace pineforge::source {
 
 // Intermediate source-layer host. The remaining source ownership surface is
@@ -67,13 +83,12 @@ public:
     int pine_last_bar_index() const;
     double prev_chart_close() const;
     int last_bar_dual_entry_path() const;
-    double trail_best_price() const;
     double live_position_size() const override;
     int pending_order_count() const;
     MarketAdmissionJournal& market_admission_journal();
     const MarketAdmissionJournal& market_admission_journal() const;
     std::vector<admission::Field> market_admission_fields() const;
-    const PendingOrder& pending_order_at(int index) const;
+    const PendingOrder& pending_order_at(int i) const;
     int probe_fill_qty(int index, double fill_price, double* qty,
                        int* close_only, int* partition) const;
     int pending_order_level_resolved(int index) const;
@@ -193,8 +208,6 @@ protected:
     std::vector<uint64_t> scratch_filled_incarnations_;
     internal::DualEntryStopPathWinner dual_entry_path_{};
     internal::DualEntryStopPathWinner last_bar_dual_entry_decision_{};
-    double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
-    int trail_close_restart_bar_ = -1;
     double trail_best_before_bar_ = std::numeric_limits<double>::quiet_NaN();
     int trail_best_before_bar_index_ = -1;
     int64_t trail_best_before_bar_position_cycle_ = 0;
@@ -269,11 +282,8 @@ protected:
     void apply_source_pending_removals(
         const std::vector<execution::PendingRemoval>& removals);
     void reset_source_exit_activations_before_flatten();
-    void reset_source_trail_after_flatten();
     void reset_source_position_ledgers_after_book_clear();
-    void on_source_append_quoted_lot_before_book(const PyramidEntry& lot);
     void on_source_append_quoted_lot_after_book(const PyramidEntry& lot);
-    void reset_source_open_position_trail_before_book_clear(const PyramidEntry& lot);
     void reset_source_open_position_ledgers_before_book(const PyramidEntry& lot);
     void on_source_open_position_booked(const PyramidEntry& lot);
     enum class ExitLegTransitionResult {

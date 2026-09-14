@@ -182,8 +182,8 @@ bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
 
 [[noreturn]] void BacktestEngine::throw_native_only_route(const char* seam) {
     execution_consumer().refuse_source_mutation(seam);
-    throw std::runtime_error(std::string("native host refuses source mutation: ")
-                             + (seam ? seam : ""));
+    throw std::runtime_error(std::string(seam ? seam : "source route")
+                             + ": not available on a native-bound host");
 }
 
 void BacktestEngine::legacy_run_simple(const Bar*, int) {
@@ -230,15 +230,6 @@ bool BacktestEngine::legacy_stream_end(bool) {
     throw_native_only_route("legacy_stream_end");
 }
 
-int BacktestEngine::intraday_loss_day_key() const { return -1; }
-void BacktestEngine::intraday_loss_begin_bar(const Bar&) {}
-bool BacktestEngine::intraday_loss_orders_blocked() const { return false; }
-bool BacktestEngine::evaluate_max_intraday_loss(double, double) { return false; }
-void BacktestEngine::evaluate_max_intraday_loss_over_path(const Bar&) {}
-void BacktestEngine::finish_intraday_loss_cancel() {}
-bool BacktestEngine::check_risk_allow_entry(bool) const { return true; }
-void BacktestEngine::update_risk_state() {}
-void BacktestEngine::update_per_trade_extremes() {}
 void BacktestEngine::reset_source_pending_book() {}
 void BacktestEngine::reset_source_order_and_close_state() {}
 void BacktestEngine::reset_source_risk_and_cap() {}
@@ -246,18 +237,6 @@ void BacktestEngine::reset_source_margin_and_coof() {}
 void BacktestEngine::reset_source_bar_projections() {}
 void BacktestEngine::reset_source_language_series() {}
 
-BacktestEngine::BarTime BacktestEngine::_decompose_bar_time_chart_tz() const {
-    return _decompose_bar_time();
-}
-
-double BacktestEngine::calc_qty_for_type(double, double, int) const { return 0.0; }
-double BacktestEngine::calc_default_qty_from_equity(double, double) const { return 0.0; }
-double BacktestEngine::calc_qty_for_type_from_equity(double, double, int, double) const {
-    return 0.0;
-}
-double BacktestEngine::source_reversal_qty(double, double explicit_qty, int, bool) const {
-    return explicit_qty;
-}
 execution::Status BacktestEngine::on_source_close_preflight(
         const Trade*, size_t, std::optional<int>& loss_day) const {
     loss_day.reset();
@@ -285,12 +264,8 @@ void BacktestEngine::apply_source_pending_removals(
         const std::vector<execution::PendingRemoval>&) {}
 
 void BacktestEngine::reset_source_exit_activations_before_flatten() {}
-void BacktestEngine::reset_source_trail_after_flatten() {}
 void BacktestEngine::reset_source_position_ledgers_after_book_clear() {}
-void BacktestEngine::on_source_append_quoted_lot_before_book(const PyramidEntry&) {}
 void BacktestEngine::on_source_append_quoted_lot_after_book(const PyramidEntry&) {}
-void BacktestEngine::reset_source_open_position_trail_before_book_clear(
-        const PyramidEntry&) {}
 void BacktestEngine::reset_source_open_position_ledgers_before_book(
         const PyramidEntry&) {}
 void BacktestEngine::on_source_open_position_booked(const PyramidEntry&) {}
@@ -306,7 +281,7 @@ int BacktestEngine::observe_pending_effective_levels(int, double*, double*, doub
     return -1;
 }
 double BacktestEngine::observe_trail_best_price_v1() const {
-    return std::numeric_limits<double>::quiet_NaN();
+    return trail_best_price_;
 }
 
 void BacktestEngine::dispatch_source_stream_script_bar(const Bar&, bool) {

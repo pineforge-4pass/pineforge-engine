@@ -6,6 +6,7 @@
  */
 
 #include "../engine_internal.hpp"
+#include "pine_path_resolve_internal.hpp"
 #include <pineforge/order_action.hpp>
 
 #include <algorithm>

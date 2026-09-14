@@ -2,6 +2,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/engine_internal.hpp"
+#include "../src/source/pine_path_resolve_internal.hpp"
 #include <cstdio>
 #include <cmath>
 using namespace pineforge;

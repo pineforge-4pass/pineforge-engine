@@ -3,10 +3,10 @@
  * src/engine_path_resolve.cpp that the engine-driven bracket tests
  * (test_exit_path_segment_tiebreak.cpp) leave uncovered.
  *
- * These helpers live in pineforge::internal and are declared in the
- * RUNTIME-PRIVATE header src/engine_internal.hpp. libpineforge is a STATIC
- * archive, so the symbols resolve at link time even though they are hidden
- * from any .so export table. We call them directly to drive the exact
+ * These helpers live in pineforge::internal and source PendingOrder-shaped
+ * declarations live in src/source/pine_path_resolve_internal.hpp. libpineforge
+ * is a STATIC archive, so the symbols resolve at link time even though they
+ * are hidden from any .so export table. We call them directly to drive the exact
  * branch logic, AND through the public free functions
  * resolve_exit_path_fill / exit_order_earliest_path_metric_no_trail to
  * reach the anonymous-namespace trail/gap/entry-bar helpers that are not
@@ -34,6 +34,7 @@
 
 #include <pineforge/source/pine_pending_intent.hpp>
 #include "../src/engine_internal.hpp"
+#include "../src/source/pine_path_resolve_internal.hpp"
 
 using namespace pineforge;
 using pineforge::source::PendingOrder;

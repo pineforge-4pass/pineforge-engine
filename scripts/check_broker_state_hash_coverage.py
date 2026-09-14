@@ -634,6 +634,28 @@ def main(root: Path = ROOT) -> int:
               f"in any // @broker-state region: {orphans}", file=sys.stderr)
         return 1
 
+    # A waiver is only valid while the named field is genuinely absent from
+    # both hash owners.  In particular, source-layer fields that were moved
+    # out of engine.hpp must not retain their old v15 waiver: the source
+    # extension is the authoritative fold for those fields.
+    source_hashed_waivers = sorted(
+        name for name in waivers
+        if re.search(rf"\b{re.escape(name)}\b", source_hash)
+    )
+    if source_hashed_waivers:
+        print("check_broker_state_hash_coverage: waiver(s) naming a field "
+              "hashed by the source extension: "
+              f"{source_hashed_waivers}", file=sys.stderr)
+        return 1
+    already_hashed_waivers = sorted(
+        name for name in waivers
+        if re.search(rf"\b{re.escape(name)}\b", all_hash)
+    )
+    if already_hashed_waivers:
+        print("check_broker_state_hash_coverage: waiver(s) naming an already "
+              f"hashed field: {already_hashed_waivers}", file=sys.stderr)
+        return 1
+
     missing = sorted(
         m for m in members
         if not re.search(rf"\b{re.escape(m)}\b", all_hash) and m not in waivers
@@ -656,10 +678,14 @@ def main(root: Path = ROOT) -> int:
         m for m in po_members
         if not re.search(rf"\bo\.{re.escape(m)}\b", loop) and m not in po_waivers
     )
-    if po_missing:
+    po_redundant = sorted(
+        m for m in po_waivers
+        if re.search(rf"\bo\.{re.escape(m)}\b", loop)
+    )
+    if po_missing or po_redundant:
         print("check_broker_state_hash_coverage: PendingOrder members neither hashed "
-              "(o.<name> in the pending_orders_ loop) nor waived (pending_order.<name>):",
-              po_missing)
+              "(o.<name> in the pending_orders_ loop) nor waived (pending_order.<name>): "
+              f"missing={po_missing}, redundant_waivers={po_redundant}")
         return 1
     # --- struct PyramidEntry: inspect every physical-lot field recursively ---
     pe_members = struct_members(hpp, "PyramidEntry")

@@ -253,65 +253,6 @@ bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
                             bool is_long, double* out_pos);
 
 
-// For flat-position opposing stop entries (long stop vs short stop), return
-// true if any opposite stop is touched earlier on the bar path than `current`.
-bool opposing_stop_entry_hits_first(const Bar& bar,
-                                    const std::vector<source::PendingOrder>& orders,
-                                    std::size_t current_idx,
-                                    int current_bar_index = -1);
-bool opposing_stop_entry_hits_first(const Bar& bar, bool high_first,
-                                    const std::vector<source::PendingOrder>& orders,
-                                    std::size_t current_idx,
-                                    int current_bar_index);
-
-
-DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
-                                                     const std::vector<source::PendingOrder>& orders,
-                                                     int current_bar_index = -1);
-DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar, bool high_first,
-                                                     const std::vector<source::PendingOrder>& orders,
-                                                     int current_bar_index);
-
-
-// Exact scope for continuing the historical path after a dual-stop winner is
-// declined by fill-time margin admission. Kept runtime-private so focused
-// tests can pin the POOC/COOF/magnifier and order-book fences directly.
-bool dual_stop_margin_decline_can_continue_path(
-    const std::vector<source::PendingOrder>& orders,
-    DualEntryStopPathWinner winner,
-    bool process_orders_on_close,
-    bool calc_on_order_fills,
-    bool bar_magnifier);
-
-
-// For OCA exit siblings (e.g., separate TP and SL strategy.order calls),
-// compute first-touch position on OHLC path for a single-priced order.
-bool exit_order_touch_position(const Bar& bar,
-                                      const source::PendingOrder& order,
-                                      PositionSide pos,
-                                      double* out_pos);
-bool exit_order_touch_position(const Bar& bar, bool high_first,
-                               const source::PendingOrder& order,
-                               PositionSide pos,
-                               double* out_pos);
-
-
-bool oca_exit_sibling_hits_first(const Bar& bar,
-                                        const std::vector<source::PendingOrder>& orders,
-                                        std::size_t current_idx,
-                                        PositionSide pos);
-bool oca_exit_sibling_hits_first(const Bar& bar, bool high_first,
-                                 const std::vector<source::PendingOrder>& orders,
-                                 std::size_t current_idx,
-                                 PositionSide pos);
-
-
-// strategy.exit → OrderType::EXIT; strategy.order → RAW_ORDER. When a raw order's
-// direction opposes the open position, stop/limit/trail behave like closing orders,
-// not entries (fixes wrong fill prices for bracket TP/SL from strategy.order).
-bool order_is_exit_style(const source::PendingOrder& o, PositionSide pos);
-
-
 void fill_bar_path_points(const Bar& bar, double path[4]);
 
 // Same 4-waypoint path, but with the leg order chosen by the caller (so a
@@ -364,26 +305,6 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
                                           double* fill_price,
                                           bool* activated,
                                           bool* fill_at_bar_point = nullptr);
-
-
-// Earliest intra-bar path coordinate [0, 3) where this EXIT's stop/limit would
-// first fill, ignoring trail. Orders sibling strategy.exit() calls with the same
-// from_entry by TradingView OHLC path (e.g. partial TP vs full bracket).
-// Returns +inf if no fill this bar or if the order uses trail (caller falls back
-// to full-before-partial).
-double exit_order_earliest_path_metric_no_trail(
-    const Bar& bar,
-    const source::PendingOrder& order,
-    PositionSide position_side,
-    bool is_entry_bar,
-    double position_entry_price, int64_t position_cycle = 0, int64_t bar_index = 0);
-double exit_order_earliest_path_metric_no_trail(
-    const Bar& bar,
-    bool high_first,
-    const source::PendingOrder& order,
-    PositionSide position_side,
-    bool is_entry_bar,
-    double position_entry_price, int64_t position_cycle = 0, int64_t bar_index = 0);
 
 
 // design-stop-tick-rounding: `tick_bar` is the bar the STOP / LIMIT legs are

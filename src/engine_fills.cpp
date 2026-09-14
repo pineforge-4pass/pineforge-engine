@@ -179,7 +179,9 @@ double BacktestEngine::percent_commission_live_equity(
 }
 
 
-bool internal::dual_stop_margin_decline_can_continue_path(
+namespace internal {
+
+bool dual_stop_margin_decline_can_continue_path(
         const std::vector<source::PendingOrder>& orders,
         DualEntryStopPathWinner winner,
         bool process_orders_on_close,
@@ -191,6 +193,8 @@ bool internal::dual_stop_margin_decline_can_continue_path(
         && !bar_magnifier
         && is_true_flat_unlinked_stop_pair(orders, winner);
 }
+
+} // namespace internal
 
 
 // strategy_entry / strategy_close / strategy_close_all / strategy_exit

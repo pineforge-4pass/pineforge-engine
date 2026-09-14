@@ -213,6 +213,8 @@ void BacktestEngine::reset_run_state() {
     // handle while preserving the invariant that zero means unavailable.
     next_order_incarnation_ = 1;
     reset_source_order_and_close_state();
+    fold_exit_path_extremes_ = false;
+    fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
 
     // Equity + position-size extremes.
     max_equity_ = initial_capital_;

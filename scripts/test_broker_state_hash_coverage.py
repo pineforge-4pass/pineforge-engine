@@ -65,6 +65,33 @@ class SourceHashCoverage(unittest.TestCase):
              "f.b(missing_risk_halted_);"),))
         self.assertEqual(result, 1, output)
 
+    def test_waiver_cannot_name_source_hashed_field(self):
+        result, output = self.check((
+            ("scripts/broker_state_hash_waivers.txt",
+             "calc_on_order_fills_          # config: strategy(calc_on_order_fills=...)",
+             "calc_on_order_fills_          # config: strategy(calc_on_order_fills=...)\n"
+             "risk_direction_ # test source fold must not be waived"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("hashed by the source extension", output)
+
+    def test_waiver_cannot_name_generic_hashed_field(self):
+        result, output = self.check((
+            ("scripts/broker_state_hash_waivers.txt",
+             "calc_on_order_fills_          # config: strategy(calc_on_order_fills=...)",
+             "calc_on_order_fills_          # config: strategy(calc_on_order_fills=...)\n"
+             "fold_exit_path_extremes_ # test generic fold must not be waived"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("already hashed field", output)
+
+    def test_pending_order_waiver_cannot_duplicate_fold(self):
+        result, output = self.check((
+            ("scripts/broker_state_hash_waivers.txt",
+             "pending_order.comment         # trade-report label only: copied into the Trade row's entry/exit comment at fill and never read by any fill, admission, sizing or eligibility path -- it cannot change a future fill",
+             "pending_order.comment         # trade-report label only: copied into the Trade row's entry/exit comment at fill and never read by any fill, admission, sizing or eligibility path -- it cannot change a future fill\n"
+             "pending_order.id # test duplicate pending fold"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("redundant_waivers", output)
+
     def test_pending_parser_uses_source_intent(self):
         pending = ROOT / "include/pineforge/source/pine_pending_intent.hpp"
         self.assertGreater(len(members(pending.read_text())), 0)

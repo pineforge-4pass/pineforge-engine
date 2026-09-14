@@ -10,31 +10,17 @@
 # the same configured engine agree on these by construction.
 calc_on_order_fills_          # config: strategy(calc_on_order_fills=...)
 chart_ema_na_warmup_          # config: opt-in chart-TF ta.ema warmup selector
-close_entries_rule_any_       # config: strategy(close_entries_rule=...)
 commission_type_              # config: strategy(commission_type=...)
 commission_value_             # config: strategy(commission_value=...)
-default_qty_type_             # config: strategy(default_qty_type=...)
-default_qty_value_            # config: strategy(default_qty_value=...)
 historical_security_lookahead_projection_  # config: opt-in request.security selector
 initial_capital_              # config: strategy(initial_capital=...)
 margin_call_enabled_          # config: set_margin_call_enabled toggle
-margin_long_                  # config: strategy(margin_long=...)
-margin_short_                 # config: strategy(margin_short=...)
-margin_zero_cover_full_liquidation_  # config: opt-in margin-call oracle candidate
 path_order_mode_              # config: set_path_order(), persistent op-set selector
 probe_suppress_tail_logic_    # config: set_probe_suppress_tail_logic(), persistent selector
 process_orders_on_close_      # config: strategy(process_orders_on_close=...)
-pyramiding_                   # config: strategy(pyramiding=...)
 qty_step_                     # config: injected per-instrument lot step
 realtime_tail_                # config: set_realtime_tail(), persistent live-runtime selector
 realtime_tail_horizon_bars_   # config: companion horizon for realtime_tail_
-risk_direction_                 # config: strategy.risk.allow_entry_in(...)
-risk_max_cons_loss_days_        # config: strategy.risk.max_cons_loss_days(...)
-risk_max_drawdown_              # config: strategy.risk.max_drawdown(...)
-risk_max_drawdown_is_pct_       # config: companion unit selector for risk_max_drawdown_
-risk_max_intraday_loss_         # config: strategy.risk.max_intraday_loss(...)
-risk_max_intraday_loss_is_pct_  # config: companion unit selector for risk_max_intraday_loss_
-risk_max_position_size_         # config: strategy.risk.max_position_size(...)
 security_range_start_na_warmup_  # config: opt-in HTF warmup selector
 security_range_start_ms_      # config: injected HTF warmup range-start epoch
 slippage_                     # config: strategy(slippage=...)
@@ -44,7 +30,6 @@ trade_start_time_             # config: strategy_set_trade_start_time
 account_currency_fx_          # config: injected scalar FX fallback (the broker CLOCK that consumes it is hashed)
 account_currency_fx_rates_    # config: injected timestamped FX provider series
 account_currency_fx_timestamps_  # config: injected timestamped FX provider series
-bar_index_offset_             # config: script-visible Pine bar_index cosmetic offset
 
 # --- syminfo/chart/input injection: config surface for the script, not
 # broker decision state.
@@ -55,18 +40,6 @@ inputs_                       # config: injected input.* values
 # --- Feed/input.source backing series and chart-close tracking: script or
 # indicator computation context (ta.*, request.security bucketing), never
 # read by broker/fill logic.
-_src_series_active_           # input.source backing-series activation flag
-_src_open_                    # input.source backing series
-_src_high_                    # input.source backing series
-_src_low_                     # input.source backing series
-_src_close_                   # input.source backing series
-_src_volume_                  # input.source backing series
-_src_hl2_                     # input.source backing series
-_src_hlc3_                    # input.source backing series
-_src_ohlc4_                   # input.source backing series
-_src_hlcc4_                   # input.source backing series
-prev_chart_close_             # ta.atr/ta.tr chart-close tracking, script-visible only
-last_chart_close_             # companion to prev_chart_close_
 security_first_chart_bar_ms_  # run-start constant (first chart bar epoch), fixed once a run begins
 security_next_input_ms_       # feed/dispatch context: next input bar's timestamp, recomputed every bar from feed position
 security_calling_close_ms_    # feed/dispatch context: calling chart bar's nominal close
@@ -85,14 +58,6 @@ last_bar_time_                # feed metadata: last bar's timestamp (script-visi
 # directly, and each is always resolved (cleared) within the same call that
 # set it, before any other code -- let alone a later bar's dispatch -- reads
 # it again.
-current_fill_is_limit_        # doc: "Transient: true only while dispatching a LIMIT-triggered fill"
-fold_exit_path_extremes_      # doc: "Transient: true only while applying a priced ... fill"
-fold_exit_trail_peak_         # doc: "Transient companion for TRAIL exits"; NaN outside a trail fill
-last_exit_fill_was_trail_     # set by evaluate_fill_price, consumed same call chain by apply_filled_order_to_state
-intraday_loss_evaluating_     # transient evaluation flag: reentrancy guard, true only inside evaluate_max_intraday_loss, always false on return
-scratch_skip_ids_             # doc: "Not state -- must be empty across calls"
-scratch_filled_incarnations_  # doc: "Always cleared before use"
-named_entry_cancelled_incarnation_in_current_eval_  # doc: "invoke_chart_on_bar clears the map before each script execution"
 
 # --- Per-source-bar same-bar strategy.close batching scratch: the code's
 # own comment on the sibling cross-bar maps ("Per-source-bar only") applies
@@ -102,19 +67,6 @@ named_entry_cancelled_incarnation_in_current_eval_  # doc: "invoke_chart_on_bar 
 # reservation/provenance ledgers these feed (close_reserved_qty_,
 # close_two_call_first_qty_, callsite_close_reserved_qty_,
 # callsite_close_two_call_first_qty_) ARE hashed.
-sb_close_active_              # per-source-bar batching scratch
-sb_close_bar_                 # per-source-bar batching scratch
-sb_close_calls_                # per-source-bar batching scratch
-sb_close_first_id_            # per-source-bar batching scratch
-sb_close_first_target_        # per-source-bar batching scratch
-sb_close_first_carry_valid_   # per-source-bar batching scratch
-sb_close_first_carry_qty_     # per-source-bar batching scratch
-sb_close_id_                  # per-source-bar batching scratch
-sb_close_comment_             # per-source-bar batching scratch
-callsite_close_bar_           # per-source-bar scratch, same "== bar_index_" dead-once-advanced pattern
-callsite_close_callsites_     # doc: "Per-source-bar only"
-callsite_close_queue_seq_     # monotonic counter only compared within the same source bar's discarded batch
-callsite_close_admitted_total_  # doc: "claimed by the currently surviving nonzero-site instructions on this source bar"
 
 # --- Report/diagnostic accumulators that are NOT reachable through any
 # strategy.* script accessor -- pure internal report plumbing (verified by
@@ -134,7 +86,6 @@ broker_state_hashes_          # report-only recording of the hash itself; hashin
 
 # --- Per-pass dual-entry-stop working state (task brief instruction: waive
 # this one, hash the per-bar snapshot instead).
-dual_entry_path_              # per-PASS arbitration working state; last_bar_dual_entry_decision_ (hashed) is the per-bar snapshot that survives it
 
 # --- struct PendingOrder (task 7): every scalar/string member must be hashed
 # as o.<name> inside broker_state_hash()'s pending_orders_ loop or waived

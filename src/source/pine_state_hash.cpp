@@ -196,7 +196,6 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.u(scratch_filled_incarnations_.size());
     for (uint64_t incarnation : scratch_filled_incarnations_) f.u(incarnation);
     f.i(static_cast<int64_t>(last_bar_dual_entry_decision_));
-    f.d(trail_best_price_);
     f.i(trail_close_restart_bar_);
     f.d(trail_best_before_bar_);
     f.i(trail_best_before_bar_index_);

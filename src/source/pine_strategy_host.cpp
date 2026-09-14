@@ -4,10 +4,6 @@
 namespace pineforge {
 using namespace source;
 
-void fill_pending_order_mirror(const source::PendingOrder&,
-                               const MarketAdmissionJournal*,
-                               pf_pending_order_v1_t*);
-
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     : BacktestEngine(), adapter_(cap) {}
 
@@ -53,7 +49,9 @@ void source::PineStrategyHost::set_strategy_override(
 }
 
 void source::PineStrategyHost::set_pine_risk_direction(int direction) {
-    risk_direction_ = static_cast<RiskDirection>(direction);
+    risk_direction_ = direction > 0
+        ? RiskDirection::LONG_ONLY
+        : (direction < 0 ? RiskDirection::SHORT_ONLY : RiskDirection::BOTH);
 }
 
 void source::PineStrategyHost::set_pine_risk_max_cons_loss_days(int value) {
@@ -63,13 +61,13 @@ void source::PineStrategyHost::set_pine_risk_max_cons_loss_days(int value) {
 void source::PineStrategyHost::set_pine_risk_max_drawdown(
         double value, bool percent) {
     risk_max_drawdown_ = value;
-    risk_max_drawdown_is_pct_ = percent;
+    if (percent) risk_max_drawdown_is_pct_ = true;
 }
 
 void source::PineStrategyHost::set_pine_risk_max_intraday_loss(
         double value, bool percent) {
     risk_max_intraday_loss_ = value;
-    risk_max_intraday_loss_is_pct_ = percent;
+    if (percent) risk_max_intraday_loss_is_pct_ = true;
 }
 
 void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limit) {
@@ -98,10 +96,6 @@ double source::PineStrategyHost::prev_chart_close() const {
 
 int source::PineStrategyHost::last_bar_dual_entry_path() const {
     return static_cast<int>(last_bar_dual_entry_decision_);
-}
-
-double source::PineStrategyHost::trail_best_price() const {
-    return trail_best_price_;
 }
 
 void source::PineStrategyHost::_push_source_series() {
@@ -187,8 +181,6 @@ void source::PineStrategyHost::reset_source_order_and_close_state() {
     callsite_close_admitted_total_ = 0.0;
     callsite_close_reserved_qty_.clear();
     callsite_close_two_call_first_qty_.clear();
-    fold_exit_path_extremes_ = false;
-    fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
     last_exit_fill_was_trail_ = false;
     trail_best_before_bar_ = std::numeric_limits<double>::quiet_NaN();
     trail_best_before_bar_index_ = -1;
@@ -248,11 +240,6 @@ void source::PineStrategyHost::reset_source_exit_activations_before_flatten() {
     unbind_exit_activations();
 }
 
-void source::PineStrategyHost::reset_source_trail_after_flatten() {
-    trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
-    trail_close_restart_bar_ = -1;
-}
-
 void source::PineStrategyHost::reset_source_position_ledgers_after_book_clear() {
     id_unclosed_qty_.clear();
     cycle_filled_entry_ids_.clear();
@@ -263,20 +250,10 @@ void source::PineStrategyHost::reset_source_position_ledgers_after_book_clear() 
     consumed_partial_exit_ids_.clear();
 }
 
-void source::PineStrategyHost::on_source_append_quoted_lot_before_book(
-        const PyramidEntry& lot) {
-    trail_best_price_ = lot.price;
-}
-
 void source::PineStrategyHost::on_source_append_quoted_lot_after_book(
         const PyramidEntry& lot) {
     id_unclosed_qty_[lot.entry_id] += lot.qty;
     cycle_filled_entry_ids_.insert(lot.entry_id);
-}
-
-void source::PineStrategyHost::reset_source_open_position_trail_before_book_clear(
-        const PyramidEntry& lot) {
-    trail_best_price_ = lot.price;
 }
 
 void source::PineStrategyHost::reset_source_open_position_ledgers_before_book(
@@ -313,8 +290,8 @@ MarketAdmissionJournal& source::PineStrategyHost::market_admission_journal() {
     return adapter_.admission_journal;
 }
 
-const source::PendingOrder& source::PineStrategyHost::pending_order_at(int index) const {
-    return pending_orders_[static_cast<size_t>(index)];
+const source::PendingOrder& source::PineStrategyHost::pending_order_at(int i) const {
+    return pending_orders_[static_cast<size_t>(i)];
 }
 
 void source::PineStrategyHost::enable_pine_intraday_cap() {
