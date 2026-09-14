@@ -38,6 +38,7 @@ set(TEST_SOURCES
     test_native_host_repairs
     test_source_layer_native_defaults
     test_source_fingerprint
+    test_source_host_intraday_cap_setter
     test_order_action_integration
     test_placement_facts
     test_order_cancellation

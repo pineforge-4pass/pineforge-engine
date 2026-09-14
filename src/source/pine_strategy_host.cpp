@@ -72,6 +72,10 @@ void source::PineStrategyHost::set_pine_risk_max_intraday_loss(
     risk_max_intraday_loss_is_pct_ = percent;
 }
 
+void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limit) {
+    adapter_.cap = limit;
+}
+
 void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
     risk_max_position_size_ = value;
 }

@@ -25,6 +25,7 @@ public:
     void set_pine_risk_max_cons_loss_days(int value);
     void set_pine_risk_max_drawdown(double value, bool percent);
     void set_pine_risk_max_intraday_loss(double value, bool percent);
+    void set_pine_risk_max_intraday_filled_orders(int limit);
     void set_pine_risk_max_position_size(double value);
 
     void strategy_entry(const std::string& id, bool is_long,
