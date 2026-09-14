@@ -86,6 +86,9 @@ void PineNativeHost::prepare_native_begin(const NativeBeginArgs& args) {
     adapter_.set_configuration(effective);
     adapter_.set_staged_configuration(staged);
     scheduler_.capture_begin(args);
+    bar_magnifier_enabled_ = args.bar_magnifier;
+    diag_magnifier_sub_bars_processed_ = 0;
+    diag_magnifier_sample_ticks_processed_ = 0;
     const NativeRunSpec spec = adapter_.project(effective, staged, args);
     const auto setup = configure_native(spec);
     if (setup.status != NativeSetupStatus::Applied)
@@ -99,10 +102,20 @@ void PineNativeHost::on_native_run_begin() {
     scheduler_.run_begin(*this);
 }
 void PineNativeHost::on_native_bar_open(const Bar& bar, const NativeDecisionContext& context) {
+    bar_magnifier_enabled_ = context.driver_statistics.intrabar_path_enabled;
+    diag_magnifier_sub_bars_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sub_bars_processed);
+    diag_magnifier_sample_ticks_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sample_ticks_processed);
     adapter_.on_bar_open(bar, context);
     scheduler_.bar_open(bar, context, *this);
 }
 void PineNativeHost::on_native_bar(const Bar& bar, const NativeDecisionContext& context) {
+    bar_magnifier_enabled_ = context.driver_statistics.intrabar_path_enabled;
+    diag_magnifier_sub_bars_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sub_bars_processed);
+    diag_magnifier_sample_ticks_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sample_ticks_processed);
     adapter_.observe_terminal_receipts();
     scheduler_.bar(bar, context, *this);
 }

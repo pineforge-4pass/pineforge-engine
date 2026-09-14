@@ -182,6 +182,10 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         path.volume_weighted = args.magnifier_volume_weighted;
         path.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
         path.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
+        // A16: source magnifier runs preserve the legacy distribution's
+        // point-only eligibility. Pure native hosts retain the generic
+        // continuous-segment default.
+        path.sample_eligibility = IntrabarPath::SampleEligibility::DistributionSamples;
         spec.intrabar.value = std::move(path);
     }
     const auto validation = validate_native_run_spec(spec);

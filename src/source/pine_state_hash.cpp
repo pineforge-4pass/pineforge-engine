@@ -486,6 +486,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(coof_context_.sub_index); f.i(coof_context_.sub_count);
     f.b(coof_context_.is_terminal_sub_bar); f.i(coof_context_.sub_bar_open_ms);
     f.i(coof_context_.script_bar_open_ms);
+    f.b(coof_context_.driver_statistics.intrabar_path_enabled);
+    f.i(coof_context_.driver_statistics.sub_bars_per_script_bar);
+    f.i(coof_context_.driver_statistics.samples_per_sub_bar);
+    f.u(coof_context_.driver_statistics.sub_bars_processed);
+    f.u(coof_context_.driver_statistics.sample_ticks_processed);
     f.d(coof_script_bar_.open); f.d(coof_script_bar_.high); f.d(coof_script_bar_.low);
     f.d(coof_script_bar_.close); f.d(coof_script_bar_.volume); f.i(coof_script_bar_.timestamp);
     f.b(coof_script_bar_valid_);
