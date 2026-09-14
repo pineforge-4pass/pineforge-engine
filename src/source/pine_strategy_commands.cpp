@@ -24,9 +24,9 @@
  * (engine_orders.cpp).
  */
 
-#include "engine_internal.hpp"
+#include "../engine_internal.hpp"
 
-#include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -36,7 +36,7 @@
 #include <map>
 #include <utility>
 
-namespace pineforge {
+namespace pineforge::source {
 
 using internal::kFullPercentEps;
 using internal::kFullQtyEps;
@@ -93,7 +93,7 @@ inline bool trading_is_active(int64_t current_ms, int64_t start_ms,
 
 }
 
-void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
+void PineStrategyHost::strategy_entry(const std::string& id, bool is_long,
                                      double limit_price, double stop_price, double qty,
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
@@ -673,7 +673,7 @@ void BacktestEngine::strategy_entry(const std::string& id, bool is_long,
     close_reservation_capture_populations(pending_orders_.back().incarnation);
 }
 
-void BacktestEngine::strategy_close(const std::string& id,
+void PineStrategyHost::strategy_close(const std::string& id,
                                     const std::string& comment,
                                     double qty, double qty_percent,
                                     bool immediately) {
@@ -682,7 +682,7 @@ void BacktestEngine::strategy_close(const std::string& id,
                    /*callsite_token=*/0);
 }
 
-void BacktestEngine::strategy_close(const std::string& id,
+void PineStrategyHost::strategy_close(const std::string& id,
                                     const std::string& comment,
                                     double qty, double qty_percent,
                                     bool immediately,
@@ -879,7 +879,7 @@ void BacktestEngine::strategy_close(const std::string& id,
     }
 }
 
-void BacktestEngine::strategy_close_all() {
+void PineStrategyHost::strategy_close_all() {
     guard_native_mutation("strategy_close_all");
     strategy_close("");
 }
@@ -887,7 +887,7 @@ void BacktestEngine::strategy_close_all() {
 // Total qty committed by token-0 legacy replacement plus every nonzero
 // callsite survivor. Later strategy.exit sizing sees the aggregate post-close
 // capacity without making any broker fill visible to the Pine body.
-double BacktestEngine::pending_same_bar_close_target() const {
+double PineStrategyHost::pending_same_bar_close_target() const {
     double legacy = 0.0;
     if (sb_close_active_) {
         auto it = id_unclosed_qty_.find(sb_close_id_);
@@ -904,7 +904,7 @@ double BacktestEngine::pending_same_bar_close_target() const {
     return std::min(position_qty_, legacy + callsite);
 }
 
-double BacktestEngine::close_reserved_other_qty(const std::string& id) const {
+double PineStrategyHost::close_reserved_other_qty(const std::string& id) const {
     double sum = 0.0;
     for (const auto& kv : close_reserved_qty_) {
         if (kv.first != id) sum += kv.second;
@@ -912,7 +912,7 @@ double BacktestEngine::close_reserved_other_qty(const std::string& id) const {
     return sum;
 }
 
-double BacktestEngine::callsite_close_reserved_other_qty(
+double PineStrategyHost::callsite_close_reserved_other_qty(
         uint64_t /*callsite_token*/, const std::string& id) const {
     // Persistent provenance is physically backed per logical entry id. Owner
     // claims for the same id alias the shared id_unclosed_qty_ ledger, so only
@@ -937,7 +937,7 @@ double BacktestEngine::callsite_close_reserved_other_qty(
     return sum;
 }
 
-double BacktestEngine::callsite_close_physical_reserved_other_qty(
+double PineStrategyHost::callsite_close_physical_reserved_other_qty(
         uint64_t callsite_token, const std::string& id) const {
     // Post-fill reservation uses the identical per-id physical backing model
     // as admission. The id being replaced is excluded across every owner.
@@ -949,7 +949,7 @@ double BacktestEngine::callsite_close_physical_reserved_other_qty(
 // compiler token selects an independent copy of that same state machine:
 // runtime loop evaluations replace only their own syntactic site in place,
 // while distinct source sites all survive in first-admission queue order.
-void BacktestEngine::enqueue_same_bar_close(const std::string& id,
+void PineStrategyHost::enqueue_same_bar_close(const std::string& id,
                                             const std::string& comment,
                                             uint64_t callsite_token) {
     const double eps = kQtyEpsilon;
@@ -1210,7 +1210,7 @@ void BacktestEngine::enqueue_same_bar_close(const std::string& id,
 // order of their first effective admission. A same-site replacement changes
 // the payload in place without moving its queue slot (authoritative A,B,A =>
 // A_LAST,B_MIDDLE). Each flush reuses the exact accepted token-0 batch below.
-void BacktestEngine::flush_same_bar_close() {
+void PineStrategyHost::flush_same_bar_close() {
     clear_script_position_view();
 
     SameBarCloseCallsite legacy;
@@ -1339,7 +1339,7 @@ void BacktestEngine::flush_same_bar_close() {
     flush_active_same_bar_close();
 }
 
-void BacktestEngine::flush_active_same_bar_close(
+void PineStrategyHost::flush_active_same_bar_close(
     double admitted_target, double pending_later_qty,
     bool defer_first_ledger_consume, uint64_t callsite_token,
     bool retire_ledger_whole) {
@@ -1624,7 +1624,7 @@ void BacktestEngine::flush_active_same_bar_close(
     }
 }
 
-void BacktestEngine::strategy_exit(const std::string& id, const std::string& from_entry,
+void PineStrategyHost::strategy_exit(const std::string& id, const std::string& from_entry,
                                     double limit_price, double stop_price,
                                     double trail_points, double trail_offset,
                                     double trail_price, double qty_percent,
@@ -2076,7 +2076,7 @@ void BacktestEngine::strategy_exit(const std::string& id, const std::string& fro
     }
 }
 
-void BacktestEngine::strategy_cancel(const std::string& id) {
+void PineStrategyHost::strategy_cancel(const std::string& id) {
     guard_native_mutation("strategy_cancel");
     auto command=begin_market_command(admission::CommandKind::Cancel,id,false,
         std::numeric_limits<double>::quiet_NaN(),-1,
@@ -2098,7 +2098,7 @@ void BacktestEngine::strategy_cancel(const std::string& id) {
         [&](const auto& order){return order.id==id;}),pending_orders_.end());
 }
 
-void BacktestEngine::strategy_cancel_all() {
+void PineStrategyHost::strategy_cancel_all() {
     guard_native_mutation("strategy_cancel_all");
     auto command=begin_market_command(admission::CommandKind::CancelAll,"",false,
         std::numeric_limits<double>::quiet_NaN(),-1,
@@ -2107,7 +2107,7 @@ void BacktestEngine::strategy_cancel_all() {
     pending_orders_.clear();
 }
 
-void BacktestEngine::strategy_order(const std::string& id, bool is_long, double qty,
+void PineStrategyHost::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
     guard_native_mutation("strategy_order");
@@ -2201,7 +2201,7 @@ void BacktestEngine::strategy_order(const std::string& id, bool is_long, double 
     close_reservation_capture_populations(pending_orders_.back().incarnation);
 }
 
-void BacktestEngine::close_reservation_capture_populations(uint64_t admitted_incarnation) {
+void PineStrategyHost::close_reservation_capture_populations(uint64_t admitted_incarnation) {
     // Called only after an ENTRY/MARKET/RAW admission has actually appended.
     // Queue priority can be retained on replacement; this cause cannot.
     for (auto& order : pending_orders_)
@@ -2218,7 +2218,7 @@ void BacktestEngine::close_reservation_capture_populations(uint64_t admitted_inc
 // matching_qty / qty_to_close / all_entries_match. Returns false when
 // the id specifies an unknown entry or the resolved qty rounds to
 // zero, signalling the caller to early-return.
-bool BacktestEngine::compute_close_target_qty(const std::string& id,
+bool PineStrategyHost::compute_close_target_qty(const std::string& id,
                                               double qty,
                                               double qty_percent,
                                               bool use_script_position_view,
@@ -2366,7 +2366,7 @@ bool BacktestEngine::compute_close_target_qty(const std::string& id,
 // through suppress_declined_reversal_close_legs)? Mirrors that predicate's
 // shape: MARKET type, same bar, opposite to the held side, named id (a bare
 // close_all is excluded from the netting and keeps the cancel).
-bool BacktestEngine::reversal_pair_close_keeps_brackets(
+bool PineStrategyHost::reversal_pair_close_keeps_brackets(
         const std::string& id) const {
     if (id.empty() || position_side_ == PositionSide::FLAT) return false;
     for (const PendingOrder& o : pending_orders_) {
@@ -2395,7 +2395,7 @@ bool BacktestEngine::reversal_pair_close_keeps_brackets(
 // reversal, or a same-bar re-issue that inherited that dormancy) keeps its
 // revive against the ORIGINAL armed stop — the 1D 07-14 row — while the
 // pair's close still supersedes the re-issue's end-of-bar settle.
-void BacktestEngine::hold_brackets_dormant_for_reversal_pair_close(
+void PineStrategyHost::hold_brackets_dormant_for_reversal_pair_close(
         const std::string& id) {
     for (PendingOrder& o : pending_orders_) {
         if (o.type != OrderType::EXIT || o.from_entry != id) continue;
@@ -2404,7 +2404,7 @@ void BacktestEngine::hold_brackets_dormant_for_reversal_pair_close(
     }
 }
 
-void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*closing_long*/) {
+void PineStrategyHost::cancel_orders_for_full_close(const std::string& id, bool /*closing_long*/) {
     pending_orders_.erase(
         std::remove_if(
             pending_orders_.begin(),
@@ -2421,7 +2421,7 @@ void BacktestEngine::cancel_orders_for_full_close(const std::string& id, bool /*
         pending_orders_.end());
 }
 
-void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(
+void PineStrategyHost::cancel_same_bar_market_reentries_after_full_close(
         bool closed_long, bool preserve_undercap_entries) {
     const PositionSide closed_side = closed_long ? PositionSide::LONG : PositionSide::SHORT;
     pending_orders_.erase(
@@ -2453,7 +2453,7 @@ void BacktestEngine::cancel_same_bar_market_reentries_after_full_close(
 // process_orders_on_close / strategy.close(immediately=true) path).
 // Dispatches between full, FIFO-partial, and by-entry-percent partial
 // exit primitives, then tags the new trade rows with comment + exit_id.
-void BacktestEngine::execute_immediate_close(const std::string& id,
+void PineStrategyHost::execute_immediate_close(const std::string& id,
                                              const std::string& comment,
                                              double qty_to_close,
                                              double matching_qty,
@@ -2518,7 +2518,7 @@ void BacktestEngine::execute_immediate_close(const std::string& id,
 // be matched at the next bar's open by process_pending_orders. Mirrors
 // the qty / qty_percent shape that the partial-exit dispatch in
 // execute_immediate_close would have produced for the same flags.
-uint64_t BacktestEngine::queue_deferred_close_order(
+uint64_t PineStrategyHost::queue_deferred_close_order(
         const std::string& id,
         const std::string& comment,
         double qty_to_close,
@@ -2596,7 +2596,7 @@ uint64_t BacktestEngine::queue_deferred_close_order(
 // True when ``from_entry`` names a lot of the live position (or is empty:
 // "every entry"). A strategy.exit bound to an id with no open lot is inert
 // for the current position (round 9 family Z, see clear_existing_exit_order).
-bool BacktestEngine::from_entry_holds_live_lot(const std::string& from_entry) const {
+bool PineStrategyHost::from_entry_holds_live_lot(const std::string& from_entry) const {
     if (position_side_ == PositionSide::FLAT) return false;
     if (from_entry.empty()) return true;
     for (const auto& lot : pyramid_entries_) {
@@ -2605,7 +2605,7 @@ bool BacktestEngine::from_entry_holds_live_lot(const std::string& from_entry) co
     return false;
 }
 
-void BacktestEngine::clear_existing_exit_order(const std::string& id,
+void PineStrategyHost::clear_existing_exit_order(const std::string& id,
                                                const std::string& from_entry,
                                                bool has_trail_request,
                                                double trail_points,
@@ -2735,7 +2735,7 @@ void BacktestEngine::clear_existing_exit_order(const std::string& id,
 // full exit is already pending for this from_entry". Returns false
 // (caller should abort) when the available qty is zero or a blocking
 // full exit is queued.
-bool BacktestEngine::compute_exit_reserved_qty(const std::string& from_entry,
+bool PineStrategyHost::compute_exit_reserved_qty(const std::string& from_entry,
                                                double preserved_reserved_qty,
                                                double live_pos_qty,
                                                double& qp_io,

@@ -1794,18 +1794,18 @@ protected:
     // removes every order it has not yet applied.
     bool intraday_loss_cancel_pending_ = false;
     // @broker-state end
-    int intraday_loss_day_key() const;
-    void intraday_loss_begin_bar(const Bar& bar);
-    bool intraday_loss_orders_blocked() const;
-    bool evaluate_max_intraday_loss(double mark_price, double excluded_realized);
-    void evaluate_max_intraday_loss_over_path(const Bar& bar);
-    void finish_intraday_loss_cancel();
+    virtual int intraday_loss_day_key() const;
+    virtual void intraday_loss_begin_bar(const Bar& bar);
+    virtual bool intraday_loss_orders_blocked() const;
+    virtual bool evaluate_max_intraday_loss(double mark_price, double excluded_realized);
+    virtual void evaluate_max_intraday_loss_over_path(const Bar& bar);
+    virtual void finish_intraday_loss_cancel();
 
-    bool check_risk_allow_entry(bool is_long) const;
-    void update_risk_state();
+    virtual bool check_risk_allow_entry(bool is_long) const;
+    virtual void update_risk_state();
 
     // --- Per-trade extreme tracking ---
-    void update_per_trade_extremes();
+    virtual void update_per_trade_extremes();
 
     // Source compatibility extension: settle an already resolved execution
     // using the current chart context and source-day preflight/observation.
@@ -3082,7 +3082,7 @@ protected:
     // Defined out-of-line in src/engine_risk.cpp so we can use the
     // private ``ScopedTimezone`` helper without leaking its header into
     // the public engine.hpp surface.
-    BarTime _decompose_bar_time_chart_tz() const;
+    virtual BarTime _decompose_bar_time_chart_tz() const;
 
     int _bar_hour() const { return _decompose_bar_time().hour; }
     int _bar_minute() const { return _decompose_bar_time().minute; }
@@ -3621,7 +3621,7 @@ protected:
     // unwinds a C++ exception across the extern "C" boundary.
     std::string last_error_;
 
-    void register_security_eval(int sec_id, const std::string& requested_tf,
+    virtual void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false, bool heikinashi = false);
     // ``request.security_lower_tf`` registers the same per-sec_id eval
@@ -3631,15 +3631,15 @@ protected:
     // can throw a precise error if the chart's input TF turns out to be
     // <= the requested TF (mirroring TradingView's "lower timeframe
     // required" error for ``request.security_lower_tf``).
-    void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
+    virtual void register_security_lower_tf_eval(int sec_id, const std::string& requested_tf,
                                          const std::string& input_tf);
     // Sub-bar index (0-based) of the current ``request.security_lower_tf``
     // synthesis within the current chart bar. Returns 0 outside the
     // synthesis loop. Used by codegen to clear its per-call vector at
     // sub-bar 0 and push one element per sub-bar after.
-    int security_lower_tf_sub_bar_index(int sec_id) const;
-    void validate_security_timeframes(const std::string& input_tf);
-    bool security_series_slot_is_new(int sec_id) const;
+    virtual int security_lower_tf_sub_bar_index(int sec_id) const;
+    virtual void validate_security_timeframes(const std::string& input_tf);
+    virtual bool security_series_slot_is_new(int sec_id) const;
     // The one path to evaluate_security(): installs the requested context's
     // bar index for the evaluator's TA members (ta::bar_context()) for the
     // duration of the dispatch. `bar_index` is the 0-based index of the
@@ -3649,7 +3649,7 @@ protected:
     // compute()/recompute() dispatch of one requested bar rewrites the same
     // ring slot, and a conditional window call inside the security expression
     // is addressed exactly like TradingView addresses it.
-    void dispatch_security_eval(SecurityEvalState& state, const Bar& bar,
+    virtual void dispatch_security_eval(SecurityEvalState& state, const Bar& bar,
                                 bool publish, int64_t bar_index);
     // KI-55 range-start gate for one evaluator: true when the input bar at
     // `input_ts` belongs to an HTF bucket that opened before the cut --
@@ -3661,18 +3661,18 @@ protected:
     // progressive feed and the historical lookahead projection builder must
     // agree on this predicate so projected child indexes line up with the
     // per-state feed cursor.
-    bool security_input_precedes_range_start(const SecurityEvalState& state,
+    virtual bool security_input_precedes_range_start(const SecurityEvalState& state,
                                              int64_t input_ts) const;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     // True when the auxiliary request.security feed holds a bar in
     // [from_ms, to_ms): the evidence that an HTF bucket whose nominal open
     // precedes the run's first chart bar was in progress at the range start.
-    bool aux_security_traded_between(int64_t from_ms, int64_t to_ms) const;
+    virtual bool aux_security_traded_between(int64_t from_ms, int64_t to_ms) const;
 #endif
-    void feed_security_eval_state(
+    virtual void feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar,
         bool calling_bar_complete = false);
-    void publish_security_eval_state_at_calling_boundary(
+    virtual void publish_security_eval_state_at_calling_boundary(
         SecurityEvalState& state);
 
     // A new batch run (including stream_begin's historical warmup) starts a
@@ -3883,9 +3883,10 @@ protected:
     // Internal sizing helper; protected (alongside calc_qty) so the sizing-guard
     // test can exercise the fill_price<=0 / NaN rejection path directly. See
     // tests/test_adversarial_ohlcv.cpp.
-    double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
+    virtual double calc_qty_for_type(double fill_price, double qty_value, int qty_type) const;
 
 private:
+protected:
     execution::Result settle_with_context_scoped(
         const execution::Action& action, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle,
@@ -4057,8 +4058,8 @@ private:
     // source-owned seam.  The Pine compatibility adapter is implemented in
     // engine_market_admission.cpp and is deliberately absent from this
     // public engine header.
-    bool opening_admission_eligible(const MarketAdmissionDraft& draft) const;
-    void record_market_sizing_revision(PendingOrder& order, admission::SizingObservation before,
+    virtual bool opening_admission_eligible(const MarketAdmissionDraft& draft) const;
+    virtual void record_market_sizing_revision(PendingOrder& order, admission::SizingObservation before,
                                       double affordability_before);
     bool pending_flat_market_pair_scope_is_live() const;
     bool default_flat_market_gross_scope_is_live() const;
@@ -4180,34 +4181,34 @@ private:
     // close-time re-issue takes effect once the bar's broker events are
     // done). Called right after every process_margin_call dispatch site.
     void settle_dormant_bracket_reissues(exit_legs::Domain domain);
-    exit_legs::Frame next_leg_event(exit_legs::Phase phase = exit_legs::Phase::Observation);
-    exit_legs::Frame preview_next_leg_event(
+    virtual exit_legs::Frame next_leg_event(exit_legs::Phase phase = exit_legs::Phase::Observation);
+    virtual exit_legs::Frame preview_next_leg_event(
         exit_legs::Phase phase = exit_legs::Phase::Observation) const;
     void apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
                           std::optional<exit_legs::Frame> cause = std::nullopt);
-    exit_legs::Domain current_exit_leg_domain() const;
+    virtual exit_legs::Domain current_exit_leg_domain() const;
     enum class ExitLegTransitionResult {
         Applied, Replay, StaleIdentity, BindRefused, ActionRefused, Exhausted,
         RevisionExhausted
     };
-    ExitLegTransitionResult transition_exit_leg(
+    virtual ExitLegTransitionResult transition_exit_leg(
         exit_legs::Lifecycle& legs, uint64_t order_incarnation,
         exit_legs::Operation operation, std::optional<exit_legs::Frame> supplied,
         uint64_t& event_seq, int64_t position_cycle) const;
-    std::optional<execution::Status> validate_lifecycle_effects(
+    virtual std::optional<execution::Status> validate_lifecycle_effects(
         const execution::LifecycleEffects& lifecycle) const;
-    std::optional<execution::Status> preflight_settlement_lifecycle(
+    virtual std::optional<execution::Status> preflight_settlement_lifecycle(
         const execution::LifecycleEffects& lifecycle,
         bool will_reset_to_flat, bool will_open_quoted);
-    void apply_pre_close_lifecycle_batch(const execution::LifecycleBatch& batch);
-    void apply_authorized_pending_removals(
+    virtual void apply_pre_close_lifecycle_batch(const execution::LifecycleBatch& batch);
+    virtual void apply_authorized_pending_removals(
         const std::vector<execution::PendingRemoval>& removals);
     std::vector<execution::PendingRemoval> snapshot_exit_pending_removals() const;
     std::optional<execution::LifecycleBatch> select_declined_reversal_pre_close(
         const Bar& bar) const;
-    const PendingOrder* find_unique_pending(
+    virtual const PendingOrder* find_unique_pending(
         uint64_t incarnation, int64_t created_seq) const;
-    PendingOrder* find_unique_pending(uint64_t incarnation, int64_t created_seq);
+    virtual PendingOrder* find_unique_pending(uint64_t incarnation, int64_t created_seq);
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
@@ -4375,9 +4376,9 @@ private:
                           double fill_price, bool was_long);
     void record_close_trade(Trade trade);
     void validate_close_trade_counters(const Trade* rows, size_t count) const;
-    execution::Status preflight_source_close_observation(
+    virtual execution::Status preflight_source_close_observation(
         const Trade* rows, size_t count, std::optional<int>& loss_day) const;
-    void observe_source_close_rows(
+    virtual void observe_source_close_rows(
         const Trade* rows, size_t count, std::optional<int> loss_day);
     // Quote one resolved execution's current charges. Entry costs on the
     // closed rows are historical allocations. Returns close shares in FIFO
@@ -4471,14 +4472,14 @@ private:
         const std::string& id, bool is_long, double fill_price, double explicit_qty,
         int explicit_qty_type, bool explicit_qty_prequantized,
         uint64_t entry_incarnation);
-    double calc_default_qty_from_equity(double fill_price, double equity) const;
-    double calc_qty_for_type_from_equity(
+    virtual double calc_default_qty_from_equity(double fill_price, double equity) const;
+    virtual double calc_qty_for_type_from_equity(
         double fill_price, double qty_value, int qty_type, double equity) const;
-    double source_reversal_qty(double fill_price, double explicit_qty,
+    virtual double source_reversal_qty(double fill_price, double explicit_qty,
                                int explicit_qty_type, bool prequantized) const;
-    void bind_exit_activation(PendingOrder& order);
-    void bind_retained_exit_activations();
-    void unbind_exit_activations();
+    virtual void bind_exit_activation(PendingOrder& order);
+    virtual void bind_retained_exit_activations();
+    virtual void unbind_exit_activations();
     void open_fresh_position(PositionSide requested, double fill_price,
                              double qty, const std::string& id,
                              uint64_t entry_incarnation);
@@ -4623,7 +4624,7 @@ private:
     void stream_refresh_action_metadata(size_t first_action, size_t first_trade);
     bool stream_finalize_until(int64_t timestamp_ms);
     void stream_feed_input_bar(const Bar& bar, bool had_tick);
-    void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
+    virtual void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
 
     // fill_report helpers (defined in engine_report.cpp).
     void fill_trades_section(ReportC* out) const;
@@ -4632,14 +4633,15 @@ private:
     void fill_trace_section(ReportC* out) const;
 
     void guard_native_mutation(const char* operation);
-    void legacy_run_simple(const Bar* bars, int n);
-    void legacy_run_tf(const Bar* input_bars, int n_input,
+    [[noreturn]] void throw_native_only_route(const char* seam);
+    virtual void legacy_run_simple(const Bar* bars, int n);
+    virtual void legacy_run_tf(const Bar* input_bars, int n_input,
                        const std::string& input_tf,
                        const std::string& script_tf,
                        bool bar_magnifier,
                        int magnifier_samples,
                        MagnifierDistribution magnifier_dist);
-    void legacy_run_rich(const Bar* input_bars, int n_input,
+    virtual void legacy_run_rich(const Bar* input_bars, int n_input,
                          const std::string& input_tf,
                          const std::string& script_tf,
                          const std::unordered_map<std::string, std::string>& inputs,
@@ -4648,14 +4650,14 @@ private:
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist);
-    bool legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
+    virtual bool legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
                              const std::string& input_tf,
                              const std::string& script_tf);
-    bool legacy_stream_push_bar(const Bar& bar);
-    bool legacy_stream_push_tick(const TradeTick& tick);
-    bool legacy_stream_push_ticks(const TradeTick* ticks, int n);
-    bool legacy_stream_advance_time(int64_t timestamp_ms);
-    bool legacy_stream_end(bool finalize_partial_input_bar);
+    virtual bool legacy_stream_push_bar(const Bar& bar);
+    virtual bool legacy_stream_push_tick(const TradeTick& tick);
+    virtual bool legacy_stream_push_ticks(const TradeTick* ticks, int n);
+    virtual bool legacy_stream_advance_time(int64_t timestamp_ms);
+    virtual bool legacy_stream_end(bool finalize_partial_input_bar);
 
     struct ExecutionConsumerSlot {
         bool native = false;
@@ -4729,7 +4731,7 @@ public:
     // Copies a finer request.security-only feed for subsequent historical
     // runs. n == 0 clears it. Validation that depends on native chart bars is
     // intentionally deferred to run(), where failures reach last_error().
-    bool set_aux_security_feed(const Bar* bars, int n,
+    virtual bool set_aux_security_feed(const Bar* bars, int n,
                                const std::string& input_tf);
 #endif
 

@@ -453,6 +453,12 @@ execution::Result BacktestEngine::settle_native_reversal_at_v1(
     return commit_native_settlement_stage(stage, fill, lifecycle, context);
 }
 
+
+
+
+
+
+
 execution::Result BacktestEngine::settle_reversal_with_lifecycle_v1(
         const execution::ReverseTo& reversal, const execution::Fill& fill,
         const execution::LifecycleEffects& lifecycle) {
@@ -489,6 +495,24 @@ execution::Result BacktestEngine::settle_execution_with_lifecycle(
     return settle_source_staged_execution(stage, fill, lifecycle, context);
 }
 
+execution::Result BacktestEngine::settle_execution_selected_with_lifecycle(
+        const execution::Action& action, const execution::Fill& fill,
+        const execution::LifecycleEffects& lifecycle,
+        const execution::SelectedOpeningSet& selection) {
+    execution::PhysicalExecutionContext context;
+    context.effective_time_ms = current_bar_.timestamp;
+    context.interval_index = bar_index_;
+    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+    if (!std::isnan(fold_exit_trail_peak_)) {
+        context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+    }
+    NativeSettlementStage stage;
+    stage_native_settlement(
+        stage, action, fill, execution::Book{}, &selection, &lifecycle);
+    return settle_source_staged_execution(stage, fill, lifecycle, context);
+}
+
+
 execution::Result BacktestEngine::settle_native_execution_at(
         const execution::Action& action, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context) {
@@ -516,22 +540,7 @@ execution::Result BacktestEngine::settle_native_execution_selected_at(
     return settle_with_context_selected(action, fill, {}, context, selection);
 }
 
-execution::Result BacktestEngine::settle_execution_selected_with_lifecycle(
-        const execution::Action& action, const execution::Fill& fill,
-        const execution::LifecycleEffects& lifecycle,
-        const execution::SelectedOpeningSet& selection) {
-    execution::PhysicalExecutionContext context;
-    context.effective_time_ms = current_bar_.timestamp;
-    context.interval_index = bar_index_;
-    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
-    if (!std::isnan(fold_exit_trail_peak_)) {
-        context.preceding_exit_trail_peak = fold_exit_trail_peak_;
-    }
-    NativeSettlementStage stage;
-    stage_native_settlement(
-        stage, action, fill, execution::Book{}, &selection, &lifecycle);
-    return settle_source_staged_execution(stage, fill, lifecycle, context);
-}
+
 
 execution::Result BacktestEngine::settle_with_context_scoped(
         const execution::Action& action, const execution::Fill& fill,
