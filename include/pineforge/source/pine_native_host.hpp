@@ -175,7 +175,7 @@ protected:
         source_pending_view_cache_.clear();
         source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
             + adapter_.live_handles_.size());
-        const auto append = [&](const PlacementSnapshot& snapshot) {
+        const auto append = [&](const PlacementSnapshot& snapshot, const std::string& label) {
             FixturePendingOrderType type = FixturePendingOrderType::MARKET;
             switch (snapshot.family) {
             case PineOrderFamily::Close:
@@ -193,13 +193,16 @@ protected:
                 type = FixturePendingOrderType::MARKET;
                 break;
             }
-            source_pending_view_cache_.push_back({snapshot.source_id, type,
+            const std::string& id = snapshot.frozen_market_targeted_close ? label : snapshot.source_id;
+            source_pending_view_cache_.push_back({id, type,
                 snapshot.sizing.frozen_units, snapshot.sizing.price});
         };
-        for (const auto& command : adapter_.pending_same_bar_commands_) append(command.snapshot);
+        for (const auto& command : adapter_.pending_same_bar_commands_) {
+            append(command.snapshot, command.request.label);
+        }
         for (const auto& handle : adapter_.live_handles_) {
             const auto found = adapter_.placement_.find(handle.incarnation);
-            if (found != adapter_.placement_.end()) append(found->second);
+            if (found != adapter_.placement_.end()) append(found->second, found->second.source_id);
         }
         return source_pending_view_cache_;
     }
