@@ -9,10 +9,71 @@ void fill_pending_order_mirror(const source::PendingOrder&,
                                pf_pending_order_v1_t*);
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
-    : BacktestEngine(cap), adapter_(cap) {}
+    : BacktestEngine(), adapter_(cap) {}
 
 void source::PineStrategyHost::on_bar(const Bar& bar) {
     on_source_bar(bar);
+}
+
+void source::PineStrategyHost::configure_pine_strategy(
+        const PineStrategyConfig& config) {
+    process_orders_on_close_ = config.process_orders_on_close;
+    calc_on_order_fills_ = config.calc_on_order_fills;
+    initial_capital_ = config.initial_capital;
+    default_qty_type_ = static_cast<QtyType>(config.default_qty_type);
+    default_qty_value_ = config.default_qty_value;
+    pyramiding_ = config.pyramiding;
+    commission_value_ = config.commission_value;
+    commission_type_ = static_cast<CommissionType>(config.commission_type);
+    slippage_ = config.slippage;
+    margin_long_ = config.margin_long;
+    margin_short_ = config.margin_short;
+    close_entries_rule_any_ = config.close_entries_rule_any;
+    _src_series_active_ = config.src_series_active;
+}
+
+void source::PineStrategyHost::set_strategy_override(
+        const StrategyOverrides& overrides) {
+    if (!std::isnan(overrides.initial_capital)) initial_capital_ = overrides.initial_capital;
+    if (overrides.pyramiding >= 0) pyramiding_ = overrides.pyramiding;
+    if (overrides.slippage >= 0) slippage_ = overrides.slippage;
+    if (!std::isnan(overrides.commission_value)) commission_value_ = overrides.commission_value;
+    if (overrides.commission_type >= 0)
+        commission_type_ = static_cast<CommissionType>(overrides.commission_type);
+    if (!std::isnan(overrides.default_qty_value))
+        default_qty_value_ = overrides.default_qty_value;
+    if (overrides.default_qty_type >= 0)
+        default_qty_type_ = static_cast<QtyType>(overrides.default_qty_type);
+    if (overrides.process_orders_on_close >= 0)
+        process_orders_on_close_ = overrides.process_orders_on_close != 0;
+    if (overrides.calc_on_order_fills >= 0)
+        calc_on_order_fills_ = overrides.calc_on_order_fills != 0;
+    if (overrides.close_entries_rule >= 0)
+        close_entries_rule_any_ = overrides.close_entries_rule != 0;
+}
+
+void source::PineStrategyHost::set_pine_risk_direction(int direction) {
+    risk_direction_ = static_cast<RiskDirection>(direction);
+}
+
+void source::PineStrategyHost::set_pine_risk_max_cons_loss_days(int value) {
+    risk_max_cons_loss_days_ = value;
+}
+
+void source::PineStrategyHost::set_pine_risk_max_drawdown(
+        double value, bool percent) {
+    risk_max_drawdown_ = value;
+    risk_max_drawdown_is_pct_ = percent;
+}
+
+void source::PineStrategyHost::set_pine_risk_max_intraday_loss(
+        double value, bool percent) {
+    risk_max_intraday_loss_ = value;
+    risk_max_intraday_loss_is_pct_ = percent;
+}
+
+void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
+    risk_max_position_size_ = value;
 }
 
 int source::PineStrategyHost::pine_bar_index() const {
@@ -29,6 +90,14 @@ bool source::PineStrategyHost::history_advances_new_bar() const {
 
 double source::PineStrategyHost::prev_chart_close() const {
     return prev_chart_close_;
+}
+
+int source::PineStrategyHost::last_bar_dual_entry_path() const {
+    return static_cast<int>(last_bar_dual_entry_decision_);
+}
+
+double source::PineStrategyHost::trail_best_price() const {
+    return trail_best_price_;
 }
 
 void source::PineStrategyHost::_push_source_series() {

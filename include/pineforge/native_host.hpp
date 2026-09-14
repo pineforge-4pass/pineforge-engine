@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v15 {
+inline namespace engine_script_run_v16 {
 
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
@@ -350,7 +350,7 @@ using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
 // same inline engine epoch as BacktestEngine so old-header/new-library
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
-#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V15 1
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V16 1
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -406,5 +406,5 @@ public:
     friend class NativeExecutionConsumer;
 };
 
-}  // inline namespace engine_script_run_v15
+}  // inline namespace engine_script_run_v16
 }  // namespace pineforge

@@ -22,6 +22,39 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     hash_str_double_map(f, close_two_call_first_qty_);
     hash_token_owned_map(f, callsite_close_reserved_qty_);
     hash_token_owned_map(f, callsite_close_two_call_first_qty_);
+    f.b(sb_close_active_);
+    f.i(sb_close_bar_);
+    f.i(sb_close_calls_);
+    f.s(sb_close_first_id_);
+    f.d(sb_close_first_target_);
+    f.b(sb_close_first_carry_valid_);
+    f.d(sb_close_first_carry_qty_);
+    f.s(sb_close_id_);
+    f.s(sb_close_comment_);
+    f.i(callsite_close_bar_);
+    f.u(callsite_close_queue_seq_);
+    f.d(callsite_close_admitted_total_);
+    std::vector<uint64_t> callsite_tokens;
+    callsite_tokens.reserve(callsite_close_callsites_.size());
+    for (const auto& pair : callsite_close_callsites_) callsite_tokens.push_back(pair.first);
+    std::sort(callsite_tokens.begin(), callsite_tokens.end());
+    f.u(callsite_tokens.size());
+    for (uint64_t token : callsite_tokens) {
+        const auto& site = callsite_close_callsites_.at(token);
+        f.u(token); f.u(site.token); f.b(site.active); f.i(site.calls);
+        f.s(site.first_id); f.d(site.first_target); f.b(site.first_ledger_consumed);
+        f.b(site.first_carry_valid); f.d(site.first_carry_qty); f.s(site.id);
+        f.s(site.comment); f.d(site.target); f.u(site.deferred_cleanup_ids.size());
+        for (const auto& id : site.deferred_cleanup_ids) f.s(id);
+        f.u(site.queue_seq); f.b(site.retire_ledger_whole);
+    }
+    f.i(static_cast<int64_t>(default_qty_type_));
+    f.d(default_qty_value_);
+    f.i(pyramiding_);
+    f.b(margin_zero_cover_full_liquidation_);
+    f.b(close_entries_rule_any_);
+    f.d(margin_long_);
+    f.d(margin_short_);
 
     f.i(pos_view_freeze_bar_);
     f.i(static_cast<int64_t>(pos_view_frozen_side_));
@@ -134,16 +167,34 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
             f.i(capture->position_cycle);
             f.i(static_cast<int64_t>(capture->side));
             f.b(capture->first_later_admission.has_value());
-            if (const auto& admission = capture->first_later_admission) f.u(*admission);
+            if (const auto& admission = capture->first_later_admission) {
+                f.u(*admission);
+            }
         }
         f.b(o.reservation_growth_source.reservation_owner().has_value());
-        if (const auto& receiver = o.reservation_growth_source.reservation_owner()) f.u(*receiver);
+        if (const auto& receiver = o.reservation_growth_source.reservation_owner()) {
+            f.u(*receiver);
+        }
     }
     adapter_.admission_journal.reflect("journal", [&](const auto& field) {
         hash_admission_field(f, field);
     });
 
+    std::vector<std::string> cancelled_ids;
+    cancelled_ids.reserve(named_entry_cancelled_incarnation_in_current_eval_.size());
+    for (const auto& pair : named_entry_cancelled_incarnation_in_current_eval_)
+        cancelled_ids.push_back(pair.first);
+    std::sort(cancelled_ids.begin(), cancelled_ids.end());
+    f.u(cancelled_ids.size());
+    for (const auto& id : cancelled_ids) {
+        const auto& value = named_entry_cancelled_incarnation_in_current_eval_.at(id);
+        f.s(id); f.u(value.entry_incarnation); f.u(value.surviving_exit_incarnation);
+    }
+
     hash_str_set(f, consumed_partial_exit_ids_);
+    hash_str_set(f, scratch_skip_ids_);
+    f.u(scratch_filled_incarnations_.size());
+    for (uint64_t incarnation : scratch_filled_incarnations_) f.u(incarnation);
     f.i(static_cast<int64_t>(last_bar_dual_entry_decision_));
     f.d(trail_best_price_);
     f.i(trail_close_restart_bar_);
@@ -152,6 +203,8 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.i(trail_best_before_bar_position_cycle_);
     f.u(trail_best_before_bar_fill_seq_);
     f.b(last_exit_fill_was_trail_);
+    f.b(current_fill_is_limit_);
+    f.i(static_cast<int64_t>(dual_entry_path_));
     f.i(priced_entry_activity_bar_);
     f.b(priced_entry_filled_this_bar_);
 
@@ -165,7 +218,9 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.b(adapter_.cap.configuration().defer_pooc_close);
     f.b(adapter_.cap.configuration().count_pooc_full_close);
     f.b(adapter_.cap.budget().day().has_value());
-    if (const auto& day = adapter_.cap.budget().day()) f.i(day->key);
+    if (const auto& day = adapter_.cap.budget().day()) {
+        f.i(day->key);
+    }
     f.i(adapter_.cap.budget().charged_slots());
     f.b(adapter_.cap.budget().latched());
     f.b(adapter_.cap.budget().transfer().has_value());
@@ -202,6 +257,22 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.i(open_margin_slice_bar_);
     f.i(next_order_seq_);
     f.u(exit_leg_event_seq_);
+    f.b(coof_scheduler_active_);
+    f.b(coof_fill_recalc_active_);
+    f.b(coof_cursor_is_bar_close_);
+    f.b(coof_cursor_is_bar_point_);
+    f.b(coof_evaluating_path_segment_);
+    f.b(coof_recalc_at_bar_open_);
+    f.b(coof_recalc_after_first_open_fill_);
+    f.u(coof_market_entry_recalc_incarnation_);
+    f.u(coof_market_entry_recalc_fill_seq_);
+    f.b(coof_at_extreme_waypoint_);
+    f.b(coof_hist_is_segment_);
+    f.i(coof_hist_path_index_);
+    f.i(coof_cascade_recalc_leg_);
+    f.b(coof_cascade_force_wp_gap_);
+    f.d(coof_cursor_price_);
+    f.u(coof_direct_fill_events_remaining_);
 
     f.b(_src_series_active_);
     hash_source_series(f, _src_open_);

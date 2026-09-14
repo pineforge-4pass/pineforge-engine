@@ -322,7 +322,7 @@ def check_texts(files):
         driver_src, ("native_bar_structurally_valid", "preflight_native_inputs"),
         "native_driver_v4")
 
-    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v15")
+    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v16")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
                    "NativeFailure", "NativeFailureContext", "NativeInRunCause",
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
@@ -331,15 +331,15 @@ def check_texts(files):
                    "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
                    "NativeExecutionTermsFacts", "NativePrecommitView",
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult"),
-            "engine_script_run_v15",
+            "engine_script_run_v16",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
-    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v15",
+    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v16",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
         host, "NativeCurrentExecutionResult",
         "std::variant<NativeCurrentRefusal,native_order::ExecutionAppliedEvent,"
         "native_order::NoEffectEvent,native_order::MatchRejectedEvent,"
-        "native_order::CancelledEvent>", "engine_script_run_v15")
+        "native_order::CancelledEvent>", "engine_script_run_v16")
     current_command = body(host, r'struct\s+NativeCurrentExecution\s*\{', 'current command')
     if re.sub(r'\s+', '', current_command) != 'native_order::RequestHandletarget;NativeCurrentPriceRuleprice_rule=NativeCurrentPriceRule::AsPresented;':
         raise ValueError('current command has exactly target and price_rule, no competing selected authority')
@@ -362,30 +362,30 @@ def check_texts(files):
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
-            raise ValueError(name + " must be a v15 NativeStrategyHost member")
+            raise ValueError(name + " must be a v16 NativeStrategyHost member")
     for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution', 'execute_current'):
         if name not in host:
             raise ValueError('missing current host contract: ' + name)
     if "native_failure_context_in_run" not in host:
-        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v15")
+        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v16")
     if "native_failed_run_identity" not in host:
-        raise ValueError("native_failed_run_identity must belong to engine_script_run_v15")
+        raise ValueError("native_failed_run_identity must belong to engine_script_run_v16")
     if not re.search(r'\bSubmitResult\s+submit\s*\(\s*const\s+native_order::Request\s*&', host):
-        raise ValueError("general submit must belong to engine_script_run_v15")
+        raise ValueError("general submit must belong to engine_script_run_v16")
     if not re.search(r'\bReplaceResult\s+replace\s*\(\s*const\s+native_order::RequestHandle\s*&',
                      host):
-        raise ValueError("general replace must belong to engine_script_run_v15")
+        raise ValueError("general replace must belong to engine_script_run_v16")
     if "submit_market" not in host or "replace_market" not in host:
-        raise ValueError("market-only submit/replace must remain in engine_script_run_v15")
-    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v15")
+        raise ValueError("market-only submit/replace must remain in engine_script_run_v16")
+    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v16")
     require(consumer, ("NativeExecutionConsumer",),
-            "engine_script_run_v15", r'\bclass\s+NAME\s*')
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v15")
+            "engine_script_run_v16", r'\bclass\s+NAME\s*')
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v16")
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
              "NativeStrategyHost::native_events",
              "NativeStrategyHost::configure_native_fx_curve"),
-            "engine_script_run_v15", r'\bNAME\s*\(')
+            "engine_script_run_v16", r'\bNAME\s*\(')
 
 
     # These are continuation owners, not redundant physical-book snapshots.
@@ -424,4 +424,4 @@ def check(root=ROOT):
 if __name__ == "__main__":
     check()
     print("native_order identity v1 / values v4, native_calendar_v2, native_run_spec_v1, "
-          "native_driver_v4, native_fx_curve_v1 and host engine_script_run_v15 ownership verified")
+          "native_driver_v4, native_fx_curve_v1 and host engine_script_run_v16 ownership verified")

@@ -468,7 +468,7 @@ struct SymInfo {
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v15 {
+inline namespace engine_script_run_v16 {
 using PendingOrder = source::PendingOrder;
 class BrokerStateHashSink;
 class BacktestEngine {
@@ -477,9 +477,7 @@ protected:
     friend class NativeExecutionConsumer;
     friend class NativeStrategyHost;
     struct NativeConsumerBindTag { explicit NativeConsumerBindTag() = default; };
-    explicit BacktestEngine(NativeConsumerBindTag,
-                            compat::pine::CapAttachment cap_attachment =
-                                compat::pine::CapAttachment::None);
+    explicit BacktestEngine(NativeConsumerBindTag);
     IExecutionConsumer& execution_consumer();
     const IExecutionConsumer& execution_consumer() const;
     virtual void hash_source_extension(BrokerStateHashSink&) const;
@@ -583,10 +581,6 @@ protected:
     bool calc_on_order_fills_ = false;
     // Detached on bare native construction. Only the explicit Pine frontend
     // attachment can select its source-shape priority interpretation.
-    compat::pine::OrderPriority pine_order_priority_;
-    QtyType default_qty_type_ = QtyType::FIXED;
-    double default_qty_value_ = 1.0;
-    int pyramiding_ = 1;            // max additional entries in same direction
     CommissionType commission_type_ = CommissionType::PERCENT;
     double commission_value_ = 0.0;
     int slippage_ = 0;              // slippage in ticks
@@ -602,13 +596,10 @@ protected:
     // default makes progress by one quantity step; selected historical exports
     // instead close the whole residual.  Keep that alternative default-off so
     // it cannot rewrite otherwise matching trade tapes.
-    bool margin_zero_cover_full_liquidation_ = false;
     // Temporary Pine source facade: this value IS the sole compatibility
     // owner, not a mirrored limit/proxy. Existing generated statement-time
     // assignments explicitly opt in; generated constructors attach before
     // host metadata. Bare native construction leaves this policy unselected.
-    compat::pine::IntradayCap max_intraday_filled_orders_;
-    bool close_entries_rule_any_ = false; // true = "ANY", false = "FIFO" (default)
     // Percentage of margin required to open a long/short position. Default
     // 100 = 1x leverage (no leverage). TradingView's strategy() takes these
     // as ``margin_long`` / ``margin_short``; when the implied position value
@@ -836,14 +827,10 @@ protected:
     // selector so future data can never leak into a live continuation.
     bool historical_security_lookahead_projection_ = false;
     bool historical_security_lookahead_projection_active_ = false;
-    int64_t next_order_seq_ = 1;
     uint64_t next_order_incarnation_ = 1;
-    uint64_t exit_leg_event_seq_ = 0;
     // TV: at most one priced ENTRY "open" event per bar; persists across
     // multiple process_pending_orders calls (bar magnifier) and dual-pass
     // opposing-stop resolution (see engine_fills.cpp).
-    int priced_entry_activity_bar_ = -1;
-    bool priced_entry_filled_this_bar_ = false;
 
     // Transient: true only while applying a priced (stop/limit/trail) fill
     // (apply_filled_order_to_state). emit_close_trade reads it to fold the
@@ -861,7 +848,6 @@ protected:
     // Set by evaluate_fill_price: the just-evaluated exit fill fired on the
     // TRAIL leg (vs stop/limit/gap). Consumed by apply_filled_order_to_state
     // to reconstruct the trail peak above.
-    bool last_exit_fill_was_trail_ = false;
     // Transient: true only while dispatching a LIMIT-triggered fill
     // (apply_filled_order_to_state). apply_fill_slippage reads it to route
     // limit fills onto the unslipped limit-or-better path (apply_limit_fill)
@@ -882,20 +868,12 @@ protected:
     // one scalar tombstone is sufficient and cannot grow with feed length.
 
     // Actual command/review/sizing causes; policy history is a transient fold.
-    MarketAdmissionJournal market_admission_journal_;
     // Evaluation-scoped tombstones for live priced ENTRY objects actually
     // removed by strategy.cancel(id). invoke_chart_on_bar clears the map
     // before each script execution; the first fresh same-id strategy.entry
     // consumes the unique cancelled incarnation.
-    struct NamedEntryCancelContext {
-        uint64_t entry_incarnation = 0;
-        uint64_t surviving_exit_incarnation = 0;
-    };
-    std::unordered_map<std::string, NamedEntryCancelContext>
-        named_entry_cancelled_incarnation_in_current_eval_;
 
     // strategy.exit partial orders are one-shot per open position for a given id
-    std::unordered_set<std::string> consumed_partial_exit_ids_;
 
     // Reusable scratchpad for the per-call opposing-stop deferral set in
     // process_pending_orders. Holds the ids of flat-issued entry stops that
@@ -903,13 +881,11 @@ protected:
     // Cleared at the start of each process_pending_orders call; the retained
     // capacity avoids a fresh heap allocation 2-4x per bar. Typically tiny
     // (0-1 entries). Not state — must be empty across calls.
-    std::unordered_set<std::string> scratch_skip_ids_;
 
     // Reusable scratch for process_pending_orders (capacity persists across
     // calls, mirroring scratch_skip_ids_). Incarnations survive OCA erasure;
     // vector indices and retained replacement priorities do not identify an
     // object. Always cleared before use; never persistent cancellation state.
-    std::vector<uint64_t> scratch_filled_incarnations_;
 
     // Per-PASS dual-entry-stop arbitration winner (a flat position resting
     // one long stop-only ENTRY + one short stop-only ENTRY, both touched
@@ -928,7 +904,6 @@ protected:
     // updates this; the COOF scheduler's process_next_pending_order keeps
     // its own unrelated local of the same computation and does not persist
     // it here.
-    internal::DualEntryStopPathWinner dual_entry_path_{};
     // Per-BAR snapshot of the above: the last non-None value
     // dual_entry_path_ took during this bar, surviving whatever
     // dual_entry_path_ itself does afterward (a fill, a declined admission
@@ -943,11 +918,9 @@ protected:
     // not) reads the bar's real arbitration even if the winning order later
     // filled, was declined, or the working state otherwise moved on. Same
     // calc_on_order_fills_ caveat as dual_entry_path_ above.
-    internal::DualEntryStopPathWinner last_bar_dual_entry_decision_{};
 
     // --- Trailing stop state ---
     // Best favorable price since position entry (for trailing stop computation)
-    double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
     // The script bar on which a strategy.exit re-issue restarted
     // trail_best_price_ from the bar's CLOSE under process_orders_on_close
     // (round 9 family Z's restart rule, round 10 family Y's bar rule). The
@@ -955,20 +928,15 @@ protected:
     // the next bar's open: the same bar's high/low must not be folded into
     // it by the close-time process_pending_orders that follows the script
     // body (update_trail_best_for_bar_open skips this bar). -1 = none.
-    int trail_close_restart_bar_ = -1;
     // The position's running extreme as it stood BEFORE the current bar's
     // high / low were folded in (update_trail_best_for_bar_open), and the
     // bar it was captured on: a trail leg killed by a declined reversal on
     // this bar restarts from it (round 10 family AE,
     // PendingOrder::dormant_trail_best).
-    double trail_best_before_bar_ = std::numeric_limits<double>::quiet_NaN();
-    int trail_best_before_bar_index_ = -1;
     // The ordinary POOC close scan may revisit a retained trail with that
     // same pre-bar extreme only while the carried position is unchanged.
     // A new cycle, add, reduction or close-time trail restart keeps its own
     // established path state instead of inheriting an earlier position's.
-    int64_t trail_best_before_bar_position_cycle_ = 0;
-    uint64_t trail_best_before_bar_fill_seq_ = 0;
 
     // Generic synchronous close obligation. Pine quota/cause/beneficiary
     // state remains exclusively in the compatibility facade above.
@@ -1019,21 +987,8 @@ protected:
     int eventrades_count_ = 0;
 
     // --- Risk management (strategy.risk.*) ---
-    enum class RiskDirection { BOTH, LONG_ONLY, SHORT_ONLY };
-    RiskDirection risk_direction_ = RiskDirection::BOTH;
-    int risk_max_cons_loss_days_ = 0;       // 0 = unlimited
-    double risk_max_drawdown_ = 0.0;        // 0 = unlimited
-    bool risk_max_drawdown_is_pct_ = false; // true = percent_of_equity mode
-    double risk_max_intraday_loss_ = 0.0;   // 0 = unlimited
-    bool risk_max_intraday_loss_is_pct_ = false; // true = percent_of_equity mode
-    double risk_max_position_size_ = 0.0;   // 0 = unlimited
 
     // Risk state tracking
-    int cons_loss_day_count_ = 0;
-    int last_loss_day_ = -1;
-    bool risk_halted_ = false;
-    double intraday_pnl_ = 0.0;
-    int intraday_pnl_day_ = -1;
 
     // TradingView's strategy.risk.max_intraday_loss (round 7 family M
     // mechanism 5b, pinned 2026-09-05 by lab tv m45-risk-t1/t6/t9/t3b on
@@ -1054,15 +1009,9 @@ protected:
     // order of the fired day is dropped, the next day's fills). The rule
     // never latches risk_halted_ (that stays with max_drawdown /
     // max_cons_loss_days).
-    double intraday_loss_day_start_equity_ =
-        std::numeric_limits<double>::quiet_NaN();
-    int intraday_loss_day_ = -1;         // chart-tz day key of E_ds
-    int intraday_loss_block_day_ = -1;   // chart-tz day key while orders are blocked
-    bool intraday_loss_evaluating_ = false;
     // A fire inside a fill loop defers the pending-order cancel to the
     // loop's safe point (finish_intraday_loss_cancel); the loop itself
     // removes every order it has not yet applied.
-    bool intraday_loss_cancel_pending_ = false;
     // @broker-state end
     virtual int intraday_loss_day_key() const;
     virtual void intraday_loss_begin_bar(const Bar& bar);
@@ -1530,13 +1479,6 @@ protected:
     // KI-67 cascade waypoint bar — is a slice of an already-decided path and
     // is compared raw, exactly as before; a real chart / lower-TF bar is
     // quantized.
-    Bar broker_trigger_bar(const Bar& bar) const {
-        if ((calc_on_order_fills_ && coof_scheduler_active_)
-            || coof_cascade_force_wp_gap_) {
-            return bar;
-        }
-        return broker_tick_bar(bar);
-    }
 
     // TradingView fills stop entries directionally to mintick rather than
     // rounding to nearest: long stops snap UP (ceil), short stops snap DOWN
@@ -2129,38 +2071,28 @@ protected:
     // KI-60 scheduler transients. Script executions see the complete
     // historical bar, while direct POOC/immediate market closes use the
     // monotonic broker cursor price held here.
-    bool coof_scheduler_active_ = false;
-    bool coof_fill_recalc_active_ = false;
-    bool coof_cursor_is_bar_close_ = false;
     // finding-446: true when coof_cursor_price_ is a RAW OHLC path point /
     // magnifier tick (a broker-price fill there is nearest-tick rounded via
     // bar_fill_price); false when it is a resolved fill price (a bar-point
     // fill is already rounded, a level fill keeps its directional snap).
-    bool coof_cursor_is_bar_point_ = false;
-    bool coof_evaluating_path_segment_ = false;
     // KI-67: true only while the active fill recalc owns the FIRST fill event
     // at the bar-open tick (O). Orders placed while this holds keep STANDARD
     // exact-level semantics. Later fills at that same O, like fills at every
     // other path point, are MID-BAR cascades (the Pine historical cascade permission).
-    bool coof_recalc_at_bar_open_ = false;
     // True only while executing a fill recalc triggered by a later fill event
     // at O, after the first O fill has already consumed bar-open provenance.
     // Such a recalc is mid-bar for KI-67 and resumes on leg 0 (O->W1). This bit
     // lets strategy.exit apply the one pinned exception: a marketable LIMIT may
     // resume at W1, while marketable STOP suppression remains whole-entry-bar.
-    bool coof_recalc_after_first_open_fill_ = false;
     // Round15: identify the MARKET opening whose first callback is active.
     // A direct close/partial/reentry in that body changes the serial and must
     // not inherit the original fill's permission to arm a recrossing limit.
-    uint64_t coof_market_entry_recalc_incarnation_ = 0;
-    uint64_t coof_market_entry_recalc_fill_seq_ = 0;
     // KI-67: true only during a point-bar evaluation that sits AT an extreme
     // waypoint (W1 or W2) of the historical 4-tick path. Cascade orders born
     // this bar may fill only while this holds; on segments, at O, at C, and on
     // the ordinary-close / POOC-C / margin passes it is false so cascade orders
     // are held (they convert to ordinary resting orders at bar end). Set only by
     // the historical dispatch; the magnifier path never sets it.
-    bool coof_at_extreme_waypoint_ = false;
     // KI-67 exit cascade: the historical dispatch publishes its current path
     // position here for the strategy.exit cascade gate. coof_hist_is_segment_
     // marks a segment (vs point) evaluation; coof_hist_path_index_ is the LEG
@@ -2168,8 +2100,6 @@ protected:
     // path[index]) on a point. Meaningful only while coof_scheduler_active_ on
     // the non-magnifier historical path; the POOC-C / margin passes publish the
     // C waypoint (index 3) so cascade exits are held there.
-    bool coof_hist_is_segment_ = false;
-    int coof_hist_path_index_ = -1;
     // KI-67 exit cascade: the in-flight leg index (0..2) the CURRENT fill recalc
     // was triggered on — the leg the dispatch cursor traverses next after the
     // triggering fill. Published by the loop right before each recalc so a
@@ -2177,18 +2107,14 @@ protected:
     // position ("a fill AT a waypoint starts the NEXT leg"), rather than
     // re-deriving it from the fill price (ambiguous exactly at waypoints). -1 (or
     // >=3) outside a mid-bar historical recalc / at the terminal C tick.
-    int coof_cascade_recalc_leg_ = -1;
     // KI-67 exit cascade: set by the gate immediately before evaluate_fill_price
     // so resolve_exit_path_fill runs its open-gap shortcut on the in-flight
     // leg-end waypoint POINT even when is_entry_bar (entry + exit share a bar).
     // Reset right after that evaluation; never set on the magnifier path.
-    bool coof_cascade_force_wp_gap_ = false;
-    double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
     // Direct strategy.close / POOC fills can occur inside on_bar rather than
     // through process_next_pending_order. The scheduler refreshes this budget
     // before every speculative execution so those fills consume the same
     // finite historical/magnifier event budget as every other broker fill.
-    uint64_t coof_direct_fill_events_remaining_ = 0;
     // @broker-state begin
     // Monotonic cross-bar fill sequence counter; compared against
     // trail_best_before_bar_fill_seq_ (hashed above) and against
@@ -3677,22 +3603,7 @@ protected:
     ExecutionConsumerSlot execution_consumer_slot_;
 
 public:
-    explicit BacktestEngine(compat::pine::CapAttachment cap_attachment =
-                                compat::pine::CapAttachment::None);
-    // Explicit frontend selection, not a generic native risk switch. This
-    // preserves any prior declaration values and does not reset quota/state.
-    void enable_pine_intraday_cap() {
-        guard_native_mutation("enable_pine_intraday_cap");
-        max_intraday_filled_orders_.attach();
-    }
-    // Current execution-adapter scope: intraday cap + retained-parent priority.
-    // Idempotent configuration attachment, not a reset or universal Pine mode.
-    // Generated constructors call this before any host metadata is forwarded.
-    void attach_pine_execution_adapter() {
-        guard_native_mutation("attach_pine_execution_adapter");
-        max_intraday_filled_orders_.attach();
-        pine_order_priority_.attach();
-    }
+    explicit BacktestEngine();
     virtual ~BacktestEngine();
     int execution_contract() const;
     bool native_bound() const;
@@ -4056,9 +3967,6 @@ public:
     // no-op (stays at its last standard-path value) under the COOF
     // scheduler, mirroring set_probe_suppress_tail_logic's
     // dispatch-path-scope caveat.
-    int last_bar_dual_entry_path() const {
-        return static_cast<int>(last_bar_dual_entry_decision_);
-    }
 
     // Live runtime G1 (spec §3.4): a deterministic, order-independent
     // FNV-1a 64 hash over every piece of broker state that decides the next
@@ -4184,7 +4092,6 @@ public:
     // (trail_best_price_; NaN until a position fills).
     double position_avg_price() const { return position_entry_price_; }
     int64_t position_cycle_seq() const { return position_cycle_seq_; }
-    double trail_best_price() const { return trail_best_price_; }
     // ABI v4 live-runtime surface (task 9): public forwarders for the C
     // ABI, which -- being extern "C" free functions -- cannot reach the
     // protected signed_position_size() / current_equity() above.
@@ -4279,5 +4186,5 @@ public:
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 };
 
-} // inline namespace engine_script_run_v15
+} // inline namespace engine_script_run_v16
 } // namespace pineforge

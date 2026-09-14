@@ -8,6 +8,40 @@ namespace pineforge {
 
 using namespace source;
 
+    Bar source::PineStrategyHost::broker_trigger_bar(const Bar& bar) const {
+        if ((calc_on_order_fills_ && coof_scheduler_active_)
+            || coof_cascade_force_wp_gap_) {
+            return bar;
+        }
+        return broker_tick_bar(bar);
+    }
+
+    double source::PineStrategyHost::margin_liquidation_price() const {
+        return compute_liquidation_price();
+    }
+
+    double source::PineStrategyHost::compute_liquidation_price() const {
+        if (position_side_ == PositionSide::FLAT) return na<double>();
+        const double pv = syminfo_.pointvalue;
+        const double qty = position_qty_;
+        if (!(qty > 0.0) || !(pv > 0.0)) return na<double>();
+        const double direction = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
+        const double margin_pct = (position_side_ == PositionSide::LONG)
+                                      ? margin_long_ : margin_short_;
+        const double denom = (margin_pct / 100.0) - direction;
+        if (std::abs(denom) < 1e-12) return na<double>();
+        const double equity_basis =
+            (initial_capital_ + net_profit_sum_) / active_account_currency_fx();
+        double liq = (equity_basis / (qty * pv) - direction * position_entry_price_)
+                     / denom;
+        if (syminfo_mintick_ > 0.0) {
+            liq = (position_side_ == PositionSide::SHORT)
+                      ? std::ceil(liq / syminfo_mintick_) * syminfo_mintick_
+                      : std::floor(liq / syminfo_mintick_) * syminfo_mintick_;
+        }
+        return liq;
+    }
+
 
 
     compat::pine::CapClock source::PineStrategyHost::pine_cap_clock() const {
@@ -291,4 +325,3 @@ using namespace source;
 
 
 } // namespace pineforge
-

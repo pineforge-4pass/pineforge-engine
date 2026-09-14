@@ -13,7 +13,7 @@ namespace pineforge {
 struct SymInfo;
 namespace source { struct StrategyOverrides; }
 
-inline namespace engine_script_run_v15 {
+inline namespace engine_script_run_v16 {
 
 class BacktestEngine;
 
@@ -66,5 +66,5 @@ public:
 std::unique_ptr<IExecutionConsumer> make_legacy_execution_consumer();
 std::unique_ptr<IExecutionConsumer> make_native_execution_consumer();
 
-}  // inline namespace engine_script_run_v15
+}  // inline namespace engine_script_run_v16
 }  // namespace pineforge

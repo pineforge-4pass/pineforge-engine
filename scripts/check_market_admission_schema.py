@@ -72,6 +72,12 @@ def check(root=ROOT):
     header=stripped((root/'include/pineforge/market_admission.hpp').read_text())
     source=stripped((root/'src/market_admission.cpp').read_text())
     hash_source=stripped((root/'src/engine_state_hash.cpp').read_text())
+    sink_header=root/'src/broker_state_hash_internal.hpp'
+    if sink_header.is_file():
+        hash_source += '\n' + stripped(sink_header.read_text())
+    source_hash_path=root/'src/source/pine_state_hash.cpp'
+    if source_hash_path.is_file():
+        hash_source += '\n' + stripped(source_hash_path.read_text())
     schema=json.loads((root/'scripts/market_admission_schema.json').read_text())
     expected_names={'Configuration','PriceRequest','CurrentPrices','SizingObservation','CommandObservation','ReviewReceipt','SizingRevision','Draft','BookObservation','CommandEvent','InstructionResolution','ReviewEvent','SizingEvent','Journal'}
     if set(schema)!=expected_names:raise ValueError('market admission canonical type schema changed')
@@ -127,8 +133,15 @@ def check(root=ROOT):
         if compact(f'field(p,"{field}",o.{expr});') not in compact(birth_block):raise ValueError('incomplete admission birth reflection: '+field)
     mirrors=json.loads((root/'scripts/market_admission_mirror_fields.json').read_text())
     if mirrors!=order_fields(schema):raise ValueError('admission C mirror must reflect every actual per-order fact')
-    for fold in ['admission::reflect(o.market_admission,"draft",[&](const auto& field){hash_admission_field(f,field);});','market_admission_journal_.reflect("journal",[&](const auto& field){hash_admission_field(f,field);});','f.s(field.path);f.u(field.value.index());']:
-        if compact(fold) not in compact(hash_source):raise ValueError('admission actual-value hash plumbing missing')
+    folds=[
+        ('admission::reflect(o.market_admission,"draft",[&](const auto& field){hash_admission_field(f,field);});',),
+        ('market_admission_journal_.reflect("journal",[&](const auto& field){hash_admission_field(f,field);});',
+         'adapter_.admission_journal.reflect("journal",[&](const auto& field){hash_admission_field(f,field);});'),
+        ('f.s(field.path);f.u(field.value.index());',),
+    ]
+    for alternatives in folds:
+        if not any(compact(fold) in compact(hash_source) for fold in alternatives):
+            raise ValueError('admission actual-value hash plumbing missing')
     for path in ['scripts/broker_state_hash_waivers.txt','scripts/pending_order_mirror_waivers.txt']:
         for line in (root/path).read_text().splitlines():
             if line.split('#',1)[0].strip() and 'market_admission' in line.split('#',1)[0]:raise ValueError('market admission cannot be waived')

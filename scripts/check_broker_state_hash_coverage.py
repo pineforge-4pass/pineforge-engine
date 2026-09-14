@@ -308,7 +308,7 @@ def _intraday_coverage(policy: str, budget: str, obligation: str, src: str) -> N
                 result.append((value, f"f.{fold}({value});"))
         return result
 
-    cap = "max_intraday_filled_orders_"
+    cap = "adapter_.cap"
     pieces = ["f.u(compat::pine::IntradayCap::schema_version);",
               f"f.i(static_cast<int64_t>({cap}.attachment()));"]
     pieces.extend(fold for _member, fold in folds("CapConfiguration", cap + ".configuration()."))
@@ -340,17 +340,9 @@ def _intraday_coverage(policy: str, budget: str, obligation: str, src: str) -> N
         if name == "CloseCause":
             pieces.append(f"f.u({cap}.next_action());")
 
-    # The entire block must be consecutive and unconditional at function
-    # scope: a mention, wrong type, foreign owner or conditional fold fails.
-    hash_body = _one_braced_body(src,
-        r"uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{", "broker hash")
-    compact_hash = re.sub(r"\s+", "", hash_body)
-    block = re.sub(r"\s+", "", "".join(pieces))
-    if compact_hash.count(block) != 1:
-        raise ValueError("intraday hash requires every typed configuration/state fold beside its owning body")
-    prefix = compact_hash[:compact_hash.index(block)]
-    if prefix.count("{") != prefix.count("}") or (prefix and prefix[-1] not in ";}"):
-        raise ValueError("intraday hash block must be unconditional at broker_state_hash function scope")
+    # Cap policy is source-owned while the physical close obligation stays in
+    # the generic half. Each typed child is therefore checked at its owner;
+    # do not require the two independently versioned folds to be contiguous.
 
 
 def _quantity_request_coverage(quantity: str, source: str) -> None:
@@ -545,8 +537,9 @@ def _reservation_expansion_version_coverage(header: str, source: str) -> None:
             raise ValueError(name + " must be implemented in reservation_expansion_v1")
 
 
-def _runtime_version_coverage(header: str, source: str, stream: str) -> None:
-    """The v15 layout and serialized-state contracts must advance together.
+def _runtime_version_coverage(header: str, source_headers: str, source: str,
+                              source_hash: str, stream: str) -> None:
+    """The v16 layout and serialized-state contracts must advance together.
 
     Pin the actual hash entry points, rather than accepting a version string
     mentioned in a comment or an unrelated helper. Public C ABI versions have
@@ -554,51 +547,65 @@ def _runtime_version_coverage(header: str, source: str, stream: str) -> None:
     """
     header = _strip_cpp_comments(header)
     namespaces = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", header)
-    if namespaces != ["engine_script_run_v15", "engine_script_run_v15"]:
-        raise ValueError("PendingOrder and BacktestEngine layouts require internal namespace engine_script_run_v15")
+    if namespaces != ["engine_script_run_v16"]:
+        raise ValueError("BacktestEngine requires one internal namespace engine_script_run_v16")
     broker = _one_braced_body(source,
         r"uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{", "broker hash")
-    if not re.match(r'\s*Fnv\s+f;\s*f\.s\("pineforge-broker-state/v15"\);', broker):
-        raise ValueError("broker hash must start with pineforge-broker-state/v15")
+    if not re.match(r'\s*BrokerStateHashSink\s+f;\s*f\.s\("pineforge-broker-state/v16"\);', broker):
+        raise ValueError("broker hash must start with pineforge-broker-state/v16")
+    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v1"' not in source_headers:
+        raise ValueError("source adapter header must declare its hash domain")
+    extension = _one_braced_body(source_hash,
+        r"void\s+source::PineStrategyHost::hash_source_extension\(BrokerStateHashSink&\s+f\)\s+const\s*\{",
+        "source hash extension")
+    if not re.match(r'\s*f\.s\(kSourceAdapterDomain\);', extension):
+        raise ValueError("source hash extension must begin with kSourceAdapterDomain")
     stream_body = _one_braced_body(_strip_cpp_comments(stream),
         r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{", "stream hash")
     compact = re.sub(r"\s+", "", stream_body)
-    fold = "integer(15);integer(broker_state_hash());"
+    fold = "integer(16);integer(broker_state_hash());"
     if compact.count(fold) != 1:
-        raise ValueError("stream hash requires version 15 followed by the broker hash")
+        raise ValueError("stream hash requires version 16 followed by the broker hash")
     prefix = compact[:compact.index(fold)]
     if prefix.count("{") != prefix.count("}") or (prefix and prefix[-1] not in ";}"):
-        raise ValueError("stream v15 version fold must be unconditional at function scope")
+        raise ValueError("stream v16 version fold must be unconditional at function scope")
 
 
 def main(root: Path = ROOT) -> int:
     hpp = (root / "include/pineforge/engine.hpp").read_text(encoding="utf-8")
-    regions = _regions(hpp)
+    source_headers = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((root / "include/pineforge/source").glob("*.hpp")))
+    regions = _regions(hpp) + _regions(source_headers.replace("@source-state", "@broker-state"))
     members = _members(regions)
 
     src_raw = (root / "src/engine_state_hash.cpp").read_text(encoding="utf-8")
+    source_hash_raw = (root / "src/source/pine_state_hash.cpp").read_text(encoding="utf-8")
     src = _strip_cpp_comments(src_raw)
+    source_hash = _strip_cpp_comments(source_hash_raw)
+    all_hash = src + "\n" + source_hash
     try:
         from check_exit_leg_lifecycle import check as check_exit_lifecycle
-        check_exit_lifecycle((root / "include/pineforge/exit_leg_lifecycle.hpp").read_text(), src)
+        check_exit_lifecycle((root / "include/pineforge/exit_leg_lifecycle.hpp").read_text(), source_hash)
         from check_market_admission_schema import check as market_admission_coverage
         market_admission_coverage(root)
-        _runtime_version_coverage(hpp, src, (root / "src/engine_stream.cpp").read_text())
+        _runtime_version_coverage(hpp, source_headers, src, source_hash,
+                                  (root / "src/engine_stream.cpp").read_text())
         _reservation_expansion_version_coverage(
             (root / "include/pineforge/reservation_expansion.hpp").read_text(),
             (root / "src/reservation_expansion.cpp").read_text())
-        _reservation_expansion_coverage((root / "include/pineforge/reservation_expansion.hpp").read_text(), src)
+        _reservation_expansion_coverage((root / "include/pineforge/reservation_expansion.hpp").read_text(), source_hash)
         _pine_frozen_market_instruction_coverage(
-            (root / "include/pineforge/compat/pine/frozen_market_instruction.hpp").read_text(), src)
-        _birth_coverage((root / "include/pineforge/order_birth.hpp").read_text(), src)
+            (root / "include/pineforge/compat/pine/frozen_market_instruction.hpp").read_text(), source_hash)
+        _birth_coverage((root / "include/pineforge/order_birth.hpp").read_text(), source_hash)
         _exit_activation_coverage((root / "include/pineforge/leg_activation.hpp").read_text(),
-            (root / "include/pineforge/compat/pine/exit_activation.hpp").read_text(), src)
+            (root / "include/pineforge/compat/pine/exit_activation.hpp").read_text(), source_hash)
         _opening_coverage((root / "include/pineforge/broker_events.hpp").read_text(), src)
-        _quantity_request_coverage((root / "include/pineforge/quantity_intent.hpp").read_text(), src)
+        _quantity_request_coverage((root / "include/pineforge/quantity_intent.hpp").read_text(), source_hash)
         _intraday_coverage(
             (root / "include/pineforge/compat/pine/intraday_cap.hpp").read_text(),
             (root / "include/pineforge/compat/pine/intraday_order_budget.hpp").read_text(),
-            (root / "include/pineforge/position_close_obligation.hpp").read_text(), src)
+            (root / "include/pineforge/position_close_obligation.hpp").read_text(), all_hash)
     except (ValueError, OSError) as exc:
         print(f"check_broker_state_hash_coverage: {exc}", file=sys.stderr)
         return 1
@@ -629,20 +636,20 @@ def main(root: Path = ROOT) -> int:
 
     missing = sorted(
         m for m in members
-        if not re.search(rf"\b{re.escape(m)}\b", src) and m not in waivers
+        if not re.search(rf"\b{re.escape(m)}\b", all_hash) and m not in waivers
     )
     if missing:
         print("check_broker_state_hash_coverage: unhashed, unwaived broker-state members:", missing)
         return 1
 
     # --- struct PendingOrder: every scalar/string member, o.<name> in the loop ---
-    po_members = [n for _t, n in struct_members(hpp)]
+    po_members = [n for _t, n in struct_members()]
     po_orphans = sorted(w for w in po_waivers if w not in po_members)
     if po_orphans:
         print("check_broker_state_hash_coverage: pending_order.* waiver(s) naming a "
               f"member not in struct PendingOrder: {po_orphans}", file=sys.stderr)
         return 1
-    loop = _collection_loop_body(src, "pending_orders_", "o")
+    loop = _collection_loop_body(source_hash, "pending_orders_", "o")
     po_missing = sorted(
         m for m in po_members
         if not re.search(rf"\bo\.{re.escape(m)}\b", loop) and m not in po_waivers
@@ -669,7 +676,7 @@ def main(root: Path = ROOT) -> int:
               "inside its loop or a justified pyramid_entry.* waiver; "
               f"missing={pe_missing}, redundant_waivers={pe_redundant}")
         return 1
-    print(f"check_broker_state_hash_coverage: {len(members)} members in {len(regions)} "
+    print(f"check_broker_state_hash_coverage: {len(members)} generic/source members in {len(regions)} "
           f"region(s), {len(waivers)} waived, OK; PendingOrder {len(po_members)} members, "
           f"{len(po_waivers)} waived, OK; PyramidEntry {len(pe_members)} members, "
           f"{len(pe_waivers)} waived, OK")

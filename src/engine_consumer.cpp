@@ -8,7 +8,7 @@
 #include <utility>
 
 namespace pineforge {
-inline namespace engine_script_run_v15 {
+inline namespace engine_script_run_v16 {
 
 class LegacyCompatibilityConsumer final : public IExecutionConsumer {
 public:
@@ -70,15 +70,12 @@ std::unique_ptr<IExecutionConsumer> make_legacy_execution_consumer() {
     return std::make_unique<LegacyCompatibilityConsumer>();
 }
 
-BacktestEngine::BacktestEngine(compat::pine::CapAttachment cap_attachment)
-    : max_intraday_filled_orders_(cap_attachment) {
+BacktestEngine::BacktestEngine() {
     execution_consumer_slot_.native = false;
     execution_consumer_slot_.ptr = make_legacy_execution_consumer();
 }
 
-BacktestEngine::BacktestEngine(NativeConsumerBindTag,
-                               compat::pine::CapAttachment cap_attachment)
-    : max_intraday_filled_orders_(cap_attachment) {
+BacktestEngine::BacktestEngine(NativeConsumerBindTag) {
     execution_consumer_slot_.native = true;
     execution_consumer_slot_.ptr = make_native_execution_consumer();
 }
@@ -345,5 +342,5 @@ bool BacktestEngine::aux_security_traded_between(int64_t, int64_t) const { retur
 void BacktestEngine::feed_security_eval_state(SecurityEvalState&, const Bar&, bool) {}
 void BacktestEngine::publish_security_eval_state_at_calling_boundary(SecurityEvalState&) {}
 
-}  // inline namespace engine_script_run_v15
+}  // inline namespace engine_script_run_v16
 }  // namespace pineforge

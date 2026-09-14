@@ -17,6 +17,13 @@ public:
 
     void on_bar(const Bar& bar) final;
     virtual void on_source_bar(const Bar& bar) = 0;
+    void configure_pine_strategy(const PineStrategyConfig& config);
+    void set_strategy_override(const StrategyOverrides& overrides);
+    void set_pine_risk_direction(int direction);
+    void set_pine_risk_max_cons_loss_days(int value);
+    void set_pine_risk_max_drawdown(double value, bool percent);
+    void set_pine_risk_max_intraday_loss(double value, bool percent);
+    void set_pine_risk_max_position_size(double value);
 
     void strategy_entry(const std::string& id, bool is_long,
                         double limit_price = std::numeric_limits<double>::quiet_NaN(),
@@ -56,6 +63,8 @@ public:
     int pine_bar_index() const;
     int pine_last_bar_index() const;
     double prev_chart_close() const;
+    int last_bar_dual_entry_path() const;
+    double trail_best_price() const;
     double live_position_size() const override;
     int pending_order_count() const;
     const MarketAdmissionJournal& market_admission_journal() const;
@@ -75,6 +84,7 @@ public:
     double observe_trail_best_price_v1() const override;
 
 protected:
+    // @source-state begin
     PineExecutionAdapter adapter_;
     using PineLanguageState::pos_view_freeze_bar_;
     using PineLanguageState::pos_view_frozen_side_;
@@ -109,7 +119,6 @@ protected:
     using PineLanguageState::coof_checkpoint_prev_chart_close_;
     using PineLanguageState::coof_checkpoint_last_chart_close_;
 
-    // @source-state begin
     std::set<std::string> cycle_filled_entry_ids_;
     std::unordered_map<std::string, double> id_unclosed_qty_;
     bool sb_close_active_ = false;
@@ -160,6 +169,8 @@ protected:
     double pending_close_qty_in_bar_ = 0.0;
     int64_t next_order_seq_ = 1;
     uint64_t exit_leg_event_seq_ = 0;
+    int priced_entry_activity_bar_ = -1;
+    bool priced_entry_filled_this_bar_ = false;
     struct NamedEntryCancelContext {
         uint64_t entry_incarnation = 0;
         uint64_t surviving_exit_incarnation = 0;
@@ -219,6 +230,9 @@ protected:
     bool history_advances_new_bar() const;
     void hash_source_extension(BrokerStateHashSink&) const override;
     void _push_source_series();
+    Bar broker_trigger_bar(const Bar& bar) const;
+    double compute_liquidation_price() const;
+    double margin_liquidation_price() const;
     double signed_position_size() const;
     void freeze_script_position_view();
     void clear_script_position_view();

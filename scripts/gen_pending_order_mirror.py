@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate the POD mirror of pineforge::PendingOrder (spec §3.6, ABI v4).
+"""Generate the POD mirror of pineforge::source::PendingOrder (spec §3.6, ABI v4).
 
-Parses ``struct PendingOrder { ... };`` in include/pineforge/engine.hpp and
+Parses ``struct PendingOrder { ... };`` in include/pineforge/source/pine_pending_intent.hpp and
 emits
 
   * include/pineforge/pending_order_mirror.hpp -- the C-compatible
@@ -12,9 +12,10 @@ emits
     ``std::string`` as ``char name[64]; uint8_t name_truncated; uint64_t
     name_hash64;`` where the hash is FNV-1a 64 of the FULL string) plus the
     ``pf_field_desc_t`` {name, type, offset, size} descriptor type;
-  * src/pending_order_mirror.cpp -- ``pineforge::fill_pending_order_mirror``
-    and ``pineforge::pending_order_layout`` (the self-describing field table
-    a ctypes/FFI consumer builds its struct from).
+  * src/pending_order_mirror.cpp -- the source-free
+    ``pineforge::pending_order_layout`` descriptor table;
+  * src/source/pine_pending_mirror.cpp -- the source projection
+    ``pineforge::fill_pending_order_mirror``.
 
 Every member of PendingOrder must be either mapped by TYPE_MAP / a
 ``std::string``, or listed in scripts/pending_order_mirror_waivers.txt
@@ -24,7 +25,7 @@ member, ...) also fails: the point of this generator is that PendingOrder
 cannot silently grow a member nobody mirrored.
 
 Run with --check to verify the committed files are byte-identical to what
-the current engine.hpp generates (CI, and a ctest). The parser is also
+the current source intent header generates (CI, and a ctest). The parser is also
 imported by scripts/check_broker_state_hash_coverage.py (``members()``).
 """
 from __future__ import annotations
@@ -36,9 +37,10 @@ from pathlib import Path
 from exit_leg_reflection_schema import mapping as lifecycle_mapping, validate as validate_lifecycle_mapping
 
 ROOT = Path(__file__).resolve().parents[1]
-HPP = ROOT / "include/pineforge/engine.hpp"
+HPP = ROOT / "include/pineforge/source/pine_pending_intent.hpp"
 OUT_H = ROOT / "include/pineforge/pending_order_mirror.hpp"
 OUT_C = ROOT / "src/pending_order_mirror.cpp"
+OUT_SOURCE_C = ROOT / "src/source/pine_pending_mirror.cpp"
 WAIVERS = ROOT / "scripts/pending_order_mirror_waivers.txt"
 STRUCT_NAME = "PendingOrder"
 STR_CAP = 64
@@ -62,9 +64,9 @@ TYPE_MAP: dict[str, tuple[str, str]] = {
 # Public v1 is append-only. Removed native fields survive only as one-way
 # deprecated output projections at their original offsets.
 LEGACY_OUTPUTS = {
-    "created_after_position_close_in_bar": "placement_has_prior_close(src) ? 1 : 0",
-    "over_pyramiding_cap_at_placement": "placement_at_entry_capacity(src) ? 1 : 0",
-    "reverses_same_bar_market_from_flat": "journal && placement_has_opposite_market_predecessor(*journal, src) ? 1 : 0",
+    "created_after_position_close_in_bar": "source::placement_has_prior_close(src) ? 1 : 0",
+    "over_pyramiding_cap_at_placement": "source::placement_at_entry_capacity(src) ? 1 : 0",
+    "reverses_same_bar_market_from_flat": "journal && source::placement_has_opposite_market_predecessor(*journal, src) ? 1 : 0",
     "limit_price": "src.legs.prices().limit_price",
     "stop_price": "src.legs.prices().stop_price",
     "trail_points": "src.legs.prices().trail_points",
@@ -101,13 +103,14 @@ LEGACY_OUTPUTS = {
     "sbmt_member": "src.pine_frozen_market_instruction.active() ? 1 : 0",
     "sbmt_own_qty": "src.pine_frozen_market_instruction.transaction() ? src.pine_frozen_market_instruction.transaction()->own_units : std::numeric_limits<double>::quiet_NaN()",
     "sbmt_tx_qty": "src.pine_frozen_market_instruction.transaction() ? src.pine_frozen_market_instruction.transaction()->transaction_units : std::numeric_limits<double>::quiet_NaN()",
-    "sbmt_kept_over_cap": "src.pine_frozen_market_instruction.transaction() && placement_at_entry_capacity(src) ? 1 : 0",
+    "sbmt_kept_over_cap": "src.pine_frozen_market_instruction.transaction() && source::placement_at_entry_capacity(src) ? 1 : 0",
     "sbmt_close_qty": "src.pine_frozen_market_instruction.targeted_close() ? src.quantity_request.intent()->units() : std::numeric_limits<double>::quiet_NaN()",
     "sbmt_close_buy": "src.pine_frozen_market_instruction.targeted_close() && src.created_position_side == PositionSide::SHORT ? 1 : 0",
     "declined_by_replaced_short_market": "src.cancellation.cause() == CancellationCause::Replacement ? 1 : 0",
     "suppress_as_declined_reversal_close": "src.cancellation.cause() == CancellationCause::Dependency ? 1 : 0",
     "suppressed_close_consumed_ledger_qty": "src.cancellation.close_claim_consumed()",
     "suppressed_close_retired_ledger_qty": "src.cancellation.close_claim_retired()",
+    "short_seed_collision_role": "(int32_t)src.short_seed_collision_role",
 }
 _ADMISSION_FIELDS = json.loads((ROOT / "scripts/market_admission_mirror_fields.json").read_text())
 
@@ -350,7 +353,7 @@ def classify(ms: list[tuple[str, str]], waivers: dict[str, str]):
     return mirrored, waived
 
 
-def generate() -> tuple[str, str]:
+def generate_parts() -> tuple[str, str, str]:
     # Share the strict nested storage census; newly stored fields cannot hide
     # behind an unchanged composite-map name. Imported lazily (checker also
     # uses this module's PendingOrder parser).
@@ -386,7 +389,9 @@ def generate() -> tuple[str, str]:
     for t, m in ordered:
         if m in LEGACY_OUTPUTS:
             ct = TYPE_MAP[t][0]
-            fields.append(f"    {ct} {m};  // deprecated, derived output only")
+            fields.append(
+                f"    {ct} {m};" if native.get(m) == t
+                else f"    {ct} {m};  // deprecated, derived output only")
             copies.append(f"    out->{m} = {LEGACY_OUTPUTS[m]};")
             descs.append((m, ct))
         elif t in COMPOSITE_MAP:
@@ -457,14 +462,15 @@ def generate() -> tuple[str, str]:
         f"#define PF_PENDING_ORDER_STR_CAP {STR_CAP}",
         "",
     ]
-    c = [
+    projection = [
         banner,
-        "#include <pineforge/engine.hpp>",
+        "#include <pineforge/source/pine_pending_intent.hpp>",
         "#include <pineforge/pending_order_mirror.hpp>",
         "#include <pineforge/compat/pine/market_admission.hpp>",
         "",
         "#include <cstddef>",
         "#include <cstring>",
+        "#include <stdexcept>",
         "#include <string_view>",
         "#include <type_traits>",
         "",
@@ -490,7 +496,7 @@ def generate() -> tuple[str, str]:
         "",
         "}  // namespace",
         "",
-        "void fill_pending_order_mirror(const PendingOrder& src, const MarketAdmissionJournal* journal, pf_pending_order_v1_t* out) {",
+        "void fill_pending_order_mirror(const source::PendingOrder& src, const MarketAdmissionJournal* journal, pf_pending_order_v1_t* out) {",
         "    const auto& origin = src.market_admission.observation();",
         "    if (!journal && src.type == OrderType::ENTRY && origin",
         "        && origin->kind == admission::CommandKind::Entry",
@@ -503,10 +509,26 @@ def generate() -> tuple[str, str]:
         *copies,
         "}",
         "",
-        "void fill_pending_order_mirror(const PendingOrder& src, pf_pending_order_v1_t* out) {",
+        "void fill_pending_order_mirror(const source::PendingOrder& src, pf_pending_order_v1_t* out) {",
         "    fill_pending_order_mirror(src, nullptr, out);",
         "}",
         "",
+        "}  // namespace pineforge",
+        "",
+    ]
+    descriptor = [
+        banner,
+        "#include <pineforge/pending_order_mirror.hpp>",
+        "",
+        "#include <cstddef>",
+        "#include <type_traits>",
+        "",
+        "static_assert(std::is_standard_layout<pf_pending_order_v1_t>::value,",
+        '              "pf_pending_order_v1_t must be standard-layout");',
+        "static_assert(std::is_trivial<pf_pending_order_v1_t>::value,",
+        '              "pf_pending_order_v1_t must be trivial (memcpy-able across the C ABI)");',
+        "",
+        "namespace pineforge {",
         "namespace {",
         "",
         "#define PF_PO_FIELD(name, type) \\",
@@ -529,7 +551,13 @@ def generate() -> tuple[str, str]:
         "}  // namespace pineforge",
         "",
     ]
-    return "\n".join(h), "\n".join(c)
+    return "\n".join(h), "\n".join(descriptor), "\n".join(projection)
+
+
+def generate() -> tuple[str, str]:
+    """Compatibility surface for checker self-tests: header + descriptor TU."""
+    header, descriptor, _ = generate_parts()
+    return header, descriptor
 
 
 def census() -> str:
@@ -548,18 +576,22 @@ def main(argv: list[str]) -> int:
     if "--census" in argv:
         print(census())
         return 0
-    h, c = generate()
+    h, c, source_c = generate_parts()
     if "--check" in argv:
         cur_h = OUT_H.read_text(encoding="utf-8") if OUT_H.is_file() else None
         cur_c = OUT_C.read_text(encoding="utf-8") if OUT_C.is_file() else None
-        ok = cur_h == h and cur_c == c
+        cur_source_c = OUT_SOURCE_C.read_text(encoding="utf-8") if OUT_SOURCE_C.is_file() else None
+        ok = cur_h == h and cur_c == c and cur_source_c == source_c
         print("pending_order_mirror: up to date" if ok else
               "pending_order_mirror: STALE -- run python3 scripts/gen_pending_order_mirror.py "
-              "and commit include/pineforge/pending_order_mirror.hpp + src/pending_order_mirror.cpp")
+              "and commit include/pineforge/pending_order_mirror.hpp + src/pending_order_mirror.cpp "
+              "+ src/source/pine_pending_mirror.cpp")
         return 0 if ok else 1
     OUT_H.write_text(h, encoding="utf-8")
     OUT_C.write_text(c, encoding="utf-8")
-    print(f"wrote {OUT_H.relative_to(ROOT)}, {OUT_C.relative_to(ROOT)}")
+    OUT_SOURCE_C.write_text(source_c, encoding="utf-8")
+    print(f"wrote {OUT_H.relative_to(ROOT)}, {OUT_C.relative_to(ROOT)}, "
+          f"{OUT_SOURCE_C.relative_to(ROOT)}")
     return 0
 
 
