@@ -32,6 +32,11 @@ PineStrategyConfig PineNativeHost::apply_overrides(PineStrategyConfig config,
 StagedConfiguration PineNativeHost::staged_configuration() const {
     StagedConfiguration staged;
     staged.syminfo = syminfo_;
+    // Existing source fixtures and generated setters may write the legacy
+    // scalar mintick slot directly before begin.  It is the authoritative
+    // source value at this boundary; rich SymInfo ingress keeps both slots in
+    // lockstep above.
+    staged.syminfo.mintick = syminfo_mintick_;
     staged.inputs = inputs_;
     staged.chart_timezone = chart_timezone_;
     staged.account_fx = account_currency_fx_;
@@ -211,6 +216,7 @@ void PineNativeHost::scheduler_publish_source_bar(const Bar& bar, bool) {
     // Complete one source evaluation before appending bracket legs for newly
     // pending same-id openings.  Existing legs are re-priced in-call first,
     // preserving the source roster order at the next native candidate.
+    adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
 }
 

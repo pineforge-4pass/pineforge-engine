@@ -332,7 +332,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
     f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
-    f.b(value.reverse_to); f.s(value.bracket_origin.run.session_key);
+    f.b(value.reverse_to); f.b(value.terms_priced_reverse); f.d(value.frozen_reversal_transaction);
+    f.i(value.placement_cycle); f.u(value.sequential_group); f.u(value.sequential_rank);
+    f.b(value.has_full_entry_bracket); f.s(value.bracket_origin.run.session_key);
     f.u(value.bracket_origin.run.run_number); f.u(value.bracket_origin.incarnation);
     f.u(value.source_sequence);
     f.i(value.placement_script_open_ms);
@@ -437,6 +439,17 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         hash_native_request(f, leg.request); hash_placement(f, leg.snapshot);
         f.s(leg.replacement_key); f.u(leg.family_key);
     }
+    f.u(pending_entries_.size());
+    for (const auto& entry : pending_entries_) {
+        hash_native_request(f, entry.request); hash_placement(f, entry.snapshot);
+        f.s(entry.replacement_key);
+    }
+    f.u(pending_relative_exits_.size());
+    for (const auto& exit : pending_relative_exits_) {
+        f.s(exit.exit_id); f.s(exit.from_entry); f.d(exit.trail_points); f.d(exit.trail_offset);
+        f.d(exit.trail_price); f.d(exit.qty_percent); f.s(exit.comment); f.d(exit.qty);
+        f.s(exit.oca_name); f.d(exit.profit_ticks); f.d(exit.loss_ticks);
+    }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
     hash_native_handle_vector(f, pending_view_handles_);
     std::vector<std::uint64_t> current_debit_ordinals;
@@ -446,11 +459,15 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(current_debit_ordinals.size());
     for (const auto ordinal : current_debit_ordinals) f.u(ordinal);
     f.u(receipt_cursor_);
+    f.b(materializing_relative_);
+    f.i(current_position_cycle_);
+    f.i(current_position_sign_);
+    f.u(next_sequential_group_);
     std::vector<std::int64_t> pooc_basis_keys;
     for (const auto& pair : pooc_close_basis_by_script_bar_) pooc_basis_keys.push_back(pair.first);
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
     for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
-    f.d(pooc_open_basis_); f.i(pooc_open_script_bar_);
+    f.d(pooc_open_basis_); f.i(pooc_open_script_bar_); f.i(close_all_pending_script_bar_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
     f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);

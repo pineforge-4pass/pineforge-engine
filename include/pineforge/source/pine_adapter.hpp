@@ -113,6 +113,12 @@ struct PlacementSnapshot {
     bool deferred_cohort = false;
     bool frozen_market_instruction = false;
     bool reverse_to = false;
+    bool terms_priced_reverse = false;
+    double frozen_reversal_transaction = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t placement_cycle = 0;
+    std::uint64_t sequential_group = 0;
+    std::uint8_t sequential_rank = 0;
+    bool has_full_entry_bracket = false;
     // Explicit bracket legs retain the source opening provenance that caused
     // their submission.  A pending parent rejected at a later candidate can
     // then retire only its own deferred legs.
@@ -247,6 +253,10 @@ public:
     // re-priced carried bracket legs retain their original roster order before
     // newly pending-entry legs are appended.
     void flush_pending_bracket_legs();
+    // Ordinary POOC same-direction adds are held until the source evaluation
+    // closes, so a later close_all in that same evaluation settles first and
+    // the add opens the next source position at the same close point.
+    void flush_pending_entries();
 
     void hash_state(BrokerStateHashSink&) const;
 
@@ -278,6 +288,26 @@ private:
         std::uint64_t family_key = 0;
     };
 
+    struct PendingEntry {
+        native_order::Request request;
+        PlacementSnapshot snapshot;
+        SourceId replacement_key;
+    };
+
+    struct PendingRelativeExit {
+        SourceId exit_id;
+        SourceId from_entry;
+        double trail_points = std::numeric_limits<double>::quiet_NaN();
+        double trail_offset = std::numeric_limits<double>::quiet_NaN();
+        double trail_price = std::numeric_limits<double>::quiet_NaN();
+        double qty_percent = 100.0;
+        std::string comment;
+        double qty = std::numeric_limits<double>::quiet_NaN();
+        std::string oca_name;
+        double profit_ticks = std::numeric_limits<double>::quiet_NaN();
+        double loss_ticks = std::numeric_limits<double>::quiet_NaN();
+    };
+
     NativeStrategyHost& require_host() const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
@@ -292,6 +322,8 @@ private:
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
     void cancel_bracket_origin(const native_order::RequestHandle&);
     void cancel_bracket_siblings(const native_order::RequestHandle&);
+    void materialize_relative_exits(const PlacementSnapshot&,
+                                   const native_order::ExecutionAppliedEvent&);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
@@ -312,6 +344,8 @@ private:
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
+    std::vector<PendingEntry> pending_entries_;
+    std::vector<PendingRelativeExit> pending_relative_exits_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     std::vector<native_order::RequestHandle> pending_view_handles_;
@@ -321,9 +355,14 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::uint64_t receipt_cursor_ = 0;
+    bool materializing_relative_ = false;
+    std::int64_t current_position_cycle_ = 0;
+    int current_position_sign_ = 0;
+    std::uint64_t next_sequential_group_ = 0;
     std::unordered_map<std::int64_t, double> pooc_close_basis_by_script_bar_;
     double pooc_open_basis_ = 0.0;
     std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};
