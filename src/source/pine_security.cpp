@@ -14,7 +14,8 @@
 #include <stdexcept>
 #include <unordered_set>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 
 using namespace internal;
 
@@ -32,7 +33,7 @@ static int safe_tf_to_seconds(const std::string& tf) {
 
 // --- register_security_eval ---
 
-void PineStrategyHost::register_security_eval(int sec_id, const std::string& requested_tf,
+void source::PineStrategyHost::register_security_eval(int sec_id, const std::string& requested_tf,
                                              const std::string& input_tf,
                                              bool lookahead_on, bool gaps_on,
                                              bool heikinashi) {
@@ -72,7 +73,7 @@ void PineStrategyHost::register_security_eval(int sec_id, const std::string& req
     security_eval_states_.push_back(std::move(state));
 }
 
-bool PineStrategyHost::session_template_knows_early_close() const {
+bool source::PineStrategyHost::session_template_knows_early_close() const {
     std::string kind = syminfo_.type;
     for (char& c : kind) {
         if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
@@ -80,7 +81,7 @@ bool PineStrategyHost::session_template_knows_early_close() const {
     return kind != "forex" && kind != "cfd" && kind != "crypto";
 }
 
-void PineStrategyHost::register_security_lower_tf_eval(
+void source::PineStrategyHost::register_security_lower_tf_eval(
     int sec_id,
     const std::string& requested_tf,
     const std::string& input_tf
@@ -92,7 +93,7 @@ void PineStrategyHost::register_security_lower_tf_eval(
     }
 }
 
-int PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
+int source::PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
     for (const auto& state : security_eval_states_) {
         if (state.sec_id == sec_id) {
             return state.lower_tf_sub_bar_index;
@@ -101,7 +102,7 @@ int PineStrategyHost::security_lower_tf_sub_bar_index(int sec_id) const {
     return 0;
 }
 
-void PineStrategyHost::validate_security_timeframes(const std::string& input_tf) {
+void source::PineStrategyHost::validate_security_timeframes(const std::string& input_tf) {
     if (input_tf.empty()) {
         if (!security_eval_states_.empty()) {
             throw std::runtime_error(
@@ -298,7 +299,7 @@ void PineStrategyHost::validate_security_timeframes(const std::string& input_tf)
     }
 }
 
-void PineStrategyHost::dispatch_security_eval(SecurityEvalState& state,
+void source::PineStrategyHost::dispatch_security_eval(SecurityEvalState& state,
                                             const Bar& bar, bool publish,
                                             int64_t bar_index) {
     state.ta_bar_index = bar_index;
@@ -308,7 +309,7 @@ void PineStrategyHost::dispatch_security_eval(SecurityEvalState& state,
     evaluate_security(state.sec_id, bar, publish);
 }
 
-bool PineStrategyHost::security_series_slot_is_new(int sec_id) const {
+bool source::PineStrategyHost::security_series_slot_is_new(int sec_id) const {
     if (security_history_publication_replay_) {
         return false;
     }
@@ -321,7 +322,7 @@ bool PineStrategyHost::security_series_slot_is_new(int sec_id) const {
     return true;
 }
 
-void PineStrategyHost::publish_security_eval_state_at_calling_boundary(
+void source::PineStrategyHost::publish_security_eval_state_at_calling_boundary(
         SecurityEvalState& state) {
     if (state.publish_gate_tf_seconds <= 0 || state.feed_count <= 0) {
         return;
@@ -346,7 +347,7 @@ void PineStrategyHost::publish_security_eval_state_at_calling_boundary(
                                                    : state.eval_complete_count);
 }
 
-bool PineStrategyHost::security_input_precedes_range_start(
+bool source::PineStrategyHost::security_input_precedes_range_start(
         const SecurityEvalState& state, int64_t input_ts) const {
     if (security_range_start_na_warmup_) {
         // TradingView's deep-backtest request.security series are built from the
@@ -469,7 +470,7 @@ bool PineStrategyHost::security_input_precedes_range_start(
 #endif
 }
 
-bool PineStrategyHost::aux_security_traded_between(int64_t from_ms,
+bool source::PineStrategyHost::aux_security_traded_between(int64_t from_ms,
                                                  int64_t to_ms) const {
     auto it = std::lower_bound(
         aux_security_bars_.begin(), aux_security_bars_.end(), from_ms,
@@ -477,7 +478,7 @@ bool PineStrategyHost::aux_security_traded_between(int64_t from_ms,
     return it != aux_security_bars_.end() && it->timestamp < to_ms;
 }
 
-void PineStrategyHost::feed_security_eval_state(
+void source::PineStrategyHost::feed_security_eval_state(
         SecurityEvalState& state, const Bar& input_bar,
         bool calling_bar_complete) {
     // Opt-in KI-55 HTF warmup parity (security_range_start_na_warmup run flag):
@@ -864,4 +865,4 @@ void PineStrategyHost::feed_security_eval_state(
     }
 }
 
-} // namespace pineforge::source
+} // namespace pineforge

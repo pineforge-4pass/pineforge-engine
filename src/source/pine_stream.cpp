@@ -12,7 +12,8 @@
 #include <stdexcept>
 #include <string>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 
 namespace {
 
@@ -22,7 +23,7 @@ Bar price_point(double price, double volume, int64_t timestamp) {
 
 }  // namespace
 
-bool PineStrategyHost::legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
+bool source::PineStrategyHost::legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {
     const StreamPhase phase_before_begin = stream_phase_;
@@ -151,7 +152,7 @@ bool PineStrategyHost::legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
     }
 }
 
-bool PineStrategyHost::legacy_stream_push_bar(const Bar& bar) {
+bool source::PineStrategyHost::legacy_stream_push_bar(const Bar& bar) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -201,7 +202,7 @@ bool PineStrategyHost::legacy_stream_push_bar(const Bar& bar) {
     }
 }
 
-bool PineStrategyHost::legacy_stream_push_tick(const TradeTick& tick) {
+bool source::PineStrategyHost::legacy_stream_push_tick(const TradeTick& tick) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -301,7 +302,7 @@ bool PineStrategyHost::legacy_stream_push_tick(const TradeTick& tick) {
     }
 }
 
-bool PineStrategyHost::legacy_stream_push_ticks(const TradeTick* ticks, int n) {
+bool source::PineStrategyHost::legacy_stream_push_ticks(const TradeTick* ticks, int n) {
     last_error_.clear();
     if (n < 0 || (n > 0 && ticks == nullptr)) {
         last_error_ = "stream_push_ticks received an invalid tick array";
@@ -313,7 +314,7 @@ bool PineStrategyHost::legacy_stream_push_ticks(const TradeTick* ticks, int n) {
     return true;
 }
 
-bool PineStrategyHost::legacy_stream_advance_time(int64_t timestamp_ms) {
+bool source::PineStrategyHost::legacy_stream_advance_time(int64_t timestamp_ms) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -345,7 +346,7 @@ bool PineStrategyHost::legacy_stream_advance_time(int64_t timestamp_ms) {
     }
 }
 
-bool PineStrategyHost::legacy_stream_end(bool finalize_partial_input_bar) {
+bool source::PineStrategyHost::legacy_stream_end(bool finalize_partial_input_bar) {
     last_error_.clear();
     try {
         if (stream_phase_ != StreamPhase::REALTIME) {
@@ -371,7 +372,7 @@ bool PineStrategyHost::legacy_stream_end(bool finalize_partial_input_bar) {
     }
 }
 
-void PineStrategyHost::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
+void source::PineStrategyHost::stream_dispatch_script_bar(const Bar& bar, bool had_tick) {
     if (script_tf_seconds_ > 0
         && bar.timestamp > std::numeric_limits<int64_t>::max()
             - static_cast<int64_t>(script_tf_seconds_) * 1000) {
@@ -484,4 +485,4 @@ void PineStrategyHost::stream_dispatch_script_bar(const Bar& bar, bool had_tick)
     stream_script_tick_seen_ = false;
 }
 
-} // namespace pineforge::source
+} // namespace pineforge

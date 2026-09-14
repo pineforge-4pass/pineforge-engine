@@ -1,13 +1,14 @@
 #pragma once
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_language_state.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
 
 namespace pineforge::source {
 
 // Intermediate source-layer host. The remaining source ownership surface is
 // filled in by the R4-C L2 transfer (contract sections 3.1 and 7).
-class PineStrategyHost : public BacktestEngine {
+class PineStrategyHost : public BacktestEngine, protected PineLanguageState {
 public:
     explicit PineStrategyHost(
             compat::pine::CapAttachment cap = compat::pine::CapAttachment::None);
@@ -50,7 +51,52 @@ public:
                         const std::string& oca_name = "",
                         int oca_type = 0);
 
+    int pine_bar_index() const;
+    int pine_last_bar_index() const;
+    double prev_chart_close() const;
+    double live_position_size() const;
+
 protected:
+    using PineLanguageState::pos_view_freeze_bar_;
+    using PineLanguageState::pos_view_frozen_side_;
+    using PineLanguageState::pos_view_frozen_qty_;
+    using PineLanguageState::pos_view_frozen_entry_qty_;
+    using PineLanguageState::_src_series_active_;
+    using PineLanguageState::_src_open_;
+    using PineLanguageState::_src_high_;
+    using PineLanguageState::_src_low_;
+    using PineLanguageState::_src_close_;
+    using PineLanguageState::_src_volume_;
+    using PineLanguageState::_src_hl2_;
+    using PineLanguageState::_src_hlc3_;
+    using PineLanguageState::_src_ohlc4_;
+    using PineLanguageState::_src_hlcc4_;
+    using PineLanguageState::prev_chart_close_;
+    using PineLanguageState::last_chart_close_;
+    using PineLanguageState::bar_index_offset_;
+    using PineLanguageState::is_first_tick_;
+    using PineLanguageState::is_last_tick_;
+    using PineLanguageState::history_slot_is_new_;
+    using PineLanguageState::coof_checkpoint_contains_current_bar_;
+    using PineLanguageState::coof_checkpoint_src_open_;
+    using PineLanguageState::coof_checkpoint_src_high_;
+    using PineLanguageState::coof_checkpoint_src_low_;
+    using PineLanguageState::coof_checkpoint_src_close_;
+    using PineLanguageState::coof_checkpoint_src_volume_;
+    using PineLanguageState::coof_checkpoint_src_hl2_;
+    using PineLanguageState::coof_checkpoint_src_hlc3_;
+    using PineLanguageState::coof_checkpoint_src_ohlc4_;
+    using PineLanguageState::coof_checkpoint_src_hlcc4_;
+    using PineLanguageState::coof_checkpoint_prev_chart_close_;
+    using PineLanguageState::coof_checkpoint_last_chart_close_;
+
+    bool history_advances_new_bar() const;
+    void _push_source_series();
+    double signed_position_size() const;
+    void freeze_script_position_view();
+    void clear_script_position_view();
+    void reset_source_language_series();
+
     // L2 mechanically generated declarations for relocated members appear
     // between these markers while the source layer is assembled.
     // BEGIN L2 SOURCE DECLARATIONS

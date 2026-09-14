@@ -12,11 +12,12 @@
 #include <stdexcept>
 #include <vector>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
 
-bool PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
+bool source::PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
                                            const std::string& input_tf) {
     guard_native_mutation("set_aux_security_feed");
     if (n == 0) {
@@ -55,12 +56,12 @@ bool PineStrategyHost::set_aux_security_feed(const Bar* bars, int n,
     return true;
 }
 
-void PineStrategyHost::clear_aux_security_chart_ranges() {
+void source::PineStrategyHost::clear_aux_security_chart_ranges() {
     aux_security_chart_begin_.clear();
     aux_security_chart_end_.clear();
 }
 
-void PineStrategyHost::prepare_aux_security_chart_ranges(
+void source::PineStrategyHost::prepare_aux_security_chart_ranges(
         const Bar* chart_bars, int n_chart, const std::string& chart_tf) {
     clear_aux_security_chart_ranges();
     if (!aux_security_feed_enabled()) return;
@@ -187,7 +188,7 @@ void PineStrategyHost::prepare_aux_security_chart_ranges(
     }
 }
 
-int64_t PineStrategyHost::aux_security_calling_close_ms() const {
+int64_t source::PineStrategyHost::aux_security_calling_close_ms() const {
     const CalendarPeriod chart_period = calendar_period_for(input_tf_);
     if (chart_period != CalendarPeriod::NONE) {
         return session_period_last_traded_close_ms(
@@ -206,7 +207,7 @@ int64_t PineStrategyHost::aux_security_calling_close_ms() const {
         : 0;
 }
 
-void PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) {
+void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) {
     const std::size_t idx = static_cast<std::size_t>(chart_index);
     if (idx >= aux_security_chart_begin_.size()
         || idx >= aux_security_chart_end_.size()) {
@@ -348,7 +349,7 @@ void PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) {
     }
 }
 
-void PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int chart_index) {
+void source::PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int chart_index) {
     (void)chart_index;
     bool any = false;
     for (const auto& state : security_eval_states_) {
@@ -380,4 +381,4 @@ void PineStrategyHost::feed_deferred_aux_security_for_chart_bar(int chart_index)
 
 #endif  // PINEFORGE_HAS_AUX_SECURITY_FEED_V1
 
-} // namespace pineforge::source
+} // namespace pineforge

@@ -25,7 +25,8 @@
 #define PINEFORGE_SHORT_SEED_COLLISION_FINAL_SHORT_CLOSE_ONLY 1
 #endif
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 using namespace internal;
 
 namespace {
@@ -155,12 +156,12 @@ bool is_true_flat_unlinked_stop_pair(
 
 }  // namespace
 
-void PineStrategyHost::finalize_same_bar_market_tx_book() {
+void source::PineStrategyHost::finalize_same_bar_market_tx_book() {
     compat::pine::finalize_frozen_market_book(
         pending_orders_, same_bar_market_tx_scope_is_live());
 }
 
-void PineStrategyHost::process_carried_long_money_before_priced_orders(
+void source::PineStrategyHost::process_carried_long_money_before_priced_orders(
         const Bar& bar) {
     if (!margin_call_enabled_ || position_side_ != PositionSide::LONG
         || process_orders_on_close_ || calc_on_order_fills_
@@ -216,7 +217,7 @@ void PineStrategyHost::process_carried_long_money_before_priced_orders(
                               /*opening_only=*/true);
 }
 
-void PineStrategyHost::process_pending_orders(const Bar& bar, bool before_pooc_script) {
+void source::PineStrategyHost::process_pending_orders(const Bar& bar, bool before_pooc_script) {
     const uint64_t fills_at_pass_start = broker_fill_event_seq_;
     // Update risk state
     update_risk_state();
@@ -436,7 +437,7 @@ void PineStrategyHost::process_pending_orders(const Bar& bar, bool before_pooc_s
     }
 }
 
-BacktestEngine::CoofFillResult PineStrategyHost::process_next_pending_order(
+BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_order(
         const Bar& bar,
         bool allow_market_orders,
         int& exit_closed_from_bar,
@@ -825,7 +826,7 @@ BacktestEngine::CoofFillResult PineStrategyHost::process_next_pending_order(
     return result;
 }
 
-bool PineStrategyHost::process_carried_position_fx_rollover(const Bar& bar) {
+bool source::PineStrategyHost::process_carried_position_fx_rollover(const Bar& bar) {
     // Capability flags for the broker-open FX rollover matrix.  Short 1x is
     // the dual of the TV-pinned long path; leveraged cells remain off.
     static constexpr bool kEnableShortFxRollover = true;
@@ -1009,7 +1010,7 @@ bool PineStrategyHost::process_carried_position_fx_rollover(const Bar& bar) {
     return true;
 }
 
-bool PineStrategyHost::entry_bar_margin_path_scope() const {
+bool source::PineStrategyHost::entry_bar_margin_path_scope() const {
     return position_open_bar_ == bar_index_
         && position_side_ != PositionSide::FLAT
         && !process_orders_on_close_
@@ -1020,7 +1021,7 @@ bool PineStrategyHost::entry_bar_margin_path_scope() const {
         && stream_phase_ == StreamPhase::IDLE;
 }
 
-bool PineStrategyHost::entry_bar_post_fill_adverse(const Bar& bar,
+bool source::PineStrategyHost::entry_bar_post_fill_adverse(const Bar& bar,
                                                  double* out_mark,
                                                  double* out_pos) const {
     if (out_mark == nullptr || out_pos == nullptr) return false;
@@ -1060,7 +1061,7 @@ bool PineStrategyHost::entry_bar_post_fill_adverse(const Bar& bar,
     return true;
 }
 
-void PineStrategyHost::process_short_margin_before_script(const Bar& bar) {
+void source::PineStrategyHost::process_short_margin_before_script(const Bar& bar) {
     if (!margin_call_enabled_ || position_side_ != PositionSide::SHORT
         || process_orders_on_close_ || calc_on_order_fills_
         || bar_magnifier_enabled_ || coof_scheduler_active_
@@ -1167,7 +1168,7 @@ void PineStrategyHost::process_short_margin_before_script(const Bar& bar) {
     }
 }
 
-void PineStrategyHost::process_carried_pooc_short_margin_before_script(const Bar& bar) {
+void source::PineStrategyHost::process_carried_pooc_short_margin_before_script(const Bar& bar) {
     if (!process_orders_on_close_ || !margin_call_enabled_
         || position_side_ != PositionSide::SHORT
         || calc_on_order_fills_ || coof_scheduler_active_ || bar_magnifier_enabled_
@@ -1261,7 +1262,7 @@ void PineStrategyHost::process_carried_pooc_short_margin_before_script(const Bar
     }
 }
 
-void PineStrategyHost::process_margin_call(const Bar& bar) {
+void source::PineStrategyHost::process_margin_call(const Bar& bar) {
     // Consume first, including on disabled/degenerate paths. This is an event
     // attached to the just-completed fill cycle, never durable per-position
     // state that a later bar may reconstruct or reuse.
@@ -1748,7 +1749,7 @@ void PineStrategyHost::process_margin_call(const Bar& bar) {
     run_post_opening_adverse_pass();
 }
 
-bool PineStrategyHost::pooc_opening_money_scope(const Bar& bar) const {
+bool source::PineStrategyHost::pooc_opening_money_scope(const Bar& bar) const {
     if (!process_orders_on_close_ || slippage_ <= 0
         || position_side_ != PositionSide::LONG || margin_long_ != 100.0
         || !(position_qty_ > 1.0) || position_entry_count_ != 1
@@ -1773,7 +1774,7 @@ bool PineStrategyHost::pooc_opening_money_scope(const Bar& bar) const {
         && entry.entry_bar_index == position_open_bar_;
 }
 
-bool PineStrategyHost::pooc_trail_money_pre_exit_scope(
+bool source::PineStrategyHost::pooc_trail_money_pre_exit_scope(
         const Bar& bar, const PendingOrder& order, double exit_path_position) const {
     if (!process_orders_on_close_ || position_side_ != PositionSide::LONG
         || calc_on_order_fills_ || coof_scheduler_active_ || bar_magnifier_enabled_
@@ -1818,7 +1819,7 @@ bool PineStrategyHost::pooc_trail_money_pre_exit_scope(
     return true;
 }
 
-bool PineStrategyHost::tv_money_long_margin_call(const Bar& bar,
+bool source::PineStrategyHost::tv_money_long_margin_call(const Bar& bar,
                                               bool carried_pooc_pre_close,
                                               bool opening_only,
                                               double before_exit_path_position) {
@@ -2060,7 +2061,7 @@ bool PineStrategyHost::tv_money_long_margin_call(const Bar& bar,
     return true;
 }
 
-void PineStrategyHost::revive_position_brackets_after_margin_call_partial(
+void source::PineStrategyHost::revive_position_brackets_after_margin_call_partial(
         double margin_call_event_price) {
     const double mc_price = margin_call_event_price;
     if (position_side_ == PositionSide::FLAT) return;
@@ -2136,7 +2137,7 @@ void PineStrategyHost::revive_position_brackets_after_margin_call_partial(
     }
 }
 
-void PineStrategyHost::settle_dormant_bracket_reissues(exit_legs::Domain domain) {
+void source::PineStrategyHost::settle_dormant_bracket_reissues(exit_legs::Domain domain) {
     auto completed = next_leg_event(exit_legs::Phase::AfterMargin);
     completed.domain = domain;
     for (PendingOrder& order : pending_orders_) {
@@ -2145,7 +2146,7 @@ void PineStrategyHost::settle_dormant_bracket_reissues(exit_legs::Domain domain)
     }
 }
 
-bool PineStrategyHost::margin_call_slice_before_priced_exit(
+bool source::PineStrategyHost::margin_call_slice_before_priced_exit(
         const Bar& bar, double exit_fill_price, double exit_path_position) {
     if (!margin_call_enabled_) return false;
     if (position_side_ == PositionSide::FLAT) return false;
@@ -2323,7 +2324,7 @@ bool PineStrategyHost::margin_call_slice_before_priced_exit(
     return true;
 }
 
-bool PineStrategyHost::margin_call_1x_long_opening_slice_before_priced_exit(
+bool source::PineStrategyHost::margin_call_1x_long_opening_slice_before_priced_exit(
         const Bar& bar) {
     (void)bar;
     if (position_side_ != PositionSide::LONG) return false;
@@ -2457,7 +2458,7 @@ bool PineStrategyHost::margin_call_1x_long_opening_slice_before_priced_exit(
     return true;
 }
 
-bool PineStrategyHost::whole_position_market_close_rests_for_open() const {
+bool source::PineStrategyHost::whole_position_market_close_rests_for_open() const {
     if (position_side_ == PositionSide::FLAT) return false;
     // Round 8 regression (cand-round8-engine-a-20260905: 19 all-in reversal
     // scripts on AAPL / NYSE:F / XAUUSD / NIFTY 15 fell from excellent, e.g.
@@ -2520,7 +2521,7 @@ bool PineStrategyHost::whole_position_market_close_rests_for_open() const {
     return false;
 }
 
-bool PineStrategyHost::margin_call_slice_at_bar_open(const Bar& bar) {
+bool source::PineStrategyHost::margin_call_slice_at_bar_open(const Bar& bar) {
     if (!margin_call_enabled_) return false;
     if (position_side_ == PositionSide::FLAT) return false;
     if (coof_scheduler_active_) return false;
@@ -2675,7 +2676,7 @@ bool PineStrategyHost::margin_call_slice_at_bar_open(const Bar& bar) {
     return true;
 }
 
-void PineStrategyHost::update_trail_best_for_bar_open(const Bar& bar) {
+void source::PineStrategyHost::update_trail_best_for_bar_open(const Bar& bar) {
     if (trail_close_restart_bar_ == bar_index_) return;
     // Capture the extreme as it stood before this bar (once per bar: the
     // process_orders_on_close kernel folds the same bar a second time).
@@ -2711,7 +2712,7 @@ void PineStrategyHost::update_trail_best_for_bar_open(const Bar& bar) {
     }
 }
 
-void PineStrategyHost::sort_exit_siblings_by_path_fill(const Bar& bar) {
+void source::PineStrategyHost::sort_exit_siblings_by_path_fill(const Bar& bar) {
     if (pending_orders_.size() < 2) return;  // nothing to order; skips stable_sort's temp-buffer alloc
     // design-stop-tick-rounding: the no-trail metric is a stop / limit
     // trigger test, so it walks the tick-quantized bar — in the RAW bar's
@@ -2768,7 +2769,7 @@ void PineStrategyHost::sort_exit_siblings_by_path_fill(const Bar& bar) {
         });
 }
 
-bool PineStrategyHost::pending_flat_market_pair_scope_is_live() const {
+bool source::PineStrategyHost::pending_flat_market_pair_scope_is_live() const {
     return !process_orders_on_close_
         && !calc_on_order_fills_
         && slippage_ == 0
@@ -2784,7 +2785,7 @@ bool PineStrategyHost::pending_flat_market_pair_scope_is_live() const {
         && !risk_halted_;
 }
 
-bool PineStrategyHost::default_flat_market_gross_scope_is_live()
+bool source::PineStrategyHost::default_flat_market_gross_scope_is_live()
         const {
     return !process_orders_on_close_
         && !calc_on_order_fills_
@@ -2818,7 +2819,7 @@ bool PineStrategyHost::default_flat_market_gross_scope_is_live()
         && !risk_halted_;
 }
 
-void PineStrategyHost::finalize_default_flat_market_gross_admission() {
+void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
     auto review=begin_market_review(admission::Checkpoint::DefaultGross);
     std::vector<size_t> group;
     group.reserve(2);
@@ -3018,7 +3019,7 @@ void PineStrategyHost::finalize_default_flat_market_gross_admission() {
         pending_orders_.end());
 }
 
-void PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admission() {
+void source::PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admission() {
     auto review=begin_market_review(admission::Checkpoint::TerminalGross);
     const auto history=compat::pine::admission_history(market_admission_journal_);
     const bool source_bar_disqualified=history.pair_causes.count(bar_index_)!=0;
@@ -3120,7 +3121,7 @@ void PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admission() {
         pending_orders_.end());
 }
 
-void PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar) {
+void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar) {
     auto review=begin_market_review(admission::Checkpoint::ExplicitPair);
     auto history=compat::pine::admission_history(market_admission_journal_);
     std::vector<int64_t> rejected_seqs;
@@ -3269,7 +3270,7 @@ void PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar) {
 
 }
 
-void PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
+void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
     // Roles are derived from the complete live book at each broker boundary;
     // never let a partially surviving or carried object retain the transaction.
     for (PendingOrder& order : pending_orders_) {
@@ -3897,7 +3898,7 @@ void PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
         });
 }
 
-bool PineStrategyHost::short_seed_collision_materialization_is_live(
+bool source::PineStrategyHost::short_seed_collision_materialization_is_live(
         const PendingOrder& order) const {
     if (!PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG
         || order.short_seed_collision_role
@@ -3956,7 +3957,7 @@ bool PineStrategyHost::short_seed_collision_materialization_is_live(
         && std::abs(position_qty_ - long_lot.qty) <= kQtyEpsilon;
 }
 
-bool PineStrategyHost::short_seed_collision_final_short_is_live(
+bool source::PineStrategyHost::short_seed_collision_final_short_is_live(
         const PendingOrder& order) const {
     if (!PINEFORGE_SHORT_SEED_COLLISION_FINAL_SHORT_CLOSE_ONLY
         || order.short_seed_collision_role != ShortSeedCollisionRole::FINAL_SHORT
@@ -4024,7 +4025,7 @@ bool PineStrategyHost::short_seed_collision_final_short_is_live(
             <= std::max(1e-12, std::abs(source_long.price) * 1e-12);
 }
 
-bool PineStrategyHost::same_bar_market_tx_scope_is_live() const {
+bool source::PineStrategyHost::same_bar_market_tx_scope_is_live() const {
     return !process_orders_on_close_
         && !calc_on_order_fills_
         && !coof_scheduler_active_
@@ -4050,7 +4051,7 @@ bool PineStrategyHost::same_bar_market_tx_scope_is_live() const {
         && !risk_halted_;
 }
 
-bool PineStrategyHost::same_bar_market_close_artifact_is_live(
+bool source::PineStrategyHost::same_bar_market_close_artifact_is_live(
         const PendingOrder& order) const {
     if (!order.pine_frozen_market_instruction.targeted_close()
         || order.type != OrderType::EXIT
@@ -4088,7 +4089,7 @@ bool PineStrategyHost::same_bar_market_close_artifact_is_live(
     return false;
 }
 
-void PineStrategyHost::apply_same_bar_market_tx_reversal(
+void source::PineStrategyHost::apply_same_bar_market_tx_reversal(
         PendingOrder& order, double fill_price, const Bar& bar,
         double& trail_best_path_state) {
     const double tx = order.pine_frozen_market_instruction.transaction()->transaction_units;
@@ -4131,7 +4132,7 @@ void PineStrategyHost::apply_same_bar_market_tx_reversal(
     trail_best_path_state = trail_best_after_fill;
 }
 
-bool PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
+bool source::PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
         const PendingOrder& order, const Bar& bar,
         bool* limit_leg) const {
     if (limit_leg != nullptr) *limit_leg = false;
@@ -4238,7 +4239,7 @@ bool PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
     return false;
 }
 
-bool PineStrategyHost::pending_flat_market_pair_is_live(
+bool source::PineStrategyHost::pending_flat_market_pair_is_live(
         const PendingOrder& order) const {
     if (!pending_flat_market_pair_scope_is_live()
         || order.type != OrderType::MARKET
@@ -4260,7 +4261,7 @@ bool PineStrategyHost::pending_flat_market_pair_is_live(
     return false;
 }
 
-void PineStrategyHost::invalidate_pending_flat_market_pair(int64_t created_seq) {
+void source::PineStrategyHost::invalidate_pending_flat_market_pair(int64_t created_seq) {
     if (created_seq <= 0) return;
     for (PendingOrder& order : pending_orders_) {
         if (order.created_seq == created_seq
@@ -4272,7 +4273,7 @@ void PineStrategyHost::invalidate_pending_flat_market_pair(int64_t created_seq) 
     }
 }
 
-void PineStrategyHost::compact_filled_pending_orders(
+void source::PineStrategyHost::compact_filled_pending_orders(
         std::vector<uint64_t>& retired_incarnations,
         int exit_closed_from_bar,
         uint64_t exit_closed_from_incarnation,
@@ -4340,7 +4341,7 @@ void PineStrategyHost::compact_filled_pending_orders(
     reclaim_market_admission();
 }
 
-bool PineStrategyHost::flat_dual_stop_opposite_is_live(
+bool source::PineStrategyHost::flat_dual_stop_opposite_is_live(
         const PendingOrder& order, bool flat_dual_stop_pair) const {
     return flat_dual_stop_pair
         && order.type == OrderType::ENTRY
@@ -4354,7 +4355,7 @@ bool PineStrategyHost::flat_dual_stop_opposite_is_live(
         && position_qty_ > kQtyEpsilon;
 }
 
-bool PineStrategyHost::use_default_stop_placement_qty(
+bool source::PineStrategyHost::use_default_stop_placement_qty(
         const PendingOrder& order, double fill_price,
         bool flat_dual_stop_pair) const {
     if (order.type != OrderType::ENTRY
@@ -4375,7 +4376,7 @@ bool PineStrategyHost::use_default_stop_placement_qty(
             || flat_dual_stop_opposite_is_live(order, flat_dual_stop_pair));
 }
 
-int PineStrategyHost::probe_fill_qty(int index, double fill_price, double* qty,
+int source::PineStrategyHost::probe_fill_qty(int index, double fill_price, double* qty,
                                    int* close_only, int* partition) const {
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())
         || !qty || !close_only || !partition) {
@@ -4555,14 +4556,14 @@ int PineStrategyHost::probe_fill_qty(int index, double fill_price, double* qty,
     return 0;
 }
 
-int PineStrategyHost::pending_order_level_resolved(int index) const {
+int source::PineStrategyHost::pending_order_level_resolved(int index) const {
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())) return -1;
     const PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
     if (o.type != OrderType::EXIT || o.from_entry.empty()) return 1;
     return cycle_filled_entry_ids_.count(o.from_entry) ? 1 : 0;
 }
 
-int PineStrategyHost::pending_order_effective_levels(int index, double* stop,
+int source::PineStrategyHost::pending_order_effective_levels(int index, double* stop,
                                                    double* limit,
                                                    double* trail_activation) const {
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())
@@ -4613,7 +4614,7 @@ int PineStrategyHost::pending_order_effective_levels(int index, double* stop,
     return 0;
 }
 
-bool PineStrategyHost::stop_entry_margin_admission_declines(
+bool source::PineStrategyHost::stop_entry_margin_admission_declines(
         const PendingOrder& order, double fill_price, const Bar& /*bar*/,
         bool flat_dual_stop_pair) const {
     if (order.type != OrderType::ENTRY
@@ -4658,7 +4659,7 @@ bool PineStrategyHost::stop_entry_margin_admission_declines(
     return fill_qty > 0.0 && required > available + eps;
 }
 
-void PineStrategyHost::apply_filled_order_to_state(
+void source::PineStrategyHost::apply_filled_order_to_state(
         size_t order_index,
         double fill_price,
         bool fill_is_limit,
@@ -6305,7 +6306,7 @@ void PineStrategyHost::apply_filled_order_to_state(
     }
 }
 
-bool PineStrategyHost::replaced_percent_short_market_is_live(
+bool source::PineStrategyHost::replaced_percent_short_market_is_live(
         const PendingOrder& order) const {
     if (order.type != OrderType::MARKET || order.is_long
         || (order.replaced_order_incarnation == 0)
@@ -6372,7 +6373,7 @@ bool PineStrategyHost::replaced_percent_short_market_is_live(
     return true;
 }
 
-void PineStrategyHost::apply_market_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_market_order_fill(PendingOrder& order, double fill_price,
                                              const Bar& bar,
                                              double& trail_best_path_state,
                                              bool later_same_tick_entry) {
@@ -6618,7 +6619,7 @@ void PineStrategyHost::apply_market_order_fill(PendingOrder& order, double fill_
     trail_best_path_state = trail_best_after_fill;
 }
 
-void PineStrategyHost::apply_entry_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_entry_order_fill(PendingOrder& order, double fill_price,
                                             const Bar& bar,
                                             double& trail_best_path_state,
                                             bool flat_dual_stop_pair) {
@@ -6824,7 +6825,7 @@ void PineStrategyHost::apply_entry_order_fill(PendingOrder& order, double fill_p
     }
 }
 
-void PineStrategyHost::apply_exit_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_exit_order_fill(PendingOrder& order, double fill_price,
                                            int& exit_closed_from_bar,
                                            uint64_t& exit_closed_from_incarnation,
                                            bool& exit_closed_was_long) {
@@ -7047,7 +7048,7 @@ void PineStrategyHost::apply_exit_order_fill(PendingOrder& order, double fill_pr
     }
 }
 
-void PineStrategyHost::reconcile_deferred_layered_exits(
+void source::PineStrategyHost::reconcile_deferred_layered_exits(
         const std::string& entry_id,
         std::vector<uint64_t>& zero_reservation_incarnations) {
     if (entry_id.empty()) return;
@@ -7125,7 +7126,7 @@ void PineStrategyHost::reconcile_deferred_layered_exits(
     }
 }
 
-void PineStrategyHost::apply_raw_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_raw_order_fill(PendingOrder& order, double fill_price,
                                           double& trail_best_path_state,
                                           int& exit_closed_from_bar,
                                           uint64_t& exit_closed_from_incarnation,
@@ -7203,7 +7204,7 @@ void PineStrategyHost::apply_raw_order_fill(PendingOrder& order, double fill_pri
     }
 }
 
-void PineStrategyHost::materialize_relative_exit_prices_for_live_position() {
+void source::PineStrategyHost::materialize_relative_exit_prices_for_live_position() {
     if (position_side_ == PositionSide::FLAT) return;
     if (!std::isfinite(position_entry_price_)) return;
     const double dir = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
@@ -7227,7 +7228,7 @@ void PineStrategyHost::materialize_relative_exit_prices_for_live_position() {
     }
 }
 
-void PineStrategyHost::suppress_declined_reversal_close_legs(
+void source::PineStrategyHost::suppress_declined_reversal_close_legs(
         const PendingOrder& declined_entry) {
     for (PendingOrder& co : pending_orders_) {
         if (co.cancellation.cancelled()) continue;   // idempotent
@@ -7260,7 +7261,7 @@ void PineStrategyHost::suppress_declined_reversal_close_legs(
     }
 }
 
-bool PineStrategyHost::dormant_bracket_trail_leg_live(const PendingOrder& o) const {
+bool source::PineStrategyHost::dormant_bracket_trail_leg_live(const PendingOrder& o) const {
     // The trail leg of a killed bracket is live from the bar AFTER the
     // decline, never on the decline bar itself. TradingView's declined
     // reversal is a flip attempt at that bar's open (the reversal MARKET
@@ -7281,7 +7282,7 @@ bool PineStrategyHost::dormant_bracket_trail_leg_live(const PendingOrder& o) con
 }
 
 std::optional<execution::LifecycleBatch>
-PineStrategyHost::select_declined_reversal_pre_close(const Bar& bar) const {
+source::PineStrategyHost::select_declined_reversal_pre_close(const Bar& bar) const {
     if (position_side_ == PositionSide::FLAT) return std::nullopt;
     execution::LifecycleBatch batch;
     const auto upcoming = preview_next_leg_event(exit_legs::Phase::Observation);
@@ -7307,13 +7308,13 @@ PineStrategyHost::select_declined_reversal_pre_close(const Bar& bar) const {
     return batch;
 }
 
-void PineStrategyHost::mark_position_brackets_dormant_on_declined_reversal(const Bar& bar) {
+void source::PineStrategyHost::mark_position_brackets_dormant_on_declined_reversal(const Bar& bar) {
     const auto batch = select_declined_reversal_pre_close(bar);
     if (!batch) return;
     apply_pre_close_lifecycle_batch(*batch);
 }
 
-double PineStrategyHost::pooc_short_exit_trigger_close(
+double source::PineStrategyHost::pooc_short_exit_trigger_close(
         const PendingOrder& order, const Bar& bar) const {
     // Hariss F POOC pins: newly reissued short exits test the broker's tick
     // close, while Pine still sees raw OHLC and the order levels stay raw.
@@ -7362,7 +7363,7 @@ double PineStrategyHost::pooc_short_exit_trigger_close(
     return tick_grid_price(bar.close);
 }
 
-BacktestEngine::OrderEligibility PineStrategyHost::classify_order_eligibility(
+BacktestEngine::OrderEligibility source::PineStrategyHost::classify_order_eligibility(
         PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
@@ -7728,7 +7729,7 @@ BacktestEngine::OrderEligibility PineStrategyHost::classify_order_eligibility(
     return OrderEligibility::Proceed;
 }
 
-BacktestEngine::FillEvaluation PineStrategyHost::evaluate_fill_price(
+BacktestEngine::FillEvaluation source::PineStrategyHost::evaluate_fill_price(
         PendingOrder& order, size_t order_index, const Bar& bar,
         int opposing_pass, double trail_best_path_state,
         std::unordered_set<std::string>& pass0_opposing_skip_ids) {
@@ -8069,4 +8070,4 @@ BacktestEngine::FillEvaluation PineStrategyHost::evaluate_fill_price(
             fill_price, is_limit_fill, exit_path_fill, exit_path_position};
 }
 
-} // namespace pineforge::source
+} // namespace pineforge

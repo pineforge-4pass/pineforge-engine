@@ -340,22 +340,7 @@ void BacktestEngine::reset_run_state() {
     stream_action_sequence_ = 0;
     stream_order_actions_.clear();
 
-    // Native source-series history (input.source(...) ring buffers). Must list
-    // EVERY _src_*_ member declared in engine.hpp — a missing one leaks history
-    // into a reused handle (see test_handle_reuse_reset all-series coverage).
-    _src_open_.clear();
-    _src_high_.clear();
-    _src_low_.clear();
-    _src_close_.clear();
-    _src_volume_.clear();
-    prev_chart_close_ = std::numeric_limits<double>::quiet_NaN();  // issue #178
-    last_chart_close_ = std::numeric_limits<double>::quiet_NaN();
-    coof_checkpoint_prev_chart_close_ = std::numeric_limits<double>::quiet_NaN();
-    coof_checkpoint_last_chart_close_ = std::numeric_limits<double>::quiet_NaN();
-    _src_hl2_.clear();
-    _src_hlc3_.clear();
-    _src_ohlc4_.clear();
-    _src_hlcc4_.clear();
+    reset_source_language_series();
 
     // Per-bar trace/diagnostic buffers (trace_enabled_ is config — preserved).
     if (trace_enabled_) {

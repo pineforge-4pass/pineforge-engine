@@ -3,14 +3,15 @@
 #include "../engine_internal.hpp"
 #include <algorithm>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 namespace {
 // Sole price capture/read seam for this component. Historical requested prices
 // never become a mutable current-price book; root may adapt these reads to the
 // lifecycle worker's immutable current definition in the integrated candidate.
 admission::PriceRequest capture_request_prices(double limit,double stop){return {limit,stop};}
 }
-admission::Configuration PineStrategyHost::admission_configuration() const {
+admission::Configuration source::PineStrategyHost::admission_configuration() const {
     return {process_orders_on_close_,calc_on_order_fills_,bar_magnifier_enabled_,
         coof_fill_recalc_active_,coof_scheduler_active_,slippage_,pyramiding_,
         static_cast<int>(default_qty_type_),default_qty_value_,margin_long_,margin_short_,
@@ -19,22 +20,22 @@ admission::Configuration PineStrategyHost::admission_configuration() const {
         risk_max_cons_loss_days_,risk_max_drawdown_,risk_max_intraday_loss_,risk_max_position_size_,
         max_intraday_filled_orders_.active(),risk_halted_};
 }
-admission::CurrentPrices PineStrategyHost::admission_current_prices(const PendingOrder& order) const {
+admission::CurrentPrices source::PineStrategyHost::admission_current_prices(const PendingOrder& order) const {
     const auto& prices = order.legs.prices();
     return {prices.limit_price, prices.stop_price, prices.trail_points,
             prices.trail_price, prices.trail_offset};
 }
-bool PineStrategyHost::opening_admission_eligible(const MarketAdmissionDraft& draft) const {
+bool source::PineStrategyHost::opening_admission_eligible(const MarketAdmissionDraft& draft) const {
     // Pine is one policy adapter over the generic admission journal. Keep
     // that dependency in this translation unit so engine.hpp exposes the
     // native model without importing a source-language policy header.
     return compat::pine::opening_qualification(draft);
 }
-admission::BookObservation PineStrategyHost::admission_book_observation(const PendingOrder& order) const {
+admission::BookObservation source::PineStrategyHost::admission_book_observation(const PendingOrder& order) const {
     return {order.incarnation,order.created_seq,order.created_bar,static_cast<int>(order.type),
             static_cast<int>(order.created_position_side),order.is_long,order.id,order.oca_name,order.oca_type,order.birth,admission_current_prices(order),order.market_admission};
 }
-admission::CommandCapture PineStrategyHost::begin_market_command(admission::CommandKind kind,
+admission::CommandCapture source::PineStrategyHost::begin_market_command(admission::CommandKind kind,
         const std::string& id,bool buy,double qty,int qty_type,double limit,double stop,const std::string& oca,int oca_type) {
     admission::CommandObservation input;
     auto allocation = market_admission_journal_.reserve();
@@ -64,7 +65,7 @@ admission::CommandCapture PineStrategyHost::begin_market_command(admission::Comm
         market_admission_journal_.append(std::move(event));reclaim_market_admission();
     });
 }
-void PineStrategyHost::bind_market_command(PendingOrder& order,admission::CommandCapture& command) {
+void source::PineStrategyHost::bind_market_command(PendingOrder& order,admission::CommandCapture& command) {
     const auto& input=command.input();const auto& c=input.configuration;
     std::optional<admission::SizingObservation> original;
     if((order.type==OrderType::MARKET||order.type==OrderType::RAW_ORDER)
@@ -75,7 +76,7 @@ void PineStrategyHost::bind_market_command(PendingOrder& order,admission::Comman
         original=admission::SizingObservation{order.frozen_default_qty,order.sizing_equity,order.sizing_price,order.sizing_mark,order.sizing_fx};
     command.bind(order.market_admission,original,order.explicit_placement_equity,order.explicit_slipped_signal_close);
 }
-admission::ReviewCapture PineStrategyHost::begin_market_review(admission::Checkpoint checkpoint) {
+admission::ReviewCapture source::PineStrategyHost::begin_market_review(admission::Checkpoint checkpoint) {
     admission::ReviewEvent event;
     auto allocation = market_admission_journal_.reserve();
     event.receipt={allocation.sequence(),checkpoint,bar_index_};
@@ -107,11 +108,11 @@ admission::ReviewCapture PineStrategyHost::begin_market_review(admission::Checkp
         market_admission_journal_.append(std::move(review));reclaim_market_admission();
     });
 }
-void PineStrategyHost::reclaim_market_admission() {
+void source::PineStrategyHost::reclaim_market_admission() {
     std::vector<uint64_t> live;for(const auto& order:pending_orders_)live.push_back(order.incarnation);
     market_admission_journal_.retain(compat::pine::admission_retention(market_admission_journal_,live));
 }
-void PineStrategyHost::record_market_sizing_revision(PendingOrder& order,admission::SizingObservation before,double affordability_before) {
+void source::PineStrategyHost::record_market_sizing_revision(PendingOrder& order,admission::SizingObservation before,double affordability_before) {
     // Only an actual committed liquidation/refresh caller owns this revision.
     if(!order.market_admission.observation()||broker_fill_event_seq_==0)return;
     admission::SizingEvent event;
@@ -124,7 +125,7 @@ void PineStrategyHost::record_market_sizing_revision(PendingOrder& order,admissi
     order.market_admission.sizing_revised(event.receipt);market_admission_journal_.append(std::move(event));
     reclaim_market_admission();
 }
-std::vector<admission::Field> PineStrategyHost::market_admission_fields() const {
+std::vector<admission::Field> source::PineStrategyHost::market_admission_fields() const {
     std::vector<admission::Field> fields;const auto add=[&](const auto& field){fields.push_back(field);};
     market_admission_journal_.reflect("journal",add);
     for(const auto& order:pending_orders_)admission::reflect(order.market_admission,"orders["+std::to_string(order.incarnation)+"]",add);

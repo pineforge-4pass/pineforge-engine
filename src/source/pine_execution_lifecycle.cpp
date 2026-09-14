@@ -12,7 +12,8 @@
 #include <variant>
 #include <vector>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 namespace {
 
 bool valid_lifecycle_phase(exit_legs::Phase phase) {
@@ -62,7 +63,7 @@ struct IdentityKeyHash {
 
 } // namespace
 
-exit_legs::Domain PineStrategyHost::current_exit_leg_domain() const {
+exit_legs::Domain source::PineStrategyHost::current_exit_leg_domain() const {
     if (stream_phase_ != StreamPhase::IDLE) return exit_legs::Domain::RawTicks;
     if (bar_magnifier_enabled_) {
         return coof_scheduler_active_ ? exit_legs::Domain::MagnifierCoof
@@ -72,13 +73,13 @@ exit_legs::Domain PineStrategyHost::current_exit_leg_domain() const {
                                   : exit_legs::Domain::Ordinary;
 }
 
-exit_legs::Frame PineStrategyHost::preview_next_leg_event(exit_legs::Phase phase) const {
+exit_legs::Frame source::PineStrategyHost::preview_next_leg_event(exit_legs::Phase phase) const {
     if (exit_leg_event_seq_ == UINT64_MAX)
         throw std::overflow_error("exit lifecycle event exhausted");
     return {exit_leg_event_seq_ + 1, bar_index_, current_exit_leg_domain(), phase};
 }
 
-const PendingOrder* PineStrategyHost::find_unique_pending(
+const PendingOrder* source::PineStrategyHost::find_unique_pending(
         uint64_t incarnation, int64_t created_seq) const {
     const PendingOrder* found = nullptr;
     for (const auto& order : pending_orders_) {
@@ -90,14 +91,14 @@ const PendingOrder* PineStrategyHost::find_unique_pending(
     return found;
 }
 
-PendingOrder* PineStrategyHost::find_unique_pending(
+PendingOrder* source::PineStrategyHost::find_unique_pending(
         uint64_t incarnation, int64_t created_seq) {
     return const_cast<PendingOrder*>(
         static_cast<const PineStrategyHost*>(this)->find_unique_pending(
             incarnation, created_seq));
 }
 
-BacktestEngine::ExitLegTransitionResult PineStrategyHost::transition_exit_leg(
+BacktestEngine::ExitLegTransitionResult source::PineStrategyHost::transition_exit_leg(
         exit_legs::Lifecycle& legs, uint64_t order_incarnation,
         exit_legs::Operation operation, std::optional<exit_legs::Frame> supplied,
         uint64_t& event_seq, int64_t position_cycle) const {
@@ -138,4 +139,4 @@ BacktestEngine::ExitLegTransitionResult PineStrategyHost::transition_exit_leg(
     return ExitLegTransitionResult::ActionRefused;
 }
 
-} // namespace pineforge::source
+} // namespace pineforge

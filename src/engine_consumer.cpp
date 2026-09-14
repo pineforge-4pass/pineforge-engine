@@ -225,6 +225,7 @@ void BacktestEngine::finish_intraday_loss_cancel() {}
 bool BacktestEngine::check_risk_allow_entry(bool) const { return true; }
 void BacktestEngine::update_risk_state() {}
 void BacktestEngine::update_per_trade_extremes() {}
+void BacktestEngine::reset_source_language_series() {}
 
 BacktestEngine::BarTime BacktestEngine::_decompose_bar_time_chart_tz() const {
     return _decompose_bar_time();

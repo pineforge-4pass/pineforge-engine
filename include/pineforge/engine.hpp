@@ -4416,6 +4416,7 @@ protected:
     // are set before run() and must survive it. Called at the top of every
     // run() loop entrypoint. See tests/test_handle_reuse_reset.cpp.
     void reset_run_state();
+    virtual void reset_source_language_series();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
     void settle_position_after_partial_exit(
@@ -5314,7 +5315,7 @@ public:
     // strategy.equity, which adds open profit on top of this (see the
     // sizing_equity formula and the equity-curve remark below, both
     // current_equity() + open_profit(...)).
-    double live_position_size() const { return signed_position_size(); }
+    virtual double live_position_size() const { return signed_position_size(); }
     double live_current_equity() const { return current_equity(); }
     // ABI v4 live-runtime surface (task 9): total SCRIPT bars dispatched by
     // the most recent run() (mirrors pf_report_t::script_bars_processed,

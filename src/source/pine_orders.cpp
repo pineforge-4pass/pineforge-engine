@@ -17,7 +17,8 @@
 #include <utility>
 #include <vector>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 using namespace internal;
 
 namespace {
@@ -92,7 +93,7 @@ std::vector<uint64_t> source_opening_membership(
 
 // Risk management + per-trade extreme tracking moved to engine_risk.cpp.
 
-double PineStrategyHost::calc_qty_for_type(double fill_price, double qty_value, int qty_type) const {
+double source::PineStrategyHost::calc_qty_for_type(double fill_price, double qty_value, int qty_type) const {
     if (std::isnan(qty_value)) {
         return calc_qty(fill_price);
     }
@@ -101,7 +102,7 @@ double PineStrategyHost::calc_qty_for_type(double fill_price, double qty_value, 
     return calc_qty_for_type_from_equity(fill_price, qty_value, qty_type, equity);
 }
 
-double PineStrategyHost::calc_default_qty_from_equity(double fill_price, double equity) const {
+double source::PineStrategyHost::calc_default_qty_from_equity(double fill_price, double equity) const {
     const double basis = round_to_mintick(fill_price);
     switch (default_qty_type_) {
         case QtyType::FIXED:
@@ -126,7 +127,7 @@ double PineStrategyHost::calc_default_qty_from_equity(double fill_price, double 
     return apply_qty_step(default_qty_value_);
 }
 
-double PineStrategyHost::calc_qty_for_type_from_equity(
+double source::PineStrategyHost::calc_qty_for_type_from_equity(
         double fill_price, double qty_value, int qty_type, double equity) const {
     if (std::isnan(qty_value)) return calc_default_qty_from_equity(fill_price, equity);
     // qty_step_ lot-size flooring applies uniformly regardless of how the
@@ -171,7 +172,7 @@ double PineStrategyHost::calc_qty_for_type_from_equity(
     return apply_qty_step(qty_value);
 }
 
-double PineStrategyHost::source_reversal_qty(
+double source::PineStrategyHost::source_reversal_qty(
         double fill_price, double explicit_qty, int explicit_qty_type,
         bool prequantized) const {
     if (prequantized) return explicit_qty;
@@ -189,7 +190,7 @@ double PineStrategyHost::source_reversal_qty(
         fill_price, explicit_qty, explicit_qty_type, projection.realized_balance);
 }
 
-void PineStrategyHost::execute_market_entry(const std::string& id, bool is_long, double fill_price,
+void source::PineStrategyHost::execute_market_entry(const std::string& id, bool is_long, double fill_price,
                                           double explicit_qty, int explicit_qty_type,
                                           PositionSide created_position_side,
                                           bool close_only_opposite,
@@ -274,7 +275,7 @@ void PineStrategyHost::execute_market_entry(const std::string& id, bool is_long,
                             entry_incarnation);
 }
 
-void PineStrategyHost::execute_market_exit(double fill_price) {
+void source::PineStrategyHost::execute_market_exit(double fill_price) {
     if (position_side_ == PositionSide::FLAT) {
         return;
     }
@@ -291,7 +292,7 @@ void PineStrategyHost::execute_market_exit(double fill_price) {
         throw std::runtime_error("invalid resolved full-position settlement");
 }
 
-void PineStrategyHost::record_range_end_close_trades() {
+void source::PineStrategyHost::record_range_end_close_trades() {
     range_end_trades_.clear();
     if (stream_warmup_mode_) return;
     if (position_side_ == PositionSide::FLAT) return;
@@ -325,7 +326,7 @@ void PineStrategyHost::record_range_end_close_trades() {
     for (const auto& p : equity_curve_) fold_equity_extreme(p.equity);
 }
 
-void PineStrategyHost::execute_partial_exit_qty(
+void source::PineStrategyHost::execute_partial_exit_qty(
         double fill_price, double qty_to_close, PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
     const double held = position_side_ == PositionSide::LONG
@@ -354,7 +355,7 @@ void PineStrategyHost::execute_partial_exit_qty(
         restore_source_partial_exit_slots(pre_count, cause);
 }
 
-void PineStrategyHost::execute_partial_exit(double fill_price, double qty_percent,
+void source::PineStrategyHost::execute_partial_exit(double fill_price, double qty_percent,
                                           PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
 
@@ -371,7 +372,7 @@ void PineStrategyHost::execute_partial_exit(double fill_price, double qty_percen
     execute_partial_exit_qty(fill_price, qty_to_close, cause);
 }
 
-void PineStrategyHost::execute_partial_exit_by_entry(double fill_price,
+void source::PineStrategyHost::execute_partial_exit_by_entry(double fill_price,
                                                    const std::string& from_entry,
                                                    PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
@@ -391,7 +392,7 @@ void PineStrategyHost::execute_partial_exit_by_entry(double fill_price,
         restore_source_partial_exit_slots(pre_count, cause);
 }
 
-void PineStrategyHost::execute_partial_exit_by_entry_qty(
+void source::PineStrategyHost::execute_partial_exit_by_entry_qty(
         double fill_price, const std::string& from_entry, double qty_to_close,
         PositionReductionCause cause) {
     if (position_side_ == PositionSide::FLAT || pyramid_entries_.empty()) return;
@@ -421,7 +422,7 @@ void PineStrategyHost::execute_partial_exit_by_entry_qty(
         restore_source_partial_exit_slots(pre_count, cause);
 }
 
-void PineStrategyHost::execute_partial_exit_by_entry_percent(double fill_price,
+void source::PineStrategyHost::execute_partial_exit_by_entry_percent(double fill_price,
                                                            const std::string& from_entry,
                                                            double qty_percent,
                                                            PositionReductionCause cause) {
@@ -440,7 +441,7 @@ void PineStrategyHost::execute_partial_exit_by_entry_percent(double fill_price,
     execute_partial_exit_by_entry_qty(fill_price, from_entry, qty_to_close, cause);
 }
 
-double PineStrategyHost::cover_samebar_market_adds_on_exit(const PendingOrder& order,
+double source::PineStrategyHost::cover_samebar_market_adds_on_exit(const PendingOrder& order,
                                                          double fill_price,
                                                          PositionReductionCause cause) {
     if (order.from_entry.empty()) return 0.0;
@@ -475,7 +476,7 @@ double PineStrategyHost::cover_samebar_market_adds_on_exit(const PendingOrder& o
     return result.closed_units;
 }
 
-void PineStrategyHost::cancel_oca_group(std::string oca_name, std::string exclude_id) {
+void source::PineStrategyHost::cancel_oca_group(std::string oca_name, std::string exclude_id) {
     // Direct callers may borrow both strings from the vector being erased.
     // Value parameters keep membership/exclusion stable throughout remove_if.
     if (oca_name.empty()) return;
@@ -487,7 +488,7 @@ void PineStrategyHost::cancel_oca_group(std::string oca_name, std::string exclud
         pending_orders_.end());
 }
 
-void PineStrategyHost::reduce_oca_group(std::string oca_name,
+void source::PineStrategyHost::reduce_oca_group(std::string oca_name,
                                       std::string exclude_id,
                                       double filled_qty) {
     if (oca_name.empty()) return;
@@ -503,7 +504,7 @@ void PineStrategyHost::reduce_oca_group(std::string oca_name,
         pending_orders_.end());
 }
 
-void PineStrategyHost::purge_exit_orders(bool retain_for_pending_entries) {
+void source::PineStrategyHost::purge_exit_orders(bool retain_for_pending_entries) {
     if (retain_for_pending_entries) {
         // End-of-bar flat-purge: the position is flat, but a from_entry-bound
         // EXIT bracket whose parent ENTRY is still a PENDING order (e.g. a limit
@@ -532,7 +533,7 @@ void PineStrategyHost::purge_exit_orders(bool retain_for_pending_entries) {
         pending_orders_.end());
 }
 
-Trade PineStrategyHost::build_close_trade(const PyramidEntry& pe, double close_qty,
+Trade source::PineStrategyHost::build_close_trade(const PyramidEntry& pe, double close_qty,
                                         double fill_price, bool was_long) const {
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = current_bar_.timestamp;
@@ -546,12 +547,12 @@ Trade PineStrategyHost::build_close_trade(const PyramidEntry& pe, double close_q
         context);
 }
 
-void PineStrategyHost::emit_close_trade(const PyramidEntry& pe, double close_qty,
+void source::PineStrategyHost::emit_close_trade(const PyramidEntry& pe, double close_qty,
                                       double fill_price, bool was_long) {
     record_close_trade(build_close_trade(pe, close_qty, fill_price, was_long));
 }
 
-void PineStrategyHost::restore_source_partial_exit_slots(
+void source::PineStrategyHost::restore_source_partial_exit_slots(
         int pre_count, PositionReductionCause cause) {
     // Settlement owns quantities, average price, cycles, and physical dust.
     // This adapter step restores only the source's occupied-slot policy.
@@ -561,13 +562,13 @@ void PineStrategyHost::restore_source_partial_exit_slots(
     }
 }
 
-exit_legs::Frame PineStrategyHost::next_leg_event(exit_legs::Phase phase) {
+exit_legs::Frame source::PineStrategyHost::next_leg_event(exit_legs::Phase phase) {
     const auto frame = preview_next_leg_event(phase);
     ++exit_leg_event_seq_;
     return frame;
 }
 
-void PineStrategyHost::apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
+void source::PineStrategyHost::apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
                                       std::optional<exit_legs::Frame> supplied) {
     // Rebinding can require a later receipt event at this same hook. Preserve
     // its phase when replacing that receipt; an after-margin completion must
@@ -593,7 +594,7 @@ void PineStrategyHost::apply_leg_action(PendingOrder& order, exit_legs::Operatio
     throw std::logic_error("exit lifecycle action refused");
 }
 
-void PineStrategyHost::bind_exit_activation(PendingOrder& order) {
+void source::PineStrategyHost::bind_exit_activation(PendingOrder& order) {
     if (order.type != OrderType::EXIT) return;
     if (!order.legs.target().incarnation) order.legs.attach(order.incarnation, position_cycle_seq_);
     if (order.legs.target().owner != position_cycle_seq_)
@@ -606,11 +607,11 @@ void PineStrategyHost::bind_exit_activation(PendingOrder& order) {
         position_cycle_seq_, position_open_bar_));
 }
 
-void PineStrategyHost::bind_retained_exit_activations() {
+void source::PineStrategyHost::bind_retained_exit_activations() {
     for (auto& order : pending_orders_) bind_exit_activation(order);
 }
 
-void PineStrategyHost::unbind_exit_activations() {
+void source::PineStrategyHost::unbind_exit_activations() {
     for (auto& order : pending_orders_) {
         if (order.type == OrderType::EXIT) {
             order.leg_activation.unbind();
@@ -625,7 +626,7 @@ void PineStrategyHost::unbind_exit_activations() {
     }
 }
 
-void PineStrategyHost::open_fresh_position(PositionSide requested, double fill_price,
+void source::PineStrategyHost::open_fresh_position(PositionSide requested, double fill_price,
                                          double qty, const std::string& id,
                                          uint64_t entry_incarnation) {
     if (position_side_ != PositionSide::FLAT)
@@ -633,7 +634,7 @@ void PineStrategyHost::open_fresh_position(PositionSide requested, double fill_p
     settle_source_opening(requested, fill_price, qty, id, {}, entry_incarnation);
 }
 
-execution::Result PineStrategyHost::settle_source_opening(
+execution::Result source::PineStrategyHost::settle_source_opening(
         PositionSide requested, double fill_price, double qty,
         const std::string& id, const std::string& comment, uint64_t incarnation) {
     if ((requested != PositionSide::LONG && requested != PositionSide::SHORT)
@@ -656,7 +657,7 @@ execution::Result PineStrategyHost::settle_source_opening(
     return result;
 }
 
-void PineStrategyHost::consume_tv_carry_from_siblings(const std::string& id,
+void source::PineStrategyHost::consume_tv_carry_from_siblings(const std::string& id,
                                                     PositionSide created_position_side,
                                                     int created_bar) {
     for (auto& other : pending_orders_) {
@@ -672,7 +673,7 @@ void PineStrategyHost::consume_tv_carry_from_siblings(const std::string& id,
     }
 }
 
-void PineStrategyHost::enter_market_from_flat(const std::string& id, bool is_long,
+void source::PineStrategyHost::enter_market_from_flat(const std::string& id, bool is_long,
                                             double fill_price, double explicit_qty,
                                             int explicit_qty_type,
                                             PositionSide created_position_side,
@@ -710,7 +711,7 @@ void PineStrategyHost::enter_market_from_flat(const std::string& id, bool is_lon
     open_fresh_position(requested, fill_price, qty, id, entry_incarnation);
 }
 
-void PineStrategyHost::add_to_pyramid_market(const std::string& id, bool is_long,
+void source::PineStrategyHost::add_to_pyramid_market(const std::string& id, bool is_long,
                                            double fill_price, double explicit_qty,
                                            int explicit_qty_type,
                                            PositionSide created_position_side,
@@ -721,7 +722,7 @@ void PineStrategyHost::add_to_pyramid_market(const std::string& id, bool is_long
         created_position_side, is_priced_entry, false, entry_incarnation);
 }
 
-void PineStrategyHost::add_to_pyramid_market_with_qty_provenance(
+void source::PineStrategyHost::add_to_pyramid_market_with_qty_provenance(
         const std::string& id, bool is_long, double fill_price, double explicit_qty,
         int explicit_qty_type, PositionSide created_position_side,
         bool is_priced_entry, bool explicit_qty_prequantized,
@@ -752,7 +753,7 @@ void PineStrategyHost::add_to_pyramid_market_with_qty_provenance(
         pyramid_entries_.back().market_pyramid_add = !is_priced_entry;
 }
 
-void PineStrategyHost::close_opposite_then_enter(const std::string& id, bool is_long,
+void source::PineStrategyHost::close_opposite_then_enter(const std::string& id, bool is_long,
                                                double fill_price, double explicit_qty,
                                                int explicit_qty_type,
                                                bool purge_pending_exits,
@@ -766,7 +767,7 @@ void PineStrategyHost::close_opposite_then_enter(const std::string& id, bool is_
 }
 
 std::vector<execution::PendingRemoval>
-PineStrategyHost::snapshot_exit_pending_removals() const {
+source::PineStrategyHost::snapshot_exit_pending_removals() const {
     std::vector<execution::PendingRemoval> removals;
     for (const auto& order : pending_orders_) {
         if (order.type == OrderType::EXIT) {
@@ -777,7 +778,7 @@ PineStrategyHost::snapshot_exit_pending_removals() const {
     return removals;
 }
 
-void PineStrategyHost::apply_resolved_close_opposite_then_enter(
+void source::PineStrategyHost::apply_resolved_close_opposite_then_enter(
         const std::string& id, bool is_long, double fill_price,
         double explicit_qty, int explicit_qty_type,
         bool explicit_qty_prequantized, uint64_t entry_incarnation,
@@ -816,7 +817,7 @@ void PineStrategyHost::apply_resolved_close_opposite_then_enter(
         throw std::runtime_error("invalid resolved close-opposite settlement");
 }
 
-void PineStrategyHost::flip_market_position_to(const std::string& id, bool is_long,
+void source::PineStrategyHost::flip_market_position_to(const std::string& id, bool is_long,
                                              double fill_price, double explicit_qty,
                                              int explicit_qty_type,
                                              bool explicit_qty_prequantized,
@@ -841,7 +842,7 @@ void PineStrategyHost::flip_market_position_to(const std::string& id, bool is_lo
         throw std::runtime_error("invalid resolved flip settlement");
 }
 
-void PineStrategyHost::sequential_same_tick_reversal_fill(const std::string& id,
+void source::PineStrategyHost::sequential_same_tick_reversal_fill(const std::string& id,
                                                         bool is_long,
                                                         double fill_price,
                                                         double explicit_qty,
@@ -851,7 +852,7 @@ void PineStrategyHost::sequential_same_tick_reversal_fill(const std::string& id,
         id, is_long, fill_price, explicit_qty, explicit_qty_type, false, entry_incarnation);
 }
 
-void PineStrategyHost::sequential_same_tick_reversal_fill_with_qty_provenance(
+void source::PineStrategyHost::sequential_same_tick_reversal_fill_with_qty_provenance(
         const std::string& id, bool is_long, double fill_price, double explicit_qty,
         int explicit_qty_type, bool explicit_qty_prequantized, uint64_t entry_incarnation) {
     double held = 0.0;
@@ -872,4 +873,4 @@ void PineStrategyHost::sequential_same_tick_reversal_fill_with_qty_provenance(
         throw std::runtime_error("invalid resolved sequential settlement");
 }
 
-} // namespace pineforge::source
+} // namespace pineforge

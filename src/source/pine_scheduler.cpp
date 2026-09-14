@@ -15,7 +15,8 @@
 #include <stdexcept>
 #include <unordered_set>
 
-namespace pineforge::source {
+namespace pineforge {
+using namespace source;
 using namespace internal;
 
 namespace {
@@ -115,12 +116,12 @@ Bar coof_segment_bar(const Bar& script_bar, double from, double to) {
 
 }  // namespace
 
-OrderBirth PineStrategyHost::capture_order_birth() const {
+OrderBirth source::PineStrategyHost::capture_order_birth() const {
     if (birth_context_owner == this && birth_context) return *birth_context;
     return OrderBirth::direct_command(bar_index_, current_bar_.timestamp);
 }
 
-void PineStrategyHost::invoke_chart_on_bar(const Bar& bar) {
+void source::PineStrategyHost::invoke_chart_on_bar(const Bar& bar) {
     const OrderBirth origin = birth_context_owner == this && birth_context
         ? *birth_context : OrderBirth::chart_evaluation(bar_index_, bar.timestamp);
     ScopedBirthContext origin_scope(this, origin);
@@ -147,7 +148,7 @@ void PineStrategyHost::invoke_chart_on_bar(const Bar& bar) {
     on_bar(bar);
 }
 
-void PineStrategyHost::dispatch_bar() {
+void source::PineStrategyHost::dispatch_bar() {
     // ABI v4 live-runtime surface (task 4): reset the per-bar dual-entry-stop
     // arbitration snapshot once per bar, before anything else -- including
     // the COOF early return below, so a calc_on_order_fills_ bar (which never
@@ -282,7 +283,7 @@ void PineStrategyHost::dispatch_bar() {
     }
 }
 
-void PineStrategyHost::snapshot_coof_script_state() {
+void source::PineStrategyHost::snapshot_coof_script_state() {
     if (_src_series_active_) {
         coof_checkpoint_src_open_ = _src_open_;
         coof_checkpoint_src_high_ = _src_high_;
@@ -300,7 +301,7 @@ void PineStrategyHost::snapshot_coof_script_state() {
     coof_checkpoint_contains_current_bar_ = false;
 }
 
-void PineStrategyHost::restore_coof_script_state() {
+void source::PineStrategyHost::restore_coof_script_state() {
     if (_src_series_active_) {
         _src_open_ = coof_checkpoint_src_open_;
         _src_high_ = coof_checkpoint_src_high_;
@@ -317,7 +318,7 @@ void PineStrategyHost::restore_coof_script_state() {
     restore_script_state();
 }
 
-void PineStrategyHost::commit_coof_script_state() {
+void source::PineStrategyHost::commit_coof_script_state() {
     if (_src_series_active_) {
         coof_checkpoint_src_open_ = _src_open_;
         coof_checkpoint_src_high_ = _src_high_;
@@ -335,7 +336,7 @@ void PineStrategyHost::commit_coof_script_state() {
     coof_checkpoint_contains_current_bar_ = true;
 }
 
-uint64_t PineStrategyHost::execute_coof_script_body(
+uint64_t source::PineStrategyHost::execute_coof_script_body(
         const Bar& script_bar,
         double broker_cursor_price,
         bool cursor_is_bar_point,
@@ -394,7 +395,7 @@ uint64_t PineStrategyHost::execute_coof_script_body(
     return broker_fill_event_seq_ - before;
 }
 
-uint64_t PineStrategyHost::run_coof_recalc_chain(
+uint64_t source::PineStrategyHost::run_coof_recalc_chain(
         const Bar& script_bar, double broker_cursor_price,
         bool cursor_is_bar_point, BirthCursor cursor,
         uint64_t& evaluation_ordinal, uint64_t triggering_events,
@@ -442,7 +443,7 @@ uint64_t PineStrategyHost::run_coof_recalc_chain(
     return total_events;
 }
 
-void PineStrategyHost::dispatch_bar_calc_on_order_fills() {
+void source::PineStrategyHost::dispatch_bar_calc_on_order_fills() {
     const Bar script_bar = current_bar_;
     intraday_loss_begin_bar(script_bar);
     // KI-67: TradingView applies NO per-bar fill-event budget. The old fixed
@@ -713,7 +714,7 @@ void PineStrategyHost::dispatch_bar_calc_on_order_fills() {
     is_last_tick_ = true;
 }
 
-void PineStrategyHost::legacy_run_simple(const Bar* bars, int n) {
+void source::PineStrategyHost::legacy_run_simple(const Bar* bars, int n) {
     last_error_.clear();
     last_run_status_ = 0;
     abort_requested_.store(false, std::memory_order_relaxed);
@@ -802,7 +803,7 @@ void PineStrategyHost::legacy_run_simple(const Bar* bars, int n) {
     }
 }
 
-void PineStrategyHost::run_magnified_bar(
+void source::PineStrategyHost::run_magnified_bar(
         const std::vector<Bar>& sub_bars, int64_t script_bar_ts,
         bool caller_completed_on_boundary) {
     if (sub_bars.empty()) return;
@@ -966,7 +967,7 @@ void PineStrategyHost::run_magnified_bar(
     finalize_bar();
 }
 
-void PineStrategyHost::run_magnified_bar_calc_on_order_fills(
+void source::PineStrategyHost::run_magnified_bar_calc_on_order_fills(
         const std::vector<Bar>& sub_bars,
         int64_t script_bar_ts,
         bool caller_completed_on_boundary) {
@@ -1225,7 +1226,7 @@ void PineStrategyHost::run_magnified_bar_calc_on_order_fills(
     finalize_bar();
 }
 
-void PineStrategyHost::legacy_run_tf(const Bar* input_bars, int n_input,
+void source::PineStrategyHost::legacy_run_tf(const Bar* input_bars, int n_input,
                           const std::string& input_tf,
                           const std::string& script_tf,
                           bool bar_magnifier,
@@ -1245,7 +1246,7 @@ void PineStrategyHost::legacy_run_tf(const Bar* input_bars, int n_input,
     }
 }
 
-void PineStrategyHost::run_tf_impl(const Bar* input_bars, int n_input,
+void source::PineStrategyHost::run_tf_impl(const Bar* input_bars, int n_input,
                           const std::string& input_tf,
                           const std::string& script_tf,
                           bool bar_magnifier,
@@ -1435,7 +1436,7 @@ void PineStrategyHost::run_tf_impl(const Bar* input_bars, int n_input,
     }
 }
 
-int PineStrategyHost::count_expected_script_bars(const Bar* input_bars, int n_input,
+int source::PineStrategyHost::count_expected_script_bars(const Bar* input_bars, int n_input,
                                                 bool needs_aggregation) const {
     if (!needs_aggregation) return n_input;
     TimeframeAggregator preview_agg(script_tf_, input_tf_);
@@ -1449,7 +1450,7 @@ int PineStrategyHost::count_expected_script_bars(const Bar* input_bars, int n_in
     return count;
 }
 
-void PineStrategyHost::init_security_eval_states_for_run(
+void source::PineStrategyHost::init_security_eval_states_for_run(
     const std::string& effective_input_tf) {
     security_next_input_ms_ = 0;
     security_calling_close_ms_ = 0;
@@ -1490,7 +1491,7 @@ void PineStrategyHost::init_security_eval_states_for_run(
     }
 }
 
-void PineStrategyHost::prepare_historical_security_lookahead_projections(
+void source::PineStrategyHost::prepare_historical_security_lookahead_projections(
         const Bar* input_bars, int n_input,
         const std::string& effective_input_tf) {
     clear_historical_security_lookahead_projections();
@@ -1648,7 +1649,7 @@ void PineStrategyHost::prepare_historical_security_lookahead_projections(
     }
 }
 
-void PineStrategyHost::clear_historical_security_lookahead_projections() {
+void source::PineStrategyHost::clear_historical_security_lookahead_projections() {
     historical_security_lookahead_projection_active_ = false;
     for (auto& state : security_eval_states_) {
         state.historical_projections.clear();
@@ -1657,7 +1658,7 @@ void PineStrategyHost::clear_historical_security_lookahead_projections() {
     }
 }
 
-void PineStrategyHost::set_session_bar_state(bool in_session,
+void source::PineStrategyHost::set_session_bar_state(bool in_session,
                                            bool intraday_islastbar) {
     session_ismarket_ = in_session;
     if (tf_is_daily_or_higher(script_tf_)) {
@@ -1673,7 +1674,7 @@ void PineStrategyHost::set_session_bar_state(bool in_session,
     session_islastbar_ = intraday_islastbar;
 }
 
-void PineStrategyHost::run_simple_bar_loop(const Bar* input_bars, int n_input) {
+void source::PineStrategyHost::run_simple_bar_loop(const Bar* input_bars, int n_input) {
     for (int i = 0; i < n_input; ++i) {
         check_abort();
         current_bar_ = input_bars[i];
@@ -1754,7 +1755,7 @@ void PineStrategyHost::run_simple_bar_loop(const Bar* input_bars, int n_input) {
     }
 }
 
-void PineStrategyHost::run_aggregation_bar_loop(const Bar* input_bars, int n_input,
+void source::PineStrategyHost::run_aggregation_bar_loop(const Bar* input_bars, int n_input,
                                                 bool bar_magnifier,
                                                 int expected_script_bars) {
     std::vector<Bar> group_sub_bars;
@@ -1890,7 +1891,7 @@ void PineStrategyHost::run_aggregation_bar_loop(const Bar* input_bars, int n_inp
     }
 }
 
-const Series<double>& PineStrategyHost::get_input_source(
+const Series<double>& source::PineStrategyHost::get_input_source(
         const std::string& key, const Series<double>& default_series) const {
     auto it = inputs_.find(key);
     if (it == inputs_.end()) return default_series;
@@ -1910,7 +1911,7 @@ const Series<double>& PineStrategyHost::get_input_source(
     return default_series;
 }
 
-void PineStrategyHost::legacy_run_rich(const Bar* input_bars, int n_input,
+void source::PineStrategyHost::legacy_run_rich(const Bar* input_bars, int n_input,
                           const std::string& input_tf,
                           const std::string& script_tf,
                           const std::unordered_map<std::string, std::string>& inputs,
@@ -1982,4 +1983,4 @@ void PineStrategyHost::legacy_run_rich(const Bar* input_bars, int n_input,
     }
 }
 
-} // namespace pineforge::source
+} // namespace pineforge
