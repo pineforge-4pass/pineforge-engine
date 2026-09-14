@@ -21,7 +21,8 @@ from pathlib import Path
 from check_native_cpp_versions import FILES, check as check_native_versions
 from check_aggregate_cpp_versions import clean
 from prepare_settlement_cpp_abi_base import (
-    V14_COMMIT, V14_TREE, authenticate_headers, extract_tar,
+    V14_COMMIT, V14_TREE, V15_FROZEN_COMMIT, V15_FROZEN_TREE,
+    authenticate_headers, extract_tar,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,8 @@ ORDER_V1_HEADER_SHA = "b13006e99554ba9caa3e5b444cca3e4f2b5ebd5e372d3dcbe44bb6a67
 
 V14_HEADERS_SHA256 = "37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e"
 V14_ENGINE_EPOCH = "engine_script_run_v14"
+V15_FROZEN_HEADERS_SHA256 = "189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3"
+V15_FROZEN_ENGINE_EPOCH = "engine_script_run_v15"
 CURRENT_TERMS_SURFACE_READY = True
 CURRENT_RESULT_DIAGNOSTIC = "R4B_CURRENT_RESULT_ALTERNATIVES"
 
@@ -292,6 +295,10 @@ def control_applicability(ready: bool | None = None) -> list[dict]:
          "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v15"),
         ("v15_native_fx_curve_surface_compile", "compile", ready,
          "NATIVE_FX_CURVE_CALLER", "engine_script_run_v15"),
+        ("v15_frozen_current_execution_surface_compile", "compile", ready,
+         "CURRENT_EXECUTION_V15_CALLER", V15_FROZEN_ENGINE_EPOCH),
+        ("v15_frozen_native_fx_curve_surface_compile", "compile", ready,
+         "NATIVE_FX_CURVE_CALLER", V15_FROZEN_ENGINE_EPOCH),
     )
     return [{"name": name, "kind": kind, "applicable": bool(applicable),
              "status": "required" if applicable else "pending_surface",
@@ -299,21 +306,34 @@ def control_applicability(ready: bool | None = None) -> list[dict]:
             for name, kind, applicable, template, epoch in controls]
 
 
-def authenticate_v14_fixture(fixture: Path, destination: Path) -> dict:
-    """Authenticate the pinned tar closure independently of gzip-JSON fixtures."""
+def authenticate_host_fixture(fixture: Path, destination: Path, *, archive_sha256: str,
+                              commit: str, tree: str, epoch: str, label: str) -> dict:
+    """Authenticate a pinned host tar closure independently of gzip-JSON fixtures."""
     archive = (fixture / "headers.tar").read_bytes()
-    if sha256(archive) != V14_HEADERS_SHA256:
-        raise RuntimeError("frozen v14 header archive digest mismatch")
+    if sha256(archive) != archive_sha256:
+        raise RuntimeError("frozen " + label + " header archive digest mismatch")
     extract_tar(archive, destination)
-    manifest = authenticate_headers(destination, fixture / "manifest.json",
-                                    commit=V14_COMMIT, tree=V14_TREE)
+    manifest = authenticate_headers(destination, fixture / "manifest.json", commit=commit, tree=tree)
     for name in ("engine.hpp", "native_host.hpp"):
         text = (destination / "include/pineforge" / name).read_text()
         epochs = set(re.findall(r"\binline\s+namespace\s+(engine_script_run_v\d+)\s*\{",
                                 clean(text)))
-        if epochs != {V14_ENGINE_EPOCH}:
-            raise RuntimeError("frozen v14 header owner mismatch: " + name)
+        if epochs != {epoch}:
+            raise RuntimeError("frozen " + label + " header owner mismatch: " + name)
     return manifest
+
+
+def authenticate_v14_fixture(fixture: Path, destination: Path) -> dict:
+    return authenticate_host_fixture(
+        fixture, destination, archive_sha256=V14_HEADERS_SHA256,
+        commit=V14_COMMIT, tree=V14_TREE, epoch=V14_ENGINE_EPOCH, label="v14")
+
+
+def authenticate_v15_frozen_fixture(fixture: Path, destination: Path) -> dict:
+    return authenticate_host_fixture(
+        fixture, destination, archive_sha256=V15_FROZEN_HEADERS_SHA256,
+        commit=V15_FROZEN_COMMIT, tree=V15_FROZEN_TREE,
+        epoch=V15_FROZEN_ENGINE_EPOCH, label="v15")
 
 
 def remove_current_result_cancelled(text: str) -> str:
@@ -660,6 +680,19 @@ def main() -> int:
             "manifest_sha256": sha256((FIXTURE / v14_name / "manifest.json").read_bytes()),
             "files": v14_manifest["files"], "provider_epoch": V14_ENGINE_EPOCH,
         }
+        v15_frozen_name = "host-e7cdf05"
+        v15_frozen_destination = root / v15_frozen_name
+        v15_frozen_manifest = authenticate_v15_frozen_fixture(
+            FIXTURE / v15_frozen_name, v15_frozen_destination)
+        v15_frozen_include = v15_frozen_destination / "include"
+        receipt["fixtures"][v15_frozen_name] = {
+            "source_commit": v15_frozen_manifest["commit"],
+            "source_tree": v15_frozen_manifest["tree"],
+            "archive_sha256": V15_FROZEN_HEADERS_SHA256,
+            "manifest_sha256": sha256((FIXTURE / v15_frozen_name / "manifest.json").read_bytes()),
+            "files": v15_frozen_manifest["files"],
+            "provider_epoch": V15_FROZEN_ENGINE_EPOCH,
+        }
 
         def compile_object(name, source, include_path, extra_source_dir=None):
             path = root / (name + ".cpp")
@@ -778,6 +811,10 @@ def main() -> int:
                                              CURRENT_EXECUTION_V15_CALLER, include)
             current_fx_curve = compile_object("v15_native_fx_curve_surface_compile",
                                               NATIVE_FX_CURVE_CALLER, include)
+            compile_object("v15_frozen_current_execution_surface_compile",
+                           CURRENT_EXECUTION_V15_CALLER, v15_frozen_include)
+            compile_object("v15_frozen_native_fx_curve_surface_compile",
+                           NATIVE_FX_CURVE_CALLER, v15_frozen_include)
             # The unmodified V15 probe above must compile before this mutation is meaningful.
             mutated_include = root / "missing-cancelled-include"
             shutil.copytree(include, mutated_include)

@@ -47,6 +47,8 @@ from prepare_settlement_cpp_abi_base import (
     V13_TREE,
     V14_COMMIT,
     V14_TREE,
+    V15_FROZEN_COMMIT,
+    V15_FROZEN_TREE,
     PROVIDERS,
     COPY_CACHE,
     authenticate_headers,
@@ -103,7 +105,9 @@ class Scripted:
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
         if argv[0] == 'git' and 'cat-file' in argv:
-            if V14_COMMIT + '^{commit}' in argv:
+            if V15_FROZEN_COMMIT + '^{commit}' in argv:
+                key = 'v15-frozen-cat-file'
+            elif V14_COMMIT + '^{commit}' in argv:
                 key = 'v14-cat-file'
             elif V13_COMMIT + '^{commit}' in argv:
                 key = 'v13-cat-file'
@@ -211,7 +215,7 @@ class Scripted:
             if self.exits.get('sanitizer_flag') == 'absent':
                 commands[0]['command'] = f'{self.cxx} -c src/matrix.cpp'
             (self.build_dir / 'compile_commands.json').write_text(json.dumps(commands))
-        for role in ('e60', '0e', 'v13', 'v14'):
+        for role in ('e60', '0e', 'v13', 'v14', 'v15-frozen'):
             self._maybe_seed_abi_base(role)
         return Completed(0, b'configured\n', b'')
 
@@ -249,7 +253,8 @@ class Scripted:
         return Completed(0, b'installed\n', b'')
 
     def _maybe_seed_abi_base(self, role: str) -> None:
-        key = {'e60': 'base', '0e': 'prior', 'v13': 'v13', 'v14': 'v14'}[role]
+        key = {'e60': 'base', '0e': 'prior', 'v13': 'v13', 'v14': 'v14',
+               'v15-frozen': 'v15_frozen'}[role]
         kind = self.exits.get('preexisting_' + key)
         if not kind:
             return
@@ -289,7 +294,7 @@ class Scripted:
 
     @staticmethod
     def provider_command_name(argv: list[str], suffix: str) -> str:
-        for commit, prefix in ((V14_COMMIT, 'v14-'), (V13_COMMIT, 'v13-'),
+        for commit, prefix in ((V15_FROZEN_COMMIT, 'v15-frozen-'), (V14_COMMIT, 'v14-'), (V13_COMMIT, 'v13-'),
                                (PRIOR_COMMIT, 'prior-')):
             if commit in argv:
                 return prefix + suffix
@@ -467,6 +472,18 @@ class CopyCacheIdentity(unittest.TestCase):
 
 
 class HistoricalProviderPins(unittest.TestCase):
+    def test_v15_frozen_preparation_uses_the_e7cdf052_header_closure(self):
+        provider = PROVIDERS['v15-frozen']
+        self.assertEqual(provider['commit'], V15_FROZEN_COMMIT)
+        self.assertEqual(provider['tree'], V15_FROZEN_TREE)
+        self.assertEqual(provider['manifest'],
+                         ROOT / 'tests/fixtures/native_cpp_abi/host-e7cdf05/manifest.json')
+        self.assertEqual(provider['default_output'], 'native-abi-v15-frozen')
+        self.assertEqual(provider['headers_name'], 'headers.tar')
+        archive = provider['manifest'].parent / provider['headers_name']
+        self.assertEqual(identity(archive)['sha256'],
+                         '189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3')
+
     def test_v14_preparation_uses_the_frozen_f736676_header_closure(self):
         provider = PROVIDERS['v14']
         self.assertEqual(provider['commit'], V14_COMMIT)
@@ -483,10 +500,11 @@ class HistoricalProviderPins(unittest.TestCase):
         self.assertEqual({role: provider['engine_epoch'] for role, provider in PROVIDERS.items()}, {
             'e60': 'engine_script_run_v13', '0e': 'engine_script_run_v13',
             'v13': 'engine_script_run_v13', 'v14': 'engine_script_run_v14',
+            'v15-frozen': 'engine_script_run_v15',
         })
 
     def test_host_provider_epoch_matches_its_authenticated_header_owner(self):
-        for role in ('v13', 'v14'):
+        for role in ('v13', 'v14', 'v15-frozen'):
             provider = PROVIDERS[role]
             with self.subTest(role=role), tempfile.TemporaryDirectory() as temporary:
                 source = Path(temporary) / 'headers'
@@ -687,7 +705,7 @@ class GitObjectDiscovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary)  # deliberately not a Git repository
             scripted = Scripted(source / 'build', source)
-            for commit in (BASE_COMMIT, PRIOR_COMMIT, V13_COMMIT, V14_COMMIT):
+            for commit in (BASE_COMMIT, PRIOR_COMMIT, V13_COMMIT, V14_COMMIT, V15_FROZEN_COMMIT):
                 self.assertTrue(ci_verify.pinned_object_present(source, scripted, commit))
             self.assertFalse(ci_verify.pinned_object_present(source, scripted, '0' * 40))
 
@@ -822,13 +840,15 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertIn('abi-prior', stage_names(summary))
         self.assertIn('abi-v13', stage_names(summary))
         self.assertIn('abi-v14', stage_names(summary))
+        self.assertIn('abi-v15-frozen', stage_names(summary))
         names = stage_names(summary)
         self.assertLess(names.index('build'), names.index('abi-base'))
         self.assertLess(names.index('abi-base'), names.index('abi-prior'))
         self.assertLess(names.index('abi-prior'), names.index('ctest'))
         self.assertLess(names.index('abi-prior'), names.index('abi-v13'))
         self.assertLess(names.index('abi-v13'), names.index('abi-v14'))
-        self.assertLess(names.index('abi-v14'), names.index('ctest'))
+        self.assertLess(names.index('abi-v14'), names.index('abi-v15-frozen'))
+        self.assertLess(names.index('abi-v15-frozen'), names.index('ctest'))
         self.assertIn('ctest', scripted.names())
         self.assertIn('install', scripted.names())
         self.assertTrue((build_dir / 'ci-logs' / 'ctest.log').is_file())
@@ -954,6 +974,28 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(code, 0, summary['failures'])
         self.assertNotIn('v14-fetch', scripted.names())
         self.assertIn('v14-prepare', scripted.names())
+
+    def test_v15_frozen_provider_uses_its_own_pinned_profile_preparation(self):
+        code, summary, scripted, build_dir = self.run_profile(**{'v15-frozen-cat-file': 1})
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['abiV15Frozen']['action'], 'prepared')
+        fetches = [argv for argv in scripted.calls if argv[0] == 'git' and 'fetch' in argv]
+        self.assertEqual(fetches, [['git', '-C', str(ROOT), 'fetch', '--no-tags', '--depth=1',
+                                    'origin', V15_FROZEN_COMMIT]])
+        self.assertIn('abi-v15-frozen-fetch', stage_names(summary))
+        prepare = next(argv for argv in scripted.calls if V15_FROZEN_COMMIT in argv and '--tree' in argv)
+        self.assertEqual(prepare[prepare.index('--tree') + 1], V15_FROZEN_TREE)
+        self.assertEqual(Path(prepare[prepare.index('--output') + 1]).resolve(),
+                         (build_dir / 'native-abi-v15-frozen').resolve())
+        self.assertEqual(prepare[prepare.index('--header-manifest') + 1],
+                         str(ROOT / 'tests/fixtures/native_cpp_abi/host-e7cdf05/manifest.json'))
+
+    def test_matching_v15_frozen_is_reused_without_fetch_or_prepare(self):
+        code, summary, scripted, _ = self.run_profile(preexisting_v15_frozen='match')
+        self.assertEqual(code, 0, summary['failures'])
+        self.assertEqual(summary['abiV15Frozen']['action'], 'reused')
+        self.assertNotIn('v15-frozen-fetch', scripted.names())
+        self.assertNotIn('v15-frozen-prepare', scripted.names())
 
     def test_matching_v14_is_reused_without_fetch_or_prepare(self):
         code, summary, scripted, _ = self.run_profile(preexisting_v14='match')
@@ -1175,6 +1217,30 @@ class DiagnosticsCollection(unittest.TestCase):
             self.assertIn('native-abi-v14/receipt.json', missing)
             self.assertIn('native-abi-v14/build.log', missing)
             self.assertNotIn('native-abi-v14/configure.log', missing)
+
+    def test_v15_frozen_provider_diagnostics_survive_without_binaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider = root / 'build/native-abi-v15-frozen'
+            provider.mkdir(parents=True)
+            files = {
+                'receipt.json': json.dumps({'commit': V15_FROZEN_COMMIT, 'archiveSha256': 'a' * 64}),
+                'configure.log': 'frozen v15 provider configured\n',
+                'build.log': 'frozen v15 provider built\n',
+            }
+            for name, content in files.items():
+                (provider / name).write_text(content)
+            (provider / 'libpineforge.a').write_bytes(b'!<arch>\nexcluded library\n')
+            (provider / 'source.tar').write_bytes(b'excluded source archive\n')
+            output = root / 'diagnostics'
+            self.collect(root / 'build', output)
+            for name, content in files.items():
+                self.assertEqual((output / ('native-abi-v15-frozen-' + name)).read_text(), content)
+            missing = json.loads((output / 'missing.json').read_text())
+            self.assertFalse(any(name.startswith('native-abi-v15-frozen/') for name in missing))
+            retained = [path.name for path in output.rglob('*') if path.is_file()]
+            self.assertNotIn('libpineforge.a', retained)
+            self.assertNotIn('source.tar', retained)
 
     def test_native_abi_control_receipt_is_retained_or_recorded_missing(self):
         with tempfile.TemporaryDirectory() as temporary:

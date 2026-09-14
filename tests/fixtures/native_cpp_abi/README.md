@@ -8,7 +8,7 @@ exact file contents, gzip-compressed with `mtime=0`. The archive is
 independent of Git history, shallow checkouts, network access, and later
 current-header changes.
 
-The `host-c3ed455` and `host-f736676` closures use `headers.tar`, authenticated
+The `host-c3ed455`, `host-f736676`, and `host-e7cdf05` closures use `headers.tar`, authenticated
 against their exact per-file manifests. They also supply the real historical
 libraries prepared by `scripts/prepare_settlement_cpp_abi_base.py`; the native
 checker imports that module's tar extraction/authentication helpers directly.
@@ -24,22 +24,20 @@ checker imports that module's tar extraction/authentication helpers directly.
 | `order-e7d023d` | same e7d023d commit/tree, `native_order.hpp` SHA `b13006e99554ba9caa3e5b444cca3e4f2b5ebd5e372d3dcbe44bb6a677192a3e` | `native_order_v1`. `CommandEvent` has 10 alternatives. `src/native_order.cpp` is an authentic compile-only old object. |
 | `host-c3ed455` | commit `c3ed45516721d3185fcd2f50bb293793304bc6e6`, tree `bb80c4767dddc0e5c9ae172672edd955ad344890` | Engine/host epoch 13, order epoch 2, driver epoch 3. Full historical host/order/driver library pairing; no current-execution declarations. |
 | `host-f736676` | commit `f736676ea9a558dc664b18f099a488b3a2c0067f`, tree `c69421f0f86d23aa48eeb2c79bf7f475a4db0e83`, tar SHA `37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e` | Frozen 55-header engine/host epoch 14, order epoch 3, driver epoch 4 closure. Active shape-agnostic current-execution compile control and real full-library pairing with current v15. |
+| `host-e7cdf05` | commit `e7cdf052fa44d4c98035804db7b8399d3a5a37b2`, tree `dea028ca5664f78c055b1588820a4f7cce5b137f`, tar SHA `189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3` | Frozen 56-header v15 source-layer-base closure. The immutable same-epoch archive must link with the live v15 archive in every matching native domain. |
 
 Sources were taken from the pairing-audit capture
 `tasks/native-abi-audit/snapshot-20260912T064119Z` and, where that capture
-omitted a file, from the same Git commit the capture names. The two later
+omitted a file, from the same Git commit the capture names. The three later
 tar closures come from the exact commits listed above. Do not execute
 mismatched binaries. Layout sizes in each manifest were recorded by the
 pairing audit's LLVM `sizeof`/`offsetof` witness and are re-checked here
 with `static_assert` against the frozen headers.
 
-The full settlement matrix comprises e60, 0e, v13, v14 and current v15 archives.
-Host and order cross-epoch pairs reject; driver v4 positively links both
-v14→v15 and v15→v14. These domain-specific outcomes govern over the frozen
-v14 fixture README's historical blanket-rejection wording.
-`native-abi-receipt.json` records the active frozen-v14 compile control.
-The complete `CURRENT_EXECUTION_V15_CALLER` and `NATIVE_FX_CURVE_CALLER`
-templates, plus the named good-v15 and missing-Cancelled compile controls,
-are pending while `CURRENT_TERMS_SURFACE_READY = False` in phases 0–1b;
-phase 1c activates them when the host surface lands. Existing order-v1
-rejection pairs remain required.
+The full settlement matrix comprises e60, 0e, v13, v14, frozen v15 and live
+v15 archives. Host and order cross-epoch pairs reject; driver v4 positively
+links v14↔v15, and the frozen/live v15 pair positively links in every
+same-owner domain. `native-abi-receipt.json` records the authenticated v14
+and frozen-v15 compile controls. `CURRENT_TERMS_SURFACE_READY = True`: the
+complete v15 current-execution, FX and missing-Cancelled controls are active.
+Existing order-v1 rejection pairs remain required.

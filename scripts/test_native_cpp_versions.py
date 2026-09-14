@@ -327,7 +327,9 @@ class NativeVersions(unittest.TestCase):
         self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'], 'required')
         for name in ('v15_current_execution_surface_compile',
                      'v15_current_result_missing_cancelled_compile_reject',
-                     'v15_native_fx_curve_surface_compile'):
+                     'v15_native_fx_curve_surface_compile',
+                     'v15_frozen_current_execution_surface_compile',
+                     'v15_frozen_native_fx_curve_surface_compile'):
             self.assertEqual(controls[name]['status'], 'required')
 
     def test_order_namespace_is_derived_not_literal(self):
@@ -431,6 +433,30 @@ class NativeVersions(unittest.TestCase):
             (mislabeled / 'manifest.json').write_text(json.dumps(data))
             with self.assertRaises(RuntimeError):
                 authenticate_v14_fixture(mislabeled, root / 'bad-manifest')
+
+    def test_v15_frozen_tar_authentication_rejects_archive_and_manifest_tampering(self):
+        from check_native_cpp_abi import FIXTURE, authenticate_v15_frozen_fixture
+        fixture = FIXTURE / 'host-e7cdf05'
+        with tempfile.TemporaryDirectory(prefix='pf-native-v15-auth-') as temp:
+            root = Path(temp)
+            valid = root / 'valid'
+            manifest = root / 'manifest-copy'
+            shutil.copytree(fixture, manifest)
+            authenticate_v15_frozen_fixture(manifest, valid)
+            tampered = root / 'tampered'
+            shutil.copytree(fixture, tampered)
+            archive = bytearray((tampered / 'headers.tar').read_bytes())
+            archive[-1] ^= 1
+            (tampered / 'headers.tar').write_bytes(archive)
+            with self.assertRaises(RuntimeError):
+                authenticate_v15_frozen_fixture(tampered, root / 'bad-archive')
+            mislabeled = root / 'mislabeled'
+            shutil.copytree(fixture, mislabeled)
+            data = json.loads((mislabeled / 'manifest.json').read_text())
+            data['tree'] = '0' * 40
+            (mislabeled / 'manifest.json').write_text(json.dumps(data))
+            with self.assertRaises(RuntimeError):
+                authenticate_v15_frozen_fixture(mislabeled, root / 'bad-manifest')
 
     def test_current_execution_caller_is_rendered_per_provider(self):
         from check_native_cpp_abi import render_current_execution_caller

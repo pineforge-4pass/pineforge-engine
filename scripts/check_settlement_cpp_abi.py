@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Actual old/new settlement ABI pairings. Compile and link; NEVER run callers.
 
-Requires separately prepared real e60 R2, 0e R3, v13 and v14 archives. No Git/network/build fallback
+Requires separately prepared real e60 R2, 0e R3, v13, v14 and frozen-v15 archives. No Git/network/build fallback
 is performed by this CTest-time checker. Existing native/script ABI guards stay
 separate and mandatory, including their old epoch and sanitizer RTTI controls.
 """
@@ -613,6 +613,8 @@ def main() -> int:
                         help='required for full proof: prepared real 0e18690 provider receipt')
     parser.add_argument('--v13-receipt', type=Path, help='prepared real c3ed455 epoch 13 provider; mandatory in full matrix')
     parser.add_argument('--v14-receipt', type=Path, help='prepared real f736676 epoch 14 provider; mandatory in full matrix')
+    parser.add_argument('--v15-frozen-receipt', type=Path,
+                        help='prepared real e7cdf052 frozen epoch 15 provider; mandatory in full matrix')
     parser.add_argument('--base-generated-include', type=Path)
     parser.add_argument('--extra-flag', action='append', default=[])
     parser.add_argument('--receipt', type=Path, required=True)
@@ -688,6 +690,16 @@ def main() -> int:
                                'commit':v14_receipt['commit'],'tree':v14_receipt['tree']}
                 v14_members,v14_shape = frozen_shape(v14_include,include,selected=True)
                 report['v14FrozenShape']=v14_shape
+                v15_frozen_library,v15_frozen_include,v15_frozen_generated,v15_frozen_receipt = load_provider(
+                    args,scratch/'v15-frozen',cache,args.v15_frozen_receipt,PROVIDERS['v15-frozen'],
+                    expect_present=(*OLD_METHODS,*OLD_PRIVATE,*NEW_METHODS,*NEW_PRIVATE,*REVERSAL_METHODS),
+                    expect_absent=())
+                report['v15Frozen']={'receiptSha256':identity(args.v15_frozen_receipt)['sha256'],
+                                     'archiveSha256':identity(v15_frozen_library)['sha256'],
+                                     'commit':v15_frozen_receipt['commit'],'tree':v15_frozen_receipt['tree']}
+                v15_frozen_members,v15_frozen_shape = frozen_shape(
+                    v15_frozen_include,include,selected=True)
+                report['v15FrozenShape']=v15_frozen_shape
 
             def compile_tu(name,text,headers,generated):
                 # Each caller must name its actual header epoch, including return-only APIs.
@@ -741,6 +753,9 @@ def main() -> int:
                 report['priorLayout']=compare_layout('prior',prior_include,prior_generated,prior_members,selected=True)
                 report['v13Layout']=compare_layout('v13',v13_include,v13_generated,v13_members,selected=True)
                 report['v14Layout']=compare_layout('v14',v14_include,v14_generated,v14_members,selected=True)
+                report['v15FrozenLayout']=compare_layout(
+                    'v15-frozen',v15_frozen_include,v15_frozen_generated,
+                    v15_frozen_members,selected=True)
             if not args.base_only:
                 current_header=clean((include/'pineforge/engine.hpp').read_text())
                 for method in (*NEW_METHODS,*(REVERSAL_METHODS if full_matrix else ())):
@@ -793,6 +808,7 @@ def main() -> int:
                 native_providers = {
                     'v13': (v13_library, v13_include, v13_generated),
                     'v14': (v14_library, v14_include, v14_generated),
+                    'v15-frozen': (v15_frozen_library, v15_frozen_include, v15_frozen_generated),
                     current_label: (library, include, args.generated_include),
                 }
                 report['archiveProviders'] = {
@@ -804,8 +820,9 @@ def main() -> int:
                 }
                 domains = {role: native_domain_callers(headers)
                            for role, (_,headers,_) in native_providers.items()}
-                # Compile all three epochs, then decide every pair by its domain's
-                # owner. In particular, driver v4 has positive v14/v15 cross pairs.
+                # Compile every provider, then decide each pair by its domain's
+                # owner. In particular, a frozen v15 provider and the live v15
+                # archive positively pair in every same-owner domain.
                 objects = {
                     role: {name: compile_tu(role+'-'+name,text,headers,generated)
                            for name,(text,_,_) in domains[role].items()}
@@ -819,14 +836,15 @@ def main() -> int:
                             link(caller+'-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,engine='pineforge::'+engine_epoch(native_providers[caller][1])+'::BacktestEngine::',
                                  symbol_missing=None if positive else needle)
-                for caller in ('v14',current_label):
+                for caller in ('v14','v15-frozen',current_label):
                     _,headers,generated = native_providers[caller]
                     epoch = engine_epoch(headers)
+                    caller_engine = 'pineforge::'+epoch+'::BacktestEngine::'
                     obj = compile_tu(caller+'-current-execution',CURRENT_EXECUTION_CALLER,headers,generated)
                     for provider,(runtime,_,_) in native_providers.items():
-                        positive = caller == provider
+                        positive = caller_engine == provider_engine_for(runtime,provider_engines)
                         link(caller+'-current-execution-'+provider+('-real' if positive else '-rejected'),
-                             obj,runtime,engine='pineforge::'+epoch+'::BacktestEngine::',
+                             obj,runtime,engine=caller_engine,
                              symbol_missing=None if positive else [
                                  'pineforge::'+epoch+'::NativeStrategyHost::'+method+'(' for method in
                                  ('current_execution_point','inspect_current_execution','execute_current')])
@@ -837,13 +855,13 @@ def main() -> int:
                                       ('native-fx-curve',NATIVE_FX_CURVE_CALLER)):
                         obj = compile_tu(current_label+'-'+name,text,include,args.generated_include)
                         for provider,(runtime,_,_) in native_providers.items():
-                            positive = provider == current_label
+                            positive = ENGINE == provider_engine_for(runtime,provider_engines)
                             link(current_label+'-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,symbol_missing=None if positive else
                                  'pineforge::'+CURRENT_EPOCH+'::NativeStrategyHost::configure_native_fx_curve(')
                 # The historical host providers also own the full settlement API.
                 # Retain the e60/0e introduction controls below and check these
-                # callers against each of the three modern engine owners.
+                # callers against each modern engine owner.
                 engine_callers = {
                     'old-api': OLD_CALLER, 'old-private': PRIVATE_OLD_CALLER,
                     'selected': NEW_CALLER, 'new-private': PRIVATE_NEW_CALLER,
@@ -857,19 +875,20 @@ def main() -> int:
                 engine_objects = {current_label: {
                     'old-api':cur_old, 'old-private':current_private_old,
                     'selected':new, 'new-private':private_new, 'reversal':reversal}}
-                for caller in ('v13','v14'):
+                for caller in ('v13','v14','v15-frozen'):
                     _,headers,generated = native_providers[caller]
                     engine_objects[caller] = {name:compile_tu(caller+'-engine-'+name,text,headers,generated)
                                               for name,text in engine_callers.items()}
                 for caller,callers in engine_objects.items():
                     epoch = engine_epoch(native_providers[caller][1])
+                    caller_engine = 'pineforge::'+epoch+'::BacktestEngine::'
                     for provider,(runtime,_,_) in native_providers.items():
-                        positive = caller == provider
+                        positive = caller_engine == provider_engine_for(runtime,provider_engines)
                         for name,obj in callers.items():
                             methods,parameter_domain = method_sets[name]
                             link(caller+'-engine-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,missing=() if positive else methods,domain=parameter_domain,
-                                 engine='pineforge::'+epoch+'::BacktestEngine::')
+                                 engine=caller_engine)
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)

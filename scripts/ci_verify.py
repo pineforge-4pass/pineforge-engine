@@ -339,6 +339,7 @@ class Driver:
         self.abi_prior_action = 'not-started'
         self.abi_v13_action = 'not-started'
         self.abi_v14_action = 'not-started'
+        self.abi_v15_frozen_action = 'not-started'
         self.summary: dict = {
             'schemaVersion': SCHEMA,
             'status': 'incomplete',
@@ -361,6 +362,7 @@ class Driver:
             'abiPrior': {'action': self.abi_prior_action},
             'abiV13': {'action': self.abi_v13_action},
             'abiV14': {'action': self.abi_v14_action},
+            'abiV15Frozen': {'action': self.abi_v15_frozen_action},
             'stages': self.stages,
             'failures': self.failures,
         }
@@ -370,6 +372,7 @@ class Driver:
         self.summary['abiPrior'] = {'action': self.abi_prior_action}
         self.summary['abiV13'] = {'action': self.abi_v13_action}
         self.summary['abiV14'] = {'action': self.abi_v14_action}
+        self.summary['abiV15Frozen'] = {'action': self.abi_v15_frozen_action}
         self.summary['actualVersion'] = self.actual_version
         self.summary['stages'] = self.stages
         self.summary['failures'] = self.failures
@@ -534,6 +537,15 @@ class Driver:
                         '--header-manifest', str(manifest)],
             stage='abi-v14', fetch_stage='abi-v14-fetch')
 
+    def ensure_abi_v15_frozen(self) -> None:
+        provider = PROVIDERS['v15-frozen']
+        manifest = self.cfg.source / provider['manifest'].relative_to(ROOT)
+        self.abi_v15_frozen_action = self.ensure_prepared_provider(
+            self.cfg.build_dir / provider['default_output'], provider['commit'], provider['tree'],
+            extra_argv=['--commit', provider['commit'], '--tree', provider['tree'],
+                        '--header-manifest', str(manifest)],
+            stage='abi-v15-frozen', fetch_stage='abi-v15-frozen-fetch')
+
     def ensure_prepared_provider(self, output: Path, commit: str, tree: str, *,
                                  extra_argv: list[str], stage: str, fetch_stage: str) -> str:
         prepare = [
@@ -682,6 +694,7 @@ class Driver:
         self.ensure_abi_prior()
         self.ensure_abi_v13()
         self.ensure_abi_v14()
+        self.ensure_abi_v15_frozen()
 
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
                  '--output-on-failure', '--no-tests=error', '--parallel', str(self.cfg.jobs)]

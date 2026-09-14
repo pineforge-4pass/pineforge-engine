@@ -179,10 +179,16 @@ def check_fx_curve_introduced_at(manifests):
 
 
 def authenticate_historical_host_manifests(root=ROOT, providers=PROVIDERS):
-    """Reuse authenticated provider closures without injecting current-only values."""
+    """Reuse older authenticated closures without injecting current-only values.
+
+    The frozen v15 provider is a same-epoch control, not evidence that a v15
+    value predates its public owner.
+    """
     manifests = {}
     with tempfile.TemporaryDirectory(prefix='.native-fx-introduced-', dir=root) as temporary:
         for label, provider in providers.items():
+            if provider['engine_epoch'] == 'engine_script_run_v15':
+                continue
             manifest_path = provider['manifest']
             if not manifest_path.parent.name.startswith('host-'):
                 continue

@@ -25,9 +25,17 @@ The fourth provider is native host epoch 14 at commit
 `37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e`, and its
 full archive is prepared under `native-abi-v14/`.
 
-All four historical providers and current v15 remain required in the
-five-archive matrix. e60/0e retain engine-only roles; v13/v14/v15 supply
-the host/order/driver domains. The selected-method rejection uses R2.
+The fifth prepared provider is the frozen same-epoch v15 source-layer base at
+commit `e7cdf052fa44d4c98035804db7b8399d3a5a37b2`, tree
+`dea028ca5664f78c055b1588820a4f7cce5b137f`. Its 56-header closure is frozen
+at `../native_cpp_abi/host-e7cdf05/manifest.json` with `headers.tar` SHA-256
+`189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3`, and its
+real archive is prepared under `native-abi-v15-frozen/`.
+
+All four historical providers, the frozen v15 provider, and the live v15
+archive remain required in the six-archive matrix. e60/0e retain engine-only
+roles; v13/v14/frozen-v15/live-v15 supply the host/order/driver domains. The
+selected-method rejection uses R2.
 
 The new settlement checker supplements `check_native_cpp_abi.py` and
 `check_script_cpp_abi.py`; retain those existing checks and their old epoch
@@ -67,6 +75,12 @@ python3 scripts/prepare_settlement_cpp_abi_base.py \
   --commit f736676ea9a558dc664b18f099a488b3a2c0067f \
   --tree c69421f0f86d23aa48eeb2c79bf7f475a4db0e83 \
   --header-manifest tests/fixtures/native_cpp_abi/host-f736676/manifest.json
+python3 scripts/prepare_settlement_cpp_abi_base.py \
+  --source-repo . --current-build build \
+  --output build/native-abi-v15-frozen --jobs 4 \
+  --commit e7cdf052fa44d4c98035804db7b8399d3a5a37b2 \
+  --tree dea028ca5664f78c055b1588820a4f7cce5b137f \
+  --header-manifest tests/fixtures/native_cpp_abi/host-e7cdf05/manifest.json
 ```
 
 For the sanitizer lane, replace the build paths with `build-asan`; for the
@@ -95,21 +109,23 @@ python3 scripts/check_settlement_cpp_abi.py \
   --prior-receipt build/settlement-abi-prior/receipt.json \
   --v13-receipt build/native-abi-v13/receipt.json \
   --v14-receipt build/native-abi-v14/receipt.json \
+  --v15-frozen-receipt build/native-abi-v15-frozen/receipt.json \
   --receipt build/settlement-abi-receipt.json
 ```
 
-`--v13-receipt` and `--v14-receipt` are mandatory in the full matrix; only the
+`--v13-receipt`, `--v14-receipt`, and `--v15-frozen-receipt` are mandatory in the full matrix; only the
 partial development modes below may omit them. CMake supplies these through
-`PINEFORGE_NATIVE_ABI_V13_RECEIPT` and `PINEFORGE_NATIVE_ABI_V14_RECEIPT`.
+`PINEFORGE_NATIVE_ABI_V13_RECEIPT`, `PINEFORGE_NATIVE_ABI_V14_RECEIPT`, and
+`PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT`.
 Pass `--extra-flag=-fsanitize=address,undefined` for
 an instrumented archive, as the existing CMake ABI guards do. The compiler must
-match the current build and all four prepared providers. A preserved Mac Release archive cannot stand
+match the current build and all five prepared providers. A preserved Mac Release archive cannot stand
 in for a Linux, Debug or sanitizer provider. Missing artifacts fail with the preparation
 command; no skip, stub or implicit network fallback is available.
 
 The checker:
 
-* authenticates all four historical header inventories and all five archives, checks old defined symbols,
+* authenticates all four historical header inventories, the frozen v15 closure, and all six archives, checks old defined symbols,
   and requires current archive freshness against all `src`, `include`,
   `cmake` files and `CMakeLists.txt`;
 * freezes execution aggregate field/order/type/status encodings, Action and CloseScope
@@ -198,8 +214,8 @@ Three development modes return labeled partial receipts:
 new public declarations against the real old provider before the new archive
 exists; `--public-only` runs all public pairings before new private provenance
 helpers are integrated. These partial modes do not include the reversal matrix
-or the v13/v14/v15 domain pairings, and may omit `--prior-receipt`,
-`--v13-receipt` and `--v14-receipt`.
+or the v13/v14/frozen-v15/live-v15 domain pairings, and may omit `--prior-receipt`,
+`--v13-receipt`, `--v14-receipt`, and `--v15-frozen-receipt`.
 None returns `status: passed` or
 `newArchivePairingComplete: true`. Do not use these modes in CI acceptance.
 

@@ -28,7 +28,13 @@ V13_COMMIT = 'c3ed45516721d3185fcd2f50bb293793304bc6e6'
 V13_TREE = 'bb80c4767dddc0e5c9ae172672edd955ad344890'
 V14_COMMIT = 'f736676ea9a558dc664b18f099a488b3a2c0067f'
 V14_TREE = 'c69421f0f86d23aa48eeb2c79bf7f475a4db0e83'
+V15_FROZEN_COMMIT = 'e7cdf052fa44d4c98035804db7b8399d3a5a37b2'
+V15_FROZEN_TREE = 'dea028ca5664f78c055b1588820a4f7cce5b137f'
 PROVIDERS = {
+    'v15-frozen': {'commit': V15_FROZEN_COMMIT, 'tree': V15_FROZEN_TREE,
+                   'engine_epoch': 'engine_script_run_v15',
+                   'manifest': ROOT / 'tests/fixtures/native_cpp_abi/host-e7cdf05/manifest.json',
+                   'default_output': 'native-abi-v15-frozen', 'headers_name': 'headers.tar'},
     'v14': {'commit': V14_COMMIT, 'tree': V14_TREE,
             'engine_epoch': 'engine_script_run_v14',
             'manifest': ROOT / 'tests/fixtures/native_cpp_abi/host-f736676/manifest.json',
