@@ -2,12 +2,13 @@
 #include <pineforge/native_calendar.hpp>
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <new>
 #include <string_view>
 
 namespace pineforge {
-inline namespace native_run_spec_v1 {
+inline namespace native_run_spec_v2 {
 namespace {
 
 using Error = NativeRunSpecError;
@@ -57,6 +58,19 @@ Result validate_string(std::string_view value, Field field, bool required) noexc
 }
 
 bool positive(double value) noexcept { return std::isfinite(value) && value > 0.0; }
+
+bool valid_distribution(MagnifierDistribution distribution) noexcept {
+    switch (distribution) {
+    case MagnifierDistribution::UNIFORM:
+    case MagnifierDistribution::COSINE:
+    case MagnifierDistribution::TRIANGLE:
+    case MagnifierDistribution::ENDPOINTS:
+    case MagnifierDistribution::FRONT_LOADED:
+    case MagnifierDistribution::BACK_LOADED:
+        return true;
+    }
+    return false;
+}
 
 Result validate_values(const NativeRunSpec& spec) noexcept {
     const struct {
@@ -128,6 +142,24 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     }
     if (spec.initial_margin_fraction && !positive(*spec.initial_margin_fraction))
         return {Error::NotFinitePositive, Field::InitialMarginFraction};
+    if (spec.intrabar.value.index() > 1) {
+        return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
+    }
+    if (const auto* lower = spec.intrabar.lower()) {
+        const auto tf = validate_string(lower->tf, Field::IntrabarTimeframe, true);
+        if (!tf) return tf;
+        if (lower->samples < 2 || lower->samples > (1 << 20)) {
+            return {Error::InvalidIntrabarPath, Field::IntrabarSamples};
+        }
+        if (!valid_distribution(lower->distribution)) {
+            return {Error::InvalidIntrabarPath, Field::IntrabarDistribution};
+        }
+        if (lower->volume_weighted_min_samples < 2
+            || lower->volume_weighted_max_samples < lower->volume_weighted_min_samples
+            || lower->volume_weighted_max_samples > (1 << 20)) {
+            return {Error::InvalidIntrabarPath, Field::IntrabarVolumeSamples};
+        }
+    }
     return {};
 }
 
@@ -144,6 +176,21 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
         active_field = Field::ScriptTimeframe;
         const auto script = native_calendar::parse_timeframe(spec.script_tf);
         if (!script) return {Error::InvalidTimeframe, active_field};
+        if (const auto* lower = spec.intrabar.lower()) {
+            active_field = Field::IntrabarTimeframe;
+            const auto path_tf = native_calendar::parse_timeframe(lower->tf);
+            if (!path_tf) return {Error::InvalidIntrabarPath, active_field};
+            switch (native_calendar::compatibility(*path_tf, *script).pairing) {
+            case native_calendar::TimeframePairing::Passthrough:
+            case native_calendar::TimeframePairing::SameUnitMultiple:
+            case native_calendar::TimeframePairing::FixedDivisible:
+            case native_calendar::TimeframePairing::FixedToCalendar:
+            case native_calendar::TimeframePairing::CalendarToCalendar:
+                break;
+            default:
+                return {Error::InvalidIntrabarPath, active_field};
+            }
+        }
         // Configure admits the complete batch contract, including monthly.
         // The host must apply stream_compatibility separately at stream begin.
         switch (native_calendar::compatibility(*input, *script).pairing) {
@@ -183,5 +230,37 @@ NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept 
     return {};
 }
 
-}  // inline namespace native_run_spec_v1
+std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept {
+    std::uint64_t state = 1469598103934665603ULL;
+    const auto bytes = [&state](const void* data, std::size_t count) noexcept {
+        const auto* values = static_cast<const unsigned char*>(data);
+        for (std::size_t i = 0; i < count; ++i) {
+            state ^= values[i];
+            state *= 1099511628211ULL;
+        }
+    };
+    const auto u = [&bytes](std::uint64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto i = [&bytes](std::int64_t value) noexcept { bytes(&value, sizeof value); };
+    const auto d = [&bytes](double value) noexcept { bytes(&value, sizeof value); };
+    const auto s = [&u, &bytes](const std::string& value) noexcept {
+        u(value.size());
+        bytes(value.data(), value.size());
+    };
+    u(path.value.index());
+    const auto* lower = path.lower();
+    if (!lower) return state;
+    s(lower->tf);
+    i(lower->samples);
+    u(static_cast<std::uint64_t>(lower->distribution));
+    u(lower->volume_weighted ? 1u : 0u);
+    i(lower->volume_weighted_min_samples);
+    i(lower->volume_weighted_max_samples);
+    u(lower->bars.size());
+    for (const auto& bar : lower->bars) {
+        d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume); i(bar.timestamp);
+    }
+    return state;
+}
+
+}  // inline namespace native_run_spec_v2
 } // namespace pineforge

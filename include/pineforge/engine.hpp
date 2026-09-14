@@ -427,12 +427,16 @@ struct SymInfo {
     double qty_step = 0.0;
 };
 
+// Value-owned runtime input transport shared by the public rich run overload
+// and the generic native pre-begin provider.  It contains no frontend policy.
+using InputsMap = std::unordered_map<std::string, std::string>;
+
 // The C++ subclass contract is internal, unlike pineforge.h's stable C ABI.
 // Changing its layout or vtable requires all generated/native C++ objects to be rebuilt.
 // v6 adds explicit owner-bound exit-leg activation and Pine placement evidence.
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
-inline namespace engine_script_run_v16 {
+inline namespace engine_script_run_v17 {
 class BrokerStateHashSink;
 class BacktestEngine {
 protected:
@@ -3794,5 +3798,5 @@ public:
     void trace(const std::string& name, int value)   { trace(name, static_cast<double>(value)); }
 };
 
-} // inline namespace engine_script_run_v16
+} // inline namespace engine_script_run_v17
 } // namespace pineforge

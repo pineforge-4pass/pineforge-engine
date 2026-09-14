@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V16
+#ifndef PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17
 #error "native strategy host must fail closed against an unversioned epoch"
 #endif
 
@@ -300,7 +300,7 @@ const native_order::ExecutionAppliedEvent* first_applied(
 int main() {
     {
         const std::string name = typeid(NativeStrategyHost).name();
-        CHECK(name.find("engine_script_run_v16") != std::string::npos);
+        CHECK(name.find("engine_script_run_v17") != std::string::npos);
         CHECK(name.find("NativeStrategyHost") != std::string::npos);
     }
     {
@@ -399,8 +399,9 @@ int main() {
         auto spec = spec_for("cabi-no-exception", 1);
         CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
         strategy_set_trace_enabled(reinterpret_cast<pf_strategy_t>(&host), 1);
-        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
-        CHECK(host.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+        // L1 pre-begin ingress is generic staging on native-bound hosts.
+        CHECK(host.native_state().kind == NativeLifecycleKind::Ready);
+        CHECK(host.last_run_status() == 0);
     }
 
     {
@@ -1435,15 +1436,14 @@ int main() {
         std::unordered_map<std::string, std::string> inputs;
         SymInfo info;
         ready.run(&bar, 1, "1", "1", inputs, info);
-        CHECK(ready.native_state().kind == NativeLifecycleKind::Failed);
-        CHECK(ready.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+        CHECK(ready.native_state().kind == NativeLifecycleKind::Completed);
         EmptyHost completed;
         CHECK(completed.configure_native(spec).status == NativeSetupStatus::Applied);
         completed.run(&bar, 1);
         CHECK(completed.native_state().kind == NativeLifecycleKind::Completed);
         completed.run(&bar, 1, "1", "1", inputs, info);
-        CHECK(completed.native_state().kind == NativeLifecycleKind::Failed);
-        CHECK(completed.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+        CHECK(completed.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(completed.last_run_status() != 0);
     }
 
     {

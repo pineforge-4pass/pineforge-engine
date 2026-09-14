@@ -56,28 +56,28 @@ x::Fill fill(double price, const char* id, uint64_t incarnation) {
     return {price, id, "", incarnation, 0.0};
 }
 
-void check_native_metadata_and_aux_refusals() {
+void check_native_metadata_and_aux_staging() {
     NativeWitness host;
-    bool metadata_refused = false;
+    bool metadata_threw = false;
     try {
         host.set_syminfo_metadata("qty_step", 0.25);
-    } catch (const std::runtime_error& error) {
-        metadata_refused = std::string(error.what())
-            == "native host refuses source mutation: set_syminfo_metadata";
+    } catch (...) {
+        metadata_threw = true;
     }
-    CHECK(metadata_refused);
-    CHECK(std::isnan(host.metadata("qty_step")));
+    CHECK(!metadata_threw);
+    CHECK(host.metadata("qty_step") == 0.25);
 
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     const Bar bars[] = {{100.0, 101.0, 99.0, 100.0, 1.0, 1700000000000LL}};
-    bool aux_refused = false;
+    bool aux_threw = false;
+    bool aux_result = true;
     try {
-        (void)host.set_aux_security_feed(bars, 1, "1");
-    } catch (const std::runtime_error& error) {
-        aux_refused = std::string(error.what())
-            == "native host refuses source mutation: set_aux_security_feed";
+        aux_result = host.set_aux_security_feed(bars, 1, "1");
+    } catch (...) {
+        aux_threw = true;
     }
-    CHECK(aux_refused);
+    CHECK(!aux_threw);
+    CHECK(!aux_result);
 #else
 #error "A28 witness requires the auxiliary-security feed surface"
 #endif
@@ -269,7 +269,7 @@ void check_native_empty_lifecycle_and_rejection() {
 } // namespace
 
 int main() {
-    check_native_metadata_and_aux_refusals();
+    check_native_metadata_and_aux_staging();
     check_legacy_route_refusal_message();
     check_native_position_and_source_empty_settlement();
     check_native_source_close_hooks_are_bypassed();

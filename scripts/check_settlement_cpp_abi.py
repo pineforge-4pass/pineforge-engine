@@ -21,7 +21,7 @@ from check_native_cpp_abi import (
     HOST_EVENTS_CALLER, HOST_CALLER, HOST_CONSTRUCTOR_CALLER, CURRENT_EXECUTION_CALLER,
     CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER, CURRENT_TERMS_SURFACE_READY,
     CURRENT_ORDER_VARIANT, CURRENT_ORDER_INTENT_VARIANT, ORDER_CALLER, BAR_CALLER,
-    assembly_layout_values, undefined_mentions, render_current_execution_caller,
+    assembly_layout_values, undefined_mentions, render_current_execution_caller, render_host_caller,
 )
 from prepare_settlement_cpp_abi_base import (
     BASE_COMMIT, BASE_TREE, COPY_CACHE, PROVIDERS, authenticate_headers, compiler_identity,
@@ -29,27 +29,39 @@ from prepare_settlement_cpp_abi_base import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-RELOCATION_MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-e7cdf05/relocation-manifest.json"
+RELOCATION_MANIFESTS = {
+    ("engine_script_run_v15", "engine_script_run_v16"):
+        ROOT / "tests/fixtures/native_cpp_abi/host-e7cdf05/relocation-manifest.json",
+    ("engine_script_run_v16", "engine_script_run_v17"):
+        ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v17.json",
+}
 
 
-def relocation_manifest(path: Path = RELOCATION_MANIFEST) -> dict:
+def relocation_manifest(transition, manifests=RELOCATION_MANIFESTS) -> dict | None:
+    path = manifests.get(transition)
+    if path is None:
+        return None
     data = json.loads(path.read_text())
-    if data.get("schema") != "pineforge-r4-c-relocation/v1":
-        raise RuntimeError("v15/v16 relocation manifest has an unknown schema")
-    if data.get("transition") != {"from": "engine_script_run_v15", "to": "engine_script_run_v16"}:
-        raise RuntimeError("v15/v16 relocation manifest has the wrong transition")
-    for key in ("removedStorage", "addedVirtuals", "removedVirtuals", "rejectionPairs"):
-        if not isinstance(data.get(key), list) or not data[key]:
-            if key == "removedVirtuals" and data.get(key) == []:
-                continue
-            raise RuntimeError("v15/v16 relocation manifest lacks " + key)
+    expected_schema = "pineforge-r4-c-relocation/v1" if transition[0].endswith("v15") \
+        else "pineforge-r4-d-relocation/v1"
+    if data.get("schema") != expected_schema:
+        raise RuntimeError("relocation manifest has an unknown schema")
+    if data.get("transition") != {"from": transition[0], "to": transition[1]}:
+        raise RuntimeError("relocation manifest has the wrong transition")
+    for key in ("removedStorage", "addedStorage", "addedVirtuals", "removedVirtuals", "rejectionPairs"):
+        if key == "addedStorage" and transition[0].endswith("v15") and key not in data:
+            data[key] = []
+        if not isinstance(data.get(key), list):
+            raise RuntimeError("relocation manifest lacks " + key)
+        if key in ("addedVirtuals", "rejectionPairs") and not data[key]:
+            raise RuntimeError("relocation manifest lacks " + key)
     if data.get("sourcePendingOrder") != "pineforge::source::PendingOrder":
-        raise RuntimeError("v15/v16 relocation manifest must name source::PendingOrder")
+            raise RuntimeError("relocation manifest must name source::PendingOrder")
     for key in ("removedStorage", "addedVirtuals", "removedVirtuals"):
         values = data[key]
         if len(values) != len(set(values)) or any(not re.fullmatch(r"[A-Za-z_]\w*", value)
                                                  for value in values):
-            raise RuntimeError("v15/v16 relocation manifest has invalid " + key)
+            raise RuntimeError("relocation manifest has invalid " + key)
     return data
 
 
@@ -69,6 +81,7 @@ PROVIDER_ORDER_SHAPES = {
     'engine_script_run_v13': (16, 3),
     'engine_script_run_v14': (16, 3),
     'engine_script_run_v15': (17, 5),
+    'engine_script_run_v16': (17, 5),
     CURRENT_EPOCH: (CURRENT_ORDER_VARIANT, CURRENT_ORDER_INTENT_VARIANT),
 }
 OLD_METHODS = ('inspect_native_settlement', 'inspect_native_settlement_scoped',
@@ -108,6 +121,20 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
         'native_host.hpp',
         'execution_consumer.hpp',
     ),
+    ('engine_script_run_v16', 'engine_script_run_v17'): (
+        'native_order.hpp',
+        'native_host.hpp',
+        'native_run_spec.hpp',
+        'market_driver.hpp',
+        'execution_consumer.hpp',
+    ),
+    ('engine_script_run_v15', 'engine_script_run_v17'): (
+        'native_order.hpp',
+        'native_host.hpp',
+        'native_run_spec.hpp',
+        'market_driver.hpp',
+        'execution_consumer.hpp',
+    ),
     ('engine_script_run_v13', 'engine_script_run_v16'): (
         'native_order.hpp',
         'native_host.hpp',
@@ -120,15 +147,24 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
         'market_driver.hpp',
         'execution_consumer.hpp',
     ),
+    ('engine_script_run_v13', 'engine_script_run_v17'): (
+        'native_order.hpp', 'native_host.hpp', 'native_run_spec.hpp',
+        'market_driver.hpp', 'execution_consumer.hpp',
+    ),
+    ('engine_script_run_v14', 'engine_script_run_v17'): (
+        'native_order.hpp', 'native_host.hpp', 'native_run_spec.hpp',
+        'market_driver.hpp', 'execution_consumer.hpp',
+    ),
 }
 # Provisional Phase-0 bytes of every exempted header. Pins change atomically
 # with the reviewed Phase-1b order and Phase-1c host landings. An exemption
 # never permits unpinned bytes or another epoch transition.
 EXEMPTED_HEADER_SHA256 = {
-    'native_order.hpp': '4333150cf15ec61b7ce723872f573ddd37c5534cfbea35e8ad1e8f2b0b5c3e15',
-    'native_host.hpp': '562ade697f8f028b86c95bc51f0dbe2080628495bd0f57a6c06fb0a35778570e',
-    'market_driver.hpp': '30b99e7a67ace08fc2e38158dc5eb697473a54e9149836d2c896a3ca189be39b',
-    'execution_consumer.hpp': '2be2418b5f4dcadec1fba02028a154278dcb8521281b5285f729fe9a74c9dcd6',
+    'native_order.hpp': '9d9900d0d859678f20278cfa607d47631c18a8eb2d308e89849b86dbba80a15c',
+    'native_host.hpp': '80e51af9df23352609212b2772e07d4e0719eff37c3038a79aea08fc23146aed',
+    'native_run_spec.hpp': '518a15af9e5b8e9a6be8577f07157515275228c0ba0816df0e806112a178aef9',
+    'market_driver.hpp': 'b22c7b5901a491b7456a229e47ea8a99988d3f0db7b482e3fd36f0ceec227c12',
+    'execution_consumer.hpp': 'b9abc06c4fa4d625db19263ef1bf24427f7d82b1faa128861a43369112fac224',
 }
 
 COMMON = '''#include <pineforge/native_host.hpp>
@@ -275,6 +311,8 @@ def render_provider_caller(text: str, headers: Path) -> str:
     command_count, intent_count = provider_order_shape(headers)
     if text == CURRENT_EXECUTION_CALLER:
         text = render_current_execution_caller(epoch)
+    elif text in (HOST_CALLER, HOST_EVENTS_CALLER):
+        text = render_host_caller(text, epoch)
     text = text.replace(CURRENT_EPOCH, epoch)
     return text.replace('COMMAND_EVENT_ALTERNATIVES', str(command_count)).replace(
         'ORDER_INTENT_ALTERNATIVES', str(intent_count))
@@ -428,6 +466,13 @@ def _virtual_inventory(text: str) -> tuple[list[str], list[str]]:
     return declarations, names
 
 
+def _native_host_virtual_inventory(include: Path) -> tuple[list[str], list[str]]:
+    text = (include / 'pineforge/native_host.hpp').read_text()
+    host = body(clean(text), r'class\s+NativeStrategyHost\s*:\s*public\s+BacktestEngine\s*\{',
+                'NativeStrategyHost')
+    return _virtual_inventory(host)
+
+
 def frozen_shape(old_include: Path, current_include: Path, *, selected=False) -> tuple[list[str], dict]:
     old_exec = (old_include/'pineforge/execution.hpp').read_text()
     cur_exec = (current_include/'pineforge/execution.hpp').read_text()
@@ -443,13 +488,12 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     old_epoch = [engine_epoch(old_include)] * 2
     new_epoch = [engine_epoch(current_include)] * 2
     epoch_break = old_epoch != new_epoch
-    reviewed_old_epochs = (*OLD_EPOCHS, "engine_script_run_v15")
+    reviewed_old_epochs = (*OLD_EPOCHS, "engine_script_run_v15", "engine_script_run_v16")
     if epoch_break and (old_epoch[0] not in reviewed_old_epochs or new_epoch[0] != CURRENT_EPOCH):
         raise RuntimeError('unreviewed engine epoch transition')
     transition = (old_epoch[0], new_epoch[0]) if epoch_break else None
     exempted = frozen_native_header_exemptions(old_include, current_include, transition)
-    manifest = relocation_manifest() if transition == (
-        "engine_script_run_v15", "engine_script_run_v16") else None
+    manifest = relocation_manifest(transition)
     if manifest is None:
         verify_exempted_header_pins(exempted)
     if selected:
@@ -470,7 +514,10 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
     current_order, current_by_name = _named_storage(current_storage)
     old_virtuals, old_virtual_names = _virtual_inventory(old_engine)
     current_virtuals, current_virtual_names = _virtual_inventory(cur_engine)
-    historical_bridge = epoch_break and old_epoch[0] in OLD_EPOCHS and new_epoch[0] == 'engine_script_run_v16'
+    old_host_virtuals, old_host_virtual_names = _native_host_virtual_inventory(old_include)
+    current_host_virtuals, current_host_virtual_names = _native_host_virtual_inventory(current_include)
+    historical_bridge = (epoch_break and old_epoch[0] in (*OLD_EPOCHS, "engine_script_run_v15")
+                         and new_epoch[0] == CURRENT_EPOCH)
     relocation_layout = False
     if manifest is None and not historical_bridge:
         if old_storage != current_storage:
@@ -493,14 +540,21 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
                     raise RuntimeError('common generic engine storage declaration changed: ' + name)
         actual_removed_storage = [name for name in old_order if name not in current_by_name]
         actual_added_storage = [name for name in current_order if name not in old_by_name]
-        actual_added_virtuals = [name for name in current_virtual_names if name not in old_virtual_names]
-        actual_removed_virtuals = [name for name in old_virtual_names if name not in current_virtual_names]
+        if transition == ('engine_script_run_v16', 'engine_script_run_v17'):
+            actual_added_virtuals = [name for name in current_host_virtual_names
+                                     if name not in old_host_virtual_names]
+            actual_removed_virtuals = [name for name in old_host_virtual_names
+                                       if name not in current_host_virtual_names]
+        else:
+            actual_added_virtuals = [name for name in current_virtual_names if name not in old_virtual_names]
+            actual_removed_virtuals = [name for name in old_virtual_names if name not in current_virtual_names]
         if manifest is not None:
-            if set(actual_removed_storage) != set(manifest['removedStorage']) or actual_added_storage:
-                raise RuntimeError('v15/v16 relocation manifest does not exactly describe removed storage')
+            if (set(actual_removed_storage) != set(manifest['removedStorage'])
+                    or actual_added_storage != manifest.get('addedStorage', [])):
+                raise RuntimeError('relocation manifest does not exactly describe storage deltas')
             if (set(actual_added_virtuals) != set(manifest['addedVirtuals'])
                     or set(actual_removed_virtuals) != set(manifest['removedVirtuals'])):
-                raise RuntimeError('v15/v16 relocation manifest does not exactly describe vtable deltas')
+                raise RuntimeError('relocation manifest does not exactly describe vtable deltas')
             for name in old_virtual_names:
                 if name in current_virtual_names:
                     old_decl = old_virtuals[old_virtual_names.index(name)]
@@ -513,8 +567,8 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
                 raise RuntimeError('v16 source PendingOrder/header ownership is absent')
             if not re.search(r'\bstruct\s+PendingOrder\s*\{', source_pending.read_text()):
                 raise RuntimeError('v16 source PendingOrder declaration is absent')
-            if 'pineforge-source-adapter/v1' not in source_adapter.read_text():
-                raise RuntimeError('v16 source adapter domain is absent')
+            if 'pineforge-source-adapter/v2' not in source_adapter.read_text():
+                raise RuntimeError('current source adapter domain is absent')
         layout_members = common_members
         relocation_layout = True
     return layout_members, {
@@ -522,6 +576,7 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
         'exemptedHeaders': exempted, 'engineStorage': old_storage,
         'currentEngineStorage': current_storage, 'virtuals': old_virtuals,
         'currentVirtuals': current_virtuals, 'relocationManifest': manifest,
+        'hostVirtuals': old_host_virtuals, 'currentHostVirtuals': current_host_virtuals,
         'removedStorage': actual_removed_storage, 'addedStorage': actual_added_storage,
         'addedVirtuals': actual_added_virtuals, 'removedVirtuals': actual_removed_virtuals,
         'relocationLayout': relocation_layout, 'historicalEpochBridge': historical_bridge,
@@ -529,7 +584,7 @@ def frozen_shape(old_include: Path, current_include: Path, *, selected=False) ->
 
 
 def layout_source(members: list[str], *, selected=False, source_pending=False,
-                  relocation_layout=False) -> tuple[str, int]:
+                  relocation_layout=False, native_layout_break=False) -> tuple[str, int]:
     values = []
     assertions = []
     for name in ['Result','SettlementInspection']:
@@ -545,11 +600,16 @@ def layout_source(members: list[str], *, selected=False, source_pending=False,
     if not relocation_layout:
         values += ['sizeof(E)', 'alignof(E)', 'sizeof(pineforge::NativeStrategyHost)']
     values += [('sizeof(pineforge::source::PendingOrder)' if source_pending
-                else 'sizeof(pineforge::PendingOrder)'),
-               'sizeof(pineforge::NativeMarketEvent)',
-               'sizeof(pineforge::NativeStateView)','sizeof(pineforge::native_order::Request)',
-               'sizeof(pineforge::native_order::WorkingRequestCore)',
-               'sizeof(pineforge::native_order::CommandEvent)']
+                else 'sizeof(pineforge::PendingOrder)')]
+    # These values are independently versioned by native_order/run_spec/
+    # driver/consumer epochs.  An engine-epoch bridge compares the frozen
+    # financial and shared-engine storage words here; the native ABI matrix
+    # separately proves each versioned caller/provider rejection pair.
+    if not native_layout_break:
+        values += ['sizeof(pineforge::NativeMarketEvent)',
+                   'sizeof(pineforge::NativeStateView)','sizeof(pineforge::native_order::Request)',
+                   'sizeof(pineforge::native_order::WorkingRequestCore)',
+                   'sizeof(pineforge::native_order::CommandEvent)']
     if selected:
         values += ['sizeof(ex::SelectedOpeningSet)', 'alignof(ex::SelectedOpeningSet)',
                    'sizeof(ex::AccountEffectProjection)', 'alignof(ex::AccountEffectProjection)']
@@ -873,6 +933,7 @@ def main() -> int:
 
             def compare_layout(name,headers,generated,layout_members,shape,*,selected=False):
                 relocation_layout = bool(shape['relocationLayout'])
+                native_layout_break = engine_epoch(headers) != engine_epoch(include)
                 # Spell PendingOrder according to *each* provider's genuine
                 # ownership. Pre-v16 archives have the engine type; v15 and
                 # the frozen/live same-epoch v16 pair own it in source/.
@@ -882,10 +943,12 @@ def main() -> int:
                 current_source_pending = (include / 'pineforge/source/pine_pending_intent.hpp').is_file()
                 old_text,word_count = layout_source(
                     layout_members, selected=selected,
-                    source_pending=old_source_pending, relocation_layout=relocation_layout)
+                    source_pending=old_source_pending, relocation_layout=relocation_layout,
+                    native_layout_break=native_layout_break)
                 current_text,current_word_count = layout_source(
                     layout_members, selected=selected, source_pending=current_source_pending,
-                    relocation_layout=relocation_layout)
+                    relocation_layout=relocation_layout,
+                    native_layout_break=native_layout_break)
                 if current_word_count != word_count:
                     raise RuntimeError('v15/v16 source-layout rows have different widths')
                 layouts=[]
@@ -1047,16 +1110,17 @@ def main() -> int:
                             link(caller+'-engine-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,missing=() if positive else methods,domain=parameter_domain,
                                  engine=caller_engine)
-                required_v15_v16_rows = {
-                    'v15-frozen-engine-old-api-'+current_label+'-rejected',
-                    current_label+'-engine-selected-v15-frozen-rejected',
-                    'v16-frozen-host-'+current_label+'-real',
-                    current_label+'-engine-selected-v16-frozen-real',
-                    'v16-frozen-engine-selected-'+current_label+'-real',
+                required_v16_v17_rows = {
+                    'v16-frozen-host-'+current_label+'-rejected',
+                    current_label+'-host-v16-frozen-rejected',
+                    'v16-frozen-engine-selected-'+current_label+'-rejected',
+                    current_label+'-engine-selected-v16-frozen-rejected',
+                    current_label+'-host-'+current_label+'-real',
+                    current_label+'-engine-selected-'+current_label+'-real',
                 }
                 actual_rows = {entry['name'] for entry in report['links']}
-                if not required_v15_v16_rows <= actual_rows:
-                    raise RuntimeError('required v15/v16 rejection or same-epoch v16 pairs are missing from the ABI matrix')
+                if not required_v16_v17_rows <= actual_rows:
+                    raise RuntimeError('required v16/v17 rejection or same-epoch v17 pairs are missing from the ABI matrix')
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)

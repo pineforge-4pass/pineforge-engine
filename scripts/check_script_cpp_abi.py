@@ -16,7 +16,7 @@ import tempfile
 
 BASE_COMMIT = "38dc73e5503fe5395458e5f8df2a2ad78054a1ae"
 BASE_ENGINE_SHA256 = "06c937a1ccd31815ca7775268ac699ffdfddb1a1f19de4628b777f37e9a6d193"
-CURRENT_NAMESPACE = "engine_script_run_v16"
+CURRENT_NAMESPACE = "engine_script_run_v17"
 BASE_NAMESPACE = "engine_script_run_v2"
 V8_COMMIT = "79921099a9357cb5bbace907a9319479f6640d89"
 V8_TREE = "e141657c572b4a3855dfee607f9951e331b961d6"
@@ -82,7 +82,7 @@ static_assert(std::is_same<pineforge::BacktestEngine,
         return '''#include <pineforge/source/pine_strategy_host.hpp>
 #include <type_traits>
 static_assert(std::is_same<pineforge::BacktestEngine,
-              pineforge::engine_script_run_v16::BacktestEngine>::value,
+              pineforge::engine_script_run_v17::BacktestEngine>::value,
               "unexpected internal C++ namespace");
 class GeneratedStrategy final : public pineforge::source::PineStrategyHost {
     void on_source_bar(const pineforge::Bar&) override {}

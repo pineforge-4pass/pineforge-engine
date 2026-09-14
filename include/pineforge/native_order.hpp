@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -20,19 +21,34 @@
 #include <vector>
 
 namespace pineforge::native_order {
-inline namespace native_order_v4 {
+inline namespace native_order_v5 {
 
 // Isolated working-request/value core: current LIVE requests and immutable
 // command history. It does not own positions, cash, paid fees, matching,
 // calendar, host phase, or a second physical book.
 //
-// Identity types remain native_order_v1. Request/core/event values are v4.
+// Identity types remain native_order_v1. Request/core/event values are v5.
 // Physical execution::Action is unchanged; native Reduce uses a typed size
 // source instead of a dummy units field. ExecutionPlan is a transient widening
 // used at the core/consumer boundary.
 
 using Flatten = execution::Flatten;
 using Transact = order_action::Transact;
+
+// A host-maintained, run-scoped roster identity.  Zero is invalid and is
+// never allocated by WorkingRequestCore.
+struct CohortHandle {
+    std::uint64_t value = 0;
+};
+inline bool operator==(CohortHandle left, CohortHandle right) noexcept {
+    return left.value == right.value;
+}
+inline bool operator!=(CohortHandle left, CohortHandle right) noexcept {
+    return !(left == right);
+}
+inline bool operator<(CohortHandle left, CohortHandle right) noexcept {
+    return left.value < right.value;
+}
 
 // Exact target exposure for an explicit reversal request. This is distinct
 // from execution::ReverseTo, which is the transient resolved execution plan.
@@ -92,7 +108,10 @@ struct BindOpenings {
     std::vector<RequestHandle> openings;
     int64_t cycle = 0;
 };
-using Owner = std::variant<Independent, WaitForApplied, BindOpening, BindOpenings>;
+struct BindCohort {
+    CohortHandle cohort;
+};
+using Owner = std::variant<Independent, WaitForApplied, BindOpening, BindOpenings, BindCohort>;
 
 enum class GroupEffect : std::uint8_t { Cancel = 0, Reduce = 1 };
 struct NoGroup {};
@@ -177,8 +196,11 @@ struct RemainingUnits {
     double q = 0.0;
 };
 struct RemainingDeferred {};
+// A dynamic cohort has no currently live member.  This is a live deferral,
+// not a terminal receipt: the consumer retries it at the next candidate.
+struct NoTarget {};
 using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits,
-                               RemainingDeferred>;
+                               RemainingDeferred, NoTarget>;
 
 struct RemainingProjectionUnbound {};
 struct RemainingProjectionFlattenAll {};
@@ -186,9 +208,11 @@ struct RemainingProjectionUnits {
     double q = 0.0;
 };
 struct RemainingProjectionDeferred {};
+struct RemainingProjectionNoTarget {};
 using RemainingProjection =
         std::variant<RemainingProjectionUnbound, RemainingProjectionFlattenAll,
-                     RemainingProjectionUnits, RemainingProjectionDeferred>;
+                     RemainingProjectionUnits, RemainingProjectionDeferred,
+                     RemainingProjectionNoTarget>;
 
 struct BookTransaction {};
 struct Wait {
@@ -228,8 +252,11 @@ struct OpeningsClose {
     Side side = Side::Long;
     Enrollment enrollment;
 };
+struct CohortClose {
+    CohortHandle cohort;
+};
 using Authority = std::variant<BookTransaction, Wait, ArmedTransaction, UnboundBookClose, BookClose,
-                               OpeningClose, OpeningsClose>;
+                               OpeningClose, OpeningsClose, CohortClose>;
 
 // Native authorization receipt, converted to a call-local financial
 // SelectedOpeningSet only at the consumer's settlement boundary.
@@ -710,6 +737,10 @@ struct EvaluationContext {
     MatchCursor cursor{};
     DriverEligibilityClass driver_class = DriverEligibilityClass::ObservedPrint;
     bool existing_matching_bit = false;
+    // Set only while resolving a CohortClose candidate.  It carries the
+    // physical side of the currently live selected roster and is not retained
+    // in a request definition.
+    std::optional<Side> cohort_side;
 };
 
 struct BeginTrailTracking {
@@ -824,6 +855,28 @@ struct EligibilityFacts {
     const Authority* authority = nullptr;
 };
 
+struct CohortRoster {
+    CohortHandle handle{};
+    // Canonical origin handles, ordered by origin incarnation rather than by
+    // host insertion order.  A successor is normalized to its predecessor
+    // root before entering this table.
+    std::vector<RequestHandle> origins;
+};
+
+enum class CohortReceiptOperation : std::uint8_t { Add = 0, Remove = 1 };
+enum class CohortReceiptStatus : std::uint8_t {
+    Applied = 0,
+    InvalidHandle = 1,
+    UnknownOrigin = 2,
+    TerminalOrigin = 3,
+};
+struct CohortReceipt {
+    CohortReceiptOperation operation = CohortReceiptOperation::Add;
+    CohortReceiptStatus status = CohortReceiptStatus::InvalidHandle;
+    CohortHandle cohort{};
+    RequestHandle origin{};
+};
+
 class WorkingRequestCore {
 public:
     explicit WorkingRequestCore(RunIdentity identity);
@@ -840,8 +893,19 @@ public:
     const RunIdentity& identity() const noexcept { return identity_; }
     const std::vector<LiveRequest>& live() const noexcept { return live_; }
     const std::vector<CommandEvent>& history() const noexcept { return history_; }
+    const std::vector<CohortRoster>& cohorts() const noexcept { return cohorts_; }
+    const std::vector<CohortReceipt>& cohort_receipts() const noexcept {
+        return cohort_receipts_;
+    }
     const LiveRequest* find_live(const RequestHandle& handle) const;
     const CommandEvent* event_at(const EventId& id) const;
+
+    // Command-boundary roster maintenance.  A rejected add/remove records a
+    // durable generic receipt but never emits a market event.
+    CohortHandle cohort_open();
+    void cohort_add(CohortHandle cohort, RequestHandle origin);
+    void cohort_remove(CohortHandle cohort, RequestHandle origin);
+    bool cohort_contains(CohortHandle cohort, const RequestHandle& opening) const;
 
     // R1 producer convenience: prepare then install one command. Bound opening
     // enrollment requires CommandContext observations via prepare_submit.
@@ -886,7 +950,8 @@ public:
     Preparation<PreparedMutation> prepare_trigger(const RequestHandle& target,
                                                   const TriggerTransition& transition,
                                                   DriverEligibilityClass driver_class,
-                                                  uint64_t& next_timeline_ordinal);
+                                                  uint64_t& next_timeline_ordinal,
+                                                  std::optional<Side> cohort_side = std::nullopt);
     InstallResult install_mutation(PreparedMutation&& prepared) noexcept;
 
     Preparation<PreparedExecution> prepare_execution(const RequestHandle& target,
@@ -950,7 +1015,8 @@ public:
                                 const TriggerState& state,
                                 DriverEligibilityClass driver_class,
                                 bool existing_matching_bit) const noexcept;
-    bool working_is_buy(const LiveRequest& live) const noexcept;
+    bool working_is_buy(const LiveRequest& live,
+                        std::optional<Side> cohort_side = std::nullopt) const noexcept;
 
 private:
     enum class TargetKind { Live, NotWorking, InvalidHandle };
@@ -981,6 +1047,9 @@ private:
     bool authenticate_receipt_outcome(const CommandEvent& event, const EventId& cause,
                                       const RequestHandle& recipient, GroupEffect effect) const;
     bool trail_level_ok(double best, double offset, bool is_buy, double* stop) const noexcept;
+    const RequestDefinition* definition_for(const RequestHandle& handle) const noexcept;
+    std::optional<RequestHandle> canonical_cohort_origin(const RequestHandle& origin) const;
+    std::size_t cohort_index(CohortHandle cohort) const noexcept;
 
     uint64_t usable_ordinal(uint64_t next) const;
     uint64_t usable_incarnation(uint64_t next) const;
@@ -1036,6 +1105,9 @@ private:
         uint64_t outcome_ordinal = 0;
     };
     std::vector<ReceiptKey> receipts_;
+    std::uint64_t next_cohort_handle_ = 1;
+    std::vector<CohortRoster> cohorts_;
+    std::vector<CohortReceipt> cohort_receipts_;
 };
 
 class PreparedSubmit {
@@ -1143,13 +1215,22 @@ static_assert(std::is_nothrow_move_constructible_v<MatchRejectedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<ExecutionAppliedEvent>);
 static_assert(std::is_nothrow_move_constructible_v<MatchCursor>);
 static_assert(std::variant_size_v<OrderIntent> == 5);
-static_assert(std::variant_size_v<Remaining> == 4);
-static_assert(std::variant_size_v<RemainingProjection> == 4);
+static_assert(std::variant_size_v<Remaining> == 5);
+static_assert(std::variant_size_v<RemainingProjection> == 5);
 static_assert(std::variant_size_v<Allowance> == 4);
 static_assert(std::variant_size_v<CommandEvent> == 17);
 static_assert(std::variant_size_v<ExecutionPlan> == 4);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 static_assert(std::variant_size_v<TriggerState> == 9);
 
-}  // inline namespace native_order_v4
+}  // inline namespace native_order_v5
 }  // namespace pineforge::native_order
+
+namespace std {
+template <>
+struct hash<pineforge::native_order::CohortHandle> {
+    std::size_t operator()(pineforge::native_order::CohortHandle value) const noexcept {
+        return static_cast<std::size_t>(value.value ^ (value.value >> 32));
+    }
+};
+}  // namespace std

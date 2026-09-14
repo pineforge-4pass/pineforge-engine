@@ -1,14 +1,18 @@
 #pragma once
 
+#include <pineforge/bar.hpp>
+#include <pineforge/magnifier.hpp>
 #include <pineforge/native_order_identity.hpp>
 
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <variant>
+#include <vector>
 
 namespace pineforge {
-inline namespace native_run_spec_v1 {
+inline namespace native_run_spec_v2 {
 
 // Encodings coincide with the versioned native-v1 C transport. These values
 // describe native execution; they do not configure source strategy policies.
@@ -28,6 +32,30 @@ enum class NativeOpenDirections : std::uint32_t {
     Long = 1,
     Short = 2,
     Both = 3,
+};
+
+// An owned lower-timeframe execution path.  It is deliberately a run-spec
+// value rather than a caller borrow: public begin arguments expire when the
+// begin call returns, whereas native matching may need the lower bars later
+// while sealing an aggregated script bar.
+struct IntrabarPath {
+    struct none {};
+    struct lower_tf {
+        std::vector<Bar> bars;
+        std::string tf;
+        int samples = 4;
+        MagnifierDistribution distribution = MagnifierDistribution::ENDPOINTS;
+        bool volume_weighted = false;
+        int volume_weighted_min_samples = 2;
+        int volume_weighted_max_samples = 64;
+    };
+    using value_type = std::variant<none, lower_tf>;
+
+    value_type value = none{};
+
+    bool is_none() const noexcept { return std::holds_alternative<none>(value); }
+    const lower_tf* lower() const noexcept { return std::get_if<lower_tf>(&value); }
+    lower_tf* lower() noexcept { return std::get_if<lower_tf>(&value); }
 };
 
 // One complete setup value, staged/copied by NativeStrategyHost before it is
@@ -67,6 +95,7 @@ struct NativeRunSpec {
     NativeOpenDirections allowed_open_directions = NativeOpenDirections::Both;
     std::optional<double> initial_margin_fraction; // Positive fraction, not percent;
                                                  // no maintenance liquidation.
+    IntrabarPath intrabar{};
 };
 
 enum class NativeRunSpecField : std::uint8_t {
@@ -77,6 +106,7 @@ enum class NativeRunSpecField : std::uint8_t {
     InitialCapital, PointValue, AccountFx, PriceTick, SlippageTicks,
     FeeKind, FeeValue, QuantityGrid, CloseExecution, MaxAbsUnits, MaxOpenLots,
     AllowedOpenDirections, InitialMarginFraction,
+    IntrabarTimeframe, IntrabarSamples, IntrabarDistribution, IntrabarVolumeSamples,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -98,6 +128,7 @@ enum class NativeRunSpecError : std::uint8_t {
     ZeroLotLimit,
     AllocationFailure,
     CalendarFailure,
+    InvalidIntrabarPath,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.
@@ -129,9 +160,14 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
 // that same spec atomically; own copy-allocation/lifecycle failure handling.
 NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept;
 
+// Exact FNV-1a content digest for a retained intrabar path.  It includes the
+// lower bars in caller order and every sampling parameter, so continuation
+// identity cannot silently reuse a path from another begin call.
+std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept;
+
 static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);
 static_assert(std::is_nothrow_move_constructible_v<NativeRunSpec>);
 static_assert(std::is_nothrow_move_assignable_v<NativeRunSpec>);
 
-}  // inline namespace native_run_spec_v1
+}  // inline namespace native_run_spec_v2
 } // namespace pineforge

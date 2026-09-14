@@ -19,9 +19,9 @@ class AggregateVersions(unittest.TestCase):
 
     def test_engine_and_forward_declarations(self):
         for path, text in DATA.items():
-            if 'engine_script_run_v16' in text:
+            if 'engine_script_run_v17' in text:
                 with self.subTest(path=path):
-                    self.reject(path, 'engine_script_run_v16', 'engine_script_run_v12')
+                    self.reject(path, 'engine_script_run_v17', 'engine_script_run_v12')
         self.reject('include/pineforge/engine.hpp',
                     'struct PendingOrder;\nstruct StrategyOverrides;',
                     'struct PendingOrder;\nusing PendingOrder = source::PendingOrder;\nstruct StrategyOverrides;')
@@ -30,13 +30,13 @@ class AggregateVersions(unittest.TestCase):
                     'struct StrategyOverrides;')
 
     def test_broker_and_stream_entry_points(self):
-        self.reject('src/engine_state_hash.cpp', 'pineforge-broker-state/v16', 'pineforge-broker-state/v12')
-        self.reject('src/engine_stream.cpp', 'integer(16); integer(broker_state_hash());',
+        self.reject('src/engine_state_hash.cpp', 'pineforge-broker-state/v17', 'pineforge-broker-state/v12')
+        self.reject('src/engine_stream.cpp', 'integer(17); integer(broker_state_hash());',
                     'integer(12); integer(broker_state_hash());')
-        self.reject('src/engine_stream.cpp', 'integer(16); integer(broker_state_hash());',
-                    'if (false) { integer(16); integer(broker_state_hash()); }')
+        self.reject('src/engine_stream.cpp', 'integer(17); integer(broker_state_hash());',
+                    'if (false) { integer(17); integer(broker_state_hash()); }')
         self.reject('include/pineforge/source/pine_adapter.hpp',
-                    'pineforge-source-adapter/v1', 'pineforge-source-adapter/v0')
+                    'pineforge-source-adapter/v2', 'pineforge-source-adapter/v0')
 
     def test_standalone_owners(self):
         for path, namespace in (

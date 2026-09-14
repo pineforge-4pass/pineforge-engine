@@ -11,7 +11,7 @@ void BacktestEngine::hash_source_extension(BrokerStateHashSink& sink) const {
 
 uint64_t BacktestEngine::broker_state_hash() const {
     BrokerStateHashSink f;
-    f.s("pineforge-broker-state/v16");
+    f.s("pineforge-broker-state/v17");
     f.u(execution_consumer().continuation_hash());
 
     // --- Position core ---

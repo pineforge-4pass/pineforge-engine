@@ -36,6 +36,7 @@ set(TEST_SOURCES
     test_native_market_vertical_contract
     test_native_calendar_driver_contract
     test_native_host_repairs
+    test_native_adapter_lowering_l1
     test_source_layer_native_defaults
     test_source_fingerprint
     test_source_host_intraday_cap_setter

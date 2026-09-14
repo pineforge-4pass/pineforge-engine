@@ -34,23 +34,23 @@ class SourceHashCoverage(unittest.TestCase):
 
     def test_generic_domain_cannot_drift(self):
         result, output = self.check((
-            ("src/engine_state_hash.cpp", "pineforge-broker-state/v16",
+            ("src/engine_state_hash.cpp", "pineforge-broker-state/v17",
              "pineforge-broker-state/v12"),))
         self.assertEqual(result, 1, output)
 
     def test_source_domain_cannot_drift(self):
         result, output = self.check((
             ("include/pineforge/source/pine_adapter.hpp",
-             "pineforge-source-adapter/v1", "pineforge-source-adapter/v0"),))
+             "pineforge-source-adapter/v2", "pineforge-source-adapter/v0"),))
         self.assertEqual(result, 1, output)
 
-    def test_stream_fold_is_v16_and_unconditional(self):
+    def test_stream_fold_is_v17_and_unconditional(self):
         for replacement in (
             "integer(12); integer(broker_state_hash());",
-            "if (false) { integer(16); integer(broker_state_hash()); }",
+            "if (false) { integer(17); integer(broker_state_hash()); }",
         ):
             result, output = self.check((
-                ("src/engine_stream.cpp", "integer(16); integer(broker_state_hash());",
+                ("src/engine_stream.cpp", "integer(17); integer(broker_state_hash());",
                  replacement),))
             self.assertEqual(result, 1, output)
 

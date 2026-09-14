@@ -9,7 +9,7 @@
 #include <variant>
 
 namespace pineforge::native_order {
-inline namespace native_order_v4 {
+inline namespace native_order_v5 {
 namespace {
 
 constexpr std::uint8_t kLivePush = 1;
@@ -85,6 +85,9 @@ RemainingProjection project_remaining(const Remaining& remaining) {
     }
     if (std::holds_alternative<RemainingDeferred>(remaining)) {
         return RemainingProjectionDeferred{};
+    }
+    if (std::holds_alternative<NoTarget>(remaining)) {
+        return RemainingProjectionNoTarget{};
     }
     return RemainingProjectionUnits{working_units(remaining)};
 }
@@ -466,6 +469,7 @@ struct PreparedExecution::Impl {
     BookClose book_close{};
     OpeningClose opening_close{};
     std::optional<OpeningsClose> openings_close;
+    std::optional<CohortClose> cohort_close;
     ExecutionProposal proposal{};
 };
 PreparedExecution::PreparedExecution() noexcept = default;
@@ -544,6 +548,9 @@ void WorkingRequestCore::clear_unbound() noexcept {
     last_incarnation_ = 0;
     ordinal_index_.clear();
     receipts_.clear();
+    next_cohort_handle_ = 1;
+    cohorts_.clear();
+    cohort_receipts_.clear();
     epoch_ = 0;
     if (instance_) instance_->expired = true;
     instance_.reset();
@@ -627,6 +634,131 @@ const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
     const CommandEvent* event = &history_[it->second];
     if (event_ordinal(*event) != id.ordinal) return nullptr;
     return event;
+}
+
+const RequestDefinition* WorkingRequestCore::definition_for(
+        const RequestHandle& handle) const noexcept {
+    if (const auto* live = find_live(handle)) return live->definition.get();
+    for (const auto& event : history_) {
+        if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
+            if (accepted->definition && accepted->definition->handle == handle)
+                return accepted->definition.get();
+        } else if (const auto* replaced = std::get_if<ReplacedEvent>(&event)) {
+            if (replaced->predecessor_definition
+                && replaced->predecessor_definition->handle == handle) {
+                return replaced->predecessor_definition.get();
+            }
+            if (replaced->successor_definition
+                && replaced->successor_definition->handle == handle) {
+                return replaced->successor_definition.get();
+            }
+        }
+    }
+    return nullptr;
+}
+
+std::optional<RequestHandle> WorkingRequestCore::canonical_cohort_origin(
+        const RequestHandle& origin) const {
+    const RequestDefinition* current = definition_for(origin);
+    if (!current) return std::nullopt;
+    RequestHandle root = current->handle;
+    std::size_t remaining = history_.size() + live_.size() + 1;
+    while (current->predecessor) {
+        if (remaining-- == 0) return std::nullopt;
+        current = definition_for(*current->predecessor);
+        if (!current) return std::nullopt;
+        root = current->handle;
+    }
+    return root;
+}
+
+std::size_t WorkingRequestCore::cohort_index(CohortHandle cohort) const noexcept {
+    const auto it = std::lower_bound(
+        cohorts_.begin(), cohorts_.end(), cohort,
+        [](const CohortRoster& roster, CohortHandle value) { return roster.handle < value; });
+    return it != cohorts_.end() && it->handle == cohort
+        ? static_cast<std::size_t>(it - cohorts_.begin())
+        : cohorts_.size();
+}
+
+CohortHandle WorkingRequestCore::cohort_open() {
+    require_identity(identity_);
+    require_epoch_room();
+    if (next_cohort_handle_ == 0 || next_cohort_handle_ == std::numeric_limits<uint64_t>::max()) {
+        throw std::overflow_error("native cohort handle exhausted");
+    }
+    const CohortHandle handle{next_cohort_handle_};
+    cohorts_.push_back(CohortRoster{handle, {}});
+    ++next_cohort_handle_;
+    if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
+    return handle;
+}
+
+void WorkingRequestCore::cohort_add(CohortHandle cohort, RequestHandle origin) {
+    require_identity(identity_);
+    require_epoch_room();
+    CohortReceipt receipt;
+    receipt.operation = CohortReceiptOperation::Add;
+    receipt.cohort = cohort;
+    receipt.origin = origin;
+    const std::size_t index = cohort_index(cohort);
+    if (cohort.value == 0 || index == cohorts_.size()) {
+        receipt.status = CohortReceiptStatus::InvalidHandle;
+    } else if (!definition_for(origin)) {
+        receipt.status = CohortReceiptStatus::UnknownOrigin;
+    } else if (!find_live(origin)) {
+        receipt.status = CohortReceiptStatus::TerminalOrigin;
+    } else if (const auto canonical = canonical_cohort_origin(origin)) {
+        auto& origins = cohorts_[index].origins;
+        const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
+        if (where == origins.end() || *where != *canonical) origins.insert(where, *canonical);
+        receipt.status = CohortReceiptStatus::Applied;
+    } else {
+        receipt.status = CohortReceiptStatus::UnknownOrigin;
+    }
+    cohort_receipts_.push_back(std::move(receipt));
+    if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
+}
+
+void WorkingRequestCore::cohort_remove(CohortHandle cohort, RequestHandle origin) {
+    require_identity(identity_);
+    require_epoch_room();
+    CohortReceipt receipt;
+    receipt.operation = CohortReceiptOperation::Remove;
+    receipt.cohort = cohort;
+    receipt.origin = origin;
+    const std::size_t index = cohort_index(cohort);
+    if (cohort.value == 0 || index == cohorts_.size()) {
+        receipt.status = CohortReceiptStatus::InvalidHandle;
+    } else if (!definition_for(origin)) {
+        receipt.status = CohortReceiptStatus::UnknownOrigin;
+    } else if (const auto canonical = canonical_cohort_origin(origin)) {
+        auto& origins = cohorts_[index].origins;
+        const auto where = std::lower_bound(origins.begin(), origins.end(), *canonical, handle_less);
+        if (where != origins.end() && *where == *canonical) origins.erase(where);
+        receipt.status = CohortReceiptStatus::Applied;
+    } else {
+        receipt.status = CohortReceiptStatus::UnknownOrigin;
+    }
+    cohort_receipts_.push_back(std::move(receipt));
+    if (!bump_epoch()) throw std::overflow_error("native working-request epoch exhausted");
+}
+
+bool WorkingRequestCore::cohort_contains(
+        CohortHandle cohort, const RequestHandle& opening) const {
+    const std::size_t index = cohort_index(cohort);
+    if (cohort.value == 0 || index == cohorts_.size()) return false;
+    const RequestDefinition* current = definition_for(opening);
+    std::size_t remaining = history_.size() + live_.size() + 1;
+    while (current) {
+        const auto& origins = cohorts_[index].origins;
+        if (std::binary_search(origins.begin(), origins.end(), current->handle, handle_less)) {
+            return true;
+        }
+        if (!current->predecessor || remaining-- == 0) break;
+        current = definition_for(*current->predecessor);
+    }
+    return false;
 }
 
 bool WorkingRequestCore::authenticate_receipt_outcome(const CommandEvent& event,
@@ -810,6 +942,9 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     epoch_ = other.epoch_;
     ordinal_index_ = std::move(other.ordinal_index_);
     receipts_ = std::move(other.receipts_);
+    next_cohort_handle_ = other.next_cohort_handle_;
+    cohorts_ = std::move(other.cohorts_);
+    cohort_receipts_ = std::move(other.cohort_receipts_);
     instance_ = std::move(other.instance_);
     if (instance_) {
         if (instance_->generation != std::numeric_limits<uint64_t>::max()) {
@@ -827,6 +962,9 @@ WorkingRequestCore& WorkingRequestCore::operator=(WorkingRequestCore&& other) no
     other.epoch_ = 0;
     other.ordinal_index_.clear();
     other.receipts_.clear();
+    other.next_cohort_handle_ = 1;
+    other.cohorts_.clear();
+    other.cohort_receipts_.clear();
     other.instance_.reset();
     return *this;
 }
@@ -948,6 +1086,11 @@ std::optional<RequestRejectReason> WorkingRequestCore::validate_request(
         if (observe_openings(cohort, bind->cycle, nonflat->side, position,
                               context.openings, &live_count)
             || live_count != cohort.size()) return RequestRejectReason::InvalidOwner;
+    } else if (const auto* bind = std::get_if<BindCohort>(&request.owner)) {
+        if (!host_sized || host_sized->kind != HostSizedKind::Close
+            || bind->cohort.value == 0 || cohort_index(bind->cohort) == cohorts_.size()) {
+            return RequestRejectReason::InvalidOwner;
+        }
     } else {
         return RequestRejectReason::InvalidOwner;
     }
@@ -1018,11 +1161,15 @@ LiveRequest WorkingRequestCore::make_live(DefinitionRef definition, const Comman
         const auto& nonflat = std::get<PositionNonflat>(context.opening->current_position);
         live.authority = OpeningClose{bind->opening, bind->cycle, nonflat.side,
                                       EnrollmentFromCommand{accepted}};
-    } else {
-        const auto& selected = std::get<BindOpenings>(request.owner);
+    } else if (const auto* bind = std::get_if<BindOpenings>(&request.owner)) {
         const auto& nonflat = std::get<PositionNonflat>(context.openings.front().current_position);
-        live.authority = OpeningsClose{selected.openings, selected.cycle, nonflat.side,
+        live.authority = OpeningsClose{bind->openings, bind->cycle, nonflat.side,
                                        EnrollmentFromCommand{accepted}};
+    } else {
+        const auto& cohort = std::get<BindCohort>(request.owner);
+        live.authority = CohortClose{cohort.cohort};
+        live.remaining = NoTarget{};
+        return live;
     }
     if (const auto* sized = as_host_sized(request.intent)) {
         live.remaining = sized->kind == HostSizedKind::Close
@@ -1066,7 +1213,8 @@ bool WorkingRequestCore::trigger_permits_driver(const Trigger& trigger,
     return false;
 }
 
-bool WorkingRequestCore::working_is_buy(const LiveRequest& live) const noexcept {
+bool WorkingRequestCore::working_is_buy(const LiveRequest& live,
+                                        std::optional<Side> cohort_side) const noexcept {
     if (const auto* transact = as_transact(live.request().intent)) {
         return transact->signed_units > 0.0;
     }
@@ -1086,6 +1234,9 @@ bool WorkingRequestCore::working_is_buy(const LiveRequest& live) const noexcept 
     }
     if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         return close->side == Side::Short;
+    }
+    if (std::holds_alternative<CohortClose>(live.authority) && cohort_side) {
+        return *cohort_side == Side::Short;
     }
     return false;
 }
@@ -1115,13 +1266,15 @@ EligibilityFacts WorkingRequestCore::eligibility_facts(
         facts.driver_ok = facts.driver_ok && current_shape(live)
             && driver_class_matches_cursor(context.driver_class, context.cursor);
     }
-    facts.is_buy = working_is_buy(live);
+    facts.is_buy = working_is_buy(live, context.cohort_side);
     if (const auto* close = std::get_if<BookClose>(&live.authority)) {
         facts.position_side = close->side;
     } else if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
         facts.position_side = close->side;
     } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
         facts.position_side = close->side;
+    } else if (std::holds_alternative<CohortClose>(live.authority) && context.cohort_side) {
+        facts.position_side = *context.cohort_side;
     }
     facts.ready_to_match = facts.birth_ok && facts.driver_ok && !facts.waiting;
     return facts;
@@ -1416,6 +1569,7 @@ Allowance initialize_allowance(const Remaining& remaining, const Capacity& capac
     if (std::holds_alternative<RemainingFlattenAll>(remaining)) return AllowanceAllScope{point};
     if (std::holds_alternative<RemainingUnbound>(remaining)) return AllowanceUnset{};
     if (std::holds_alternative<RemainingDeferred>(remaining)) return AllowanceDeferred{point};
+    if (std::holds_alternative<NoTarget>(remaining)) return AllowanceDeferred{point};
     const double q = working_units(remaining);
     double initial = q;
     if (const auto* budget = std::get_if<PointBudget>(&capacity)) initial = std::min(q, budget->units);
@@ -1491,6 +1645,18 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_evaluation(
     }
     const EligibilityFacts facts = eligibility_facts(live, context);
     if (!facts.birth_ok || !facts.driver_ok) return NoChange{NoChangeReason::NotEligible};
+
+    if (std::holds_alternative<CohortClose>(live.authority)) {
+        bool has_live_member = false;
+        for (const auto& opening : observation.openings) {
+            has_live_member = has_live_member || opening.has_live_matching_lot;
+        }
+        if (!context.cohort_side || !has_live_member) {
+            // No receipt and no group effect: this is the durable NoTarget
+            // deferral marker, retried at the next match candidate.
+            return NoChange{NoChangeReason::StillWaiting};
+        }
+    }
 
     if (std::holds_alternative<UnboundBookClose>(live.authority)) {
         if (std::holds_alternative<PositionFlat>(observation.current_position)) {
@@ -1591,7 +1757,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         const RequestHandle& target,
         const TriggerTransition& transition,
         DriverEligibilityClass driver_class,
-        uint64_t& next_timeline_ordinal) {
+        uint64_t& next_timeline_ordinal,
+        std::optional<Side> cohort_side) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) {
@@ -1611,7 +1778,7 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
                                     driver_class, false)) {
         return NoChange{NoChangeReason::NotEligible};
     }
-    const bool is_buy = working_is_buy(updated);
+    const bool is_buy = working_is_buy(updated, cohort_side);
     MutationPlan plan = begin_plan();
 
     auto emit_activated = [&](ActivationKind kind, TriggerState after, const MatchCursor& cursor,
@@ -1800,7 +1967,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_terms(
         return NoChange{NoChangeReason::NotWorking};
     }
     const LiveRequest& live = live_[live_index];
-    const bool deferred = std::holds_alternative<RemainingDeferred>(live.remaining);
+    const bool deferred = std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<NoTarget>(live.remaining);
     const bool has_units = input.terms.units.has_value();
 
     // A price-only receipt is meaningful only after a target has a concrete
@@ -1927,6 +2095,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     }
     const LiveRequest& live = live_[live_index];
     if (std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<NoTarget>(live.remaining)
         || std::holds_alternative<AllowanceDeferred>(live.allowance)) {
         return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
     }
@@ -2036,6 +2205,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
 
     const bool opening_auth = std::holds_alternative<OpeningClose>(live.authority);
     const auto* selected_auth = std::get_if<OpeningsClose>(&live.authority);
+    const auto* cohort_auth = std::get_if<CohortClose>(&live.authority);
     ExecutionScope canonical_scope = proposal.scope;
     if (opening_auth) {
         const auto& close = std::get<OpeningClose>(live.authority);
@@ -2070,6 +2240,39 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         }
         if (proposal.inspected_opened_units != 0.0) {
             return PreparationError{CoreFailure::InvalidProposal, EventId{identity_, 0}, target};
+        }
+    } else if (cohort_auth) {
+        const auto* position = std::get_if<PositionNonflat>(&proposal.pre_target.current_position);
+        auto* scope = std::get_if<SelectedExposure>(&canonical_scope);
+        if (!position || position->cycle <= 0 || !scope || scope->cycle != position->cycle
+            || !same_position(proposal.pre_fill, proposal.pre_target.current_position)
+            || scope->incarnations.empty()) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        std::sort(scope->incarnations.begin(), scope->incarnations.end());
+        if (std::adjacent_find(scope->incarnations.begin(), scope->incarnations.end())
+            != scope->incarnations.end()) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+        }
+        std::size_t live_count = 0;
+        for (const auto& observation : proposal.pre_target.openings) {
+            if (!cohort_contains(cohort_auth->cohort, observation.queried_opening)) {
+                return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+            }
+            if (!same_position(observation.current_position, proposal.pre_target.current_position)) {
+                return PreparationError{CoreFailure::ObservationMismatch, EventId{identity_, 0}, target};
+            }
+            if (observation.has_live_matching_lot) {
+                ++live_count;
+                if (!std::binary_search(scope->incarnations.begin(), scope->incarnations.end(),
+                                        observation.queried_opening.incarnation)) {
+                    return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
+                }
+            }
+        }
+        if (live_count == 0 || scope->incarnations.size() != live_count
+            || proposal.inspected_opened_units != 0.0) {
+            return PreparationError{CoreFailure::InvalidScope, EventId{identity_, 0}, target};
         }
     } else if (std::holds_alternative<BookTransaction>(live.authority)
                || std::holds_alternative<ArmedTransaction>(live.authority)
@@ -2232,6 +2435,7 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     impl->opening = opening_auth;
     if (opening_auth) impl->opening_close = std::get<OpeningClose>(live.authority);
     if (selected_auth) impl->openings_close = *selected_auth;
+    if (cohort_auth) impl->cohort_close = *cohort_auth;
     if (std::holds_alternative<BookClose>(live.authority)) {
         impl->book_close = std::get<BookClose>(live.authority);
     }
@@ -2350,7 +2554,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_group_effect(
     plan.receipt_effect = member->effect;
 
     if (std::holds_alternative<RemainingUnbound>(live.remaining)
-        || std::holds_alternative<RemainingDeferred>(live.remaining)) {
+        || std::holds_alternative<RemainingDeferred>(live.remaining)
+        || std::holds_alternative<NoTarget>(live.remaining)) {
         if (member->effect == GroupEffect::Cancel) {
             const uint64_t ordinal = usable_ordinal(next_timeline_ordinal);
             plan.events.emplace_back(make_cancelled(ordinal, live, CancelReason::Group, applied));
@@ -2677,9 +2882,9 @@ static_assert(std::is_nothrow_move_constructible_v<PreparedMutation>);
 static_assert(std::is_nothrow_move_constructible_v<PreparedExecution>);
 // Authority/scope classification above must be reviewed when an alternative
 // is introduced; an unhandled value must never acquire Book authority.
-static_assert(std::variant_size_v<Owner> == 4);
-static_assert(std::variant_size_v<Authority> == 7);
+static_assert(std::variant_size_v<Owner> == 5);
+static_assert(std::variant_size_v<Authority> == 8);
 static_assert(std::variant_size_v<ExecutionScope> == 3);
 
-}  // inline namespace native_order_v4
+}  // inline namespace native_order_v5
 }  // namespace pineforge::native_order

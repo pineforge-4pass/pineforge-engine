@@ -27,11 +27,11 @@ from prepare_settlement_cpp_abi_base import BASE_COMMIT, BASE_TREE, extract_tar,
 
 class AbiToolingTests(unittest.TestCase):
     def test_current_epoch_and_provider_relative_variant_pins(self):
-        self.assertEqual(CURRENT_EPOCH, 'engine_script_run_v16')
+        self.assertEqual(CURRENT_EPOCH, 'engine_script_run_v17')
         self.assertEqual(OLD_EPOCHS, ('engine_script_run_v13','engine_script_run_v14'))
         self.assertEqual(PROVIDER_ORDER_SHAPES, {
             'engine_script_run_v13': (16,3), 'engine_script_run_v14': (16,3),
-            'engine_script_run_v15': (17,5),
+            'engine_script_run_v15': (17,5), 'engine_script_run_v16': (17,5),
             CURRENT_EPOCH: (checker.CURRENT_ORDER_VARIANT,checker.CURRENT_ORDER_INTENT_VARIANT)})
         self.assertEqual(provider_order_shape(ROOT/'include'), (17,5))
         rendered = render_provider_caller(COMMON, ROOT/'include')
@@ -40,11 +40,11 @@ class AbiToolingTests(unittest.TestCase):
         self.assertNotIn('COMMAND_EVENT_ALTERNATIVES',rendered)
         self.assertNotIn('ORDER_INTENT_ALTERNATIVES',rendered)
 
-    def test_v15_v16_manifest_is_exact_and_uses_the_source_pending_row(self):
-        manifest = relocation_manifest()
+    def test_v16_v17_manifest_is_exact_and_uses_the_source_pending_row(self):
+        manifest = relocation_manifest(('engine_script_run_v16', 'engine_script_run_v17'))
         self.assertEqual(manifest['rejectionPairs'], [
-            ['v15-frozen', 'v16-current'], ['v16-current', 'v15-frozen']])
-        fixture = PROVIDERS['v15-frozen']
+            ['v16-frozen', 'v17-current'], ['v17-current', 'v16-frozen']])
+        fixture = PROVIDERS['v16-frozen']
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             old = root/'old'
@@ -68,18 +68,21 @@ class AbiToolingTests(unittest.TestCase):
             self.assertIn('double initial_capital_', original)
             header.write_text(original.replace(
                 'double initial_capital_', 'int unlisted_storage_;\n    double initial_capital_', 1))
-            with self.assertRaisesRegex(RuntimeError, 'relocation manifest does not exactly describe removed storage'):
+            with self.assertRaisesRegex(RuntimeError, 'relocation manifest does not exactly describe storage deltas'):
                 frozen_shape(old/'include', current, selected=True)
 
-            header.write_text(original.replace(
-                'virtual ~BacktestEngine();',
-                'virtual void unlisted_virtual_seam();\n    virtual ~BacktestEngine();', 1))
+            host_header = current/'pineforge/native_host.hpp'
+            host_original = host_header.read_text()
+            header.write_text(original)
+            host_header.write_text(host_original.replace(
+                'virtual void on_native_run_begin() {}',
+                'virtual void unlisted_virtual_seam() {}\n    virtual void on_native_run_begin() {}', 1))
             with self.assertRaisesRegex(RuntimeError, 'relocation manifest does not exactly describe vtable deltas'):
                 frozen_shape(old/'include', current, selected=True)
 
-            header.write_text(original.replace(
-                'virtual void reset_source_pending_book();',
-                'void reset_source_pending_book();', 1))
+            host_header.write_text(host_original.replace(
+                'virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}',
+                'void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}', 1))
             with self.assertRaisesRegex(RuntimeError, 'relocation manifest does not exactly describe vtable deltas'):
                 frozen_shape(old/'include', current, selected=True)
 
@@ -125,28 +128,27 @@ class AbiToolingTests(unittest.TestCase):
                 extract_tar((provider['manifest'].parent/'headers.tar').read_bytes(),root/role)
                 domains[role] = native_domain_callers(root/role/'include')
             self.assertIn('native_order_v3',domains['v14']['order'][1])
-            self.assertIn('native_order_v4',domains['v16']['order'][1])
+            self.assertIn('native_order_v5',domains['v16']['order'][1])
             for caller in domains:
                 for provider in domains:
                     for domain in domains[caller]:
                         actual = domains[caller][domain][2] == domains[provider][domain][2]
                         expected = (caller == provider
-                                    or {caller, provider} == {'v16', 'v16-frozen'}
                                     or (domain == 'order'
-                                        and {caller,provider} <= {'v16','v16-frozen','v15-frozen'})
+                                        and {caller,provider} <= {'v16-frozen','v15-frozen'})
                                     or (domain == 'driver'
-                                        and {caller,provider} <= {'v14','v16','v16-frozen','v15-frozen'}))
+                                        and {caller,provider} <= {'v14','v16-frozen','v15-frozen'}))
                         self.assertEqual(actual,expected,(caller,provider,domain))
 
     def test_pending_surface_rows_are_complete_and_current_only(self):
         self.assertTrue(checker.CURRENT_TERMS_SURFACE_READY)
-        rows = pending_surface_rows('v16',('v13','v14','v15-frozen','v16-frozen','v16'),False)
+        rows = pending_surface_rows('v17',('v13','v14','v15-frozen','v16-frozen','v17'),False)
         self.assertEqual({row['name'] for row in rows}, {
-            'v16-'+caller+'-'+provider for caller in ('current-execution-terms','native-fx-curve')
-            for provider in ('v13','v14','v15-frozen','v16-frozen','v16')})
-        self.assertTrue(all(row['status']=='pending-surface' and row['caller']=='v16' for row in rows))
+            'v17-'+caller+'-'+provider for caller in ('current-execution-terms','native-fx-curve')
+            for provider in ('v13','v14','v15-frozen','v16-frozen','v17')})
+        self.assertTrue(all(row['status']=='pending-surface' and row['caller']=='v17' for row in rows))
         self.assertTrue(all(len(row['sourceSha256'])==64 for row in rows))
-        self.assertEqual(pending_surface_rows('v16',('v13','v14','v15-frozen','v16-frozen','v16'),True),[])
+        self.assertEqual(pending_surface_rows('v17',('v13','v14','v15-frozen','v16-frozen','v17'),True),[])
         from check_native_cpp_abi import render_current_execution_caller, control_applicability
         for epoch in ('engine_script_run_v14',CURRENT_EPOCH):
             self.assertIn(epoch+'::NativeStrategyHost',render_current_execution_caller(epoch))
@@ -154,10 +156,10 @@ class AbiToolingTests(unittest.TestCase):
             render_current_execution_caller('engine_script_run_v13')
         controls = {row['name']:row for row in control_applicability(False)}
         self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'],'required')
-        for name in ('v16_current_execution_surface_compile','v16_current_result_missing_cancelled_compile_reject',
-                     'v16_native_fx_curve_surface_compile',
-                     'v16_to_v15_frozen_current_execution_compile_reject',
-                     'v16_to_v15_frozen_native_fx_curve_compile_reject'):
+        for name in ('v17_current_execution_surface_compile','v17_current_result_missing_cancelled_compile_reject',
+                     'v17_native_fx_curve_surface_compile',
+                     'v17_to_v16_frozen_current_execution_compile_reject',
+                     'v17_to_v16_frozen_native_fx_curve_compile_reject'):
             self.assertEqual(controls[name]['status'],'pending_surface')
         self.assertTrue(all(row['status']=='required' for row in control_applicability(True)))
 
@@ -346,7 +348,7 @@ class AbiToolingTests(unittest.TestCase):
             members,shape=frozen_shape(old/'include',ROOT/'include',selected=True)
             self.assertTrue(shape['epochBreak'])
             self.assertEqual(shape['oldEpoch'],['engine_script_run_v13']*2)
-            self.assertEqual(shape['currentEpoch'],['engine_script_run_v16']*2)
+            self.assertEqual(shape['currentEpoch'],['engine_script_run_v17']*2)
             self.assertGreater(len(members),100)
 
     def test_action_alternative_changes_are_frozen(self):
@@ -452,7 +454,7 @@ class AbiToolingTests(unittest.TestCase):
         return root
 
     def test_exempted_headers_are_pinned_to_their_reviewed_bytes(self):
-        transition = ('engine_script_run_v13', 'engine_script_run_v15')
+        transition = ('engine_script_run_v16', 'engine_script_run_v17')
         self.assertEqual(set(EXEMPTED_HEADER_SHA256), set(EPOCH_TRANSITION_HEADER_EXEMPTIONS[transition]))
         for name, expected in EXEMPTED_HEADER_SHA256.items():
             self.assertEqual(hashlib.sha256((ROOT/'include'/'pineforge'/name).read_bytes()).hexdigest(), expected,
@@ -466,21 +468,26 @@ class AbiToolingTests(unittest.TestCase):
             verify_exempted_header_pins([{'name': 'native_run_spec.hpp', 'oldSha256': '0'*64, 'currentSha256': '1'*64, 'reason': 'x'}])
 
     def test_every_frozen_native_header_is_compared_and_exemptions_are_recorded(self):
-        transition = ('engine_script_run_v13', 'engine_script_run_v15')
+        transition = ('engine_script_run_v16', 'engine_script_run_v17')
         self.assertEqual(set(EPOCH_TRANSITION_HEADER_EXEMPTIONS), {
             ('engine_script_run_v13', 'engine_script_run_v15'),
             ('engine_script_run_v14', 'engine_script_run_v15'),
             ('engine_script_run_v13', 'engine_script_run_v16'),
             ('engine_script_run_v14', 'engine_script_run_v16'),
-            ('engine_script_run_v15', 'engine_script_run_v16')})
+            ('engine_script_run_v15', 'engine_script_run_v16'),
+            ('engine_script_run_v13', 'engine_script_run_v17'),
+            ('engine_script_run_v14', 'engine_script_run_v17'),
+            ('engine_script_run_v15', 'engine_script_run_v17'),
+            ('engine_script_run_v16', 'engine_script_run_v17')})
         self.assertEqual(set(EPOCH_TRANSITION_HEADER_EXEMPTIONS[transition]),
-                         {'native_order.hpp', 'native_host.hpp', 'market_driver.hpp',
-                          'execution_consumer.hpp'})
+                         {'native_order.hpp', 'native_host.hpp', 'native_run_spec.hpp',
+                          'market_driver.hpp', 'execution_consumer.hpp'})
         self.assertEqual(EPOCH_TRANSITION_HEADER_EXEMPTIONS[('engine_script_run_v14','engine_script_run_v15')],
-                         EPOCH_TRANSITION_HEADER_EXEMPTIONS[transition])
+                         ('native_order.hpp', 'native_host.hpp', 'market_driver.hpp',
+                          'execution_consumer.hpp'))
         self.assertEqual(EPOCH_TRANSITION_HEADER_EXEMPTIONS[('engine_script_run_v15','engine_script_run_v16')],
                          ('native_host.hpp', 'execution_consumer.hpp'))
-        exempted, guarded = 'native_order.hpp', 'native_run_spec.hpp'
+        exempted, guarded = 'native_order.hpp', 'native_calendar.hpp'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             old = self.native_headers(root/'old')
@@ -500,7 +507,7 @@ class AbiToolingTests(unittest.TestCase):
             self.assertEqual([item['name'] for item in recorded], [exempted])
             self.assertNotEqual(recorded[0]['oldSha256'], recorded[0]['currentSha256'])
             self.assertEqual(recorded[0]['reason'],
-                             'reviewed engine_script_run_v13->engine_script_run_v15 transition')
+                             'reviewed engine_script_run_v16->engine_script_run_v17 transition')
             # The same change outside that exact transition raises.
             for other in (None, ('engine_script_run_v15', 'engine_script_run_v16')):
                 with self.subTest(transition=other):

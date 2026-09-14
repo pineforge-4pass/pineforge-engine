@@ -125,11 +125,12 @@ accepted.
 
 ## Current R4-C epoch baseline
 
-The current baseline uses `native_order_v4`, engine/host
-`engine_script_run_v16`, `native-consumer/v6`, broker/stream version 16, and
-the source extension domain `pineforge-source-adapter/v1`. The frozen e7cdf05
-provider remains v15. Identity values remain `native_order_v1`; native run-spec
-and calendar remain v1, the driver remains v4, and `PF_ABI_VERSION` remains 4.
+The current L1 baseline uses `native_order_v5`, engine/host
+`engine_script_run_v17`, `native-consumer/v7`, broker/stream version 17, and
+the source extension domain `pineforge-source-adapter/v2`. The frozen ab9714b
+provider remains v16 for the required bidirectional rejection pairs. Identity
+values remain `native_order_v1`; native run-spec is v2, calendar remains v2,
+the driver is v5, and `PF_ABI_VERSION` remains 4.
 
 ## Completed R3 settlement and observation milestones
 

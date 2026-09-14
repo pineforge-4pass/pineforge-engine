@@ -135,11 +135,11 @@ int main() {
 HOST_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 static_assert(std::is_same_v<pineforge::NativeStrategyHost,
-    pineforge::engine_script_run_v16::NativeStrategyHost>);
+    pineforge::ENGINE_EPOCH::NativeStrategyHost>);
 static_assert(std::is_same_v<pineforge::NativeStateView,
-    pineforge::engine_script_run_v16::NativeStateView>);
+    pineforge::ENGINE_EPOCH::NativeStateView>);
 static_assert(std::is_same_v<pineforge::NativeFailure,
-    pineforge::engine_script_run_v16::NativeFailure>);
+    pineforge::ENGINE_EPOCH::NativeFailure>);
 static_assert(std::is_trivially_copyable_v<pineforge::NativeFailure>);
 static_assert(std::is_trivially_copyable_v<pineforge::NativeFailureContext>);
 int main(int argc, char** argv) {
@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
 HOST_EVENTS_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 static_assert(std::is_same_v<pineforge::NativeStrategyHost,
-    pineforge::engine_script_run_v16::NativeStrategyHost>);
+    pineforge::ENGINE_EPOCH::NativeStrategyHost>);
 int main(int argc, char** argv) {
     auto* host = reinterpret_cast<pineforge::NativeStrategyHost*>(argv);
     auto events = host->native_events(0);
@@ -179,10 +179,10 @@ int main(int argc, char** argv) {
 CURRENT_EXECUTION_V15_CALLER = '''#include <pineforge/native_host.hpp>
 #include <type_traits>
 #include <variant>
-using H = pineforge::engine_script_run_v16::NativeStrategyHost;
-using C = pineforge::engine_script_run_v16::NativeCurrentExecution;
-using P = pineforge::engine_script_run_v16::NativeCurrentExecutionPreview;
-using R = pineforge::engine_script_run_v16::NativeCurrentExecutionResult;
+using H = pineforge::engine_script_run_v17::NativeStrategyHost;
+using C = pineforge::engine_script_run_v17::NativeCurrentExecution;
+using P = pineforge::engine_script_run_v17::NativeCurrentExecutionPreview;
+using R = pineforge::engine_script_run_v17::NativeCurrentExecutionResult;
 static_assert(std::variant_size_v<R> == 5, "R4B_CURRENT_RESULT_ALTERNATIVES");
 static_assert(std::is_same_v<std::variant_alternative_t<4, R>,
     pineforge::native_order::CancelledEvent>);
@@ -218,9 +218,9 @@ int main(int argc, char** argv) {
 NATIVE_FX_CURVE_CALLER = '''#include <pineforge/native_fx_curve.hpp>
 #include <pineforge/native_host.hpp>
 #include <type_traits>
-using H = pineforge::engine_script_run_v16::NativeStrategyHost;
+using H = pineforge::engine_script_run_v17::NativeStrategyHost;
 using V = pineforge::NativeFxCurveValidation;
-using S = pineforge::engine_script_run_v16::NativeFxCurveSetupResult;
+using S = pineforge::engine_script_run_v17::NativeFxCurveSetupResult;
 static_assert(std::is_same_v<V, pineforge::native_fx_curve_v1::NativeFxCurveValidation>);
 static_assert(std::is_same_v<decltype(V::error), pineforge::NativeFxCurveError>);
 static_assert(std::is_same_v<decltype(V::index), std::size_t>);
@@ -280,9 +280,13 @@ def current_order_namespace(text: str) -> str:
 
 
 def render_current_execution_caller(epoch: str) -> str:
-    if epoch not in (V14_ENGINE_EPOCH, "engine_script_run_v16"):
+    if epoch not in (V14_ENGINE_EPOCH, "engine_script_run_v16", "engine_script_run_v17"):
         raise RuntimeError("current-execution caller requires a current-execution provider")
     return CURRENT_EXECUTION_CALLER.replace("ENGINE_EPOCH", epoch)
+
+
+def render_host_caller(template: str, epoch: str) -> str:
+    return template.replace("ENGINE_EPOCH", epoch)
 
 
 def control_applicability(ready: bool | None = None) -> list[dict]:
@@ -292,16 +296,16 @@ def control_applicability(ready: bool | None = None) -> list[dict]:
     controls = (
         ("v14_current_execution_shape_agnostic_compile", "compile", True,
          "CURRENT_EXECUTION_CALLER", V14_ENGINE_EPOCH),
-        ("v16_current_execution_surface_compile", "compile", ready,
-         "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v16"),
-        ("v16_current_result_missing_cancelled_compile_reject", "compile_rejection", ready,
-         "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v16"),
-        ("v16_native_fx_curve_surface_compile", "compile", ready,
-         "NATIVE_FX_CURVE_CALLER", "engine_script_run_v16"),
-        ("v16_to_v15_frozen_current_execution_compile_reject", "compile_rejection", ready,
-         "CURRENT_EXECUTION_V15_CALLER", V15_FROZEN_ENGINE_EPOCH),
-        ("v16_to_v15_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
-         "NATIVE_FX_CURVE_CALLER", V15_FROZEN_ENGINE_EPOCH),
+        ("v17_current_execution_surface_compile", "compile", ready,
+         "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v17"),
+        ("v17_current_result_missing_cancelled_compile_reject", "compile_rejection", ready,
+         "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v17"),
+        ("v17_native_fx_curve_surface_compile", "compile", ready,
+         "NATIVE_FX_CURVE_CALLER", "engine_script_run_v17"),
+        ("v17_to_v16_frozen_current_execution_compile_reject", "compile_rejection", ready,
+         "CURRENT_EXECUTION_V15_CALLER", V16_FROZEN_ENGINE_EPOCH),
+        ("v17_to_v16_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
+         "NATIVE_FX_CURVE_CALLER", V16_FROZEN_ENGINE_EPOCH),
     )
     return [{"name": name, "kind": kind, "applicable": bool(applicable),
              "status": "required" if applicable else "pending_surface",
@@ -525,7 +529,7 @@ def current_driver_layout() -> str:
     return driver_layout_source({
         "NativeCoordinate_sizeof": CURRENT_COORDINATE,
         "NativeDriverPoint_sizeof": 112,
-        "NativeDecisionContext_sizeof": 168,
+        "NativeDecisionContext_sizeof": 200,
         "NativeCoordinate_last_traded_close_ms_offset": 32,
     })
 
@@ -578,13 +582,13 @@ def main() -> int:
         ("pineforge::native_order::native_order_v1::WorkingRequestCore::submit(",
          current_order_submit),
         ("pineforge::validate_native_run_spec(",
-         "pineforge::native_run_spec_v1::validate_native_run_spec("),
+         "pineforge::native_run_spec_v2::validate_native_run_spec("),
         ("pineforge::native_bar_structurally_valid(",
-         "pineforge::native_driver_v4::native_bar_structurally_valid("),
+         "pineforge::native_driver_v5::native_bar_structurally_valid("),
         ("abi_accept_coordinate(pineforge::NativeCoordinate",
-         "abi_accept_coordinate(pineforge::native_driver_v4::NativeCoordinate"),
+         "abi_accept_coordinate(pineforge::native_driver_v5::NativeCoordinate"),
         ("pineforge::engine_script_run_v12::NativeStrategyHost::native_events(",
-         "pineforge::engine_script_run_v16::NativeStrategyHost::native_events("),
+         "pineforge::engine_script_run_v17::NativeStrategyHost::native_events("),
     )
     for old, new in controls:
         if old in new:
@@ -604,9 +608,9 @@ def main() -> int:
             "native_order_identity": "pineforge::native_order::native_order_v1",
             "native_order": "pineforge::native_order::" + order_namespace,
             "native_calendar": "pineforge::native_calendar::native_calendar_v2",
-            "native_run_spec": "pineforge::native_run_spec_v1",
-            "native_driver": "pineforge::native_driver_v4",
-            "native_host": "pineforge::engine_script_run_v16",
+            "native_run_spec": "pineforge::native_run_spec_v2",
+            "native_driver": "pineforge::native_driver_v5",
+            "native_host": "pineforge::engine_script_run_v17",
         },
         "executable_runs": 0,
         "compiles": [],
@@ -822,39 +826,42 @@ def main() -> int:
         current_coordinate = compile_object("current_coordinate_caller", COORDINATE_CALLER, include)
         current_coordinate_provider = compile_object(
             "current_coordinate_provider", COORDINATE_PROVIDER, include)
-        current_host = compile_object("current_host_caller", HOST_CALLER, include)
-        current_host_events = compile_object("current_host_events_caller", HOST_EVENTS_CALLER, include)
+        current_host = compile_object("current_host_caller",
+                                      render_host_caller(HOST_CALLER, "engine_script_run_v17"), include)
+        current_host_events = compile_object("current_host_events_caller",
+                                             render_host_caller(HOST_EVENTS_CALLER, "engine_script_run_v17"), include)
         current_execution = compile_object("current_execution_caller",
-                                           render_current_execution_caller("engine_script_run_v16"), include)
+                                           render_current_execution_caller("engine_script_run_v17"), include)
         # The frozen L0 provider has the same published epoch and must accept
         # every current caller at compile time. Link-time pairing with its
         # real archive is enforced in the settlement matrix.
-        compile_object("v16_frozen_host_caller", HOST_CALLER, v16_frozen_include)
+        compile_object("v16_frozen_host_caller",
+                       render_host_caller(HOST_CALLER, V16_FROZEN_ENGINE_EPOCH), v16_frozen_include)
         compile_object("v16_frozen_current_execution_caller",
                        render_current_execution_caller("engine_script_run_v16"), v16_frozen_include)
         compile_object("v14_current_execution_shape_agnostic_compile",
                        render_current_execution_caller(V14_ENGINE_EPOCH), v14_include)
         current_surface = current_fx_curve = None
         if CURRENT_TERMS_SURFACE_READY:
-            current_surface = compile_object("v16_current_execution_surface_compile",
+            current_surface = compile_object("v17_current_execution_surface_compile",
                                              CURRENT_EXECUTION_V15_CALLER, include)
-            current_fx_curve = compile_object("v16_native_fx_curve_surface_compile",
+            current_fx_curve = compile_object("v17_native_fx_curve_surface_compile",
                                               NATIVE_FX_CURVE_CALLER, include)
             for name, source in (
-                ("v16_to_v15_frozen_current_execution_compile_reject",
+                ("v17_to_v16_frozen_current_execution_compile_reject",
                  CURRENT_EXECUTION_V15_CALLER),
-                ("v16_to_v15_frozen_native_fx_curve_compile_reject",
+                ("v17_to_v16_frozen_native_fx_curve_compile_reject",
                  NATIVE_FX_CURVE_CALLER),
             ):
                 path = root / (name + ".cpp")
                 path.write_text(source)
                 compiled = subprocess.run(
-                    [*common, "-I", str(v15_frozen_include), "-I", args.generated_include,
+                    [*common, "-I", str(v16_frozen_include), "-I", args.generated_include,
                      "-c", str(path), "-o", str(root / (name + ".o"))],
                     capture_output=True, text=True, timeout=90)
                 diagnostic = diagnostic_text(compiled)
-                if compiled.returncode == 0 or "engine_script_run_v16" not in diagnostic:
-                    raise RuntimeError(name + " did not reject the v15-frozen provider:\n" + diagnostic)
+                if compiled.returncode == 0 or "engine_script_run_v17" not in diagnostic:
+                    raise RuntimeError(name + " did not reject the v16-frozen provider:\n" + diagnostic)
                 receipt["compile_rejections"].append({
                     "name": name, "outcome": "expected_compile_rejection",
                     "exit": compiled.returncode, "diagnostics": diagnostic,
@@ -867,7 +874,7 @@ def main() -> int:
             original_header = mutated_host.read_bytes()
             mutated_host.write_bytes(remove_current_result_cancelled(original_header.decode()).encode())
             receipt["compile_rejections"].append(expect_compile_rejection(
-                "v16_current_result_missing_cancelled_compile_reject",
+                "v17_current_result_missing_cancelled_compile_reject",
                 CURRENT_EXECUTION_V15_CALLER, mutated_include, compiler_flags=common,
                 generated_include=args.generated_include, scratch=root,
                 original_header_sha256=sha256(original_header)))
@@ -970,8 +977,8 @@ def main() -> int:
         link("current_host_events_to_current_library", [current_host_events], library)
         link("current_execution_to_current_library", [current_execution], library)
         if CURRENT_TERMS_SURFACE_READY:
-            link("v16_current_execution_surface_to_current_library", [current_surface], library)
-            link("v16_native_fx_curve_to_current_library", [current_fx_curve], library)
+            link("v17_current_execution_surface_to_current_library", [current_surface], library)
+            link("v17_native_fx_curve_to_current_library", [current_fx_curve], library)
         link("current_coordinate_to_current_provider",
              [current_coordinate], current_coordinate_provider)
 
@@ -1015,14 +1022,14 @@ def main() -> int:
         link("current_descriptor_to_old_calendar", [current_descriptor, old_timezone_obj], old_calendar_obj,
              "pineforge::native_calendar::native_calendar_v2::timezone_identity_descriptor(")
         link("current_spec_to_old_symbol_control", [current_spec], old_spec_symbols,
-             "pineforge::native_run_spec_v1::validate_native_run_spec(")
+             "pineforge::native_run_spec_v2::validate_native_run_spec(")
         link("current_host_events_to_old_symbols", [current_host_events], old_host_events_symbols,
-             "pineforge::engine_script_run_v16::NativeStrategyHost::native_events(")
+             "pineforge::engine_script_run_v17::NativeStrategyHost::native_events(")
         link("current_bar_to_old_object", [current_bar], old_bar_obj,
-             "pineforge::native_driver_v4::native_bar_structurally_valid(")
+             "pineforge::native_driver_v5::native_bar_structurally_valid(")
         link("current_coordinate_to_old_provider", [current_coordinate], old_coordinate_provider,
-             ["abi_accept_coordinate(pineforge::native_driver_v4::NativeCoordinate",
-              "abi_accept_decision(pineforge::native_driver_v4::NativeDecisionContext"])
+             ["abi_accept_coordinate(pineforge::native_driver_v5::NativeCoordinate",
+              "abi_accept_decision(pineforge::native_driver_v5::NativeDecisionContext"])
 
     executed_controls = {row["name"] for key in ("compiles", "compile_rejections")
                          for row in receipt[key]}

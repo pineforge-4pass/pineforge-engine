@@ -547,13 +547,13 @@ def _runtime_version_coverage(header: str, source_headers: str, source: str,
     """
     header = _strip_cpp_comments(header)
     namespaces = re.findall(r"inline\s+namespace\s+(engine_script_run_v\d+)\s*\{", header)
-    if namespaces != ["engine_script_run_v16"]:
-        raise ValueError("BacktestEngine requires one internal namespace engine_script_run_v16")
+    if namespaces != ["engine_script_run_v17"]:
+        raise ValueError("BacktestEngine requires one internal namespace engine_script_run_v17")
     broker = _one_braced_body(source,
         r"uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{", "broker hash")
-    if not re.match(r'\s*BrokerStateHashSink\s+f;\s*f\.s\("pineforge-broker-state/v16"\);', broker):
-        raise ValueError("broker hash must start with pineforge-broker-state/v16")
-    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v1"' not in source_headers:
+    if not re.match(r'\s*BrokerStateHashSink\s+f;\s*f\.s\("pineforge-broker-state/v17"\);', broker):
+        raise ValueError("broker hash must start with pineforge-broker-state/v17")
+    if 'kSourceAdapterDomain[] = "pineforge-source-adapter/v2"' not in source_headers:
         raise ValueError("source adapter header must declare its hash domain")
     extension = _one_braced_body(source_hash,
         r"void\s+source::PineStrategyHost::hash_source_extension\(BrokerStateHashSink&\s+f\)\s+const\s*\{",
@@ -563,12 +563,12 @@ def _runtime_version_coverage(header: str, source_headers: str, source: str,
     stream_body = _one_braced_body(_strip_cpp_comments(stream),
         r"uint64_t\s+BacktestEngine::stream_state_hash\(\)\s+const\s*\{", "stream hash")
     compact = re.sub(r"\s+", "", stream_body)
-    fold = "integer(16);integer(broker_state_hash());"
+    fold = "integer(17);integer(broker_state_hash());"
     if compact.count(fold) != 1:
-        raise ValueError("stream hash requires version 16 followed by the broker hash")
+        raise ValueError("stream hash requires version 17 followed by the broker hash")
     prefix = compact[:compact.index(fold)]
     if prefix.count("{") != prefix.count("}") or (prefix and prefix[-1] not in ";}"):
-        raise ValueError("stream v16 version fold must be unconditional at function scope")
+        raise ValueError("stream v17 version fold must be unconditional at function scope")
 
 
 def main(root: Path = ROOT) -> int:

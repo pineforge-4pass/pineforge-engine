@@ -116,20 +116,21 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. R4-C advances `BacktestEngine`, `NativeStrategyHost`, and the private
-consumer to `engine_script_run_v16`; the host capability macro is
-`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V16`. `PendingOrder` is no longer an engine
-epoch type: it is `pineforge::source::PendingOrder`, with the explicit
-`pineforge-source-adapter/v1` source-hash domain. Native request/core/event
-values remain `native_order_v4`, the private consumer identity remains
-`native-consumer/v6`, and driver types remain `native_driver_v4`.
+runtime. R4-D L1 advances `BacktestEngine`, `NativeStrategyHost`, and the
+private consumer to `engine_script_run_v17`; the host capability macro is
+`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17`. `PendingOrder` remains a source
+epoch type (`pineforge::source::PendingOrder`) with the explicit
+`pineforge-source-adapter/v2` source-hash domain. Native request/core/event
+values are `native_order_v5`, the private consumer identity is
+`native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
+`native_run_spec_v2`.
 
 | Matrix role | Internal identity |
 | --- | --- |
-| Live engine/host library | `engine_script_run_v16` |
+| Live engine/host library | `engine_script_run_v17` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` |
 | `host-ab9714b` immutable provider | `engine_script_run_v16` |
-| Source extension | `pineforge-source-adapter/v1` |
+| Source extension | `pineforge-source-adapter/v2` |
 
 The current v16 archive is checked with six archived provider inputs: the real
 e60 R2 and 0e R3 providers, authenticated c3ed455 v13 and f736676 v14 host

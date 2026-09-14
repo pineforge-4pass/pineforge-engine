@@ -36,10 +36,10 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[8], 'std::optional<execution::Status> settlement_readiness;', '')
         self.reject(FILES[6], 'CurrentExecution = 8', 'CurrentExecution = 7')
         self.reject(FILES[6], 'Calculation = 7', 'Calculation = 9')
-        self.reject(FILES[6], 'native-driver/v4', 'native-driver/v3')
+        self.reject(FILES[6], 'native-driver/v5', 'native-driver/v3')
 
     def test_current_cause_and_selected_hash_coverage(self):
-        for fold in ('f.u(bind->openings.size());', 'f.u(openings->openings.size());',
+        for fold in ('f.u(value.openings.size());', 'hash_cohort_handle(f, value.cohort);',
                      'f.u(selected->incarnations.size());', 'f.d(point.price);',
                      'f.u(point.quote_origin_ordinal);', 'f.u(current_frame_->acceptance_cutoff);',
                      'f.u(notification.ordinal);'):
@@ -51,29 +51,29 @@ class NativeVersions(unittest.TestCase):
 
     def test_stale_wrapper(self):
         for path, namespace, stale in (
-            (FILES[0], "native_order_v4", "native_order_v1"),
-            (FILES[1], "native_order_v4", "native_order_v1"),
-            (FILES[11], "native_order_v1", "native_order_v4"),
+            (FILES[0], "native_order_v5", "native_order_v1"),
+            (FILES[1], "native_order_v5", "native_order_v1"),
+            (FILES[11], "native_order_v1", "native_order_v5"),
             (FILES[2], "native_calendar_v2", "native_calendar_v1"),
             (FILES[3], "native_calendar_v2", "native_calendar_v3"),
-            (FILES[4], "native_run_spec_v1", "native_run_spec_v2"),
-            (FILES[5], "native_run_spec_v1", "native_run_spec_v2"),
-            (FILES[6], "native_driver_v4", "native_driver_v2"),
-            (FILES[7], "native_driver_v4", "native_driver_v3"),
-            (FILES[8], "engine_script_run_v16", "engine_script_run_v12"),
-            (FILES[9], "engine_script_run_v16", "engine_script_run_v12"),
-            (FILES[10], "engine_script_run_v16", "engine_script_run_v12"),
+            (FILES[4], "native_run_spec_v2", "native_run_spec_v1"),
+            (FILES[5], "native_run_spec_v2", "native_run_spec_v1"),
+            (FILES[6], "native_driver_v5", "native_driver_v2"),
+            (FILES[7], "native_driver_v5", "native_driver_v3"),
+            (FILES[8], "engine_script_run_v17", "engine_script_run_v12"),
+            (FILES[9], "engine_script_run_v17", "engine_script_run_v12"),
+            (FILES[10], "engine_script_run_v17", "engine_script_run_v12"),
         ):
             with self.subTest(path=path, namespace=namespace):
                 self.reject(path, namespace, stale)
 
     def test_duplicate_wrapper(self):
         for path, namespace in (
-            (FILES[0], "native_order_v4"),
+            (FILES[0], "native_order_v5"),
             (FILES[2], "native_calendar_v2"),
-            (FILES[4], "native_run_spec_v1"),
-            (FILES[6], "native_driver_v4"),
-            (FILES[8], "engine_script_run_v16"),
+            (FILES[4], "native_run_spec_v2"),
+            (FILES[6], "native_driver_v5"),
+            (FILES[8], "engine_script_run_v17"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -82,11 +82,11 @@ class NativeVersions(unittest.TestCase):
 
     def test_empty_namespace_is_not_ownership(self):
         for path, namespace in (
-            (FILES[0], "native_order_v4"),
+            (FILES[0], "native_order_v5"),
             (FILES[2], "native_calendar_v2"),
-            (FILES[4], "native_run_spec_v1"),
-            (FILES[6], "native_driver_v4"),
-            (FILES[8], "engine_script_run_v16"),
+            (FILES[4], "native_run_spec_v2"),
+            (FILES[6], "native_driver_v5"),
+            (FILES[8], "engine_script_run_v17"),
             (FILES[11], "native_order_v1"),
         ):
             with self.subTest(path=path):
@@ -95,10 +95,10 @@ class NativeVersions(unittest.TestCase):
 
     def test_comment_only_namespace_is_not_ownership(self):
         for path, namespace, decoy in (
-            (FILES[0], "native_order_v4", "struct WorkingRequestCore"),
+            (FILES[0], "native_order_v5", "struct WorkingRequestCore"),
             (FILES[11], "native_order_v1", "struct RunIdentity"),
             (FILES[2], "native_calendar_v2", "parse_timeframe NativeInterval"),
-            (FILES[8], "engine_script_run_v16", "class NativeStrategyHost"),
+            (FILES[8], "engine_script_run_v17", "class NativeStrategyHost"),
         ):
             with self.subTest(path=path):
                 self.reject(
@@ -172,8 +172,8 @@ class NativeVersions(unittest.TestCase):
         decl = "NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noexcept;"
         text = changed[spec].replace(decl, "", 1)
         text = text.replace(
-            "}  // inline namespace native_run_spec_v1",
-            "}  // inline namespace native_run_spec_v1\n" + decl,
+            "}  // inline namespace native_run_spec_v2",
+            "}  // inline namespace native_run_spec_v2\n" + decl,
             1)
         changed[spec] = text
         with self.assertRaises(ValueError):
@@ -187,8 +187,8 @@ class NativeVersions(unittest.TestCase):
         func = changed[src][start:end]
         text = changed[src][:start] + changed[src][end:]
         text = text.replace(
-            "}  // inline namespace native_driver_v4",
-            "}  // inline namespace native_driver_v4\n" + func,
+            "}  // inline namespace native_driver_v5",
+            "}  // inline namespace native_driver_v5\n" + func,
             1)
         changed[src] = text
         with self.assertRaises(ValueError):
@@ -208,8 +208,8 @@ class NativeVersions(unittest.TestCase):
         needle = "WorkingRequestCore::reset("
         self.assertIn(needle, changed[src])
         changed[src] = changed[src].replace(
-            "}  // inline namespace native_order_v4",
-            "}  // inline namespace native_order_v4\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
+            "}  // inline namespace native_order_v5",
+            "}  // inline namespace native_order_v5\nvoid WorkingRequestCore::reset(RunIdentity) {}\n",
             1)
         with self.assertRaises(ValueError):
             check_texts(changed)
@@ -218,14 +218,14 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[6], DRIVER_FORWARD, "")
         self.reject(
             FILES[6],
-            DRIVER_FORWARD + "\ninline namespace native_driver_v4 {",
-            "inline namespace native_driver_v4 {\n" + DRIVER_FORWARD)
+            DRIVER_FORWARD + "\ninline namespace native_driver_v5 {",
+            "inline namespace native_driver_v5 {\n" + DRIVER_FORWARD)
         self.reject(
             FILES[6],
             DRIVER_FORWARD,
-            "inline namespace native_run_spec_v1 { struct NativeRunSpec {}; }")
+            "inline namespace native_run_spec_v2 { struct NativeRunSpec {}; }")
 
-    def test_host_public_values_cannot_leave_v16(self):
+    def test_host_public_values_cannot_leave_v17(self):
         self.reject(FILES[8], "struct NativeStateView {", "} struct NativeStateView {")
         self.reject(FILES[8], "struct NativeFailure {", "} struct NativeFailure {")
         self.reject(FILES[8], "struct NativeFailureContext {", "} struct NativeFailureContext {")
@@ -237,7 +237,7 @@ class NativeVersions(unittest.TestCase):
             "")
         self.reject(
             FILES[6],
-            'kNativeConsumerSemanticVersion = "native-consumer/v6"',
+            'kNativeConsumerSemanticVersion = "native-consumer/v7"',
             'kNativeConsumerSemanticVersion = "native-consumer/v3"')
 
     def test_terms_ownership_and_alias_shapes_are_exact(self):
@@ -247,6 +247,10 @@ class NativeVersions(unittest.TestCase):
             (FILES[0], "struct ReverseTo {", "struct MissingReverseTo {"),
             (FILES[0], "struct RemainingDeferred {}", "struct MissingRemainingDeferred {}"),
             (FILES[0], "struct RemainingProjectionDeferred {}", "struct MissingRemainingProjectionDeferred {}"),
+            (FILES[0], "struct NoTarget {}", "struct MissingNoTarget {}"),
+            (FILES[0], "struct CohortHandle {", "struct MissingCohortHandle {"),
+            (FILES[0], "struct BindCohort {", "struct MissingBindCohort {"),
+            (FILES[0], "struct CohortClose {", "struct MissingCohortClose {"),
             (FILES[0], "struct AllowanceDeferred {", "struct MissingAllowanceDeferred {"),
             (FILES[0], "enum class OpeningShape", "enum class MissingOpeningShape"),
             (FILES[0], "struct ExecutionTerms {", "struct MissingExecutionTerms {"),
@@ -262,10 +266,15 @@ class NativeVersions(unittest.TestCase):
             (FILES[8], "struct NativePrecommitView {", "struct MissingNativePrecommitView {"),
             (FILES[8], "enum class NativePrecommitVerdict", "enum class MissingNativePrecommitVerdict"),
             (FILES[8], "struct NativeFxCurveSetupResult {", "struct MissingNativeFxCurveSetupResult {"),
+            (FILES[8], "struct NativeBeginArgs {", "struct MissingNativeBeginArgs {"),
             (FILES[8], "resolve_execution_terms(\n", "resolve_execution_terms_missing(\n"),
             (FILES[8], "validate_execution_precommit(\n", "validate_execution_precommit_missing(\n"),
             (FILES[8], "configure_native_fx_curve(const NativeFxCurve& curve)",
              "configure_native_fx_curve_missing(const NativeFxCurve& curve)"),
+            (FILES[8], "prepare_native_begin(const NativeBeginArgs&)",
+             "prepare_native_begin_missing(const NativeBeginArgs&)"),
+            (FILES[8], "on_native_bar_open(const Bar&, const NativeDecisionContext&)",
+             "on_native_bar_open_missing(const Bar&, const NativeDecisionContext&)"),
         ):
             with self.subTest(before=before):
                 self.reject(path, before, after)
@@ -274,13 +283,15 @@ class NativeVersions(unittest.TestCase):
             ("using OrderIntent = std::variant<Flatten, Reduce, Transact, ReverseTo, HostSized>;",
              "using OrderIntent = std::variant<Flatten, Reduce, Transact, HostSized, ReverseTo>;"),
             ("using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingUnits,\n"
-             "                               RemainingDeferred>;",
+             "                               RemainingDeferred, NoTarget>;",
              "using Remaining = std::variant<RemainingUnbound, RemainingFlattenAll, RemainingDeferred,\n"
-             "                               RemainingUnits>;"),
+             "                               RemainingUnits, NoTarget>;"),
             ("using RemainingProjection =\n        std::variant<RemainingProjectionUnbound, RemainingProjectionFlattenAll,\n"
-             "                     RemainingProjectionUnits, RemainingProjectionDeferred>;",
+             "                     RemainingProjectionUnits, RemainingProjectionDeferred,\n"
+             "                     RemainingProjectionNoTarget>;",
              "using RemainingProjection =\n        std::variant<RemainingProjectionUnbound, RemainingProjectionFlattenAll,\n"
-             "                     RemainingProjectionDeferred, RemainingProjectionUnits>;"),
+             "                     RemainingProjectionDeferred, RemainingProjectionUnits,\n"
+             "                     RemainingProjectionNoTarget>;"),
             ("using Allowance = std::variant<AllowanceUnset, AllowanceUnits, AllowanceAllScope,\n"
              "                               AllowanceDeferred>;",
              "using Allowance = std::variant<AllowanceUnset, AllowanceUnits, AllowanceDeferred,\n"
@@ -325,20 +336,20 @@ class NativeVersions(unittest.TestCase):
         self.assertIn('validate_native_fx_curve', NATIVE_FX_CURVE_CALLER)
         controls = {row['name']: row for row in control_applicability()}
         self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'], 'required')
-        for name in ('v16_current_execution_surface_compile',
-                     'v16_current_result_missing_cancelled_compile_reject',
-                     'v16_native_fx_curve_surface_compile',
-                     'v16_to_v15_frozen_current_execution_compile_reject',
-                     'v16_to_v15_frozen_native_fx_curve_compile_reject'):
+        for name in ('v17_current_execution_surface_compile',
+                     'v17_current_result_missing_cancelled_compile_reject',
+                     'v17_native_fx_curve_surface_compile',
+                     'v17_to_v16_frozen_current_execution_compile_reject',
+                     'v17_to_v16_frozen_native_fx_curve_compile_reject'):
             self.assertEqual(controls[name]['status'], 'required')
 
     def test_order_namespace_is_derived_not_literal(self):
         from check_native_cpp_abi import current_order_namespace
         self.assertEqual(current_order_namespace(
-            'inline namespace native_order_v4 { struct X {}; }'), 'native_order_v4')
+            'inline namespace native_order_v5 { struct X {}; }'), 'native_order_v5')
         with self.assertRaises(RuntimeError):
             current_order_namespace(
-                'inline namespace native_order_v4 { }\n'
+                'inline namespace native_order_v5 { }\n'
                 'inline namespace native_order_v3 { }')
 
     def test_missing_cancelled_mutation_is_exactly_one(self):
@@ -485,10 +496,10 @@ class NativeVersions(unittest.TestCase):
     def test_current_execution_caller_is_rendered_per_provider(self):
         from check_native_cpp_abi import render_current_execution_caller
         v14 = render_current_execution_caller('engine_script_run_v14')
-        v16 = render_current_execution_caller('engine_script_run_v16')
+        v16 = render_current_execution_caller('engine_script_run_v17')
         self.assertIn('engine_script_run_v14', v14)
-        self.assertNotIn('engine_script_run_v16', v14)
-        self.assertIn('engine_script_run_v16', v16)
+        self.assertNotIn('engine_script_run_v17', v14)
+        self.assertIn('engine_script_run_v17', v16)
         self.assertNotIn('engine_script_run_v14', v16)
         with self.assertRaises(RuntimeError):
             render_current_execution_caller('engine_script_run_v13')

@@ -20,8 +20,8 @@ namespace no = pineforge::native_order;
 namespace ex = pineforge::execution;
 
 static_assert(std::variant_size_v<no::OrderIntent> == 5);
-static_assert(std::variant_size_v<no::Remaining> == 4);
-static_assert(std::variant_size_v<no::RemainingProjection> == 4);
+static_assert(std::variant_size_v<no::Remaining> == 5);
+static_assert(std::variant_size_v<no::RemainingProjection> == 5);
 static_assert(std::variant_size_v<no::Allowance> == 4);
 static_assert(std::variant_size_v<no::CommandEvent> == 17);
 static_assert(std::variant_size_v<no::ExecutionPlan> == 4);

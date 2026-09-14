@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v16 {
+inline namespace engine_script_run_v17 {
 
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
@@ -345,12 +345,32 @@ using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
     native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,
     native_order::MatchRejectedEvent, native_order::CancelledEvent>;
 
+// Borrowed begin-call facts. The bar/input/override pointers expire when
+// prepare_native_begin returns; retained configuration must copy them by
+// value (for example into NativeRunSpec::intrabar).
+struct NativeBeginArgs {
+    const Bar* bars = nullptr;
+    int n = 0;
+    std::string input_tf;
+    std::string script_tf;
+    bool bar_magnifier = false;
+    int magnifier_samples = 4;
+    MagnifierDistribution magnifier_distribution = MagnifierDistribution::ENDPOINTS;
+    bool magnifier_volume_weighted = false;
+    int magnifier_volume_weighted_min_samples = 2;
+    int magnifier_volume_weighted_max_samples = 64;
+    const InputsMap* inputs = nullptr;
+    const void* overrides_opaque = nullptr;
+    bool is_stream = false;
+    int warmup_n = 0;
+};
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
-#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V16 1
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17 1
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -362,7 +382,11 @@ public:
 
     void on_bar(const Bar& bar) final;
 
+    virtual void prepare_native_begin(const NativeBeginArgs&) {}
     virtual void on_native_run_begin() {}
+    // Precedes the matching pass at the script bar's open decision point.
+    // inspect_current_execution/execute_current are legal in this hook.
+    virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}
     virtual void on_native_bar(const Bar& bar, const NativeDecisionContext& context) = 0;
 
     virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
@@ -393,6 +417,9 @@ public:
     native_order::ReplaceResult replace_market(const native_order::RequestHandle& target,
                                                const native_order::Request& request);
     native_order::CancelResult cancel(const native_order::RequestHandle& target);
+    native_order::CohortHandle cohort_open();
+    void cohort_add(native_order::CohortHandle cohort, native_order::RequestHandle origin);
+    void cohort_remove(native_order::CohortHandle cohort, native_order::RequestHandle origin);
 
     NativePhysicalPosition physical_position() const;
     double native_marked_equity(double mark) const;
@@ -406,5 +433,5 @@ public:
     friend class NativeExecutionConsumer;
 };
 
-}  // inline namespace engine_script_run_v16
+}  // inline namespace engine_script_run_v17
 }  // namespace pineforge

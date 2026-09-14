@@ -1,0 +1,19 @@
+{
+  "schema": "pineforge-r4-d-relocation/v1",
+  "transition": {
+    "from": "engine_script_run_v16",
+    "to": "engine_script_run_v17"
+  },
+  "sourcePendingOrder": "pineforge::source::PendingOrder",
+  "removedStorage": [],
+  "addedStorage": [],
+  "addedVirtuals": [
+    "prepare_native_begin",
+    "on_native_bar_open"
+  ],
+  "removedVirtuals": [],
+  "rejectionPairs": [
+    ["v16-frozen", "v17-current"],
+    ["v17-current", "v16-frozen"]
+  ]
+}

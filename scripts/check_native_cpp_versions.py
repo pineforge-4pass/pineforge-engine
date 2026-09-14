@@ -30,7 +30,7 @@ NATIVE_FX_CURVE_SOURCE = "src/native_fx_curve.cpp"
 NATIVE_FX_CURVE_NAMESPACE = "native_fx_curve_v1"
 
 DRIVER_FORWARD = (
-    "inline namespace native_run_spec_v1 { struct NativeRunSpec; }"
+    "inline namespace native_run_spec_v2 { struct NativeRunSpec; }"
 )
 
 TYPE_DEF = r'\b(?:enum\s+class|class|struct)\s+(\w+)\s*(?::[^;{]+)?\{'
@@ -210,53 +210,64 @@ def check_texts(files):
     identity = versioned(files[FILES[11]], "pineforge::native_order", "native_order_v1")
     require(identity, ("RunIdentity", "RequestHandle", "Birth"),
             "native_order_v1", r'\b(?:class|struct)\s+NAME\s*\{')
-    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v4")
+    order = versioned(files[FILES[0]], "pineforge::native_order", "native_order_v5")
     require(order, ("WorkingRequestCore", "Request", "SubmitResult",
                     "AcceptedEvent", "NoEffectEvent", "MatchRejectedEvent",
                     "ExecutionAppliedEvent", "HostSized", "HostSizedKind", "ReverseTo",
-                    "RemainingDeferred", "RemainingProjectionDeferred", "AllowanceDeferred",
+                    "RemainingDeferred", "RemainingProjectionDeferred", "NoTarget",
+                    "RemainingProjectionNoTarget", "CohortHandle", "BindCohort", "CohortClose",
+                    "CohortRoster", "CohortReceipt", "AllowanceDeferred",
                     "OpeningShape", "ExecutionTerms", "TermsResolvedInput",
                     "TermsResolvedEvent", "NativeCandidatePriceKind"),
-            "native_order_v4", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+            "native_order_v5", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
                     "RemainingProjection", "Allowance"),
-            "native_order_v4", r'\busing\s+NAME\s*=')
+            "native_order_v5", r'\busing\s+NAME\s*=')
+    for token in ('operator==(CohortHandle', 'operator<(CohortHandle',
+                  'struct hash<pineforge::native_order::CohortHandle>'):
+        if token not in files[FILES[0]]:
+            raise ValueError('CohortHandle requires C++17 equality/order/hash support')
     require_exact_alias(
         order, "OrderIntent", "std::variant<Flatten,Reduce,Transact,ReverseTo,HostSized>",
-        "native_order_v4")
+        "native_order_v5")
     require_exact_alias(
         order, "Remaining",
-        "std::variant<RemainingUnbound,RemainingFlattenAll,RemainingUnits,RemainingDeferred>",
-        "native_order_v4")
+        "std::variant<RemainingUnbound,RemainingFlattenAll,RemainingUnits,RemainingDeferred,NoTarget>",
+        "native_order_v5")
     require_exact_alias(
         order, "RemainingProjection",
         "std::variant<RemainingProjectionUnbound,RemainingProjectionFlattenAll,"
-        "RemainingProjectionUnits,RemainingProjectionDeferred>", "native_order_v4")
+        "RemainingProjectionUnits,RemainingProjectionDeferred,RemainingProjectionNoTarget>", "native_order_v5")
     require_exact_alias(
         order, "Allowance",
         "std::variant<AllowanceUnset,AllowanceUnits,AllowanceAllScope,AllowanceDeferred>",
-        "native_order_v4")
+        "native_order_v5")
     require_exact_alias(
         order, "ExecutionPlan",
         "std::variant<execution::Flatten,order_action::Reduce,order_action::Transact,"
-        "execution::ReverseTo>", "native_order_v4")
-    require_namespace_functions(order, ("to_execution_plan",), "native_order_v4")
+        "execution::ReverseTo>", "native_order_v5")
+    require_namespace_functions(order, ("to_execution_plan",), "native_order_v5")
     required_order_members = (
         (r'\bPreparation<PreparedMutation>\s+prepare_terms\s*\(', "prepare_terms"),
         (r'\bstatic\s+Allowance\s+evaluated_allowance\s*\(', "evaluated_allowance"),
         (r'\bstatic\s+bool\s+effective_host_units\s*\(', "effective_host_units"),
+        (r'\bCohortHandle\s+cohort_open\s*\(', "cohort_open"),
+        (r'\bvoid\s+cohort_add\s*\(', "cohort_add"),
+        (r'\bvoid\s+cohort_remove\s*\(', "cohort_remove"),
     )
     for pattern, name in required_order_members:
         if len(re.findall(pattern, order)) != 1:
-            raise ValueError(name + " must be a native_order_v4 WorkingRequestCore member")
+            raise ValueError(name + " must be a native_order_v5 WorkingRequestCore member")
     if re.search(r'\b(?:class|struct)\s+RunIdentity\s*\{', order):
-        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v4")
-    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v4")
+        raise ValueError("RunIdentity must remain in native_order_v1, not native_order_v5")
+    order_src = versioned(files[FILES[1]], "pineforge::native_order", "native_order_v5")
     require(order_src, ("WorkingRequestCore::reset", "WorkingRequestCore::find_live",
                         "WorkingRequestCore::prepare_terms",
                         "WorkingRequestCore::evaluated_allowance",
-                        "WorkingRequestCore::effective_host_units"),
-            "native_order_v4", r'\bNAME\s*\(')
+                        "WorkingRequestCore::effective_host_units",
+                        "WorkingRequestCore::cohort_open", "WorkingRequestCore::cohort_add",
+                        "WorkingRequestCore::cohort_remove"),
+            "native_order_v5", r'\bNAME\s*\(')
 
     calendar = versioned(files[FILES[2]], "pineforge::native_calendar", "native_calendar_v2")
     require(calendar, ("Timeframe", "SessionCalendar", "NativeInterval",
@@ -276,56 +287,61 @@ def check_texts(files):
     require(calendar_src, ("TimezoneIdentityDescriptor::valid",),
             "native_calendar_v2", r'\bNAME\s*\(')
 
-    spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v1")
+    spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v2")
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
-                   "NativeRunSpecField"),
-            "native_run_spec_v1",
+                   "NativeRunSpecField", "IntrabarPath"),
+            "native_run_spec_v2",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
-        spec, ("validate_native_run_spec", "normalize_native_run_spec"),
-        "native_run_spec_v1")
-    spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v1")
+        spec, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
+        "native_run_spec_v2")
+    spec_src = versioned(files[FILES[5]], "pineforge", "native_run_spec_v2")
     require_namespace_functions(
-        spec_src, ("validate_native_run_spec", "normalize_native_run_spec"),
-        "native_run_spec_v1")
+        spec_src, ("validate_native_run_spec", "normalize_native_run_spec", "native_intrabar_path_digest"),
+        "native_run_spec_v2")
 
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
         raise ValueError("market_driver.hpp must forward-declare NativeRunSpec "
-                         "in native_run_spec_v1 outside native_driver_v4")
+                         "in native_run_spec_v2 outside native_driver_v5")
     driver_clean = clean(driver_text)
     driver_owner = body(driver_clean, r'namespace\s+pineforge\s*\{', "pineforge")
-    driver = body(driver_owner, r'inline\s+namespace\s+native_driver_v4\s*\{',
-                  "native_driver_v4")
-    if DRIVER_FORWARD in driver or "native_run_spec_v1" in driver:
-        raise ValueError("NativeRunSpec forward declaration must stay outside native_driver_v4")
+    driver = body(driver_owner, r'inline\s+namespace\s+native_driver_v5\s*\{',
+                  "native_driver_v5")
+    if DRIVER_FORWARD in driver or "native_run_spec_v2" in driver:
+        raise ValueError("NativeRunSpec forward declaration must stay outside native_driver_v5")
     if re.search(r'\bstruct\s+NativeRunSpec\s*\{', driver_clean):
-        raise ValueError("NativeRunSpec definition does not belong to native_driver_v4")
+        raise ValueError("NativeRunSpec definition does not belong to native_driver_v5")
     # Compare ownership as if the allowed forward declaration were absent.
     driver_without_forward = driver_clean.replace(DRIVER_FORWARD, "", 1)
-    versioned(driver_without_forward, "pineforge", "native_driver_v4")
+    versioned(driver_without_forward, "pineforge", "native_driver_v5")
     require(driver, ("NativeCoordinate", "NativeDriverPoint", "NativeDecisionContext",
                      "NativeInputPreflightResult", "INativeDriverSink"),
-            "native_driver_v4", r'\b(?:class|struct)\s+NAME\s*\{')
+            "native_driver_v5", r'\b(?:class|struct)\s+NAME\s*\{')
+    decision = body(driver, r'struct\s+NativeDecisionContext\s*\{', 'decision context')
+    for member in ('intsub_index=0;', 'intsub_count=1;', 'boolis_terminal_sub_bar=true;',
+                   'int64_tsub_bar_open_ms=0;', 'int64_tscript_bar_open_ms=0;'):
+        if member not in re.sub(r'\s+', '', decision):
+            raise ValueError('native_driver_v5 decision context omits intrabar field: ' + member)
     require_namespace_functions(
         driver, ("native_bar_structurally_valid", "preflight_native_inputs"),
-        "native_driver_v4")
-    if 'kNativeConsumerSemanticVersion = "native-consumer/v6"' not in driver_text:
-        raise ValueError("consumer semantic marker must remain native-consumer/v6")
+        "native_driver_v5")
+    if 'kNativeConsumerSemanticVersion = "native-consumer/v7"' not in driver_text:
+        raise ValueError("consumer semantic marker must be native-consumer/v7")
     provenance = body(driver, r'enum\s+class\s+NativePriceProvenance\s*:[^{]+\{', 'price provenance')
     expected_provenance = [('Confirmed', '0'), ('ObservedPrint', '1'), ('ModeledOHLCOpen', '2'),
         ('ModeledOHLCClose', '3'), ('CarriedOpen', '4'), ('AfterCalculationClose', '5'),
         ('PartialFinalized', '6'), ('Calculation', '7'), ('CurrentExecution', '8')]
     if re.findall(r'(\w+)\s*=\s*(\d+)', provenance) != expected_provenance:
         raise ValueError('driver provenance must preserve 0..7 and append only CurrentExecution=8')
-    if 'kNativeDriverSemanticVersion = "native-driver/v4"' not in driver_text:
-        raise ValueError('driver semantic marker must be native-driver/v4')
-    driver_src = versioned(files[FILES[7]], "pineforge", "native_driver_v4")
+    if 'kNativeDriverSemanticVersion = "native-driver/v5"' not in driver_text:
+        raise ValueError('driver semantic marker must be native-driver/v5')
+    driver_src = versioned(files[FILES[7]], "pineforge", "native_driver_v5")
     require_namespace_functions(
         driver_src, ("native_bar_structurally_valid", "preflight_native_inputs"),
-        "native_driver_v4")
+        "native_driver_v5")
 
-    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v16")
+    host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v17")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
                    "NativeFailure", "NativeFailureContext", "NativeInRunCause",
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
@@ -333,16 +349,16 @@ def check_texts(files):
                    "NativeCurrentPriceRule", "NativeCurrentQuoteKind", "NativeCurrentPointView",
                    "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
                    "NativeExecutionTermsFacts", "NativePrecommitView",
-                   "NativePrecommitVerdict", "NativeFxCurveSetupResult"),
-            "engine_script_run_v16",
+                   "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs"),
+            "engine_script_run_v17",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
-    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v16",
+    require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v17",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
         host, "NativeCurrentExecutionResult",
         "std::variant<NativeCurrentRefusal,native_order::ExecutionAppliedEvent,"
         "native_order::NoEffectEvent,native_order::MatchRejectedEvent,"
-        "native_order::CancelledEvent>", "engine_script_run_v16")
+        "native_order::CancelledEvent>", "engine_script_run_v17")
     current_command = body(host, r'struct\s+NativeCurrentExecution\s*\{', 'current command')
     if re.sub(r'\s+', '', current_command) != 'native_order::RequestHandletarget;NativeCurrentPriceRuleprice_rule=NativeCurrentPriceRule::AsPresented;':
         raise ValueError('current command has exactly target and price_rule, no competing selected authority')
@@ -362,44 +378,58 @@ def check_texts(files):
          r'\s*const\s+NativePrecommitView\s*&', "validate_execution_precommit"),
         (r'\bNativeFxCurveSetupResult\s+configure_native_fx_curve\s*\('
          r'\s*const\s+NativeFxCurve\s*&', "configure_native_fx_curve"),
+        (r'\bvirtual\s+void\s+prepare_native_begin\s*\('
+         r'\s*const\s+NativeBeginArgs\s*&', "prepare_native_begin"),
+        (r'\bvirtual\s+void\s+on_native_bar_open\s*\('
+         r'\s*const\s+Bar\s*&', "on_native_bar_open"),
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
-            raise ValueError(name + " must be a v16 NativeStrategyHost member")
-    for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution', 'execute_current'):
+            raise ValueError(name + " must be a v17 NativeStrategyHost member")
+    for name in ('on_native_applied', 'current_execution_point', 'inspect_current_execution',
+                 'execute_current', 'cohort_open', 'cohort_add', 'cohort_remove'):
         if name not in host:
             raise ValueError('missing current host contract: ' + name)
     if "native_failure_context_in_run" not in host:
-        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v16")
+        raise ValueError("native_failure_context_in_run must belong to engine_script_run_v17")
     if "native_failed_run_identity" not in host:
-        raise ValueError("native_failed_run_identity must belong to engine_script_run_v16")
+        raise ValueError("native_failed_run_identity must belong to engine_script_run_v17")
     if not re.search(r'\bSubmitResult\s+submit\s*\(\s*const\s+native_order::Request\s*&', host):
-        raise ValueError("general submit must belong to engine_script_run_v16")
+        raise ValueError("general submit must belong to engine_script_run_v17")
     if not re.search(r'\bReplaceResult\s+replace\s*\(\s*const\s+native_order::RequestHandle\s*&',
                      host):
-        raise ValueError("general replace must belong to engine_script_run_v16")
+        raise ValueError("general replace must belong to engine_script_run_v17")
     if "submit_market" not in host or "replace_market" not in host:
-        raise ValueError("market-only submit/replace must remain in engine_script_run_v16")
-    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v16")
+        raise ValueError("market-only submit/replace must remain in engine_script_run_v17")
+    consumer = versioned(files[FILES[9]], "pineforge", "engine_script_run_v17")
     require(consumer, ("NativeExecutionConsumer",),
-            "engine_script_run_v16", r'\bclass\s+NAME\s*')
-    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v16")
+            "engine_script_run_v17", r'\bclass\s+NAME\s*')
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v17")
     require(consumer_src,
             ("NativeStrategyHost::configure_native", "NativeStrategyHost::native_state",
              "NativeStrategyHost::native_events",
-             "NativeStrategyHost::configure_native_fx_curve"),
-            "engine_script_run_v16", r'\bNAME\s*\(')
+             "NativeStrategyHost::configure_native_fx_curve",
+             "NativeStrategyHost::cohort_open", "NativeStrategyHost::cohort_add",
+             "NativeStrategyHost::cohort_remove"),
+            "engine_script_run_v17", r'\bNAME\s*\(')
 
 
     # These are continuation owners, not redundant physical-book snapshots.
     hash_requirements = {
-        'hash_owner': ('native_order::BindOpenings', 'bind->cycle', 'bind->openings.size()', 'hash_handle(f, handle)'),
-        'hash_authority': ('native_order::OpeningsClose', 'openings->cycle', 'openings->side',
-                           'openings->openings.size()', 'openings->enrollment.index()', 'hash_handle(f, handle)'),
+        'hash_owner': ('native_order::BindOpenings', 'native_order::BindCohort',
+                       'value.cycle', 'value.openings.size()', 'hash_handle(f, handle)',
+                       'hash_cohort_handle(f, value.cohort)', 'unhashed native owner'),
+        'hash_authority': ('native_order::OpeningsClose', 'value.cycle', 'value.side',
+                           'value.openings.size()', 'hash_enrollment(value.enrollment)', 'hash_handle(f, handle)',
+                           'native_order::CohortClose', 'hash_cohort_handle(f, value.cohort)',
+                           'unhashed native authority'),
         'hash_scope': ('native_order::SelectedExposure', 'selected->cycle',
                        'selected->incarnations.size()', 'f.u(incarnation)'),
         'hash_current_point': ('point.decision.coordinate', 'point.decision.decision_floor_ms',
                               'point.decision.input_interval', 'point.decision.script_interval',
+                              'point.decision.sub_index', 'point.decision.sub_count',
+                              'point.decision.is_terminal_sub_bar', 'point.decision.sub_bar_open_ms',
+                              'point.decision.script_bar_open_ms',
                               'point.price', 'point.quote_kind', 'point.quote_origin_ordinal'),
     }
     for function, facts in hash_requirements.items():
@@ -410,7 +440,9 @@ def check_texts(files):
     continuation = body(consumer_src, r'uint64_t\s+NativeExecutionConsumer::continuation_hash\(\)\s*const\s*noexcept\s*\{', 'native continuation')
     for fact in ('current_frame_.has_value()', 'current_frame_->point', 'current_frame_->acceptance_cutoff',
                  'applied_notifications_.size() - notification_head_', 'notification.history_index',
-                 'notification.ordinal', 'notification.point', 'consuming_request_', 'draining_notifications_'):
+                 'notification.ordinal', 'notification.point', 'consuming_request_', 'draining_notifications_',
+                 'preparing_begin_', 'callback_context_.sub_index',
+                 'callback_context_.script_bar_open_ms', 'hash_cohorts(f, requests_)'):
         if fact not in continuation:
             raise ValueError('native continuation omits current frame/queue fact: ' + fact)
 
@@ -426,5 +458,5 @@ def check(root=ROOT):
 
 if __name__ == "__main__":
     check()
-    print("native_order identity v1 / values v4, native_calendar_v2, native_run_spec_v1, "
-          "native_driver_v4, native_fx_curve_v1 and host engine_script_run_v16 ownership verified")
+    print("native_order identity v1 / values v5, native_calendar_v2, native_run_spec_v2, "
+          "native_driver_v5, native_fx_curve_v1 and host engine_script_run_v17 ownership verified")

@@ -11,8 +11,9 @@ R4-D adapter-lowering base. The preparation tool builds the archived source
 with the current profile compiler/configuration; it never synthesizes a
 provider or executes ABI callers.
 
-The provider is intentionally same-epoch with the live v16 archive. The ABI
-matrices require both same-epoch link directions to succeed, while retaining
-the existing v13/v14/v15 rejection controls. It is frozen before L1 advances
-any version literal, so a later v17/v5/v2/v5/v7 transition has an authentic
-v16 side to reject.
+The provider is intentionally the authentic predecessor of the live v17
+archive. The ABI matrices require v16↔v17 rejection in both directions while
+retaining historical v13/v14/v15 controls. Its sibling
+`relocation-manifest-v16-v17.json` pins exactly the two added
+`NativeStrategyHost` virtuals (`prepare_native_begin`, `on_native_bar_open`)
+and no storage relocation.

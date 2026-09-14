@@ -6,7 +6,7 @@
 
 namespace pineforge::source {
 
-inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v1";
+inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v2";
 
 struct PineStrategyConfig {
     bool process_orders_on_close = false;
