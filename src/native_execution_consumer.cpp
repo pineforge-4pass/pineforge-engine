@@ -53,6 +53,8 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.s(spec.identity.session_key); f.u(spec.identity.run_number);
     f.s(spec.input_tf); f.s(spec.script_tf);
     f.b(spec.timeframe_undetected);
+    f.u(static_cast<uint64_t>(spec.slot_label_policy));
+    f.u(static_cast<uint64_t>(spec.legacy_tolerance));
     f.s(spec.ticker); f.s(spec.tickerid); f.s(spec.type);
     f.s(spec.currency); f.s(spec.basecurrency); f.s(spec.description); f.s(spec.volumetype);
     f.s(spec.timezone); f.s(spec.session); f.s(spec.chart_timezone);
@@ -1005,6 +1007,17 @@ bool NativeExecutionConsumer::has_undetected_timeframe() const noexcept {
     return spec && spec->timeframe_undetected;
 }
 
+bool NativeExecutionConsumer::legacy_tolerant_slot_labels() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec && spec->slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant;
+}
+
+bool NativeExecutionConsumer::uses_raw_label_partition() const noexcept {
+    return has_undetected_timeframe()
+        || (legacy_tolerant_slot_labels()
+            && pairing_.pairing == native_calendar::TimeframePairing::Passthrough);
+}
+
 native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
         std::int64_t timestamp) noexcept {
     // No duration is available in this state. Each boundary is the current
@@ -1014,14 +1027,18 @@ native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
-    if (has_undetected_timeframe()) return timestamp_partition(timestamp);
-    return native_calendar::interval_containing(calendar_, input_tf_, timestamp);
+    if (uses_raw_label_partition()) return timestamp_partition(timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp);
+    if (!interval && legacy_tolerant_slot_labels()) return timestamp_partition(timestamp);
+    return interval;
 }
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
-    if (has_undetected_timeframe()) return timestamp_partition(timestamp);
-    return native_calendar::interval_containing(calendar_, script_tf_, timestamp);
+    if (uses_raw_label_partition()) return timestamp_partition(timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp);
+    if (!interval && legacy_tolerant_slot_labels()) return timestamp_partition(timestamp);
+    return interval;
 }
 
 bool NativeExecutionConsumer::validate_undetected_begin(
@@ -1353,6 +1370,9 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
         break;
     case NativeInputPreflightError::CalendarFailure:
         present_refusal(engine, "native calendar parse failed during input preflight");
+        break;
+    case NativeInputPreflightError::TimestampDeltaOverflow:
+        present_refusal(engine, "native timestamp delta exceeds int64 range");
         break;
     case NativeInputPreflightError::None:
         break;
@@ -3999,19 +4019,22 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         present_refusal(engine, "native input is not aligned");
         return false;
     }
-    if (!native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
+    if (!legacy_tolerant_slot_labels()
+        && !native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
         processing_input_ = false;
         present_refusal(engine, "native confirmed bar timestamp is not a canonical slot label");
         return false;
     }
     if (last_accepted_input_) {
-        if (interval->open_ms <= last_accepted_input_->open_ms) {
+        if (!legacy_tolerant_slot_labels()
+            && interval->open_ms <= last_accepted_input_->open_ms) {
             processing_input_ = false;
             present_refusal(engine, "native duplicate overlapping input slot");
             return false;
         }
         const auto* running = std::get_if<NativeRunning>(&state_);
-        if (running && running->phase != NativeRunPhase::Batch) {
+        if (!legacy_tolerant_slot_labels()
+            && running && running->phase != NativeRunPhase::Batch) {
             auto expected = native_calendar::interval_containing(
                 calendar_, input_tf_, last_accepted_input_->next_input_open_ms);
             if (!expected || expected->open_ms != interval->open_ms) {

@@ -42,7 +42,11 @@ class AbiToolingTests(unittest.TestCase):
 
     def test_v16_v17_manifest_is_exact_and_uses_the_source_pending_row(self):
         manifest = relocation_manifest(('engine_script_run_v16', 'engine_script_run_v17'))
-        self.assertEqual(manifest['addedValueMembers'], ['NativeBeginArgs::syminfo'])
+        self.assertEqual(manifest['addedValueMembers'], [
+            'NativeBeginArgs::syminfo',
+            'NativeRunSpec::slot_label_policy',
+            'NativeRunSpec::legacy_tolerance',
+        ])
         self.assertEqual(manifest['rejectionPairs'], [
             ['v16-frozen', 'v17-current'], ['v17-current', 'v16-frozen']])
         fixture = PROVIDERS['v16-frozen']

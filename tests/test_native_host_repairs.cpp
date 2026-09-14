@@ -315,6 +315,64 @@ int main() {
         CHECK(off.index == 0);
     }
 
+    // A13: source-compatible batch labels retain the caller's timestamp as
+    // the decision coordinate. This is a pure native fixture: no adapter or
+    // source host participates in either the canonical refusal or lowering.
+    {
+        const Bar legacy_labels[] = {
+            bar_at(1000, 100, 101, 99, 100),
+            bar_at(2000, 100, 101, 99, 100),
+            bar_at(3000, 100, 101, 99, 100),
+            bar_at(4000, 100, 101, 99, 100),
+        };
+        auto canonical_spec = spec_for("slot-label-canonical", 1);
+        RecordHost canonical;
+        CHECK(canonical.configure_native(canonical_spec).status == NativeSetupStatus::Applied);
+        const uint64_t canonical_hash = canonical.native_continuation_hash();
+        canonical.run(legacy_labels, 4);
+        CHECK(canonical.native_state().kind == NativeLifecycleKind::Ready);
+        CHECK(canonical.callbacks == 0);
+        CHECK(canonical.last_error()
+              == "native confirmed bar timestamp is not a canonical slot label");
+        CHECK(canonical.native_continuation_hash() == canonical_hash);
+
+        auto structural_spec = canonical_spec;
+        structural_spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+        RecordHost structural;
+        CHECK(structural.configure_native(structural_spec).status == NativeSetupStatus::Applied);
+        CHECK(structural.native_continuation_hash() != canonical_hash);
+
+        auto tolerant_spec = canonical_spec;
+        tolerant_spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+        RecordHost tolerant;
+        tolerant.buy_on_first = true;
+        CHECK(tolerant.configure_native(tolerant_spec).status == NativeSetupStatus::Applied);
+        CHECK(tolerant.native_continuation_hash() != canonical_hash);
+        tolerant.run(legacy_labels, 4);
+        CHECK(tolerant.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(tolerant.callbacks == 4);
+        CHECK(tolerant.bars.size() == 4);
+        CHECK(tolerant.contexts.size() == 4);
+        for (std::size_t i = 0; i < tolerant.bars.size() && i < tolerant.contexts.size(); ++i) {
+            CHECK(tolerant.bars[i].timestamp == legacy_labels[i].timestamp);
+            CHECK(tolerant.contexts[i].coordinate.open_ms == legacy_labels[i].timestamp);
+            CHECK(tolerant.contexts[i].input_interval.open_ms == legacy_labels[i].timestamp);
+            CHECK(tolerant.contexts[i].script_interval.open_ms == legacy_labels[i].timestamp);
+            CHECK(tolerant.contexts[i].script_bar_open_ms == legacy_labels[i].timestamp);
+        }
+        CHECK(applied_fill_count(tolerant) == 1);
+        near(tolerant.physical_position().signed_units, 1.0);
+
+        const Bar delta_overflow[] = {
+            bar_at(-1, 100, 101, 99, 100),
+            bar_at(std::numeric_limits<int64_t>::max(), 100, 101, 99, 100),
+        };
+        const auto overflow = preflight_native_inputs(
+            tolerant_spec, delta_overflow, 2, NativeInputPolicy::Batch);
+        CHECK(overflow.error == NativeInputPreflightError::TimestampDeltaOverflow);
+        CHECK(overflow.index == 1);
+    }
+
     {
         NativeRunSpec spec = spec_for("preflight-rth-gap", 1);
         spec.session = "0930-1600:23456";
@@ -992,7 +1050,7 @@ int main() {
         auto spec = spec_for("positive-ohlc-nan-volume", 1);
         CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
         const uint64_t hash_ready = host.native_continuation_hash();
-        Bar zero_px{0.0, 101, 99, 100, 1.0, 60000};
+        Bar zero_px{0.0, 1.0, 0.0, 1.0, 1.0, 60000};
         host.run(&zero_px, 1);
         CHECK(host.native_state().kind == NativeLifecycleKind::Ready);
         CHECK(host.last_run_status() != 0);
@@ -1009,6 +1067,15 @@ int main() {
         CHECK(preflight_native_inputs(spec, &zero_px, 1, NativeInputPolicy::Batch).error
               == NativeInputPreflightError::StructuralInvalid);
         CHECK(preflight_native_inputs(spec, &nanvol, 1, NativeInputPolicy::Batch).error
+              == NativeInputPreflightError::StructuralInvalid);
+
+        auto tolerant = spec;
+        tolerant.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+        tolerant.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+        CHECK(preflight_native_inputs(tolerant, &zero_px, 1, NativeInputPolicy::Batch));
+        CHECK(preflight_native_inputs(tolerant, &nanvol, 1, NativeInputPolicy::Batch));
+        CHECK(preflight_native_inputs(tolerant, &zero_px, 1,
+                                     NativeInputPolicy::StreamWarmup).error
               == NativeInputPreflightError::StructuralInvalid);
     }
 

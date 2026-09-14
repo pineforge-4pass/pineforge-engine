@@ -289,7 +289,8 @@ def check_texts(files):
 
     spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v2")
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
-                   "NativeRunSpecField", "IntrabarPath"),
+                   "NativeRunSpecField", "IntrabarPath", "NativeSlotLabelPolicy",
+                   "NativeLegacyTolerance"),
             "native_run_spec_v2",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require_namespace_functions(
@@ -303,17 +304,28 @@ def check_texts(files):
     if ('std::stringinput_tf;std::stringscript_tf;booltimeframe_undetected=false;'
             not in re.sub(r'\s+', '', run_spec)):
         raise ValueError('native_run_spec_v2 requires its explicit undetected-timeframe field')
+    compact_spec = re.sub(r'\s+', '', run_spec)
+    for member in (
+            'NativeSlotLabelPolicyslot_label_policy=NativeSlotLabelPolicy::Canonical;',
+            'NativeLegacyTolerancelegacy_tolerance=NativeLegacyTolerance::None;'):
+        if member not in compact_spec:
+            raise ValueError('native_run_spec_v2 omits legacy-tolerance policy member: ' + member)
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
-    if not re.search(r'\bTimeframeUndetected\b', fields):
-        raise ValueError('native_run_spec_v2 omits the undetected-timeframe field tag')
+    for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance'):
+        if not re.search(r'\b' + field + r'\b', fields):
+            raise ValueError('native_run_spec_v2 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
                   'native run spec errors')
-    if not re.search(r'\bInvalidUndetectedTimeframe\b', errors):
-        raise ValueError('native_run_spec_v2 omits the undetected-timeframe validation error')
+    for error in ('InvalidUndetectedTimeframe', 'UnknownSlotLabelPolicy',
+                  'UnknownLegacyTolerance'):
+        if not re.search(r'\b' + error + r'\b', errors):
+            raise ValueError('native_run_spec_v2 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
-            or 'InvalidUndetectedTimeframe' not in spec_src):
-        raise ValueError('native run-spec validation omits undetected-timeframe rules')
+            or 'InvalidUndetectedTimeframe' not in spec_src
+            or 'spec.slot_label_policy' not in spec_src
+            or 'spec.legacy_tolerance' not in spec_src):
+        raise ValueError('native run-spec validation omits an explicit compatibility rule')
 
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
@@ -355,6 +367,17 @@ def check_texts(files):
     require_namespace_functions(
         driver_src, ("native_bar_structurally_valid", "preflight_native_inputs"),
         "native_driver_v5")
+    for token in ('spec.slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant',
+                  'NativeLegacyTolerance::BatchStructuralBars',
+                  'NativeInputPreflightError::TimestampDeltaOverflow'):
+        if token not in driver_src:
+            raise ValueError('native driver omits legacy-compatible preflight token: ' + token)
+
+    consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v17")
+    for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
+                 'f.u(static_cast<uint64_t>(spec.legacy_tolerance));'):
+        if fold not in consumer_src:
+            raise ValueError('native continuation hash omits compatibility policy: ' + fold)
 
     host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v17")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",

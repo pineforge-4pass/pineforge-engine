@@ -185,6 +185,8 @@ private:
     bool commands_allowed() const;
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
     bool has_undetected_timeframe() const noexcept;
+    bool legacy_tolerant_slot_labels() const noexcept;
+    bool uses_raw_label_partition() const noexcept;
     static native_calendar::NativeInterval timestamp_partition(std::int64_t timestamp) noexcept;
     std::optional<native_calendar::NativeInterval> input_interval_at(std::int64_t timestamp) const;
     std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const;

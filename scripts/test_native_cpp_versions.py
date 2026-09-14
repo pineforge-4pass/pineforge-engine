@@ -58,6 +58,26 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'f.b(spec.timeframe_undetected);', '')
         self.reject(FILES[10], 'args.n >= 2', 'args.n > 2')
 
+    def test_legacy_tolerant_slot_policy_is_explicit_and_hashed(self):
+        for before, after in (
+            ('NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;', ''),
+            ('NativeLegacyTolerance legacy_tolerance = NativeLegacyTolerance::None;', ''),
+            ('SlotLabelPolicy, LegacyTolerance,', 'SlotLabelPolicy,'),
+            ('UnknownSlotLabelPolicy,', 'MissingSlotLabelPolicy,'),
+            ('UnknownLegacyTolerance,', 'MissingLegacyTolerance,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'spec.slot_label_policy', 'spec.removed_slot_label_policy')
+        self.reject(FILES[5], 'spec.legacy_tolerance', 'spec.removed_legacy_tolerance')
+        self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.slot_label_policy));', '')
+        self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.legacy_tolerance));', '')
+        self.reject(FILES[7],
+                    'spec.slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant',
+                    'false')
+        self.reject(FILES[7], 'NativeLegacyTolerance::BatchStructuralBars',
+                    'NativeLegacyTolerance::RemovedBatchStructuralBars')
+
     def test_current(self):
         check_texts(DATA)
 

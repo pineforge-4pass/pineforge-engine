@@ -72,6 +72,22 @@ bool valid_distribution(MagnifierDistribution distribution) noexcept {
     return false;
 }
 
+bool valid_slot_label_policy(NativeSlotLabelPolicy policy) noexcept {
+    switch (policy) {
+    case NativeSlotLabelPolicy::Canonical:
+    case NativeSlotLabelPolicy::LegacyTolerant:
+        return true;
+    }
+    return false;
+}
+
+bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
+    constexpr std::uint32_t kKnown =
+        static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars);
+    const auto bits = static_cast<std::uint32_t>(tolerance);
+    return (bits & ~kKnown) == 0u;
+}
+
 Result validate_values(const NativeRunSpec& spec) noexcept {
     const bool require_timeframes = !spec.timeframe_undetected;
     const struct {
@@ -100,6 +116,12 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     if (spec.timeframe_undetected
         && (!spec.input_tf.empty() || !spec.script_tf.empty() || !spec.intrabar.is_none())) {
         return {Error::InvalidUndetectedTimeframe, Field::TimeframeUndetected};
+    }
+    if (!valid_slot_label_policy(spec.slot_label_policy)) {
+        return {Error::UnknownSlotLabelPolicy, Field::SlotLabelPolicy};
+    }
+    if (!valid_legacy_tolerance(spec.legacy_tolerance)) {
+        return {Error::UnknownLegacyTolerance, Field::LegacyTolerance};
     }
     if (spec.identity.run_number == 0) return {Error::ZeroRunNumber, Field::RunNumber};
     const struct { double value; Field field; } financial[] = {

@@ -34,6 +34,31 @@ enum class NativeOpenDirections : std::uint32_t {
     Both = 3,
 };
 
+// Native hosts normally require every confirmed bar to name a canonical input
+// slot.  A host that deliberately reproduces a legacy batch route can retain
+// the caller's strictly-increasing timestamps as its decision labels instead.
+// This remains a run-spec value so the two modes never share a continuation.
+enum class NativeSlotLabelPolicy : std::uint32_t {
+    Canonical = 0,
+    LegacyTolerant = 1,
+};
+
+// Explicit, opt-in compatibility exceptions for legacy batch input shape.
+// They are separate from slot labels because a host may need legacy price/
+// unavailable-volume admission while retaining canonical calendar labels.
+enum class NativeLegacyTolerance : std::uint32_t {
+    None = 0,
+    // Match engine_run.cpp's legacy batch structural check: finite OHLC values
+    // need not be positive, and NaN volume means unavailable activity.
+    BatchStructuralBars = 1u << 0,
+};
+
+constexpr bool native_legacy_tolerance_enabled(
+        NativeLegacyTolerance enabled, NativeLegacyTolerance requested) noexcept {
+    return (static_cast<std::uint32_t>(enabled)
+            & static_cast<std::uint32_t>(requested)) != 0u;
+}
+
 // An owned lower-timeframe execution path.  It is deliberately a run-spec
 // value rather than a caller borrow: public begin arguments expire when the
 // begin call returns, whereas native matching may need the lower bars later
@@ -70,6 +95,10 @@ struct NativeRunSpec {
     // A public begin with fewer than two bars may not establish a timeframe.
     // This preserves that explicit state without inventing a clock literal.
     bool timeframe_undetected = false;
+    // Strict native hosts retain the canonical slot-label rule. A legacy
+    // source provider may opt into raw, strictly-increasing caller labels.
+    NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;
+    NativeLegacyTolerance legacy_tolerance = NativeLegacyTolerance::None;
 
     std::string ticker;
     std::string tickerid;
@@ -111,6 +140,7 @@ enum class NativeRunSpecField : std::uint8_t {
     AllowedOpenDirections, InitialMarginFraction,
     IntrabarTimeframe, IntrabarSamples, IntrabarDistribution, IntrabarVolumeSamples,
     TimeframeUndetected,
+    SlotLabelPolicy, LegacyTolerance,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -134,6 +164,8 @@ enum class NativeRunSpecError : std::uint8_t {
     CalendarFailure,
     InvalidIntrabarPath,
     InvalidUndetectedTimeframe,
+    UnknownSlotLabelPolicy,
+    UnknownLegacyTolerance,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.

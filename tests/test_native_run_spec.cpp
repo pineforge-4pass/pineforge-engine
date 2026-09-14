@@ -86,6 +86,7 @@ std::string snapshot(const NativeRunSpec& s) {
     append(out, s.identity.session_key); append(out, s.identity.run_number);
     append(out, s.input_tf); append(out, s.script_tf);
     append(out, s.timeframe_undetected);
+    append(out, s.slot_label_policy); append(out, s.legacy_tolerance);
     append(out, s.ticker); append(out, s.tickerid); append(out, s.type);
     append(out, s.currency); append(out, s.basecurrency);
     append(out, s.description); append(out, s.volumetype);
@@ -392,6 +393,32 @@ void undetected_timeframe_contract() {
     expect_refusal(spec, Error::EmptyRequiredString, Field::InputTimeframe);
 }
 
+void legacy_tolerant_policy_contract() {
+    auto spec = complete_spec();
+    check(spec.slot_label_policy == NativeSlotLabelPolicy::Canonical,
+          "canonical slot labels are the native default");
+    check(spec.legacy_tolerance == NativeLegacyTolerance::None,
+          "legacy structural tolerance is opt-in");
+
+    spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+    expect_acceptance(spec);
+    spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+    expect_acceptance(spec);
+    check(native_legacy_tolerance_enabled(
+              spec.legacy_tolerance, NativeLegacyTolerance::BatchStructuralBars),
+          "legacy structural tolerance bit is readable");
+    check(!native_legacy_tolerance_enabled(
+              NativeLegacyTolerance::None, NativeLegacyTolerance::BatchStructuralBars),
+          "absent legacy structural tolerance stays strict");
+
+    spec = complete_spec();
+    spec.slot_label_policy = static_cast<NativeSlotLabelPolicy>(2u);
+    expect_refusal(spec, Error::UnknownSlotLabelPolicy, Field::SlotLabelPolicy);
+    spec = complete_spec();
+    spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(2u);
+    expect_refusal(spec, Error::UnknownLegacyTolerance, Field::LegacyTolerance);
+}
+
 void failure_atomicity() {
     auto spec = complete_spec();
     spec.fee_value = -0.0;
@@ -422,6 +449,7 @@ int main() {
     financial_values_and_options();
     complete_clock_contract();
     undetected_timeframe_contract();
+    legacy_tolerant_policy_contract();
     failure_atomicity();
     std::cout << (checks - failures) << '/' << checks << " checks passed; "
               << failures << " failed\n";

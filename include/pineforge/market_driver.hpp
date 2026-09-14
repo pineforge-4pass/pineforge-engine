@@ -145,6 +145,7 @@ enum class NativeInputPreflightError : std::uint16_t {
     OverlappingSlot = 7,
     InSessionGap = 8,
     CalendarFailure = 9,
+    TimestampDeltaOverflow = 10,
 };
 
 struct NativeInputPreflightResult {

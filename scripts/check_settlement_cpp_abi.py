@@ -56,9 +56,12 @@ def relocation_manifest(transition, manifests=RELOCATION_MANIFESTS) -> dict | No
         if key in ("addedVirtuals", "rejectionPairs") and not data[key]:
             raise RuntimeError("relocation manifest lacks " + key)
     if transition == ("engine_script_run_v16", "engine_script_run_v17"):
-        if data.get("addedValueMembers") != ["NativeBeginArgs::syminfo"]:
+        if data.get("addedValueMembers") != [
+                "NativeBeginArgs::syminfo",
+                "NativeRunSpec::slot_label_policy",
+                "NativeRunSpec::legacy_tolerance"]:
             raise RuntimeError(
-                "v16/v17 relocation manifest must record NativeBeginArgs::syminfo")
+                "v16/v17 relocation manifest must record all reviewed value members")
     if data.get("sourcePendingOrder") != "pineforge::source::PendingOrder":
             raise RuntimeError("relocation manifest must name source::PendingOrder")
     for key in ("removedStorage", "addedVirtuals", "removedVirtuals"):
@@ -166,8 +169,8 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
 EXEMPTED_HEADER_SHA256 = {
     'native_order.hpp': '9d9900d0d859678f20278cfa607d47631c18a8eb2d308e89849b86dbba80a15c',
     'native_host.hpp': '4493556ac72a243d926753fbbe129bf3414132293350b04634d6cbb72e5ff83f',
-    'native_run_spec.hpp': '9de2c9a148351a7c470bc233913cd8227eb54c926fee5cb7ef92f01afe8d6cc7',
-    'market_driver.hpp': 'b22c7b5901a491b7456a229e47ea8a99988d3f0db7b482e3fd36f0ceec227c12',
+    'native_run_spec.hpp': '178bba952891e822e118bdd0cac9217e8d1c5cd4f076fa9251b1c55da39de82d',
+    'market_driver.hpp': '2add4106dcf8786a0fe86f67137675a21c639b0fd8d9b15662aa6f8ddf7f7309',
     'execution_consumer.hpp': 'b9abc06c4fa4d625db19263ef1bf24427f7d82b1faa128861a43369112fac224',
 }
 

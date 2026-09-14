@@ -8,7 +8,9 @@
   "removedStorage": [],
   "addedStorage": [],
   "addedValueMembers": [
-    "NativeBeginArgs::syminfo"
+    "NativeBeginArgs::syminfo",
+    "NativeRunSpec::slot_label_policy",
+    "NativeRunSpec::legacy_tolerance"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
