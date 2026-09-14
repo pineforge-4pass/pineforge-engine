@@ -879,9 +879,7 @@ def main() -> int:
 
             # Compile every actual caller before interpreting any link outcome.
             old=compile_tu('old-book-singleton',OLD_CALLER,old_include,old_generated)
-            cur_old=compile_tu('current-old-member-types',OLD_CALLER,include,args.generated_include)
             private_old=compile_tu('old-private-f8-f11',PRIVATE_OLD_CALLER,old_include,old_generated)
-            current_private_old=compile_tu('current-old-private-types',PRIVATE_OLD_CALLER,include,args.generated_include)
             old_events=compile_tu('old-host-events-return',HOST_EVENTS_CALLER,old_include,old_generated)
             current_events=compile_tu('current-host-events-return',HOST_EVENTS_CALLER,include,args.generated_include)
             report['layout']=compare_layout('old',old_include,old_generated,members,shape)
@@ -903,8 +901,6 @@ def main() -> int:
                     if not access or access[-1]!='protected':
                         raise RuntimeError('new method must stay protected: '+method)
                 new=compile_tu('new-six-methods',NEW_CALLER,include,args.generated_include)
-                if not args.old_rejections_only and not args.public_only:
-                    private_new=compile_tu('new-private-provenance',PRIVATE_NEW_CALLER,include,args.generated_include)
                 wrong_project=scratch/'wrong-project';shutil.copytree(include,wrong_project)
                 header=wrong_project/'pineforge/engine.hpp';changed=header.read_text();wrong_source=NEW_CALLER
                 wrong_names=[]
@@ -999,18 +995,16 @@ def main() -> int:
                 # Retain the e60/0e introduction controls below and check these
                 # callers against each modern engine owner.
                 engine_callers = {
-                    'old-api': OLD_CALLER, 'old-private': PRIVATE_OLD_CALLER,
-                    'selected': NEW_CALLER, 'new-private': PRIVATE_NEW_CALLER,
+                    'old-api': OLD_CALLER, 'selected': NEW_CALLER,
                     'reversal': REVERSAL_CALLER,
                 }
                 method_sets = {
-                    'old-api': (OLD_METHODS,None), 'old-private': (OLD_PRIVATE,None),
+                    'old-api': (OLD_METHODS,None),
                     'selected': (NEW_METHODS,'close_selection_v1::SelectedOpeningSet'),
-                    'new-private': (NEW_PRIVATE,None), 'reversal': (REVERSAL_METHODS,REVERSAL_DOMAIN),
+                    'reversal': (REVERSAL_METHODS,REVERSAL_DOMAIN),
                 }
                 engine_objects = {current_label: {
-                    'old-api':cur_old, 'old-private':current_private_old,
-                    'selected':new, 'new-private':private_new, 'reversal':reversal}}
+                    'selected':new, 'reversal':reversal}}
                 for caller in ('v13','v14','v15-frozen'):
                     _,headers,generated = native_providers[caller]
                     engine_objects[caller] = {name:compile_tu(caller+'-engine-'+name,text,headers,generated)
@@ -1025,23 +1019,25 @@ def main() -> int:
                             link(caller+'-engine-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,missing=() if positive else methods,domain=parameter_domain,
                                  engine=caller_engine)
+                required_v15_v16_rows = {
+                    'v15-frozen-engine-old-api-'+current_label+'-rejected',
+                    current_label+'-engine-selected-v15-frozen-rejected',
+                }
+                actual_rows = {entry['name'] for entry in report['links']}
+                if not required_v15_v16_rows <= actual_rows:
+                    raise RuntimeError('v15/v16 rejection pairs are missing from the ABI matrix')
             link('old-api-old-real',old,old_library)
             link('old-private-old-real',private_old,old_library)
             link('old-events-old-real',old_events,old_library)
             if not args.old_rejections_only:
                 link('old-api-new-real-epoch-rejected',old,library,OLD_METHODS,engine=OLD_ENGINE)
-                link('current-old-api-new-real',cur_old,library)
                 link('old-private-new-real-epoch-rejected',private_old,library,OLD_PRIVATE,engine=OLD_ENGINE)
-                link('current-old-private-new-real',current_private_old,library)
                 link('old-events-new-real-epoch-rejected',old_events,library,symbol_missing='pineforge::engine_script_run_v13::NativeStrategyHost::native_events(')
                 link('current-events-new-real',current_events,library)
             if not args.base_only:
                 link('new-api-old-real-rejected',new,old_library,NEW_METHODS,'close_selection_v1::SelectedOpeningSet')
                 if not args.old_rejections_only:
                     link('new-api-new-real',new,library)
-                    if not args.public_only:
-                        link('new-private-new-real',private_new,library)
-                        link('new-private-old-real-rejected',private_new,old_library,NEW_PRIVATE)
                     link('synthetic-project-v2-rejected',wrong_projection,library,wrong_names)
                     link('synthetic-selection-v2-rejected',wrong_set,library,
                          (NEW_METHODS[0],NEW_METHODS[1],NEW_METHODS[2],NEW_METHODS[5]),'close_selection_v2::SelectedOpeningSet')

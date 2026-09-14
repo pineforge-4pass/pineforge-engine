@@ -469,7 +469,6 @@ struct SymInfo {
 // Version the mangled class name so older headers' member offsets/vtable cannot
 // silently bind out-of-line members of this different object layout.
 inline namespace engine_script_run_v16 {
-using PendingOrder = source::PendingOrder;
 class BrokerStateHashSink;
 class BacktestEngine {
 protected:
@@ -2943,7 +2942,7 @@ protected:
     // slices (never the frozen pre-add lot, never a prior-bar slice). Returns
     // the qty scratched (0 = no collision → strict no-op).
     double cover_samebar_market_adds_on_exit(
-        const PendingOrder& order, double fill_price,
+        const source::PendingOrder& order, double fill_price,
         PositionReductionCause cause = PositionReductionCause::SCRIPT_ORDER);
     void cancel_oca_group(std::string oca_name, std::string exclude_id);
     // Pine v6 oca.reduce: when one sibling fills qty Q, reduce remaining
@@ -2958,12 +2957,12 @@ protected:
     void update_trail_best_for_bar_open(const Bar& bar);
     void sort_exit_siblings_by_path_fill(const Bar& bar);
     admission::Configuration admission_configuration() const;
-    admission::CurrentPrices admission_current_prices(const PendingOrder& order) const;
-    admission::BookObservation admission_book_observation(const PendingOrder& order) const;
+    admission::CurrentPrices admission_current_prices(const source::PendingOrder& order) const;
+    admission::BookObservation admission_book_observation(const source::PendingOrder& order) const;
     admission::CommandCapture begin_market_command(admission::CommandKind kind,
         const std::string& id, bool buy, double qty, int qty_type,
         double limit, double stop, const std::string& oca, int oca_type);
-    void bind_market_command(PendingOrder& order, admission::CommandCapture& command);
+    void bind_market_command(source::PendingOrder& order, admission::CommandCapture& command);
     admission::ReviewCapture begin_market_review(admission::Checkpoint checkpoint);
     void reclaim_market_admission();
     // The generic engine asks for an opening-admission decision through this
@@ -2971,7 +2970,7 @@ protected:
     // engine_market_admission.cpp and is deliberately absent from this
     // public engine header.
     bool opening_admission_eligible(const MarketAdmissionDraft& draft) const;
-    void record_market_sizing_revision(PendingOrder& order, admission::SizingObservation before,
+    void record_market_sizing_revision(source::PendingOrder& order, admission::SizingObservation before,
                                       double affordability_before);
     bool pending_flat_market_pair_scope_is_live() const;
     bool default_flat_market_gross_scope_is_live() const;
@@ -2980,17 +2979,17 @@ protected:
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
     bool short_seed_collision_materialization_is_live(
-        const PendingOrder& order) const;
+        const source::PendingOrder& order) const;
     bool short_seed_collision_final_short_is_live(
-        const PendingOrder& order) const;
-    // round 8 family S (PendingOrder::pine_frozen_market_instruction): the same-bar MARKET
+        const source::PendingOrder& order) const;
+    // round 8 family S (source::PendingOrder::pine_frozen_market_instruction): the same-bar MARKET
     // transaction's scope, the close-artifact predicate (rule 4) and the
     // frozen-transaction reversal kernel (rules 1/2).
     bool same_bar_market_tx_scope_is_live() const;
     void finalize_same_bar_market_tx_book();
     bool same_bar_market_close_artifact_is_live(
-        const PendingOrder& order) const;
-    void apply_same_bar_market_tx_reversal(PendingOrder& order, double fill_price,
+        const source::PendingOrder& order) const;
+    void apply_same_bar_market_tx_reversal(source::PendingOrder& order, double fill_price,
                                            const Bar& bar,
                                            double& trail_best_path_state);
     // TradingView binds a valid, single/full, non-trailing strategy.exit to a
@@ -3008,9 +3007,9 @@ protected:
     // limit_leg (optional out): set true iff the LIMIT leg is the marketable
     // one, so the fill site can take the unslipped limit-or-better path.
     bool prearmed_market_parent_bracket_gaps_at_open(
-        const PendingOrder& order, const Bar& bar,
+        const source::PendingOrder& order, const Bar& bar,
         bool* limit_leg = nullptr) const;
-    bool pending_flat_market_pair_is_live(const PendingOrder& order) const;
+    bool pending_flat_market_pair_is_live(const source::PendingOrder& order) const;
     void invalidate_pending_flat_market_pair(int64_t created_seq);
     void compact_filled_pending_orders(std::vector<uint64_t>& retired_incarnations,
                                        int exit_closed_from_bar,
@@ -3032,26 +3031,26 @@ protected:
                                      std::vector<uint64_t>& retired_incarnations,
                                      bool flat_dual_stop_pair = false);
     bool stop_entry_margin_admission_declines(
-        const PendingOrder& order, double fill_price, const Bar& bar,
+        const source::PendingOrder& order, double fill_price, const Bar& bar,
         bool flat_dual_stop_pair = false) const;
     // True iff `order` is a default percent_of_equity <= 100 pure STOP that
-    // carries its placement snapshot (PendingOrder::default_stop_placement_qty)
+    // carries its placement snapshot (source::PendingOrder::default_stop_placement_qty)
     // and the fill price is a usable positive print: the fill-time admission
     // and dispatch then consume the placement quantity instead of re-sizing
     // at the fill.
     // The pair context exists only inside the ordinary atomic two-stop scan.
     // No callback or stable-frame ABI read occurs between its two fills.
     bool flat_dual_stop_opposite_is_live(
-        const PendingOrder& order, bool flat_dual_stop_pair) const;
+        const source::PendingOrder& order, bool flat_dual_stop_pair) const;
     bool use_default_stop_placement_qty(
-        const PendingOrder& order, double fill_price,
+        const source::PendingOrder& order, double fill_price,
         bool flat_dual_stop_pair = false) const;
     // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
     // site with the just-declined MARKET reversal entry. Flags every pending
     // FULL close that was co-queued after it on the same bar against the held
-    // side (see PendingOrder::cancellation), releasing each close claim
+    // side (see source::PendingOrder::cancellation), releasing each close claim
     // exactly once.
-    void suppress_declined_reversal_close_legs(const PendingOrder& declined_entry);
+    void suppress_declined_reversal_close_legs(const source::PendingOrder& declined_entry);
     // round 8 family R / round 10 family AB: the 10-significant-digit
     // margin-call trigger on a margin-100 LONG (process_margin_call; rule
     // and pins on tv_money_long_margin_call in engine_fills.cpp).
@@ -3068,7 +3067,7 @@ protected:
                                   double before_exit_path_position =
                                       std::numeric_limits<double>::quiet_NaN());
     bool pooc_trail_money_pre_exit_scope(const Bar& bar,
-                                        const PendingOrder& order,
+                                        const source::PendingOrder& order,
                                         double exit_path_position) const;
     // Positive-slip, single terminal-C MARKET lot covered by the opening
     // money-event controls. Shared by post-entry deferral and next-O dispatch.
@@ -3080,7 +3079,7 @@ protected:
     // leg (trail_points / trail_price) stays live; its stop / limit die. Not
     // on the decline bar itself (dormant_reversal_kill_bar): the flip attempt
     // holds the brackets for the rest of that bar.
-    bool dormant_bracket_trail_leg_live(const PendingOrder& o) const;
+    bool dormant_bracket_trail_leg_live(const source::PendingOrder& o) const;
     // finding-311: a margin-call partial re-registers the surviving
     // position's exit brackets (revive with original prices). When the
     // margin-call event price makes a revived bracket marketable, the whole
@@ -3105,16 +3104,16 @@ protected:
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
-    bool replaced_percent_short_market_is_live(const PendingOrder& order) const;
-    void apply_market_order_fill(PendingOrder& order, double fill_price,
+    bool replaced_percent_short_market_is_live(const source::PendingOrder& order) const;
+    void apply_market_order_fill(source::PendingOrder& order, double fill_price,
                                  const Bar& bar,
                                  double& trail_best_path_state,
                                  bool later_same_tick_entry);
-    void apply_entry_order_fill(PendingOrder& order, double fill_price,
+    void apply_entry_order_fill(source::PendingOrder& order, double fill_price,
                                 const Bar& bar,
                                 double& trail_best_path_state,
                                 bool flat_dual_stop_pair = false);
-    void apply_exit_order_fill(PendingOrder& order, double fill_price,
+    void apply_exit_order_fill(source::PendingOrder& order, double fill_price,
                                int& exit_closed_from_bar,
                                uint64_t& exit_closed_from_incarnation,
                                bool& exit_closed_was_long);
@@ -3130,7 +3129,7 @@ protected:
     void reconcile_deferred_layered_exits(
         const std::string& entry_id,
         std::vector<uint64_t>& zero_reservation_incarnations);
-    void apply_raw_order_fill(PendingOrder& order, double fill_price,
+    void apply_raw_order_fill(source::PendingOrder& order, double fill_price,
                               double& trail_best_path_state,
                               int& exit_closed_from_bar,
                               uint64_t& exit_closed_from_incarnation,
@@ -3144,10 +3143,10 @@ protected:
     // apply (mutate engine state with the fill — see apply_*_order_fill
     // declarations above).
     enum class OrderEligibility { Proceed, Skip, Remove };
-    double pooc_short_exit_trigger_close(const PendingOrder& order,
+    double pooc_short_exit_trigger_close(const source::PendingOrder& order,
                                          const Bar& bar) const;
     OrderEligibility classify_order_eligibility(
-        PendingOrder& order, int opposing_pass,
+        source::PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
         int exit_closed_from_bar, uint64_t exit_closed_from_incarnation,
@@ -3172,7 +3171,7 @@ protected:
         double exit_path_position = std::numeric_limits<double>::quiet_NaN();
     };
     FillEvaluation evaluate_fill_price(
-        PendingOrder& order, size_t order_index, const Bar& bar,
+        source::PendingOrder& order, size_t order_index, const Bar& bar,
         int opposing_pass, double trail_best_path_state,
         std::unordered_set<std::string>& pass0_opposing_skip_ids);
 

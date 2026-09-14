@@ -1,9 +1,11 @@
 #pragma once
 
 #include <pineforge/engine.hpp>
+#include <pineforge/session_time.hpp>
 #include <pineforge/source/pine_language_state.hpp>
 #include <pineforge/source/pine_pending_intent.hpp>
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
 
 namespace pineforge::source {
@@ -332,6 +334,22 @@ protected:
     void clear_historical_security_lookahead_projections();
     void set_session_bar_state(bool in_session,
                                                bool intraday_islastbar);
+    bool pine_session_ismarket(const std::string& session,
+                               const std::string& tz, int64_t bar_ms) const {
+        return pineforge::pine_session_ismarket(session, tz, bar_ms, script_tf_);
+    }
+    bool pine_session_ispremarket(const std::string& session,
+                                  const std::string& tz, int64_t bar_ms) const {
+        return pineforge::pine_session_ispremarket(session, tz, bar_ms, script_tf_);
+    }
+    bool pine_session_ispostmarket(const std::string& session,
+                                   const std::string& tz, int64_t bar_ms) const {
+        return pineforge::pine_session_ispostmarket(session, tz, bar_ms, script_tf_);
+    }
+    int64_t time_close() const {
+        return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
+                               syminfo_.timezone, script_tf_);
+    }
     void run_simple_bar_loop(const Bar* input_bars, int n_input);
     void run_aggregation_bar_loop(const Bar* input_bars, int n_input,
                                                     bool bar_magnifier,
@@ -367,7 +385,15 @@ protected:
     void process_carried_long_money_before_priced_orders(
             const Bar& bar);
     void process_pending_orders(const Bar& bar, bool before_pooc_script = false);
-    BacktestEngine::CoofFillResult process_next_pending_order(
+    struct CoofFillResult {
+        bool filled = false;
+        double fill_price = std::numeric_limits<double>::quiet_NaN();
+        uint64_t fill_events = 0;
+        double chart_waypoint_price = std::numeric_limits<double>::quiet_NaN();
+        bool grouped_stop_recalc = false;
+        uint64_t market_entry_incarnation = 0;
+    };
+    CoofFillResult process_next_pending_order(
             const Bar& bar,
             bool allow_market_orders,
             int& exit_closed_from_bar,
@@ -479,14 +505,23 @@ protected:
     void mark_position_brackets_dormant_on_declined_reversal(const Bar& bar);
     double pooc_short_exit_trigger_close(
             const PendingOrder& order, const Bar& bar) const;
-    BacktestEngine::OrderEligibility classify_order_eligibility(
+    enum class OrderEligibility { Proceed, Skip, Remove };
+    struct FillEvaluation {
+        enum class Kind { Fill, NoFill, DeferredToOpposingPass };
+        Kind kind;
+        double fill_price;
+        bool is_limit_fill = false;
+        bool exit_path_fill = false;
+        double exit_path_position = std::numeric_limits<double>::quiet_NaN();
+    };
+    OrderEligibility classify_order_eligibility(
             PendingOrder& order, int opposing_pass,
             internal::DualEntryStopPathWinner dual_entry_path,
             const std::unordered_set<std::string>& pass0_opposing_skip_ids,
             int exit_closed_from_bar, uint64_t exit_closed_from_incarnation,
             bool exit_closed_was_long, const Bar& bar,
             bool flat_dual_stop_pair = false);
-    BacktestEngine::FillEvaluation evaluate_fill_price(
+    FillEvaluation evaluate_fill_price(
             PendingOrder& order, size_t order_index, const Bar& bar,
             int opposing_pass, double trail_best_path_state,
             std::unordered_set<std::string>& pass0_opposing_skip_ids);

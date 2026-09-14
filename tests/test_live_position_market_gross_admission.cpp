@@ -32,6 +32,7 @@
 #include <pineforge/compat/pine/market_admission.hpp>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 static int tests_passed = 0;
 static int tests_failed = 0;

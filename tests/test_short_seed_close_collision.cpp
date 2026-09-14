@@ -13,6 +13,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 static int g_pass = 0;
 static int g_fail = 0;

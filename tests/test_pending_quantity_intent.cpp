@@ -17,6 +17,7 @@ namespace prior_mirror {
 }
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 static_assert(offsetof(pf_pending_order_v1_t, struct_version) == offsetof(prior_mirror::pf_pending_order_v1_t, struct_version), "legacy struct_version offset");
 static_assert(offsetof(pf_pending_order_v1_t, size) == offsetof(prior_mirror::pf_pending_order_v1_t, size), "legacy size offset");
 static_assert(offsetof(pf_pending_order_v1_t, id) == offsetof(prior_mirror::pf_pending_order_v1_t, id), "legacy id offset");
@@ -126,7 +127,7 @@ static_assert(offsetof(pf_pending_order_v1_t, suppressed_close_consumed_ledger_q
 static_assert(offsetof(pf_pending_order_v1_t, suppressed_close_retired_ledger_qty) == offsetof(prior_mirror::pf_pending_order_v1_t, suppressed_close_retired_ledger_qty), "legacy suppressed_close_retired_ledger_qty offset");
 static_assert(offsetof(pf_pending_order_v1_t, short_seed_collision_role) == offsetof(prior_mirror::pf_pending_order_v1_t, short_seed_collision_role), "legacy short_seed_collision_role offset");
 namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
 }
 namespace {
 int checks = 0, failures = 0;

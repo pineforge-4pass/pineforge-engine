@@ -22,6 +22,12 @@ class AggregateVersions(unittest.TestCase):
             if 'engine_script_run_v16' in text:
                 with self.subTest(path=path):
                     self.reject(path, 'engine_script_run_v16', 'engine_script_run_v12')
+        self.reject('include/pineforge/engine.hpp',
+                    'struct PendingOrder;\nstruct StrategyOverrides;',
+                    'struct PendingOrder;\nusing PendingOrder = source::PendingOrder;\nstruct StrategyOverrides;')
+        self.reject('include/pineforge/engine.hpp',
+                    'struct PendingOrder;\nstruct StrategyOverrides;',
+                    'struct StrategyOverrides;')
 
     def test_broker_and_stream_entry_points(self):
         self.reject('src/engine_state_hash.cpp', 'pineforge-broker-state/v16', 'pineforge-broker-state/v12')

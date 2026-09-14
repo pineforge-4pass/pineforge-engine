@@ -3,7 +3,7 @@
 #include <pineforge/source/pine_pending_intent.hpp>
 #include <stdexcept>
 namespace lifecycle_fixture {
-inline void apply(pineforge::PendingOrder& o, pineforge::exit_legs::Operation op, int64_t bar = 0) {
+inline void apply(pineforge::source::PendingOrder& o, pineforge::exit_legs::Operation op, int64_t bar = 0) {
     using namespace pineforge::exit_legs;
     if (!o.incarnation) throw std::logic_error("literal lifecycle fixture requires instruction identity");
     if (!o.legs.target().incarnation) o.legs.attach(o.incarnation,
@@ -12,7 +12,7 @@ inline void apply(pineforge::PendingOrder& o, pineforge::exit_legs::Operation op
     const Action action{o.legs.target(), o.legs.revision(), {event, bar, Domain::Ordinary, Phase::Observation}, std::move(op)};
     if (o.legs.apply(o.legs.target(), action) != Result::Applied) throw std::logic_error("literal lifecycle setup rejected");
 }
-inline void suspend(pineforge::PendingOrder& o, std::optional<int64_t> excluded = {},
+inline void suspend(pineforge::source::PendingOrder& o, std::optional<int64_t> excluded = {},
                     std::optional<int64_t> held = {}) {
     using namespace pineforge::exit_legs;
     std::optional<ObservationWindow> window;
@@ -21,10 +21,10 @@ inline void suspend(pineforge::PendingOrder& o, std::optional<int64_t> excluded 
     if (held) hold = Barrier{{0,*held,Domain::Ordinary,Phase::Observation}};
     apply(o, Suspend{{Leg::Stop,Leg::Limit},hold,window,{}});
 }
-inline void restore(pineforge::PendingOrder& o) {
+inline void restore(pineforge::source::PendingOrder& o) {
     using namespace pineforge::exit_legs; apply(o, Restore{{Leg::Stop,Leg::Limit,Leg::Trail}});
 }
-inline void stage(pineforge::PendingOrder& o) {
+inline void stage(pineforge::source::PendingOrder& o) {
     using namespace pineforge::exit_legs;
     apply(o, StageReplacement{{o.incarnation,o.legs.definition(o.incarnation),{{0,0,Domain::Ordinary,Phase::Observation}}}});
 }

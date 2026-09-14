@@ -33,6 +33,7 @@
 #include <pineforge/bar.hpp>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 static int tests_passed = 0;
 static int tests_failed = 0;

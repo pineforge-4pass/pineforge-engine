@@ -11,10 +11,11 @@ namespace prior {
 #include "fixtures/exit_lifecycle/f60_pending_order_mirror.hpp"
 }
 namespace pineforge{
-void fill_pending_order_mirror(const PendingOrder&,pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&,pf_pending_order_v1_t*);
 const pf_field_desc_t* pending_order_layout(int*);
 }
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 using namespace reflection_fixture;
 #define F60_FIELD(n) static_assert(offsetof(pf_pending_order_v1_t,n)==offsetof(prior::pf_pending_order_v1_t,n),"f60 field offset"); \
  static_assert(std::is_same<decltype(pf_pending_order_v1_t::n),decltype(prior::pf_pending_order_v1_t::n)>::value,"f60 field type");

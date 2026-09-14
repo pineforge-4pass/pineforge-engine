@@ -22,6 +22,7 @@
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 static int passed = 0;
 static int failed = 0;

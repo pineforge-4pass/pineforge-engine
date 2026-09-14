@@ -1,6 +1,7 @@
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/source/pine_pending_intent.hpp>
+#include <pineforge/source/pine_policy_support.hpp>
 /*
  * engine_fills.cpp — process_pending_orders — the bar-pump fill loop
  */
@@ -26,6 +27,7 @@
 #endif
 
 namespace pineforge {
+using source::PendingOrder;
 using namespace internal;
 
 namespace {

@@ -7,7 +7,7 @@
 // translated into a mutation of the factual placement operands.
 namespace placement_fixture {
 template<class Change>
-void change(pineforge::PendingOrder& order, Change edit) {
+void change(pineforge::source::PendingOrder& order, Change edit) {
     using namespace pineforge;
     auto observed = std::make_shared<admission::CommandObservation>();
     if (order.market_admission.observation()) {
@@ -27,10 +27,10 @@ void change(pineforge::PendingOrder& order, Change edit) {
         replacement.sizing_revised(*order.market_admission.sizing_revision());
     order.market_admission = std::move(replacement);
 }
-inline void prior_close_quantity(pineforge::PendingOrder& order, double quantity) {
+inline void prior_close_quantity(pineforge::source::PendingOrder& order, double quantity) {
     change(order, [quantity](auto& observation) { observation.prior_close_quantity = quantity; });
 }
-inline void at_capacity(pineforge::PendingOrder& order) {
+inline void at_capacity(pineforge::source::PendingOrder& order) {
     change(order, [](auto& observation) {
         observation.placement_side = static_cast<int>(observation.buy
             ? pineforge::PositionSide::LONG : pineforge::PositionSide::SHORT);

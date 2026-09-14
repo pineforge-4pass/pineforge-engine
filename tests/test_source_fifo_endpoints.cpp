@@ -15,6 +15,7 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace x = pineforge::execution;
 
 namespace {

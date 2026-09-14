@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++failures; } } while (0)

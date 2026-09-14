@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace pine_cap = pineforge::compat::pine;
 namespace {
 int failures = 0;

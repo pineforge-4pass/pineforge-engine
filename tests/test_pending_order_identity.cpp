@@ -12,6 +12,7 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 bool pine_fixture_attachment = false;
 const double missing = std::numeric_limits<double>::quiet_NaN();

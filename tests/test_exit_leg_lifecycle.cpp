@@ -7,10 +7,11 @@
 #include <cstring>
 #include <vector>
 namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
 const pf_field_desc_t* pending_order_layout(int*);
 }
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 using namespace pineforge::exit_legs;
 static_assert(!std::is_aggregate<Definition>::value, "definition handles cannot import a mutable shared owner");
 static_assert(!std::is_assignable<decltype((std::declval<const Definition&>().prices().stop_price)), double>::value,

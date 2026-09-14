@@ -15,8 +15,9 @@
 #undef PF_PREFIX_FIELD
 static_assert(offsetof(pf_pending_order_v1_t, birth_cause) >= sizeof(c45_pending_order_t), "new facts must append after the v1 prefix");
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
 }
 namespace {
 int failed = 0;

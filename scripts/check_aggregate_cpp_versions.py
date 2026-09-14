@@ -48,6 +48,11 @@ def check_texts(files):
     namespaces = re.findall(r'inline\s+namespace\s+(engine_script_run_v\d+)\s*\{', header)
     if namespaces != ["engine_script_run_v16"]:
         raise ValueError("BacktestEngine requires engine_script_run_v16")
+    pending_forward = re.findall(
+        r'namespace\s+source\s*\{\s*struct\s+PendingOrder\s*;\s*'
+        r'struct\s+StrategyOverrides\s*;\s*}', header)
+    if len(pending_forward) != 1 or re.search(r'\busing\s+PendingOrder\b', header):
+        raise ValueError("engine header must only forward-declare source::PendingOrder")
     broker = body(clean(files[FILES[1]]),
                   r'uint64_t\s+BacktestEngine::broker_state_hash\(\)\s+const\s*\{', "broker hash")
     if not re.match(r'\s*BrokerStateHashSink\s+f;\s*f\.s\("pineforge-broker-state/v16"\);', broker):

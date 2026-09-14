@@ -15,6 +15,7 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 constexpr double qnan = std::numeric_limits<double>::quiet_NaN();
 int passed = 0, failed = 0;

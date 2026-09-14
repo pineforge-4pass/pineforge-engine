@@ -9,6 +9,7 @@
 #include <utility>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 namespace {
 int checks = 0;

@@ -1,4 +1,5 @@
 #include "engine_internal.hpp"
+#include <pineforge/source/pine_pending_intent.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include <vector>
 
 namespace pineforge {
+using source::PendingOrder;
 namespace {
 
 bool valid_lifecycle_phase(exit_legs::Phase phase) {

@@ -182,6 +182,8 @@ bool BacktestEngine::stream_end(bool finalize_partial_input_bar) {
 
 [[noreturn]] void BacktestEngine::throw_native_only_route(const char* seam) {
     execution_consumer().refuse_source_mutation(seam);
+    throw std::runtime_error(std::string("native host refuses source mutation: ")
+                             + (seam ? seam : ""));
 }
 
 void BacktestEngine::legacy_run_simple(const Bar*, int) {
@@ -256,12 +258,6 @@ double BacktestEngine::calc_qty_for_type_from_equity(double, double, int, double
 double BacktestEngine::source_reversal_qty(double, double explicit_qty, int, bool) const {
     return explicit_qty;
 }
-bool BacktestEngine::opening_admission_eligible(const MarketAdmissionDraft&) const {
-    return false;
-}
-void BacktestEngine::record_market_sizing_revision(
-        PendingOrder&, admission::SizingObservation, double) {}
-
 execution::Status BacktestEngine::on_source_close_preflight(
         const Trade*, size_t, std::optional<int>& loss_day) const {
     loss_day.reset();

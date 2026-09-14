@@ -111,6 +111,7 @@
 #include "test_m_admission_36_data.hpp"
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 static int tests_passed = 0;
 static int tests_failed = 0;

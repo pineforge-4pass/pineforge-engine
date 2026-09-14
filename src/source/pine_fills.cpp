@@ -437,7 +437,7 @@ void source::PineStrategyHost::process_pending_orders(const Bar& bar, bool befor
     }
 }
 
-BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_order(
+source::PineStrategyHost::CoofFillResult source::PineStrategyHost::process_next_pending_order(
         const Bar& bar,
         bool allow_market_orders,
         int& exit_closed_from_bar,
@@ -7363,7 +7363,7 @@ double source::PineStrategyHost::pooc_short_exit_trigger_close(
     return tick_grid_price(bar.close);
 }
 
-BacktestEngine::OrderEligibility source::PineStrategyHost::classify_order_eligibility(
+source::PineStrategyHost::OrderEligibility source::PineStrategyHost::classify_order_eligibility(
         source::PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
@@ -7729,7 +7729,7 @@ BacktestEngine::OrderEligibility source::PineStrategyHost::classify_order_eligib
     return OrderEligibility::Proceed;
 }
 
-BacktestEngine::FillEvaluation source::PineStrategyHost::evaluate_fill_price(
+source::PineStrategyHost::FillEvaluation source::PineStrategyHost::evaluate_fill_price(
         source::PendingOrder& order, size_t order_index, const Bar& bar,
         int opposing_pass, double trail_best_path_state,
         std::unordered_set<std::string>& pass0_opposing_skip_ids) {

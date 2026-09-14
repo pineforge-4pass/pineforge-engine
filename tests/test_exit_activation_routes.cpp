@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 constexpr double missing = std::numeric_limits<double>::quiet_NaN();
 int checks = 0, failures = 0;

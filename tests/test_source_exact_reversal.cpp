@@ -11,6 +11,7 @@
 #include <string>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace x = pineforge::execution;
 namespace {
 int checks = 0, failures = 0;

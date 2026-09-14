@@ -5,6 +5,7 @@
 
 #include "engine_internal.hpp"
 #include <pineforge/order_action.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -17,6 +18,7 @@
 #include <vector>
 
 namespace pineforge {
+using source::PendingOrder;
 using namespace internal;
 
 namespace {

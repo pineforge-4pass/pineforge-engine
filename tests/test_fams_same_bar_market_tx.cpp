@@ -40,6 +40,7 @@
 #include "test_fams_same_bar_market_tx_data.hpp"
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 static int g_pass = 0;
 static int g_fail = 0;

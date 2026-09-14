@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 namespace pineforge {
+using source::PendingOrder;
 namespace internal {
 
 

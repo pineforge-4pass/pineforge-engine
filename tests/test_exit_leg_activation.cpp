@@ -139,6 +139,7 @@ static_assert(offsetof(pf_pending_order_v1_t, quantity_reservation_units) == off
 static_assert(offsetof(pf_pending_order_v1_t, quantity_reservation_basis_units) == offsetof(prior_leg_mirror::pf_pending_order_v1_t, quantity_reservation_basis_units), "preserve existing v1 prefix offset");
 static_assert(offsetof(pf_pending_order_v1_t, leg_activation_owner_cycle) >= sizeof(prior_leg_mirror::pf_pending_order_v1_t), "append after old full prefix");
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 const double nan = std::numeric_limits<double>::quiet_NaN();
 const Bar bars[] = {

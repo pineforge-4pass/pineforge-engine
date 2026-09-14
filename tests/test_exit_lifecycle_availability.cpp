@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cmath>
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 using namespace pineforge::exit_legs;
 namespace {
 const double na=std::numeric_limits<double>::quiet_NaN();

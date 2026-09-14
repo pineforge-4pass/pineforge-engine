@@ -13,6 +13,7 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 int failures = 0;
 int rejections = 0;

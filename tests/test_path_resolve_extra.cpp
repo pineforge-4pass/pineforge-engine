@@ -36,6 +36,7 @@
 #include "../src/engine_internal.hpp"
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 using namespace pineforge::internal;
 
 static int tests_passed = 0;

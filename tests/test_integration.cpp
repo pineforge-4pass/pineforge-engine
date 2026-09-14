@@ -16,6 +16,7 @@
 #include <pineforge/series.hpp>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 
 // ---- helpers ----------------------------------------------------------------
 

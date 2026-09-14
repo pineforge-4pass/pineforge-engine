@@ -9,6 +9,7 @@
 #include <string>
 
 using namespace pineforge;
+using pineforge::source::PendingOrder;
 namespace {
 int checks = 0, failures = 0;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; std::fprintf(stderr,"FAIL %d %s\n",__LINE__,#x); } } while (0)
