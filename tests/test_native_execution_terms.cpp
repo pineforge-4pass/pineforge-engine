@@ -1,6 +1,7 @@
 #include "native_terms_fixture.hpp"
 #include "../src/native_matching.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <type_traits>
 #include <variant>
@@ -141,6 +142,24 @@ bool same_terms_facts_bits(const NativeExecutionTermsFacts& a,
         && a.fx_effective_time_ms == b.fx_effective_time_ms
         && bits(a.active_fx) == bits(b.active_fx)
         && bits(a.pending_group_deduction) == bits(b.pending_group_deduction);
+}
+
+const NativeExecutionTermsFacts* facts_for(const TermsHost& host, const char* label) {
+    const auto found = std::find_if(host.resolved_facts.begin(), host.resolved_facts.end(),
+        [label](const NativeExecutionTermsFacts& facts) {
+            return facts.definition && facts.definition->request.label == label;
+        });
+    return found == host.resolved_facts.end() ? nullptr : &*found;
+}
+
+void check_trigger_origin(const NativeExecutionTermsFacts& facts,
+                          no::NativeCandidatePriceKind kind, double raw, double level,
+                          double t) {
+    CHECK(facts.price_kind == kind);
+    REQUIRE(facts.trigger_level);
+    CHECK(bits(facts.raw_price) == bits(raw));
+    CHECK(bits(*facts.trigger_level) == bits(level));
+    CHECK(bits(facts.cursor.t) == bits(t));
 }
 
 void test_only_oracle_host_uses_facts() {
@@ -358,6 +377,82 @@ void current_group_deduction_returns_cancelled() {
     CHECK(reached);
 }
 
+void a_t4c_nonpositive_group_terminal_matches_preview() {
+    auto configure = [](TermsHost& host) {
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+                return no::ExecutionTerms{-1.0, 1.0, no::OpeningShape::Transact};
+            }
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+    };
+
+    TermsHost current;
+    configure(current);
+    bool current_reached = false;
+    current.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = tx(1.0, "current-nonpositive-group-a");
+        first.group = no::Member{62, 1, no::GroupEffect::Reduce};
+        auto second = host_open(no::Side::Long, "current-nonpositive-group-b");
+        second.group = no::Member{62, 2, no::GroupEffect::Reduce};
+        const auto first_target = put(h, first);
+        const auto second_target = put(h, second);
+        (void)apply(h, first_target);
+        const auto deferred = last_event<no::DeferredGroupAdjustmentEvent>(h);
+        REQUIRE(deferred);
+        CHECK(deferred->recipient == second_target);
+        CHECK(bits(deferred->pending_after.total) == bits(1.0));
+
+        const auto before = h.native_continuation_hash();
+        const auto preview = h.inspect_current_execution(command(second_target));
+        CHECK(!preview.refusal);
+        CHECK(preview.terms_cancellation == no::CancelReason::Group);
+        CHECK(!preview.settlement_readiness);
+        CHECK(h.native_continuation_hash() == before);
+
+        const auto result = h.execute_current(command(second_target));
+        REQUIRE(std::holds_alternative<no::CancelledEvent>(result));
+        const auto& cancelled = std::get<no::CancelledEvent>(result);
+        CHECK(cancelled.reason == no::CancelReason::Group);
+        const auto receipt = last_event<no::TermsResolvedEvent>(h);
+        REQUIRE(receipt && receipt->input.terms.units);
+        CHECK(bits(receipt->input.terms.resolved_price) == bits(-1.0));
+        CHECK(bits(*receipt->input.terms.units) == bits(1.0));
+        CHECK(cancelled.cause && cancelled.cause->ordinal == receipt->ordinal);
+        CHECK(cancelled.ordinal == receipt->ordinal + 1);
+        CHECK(h.native_state().kind == NativeLifecycleKind::Running);
+        (void)put(h, tx(1.0, "current-nonpositive-group-after"));
+        current_reached = true;
+    };
+    run(current, spec("current-nonpositive-group"), {100.0});
+    completed(current);
+    CHECK(current_reached);
+
+    TermsHost queued;
+    configure(queued);
+    queued.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = tx(1.0, "queued-nonpositive-group-a");
+        first.group = no::Member{63, 1, no::GroupEffect::Reduce};
+        auto second = host_open(no::Side::Long, "queued-nonpositive-group-b");
+        second.group = no::Member{63, 2, no::GroupEffect::Reduce};
+        put(h, first);
+        put(h, second);
+    };
+    run(queued, spec("queued-nonpositive-group"), {100.0});
+    completed(queued);
+    const auto rejection = last_event<no::MatchRejectedEvent>(queued);
+    REQUIRE(rejection && rejection->attempted_terms);
+    CHECK(rejection->request().label == "queued-nonpositive-group-b");
+    CHECK(rejection->reason == no::MatchRejectReason::NonpositivePrice);
+    CHECK(bits(rejection->attempted_terms->resolved_price) == bits(-1.0));
+    REQUIRE(rejection->attempted_terms->units);
+    CHECK(bits(*rejection->attempted_terms->units) == bits(1.0));
+    CHECK(events<no::TermsResolvedEvent>(queued).empty());
+}
+
 void a_t4b_queued_group_cancellation_is_typed_terminal() {
     TermsHost host;
     no::RequestHandle second;
@@ -411,6 +506,68 @@ void host_nan_price_is_rejected_without_a_receipt() {
     CHECK(bits(rejected->attempted_terms->resolved_price) == 0x7ff8000000000001ULL);
     CHECK(events<no::TermsResolvedEvent>(host).empty());
     CHECK(host.lots().empty());
+}
+
+void a_t11d_host_sized_nan_rows() {
+    constexpr std::uint64_t payload_bits = 0x7ff8000000000002ULL;
+    const double payload = from_bits(payload_bits);
+
+    TermsHost queued;
+    queued.resolver = [payload](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{payload, 1.0, no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    queued.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "nan-host-queued"));
+    };
+    run(queued, spec("nan-host-queued"), {100.0});
+    completed(queued);
+    const auto rejected = last_event<no::MatchRejectedEvent>(queued);
+    REQUIRE(rejected && rejected->attempted_terms);
+    CHECK(rejected->reason == no::MatchRejectReason::NonpositivePrice);
+    CHECK(bits(rejected->attempted_terms->resolved_price) == payload_bits);
+    REQUIRE(rejected->attempted_terms->units);
+    CHECK(bits(*rejected->attempted_terms->units) == bits(1.0));
+    CHECK(rejected->attempted_terms->shape == no::OpeningShape::Transact);
+    CHECK(events<no::TermsResolvedEvent>(queued).empty());
+    CHECK(queued.lots().empty() && queued.rows().empty());
+
+    TermsHost current;
+    current.resolver = [payload](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{payload, 1.0, no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool current_reached = false;
+    current.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto target = put(h, host_open(no::Side::Long, "nan-host-current"));
+        const auto history = h.native_events(0).size();
+        const auto preview = h.inspect_current_execution(command(target));
+        CHECK(!preview.refusal);
+        CHECK(preview.settlement_readiness == execution::Status::InvalidPrice);
+        CHECK(h.native_events(0).size() == history);
+        CHECK(events<no::TermsResolvedEvent>(h).empty());
+        bool threw = false;
+        try {
+            (void)h.execute_current(command(target));
+        } catch (const std::runtime_error& error) {
+            threw = std::string(error.what()) == "native current execution failed";
+        }
+        CHECK(threw);
+        CHECK(h.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(h.native_state().failure.code == NativeFailureCode::SettlementFailure);
+        CHECK(events<no::TermsResolvedEvent>(h).empty());
+        CHECK(h.lots().empty() && h.rows().empty());
+        current_reached = true;
+    };
+    run(current, spec("nan-host-current"), {100.0});
+    CHECK(current_reached);
 }
 
 void host_price_cannot_breach_active_limit() {
@@ -600,6 +757,38 @@ void a_t5_terms_rejections_retain_attempted_terms() {
     CHECK(close_rejected->reason == no::MatchRejectReason::InvalidTerms);
 }
 
+void a_t5_bound_host_sized_rematch_rejects_units() {
+    TermsHost host;
+    host.resolver = [](const NativeExecutionTermsFacts& facts) {
+        const bool binding = std::holds_alternative<no::RemainingDeferred>(facts.remaining);
+        return no::ExecutionTerms{facts.default_resolved_price,
+                                   binding ? std::optional<double>{2.0}
+                                           : std::optional<double>{1.0},
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        auto request = host_open(no::Side::Long, "bound-rematch-units");
+        request.capacity = no::PointBudget{1.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    run(host, spec("bound-rematch-units"), {100.0, 100.0});
+    completed(host);
+    const auto applied = events<no::ExecutionAppliedEvent>(host);
+    REQUIRE(applied.size() == 1);
+    CHECK(bits(applied.front().opened_units) == bits(1.0));
+    const auto rejected = last_event<no::MatchRejectedEvent>(host);
+    REQUIRE(rejected && rejected->attempted_terms);
+    CHECK(rejected->request().label == "bound-rematch-units");
+    CHECK(rejected->reason == no::MatchRejectReason::InvalidTerms);
+    REQUIRE(rejected->attempted_terms->units);
+    CHECK(bits(*rejected->attempted_terms->units) == bits(1.0));
+    CHECK(rejected->attempted_terms->shape == no::OpeningShape::Transact);
+    const auto receipts = events<no::TermsResolvedEvent>(host);
+    REQUIRE(receipts.size() == 1);
+    CHECK(receipts.front().input.terms.units);
+    CHECK(bits(*receipts.front().input.terms.units) == bits(2.0));
+}
+
 void a_t10_callback_exception_mapping() {
     TermsHost queued;
     queued.resolver = [](const NativeExecutionTermsFacts&) -> no::ExecutionTerms {
@@ -672,6 +861,47 @@ void a_t7_scope_facts_and_flat_close_shortcut() {
     completed(host);
     CHECK(reached);
 
+    TermsHost selected;
+    std::optional<NativeExecutionTermsFacts> selected_facts;
+    no::RequestHandle selected_opening_b;
+    selected.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        if (facts.definition->request.label == "selected-host-close") {
+            selected_facts = facts;
+            return no::ExecutionTerms{facts.default_resolved_price, facts.scope_exposure_units,
+                                       no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool selected_reached = false;
+    selected.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        const auto opening_a = put(h, tx(1.0, "selected-opening-a"));
+        (void)apply(h, opening_a);
+        selected_opening_b = put(h, tx(1.0, "selected-opening-b"));
+        (void)apply(h, selected_opening_b);
+        auto request = host_close("selected-host-close");
+        request.owner = no::BindOpenings{{opening_a, selected_opening_b}, h.cycle()};
+        const auto target = put(h, request);
+        // Bind while both members are live, then externally retire the first
+        // one before the selected HostSized close observes its cohort.
+        (void)apply(h, put(h, reduce(1.0, "selected-retire-a")));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(
+            h.execute_current(command(target))));
+        selected_reached = true;
+    };
+    run(selected, spec("terms-selected-scope"), {100.0});
+    completed(selected);
+    CHECK(selected_reached);
+    REQUIRE(selected_facts);
+    REQUIRE(std::holds_alternative<no::SelectedExposure>(selected_facts->scope));
+    const auto& scope = std::get<no::SelectedExposure>(selected_facts->scope);
+    REQUIRE(scope.incarnations.size() == 1);
+    CHECK(scope.incarnations.front() == selected_opening_b.incarnation);
+    CHECK(bits(selected_facts->scope_exposure_units) == bits(1.0));
+    CHECK(bits(selected_facts->position.signed_units) == bits(1.0));
+    CHECK(selected.physical_position().signed_units == 0.0);
+
     TermsHost flat;
     bool resolver_called = false;
     flat.resolver = [&](const NativeExecutionTermsFacts& facts) {
@@ -723,6 +953,36 @@ void a_t8_point_budget_binding_and_price_rematch() {
     CHECK(receipts[1].remaining_before.index() == receipts[1].remaining_after.index());
     CHECK(host.resolver_calls == 3);
     CHECK(host.physical_position().signed_units == 2.5);
+}
+
+void a_t13_post_binding_no_change_is_contract_failure() {
+    TermsHost host;
+    bool injected = false;
+    host.resolver = [&](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)
+            && std::holds_alternative<no::RemainingDeferred>(facts.remaining)) {
+            host.inject_post_binding_no_change(facts.target);
+            injected = true;
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    host.beginning = [](Host& base) {
+        put(static_cast<TermsHost&>(base), host_open(no::Side::Long, "force-nochange"));
+    };
+    run(host, spec("force-post-binding-nochange"), {100.0});
+    CHECK(injected);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(host.native_state().failure.code == NativeFailureCode::Contract);
+    const auto receipts = events<no::TermsResolvedEvent>(host);
+    REQUIRE(receipts.size() == 1);
+    CHECK(receipts.front().request().label == "force-nochange");
+    CHECK(receipts.front().input.terms.units);
+    CHECK(bits(*receipts.front().input.terms.units) == bits(1.0));
+    CHECK(events<no::ExecutionAppliedEvent>(host).empty());
+    CHECK(host.lots().empty() && host.rows().empty() && accounts(host) == 0);
 }
 
 void a_t8b_explicit_equivalent_allowance_and_t8c_identity_control() {
@@ -954,6 +1214,153 @@ void a_t6_matcher_price_kind_all_ten_cases() {
     CHECK(!market[0].trigger_level);
 }
 
+void a_t6c_stop_trail_and_stop_limit_sibling_origins() {
+    auto identity_terms = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                   no::OpeningShape::Transact};
+    };
+
+    TermsHost stops;
+    stops.resolver = identity_terms;
+    stops.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = host_open(no::Side::Long, "stop-sibling-first");
+        first.trigger = no::Stop{100.0};
+        auto second = host_open(no::Side::Long, "stop-sibling-second");
+        second.trigger = no::Stop{100.0};
+        put(h, first);
+        put(h, second);
+    };
+    const Bar stop_bar{99.0, 101.0, 99.0, 101.0, 1.0, T};
+    REQUIRE(stops.configure_native(spec("terms-stop-siblings")).status == NativeSetupStatus::Applied);
+    stops.run(&stop_bar, 1);
+    completed(stops);
+    const auto* stop_first = facts_for(stops, "stop-sibling-first");
+    const auto* stop_second = facts_for(stops, "stop-sibling-second");
+    REQUIRE(stop_first && stop_second);
+    CHECK(std::holds_alternative<no::StopActive>(stop_first->trigger_state));
+    CHECK(std::holds_alternative<no::StopActive>(stop_second->trigger_state));
+    check_trigger_origin(*stop_first, no::NativeCandidatePriceKind::TriggerLevel,
+                         100.0, 100.0, 0.5);
+    check_trigger_origin(*stop_second, no::NativeCandidatePriceKind::TriggerLevel,
+                         100.0, 100.0, 0.5);
+    const auto stop_receipts = events<no::TermsResolvedEvent>(stops);
+    REQUIRE(stop_receipts.size() == 2);
+    CHECK(stop_receipts[0].request().label == "stop-sibling-first");
+    CHECK(stop_receipts[1].request().label == "stop-sibling-second");
+    for (const auto& receipt : stop_receipts) {
+        CHECK(receipt.input.price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+        CHECK(bits(receipt.input.raw_price) == bits(100.0));
+        CHECK(bits(receipt.cursor.t) == bits(0.5));
+    }
+    std::vector<no::ActivatedEvent> stop_activations;
+    for (const auto& event : events<no::ActivatedEvent>(stops)) {
+        if (event.kind == no::ActivationKind::Stop) stop_activations.push_back(event);
+    }
+    REQUIRE(stop_activations.size() == 2);
+    CHECK(stop_activations[0].definition->request.label == "stop-sibling-first");
+    CHECK(stop_activations[1].definition->request.label == "stop-sibling-second");
+    CHECK(stop_activations[0].ordinal < stop_receipts[0].ordinal);
+    CHECK(stop_receipts[0].ordinal < stop_activations[1].ordinal);
+    CHECK(stop_activations[1].ordinal < stop_receipts[1].ordinal);
+
+    TermsHost trails;
+    trails.resolver = identity_terms;
+    trails.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = host_open(no::Side::Short, "trail-sibling-first");
+        first.trigger = no::Trail{1.0, std::nullopt};
+        auto second = host_open(no::Side::Short, "trail-sibling-second");
+        second.trigger = no::Trail{1.0, std::nullopt};
+        put(h, first);
+        put(h, second);
+    };
+    const Bar trail_bar{101.0, 101.0, 99.0, 99.0, 1.0, T};
+    REQUIRE(trails.configure_native(spec("terms-trail-siblings")).status == NativeSetupStatus::Applied);
+    trails.run(&trail_bar, 1);
+    completed(trails);
+    const auto* trail_first = facts_for(trails, "trail-sibling-first");
+    const auto* trail_second = facts_for(trails, "trail-sibling-second");
+    REQUIRE(trail_first && trail_second);
+    CHECK(std::holds_alternative<no::TrailActive>(trail_first->trigger_state));
+    CHECK(std::holds_alternative<no::TrailActive>(trail_second->trigger_state));
+    check_trigger_origin(*trail_first, no::NativeCandidatePriceKind::TriggerLevel,
+                         100.0, 100.0, 0.5);
+    check_trigger_origin(*trail_second, no::NativeCandidatePriceKind::TriggerLevel,
+                         100.0, 100.0, 0.5);
+    const auto trail_receipts = events<no::TermsResolvedEvent>(trails);
+    REQUIRE(trail_receipts.size() == 2);
+    CHECK(trail_receipts[0].request().label == "trail-sibling-first");
+    CHECK(trail_receipts[1].request().label == "trail-sibling-second");
+    std::vector<no::ActivatedEvent> trail_activations;
+    for (const auto& event : events<no::ActivatedEvent>(trails)) {
+        if (event.kind == no::ActivationKind::TrailTrigger) trail_activations.push_back(event);
+    }
+    REQUIRE(trail_activations.size() == 2);
+    CHECK(trail_activations[0].definition->request.label == "trail-sibling-first");
+    CHECK(trail_activations[1].definition->request.label == "trail-sibling-second");
+    CHECK(trail_activations[0].ordinal < trail_receipts[0].ordinal);
+    CHECK(trail_receipts[0].ordinal < trail_activations[1].ordinal);
+    CHECK(trail_activations[1].ordinal < trail_receipts[1].ordinal);
+    for (const auto& receipt : trail_receipts) {
+        CHECK(receipt.input.price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+        CHECK(bits(receipt.input.raw_price) == bits(100.0));
+        CHECK(bits(receipt.cursor.t) == bits(0.5));
+    }
+
+    TermsHost stop_limits;
+    stop_limits.resolver = identity_terms;
+    stop_limits.beginning = [](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = host_open(no::Side::Long, "stop-limit-sibling-first");
+        first.trigger = no::StopLimit{100.0, 99.0};
+        auto second = host_open(no::Side::Long, "stop-limit-sibling-second");
+        second.trigger = no::StopLimit{100.0, 99.0};
+        put(h, first);
+        put(h, second);
+    };
+    const std::vector<Bar> stop_limit_bars{
+        Bar{99.0, 101.0, 99.0, 101.0, 1.0, T},
+        Bar{101.0, 101.0, 98.0, 98.0, 1.0, T + 60000},
+    };
+    REQUIRE(stop_limits.configure_native(spec("terms-stop-limit-siblings")).status
+            == NativeSetupStatus::Applied);
+    stop_limits.run(stop_limit_bars.data(), static_cast<int>(stop_limit_bars.size()));
+    completed(stop_limits);
+    const auto* stop_limit_first = facts_for(stop_limits, "stop-limit-sibling-first");
+    const auto* stop_limit_second = facts_for(stop_limits, "stop-limit-sibling-second");
+    REQUIRE(stop_limit_first && stop_limit_second);
+    CHECK(std::holds_alternative<no::StopLimitLive>(stop_limit_first->trigger_state));
+    CHECK(std::holds_alternative<no::StopLimitLive>(stop_limit_second->trigger_state));
+    CHECK(stop_limit_first->price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+    CHECK(stop_limit_second->price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+    REQUIRE(stop_limit_first->trigger_level && stop_limit_second->trigger_level);
+    CHECK(bits(stop_limit_first->raw_price) == bits(99.0));
+    CHECK(bits(stop_limit_second->raw_price) == bits(99.0));
+    CHECK(bits(*stop_limit_first->trigger_level) == bits(99.0));
+    CHECK(bits(*stop_limit_second->trigger_level) == bits(99.0));
+    CHECK(bits(stop_limit_first->cursor.t) == bits(stop_limit_second->cursor.t));
+    CHECK(bits(stop_limit_first->cursor.t) == bits(2.0 / 3.0));
+    const auto stop_limit_receipts = events<no::TermsResolvedEvent>(stop_limits);
+    REQUIRE(stop_limit_receipts.size() == 2);
+    CHECK(stop_limit_receipts[0].request().label == "stop-limit-sibling-first");
+    CHECK(stop_limit_receipts[1].request().label == "stop-limit-sibling-second");
+    for (const auto& receipt : stop_limit_receipts) {
+        CHECK(receipt.input.price_kind == no::NativeCandidatePriceKind::TriggerLevel);
+        CHECK(bits(receipt.input.raw_price) == bits(99.0));
+        CHECK(bits(receipt.cursor.t) == bits(stop_limit_first->cursor.t));
+    }
+    std::vector<no::ActivatedEvent> stop_limit_activations;
+    for (const auto& event : events<no::ActivatedEvent>(stop_limits)) {
+        if (event.kind == no::ActivationKind::StopLimit) stop_limit_activations.push_back(event);
+    }
+    REQUIRE(stop_limit_activations.size() == 2);
+    CHECK(stop_limit_activations[0].definition->request.label == "stop-limit-sibling-first");
+    CHECK(stop_limit_activations[1].definition->request.label == "stop-limit-sibling-second");
+    CHECK(stop_limit_activations[1].ordinal < stop_limit_receipts[0].ordinal);
+    CHECK(stop_limit_receipts[0].ordinal < stop_limit_receipts[1].ordinal);
+}
+
 void a_t15_price_boundary_and_a_t16_flat_preview() {
     TermsHost current;
     current.resolver = [](const NativeExecutionTermsFacts& facts) {
@@ -1042,6 +1449,10 @@ void a_t14_preview_outcome_table_without_mutation() {
                                                           no::OpeningShape::Transact};
         if (label == "reverse-flat") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
                                                                   no::OpeningShape::ReverseTo};
+        if (label == "explicit-units-preview") {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        }
         if (label == "positive") return no::ExecutionTerms{facts.default_resolved_price, 1.0,
                                                               no::OpeningShape::Transact};
         return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
@@ -1077,6 +1488,11 @@ void a_t14_preview_outcome_table_without_mutation() {
         CHECK(positive_preview.settlement_readiness == execution::Status::Applied);
         CHECK(positive_preview.account.status == execution::Status::Applied);
         h.cancel(positive);
+        const auto explicit_units = put(h, tx(1.0, "explicit-units-preview"));
+        const auto explicit_preview = inspect(explicit_units);
+        CHECK(explicit_preview.terms_rejection == no::MatchRejectReason::InvalidTerms);
+        CHECK(!explicit_preview.settlement_readiness && !explicit_preview.terms_cancellation);
+        h.cancel(explicit_units);
         reached = true;
     };
     run(host, spec("terms-preview-table"), {100});
@@ -1290,6 +1706,214 @@ void a_t6d_newly_eligible_wait_child_is_point_price() {
     CHECK(bits(child_facts->raw_price) == bits(100.0));
 }
 
+void a_t6d_replacement_stop_limit_and_trail_invalidation() {
+    TermsHost replacement;
+    no::RequestHandle stale;
+    no::RequestHandle predecessor;
+    bool replaced = false;
+    replacement.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                   no::OpeningShape::Transact};
+    };
+    replacement.beginning = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        auto first = host_open(no::Side::Short, "replacement-first");
+        first.trigger = no::Limit{100.0};
+        auto second = host_open(no::Side::Short, "replacement-stale");
+        second.trigger = no::Limit{100.0};
+        put(h, first);
+        stale = put(h, second);
+        predecessor = stale;
+    };
+    replacement.notification = [&](Host& base, const no::ExecutionAppliedEvent& event) {
+        if (event.request().label != "replacement-first") return;
+        auto& h = static_cast<TermsHost&>(base);
+        auto successor = host_open(no::Side::Short, "replacement-successor");
+        successor.trigger = no::Limit{100.0};
+        const auto result = h.replace(stale, successor);
+        REQUIRE(result.status == no::ReplaceStatus::Replaced && result.successor);
+        stale = *result.successor;
+        replaced = true;
+    };
+    const std::vector<Bar> replacement_bars{
+        Bar{99.0, 101.0, 99.0, 101.0, 1.0, T},
+        Bar{100.0, 100.0, 100.0, 100.0, 1.0, T + 60000},
+    };
+    REQUIRE(replacement.configure_native(spec("terms-replacement-origin")).status
+            == NativeSetupStatus::Applied);
+    replacement.run(replacement_bars.data(), static_cast<int>(replacement_bars.size()));
+    completed(replacement);
+    CHECK(replaced);
+    const auto* successor_facts = facts_for(replacement, "replacement-successor");
+    REQUIRE(successor_facts);
+    CHECK(successor_facts->target == stale);
+    CHECK(successor_facts->target.incarnation != predecessor.incarnation);
+    CHECK(successor_facts->price_kind == no::NativeCandidatePriceKind::PointPrice);
+    REQUIRE(successor_facts->trigger_level);
+    // The successor is born at the sibling's fill cursor and first sees the
+    // continuing point at 101, not the predecessor's level crossing.
+    CHECK(bits(successor_facts->raw_price) == bits(101.0));
+    CHECK(bits(*successor_facts->trigger_level) == bits(100.0));
+    CHECK(!facts_for(replacement, "replacement-stale"));
+
+    TermsHost stop_limit;
+    stop_limit.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                   no::OpeningShape::Transact};
+    };
+    stop_limit.beginning = [](Host& base) {
+        auto request = host_open(no::Side::Long, "stop-limit-no-transfer");
+        request.trigger = no::StopLimit{100.0, 101.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    run(stop_limit, spec("terms-stop-limit-no-transfer"), {100.0});
+    completed(stop_limit);
+    const auto* stop_limit_facts = facts_for(stop_limit, "stop-limit-no-transfer");
+    REQUIRE(stop_limit_facts);
+    CHECK(stop_limit_facts->price_kind == no::NativeCandidatePriceKind::PointPrice);
+    REQUIRE(stop_limit_facts->trigger_level);
+    CHECK(bits(stop_limit_facts->raw_price) == bits(100.0));
+    CHECK(bits(*stop_limit_facts->trigger_level) == bits(101.0));
+    const auto stop_limit_activations = events<no::ActivatedEvent>(stop_limit);
+    REQUIRE(stop_limit_activations.size() == 1);
+    CHECK(stop_limit_activations.front().kind == no::ActivationKind::StopLimit);
+
+    TermsHost armed_trail;
+    armed_trail.resolver = [](const NativeExecutionTermsFacts& facts) {
+        return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                   no::OpeningShape::Transact};
+    };
+    armed_trail.beginning = [](Host& base) {
+        auto request = host_open(no::Side::Short, "trail-arm-no-transfer");
+        request.trigger = no::Trail{1.0, 101.0};
+        put(static_cast<TermsHost&>(base), request);
+    };
+    const std::vector<Bar> trail_bars{
+        Bar{100.0, 101.0, 100.0, 101.0, 1.0, T},
+        Bar{99.0, 99.0, 99.0, 99.0, 1.0, T + 60000},
+    };
+    REQUIRE(armed_trail.configure_native(spec("terms-trail-arm-no-transfer")).status
+            == NativeSetupStatus::Applied);
+    armed_trail.run(trail_bars.data(), static_cast<int>(trail_bars.size()));
+    completed(armed_trail);
+    const auto* trail_facts = facts_for(armed_trail, "trail-arm-no-transfer");
+    REQUIRE(trail_facts);
+    CHECK(trail_facts->price_kind == no::NativeCandidatePriceKind::PointPrice);
+    REQUIRE(trail_facts->trigger_level);
+    CHECK(bits(trail_facts->raw_price) == bits(99.0));
+    CHECK(bits(*trail_facts->trigger_level) == bits(100.0));
+    std::vector<no::ActivatedEvent> trail_activations;
+    for (const auto& event : events<no::ActivatedEvent>(armed_trail)) {
+        if (event.kind == no::ActivationKind::TrailArm
+            || event.kind == no::ActivationKind::TrailTrigger) {
+            trail_activations.push_back(event);
+        }
+    }
+    REQUIRE(trail_activations.size() == 2);
+    CHECK(trail_activations[0].kind == no::ActivationKind::TrailArm);
+    CHECK(trail_activations[1].kind == no::ActivationKind::TrailTrigger);
+    CHECK(trail_activations[0].cursor.point.ordinal < trail_activations[1].cursor.point.ordinal);
+}
+
+void a_t6e_stop_and_trail_gap_siblings_replay() {
+    struct GapSummary {
+        std::vector<NativeExecutionTermsFacts> facts;
+        std::vector<no::TermsResolvedEvent> receipts;
+        std::uint64_t hash = 0;
+    };
+    auto run_stop_gap = [](const char* key, double price) {
+        TermsHost host;
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            auto first = host_open(no::Side::Long, "stop-gap-first");
+            first.trigger = no::Stop{100.0};
+            auto second = host_open(no::Side::Long, "stop-gap-second");
+            second.trigger = no::Stop{100.0};
+            put(h, first);
+            put(h, second);
+        };
+        run(host, spec(key), {price});
+        completed(host);
+        return GapSummary{host.resolved_facts, events<no::TermsResolvedEvent>(host),
+                          host.native_continuation_hash()};
+    };
+    auto check_stop_gap = [](const GapSummary& summary, double expected) {
+        REQUIRE(summary.facts.size() == 2);
+        REQUIRE(summary.receipts.size() == 2);
+        for (std::size_t i = 0; i < summary.facts.size(); ++i) {
+            const auto& facts = summary.facts[i];
+            CHECK(facts.definition->request.label
+                  == (i == 0 ? "stop-gap-first" : "stop-gap-second"));
+            CHECK(std::holds_alternative<no::StopActive>(facts.trigger_state));
+            CHECK(facts.price_kind == no::NativeCandidatePriceKind::PointPrice);
+            REQUIRE(facts.trigger_level);
+            CHECK(bits(facts.raw_price) == bits(expected));
+            CHECK(bits(*facts.trigger_level) == bits(100.0));
+            const auto& receipt = summary.receipts[i];
+            CHECK(receipt.request().label == facts.definition->request.label);
+            CHECK(receipt.input.price_kind == no::NativeCandidatePriceKind::PointPrice);
+            CHECK(bits(receipt.input.raw_price) == bits(expected));
+            CHECK(bits(receipt.cursor.t) == bits(facts.cursor.t));
+        }
+    };
+    const auto stop_gap = run_stop_gap("terms-stop-gap-siblings", 101.0);
+    const auto stop_gap_replay = run_stop_gap("terms-stop-gap-siblings", 101.0);
+    check_stop_gap(stop_gap, 101.0);
+    CHECK(stop_gap.hash == stop_gap_replay.hash);
+    const auto stop_exact_gap = run_stop_gap("terms-stop-exact-gap-siblings", 100.0);
+    check_stop_gap(stop_exact_gap, 100.0);
+
+    auto run_trail_gap = [](const char* key, double final_price) {
+        TermsHost host;
+        host.resolver = [](const NativeExecutionTermsFacts& facts) {
+            return no::ExecutionTerms{facts.default_resolved_price, 1.0,
+                                       no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            auto first = host_open(no::Side::Short, "trail-gap-first");
+            first.trigger = no::Trail{1.0, std::nullopt};
+            auto second = host_open(no::Side::Short, "trail-gap-second");
+            second.trigger = no::Trail{1.0, std::nullopt};
+            put(h, first);
+            put(h, second);
+        };
+        run(host, spec(key), {101.0, final_price});
+        completed(host);
+        return GapSummary{host.resolved_facts, events<no::TermsResolvedEvent>(host),
+                          host.native_continuation_hash()};
+    };
+    auto check_trail_gap = [](const GapSummary& summary, double expected) {
+        REQUIRE(summary.facts.size() == 2);
+        REQUIRE(summary.receipts.size() == 2);
+        for (std::size_t i = 0; i < summary.facts.size(); ++i) {
+            const auto& facts = summary.facts[i];
+            CHECK(facts.definition->request.label
+                  == (i == 0 ? "trail-gap-first" : "trail-gap-second"));
+            CHECK(std::holds_alternative<no::TrailActive>(facts.trigger_state));
+            CHECK(facts.price_kind == no::NativeCandidatePriceKind::PointPrice);
+            REQUIRE(facts.trigger_level);
+            CHECK(bits(facts.raw_price) == bits(expected));
+            CHECK(bits(*facts.trigger_level) == bits(100.0));
+            const auto& receipt = summary.receipts[i];
+            CHECK(receipt.request().label == facts.definition->request.label);
+            CHECK(receipt.input.price_kind == no::NativeCandidatePriceKind::PointPrice);
+            CHECK(bits(receipt.input.raw_price) == bits(expected));
+            CHECK(bits(receipt.cursor.t) == bits(facts.cursor.t));
+        }
+    };
+    const auto trail_gap = run_trail_gap("terms-trail-gap-siblings", 99.0);
+    const auto trail_gap_replay = run_trail_gap("terms-trail-gap-siblings", 99.0);
+    check_trail_gap(trail_gap, 99.0);
+    CHECK(trail_gap.hash == trail_gap_replay.hash);
+    const auto trail_exact_gap = run_trail_gap("terms-trail-exact-gap-siblings", 100.0);
+    check_trail_gap(trail_exact_gap, 100.0);
+}
+
 }  // namespace
 
 int main() {
@@ -1301,18 +1925,24 @@ int main() {
     test("queued price receipt", overridden_price_is_durable_before_settlement);
     test("current typed preview outcomes", current_preview_has_typed_terms_outcomes_without_writes);
     test("current deferred group cancellation", current_group_deduction_returns_cancelled);
+    test("A-T4c nonpositive group terminal", a_t4c_nonpositive_group_terminal_matches_preview);
     test("A-T4b queued deferred cancellation", a_t4b_queued_group_cancellation_is_typed_terminal);
     test("host NaN attempted terms", host_nan_price_is_rejected_without_a_receipt);
+    test("A-T11d host-sized NaN rows", a_t11d_host_sized_nan_rows);
     test("host price limit fence", host_price_cannot_breach_active_limit);
     test("A-T4d authenticated unrepresentable deduction", a_t4d_authenticated_unrepresentable_deduction);
     test("A-T5 terms rejections retain attempts", a_t5_terms_rejections_retain_attempted_terms);
+    test("A-T5 bound host-sized rematch units", a_t5_bound_host_sized_rematch_rejects_units);
     test("A-T10 resolver callback exception mapping", a_t10_callback_exception_mapping);
     test("A-T7 scoped facts and flat close", a_t7_scope_facts_and_flat_close_shortcut);
     test("A-T8 host-sized PointBudget rematch", a_t8_point_budget_binding_and_price_rematch);
+    test("A-T13 post-binding NoChange", a_t13_post_binding_no_change_is_contract_failure);
     test("A-T8b explicit allowance equivalence", a_t8b_explicit_equivalent_allowance_and_t8c_identity_control);
     test("A-T11b queued notification anchor price", a_t11b_queued_notification_uses_final_terms_price);
     test("A-T11 identity infinity rows", a_t11_identity_infinity_and_nan_attempts);
     test("A-T6 matcher price-kind cases", a_t6_matcher_price_kind_all_ten_cases);
+    test("A-T6c stop/trail/stop-limit sibling origins",
+         a_t6c_stop_trail_and_stop_limit_sibling_origins);
     test("A-T15 price boundary and A-T16 flat preview", a_t15_price_boundary_and_a_t16_flat_preview);
     test("A-T14 preview outcome table", a_t14_preview_outcome_table_without_mutation);
     test("current preview/execute terms facts", current_preview_and_execute_see_same_terms_facts);
@@ -1320,6 +1950,9 @@ int main() {
     test("rounded crossing provenance collision", rounded_crossing_collision_keeps_request_origin);
     test("A-T6b/c/e sibling provenance controls", a_t6b_c_t6e_sibling_control_and_gap_provenance);
     test("A-T6d newly eligible point provenance", a_t6d_newly_eligible_wait_child_is_point_price);
+    test("A-T6d replacement and transfer invalidation",
+         a_t6d_replacement_stop_limit_and_trail_invalidation);
+    test("A-T6e stop/trail gap sibling replay", a_t6e_stop_and_trail_gap_siblings_replay);
     std::printf("R4-B terms: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

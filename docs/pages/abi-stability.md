@@ -141,6 +141,8 @@ both directions; v16↔v16 succeeds. Existing historical v13/v14/v15 verdicts,
 including the unchanged driver-v4 positive links where applicable, remain
 required. No ABI caller executable is run.
 
+The v15 current-execution controls have been active since landing 1c.
+
 For the 0.14.x line, this is an internal C++ epoch transition rather than a
 public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
 guarantee remains in force.
