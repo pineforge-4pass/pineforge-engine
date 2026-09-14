@@ -529,7 +529,7 @@ def current_driver_layout() -> str:
     return driver_layout_source({
         "NativeCoordinate_sizeof": CURRENT_COORDINATE,
         "NativeDriverPoint_sizeof": 112,
-        "NativeDecisionContext_sizeof": 200,
+        "NativeDecisionContext_sizeof": 232,
         "NativeCoordinate_last_traded_close_ms_offset": 32,
     })
 

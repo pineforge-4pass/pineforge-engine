@@ -10,7 +10,9 @@
   "addedValueMembers": [
     "NativeBeginArgs::syminfo",
     "NativeRunSpec::slot_label_policy",
-    "NativeRunSpec::legacy_tolerance"
+    "NativeRunSpec::legacy_tolerance",
+    "IntrabarPath::lower_tf::sample_eligibility",
+    "NativeDecisionContext::driver_statistics"
   ],
   "addedVirtuals": [
     "prepare_native_begin",

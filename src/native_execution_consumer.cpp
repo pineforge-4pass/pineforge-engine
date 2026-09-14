@@ -427,6 +427,14 @@ void hash_interval(Fnv& f, const native_calendar::NativeInterval& interval) noex
     f.i(interval.next_input_open_ms);
 }
 
+void hash_driver_statistics(Fnv& f, const NativeDriverStatistics& statistics) noexcept {
+    f.b(statistics.intrabar_path_enabled);
+    f.i(statistics.sub_bars_per_script_bar);
+    f.i(statistics.samples_per_sub_bar);
+    f.u(statistics.sub_bars_processed);
+    f.u(statistics.sample_ticks_processed);
+}
+
 void hash_current_point(Fnv& f, const NativeCurrentPointView& point) noexcept {
     hash_coordinate(f, point.decision.coordinate);
     f.i(point.decision.decision_floor_ms);
@@ -437,6 +445,7 @@ void hash_current_point(Fnv& f, const NativeCurrentPointView& point) noexcept {
     f.b(point.decision.is_terminal_sub_bar);
     f.i(point.decision.sub_bar_open_ms);
     f.i(point.decision.script_bar_open_ms);
+    hash_driver_statistics(f, point.decision.driver_statistics);
     f.d(point.price);
     f.u(static_cast<uint64_t>(point.quote_kind));
     f.u(point.quote_origin_ordinal);
@@ -666,6 +675,11 @@ bool NativeExecutionConsumer::failed() const noexcept {
     return std::holds_alternative<NativeFailed>(state_);
 }
 
+bool NativeExecutionConsumer::recoverable_abort() const noexcept {
+    const auto* failed_state = std::get_if<NativeFailed>(&state_);
+    return failed_state != nullptr && failed_state->failure.code == NativeFailureCode::Aborted;
+}
+
 void NativeExecutionConsumer::latch_failure(NativeFailure failure) noexcept {
     if (std::holds_alternative<NativeFailed>(state_)) return;
     std::optional<NativeRunSpec> spec;
@@ -860,11 +874,14 @@ NativeStateView NativeExecutionConsumer::view() const {
 }
 
 void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
-    // Source-free ingress is staging until the first begin.  The same guard
-    // remains the existing native-mutation refusal after a run has begun.
-    if (!failed() && (std::holds_alternative<NativeUnconfigured>(state_)
-                      || std::holds_alternative<NativeReady>(state_)
-                      || preparing_begin_)) {
+    // Source-free ingress is staging while no run is active: before a first
+    // begin, between completed runs, and after a cooperative abort. The
+    // existing in-run refusal stays fail-closed.
+    if (recoverable_abort()
+        || (!failed() && (std::holds_alternative<NativeUnconfigured>(state_)
+                          || std::holds_alternative<NativeReady>(state_)
+                          || std::holds_alternative<NativeCompleted>(state_)
+                          || preparing_begin_))) {
         return;
     }
     NativeFailure failure;
@@ -873,6 +890,33 @@ void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
     latch_failure(failure);
     throw std::runtime_error(std::string("native host refuses source mutation: ") +
                              (operation ? operation : ""));
+}
+
+bool NativeExecutionConsumer::stage_account_currency_fx_series(
+        const std::vector<std::int64_t>& timestamps, const std::vector<double>& rates) {
+    if (timestamps.size() != rates.size()) return false;
+    NativeFxCurve candidate;
+    try {
+        candidate.effective_from_ms = timestamps;
+        candidate.account_per_quote = rates;
+    } catch (...) {
+        return false;
+    }
+    if (validate_native_fx_curve(candidate).error != NativeFxCurveError::None) return false;
+    if (candidate.effective_from_ms.empty()) {
+        staged_fx_curve_.reset();
+        staged_ingress_fx_ = true;
+        return true;
+    }
+    try {
+        std::optional<NativeFxCurve> replacement;
+        replacement.emplace(std::move(candidate));
+        staged_fx_curve_.swap(replacement);
+        staged_ingress_fx_ = true;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
@@ -906,6 +950,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(callback_context_.is_terminal_sub_bar);
     f.i(callback_context_.sub_bar_open_ms);
     f.i(callback_context_.script_bar_open_ms);
+    hash_driver_statistics(f, callback_context_.driver_statistics);
     f.b(consuming_request_);
     f.b(draining_notifications_);
     f.b(current_frame_.has_value());
@@ -924,6 +969,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
     if (const auto* spec = spec_ptr()) hash_spec(f, *spec);
+    f.b(staged_ingress_fx_);
     f.b(staged_fx_curve_.has_value());
     if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
     hash_tz_identity(f, tz_identity_);
@@ -983,6 +1029,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(has_last_price_);
     f.d(last_price_);
     f.i(last_print_time_ms_);
+    hash_driver_statistics(f, driver_statistics_);
     f.u(static_cast<uint64_t>(pairing_.pairing));
     f.i(pairing_.group_factor);
     f.u(driver_digest_.count);
@@ -1147,10 +1194,20 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
 NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
                                                      const NativeRunSpec& spec) {
     NativeSetupResult result;
-    if (failed()) {
+    const NativeRunSpec* prior_spec = nullptr;
+    if (failed() && !recoverable_abort()) {
         result.validation.error = NativeRunSpecError::CalendarFailure;
         render(engine, "native host already failed");
         return result;
+    }
+    if (recoverable_abort()) {
+        const auto* aborted = std::get_if<NativeFailed>(&state_);
+        if (!aborted || !aborted->spec) {
+            result.validation.error = NativeRunSpecError::CalendarFailure;
+            render(engine, "native aborted host has no reusable run spec");
+            return result;
+        }
+        prior_spec = &*aborted->spec;
     }
     if (std::holds_alternative<NativeRunning>(state_)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
@@ -1171,8 +1228,11 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         render(engine, "native run spec rejected");
         return result;
     }
-    if (auto* completed = std::get_if<NativeCompleted>(&state_)) {
-        if (candidate.identity.session_key != completed->spec.identity.session_key
+    if (const auto* completed = std::get_if<NativeCompleted>(&state_)) {
+        prior_spec = &completed->spec;
+    }
+    if (prior_spec) {
+        if (candidate.identity.session_key != prior_spec->identity.session_key
             && candidate.identity.session_key != bound_session_key_) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
             render(engine, "native session key cannot change on a reused host");
@@ -1217,7 +1277,10 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
     calendar_ = std::move(*parsed_session);
     pairing_ = candidate.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
                                               : native_calendar::compatibility(input_tf_, script_tf_);
-    staged_fx_curve_.reset();
+    // Direct native FX setup is per-ready-spec as before. C/C++ staged ingress
+    // persists across a completed/aborted handle and is reapplied by the next
+    // provider begin, so it must survive that provider's configure call.
+    if (!staged_ingress_fx_) staged_fx_curve_.reset();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
     engine.last_error_.clear();
@@ -1307,6 +1370,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     history_digest_.reset();
     driver_digest_.reset();
     account_digest_.reset();
+    driver_statistics_ = NativeDriverStatistics{};
+    driver_statistics_.intrabar_path_enabled = spec.intrabar.lower() != nullptr;
+    callback_context_ = NativeDecisionContext{};
+    callback_context_.driver_statistics = driver_statistics_;
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
@@ -3690,6 +3757,9 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     callback_context_.is_terminal_sub_bar = true;
     callback_context_.sub_bar_open_ms = base.open_ms;
     callback_context_.script_bar_open_ms = base.open_ms;
+    driver_statistics_.sub_bars_per_script_bar = 1;
+    driver_statistics_.samples_per_sub_bar = 0;
+    callback_context_.driver_statistics = driver_statistics_;
     auto emit_discrete = [&](double price, int64_t time, NativePriceProvenance provenance,
                              NativePathPhase phase, bool matching) {
         NativeDriverPoint point;
@@ -3801,13 +3871,30 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     callback_context_ = NativeDecisionContext{};
     callback_context_.sub_count = static_cast<int>(sub_bars.size());
     callback_context_.script_bar_open_ms = base.open_ms;
+    driver_statistics_.intrabar_path_enabled = true;
+    driver_statistics_.sub_bars_per_script_bar = static_cast<int>(sub_bars.size());
+    driver_statistics_.samples_per_sub_bar = 0;
+    callback_context_.driver_statistics = driver_statistics_;
+    const bool direct_sub_bar_corners = sub_bars.size() > 1;
+    const bool distribution_samples = lower->sample_eligibility
+        == IntrabarPath::SampleEligibility::DistributionSamples;
 
     for (std::size_t sub_index = 0; sub_index < sub_bars.size(); ++sub_index) {
         const Bar& sub = *sub_bars[sub_index];
         callback_context_.sub_index = static_cast<int>(sub_index);
         callback_context_.is_terminal_sub_bar = sub_index + 1 == sub_bars.size();
         callback_context_.sub_bar_open_ms = sub.timestamp;
-        if (lower->volume_weighted) {
+        // DistributionSamples consumes the magnifier generator's ordered
+        // prices as point decisions, matching the read-only reference at
+        // src/source/pine_scheduler.cpp:806-960 without importing source
+        // policy into this generic driver.
+        if (!distribution_samples || direct_sub_bar_corners) {
+            // A retained lower bar already supplies its four exact turning
+            // points. Continuous eligibility traverses those segments directly;
+            // likewise, a path containing several retained lower bars has no
+            // missing intrabar detail for a synthetic sampler to recover.
+            sample_price_path(sub, 4, MagnifierDistribution::ENDPOINTS, samples);
+        } else if (lower->volume_weighted) {
             sample_price_path_volume_weighted(
                 sub, lower->samples, mean_volume, lower->volume_weighted_min_samples,
                 lower->volume_weighted_max_samples, lower->distribution, samples);
@@ -3819,9 +3906,14 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             render(engine, "native intrabar path produced no samples");
             return;
         }
+        ++driver_statistics_.sub_bars_processed;
+        driver_statistics_.samples_per_sub_bar = static_cast<int>(samples.size());
+        callback_context_.driver_statistics = driver_statistics_;
         double previous = samples.front();
         for (std::size_t sample_index = 0; sample_index < samples.size(); ++sample_index) {
             const double price = samples[sample_index];
+            ++driver_statistics_.sample_ticks_processed;
+            callback_context_.driver_statistics = driver_statistics_;
             NativeDriverPoint point;
             point.coordinate = base;
             point.coordinate.ordinal = take_ordinal(engine);
@@ -3837,15 +3929,19 @@ void NativeExecutionConsumer::deliver_intrabar_script(
                     ? NativePriceProvenance::ModeledOHLCClose
                     : NativePriceProvenance::Confirmed);
             point.raw_price = price;
-            point.matching = sample_index == 0;
+            point.matching = distribution_samples || sample_index == 0;
             point.excursion = sample_index != 0;
             record_driver(point);
             if (sub_index == 0 && sample_index == 0) {
                 invoke_bar_open_callback(engine, script_bar, point);
                 if (failed()) return;
             }
-            if (sample_index == 0) match_discrete(engine, point);
-            else match_segment(engine, point, previous);
+            if (distribution_samples || sample_index == 0) {
+                match_discrete(engine, point);
+                if (!failed()) apply_excursion(engine, price);
+            } else {
+                match_segment(engine, point, previous);
+            }
             if (failed()) return;
             raise_floor(sub.timestamp);
             previous = price;

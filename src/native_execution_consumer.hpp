@@ -17,6 +17,8 @@ class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
     bool is_native() const noexcept override { return true; }
     void refuse_source_mutation(const char* operation) override;
+    bool stage_account_currency_fx_series(const std::vector<std::int64_t>& timestamps,
+                                          const std::vector<double>& rates) override;
     uint64_t continuation_hash() const noexcept override;
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
@@ -178,6 +180,7 @@ private:
     };
 
     bool failed() const noexcept;
+    bool recoverable_abort() const noexcept;
     void latch_failure(NativeFailure failure) noexcept;
     void fail(BacktestEngine& engine, NativeFailure failure) noexcept;
     void render(BacktestEngine& engine, const char* text) const;
@@ -306,6 +309,7 @@ private:
     native_calendar::TimeframeCompatibility pairing_{};
     NativeRunSpec applied_{};
     std::optional<NativeFxCurve> staged_fx_curve_;
+    bool staged_ingress_fx_ = false;
     bool in_callback_ = false;
     bool preparing_begin_ = false;
     mutable bool consuming_request_ = false;
@@ -333,6 +337,7 @@ private:
     std::vector<NativeDriverPoint> driver_log_;
     std::vector<NativeAccountObservation> account_log_;
     NativeDecisionContext callback_context_{};
+    NativeDriverStatistics driver_statistics_{};
     std::optional<native_calendar::TimezoneIdentityDescriptor> tz_identity_{};
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};

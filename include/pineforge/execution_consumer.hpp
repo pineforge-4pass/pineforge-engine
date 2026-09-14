@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace pineforge {
 
@@ -31,6 +32,9 @@ public:
 
     virtual bool is_native() const noexcept = 0;
     virtual void refuse_source_mutation(const char* operation) = 0;
+    virtual bool stage_account_currency_fx_series(
+            const std::vector<std::int64_t>& timestamps,
+            const std::vector<double>& rates) = 0;
     virtual uint64_t continuation_hash() const noexcept = 0;
 
     virtual void run_simple(BacktestEngine& engine, const Bar* bars, int n) = 0;

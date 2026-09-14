@@ -102,24 +102,22 @@ bool BacktestEngine::set_account_currency_fx_series(
         return false;
     }
     if (n < 0 || (n > 0 && (!timestamps_ms || !rates))) return false;
-    if (n == 0) {
-        account_currency_fx_timestamps_.clear();
-        account_currency_fx_rates_.clear();
-        return true;
-    }
-
     std::vector<int64_t> next_timestamps;
     std::vector<double> next_rates;
-    next_timestamps.reserve(static_cast<std::size_t>(n));
-    next_rates.reserve(static_cast<std::size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        if ((i > 0 && timestamps_ms[i] <= timestamps_ms[i - 1])
-            || !std::isfinite(rates[i]) || rates[i] <= 0.0) {
-            return false;
+    if (n > 0) {
+        next_timestamps.reserve(static_cast<std::size_t>(n));
+        next_rates.reserve(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i) {
+            if ((i > 0 && timestamps_ms[i] <= timestamps_ms[i - 1])
+                || !std::isfinite(rates[i]) || rates[i] <= 0.0) {
+                return false;
+            }
+            next_timestamps.push_back(timestamps_ms[i]);
+            next_rates.push_back(rates[i]);
         }
-        next_timestamps.push_back(timestamps_ms[i]);
-        next_rates.push_back(rates[i]);
     }
+    if (!execution_consumer().stage_account_currency_fx_series(next_timestamps, next_rates))
+        return false;
     account_currency_fx_timestamps_ = std::move(next_timestamps);
     account_currency_fx_rates_ = std::move(next_rates);
     return true;

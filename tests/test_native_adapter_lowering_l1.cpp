@@ -289,6 +289,8 @@ public:
     std::string last_tickerid;
     std::string callback_tickerid;
     std::vector<double> active_fx;
+    IntrabarPath::SampleEligibility sample_eligibility =
+        IntrabarPath::SampleEligibility::ContinuousSegments;
 
     void prepare_native_begin(const NativeBeginArgs& args) override {
         ++prepares;
@@ -303,7 +305,8 @@ public:
         saw_overrides = args.overrides_opaque != nullptr;
         const std::string input = args.input_tf.empty() ? "1" : args.input_tf;
         const std::string script = args.script_tf.empty() ? input : args.script_tf;
-        NativeRunSpec configured = spec_for("provider", 1, input.c_str(), script.c_str());
+        NativeRunSpec configured = spec_for(
+            "provider", native_consumed_high_water() + 1, input.c_str(), script.c_str());
         if (args.syminfo) {
             last_tickerid = args.syminfo->tickerid;
             // The provider owns the retained value.  These assignments model
@@ -334,6 +337,7 @@ public:
             lower.volume_weighted = args.magnifier_volume_weighted;
             lower.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
             lower.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
+            lower.sample_eligibility = sample_eligibility;
             if (args.bars && args.n > 0) lower.bars.assign(args.bars, args.bars + args.n);
             configured.intrabar.value = std::move(lower);
         }
@@ -367,6 +371,57 @@ public:
         if (event.request().label == "intrabar-limit") {
             applied = event;
             applied_contexts.push_back(context);
+        }
+    }
+};
+
+class DistributionHost final : public ProviderHost {
+public:
+    std::optional<no::ExecutionAppliedEvent> applied;
+
+    void on_native_run_begin() override {
+        no::Request limit = market(1.0, "distribution-coarse-stop");
+        limit.trigger = no::Limit{95.0};
+        const auto result = submit(limit);
+        CHECK(result.status == no::SubmitStatus::Accepted);
+    }
+
+    void on_native_applied(const no::ExecutionAppliedEvent& event,
+                           const NativeDecisionContext& context) override {
+        if (event.request().label == "distribution-coarse-stop") applied = event;
+    }
+};
+
+class AbortRestageHost final : public ProviderHost {
+public:
+    bool abort_once = true;
+
+    void on_native_bar(const Bar& value, const NativeDecisionContext& context) override {
+        ProviderHost::on_native_bar(value, context);
+        if (abort_once) {
+            abort_once = false;
+            request_abort();
+        }
+    }
+};
+
+class DuringRunStagingHost final : public ProviderHost {
+public:
+    bool attempted = false;
+    bool refused = false;
+    std::string refusal;
+
+    void on_native_bar(const Bar& value, const NativeDecisionContext& context) override {
+        ProviderHost::on_native_bar(value, context);
+        if (attempted) return;
+        attempted = true;
+        const std::int64_t times[] = {kT};
+        const double rates[] = {2.0};
+        try {
+            (void)set_account_currency_fx_series(times, rates, 1);
+        } catch (const std::runtime_error& error) {
+            refused = true;
+            refusal = error.what();
         }
     }
 };
@@ -553,6 +608,66 @@ void intrabar_path_witness() {
     CHECK((opens == std::vector<std::int64_t>{kT, kT + 60000, kT + 120000, kT + 180000}));
 }
 
+bool coarse_stop_fills_with(
+        IntrabarPath::SampleEligibility eligibility, MagnifierDistribution distribution,
+        NativeDecisionContext* final_context) {
+    DistributionHost host;
+    host.copy_intrabar = true;
+    host.sample_eligibility = eligibility;
+    const Bar bars[] = {
+        bar(kT, 100.0, 101.0, 99.0, 100.0),
+        bar(kT + 60000, 100.0, 100.5, 94.5, 96.0),
+    };
+    host.run(bars, 2, "1", "1", true, 4, distribution);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.contexts.size() == 2);
+    if (!host.contexts.empty() && final_context) *final_context = host.contexts.back();
+    return host.applied.has_value();
+}
+
+void distribution_samples_witness() {
+    NativeDecisionContext continuous{};
+    CHECK(coarse_stop_fills_with(
+        IntrabarPath::SampleEligibility::ContinuousSegments,
+        MagnifierDistribution::UNIFORM, &continuous));
+
+    struct Expected {
+        MagnifierDistribution distribution;
+        bool fills;
+    };
+    const Expected expected[] = {
+        {MagnifierDistribution::UNIFORM, false},
+        {MagnifierDistribution::COSINE, true},
+        {MagnifierDistribution::TRIANGLE, false},
+        {MagnifierDistribution::ENDPOINTS, true},
+        {MagnifierDistribution::FRONT_LOADED, false},
+        {MagnifierDistribution::BACK_LOADED, false},
+    };
+    for (const auto& row : expected) {
+        NativeDecisionContext context{};
+        CHECK(coarse_stop_fills_with(
+            IntrabarPath::SampleEligibility::DistributionSamples,
+            row.distribution, &context) == row.fills);
+        CHECK(context.driver_statistics.intrabar_path_enabled);
+        CHECK(context.driver_statistics.sub_bars_per_script_bar == 1);
+        CHECK(context.driver_statistics.samples_per_sub_bar == 4);
+        CHECK(context.driver_statistics.sub_bars_processed == 2);
+        CHECK(context.driver_statistics.sample_ticks_processed == 8);
+    }
+
+    IntrabarPath::lower_tf lower;
+    lower.bars.push_back(bar(kT, 100.0, 100.5, 94.5, 96.0));
+    lower.tf = "1";
+    lower.samples = 4;
+    lower.distribution = MagnifierDistribution::UNIFORM;
+    const auto continuous_digest = native_intrabar_path_digest(
+        IntrabarPath{IntrabarPath::value_type{lower}});
+    lower.sample_eligibility = IntrabarPath::SampleEligibility::DistributionSamples;
+    const auto sampled_digest = native_intrabar_path_digest(
+        IntrabarPath{IntrabarPath::value_type{lower}});
+    CHECK(continuous_digest != sampled_digest);
+}
+
 void provider_and_staged_fx_witness() {
     ProviderHost stream_host;
     const pf_bar_t warmup{100, 100, 100, 100, 1, kT};
@@ -579,8 +694,31 @@ void provider_and_staged_fx_witness() {
     CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
     CHECK(!host.active_fx.empty());
     if (!host.active_fx.empty()) near(host.active_fx.front(), 2.0);
-    CHECK(strategy_set_account_currency_fx_series(reinterpret_cast<pf_strategy_t>(&host), times, rates, 2)
-          == -1);
+    const auto before_restage = host.native_continuation_hash();
+    const std::int64_t replacement_times[] = {kT - 60000, kT};
+    const double replacement_rates[] = {1.0, 3.0};
+    CHECK(strategy_set_account_currency_fx_series(
+              reinterpret_cast<pf_strategy_t>(&host), replacement_times, replacement_rates, 2)
+          == 0);
+    const auto after_restage = host.native_continuation_hash();
+    CHECK(after_restage != before_restage);
+    host.run(fx_bars, 1, "1", "1");
+    CHECK(host.prepares == 2);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.active_fx.size() == 2);
+    if (host.active_fx.size() == 2) near(host.active_fx.back(), 3.0);
+
+    const auto before_clear = host.native_continuation_hash();
+    CHECK(strategy_set_account_currency_fx_series(
+              reinterpret_cast<pf_strategy_t>(&host), nullptr, nullptr, 0)
+          == 0);
+    const auto after_clear = host.native_continuation_hash();
+    CHECK(after_clear != before_clear);
+    host.run(fx_bars, 1, "1", "1");
+    CHECK(host.prepares == 3);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.active_fx.size() == 3);
+    if (host.active_fx.size() == 3) near(host.active_fx.back(), 1.0);
 
     ProviderHost run_host;
     const Bar bars[] = {bar(kT)};
@@ -589,6 +727,44 @@ void provider_and_staged_fx_witness() {
     CHECK(run_host.last_input_tf == "1");
     CHECK(run_host.last_script_tf == "1");
     CHECK(run_host.native_state().kind == NativeLifecycleKind::Completed);
+}
+
+void aborted_run_fx_restage_witness() {
+    AbortRestageHost host;
+    const std::int64_t initial_times[] = {kT};
+    const double initial_rates[] = {1.0};
+    const Bar bars[] = {bar(kT)};
+    CHECK(strategy_set_account_currency_fx_series(
+              reinterpret_cast<pf_strategy_t>(&host), initial_times, initial_rates, 1)
+          == 0);
+    host.run(bars, 1, "1", "1");
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(host.native_state().failure.code == NativeFailureCode::Aborted);
+    const auto before_restage = host.native_continuation_hash();
+
+    const double replacement_rates[] = {4.0};
+    CHECK(strategy_set_account_currency_fx_series(
+              reinterpret_cast<pf_strategy_t>(&host), initial_times, replacement_rates, 1)
+          == 0);
+    CHECK(host.native_continuation_hash() != before_restage);
+    host.run(bars, 1, "1", "1");
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.prepares == 2);
+    CHECK(host.active_fx.size() == 2);
+    if (host.active_fx.size() == 2) near(host.active_fx.back(), 4.0);
+}
+
+void during_run_fx_staging_refusal_witness() {
+    DuringRunStagingHost host;
+    const Bar bars[] = {bar(kT)};
+    host.run(bars, 1, "1", "1");
+    CHECK(host.attempted);
+    CHECK(host.refused);
+    CHECK(host.refusal == "native host refuses source mutation: "
+                          "set_account_currency_fx_series");
+    CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+    CHECK(host.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+    CHECK(host.native_state().failure.operation == NativeFailureOperation::Mutation);
 }
 
 void rich_syminfo_begin_witness() {
@@ -784,7 +960,10 @@ int main() {
     membership_permutation_witness();
     pre_open_witness();
     intrabar_path_witness();
+    distribution_samples_witness();
     provider_and_staged_fx_witness();
+    aborted_run_fx_restage_witness();
+    during_run_fx_staging_refusal_witness();
     rich_syminfo_begin_witness();
     undetected_timeframe_witness();
     undetected_timeframe_rejection_witness();

@@ -289,7 +289,8 @@ def check_texts(files):
 
     spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v2")
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
-                   "NativeRunSpecField", "IntrabarPath", "NativeSlotLabelPolicy",
+                   "NativeRunSpecField", "IntrabarPath", "SampleEligibility",
+                   "NativeSlotLabelPolicy",
                    "NativeLegacyTolerance"),
             "native_run_spec_v2",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
@@ -318,14 +319,25 @@ def check_texts(files):
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
                   'native run spec errors')
     for error in ('InvalidUndetectedTimeframe', 'UnknownSlotLabelPolicy',
-                  'UnknownLegacyTolerance'):
+                  'UnknownLegacyTolerance', 'UnknownIntrabarSampleEligibility'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v2 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
             or 'InvalidUndetectedTimeframe' not in spec_src
             or 'spec.slot_label_policy' not in spec_src
-            or 'spec.legacy_tolerance' not in spec_src):
+            or 'spec.legacy_tolerance' not in spec_src
+            or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
+    intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')
+    if ('SampleEligibilitysample_eligibility='
+            'SampleEligibility::ContinuousSegments;' not in re.sub(r'\s+', '', intrabar)):
+        raise ValueError('native intrabar path omits its default sample-eligibility policy')
+    intrabar_fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
+                           'native run spec fields')
+    if not re.search(r'\bIntrabarSampleEligibility\b', intrabar_fields):
+        raise ValueError('native run-spec field tags omit intrabar sample eligibility')
+    if 'u(static_cast<std::uint64_t>(lower->sample_eligibility));' not in spec_src:
+        raise ValueError('native intrabar path digest omits sample eligibility')
 
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
@@ -342,12 +354,14 @@ def check_texts(files):
     # Compare ownership as if the allowed forward declaration were absent.
     driver_without_forward = driver_clean.replace(DRIVER_FORWARD, "", 1)
     versioned(driver_without_forward, "pineforge", "native_driver_v5")
-    require(driver, ("NativeCoordinate", "NativeDriverPoint", "NativeDecisionContext",
+    require(driver, ("NativeCoordinate", "NativeDriverPoint", "NativeDriverStatistics",
+                     "NativeDecisionContext",
                      "NativeInputPreflightResult", "INativeDriverSink"),
             "native_driver_v5", r'\b(?:class|struct)\s+NAME\s*\{')
     decision = body(driver, r'struct\s+NativeDecisionContext\s*\{', 'decision context')
     for member in ('intsub_index=0;', 'intsub_count=1;', 'boolis_terminal_sub_bar=true;',
-                   'int64_tsub_bar_open_ms=0;', 'int64_tscript_bar_open_ms=0;'):
+                   'int64_tsub_bar_open_ms=0;', 'int64_tscript_bar_open_ms=0;',
+                   'NativeDriverStatisticsdriver_statistics{};'):
         if member not in re.sub(r'\s+', '', decision):
             raise ValueError('native_driver_v5 decision context omits intrabar field: ' + member)
     require_namespace_functions(
@@ -378,6 +392,13 @@ def check_texts(files):
                  'f.u(static_cast<uint64_t>(spec.legacy_tolerance));'):
         if fold not in consumer_src:
             raise ValueError('native continuation hash omits compatibility policy: ' + fold)
+    for token in ('lower->sample_eligibility',
+                  'IntrabarPath::SampleEligibility::DistributionSamples',
+                  'if (distribution_samples || sample_index == 0)',
+                  'driver_statistics_.sample_ticks_processed',
+                  'staged_ingress_fx_', 'if (failed() && !recoverable_abort())'):
+        if token not in consumer_src:
+            raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
 
     host = versioned(files[FILES[8]], "pineforge", "engine_script_run_v17")
     require(host, ("NativeStrategyHost", "NativeStateView", "NativeLifecycleKind",
@@ -498,6 +519,7 @@ def check_texts(files):
                               'point.decision.sub_index', 'point.decision.sub_count',
                               'point.decision.is_terminal_sub_bar', 'point.decision.sub_bar_open_ms',
                               'point.decision.script_bar_open_ms',
+                              'point.decision.driver_statistics',
                               'point.price', 'point.quote_kind', 'point.quote_origin_ordinal'),
     }
     for function, facts in hash_requirements.items():
@@ -510,7 +532,8 @@ def check_texts(files):
                  'applied_notifications_.size() - notification_head_', 'notification.history_index',
                  'notification.ordinal', 'notification.point', 'consuming_request_', 'draining_notifications_',
                  'preparing_begin_', 'callback_context_.sub_index',
-                 'callback_context_.script_bar_open_ms', 'hash_cohorts(f, requests_)'):
+                 'callback_context_.script_bar_open_ms', 'callback_context_.driver_statistics',
+                 'staged_ingress_fx_', 'driver_statistics_', 'hash_cohorts(f, requests_)'):
         if fact not in continuation:
             raise ValueError('native continuation omits current frame/queue fact: ' + fact)
     spec_hash = body(consumer_src, r'void\s+hash_spec\s*\([^)]*\)\s*noexcept\s*\{',

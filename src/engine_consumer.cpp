@@ -14,6 +14,10 @@ class LegacyCompatibilityConsumer final : public IExecutionConsumer {
 public:
     bool is_native() const noexcept override { return false; }
     void refuse_source_mutation(const char*) override {}
+    bool stage_account_currency_fx_series(const std::vector<std::int64_t>&,
+                                          const std::vector<double>&) override {
+        return true;
+    }
     uint64_t continuation_hash() const noexcept override { return 0; }
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override {

@@ -78,6 +78,29 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[7], 'NativeLegacyTolerance::BatchStructuralBars',
                     'NativeLegacyTolerance::RemovedBatchStructuralBars')
 
+    def test_distribution_sample_eligibility_is_explicit_and_hashed(self):
+        for before, after in (
+            ('enum class SampleEligibility : std::uint32_t {',
+             'enum class MissingSampleEligibility : std::uint32_t {'),
+            ('SampleEligibility sample_eligibility = SampleEligibility::ContinuousSegments;', ''),
+            ('IntrabarSampleEligibility,', 'MissingIntrabarSampleEligibility,'),
+            ('UnknownIntrabarSampleEligibility,', 'MissingIntrabarSampleEligibility,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'u(static_cast<std::uint64_t>(lower->sample_eligibility));',
+                    'u(static_cast<std::uint64_t>(lower->removed_sample_eligibility));')
+        self.reject(FILES[6], 'NativeDriverStatistics driver_statistics{};',
+                    'NativeDriverStatistics removed_driver_statistics{};')
+        self.reject(FILES[10],
+                    'IntrabarPath::SampleEligibility::DistributionSamples',
+                    'IntrabarPath::SampleEligibility::ContinuousSegments')
+        self.reject(FILES[10], 'driver_statistics_.sample_ticks_processed',
+                    'driver_statistics_.removed_sample_ticks_processed')
+        self.reject(FILES[10], 'f.b(staged_ingress_fx_);', '')
+        self.reject(FILES[10], 'if (failed() && !recoverable_abort())',
+                    'if (failed() && !removed_recoverable_abort())')
+
     def test_current(self):
         check_texts(DATA)
 

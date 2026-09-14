@@ -393,6 +393,32 @@ void undetected_timeframe_contract() {
     expect_refusal(spec, Error::EmptyRequiredString, Field::InputTimeframe);
 }
 
+void intrabar_sample_eligibility_contract() {
+    auto spec = complete_spec();
+    IntrabarPath::lower_tf lower;
+    lower.tf = "1";
+    lower.samples = 4;
+    spec.intrabar.value = lower;
+    expect_acceptance(spec);
+
+    lower.sample_eligibility = IntrabarPath::SampleEligibility::DistributionSamples;
+    spec.intrabar.value = lower;
+    expect_acceptance(spec);
+
+    lower.sample_eligibility = static_cast<IntrabarPath::SampleEligibility>(2u);
+    spec.intrabar.value = lower;
+    const auto before = static_cast<std::uint32_t>(lower.sample_eligibility);
+    const auto validation = validate_native_run_spec(spec);
+    check(validation.error == Error::UnknownIntrabarSampleEligibility,
+          "unknown intrabar sample eligibility is refused");
+    check(validation.field == Field::IntrabarSampleEligibility,
+          "unknown intrabar sample eligibility names its field");
+    const auto* retained = spec.intrabar.lower();
+    check(retained != nullptr
+              && static_cast<std::uint32_t>(retained->sample_eligibility) == before,
+          "intrabar sample-eligibility refusal preserves the supplied value");
+}
+
 void legacy_tolerant_policy_contract() {
     auto spec = complete_spec();
     check(spec.slot_label_policy == NativeSlotLabelPolicy::Canonical,
@@ -449,6 +475,7 @@ int main() {
     financial_values_and_options();
     complete_clock_contract();
     undetected_timeframe_contract();
+    intrabar_sample_eligibility_contract();
     legacy_tolerant_policy_contract();
     failure_atomicity();
     std::cout << (checks - failures) << '/' << checks << " checks passed; "

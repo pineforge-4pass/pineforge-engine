@@ -65,6 +65,12 @@ constexpr bool native_legacy_tolerance_enabled(
 // while sealing an aggregated script bar.
 struct IntrabarPath {
     struct none {};
+    enum class SampleEligibility : std::uint32_t {
+        // Native hosts retain continuous matching between generated samples
+        // unless they explicitly request point-only sample eligibility.
+        ContinuousSegments = 0,
+        DistributionSamples = 1,
+    };
     struct lower_tf {
         std::vector<Bar> bars;
         std::string tf;
@@ -73,6 +79,7 @@ struct IntrabarPath {
         bool volume_weighted = false;
         int volume_weighted_min_samples = 2;
         int volume_weighted_max_samples = 64;
+        SampleEligibility sample_eligibility = SampleEligibility::ContinuousSegments;
     };
     using value_type = std::variant<none, lower_tf>;
 
@@ -139,6 +146,7 @@ enum class NativeRunSpecField : std::uint8_t {
     FeeKind, FeeValue, QuantityGrid, CloseExecution, MaxAbsUnits, MaxOpenLots,
     AllowedOpenDirections, InitialMarginFraction,
     IntrabarTimeframe, IntrabarSamples, IntrabarDistribution, IntrabarVolumeSamples,
+    IntrabarSampleEligibility,
     TimeframeUndetected,
     SlotLabelPolicy, LegacyTolerance,
 };
@@ -163,6 +171,7 @@ enum class NativeRunSpecError : std::uint8_t {
     AllocationFailure,
     CalendarFailure,
     InvalidIntrabarPath,
+    UnknownIntrabarSampleEligibility,
     InvalidUndetectedTimeframe,
     UnknownSlotLabelPolicy,
     UnknownLegacyTolerance,

@@ -72,6 +72,15 @@ bool valid_distribution(MagnifierDistribution distribution) noexcept {
     return false;
 }
 
+bool valid_sample_eligibility(IntrabarPath::SampleEligibility eligibility) noexcept {
+    switch (eligibility) {
+    case IntrabarPath::SampleEligibility::ContinuousSegments:
+    case IntrabarPath::SampleEligibility::DistributionSamples:
+        return true;
+    }
+    return false;
+}
+
 bool valid_slot_label_policy(NativeSlotLabelPolicy policy) noexcept {
     switch (policy) {
     case NativeSlotLabelPolicy::Canonical:
@@ -181,6 +190,10 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         if (!valid_distribution(lower->distribution)) {
             return {Error::InvalidIntrabarPath, Field::IntrabarDistribution};
         }
+        if (!valid_sample_eligibility(lower->sample_eligibility)) {
+            return {Error::UnknownIntrabarSampleEligibility,
+                    Field::IntrabarSampleEligibility};
+        }
         if (lower->volume_weighted_min_samples < 2
             || lower->volume_weighted_max_samples < lower->volume_weighted_min_samples
             || lower->volume_weighted_max_samples > (1 << 20)) {
@@ -284,6 +297,7 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept {
     u(lower->volume_weighted ? 1u : 0u);
     i(lower->volume_weighted_min_samples);
     i(lower->volume_weighted_max_samples);
+    u(static_cast<std::uint64_t>(lower->sample_eligibility));
     u(lower->bars.size());
     for (const auto& bar : lower->bars) {
         d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume); i(bar.timestamp);

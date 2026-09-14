@@ -66,6 +66,18 @@ struct NativeDriverPoint {
     bool excursion = false;
 };
 
+// Generic facts about the retained intrabar driver.  They let a host project
+// run diagnostics without consulting a source scheduler or borrowing driver
+// state. Counts are cumulative for the run except the two current-script-bar
+// shape fields.
+struct NativeDriverStatistics {
+    bool intrabar_path_enabled = false;
+    int sub_bars_per_script_bar = 1;
+    int samples_per_sub_bar = 0;
+    uint64_t sub_bars_processed = 0;
+    uint64_t sample_ticks_processed = 0;
+};
+
 // Presentation snapshot copied onto the callback stack. Mutating these
 // fields cannot change the consumer's decision floor, matching time, or
 // after-calculation coordinate.
@@ -82,6 +94,7 @@ struct NativeDecisionContext {
     bool is_terminal_sub_bar = true;
     int64_t sub_bar_open_ms = 0;
     int64_t script_bar_open_ms = 0;
+    NativeDriverStatistics driver_statistics{};
 };
 
 // Pump-produced events obtain ordinals from the consumer allocator.
