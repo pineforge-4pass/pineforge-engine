@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace pineforge::source {
@@ -84,9 +85,12 @@ void PineExecutionAdapter::reset_for_run() {
     placement_.clear();
     live_by_source_key_.clear();
     bracket_families_.clear();
+    pending_bracket_legs_.clear();
     live_handles_.clear();
     first_open_newborns_.clear();
     pending_view_handles_.clear();
+    current_debited_applied_ordinals_.clear();
+    receipt_cursor_ = 0;
     pooc_close_basis_by_script_bar_.clear();
     pooc_open_basis_ = 0.0;
     pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
@@ -286,6 +290,131 @@ std::vector<native_order::RequestHandle> PineExecutionAdapter::openings_for(cons
                                          : found->second.opened;
 }
 
+double PineExecutionAdapter::cohort_exposure_for(const SourceId& id) const noexcept {
+    const auto found = cohorts_by_id_.find(id);
+    if (found == cohorts_by_id_.end()) return 0.0;
+    double total = 0.0;
+    for (const auto& row : found->second.live_units_by_origin) {
+        if (std::isfinite(row.second) && row.second > 0.0) total += row.second;
+    }
+    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+}
+
+double PineExecutionAdapter::quantize_close_units(double basis, double percent) const noexcept {
+    if (!std::isfinite(basis) || basis <= 0.0 || !std::isfinite(percent) || percent <= 0.0)
+        return 0.0;
+    double units = basis * percent / 100.0;
+    if (!std::isfinite(units) || units <= 0.0) return 0.0;
+    if (staged_.quantity_grid && std::isfinite(*staged_.quantity_grid)
+        && *staged_.quantity_grid > 0.0) {
+        const double step = *staged_.quantity_grid;
+        // Pine's percentage close quantity is a source command fact: it
+        // floors to the instrument step and retains one tradable step for a
+        // positive fractional result (the L0 integer-lot witness).
+        units = std::floor(units / step + 1e-12) * step;
+        if (units == 0.0) units = step;
+    }
+    return units;
+}
+
+void PineExecutionAdapter::consume_cohort_units(
+        const SourceId& id, const native_order::ExecutionAppliedEvent& event) {
+    if (!(event.closed_units > 0.0) || !std::isfinite(event.closed_units)) return;
+    const auto found = cohorts_by_id_.find(id);
+    if (found == cohorts_by_id_.end()) return;
+    auto& facts = found->second;
+    std::vector<std::uint64_t> selected;
+    if (const auto* opening = std::get_if<execution::OpeningExposure>(&event.scope)) {
+        selected.push_back(opening->incarnation);
+    } else if (const auto* openings = std::get_if<native_order::SelectedExposure>(&event.scope)) {
+        selected = openings->incarnations;
+    } else {
+        for (const auto& handle : facts.opened) selected.push_back(handle.incarnation);
+    }
+    double remaining = event.closed_units;
+    for (const auto incarnation : selected) {
+        auto unit = facts.live_units_by_origin.find(incarnation);
+        if (unit == facts.live_units_by_origin.end() || !(unit->second > 0.0)) continue;
+        const double deduction = std::min(unit->second, remaining);
+        unit->second -= deduction;
+        remaining -= deduction;
+        if (unit->second == 0.0) facts.live_units_by_origin.erase(unit);
+        if (!(remaining > 0.0)) break;
+    }
+}
+
+bool PineExecutionAdapter::origin_is_pending(
+        const native_order::RequestHandle& origin) const noexcept {
+    if (origin.incarnation == 0) return false;
+    const auto placement = placement_.find(origin.incarnation);
+    if (placement == placement_.end() || !placement->second.opening) return false;
+    return std::find(live_handles_.begin(), live_handles_.end(), origin) != live_handles_.end();
+}
+
+void PineExecutionAdapter::cancel_bracket_origin(const native_order::RequestHandle& origin) {
+    pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+        [&](const PendingBracketLeg& leg) { return leg.snapshot.bracket_origin == origin; }),
+        pending_bracket_legs_.end());
+    std::vector<native_order::RequestHandle> matches;
+    for (const auto& handle : live_handles_) {
+        const auto placement = placement_.find(handle.incarnation);
+        if (placement != placement_.end() && placement->second.bracket_origin == origin)
+            matches.push_back(handle);
+    }
+    for (const auto& handle : matches) {
+        const auto result = require_host().cancel(handle);
+        if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
+    }
+}
+
+void PineExecutionAdapter::cancel_bracket_siblings(const native_order::RequestHandle& handle) {
+    const auto source = placement_.find(handle.incarnation);
+    if (source == placement_.end()) return;
+    const auto& snapshot = source->second;
+    if (snapshot.family != PineOrderFamily::ExitLimit && snapshot.family != PineOrderFamily::ExitStop
+        && snapshot.family != PineOrderFamily::ExitTrail) return;
+    std::vector<native_order::RequestHandle> matches;
+    for (const auto& candidate : live_handles_) {
+        if (candidate == handle) continue;
+        const auto placement = placement_.find(candidate.incarnation);
+        if (placement == placement_.end()) continue;
+        const auto& sibling = placement->second;
+        if (sibling.source_id == snapshot.source_id && sibling.from_entry == snapshot.from_entry
+            && sibling.bracket_origin == snapshot.bracket_origin
+            && (sibling.family == PineOrderFamily::ExitLimit || sibling.family == PineOrderFamily::ExitStop
+                || sibling.family == PineOrderFamily::ExitTrail)) {
+            matches.push_back(candidate);
+        }
+    }
+    for (const auto& sibling : matches) {
+        const auto result = require_host().cancel(sibling);
+        if (result.status == native_order::CancelStatus::Cancelled) retire(sibling);
+    }
+}
+
+void PineExecutionAdapter::observe_terminal_receipts() {
+    const auto rows = require_host().native_events(receipt_cursor_);
+    for (const auto& row : rows) {
+        receipt_cursor_ = std::max(receipt_cursor_, row.ordinal);
+        if (!row.command) continue;
+        std::visit([&](const auto& event) {
+            using Event = std::decay_t<decltype(event)>;
+            if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>
+                          || std::is_same_v<Event, native_order::CancelledEvent>) {
+                const auto placement = placement_.find(event.handle().incarnation);
+                if (placement != placement_.end()) {
+                    const auto handle = event.handle();
+                    const bool opening = placement->second.opening;
+                    retire(handle);
+                    if (opening) cancel_bracket_origin(handle);
+                }
+            } else if constexpr (std::is_same_v<Event, native_order::ExecutionAppliedEvent>) {
+                if (event.terminal) cancel_bracket_siblings(event.handle());
+            }
+        }, *row.command);
+    }
+}
+
 native_order::Owner PineExecutionAdapter::owner_for_close(const SourceId& id, bool dynamic) const {
     const auto found = cohorts_by_id_.find(id);
     if (dynamic || found == cohorts_by_id_.end()) {
@@ -303,6 +432,20 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const bool default_sized = std::isnan(qty);
     const double signed_target = is_long ? qty : -qty;
     const double current = require_host().physical_position().signed_units;
+    if (config_.pyramiding > 0 && current != 0.0
+        && ((current > 0.0) == is_long)) {
+        std::size_t accepted_in_cycle = 0;
+        for (const auto& cohort : cohorts_by_id_) {
+            accepted_in_cycle += cohort.second.opened.size();
+        }
+        for (const auto& handle : live_handles_) {
+            const auto placement = placement_.find(handle.incarnation);
+            if (placement != placement_.end() && placement->second.opening) ++accepted_in_cycle;
+        }
+        // Pine's cap is a monotone entry-incarnation count for the current
+        // position cycle; a partial close does not free a pyramiding slot.
+        if (accepted_in_cycle >= static_cast<std::size_t>(config_.pyramiding)) return;
+    }
     const bool reverses = !default_sized && current != 0.0
         && ((current > 0.0) != (signed_target > 0.0));
     if (default_sized) {
@@ -340,26 +483,26 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // P-DA3: strategy.close against an empty cohort is dropped at the command.
     if (openings.empty()) return;
     const double requested_percent = std::isnan(qty_percent) ? 100.0 : qty_percent;
-    // Ordinary POOC closes freeze their source-call basis. This preserves the
-    // same-pass pair behavior: two 30% close calls see the script's pre-fill
-    // 800000-unit position, whereas immediate closes re-read after execution.
-    const auto state = require_host().native_state();
-    const bool after_calculation = state.spec
-        && state.spec->close_execution == NativeCloseExecution::AfterCalculation;
-    const bool freeze_pooc = std::isnan(qty)
-        && (config_.process_orders_on_close || after_calculation) && !immediately;
+    // A queued percentage close snapshots its source-id exposure at the
+    // command.  This covers both POOC (same calculation pass) and ordinary
+    // next-open scheduling; the generic cohort remains authoritative for
+    // selecting the actual live lots at its later candidate.  Immediate
+    // closes deliberately re-read after their preceding execution.
     double frozen_qty = qty;
-    if (freeze_pooc) {
+    if (std::isnan(qty)) {
         const auto point = require_host().current_execution_point();
         const std::int64_t bar_key = point ? point->decision.script_bar_open_ms
                                            : require_host().native_decision_floor();
-        const double live_basis = std::abs(require_host().physical_position().signed_units);
-        const auto inserted = pooc_close_basis_by_script_bar_.emplace(bar_key, live_basis);
-        const double script_basis = pooc_open_script_bar_ == std::numeric_limits<std::int64_t>::min()
-            ? inserted.first->second : pooc_open_basis_;
-        frozen_qty = script_basis * requested_percent / 100.0;
+        const double source_basis = cohort_exposure_for(id);
+        const double fallback_basis = std::abs(require_host().physical_position().signed_units);
+        const double script_basis = source_basis > 0.0 ? source_basis : fallback_basis;
+        pooc_close_basis_by_script_bar_.emplace(bar_key, script_basis);
+        frozen_qty = quantize_close_units(script_basis, requested_percent);
     }
-    const bool host_sized = std::isnan(qty) || freeze_pooc;
+    // P-DA4: an immediate close has a live cohort at the command boundary;
+    // materialize its percentage quantity and bind that fixed roster before
+    // invoking execute_current.  Deferred exits retain HostSized/BindCohort.
+    const bool host_sized = std::isnan(qty) && !immediately;
     native_order::Request request;
     request.intent = host_sized
         ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Close, std::nullopt}}
@@ -374,8 +517,14 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     const SourceId replacement_key = callsite_token == 0
         ? SourceId{} : id + "#close#" + std::to_string(callsite_token);
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, replacement_key);
-    if (immediately && accepted)
-        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
+    if (immediately && accepted) {
+        const auto outcome = require_host().execute_current(
+            {*accepted, NativeCurrentPriceRule::NearestTick});
+        if (const auto* applied = std::get_if<native_order::ExecutionAppliedEvent>(&outcome)) {
+            consume_cohort_units(id, *applied);
+            current_debited_applied_ordinals_.insert(applied->ordinal);
+        }
+    }
 }
 
 void PineExecutionAdapter::close_all() {
@@ -408,26 +557,73 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             trail_offset = trail_points * tick;
     }
     const bool dynamic = std::isnan(qty);
-    const auto group_name = oca_name.empty() ? exit_id + "\x1f" + from_entry : oca_name;
     const auto family_key = key_for(exit_id, from_entry);
     auto submit_leg = [&](PineOrderFamily family, native_order::Trigger trigger) {
-        native_order::Request request;
-        request.intent = dynamic
-            ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Close, std::nullopt}}
-            : native_order::OrderIntent{native_order::Reduce{native_order::ExplicitUnits{qty}}};
-        request.label = exit_id; request.comment = comment; request.trigger = std::move(trigger);
-        request.owner = owner_for_close(from_entry, dynamic);
-        request.group = group_for(group_name, oca_name.empty() ? 1 : 0);
-        PlacementSnapshot snapshot;
-        snapshot.family = family; snapshot.source_id = exit_id; snapshot.from_entry = from_entry;
-        snapshot.comment = comment; snapshot.oca_name = oca_name; snapshot.requested_qty = qty;
-        snapshot.qty_percent = qty_percent; snapshot.deferred_cohort = dynamic;
-        snapshot.exit_levels = {limit_price, stop_price, trail_points, trail_offset,
-                                trail_price, profit_ticks, loss_ticks};
-        snapshot.sizing = sizing_snapshot();
-        const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
-            exit_id + "\x1f" + from_entry + std::to_string(static_cast<int>(family)));
-        if (accepted) bracket_families_[family_key].push_back(*accepted);
+        auto submit_one = [&](native_order::Owner owner, bool host_sized,
+                              const SourceId& replacement_key, const std::string& group_name,
+                              bool defer_new_instance,
+                              native_order::RequestHandle bracket_origin = {}) {
+            native_order::Request request;
+            request.intent = host_sized
+                ? native_order::OrderIntent{native_order::HostSized{
+                    native_order::HostSizedKind::Close, std::nullopt}}
+                : native_order::OrderIntent{native_order::Reduce{
+                    native_order::ExplicitUnits{qty}}};
+            request.label = exit_id; request.comment = comment; request.trigger = trigger;
+            request.owner = std::move(owner);
+            request.group = group_for(group_name, oca_name.empty() ? 1 : 0);
+            PlacementSnapshot snapshot;
+            snapshot.family = family; snapshot.source_id = exit_id; snapshot.from_entry = from_entry;
+            snapshot.comment = comment; snapshot.oca_name = oca_name; snapshot.requested_qty = qty;
+            snapshot.qty_percent = qty_percent; snapshot.deferred_cohort = host_sized;
+            snapshot.bracket_origin = std::move(bracket_origin);
+            snapshot.exit_levels = {limit_price, stop_price, trail_points, trail_offset,
+                                    trail_price, profit_ticks, loss_ticks};
+            snapshot.sizing = sizing_snapshot();
+            if (defer_new_instance && live_by_source_key_.find(key_for(replacement_key))
+                == live_by_source_key_.end()) {
+                auto queued = std::find_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+                    [&](const PendingBracketLeg& row) { return row.replacement_key == replacement_key; });
+                PendingBracketLeg staged{std::move(request), std::move(snapshot), replacement_key, family_key};
+                if (queued == pending_bracket_legs_.end()) pending_bracket_legs_.push_back(std::move(staged));
+                else *queued = std::move(staged);
+                return;
+            }
+            const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
+                                                    replacement_key);
+            if (accepted) bracket_families_[family_key].push_back(*accepted);
+        };
+
+        if (dynamic) {
+            const auto group_name = oca_name.empty() ? exit_id + "\x1f" + from_entry : oca_name;
+            submit_one(owner_for_close(from_entry, true), true,
+                exit_id + "\x1f" + from_entry + std::to_string(static_cast<int>(family)), group_name, false);
+            return;
+        }
+
+        // An explicit bracket quantity is one independently persistent leg
+        // for every source entry provenance, including an origin that is
+        // still pending.  BindCohort keeps that pending-origin leg deferred
+        // without inventing a source id in the generic core; the source key
+        // gives re-issues replacement semantics per (exit, from_entry, leg,
+        // origin) rather than accidentally replacing a carried instance.
+        const auto cohort = cohort_for(from_entry);
+        const auto found = cohorts_by_id_.find(from_entry);
+        std::vector<native_order::RequestHandle> origins;
+        if (found != cohorts_by_id_.end()) origins = found->second.origins;
+        if (origins.empty()) origins.push_back({});
+        for (const auto& origin : origins) {
+            const std::string origin_key = std::to_string(origin.incarnation);
+            const auto replacement_key = exit_id + "\x1f" + from_entry + "\x1f"
+                + std::to_string(static_cast<int>(family)) + "\x1f" + origin_key;
+            const auto group_name = oca_name.empty()
+                ? exit_id + "\x1f" + from_entry + "\x1f" + origin_key : oca_name;
+            const bool has_live_leg = live_by_source_key_.find(key_for(replacement_key))
+                != live_by_source_key_.end();
+            if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)) continue;
+            submit_one(native_order::BindCohort{cohort}, true, replacement_key, group_name,
+                       !has_live_leg, origin);
+        }
     };
     if (finite_positive(limit_price)) submit_leg(PineOrderFamily::ExitLimit, native_order::Limit{limit_price});
     if (finite_positive(stop_price)) submit_leg(PineOrderFamily::ExitStop, native_order::Stop{stop_price});
@@ -439,10 +635,22 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         exit_cancel_bracket(exit_id, from_entry, comment);
 }
 
+void PineExecutionAdapter::flush_pending_bracket_legs() {
+    auto queued = std::move(pending_bracket_legs_);
+    pending_bracket_legs_.clear();
+    for (auto& leg : queued) {
+        const auto accepted = submit_or_replace(std::move(leg.request), std::move(leg.snapshot), false,
+                                                leg.replacement_key);
+        if (accepted) bracket_families_[leg.family_key].push_back(*accepted);
+    }
+}
+
 void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
                                                const SourceId& from_entry,
                                                const std::string&) {
     const auto key = key_for(exit_id, from_entry);
+    pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+        [&](const PendingBracketLeg& leg) { return leg.family_key == key; }), pending_bracket_legs_.end());
     const auto found = bracket_families_.find(key);
     if (found == bracket_families_.end()) return;
     for (const auto& handle : found->second) {
@@ -453,6 +661,9 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
 }
 
 void PineExecutionAdapter::cancel(const SourceId& id) {
+    pending_bracket_legs_.erase(std::remove_if(pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
+        [&](const PendingBracketLeg& leg) { return leg.snapshot.source_id == id; }),
+        pending_bracket_legs_.end());
     std::vector<native_order::RequestHandle> matches;
     for (const auto& handle : live_handles_) {
         const auto snapshot = placement_.find(handle.incarnation);
@@ -471,6 +682,7 @@ void PineExecutionAdapter::cancel_all() {
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
     }
     bracket_families_.clear();
+    pending_bracket_legs_.clear();
 }
 
 void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
@@ -550,6 +762,10 @@ std::int64_t PineExecutionAdapter::day_key(std::int64_t timestamp_ms) noexcept {
 }
 
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
+    // Terminal entry refusals have no Applied notification.  Consume their
+    // generic receipt before the next matching point so their deferred
+    // per-origin bracket legs cannot close a different cohort member.
+    observe_terminal_receipts();
     pooc_open_script_bar_ = context.script_bar_open_ms;
     pooc_open_basis_ = std::abs(require_host().physical_position().signed_units);
     day_ledger_.current_day = day_key(context.sub_bar_open_ms);
@@ -570,6 +786,23 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         facts.cycle = event.cycle_after;
         if (std::find(facts.opened.begin(), facts.opened.end(), event.handle()) == facts.opened.end())
             facts.opened.push_back(event.handle());
+        facts.live_units_by_origin[event.handle().incarnation] += std::abs(event.opened_units);
+    }
+    const bool current_debit_observed =
+        current_debited_applied_ordinals_.erase(event.ordinal) != 0;
+    if (!current_debit_observed && placement != placement_.end()
+        && !placement->second.from_entry.empty()) {
+        consume_cohort_units(placement->second.from_entry, event);
+    }
+    if (placement != placement_.end() && placement->second.family == PineOrderFamily::CloseAll
+        && event.closed_units > 0.0) {
+        for (auto& cohort : cohorts_by_id_) cohort.second.live_units_by_origin.clear();
+    }
+    if (require_host().physical_position().signed_units == 0.0) {
+        for (auto& cohort : cohorts_by_id_) {
+            cohort.second.opened.clear();
+            cohort.second.live_units_by_origin.clear();
+        }
     }
     if (event.terminal) retire(event.handle());
     if (event.ordinal != day_ledger_.observed_applied_ordinal) {

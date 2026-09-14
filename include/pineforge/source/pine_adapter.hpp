@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -112,6 +113,10 @@ struct PlacementSnapshot {
     bool deferred_cohort = false;
     bool frozen_market_instruction = false;
     bool reverse_to = false;
+    // Explicit bracket legs retain the source opening provenance that caused
+    // their submission.  A pending parent rejected at a later candidate can
+    // then retire only its own deferred legs.
+    native_order::RequestHandle bracket_origin{};
     std::uint64_t source_sequence = 0;
     std::int64_t placement_script_open_ms = 0;
     std::int64_t placement_sub_open_ms = 0;
@@ -234,6 +239,14 @@ public:
     bool calc_on_order_fills() const noexcept { return config_.calc_on_order_fills; }
     bool process_orders_on_close() const noexcept { return config_.process_orders_on_close; }
     std::vector<native_order::RequestHandle> take_first_open_newborns();
+    // Pull terminal generic receipts before a source callback observes the
+    // next command boundary.  This retires group-cancelled bracket siblings
+    // and pending origins rejected by native admission.
+    void observe_terminal_receipts();
+    // Called by the fixture scheduler after one source script evaluation so
+    // re-priced carried bracket legs retain their original roster order before
+    // newly pending-entry legs are appended.
+    void flush_pending_bracket_legs();
 
     void hash_state(BrokerStateHashSink&) const;
 
@@ -249,7 +262,20 @@ private:
         native_order::CohortHandle handle{};
         std::vector<native_order::RequestHandle> origins;
         std::vector<native_order::RequestHandle> opened;
+        // Live source exposure by opening provenance.  This is source-layer
+        // bookkeeping only: the generic core still resolves cohort authority
+        // at every candidate.  It lets a command snapshot an existing id's
+        // percentage basis before later requests in the same script pass
+        // reduce that cohort.
+        std::unordered_map<std::uint64_t, double> live_units_by_origin;
         std::int64_t cycle = 0;
+    };
+
+    struct PendingBracketLeg {
+        native_order::Request request;
+        PlacementSnapshot snapshot;
+        SourceId replacement_key;
+        std::uint64_t family_key = 0;
     };
 
     NativeStrategyHost& require_host() const;
@@ -260,6 +286,12 @@ private:
     void remember(const native_order::RequestHandle&, PlacementSnapshot);
     void retire(const native_order::RequestHandle&) noexcept;
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
+    double cohort_exposure_for(const SourceId&) const noexcept;
+    double quantize_close_units(double basis, double percent) const noexcept;
+    void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
+    bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
+    void cancel_bracket_origin(const native_order::RequestHandle&);
+    void cancel_bracket_siblings(const native_order::RequestHandle&);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
@@ -279,9 +311,16 @@ private:
     std::unordered_map<std::uint64_t, PlacementSnapshot> placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
+    std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     std::vector<native_order::RequestHandle> pending_view_handles_;
+    // Current executions settle synchronously, while their generic Applied
+    // notification is delivered after the enclosing callback.  Record the
+    // source-cohort debit so a second immediate command sees the new basis,
+    // then suppress just that duplicate debit at notification delivery.
+    std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
+    std::uint64_t receipt_cursor_ = 0;
     std::unordered_map<std::int64_t, double> pooc_close_basis_by_script_bar_;
     double pooc_open_basis_ = 0.0;
     std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();

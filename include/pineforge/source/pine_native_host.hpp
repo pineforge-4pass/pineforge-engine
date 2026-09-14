@@ -145,6 +145,11 @@ protected:
     int source_bar_index_ = -1;
     int source_last_bar_index_ = -1;
     std::uint64_t source_callback_count_ = 0;
+    // The generic consumer deliberately clears the retired legacy scheduler
+    // flags when it applies a NativeRunSpec.  A fixture host must therefore
+    // retain its source configuration instead of sampling those fields again
+    // on a subsequent public begin.
+    bool source_configuration_captured_ = false;
     // @source-state end
 };
 

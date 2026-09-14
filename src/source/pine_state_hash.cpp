@@ -332,13 +332,57 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
     f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
-    f.b(value.reverse_to); f.u(value.source_sequence); f.i(value.placement_script_open_ms);
+    f.b(value.reverse_to); f.s(value.bracket_origin.run.session_key);
+    f.u(value.bracket_origin.run.run_number); f.u(value.bracket_origin.incarnation);
+    f.u(value.source_sequence);
+    f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.d(value.sizing.equity); f.d(value.sizing.price);
     f.d(value.sizing.fx); f.d(value.sizing.mark); f.d(value.sizing.frozen_units);
     f.b(value.sizing.at_fill); f.d(value.exit_levels.limit); f.d(value.exit_levels.stop);
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
+}
+
+void hash_native_request(BrokerStateHashSink& f, const native_order::Request& request) {
+    f.u(request.intent.index());
+    if (const auto* reduce = std::get_if<native_order::Reduce>(&request.intent)) {
+        f.u(reduce->size.index());
+        if (const auto* units = std::get_if<native_order::ExplicitUnits>(&reduce->size)) f.d(units->units);
+    } else if (const auto* transact = std::get_if<native_order::Transact>(&request.intent)) {
+        f.d(transact->signed_units);
+    } else if (const auto* reverse = std::get_if<native_order::ReverseTo>(&request.intent)) {
+        f.d(reverse->signed_units);
+    } else if (const auto* sized = std::get_if<native_order::HostSized>(&request.intent)) {
+        f.i(static_cast<std::int64_t>(sized->kind)); f.b(sized->side.has_value());
+        if (sized->side) f.i(static_cast<std::int64_t>(*sized->side));
+    }
+    f.s(request.label); f.s(request.comment);
+    f.u(request.trigger.index());
+    if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) f.d(limit->price);
+    else if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger)) f.d(stop->price);
+    else if (const auto* stop_limit = std::get_if<native_order::StopLimit>(&request.trigger)) {
+        f.d(stop_limit->stop); f.d(stop_limit->limit);
+    } else if (const auto* trail = std::get_if<native_order::Trail>(&request.trigger)) {
+        f.d(trail->offset); f.b(trail->arm_price.has_value());
+        if (trail->arm_price) f.d(*trail->arm_price);
+    }
+    f.u(request.capacity.index());
+    if (const auto* budget = std::get_if<native_order::PointBudget>(&request.capacity)) f.d(budget->units);
+    f.u(request.owner.index());
+    if (const auto* wait = std::get_if<native_order::WaitForApplied>(&request.owner)) {
+        hash_native_handle(f, wait->parent);
+    } else if (const auto* opening = std::get_if<native_order::BindOpening>(&request.owner)) {
+        hash_native_handle(f, opening->opening); f.i(opening->cycle);
+    } else if (const auto* openings = std::get_if<native_order::BindOpenings>(&request.owner)) {
+        hash_native_handle_vector(f, openings->openings); f.i(openings->cycle);
+    } else if (const auto* cohort = std::get_if<native_order::BindCohort>(&request.owner)) {
+        f.u(cohort->cohort.value);
+    }
+    f.u(request.group.index());
+    if (const auto* group = std::get_if<native_order::Member>(&request.group)) {
+        f.u(group->group); f.i(group->cohort); f.i(static_cast<std::int64_t>(group->effect));
+    }
 }
 
 } // namespace
@@ -367,6 +411,14 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         const auto& cohort = cohorts_by_id_.at(key);
         f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
         hash_native_handle_vector(f, cohort.origins); hash_native_handle_vector(f, cohort.opened);
+        std::vector<std::uint64_t> live_origin_keys;
+        live_origin_keys.reserve(cohort.live_units_by_origin.size());
+        for (const auto& row : cohort.live_units_by_origin) live_origin_keys.push_back(row.first);
+        std::sort(live_origin_keys.begin(), live_origin_keys.end());
+        f.u(live_origin_keys.size());
+        for (const auto incarnation : live_origin_keys) {
+            f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
+        }
     }
     std::vector<std::uint64_t> placement_keys;
     for (const auto& pair : placement_) placement_keys.push_back(pair.first);
@@ -380,8 +432,20 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& pair : bracket_families_) bracket_keys.push_back(pair.first);
     std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
     for (const auto key : bracket_keys) { f.u(key); hash_native_handle_vector(f, bracket_families_.at(key)); }
+    f.u(pending_bracket_legs_.size());
+    for (const auto& leg : pending_bracket_legs_) {
+        hash_native_request(f, leg.request); hash_placement(f, leg.snapshot);
+        f.s(leg.replacement_key); f.u(leg.family_key);
+    }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
     hash_native_handle_vector(f, pending_view_handles_);
+    std::vector<std::uint64_t> current_debit_ordinals;
+    current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
+    for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);
+    std::sort(current_debit_ordinals.begin(), current_debit_ordinals.end());
+    f.u(current_debit_ordinals.size());
+    for (const auto ordinal : current_debit_ordinals) f.u(ordinal);
+    f.u(receipt_cursor_);
     std::vector<std::int64_t> pooc_basis_keys;
     for (const auto& pair : pooc_close_basis_by_script_bar_) pooc_basis_keys.push_back(pair.first);
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
@@ -452,6 +516,7 @@ void source::PineNativeHost::hash_source_extension(BrokerStateHashSink& f) const
     f.i(static_cast<std::int64_t>(default_qty_type_)); f.d(default_qty_value_);
     f.i(pyramiding_); f.b(close_entries_rule_any_);
     f.i(source_bar_index_); f.i(source_last_bar_index_); f.u(source_callback_count_);
+    f.b(source_configuration_captured_);
     adapter_.hash_state(f); scheduler_.hash_state(f);
 }
 

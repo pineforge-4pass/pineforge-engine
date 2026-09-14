@@ -54,18 +54,24 @@ void PineNativeHost::prepare_native_begin(const NativeBeginArgs& args) {
     // ingress styles faithful at the source boundary; generic native state is
     // still configured only from the projected NativeRunSpec below.
     PineStrategyConfig effective = config_;
-    effective.process_orders_on_close = process_orders_on_close_;
-    effective.calc_on_order_fills = calc_on_order_fills_;
-    effective.initial_capital = initial_capital_;
-    effective.default_qty_type = static_cast<int>(default_qty_type_);
-    effective.default_qty_value = default_qty_value_;
-    effective.pyramiding = pyramiding_;
-    effective.commission_value = commission_value_;
-    effective.commission_type = static_cast<int>(commission_type_);
-    effective.slippage = slippage_;
-    effective.margin_long = margin_long_;
-    effective.margin_short = margin_short_;
-    effective.close_entries_rule_any = close_entries_rule_any_;
+    if (!source_configuration_captured_) {
+        // Existing source fixtures configure the legacy protected fields in
+        // their constructors.  Capture that one pre-begin state; afterwards
+        // the generic consumer owns the engine's compatibility fields and
+        // intentionally clears the retired POOC/COOF booleans (P6).
+        effective.process_orders_on_close = process_orders_on_close_;
+        effective.calc_on_order_fills = calc_on_order_fills_;
+        effective.initial_capital = initial_capital_;
+        effective.default_qty_type = static_cast<int>(default_qty_type_);
+        effective.default_qty_value = default_qty_value_;
+        effective.pyramiding = pyramiding_;
+        effective.commission_value = commission_value_;
+        effective.commission_type = static_cast<int>(commission_type_);
+        effective.slippage = slippage_;
+        effective.margin_long = margin_long_;
+        effective.margin_short = margin_short_;
+        effective.close_entries_rule_any = close_entries_rule_any_;
+    }
     if (args.overrides_opaque) {
         const auto* overrides = static_cast<const StrategyOverrides*>(args.overrides_opaque);
         effective = apply_overrides(effective, *overrides);
@@ -80,6 +86,7 @@ void PineNativeHost::prepare_native_begin(const NativeBeginArgs& args) {
     if (setup.status != NativeSetupStatus::Applied)
         throw std::logic_error("Pine native adapter failed to configure projected run spec");
     config_ = effective;
+    source_configuration_captured_ = true;
 }
 
 void PineNativeHost::on_native_run_begin() {
@@ -91,6 +98,7 @@ void PineNativeHost::on_native_bar_open(const Bar& bar, const NativeDecisionCont
     scheduler_.bar_open(bar, context, *this);
 }
 void PineNativeHost::on_native_bar(const Bar& bar, const NativeDecisionContext& context) {
+    adapter_.observe_terminal_receipts();
     scheduler_.bar(bar, context, *this);
 }
 void PineNativeHost::on_native_applied(const native_order::ExecutionAppliedEvent& event,
@@ -121,6 +129,7 @@ void PineNativeHost::configure_pine_strategy(const PineStrategyConfig& config) {
     margin_short_ = config.margin_short;
     close_entries_rule_any_ = config.close_entries_rule_any;
     adapter_.set_configuration(config_);
+    source_configuration_captured_ = true;
 }
 void PineNativeHost::set_strategy_override(const StrategyOverrides& overrides) {
     guard_native_mutation("set_strategy_override");
@@ -137,6 +146,7 @@ void PineNativeHost::set_strategy_override(const StrategyOverrides& overrides) {
     slippage_ = config_.slippage;
     close_entries_rule_any_ = config_.close_entries_rule_any;
     adapter_.set_configuration(config_);
+    source_configuration_captured_ = true;
 }
 void PineNativeHost::set_pine_risk_direction(int value) { adapter_.set_risk_direction(value); }
 void PineNativeHost::set_pine_risk_max_cons_loss_days(int value) { adapter_.set_risk_max_cons_loss_days(value); }
@@ -198,6 +208,10 @@ void PineNativeHost::scheduler_publish_source_bar(const Bar& bar, bool) {
     bar_index_ = source_bar_index_;
     barstate_islast_ = source_bar_index_ == source_last_bar_index_;
     on_source_bar(bar);
+    // Complete one source evaluation before appending bracket legs for newly
+    // pending same-id openings.  Existing legs are re-priced in-call first,
+    // preserving the source roster order at the next native candidate.
+    adapter_.flush_pending_bracket_legs();
 }
 
 } // namespace pineforge::source
