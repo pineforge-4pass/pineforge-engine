@@ -367,6 +367,36 @@ def check_texts(files):
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs"),
             "engine_script_run_v17",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
+    begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
+    begin_fields = (
+        (r'\bconst\s+Bar\s*\*\s*bars\s*=\s*nullptr\s*;', 'bars'),
+        (r'\bint\s+n\s*=\s*0\s*;', 'n'),
+        (r'\bstd::string\s+input_tf\s*;', 'input_tf'),
+        (r'\bstd::string\s+script_tf\s*;', 'script_tf'),
+        (r'\bbool\s+bar_magnifier\s*=\s*false\s*;', 'bar_magnifier'),
+        (r'\bint\s+magnifier_samples\s*=\s*4\s*;', 'magnifier_samples'),
+        (r'\bMagnifierDistribution\s+magnifier_distribution\s*=\s*MagnifierDistribution::ENDPOINTS\s*;',
+         'magnifier_distribution'),
+        (r'\bbool\s+magnifier_volume_weighted\s*=\s*false\s*;', 'magnifier_volume_weighted'),
+        (r'\bint\s+magnifier_volume_weighted_min_samples\s*=\s*2\s*;',
+         'magnifier_volume_weighted_min_samples'),
+        (r'\bint\s+magnifier_volume_weighted_max_samples\s*=\s*64\s*;',
+         'magnifier_volume_weighted_max_samples'),
+        (r'\bconst\s+InputsMap\s*\*\s*inputs\s*=\s*nullptr\s*;', 'inputs'),
+        (r'\bconst\s+SymInfo\s*\*\s*syminfo\s*=\s*nullptr\s*;', 'syminfo'),
+        (r'\bconst\s+void\s*\*\s*overrides_opaque\s*=\s*nullptr\s*;',
+         'overrides_opaque'),
+        (r'\bbool\s+is_stream\s*=\s*false\s*;', 'is_stream'),
+        (r'\bint\s+warmup_n\s*=\s*0\s*;', 'warmup_n'),
+    )
+    positions = []
+    for pattern, name in begin_fields:
+        matches = list(re.finditer(pattern, begin_args))
+        if len(matches) != 1:
+            raise ValueError('NativeBeginArgs requires exactly one ' + name + ' field')
+        positions.append(matches[0].start())
+    if positions != sorted(positions):
+        raise ValueError('NativeBeginArgs public begin fields changed order')
     require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v17",
             r'\busing\s+NAME\s*=')
     require_exact_alias(

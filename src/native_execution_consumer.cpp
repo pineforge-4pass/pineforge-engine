@@ -4051,7 +4051,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
     const NativeBeginArgs args{bars, n, {}, {}, false, 4,
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2, 64,
-        nullptr, nullptr, false, 0};
+        nullptr, nullptr, nullptr, false, 0};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
@@ -4082,7 +4082,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      MagnifierDistribution magnifier_dist) {
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2, 64,
-        nullptr, nullptr, false, 0};
+        nullptr, nullptr, nullptr, false, 0};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
@@ -4121,12 +4121,13 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const Bar* input_bars, int n_input,
                                        const std::string& input_tf, const std::string& script_tf,
                                        const std::unordered_map<std::string, std::string>& inputs,
-                                       const SymInfo&, const source::StrategyOverrides* overrides,
+                                       const SymInfo& syminfo,
+                                       const source::StrategyOverrides* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
         magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2, 64,
-        &inputs, overrides, false, 0};
+        &inputs, &syminfo, overrides, false, 0};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
@@ -4160,7 +4161,7 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const std::string& script_tf) {
     const NativeBeginArgs args{warmup_bars, n_warmup, input_tf, script_tf, false, 4,
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2, 64,
-        nullptr, nullptr, true, n_warmup};
+        nullptr, nullptr, nullptr, true, n_warmup};
     if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
     engine.last_error_.clear();

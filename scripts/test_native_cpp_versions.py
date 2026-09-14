@@ -279,6 +279,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[8], "enum class NativePrecommitVerdict", "enum class MissingNativePrecommitVerdict"),
             (FILES[8], "struct NativeFxCurveSetupResult {", "struct MissingNativeFxCurveSetupResult {"),
             (FILES[8], "struct NativeBeginArgs {", "struct MissingNativeBeginArgs {"),
+            (FILES[8], "const SymInfo* syminfo = nullptr;", "const SymInfo* missing_syminfo = nullptr;"),
             (FILES[8], "resolve_execution_terms(\n", "resolve_execution_terms_missing(\n"),
             (FILES[8], "validate_execution_precommit(\n", "validate_execution_precommit_missing(\n"),
             (FILES[8], "configure_native_fx_curve(const NativeFxCurve& curve)",

@@ -7,6 +7,9 @@
   "sourcePendingOrder": "pineforge::source::PendingOrder",
   "removedStorage": [],
   "addedStorage": [],
+  "addedValueMembers": [
+    "NativeBeginArgs::syminfo"
+  ],
   "addedVirtuals": [
     "prepare_native_begin",
     "on_native_bar_open"

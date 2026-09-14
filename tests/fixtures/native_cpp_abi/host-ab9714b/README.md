@@ -16,4 +16,5 @@ archive. The ABI matrices require v16↔v17 rejection in both directions while
 retaining historical v13/v14/v15 controls. Its sibling
 `relocation-manifest-v16-v17.json` pins exactly the two added
 `NativeStrategyHost` virtuals (`prepare_native_begin`, `on_native_bar_open`)
-and no storage relocation.
+and the additive `NativeBeginArgs::syminfo` value member, with no engine
+storage relocation.

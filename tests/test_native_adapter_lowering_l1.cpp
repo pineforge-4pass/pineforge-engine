@@ -283,6 +283,11 @@ public:
     std::string last_script_tf;
     bool copy_intrabar = false;
     bool saw_stream = false;
+    bool saw_inputs = false;
+    bool saw_syminfo = false;
+    bool saw_overrides = false;
+    std::string last_tickerid;
+    std::string callback_tickerid;
     std::vector<double> active_fx;
 
     void prepare_native_begin(const NativeBeginArgs& args) override {
@@ -293,9 +298,29 @@ public:
         last_input_tf = args.input_tf;
         last_script_tf = args.script_tf;
         saw_stream = args.is_stream;
+        saw_inputs = args.inputs != nullptr;
+        saw_syminfo = args.syminfo != nullptr;
+        saw_overrides = args.overrides_opaque != nullptr;
         const std::string input = args.input_tf.empty() ? "1" : args.input_tf;
         const std::string script = args.script_tf.empty() ? input : args.script_tf;
         NativeRunSpec configured = spec_for("provider", 1, input.c_str(), script.c_str());
+        if (args.syminfo) {
+            last_tickerid = args.syminfo->tickerid;
+            // The provider owns the retained value.  These assignments model
+            // the source rich-run projection without retaining the borrowed
+            // pointer after prepare_native_begin returns.
+            configured.ticker = args.syminfo->ticker;
+            configured.tickerid = args.syminfo->tickerid;
+            configured.type = args.syminfo->type;
+            configured.currency = args.syminfo->currency;
+            configured.basecurrency = args.syminfo->basecurrency;
+            configured.description = args.syminfo->description;
+            configured.volumetype = args.syminfo->volumetype;
+            configured.timezone = args.syminfo->timezone;
+            configured.session = args.syminfo->session;
+            configured.point_value = args.syminfo->pointvalue;
+            configured.price_tick = args.syminfo->mintick;
+        }
         if (args.n < 2 && args.input_tf.empty() && args.script_tf.empty()) {
             configured.input_tf.clear();
             configured.script_tf.clear();
@@ -313,6 +338,10 @@ public:
             configured.intrabar.value = std::move(lower);
         }
         CHECK(configure_native(configured).status == NativeSetupStatus::Applied);
+    }
+    void on_native_bar(const Bar& value, const NativeDecisionContext& context) override {
+        TermsHost::on_native_bar(value, context);
+        callback_tickerid = syminfo_.tickerid;
     }
     void on_native_run_begin() override {
         CHECK(submit(market(1.0, "provider-fx")).handle.has_value());
@@ -562,6 +591,66 @@ void provider_and_staged_fx_witness() {
     CHECK(run_host.native_state().kind == NativeLifecycleKind::Completed);
 }
 
+void rich_syminfo_begin_witness() {
+    const Bar bars[] = {bar(kT), bar(kT + 60000)};
+    const InputsMap inputs{{"rich_input", "kept"}};
+    SymInfo info;
+    info.ticker = "RICH";
+    info.tickerid = "RICH:SYMINF0";
+    info.currency = "EUR";
+    info.basecurrency = "USD";
+    info.type = "forex";
+    info.timezone = "UTC";
+    info.session = "24x7";
+    info.volumetype = "base";
+    info.description = "rich native fixture";
+    info.mintick = 0.0001;
+    info.pointvalue = 10.0;
+
+    ProviderHost rich;
+    rich.run(bars, 2, "1", "1", inputs, info, nullptr);
+    CHECK(rich.prepares == 1);
+    CHECK(rich.saw_inputs);
+    CHECK(rich.saw_syminfo);
+    CHECK(!rich.saw_overrides);
+    CHECK(rich.last_tickerid == "RICH:SYMINF0");
+    CHECK(rich.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(rich.native_state().spec != nullptr);
+    if (rich.native_state().spec) {
+        CHECK(rich.native_state().spec->tickerid == "RICH:SYMINF0");
+        CHECK(rich.native_state().spec->ticker == "RICH");
+        CHECK(rich.native_state().spec->currency == "EUR");
+        near(rich.native_state().spec->price_tick, 0.0001);
+        near(rich.native_state().spec->point_value, 10.0);
+    }
+    CHECK(rich.callback_tickerid == "RICH:SYMINF0");
+
+    // The pointer is only a begin-call borrow; the projected spec remains
+    // value-owned when the caller changes its SymInfo after return.
+    info.tickerid = "RICH:CHANGED";
+    CHECK(rich.native_state().spec != nullptr);
+    if (rich.native_state().spec)
+        CHECK(rich.native_state().spec->tickerid == "RICH:SYMINF0");
+
+    ProviderHost changed;
+    SymInfo changed_info = info;
+    changed_info.tickerid = "RICH:SYMINF1";
+    changed.run(bars, 2, "1", "1", inputs, changed_info, nullptr);
+    CHECK(changed.saw_syminfo);
+    CHECK(changed.last_tickerid == "RICH:SYMINF1");
+    CHECK(changed.native_continuation_hash() != rich.native_continuation_hash());
+
+    // Every non-rich public begin carries a null SymInfo pointer.  The simple
+    // and TF-aware paths are exercised here; the stream path above also
+    // records the null case.
+    ProviderHost simple;
+    simple.run(bars, 2);
+    CHECK(!simple.saw_syminfo);
+    ProviderHost tf;
+    tf.run(bars, 2, "1", "1");
+    CHECK(!tf.saw_syminfo);
+}
+
 NativeRunSpec undetected_spec(const char* key) {
     auto configured = spec_for(key);
     configured.input_tf.clear();
@@ -696,6 +785,7 @@ int main() {
     pre_open_witness();
     intrabar_path_witness();
     provider_and_staged_fx_witness();
+    rich_syminfo_begin_witness();
     undetected_timeframe_witness();
     undetected_timeframe_rejection_witness();
     precommit_overflow_witness();

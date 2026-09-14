@@ -345,7 +345,7 @@ using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
     native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,
     native_order::MatchRejectedEvent, native_order::CancelledEvent>;
 
-// Borrowed begin-call facts. The bar/input/override pointers expire when
+// Borrowed begin-call facts. The bar/input/syminfo/override pointers expire when
 // prepare_native_begin returns; retained configuration must copy them by
 // value (for example into NativeRunSpec::intrabar).
 struct NativeBeginArgs {
@@ -360,6 +360,10 @@ struct NativeBeginArgs {
     int magnifier_volume_weighted_min_samples = 2;
     int magnifier_volume_weighted_max_samples = 64;
     const InputsMap* inputs = nullptr;
+    // The rich run overload's symbol metadata is borrowed only for this
+    // callback.  A provider that uses it must copy the fields it needs into
+    // its retained NativeRunSpec/staged metadata before returning.
+    const SymInfo* syminfo = nullptr;
     const void* overrides_opaque = nullptr;
     bool is_stream = false;
     int warmup_n = 0;
