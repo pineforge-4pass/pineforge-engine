@@ -100,7 +100,7 @@ Always set, with documented defaults in the header:
 - `chart_timezone`: optional observation metadata; empty stays empty and is
   not the scheduling calendar
 - `slippage_ticks`: `0` .. `INT_MAX`. Buy adds, sell subtracts
-  `ticks * price_tick` **once** to form the kernel default price. A v15 terms
+  `ticks * price_tick` **once** to form the kernel default price. A v16 terms
   resolver receives that default; an accepted override is final and is not
   slipped a second time. No mintick snap.
 - `fee_kind` / `fee_value`: `Percent`, `CashPerUnit`, `CashPerExecution`;
@@ -165,7 +165,7 @@ cycle identity through scoped settlement. Group cancellation/reduction is
 caused by committed execution events. See the request header for the exact
 value types; source-specific Pine lowering remains codegen/adapter work.
 
-At host epoch v15, general requests also support explicit
+At host epoch v16, general requests also support explicit
 `native_order::ReverseTo{signed_units}` and `HostSized`. A `HostSized{Open,
 Side}` request binds its units at a matching candidate through the host's
 `resolve_execution_terms` override. The host may choose `Transact`, exact
@@ -598,7 +598,8 @@ Empty timeframe strings are also valid (`run(bars, n)` and
 
 ## Terms, reversal, precommit, FX curve
 
-Epoch v15 adds two const host hooks. `resolve_execution_terms` sees read-only
+The two const host hooks introduced at v15 remain present at the current v16
+host epoch. `resolve_execution_terms` sees read-only
 candidate facts and returns a resolved price plus units only for an unresolved
 `HostSized` request. Its default is the identity price with no units. A
 `NativePrecommitView` is then available to
@@ -612,6 +613,21 @@ units separately from `filled_working` turnover, so a reversal remains one
 ticket and one settlement cycle. A `HostSized{Open}` is sized once; later
 candidate rematches may re-resolve price but not size. `CloseOpposite` uses the
 existing whole-book Flatten path when it must close an absorbed roster.
+
+### Source-layer boundary (R4-C)
+
+Pine/generated hosts now derive from `pineforge::source::PineStrategyHost`,
+which derives from the v16 `BacktestEngine`; handwritten native hosts continue
+to derive from `NativeStrategyHost`. `source::PendingOrder` and the
+`pineforge-source-adapter/v1` hash domain belong to the source layer, while the
+public C ABI remains version 4.
+
+This is an ownership boundary, not completion of Pine lowering: the source host
+still uses the moved legacy compatibility loop (`LegacyCompatibilityConsumer`).
+The installed-header check removes `source/` and `compat/pine/`, then compiles
+the declared native roots and native examples; its dependency files and `nm`
+output are the evidence for this include boundary. It does not establish a
+broader policy or runtime-independence claim.
 
 The second runner module is a deliberately small example of those public
 seams. It contains no Pine command calls, formula, or protected engine write:

@@ -127,9 +127,13 @@ class Scripted:
         if any(Path(part).name == 'prepare_settlement_cpp_abi_base.py' for part in argv):
             key = self.provider_command_name(argv, 'prepare')
             return Completed(int(self.exits.get(key, 0)), b'prepared\n', b'')
+        if any(Path(part).name == 'check_native_include_independence.py' for part in argv):
+            return Completed(int(self.exits.get('native-include-independence', 0)),
+                             b'native include independence\n', b'')
         if any(Path(part).suffix == '.py' for part in argv):
             needles = {
                 'source-guard-c-abi': 'check_c_abi_runtime.py',
+                'source-guard-native-source': 'test_native_source_guard.py',
                 'source-guard-broker-hash': 'check_broker_state_hash_coverage.py',
                 'source-guard-pending-mirror': 'gen_pending_order_mirror.py',
                 'source-guard-native-versions': 'check_native_cpp_versions.py',
@@ -808,6 +812,21 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('source-guard-c-abi', failure_stages(summary))
         self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
+
+    def test_native_include_independence_runs_for_release_and_native_only(self):
+        for profile, expected in (("release", True), ("native", True),
+                                  ("debug", False), ("sanitizers", False)):
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(profile)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual('native-include-independence' in stage_names(summary), expected)
+
+    def test_native_include_independence_failure_stops_before_abi(self):
+        code, summary, scripted, _ = self.run_profile(**{'native-include-independence': 1})
+        self.assertEqual(code, 1)
+        self.assertIn('native-include-independence', failure_stages(summary))
+        self.assertNotIn('abi-base', scripted.names())
+        self.assertNotIn('ctest', scripted.names())
 
     def test_ctest_and_smoke_failures_are_both_collected(self):
         code, summary, scripted, _ = self.run_profile(ctest=8, **{'smoke-stdout': '9.9.9'})

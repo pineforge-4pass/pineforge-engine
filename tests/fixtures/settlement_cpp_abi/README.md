@@ -32,10 +32,11 @@ at `../native_cpp_abi/host-e7cdf05/manifest.json` with `headers.tar` SHA-256
 `189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3`, and its
 real archive is prepared under `native-abi-v15-frozen/`.
 
-All four historical providers, the frozen v15 provider, and the live v15
+All four historical providers, the frozen v15 provider, and the live v16
 archive remain required in the six-archive matrix. e60/0e retain engine-only
-roles; v13/v14/frozen-v15/live-v15 supply the host/order/driver domains. The
-selected-method rejection uses R2.
+roles; v13/v14/frozen-v15/live-v16 supply the host/order/driver domains. The
+v15↔v16 source/host rejection pairs are mandatory; the selected-method
+rejection uses R2.
 
 The new settlement checker supplements `check_native_cpp_abi.py` and
 `check_script_cpp_abi.py`; retain those existing checks and their old epoch
@@ -141,22 +142,20 @@ The checker:
   selected/projection aggregates. An epoch transition exempts no inventory
   entry and no layout word; `layout.comparedWords` and
   `priorLayout.comparedWords` always equal their `wordCount`;
-* compares every frozen native header's text. Across the reviewed
-  `engine_script_run_v13` → `engine_script_run_v15` and
-  `engine_script_run_v14` → `engine_script_run_v15` transitions — and only
-  those transitions, enumerated in one module constant in the checker — exactly four
-  headers may differ: `native_order.hpp`, `native_host.hpp`,
-  `market_driver.hpp` and `execution_consumer.hpp`. Current epochs are
-  `native_order_v4`, host v15, unchanged `native_driver_v4` and consumer v6. Each actual
-  difference is recorded in `frozenShape.exemptedHeaders` with both digests and
-  its transition; an exempted header that did not change records nothing, and
-  any other differing header raises. `native_order_identity.hpp`,
-  `native_run_spec.hpp` and `native_calendar.hpp` stay comment-stripped frozen
-  throughout; only the identity header's stale namespace comment is renamed.
-  The four exempted current headers also have reviewed byte pins. Those pins
-  change in the same landing as their bytes. Provider-relative order assertions
-  keep old providers at CommandEvent/OrderIntent 16/3; current remains 16/3
-  through native-terms phase 1a and moves to 17/5 with the phase-1b order surface;
+* compares every frozen native header's text. The reviewed
+  `engine_script_run_v13` → `engine_script_run_v15`,
+  `engine_script_run_v14` → `engine_script_run_v15`, and
+  `engine_script_run_v15` → `engine_script_run_v16` transitions use their
+  exact checker inventories. The v15→v16 comparison consumes the authenticated
+  source-layer relocation manifest: it permits only the listed moved storage
+  and seams, measures `source::PendingOrder` separately, and fails on every
+  extra difference. Current epochs are `native_order_v4`, host v16, unchanged
+  `native_driver_v4` and consumer v6. Each actual difference is recorded in
+  `frozenShape.exemptedHeaders` with both digests and its transition; an
+  exempted header that did not change records nothing, and any other differing
+  header raises. `native_order_identity.hpp`, `native_run_spec.hpp` and
+  `native_calendar.hpp` stay comment-stripped frozen throughout. The reviewed
+  current headers have matching byte pins.
 * compiles each old/new caller before any link result is interpreted;
 * links old Book/singleton/lifecycle, old private F8/F11 wrappers and old
   return-only host event callers against both full providers;
@@ -174,11 +173,11 @@ The checker:
 * rejects synthetic reversal `_v2` methods and `reverse_to_v2::ReverseTo`
   parameters against current, supplementing the real historical rejection;
 * links constructor/vtable, host observation, return-only `native_events()`
-  and core request callers to their matching v13/v14/v15 archives, then
+  and core request callers to their matching v13/v14/v15/v16 archives, then
   rejects every cross-epoch host/order pair at its exact namespaced symbol;
-* compiles shape-agnostic current-execution callers only from v14 and v15
-  headers, links each to its matching archive, and rejects it against the other
-  epoch and v13;
+* compiles shape-agnostic current-execution callers from authenticated v14/v15
+  headers and the live v16 headers, links each to its matching archive, and
+  rejects every mismatched owner epoch;
 * links driver callers to their matching archives, rejects v13↔v14 and
   v13↔v15 pairs, and requires positive v14→v15 and v15→v14 links because
   both own `native_driver_v4`. These per-domain outcomes govern over the

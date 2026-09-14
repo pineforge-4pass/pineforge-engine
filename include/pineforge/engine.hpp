@@ -24,17 +24,13 @@
 #include "execution_close_selection.hpp"
 #include "execution_projection.hpp"
 #include "execution_reverse_to.hpp"
+#include "position_close_obligation.hpp"
 #include "market_admission.hpp"
 #include "reservation_expansion.hpp"
 #include "order_cancellation.hpp"
-#include "compat/pine/frozen_market_instruction.hpp"
 #include "leg_activation.hpp"
 #include "exit_leg_lifecycle.hpp"
-#include "compat/pine/exit_activation.hpp"
 #include "order_birth.hpp"
-#include "compat/pine/order_birth.hpp"
-#include "compat/pine/intraday_cap.hpp"
-#include "compat/pine/order_priority.hpp"
 #include "series.hpp"
 #include "timeframe.hpp"
 #include "magnifier.hpp"
@@ -1012,7 +1008,7 @@ protected:
     // Source coordinator for one execution plus lifecycle effects and source days.
     // Pre-close operations, then close observations and old-cycle unbind, then
     // the listed pending removals, then the quoted opening path which binds
-    // only remaining exits. Native settlement does not call compat::pine
+    // only remaining exits. Native settlement does not call source-layer
     // selectors; the effects value is not retained.
     execution::Result settle_execution_with_lifecycle(
         const execution::Action& action, const execution::Fill& fill,
@@ -2007,7 +2003,7 @@ protected:
     // Chart-timezone-aware decomposition for the existing loss-day clocks
     // and the continuous/unconfigured-session order-counter fallback. The
     // order counter on an explicitly timed session instead consumes
-    // compat::pine::IntradayCap::risk_day(), which follows the symbol's trading day.
+    // source-layer intraday-cap risk-day policy, which follows the symbol's trading day.
     //
     // Falls back to plain ``_decompose_bar_time()`` (UTC) when no chart
     // timezone has been set, preserving the legacy fast path for
@@ -3697,8 +3693,8 @@ public:
     // predicates. They default to UTC / 24x7 (crypto); a data feed pushes
     // the real values via these setters before run().
     //
-    // max_intraday_filled_orders consumes a valid explicit session and this
-    // timezone through compat::pine::IntradayCap::risk_day(). Other risk-day rules keep
+    // The source-layer intraday cap consumes a valid explicit session and this
+    // timezone through its risk-day policy. Other risk-day rules keep
     // chart_timezone_, as do continuous/unconfigured order-counter clocks;
     // the existing crypto-on-shifted-chart contract therefore remains intact.
     void set_syminfo_timezone(const std::string& tz) {

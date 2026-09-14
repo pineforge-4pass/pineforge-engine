@@ -9,5 +9,6 @@ This is the last engine_script_run_v14 / native_order_v3 / native_driver_v4 /
 consumer v5 commit (R4-A, PR #250). The preparation tool builds the real
 immutable source with the current profile's compiler/configuration; it never
 synthesizes a provider or executes ABI callers. The e60, 0e and c3ed455
-providers remain required. Epoch-15 callers must reject against this archive
-at the declared symbols; v14-v14 and current-current controls link.
+providers remain required. Epoch-15 and epoch-16 callers must reject against
+this archive at the declared symbols; v14-v14 and matching current controls
+link.

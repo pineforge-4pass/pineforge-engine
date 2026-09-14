@@ -38,6 +38,11 @@ NATIVE_EXAMPLES = (
 )
 FORBIDDEN_DEPENDENCY_PARTS = ("/pineforge/source/", "/pineforge/compat/pine/")
 FORBIDDEN_SYMBOLS = ("pineforge::source", "compat::pine")
+# A21 keeps this one opaque pointer in the generic legacy wrapper signature.
+# It is a forward declaration only: no native consumer can construct or name a
+# source host through it.  Keep the exception narrow so a real source symbol
+# (or a second source type) remains a failure.
+OPAQUE_LEGACY_SOURCE_SYMBOL = "pineforge::source::StrategyOverrides const*"
 INCLUDE_VALUE_OPTIONS = {
     "-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
     "-isysroot", "-iframework", "-F",
@@ -180,8 +185,16 @@ def forbidden_dependency_entries(entries: list[str]) -> list[str]:
     return found
 
 
+def is_allowed_opaque_legacy_symbol(line: str) -> bool:
+    return ("BacktestEngine::legacy_run_rich(" in line
+            and OPAQUE_LEGACY_SOURCE_SYMBOL in line
+            and line.count("pineforge::source::") == 1)
+
+
 def forbidden_symbol_lines(symbols: str) -> list[str]:
-    return [line for line in symbols.splitlines() if any(token in line for token in FORBIDDEN_SYMBOLS)]
+    return [line for line in symbols.splitlines()
+            if any(token in line for token in FORBIDDEN_SYMBOLS)
+            and not is_allowed_opaque_legacy_symbol(line)]
 
 
 def independence_exit_code(findings: list[Finding], *, expect_fail: bool) -> int:
@@ -240,9 +253,19 @@ def format_findings(findings: list[Finding]) -> str:
     return "\n".join(lines)
 
 
-def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False) -> int:
+def archive_text(evidence_dir: Path | None, relative: Path, text: str) -> None:
+    if evidence_dir is None:
+        return
+    destination = evidence_dir / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(text)
+
+
+def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False,
+          evidence_dir: Path | None = None) -> int:
     build_dir = build_dir.resolve()
     prefix = prefix.resolve()
+    evidence_dir = evidence_dir.resolve() if evidence_dir is not None else None
     if not (build_dir / "CMakeCache.txt").is_file():
         raise InfrastructureError("build directory is not configured: " + str(build_dir))
     if prefix in {ROOT, build_dir} or ROOT in prefix.parents or build_dir in prefix.parents:
@@ -257,6 +280,16 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False) -> int:
     remove_forbidden_prefix_trees(prefix)
     cache = read_cmake_cache(build_dir / "CMakeCache.txt")
     compiler, flags, origin = compile_command_flags(build_dir, cache)
+    if evidence_dir is not None:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        archive_text(evidence_dir, Path("manifest.json"), json.dumps({
+            "buildDir": str(build_dir),
+            "compiler": compiler,
+            "flags": flags,
+            "flagsOrigin": origin,
+            "rootHeaders": list(ROOT_HEADERS),
+            "nativeExamples": [relative for _, relative in NATIVE_EXAMPLES],
+        }, indent=2, sort_keys=True) + "\n")
     if not shutil.which(compiler) and not Path(compiler).is_file():
         raise InfrastructureError("C++ compiler not found: " + compiler)
     findings: list[Finding] = []
@@ -269,13 +302,17 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False) -> int:
                                     output=work / "objects" / (header + ".o"),
                                     depfile=work / "deps" / (header + ".d"),
                                     include_root=include_root, label="compile " + header)
+            depfile = work / "deps" / (header + ".d")
+            if depfile.is_file():
+                archive_text(evidence_dir, Path("dependencies") / (header + ".d"),
+                             depfile.read_text(errors="replace"))
             if result.returncode:
                 finding = compiler_failure_finding("compile " + header, result)
                 if finding is None:
                     raise InfrastructureError("compile " + header + " failed:\n" + result.stdout + result.stderr)
                 findings.append(finding)
                 continue
-            for dependency in forbidden_dependency_entries(parse_depfile(work / "deps" / (header + ".d"))):
+            for dependency in forbidden_dependency_entries(parse_depfile(depfile)):
                 findings.append(Finding("dependency", header, dependency))
         for name, relative in NATIVE_EXAMPLES:
             source = ROOT / relative
@@ -285,17 +322,22 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False) -> int:
             result = compile_object(compiler, flags, source=source, output=output,
                                     depfile=work / "deps" / (name + ".d"),
                                     include_root=include_root, label="compile " + relative)
+            depfile = work / "deps" / (name + ".d")
+            if depfile.is_file():
+                archive_text(evidence_dir, Path("dependencies") / (name + ".d"),
+                             depfile.read_text(errors="replace"))
             if result.returncode:
                 finding = compiler_failure_finding("compile " + relative, result)
                 if finding is None:
                     raise InfrastructureError("compile " + relative + " failed:\n" + result.stdout + result.stderr)
                 findings.append(finding)
                 continue
-            for dependency in forbidden_dependency_entries(parse_depfile(work / "deps" / (name + ".d"))):
+            for dependency in forbidden_dependency_entries(parse_depfile(depfile)):
                 findings.append(Finding("dependency", relative, dependency))
             nm = run_command(["nm", "-C", str(output)], label="nm " + relative, timeout=60)
             if nm.returncode:
                 raise InfrastructureError("nm " + relative + " failed:\n" + nm.stdout + nm.stderr)
+            archive_text(evidence_dir, Path("nm") / (name + ".txt"), nm.stdout)
             for line in forbidden_symbol_lines(nm.stdout):
                 findings.append(Finding("symbol", relative, line))
         generic = work / "generic-consumer.cpp"
@@ -304,10 +346,14 @@ def check(build_dir: Path, prefix: Path, *, expect_fail: bool = False) -> int:
                                 output=work / "objects" / "generic-consumer.o",
                                 depfile=work / "deps" / "generic-consumer.d",
                                 include_root=include_root, label="compile standalone Series/TA/calendar consumer")
+        generic_depfile = work / "deps" / "generic-consumer.d"
+        if generic_depfile.is_file():
+            archive_text(evidence_dir, Path("dependencies") / "generic-consumer.d",
+                         generic_depfile.read_text(errors="replace"))
         if result.returncode:
             raise InfrastructureError("standalone Series/TA/calendar consumer failed:\n"
                                       + result.stdout + result.stderr)
-        for dependency in forbidden_dependency_entries(parse_depfile(work / "deps" / "generic-consumer.d")):
+        for dependency in forbidden_dependency_entries(parse_depfile(generic_depfile)):
             findings.append(Finding("dependency", "standalone Series/TA/calendar consumer", dependency))
     if findings:
         print(format_findings(findings))
@@ -322,11 +368,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--prefix", type=Path, required=True)
+    parser.add_argument("--evidence-dir", type=Path,
+                        help="optional directory for dependency files and native-example nm output")
     parser.add_argument("--expect-fail", action="store_true",
                         help="succeed only when a genuine forbidden dependency/symbol is found")
     args = parser.parse_args(argv)
     try:
-        return check(args.build_dir, args.prefix, expect_fail=args.expect_fail)
+        return check(args.build_dir, args.prefix, expect_fail=args.expect_fail,
+                     evidence_dir=args.evidence_dir)
     except InfrastructureError as error:
         print("native include independence: infrastructure failure: " + str(error), file=sys.stderr)
         return 1

@@ -19,6 +19,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Callable
 
@@ -42,11 +43,13 @@ SANITIZER_RUN_ENV = {
 }
 SOURCE_GUARD_SCRIPTS = (
     ('source-guard-c-abi', ['scripts/check_c_abi_runtime.py']),
+    ('source-guard-native-source', ['scripts/test_native_source_guard.py']),
     ('source-guard-broker-hash', ['scripts/check_broker_state_hash_coverage.py']),
     ('source-guard-pending-mirror', ['scripts/gen_pending_order_mirror.py', '--check']),
     ('source-guard-native-versions', ['scripts/check_native_cpp_versions.py']),
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
 )
+NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native'))
 
 
 class ConfigError(Exception):
@@ -129,6 +132,11 @@ def ctest_supports_junit(runner: Runner) -> bool:
 def source_guard_commands(source: Path) -> list[tuple[str, list[str]]]:
     python = sys.executable
     return [(name, [python, str(source / rel[0]), *rel[1:]]) for name, rel in SOURCE_GUARD_SCRIPTS]
+
+
+def native_include_independence_command(cfg: VerifyConfig, prefix: Path) -> list[str]:
+    return [sys.executable, str(cfg.source / 'scripts/check_native_include_independence.py'),
+            '--build-dir', str(cfg.build_dir), '--prefix', str(prefix)]
 
 
 def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
@@ -618,6 +626,16 @@ class Driver:
             f'printed VERSION {actual} matches {self.cfg.source / "VERSION"}',
             argv=[str(binary)])
 
+    def enforce_native_include_independence(self) -> bool:
+        if self.cfg.profile.name not in NATIVE_INCLUDE_INDEPENDENCE_PROFILES:
+            return True
+        with tempfile.TemporaryDirectory(prefix='pineforge-native-include-') as temporary:
+            result = self.invoke(
+                'native-include-independence',
+                native_include_independence_command(self.cfg, Path(temporary)),
+                timeout=300)
+        return result.returncode == 0
+
     def run(self) -> int:
         self.logs.mkdir(parents=True, exist_ok=True)
         self.write_summary()
@@ -676,6 +694,8 @@ class Driver:
                 'libpineforge.a predates source; full rebuild required: ' + ', '.join(stale[:40]))
             return self.finish('failed', 1)
         self.pass_stage('stale-binaries', f'{archive} is newer than src/, include/, CMakeLists.txt')
+        if not self.enforce_native_include_independence():
+            return self.finish('failed', 1)
         live = self.cfg.build_dir / 'bin' / 'pineforge-live'
         if self.cfg.profile.live_runner:
             if not live.is_file():

@@ -37,6 +37,7 @@ set(TEST_SOURCES
     test_native_calendar_driver_contract
     test_native_host_repairs
     test_source_layer_native_defaults
+    test_source_fingerprint
     test_order_action_integration
     test_placement_facts
     test_order_cancellation
@@ -61,6 +62,7 @@ set(TEST_SOURCES
     test_exit_lifecycle_availability
     test_exit_activation_routes
     test_pending_order_core
+    test_pending_order_v1_canary
     test_pending_quantity_intent
     test_bulk_preflight
     test_opening_obligation
@@ -357,6 +359,11 @@ add_test(
     NAME test_native_include_independence_tooling
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_native_include_independence.py
+)
+add_test(
+    NAME test_native_source_guard
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_native_source_guard.py
 )
 add_test(
     NAME test_native_cpp_abi

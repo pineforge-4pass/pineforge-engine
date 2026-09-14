@@ -239,9 +239,12 @@ array, freed by `report_free` — same ownership rule as `trades` /
 ## The pending-order mirror {#live_surface_pending_mirror}
 
 `pf_pending_order_v1_t` is a **generated**, C-compatible POD mirror of the
-engine's internal `PendingOrder` record, produced by
-`scripts/gen_pending_order_mirror.py` from `include/pineforge/engine.hpp`
-into `include/pineforge/pending_order_mirror.hpp` — never hand-edited. It
+source-owned `source::PendingOrder` record, produced by
+`scripts/gen_pending_order_mirror.py` from
+`include/pineforge/source/pine_pending_intent.hpp` into
+`include/pineforge/pending_order_mirror.hpp` — never hand-edited. The generator
+emits a source-free descriptor/layout TU (`src/pending_order_mirror.cpp`) and a
+source projection TU (`src/source/pine_pending_mirror.cpp`). It
 starts with `struct_version` and `size` (a self-describing header),
 followed by 98 mirrored `PendingOrder` members (scalars by value, strings
 as the fixed `char[64]` + truncated-flag + hash64 triple above, enums as

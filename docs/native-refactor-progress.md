@@ -18,7 +18,7 @@ improvement resumes after the final native audit.
 | R3 observation | Source-day observation isolation | Complete ([PR #248](https://github.com/pineforge-4pass/pineforge-engine/pull/248)) |
 | R4-A | Selected closes, current-point execution, native run specification and forward lifecycle | Complete ([PR #250](https://github.com/pineforge-4pass/pineforge-engine/pull/250)) |
 | R4-B | Host-sized terms, exact reversal, precommit view, immutable native FX curve, ABI fencing, example and docs | In implementation; no R4 acceptance claim |
-| Slice B | Source-layer cut, including the generic native FX broker-open epoch clock | Not started |
+| Slice B | Source-layer cut, including the generic native FX broker-open epoch clock | Intermediate ownership boundary landed; no R4 credit |
 | Slice C | Pine compatibility adapter lowering onto the native seams | Not started |
 | R5 | Final requirement and compatibility audit | Open |
 | R6 | Resume the parity improvement campaign after the audit | Queued |
@@ -105,12 +105,31 @@ The native R2 boundary is pinned; complete Pine lowering remains mandatory
 R4 work. The parity-improvement campaign remains paused through the final
 native audit.
 
-## Current R4-B epoch baseline
+## R4-C intermediate source hierarchy
 
-The current R4-B baseline uses `native_order_v4`, engine/host
-`engine_script_run_v15`, `native-consumer/v6`, and broker/stream version 15.
-Identity values remain `native_order_v1`; native run-spec and calendar remain
-v1, the driver remains v4, and `PF_ABI_VERSION` remains 4.
+```text
+Generated strategy / handwritten Pine fixture
+  -> source::PineStrategyHost
+       -> BacktestEngine
+NativeStrategyHost
+  -> BacktestEngine
+```
+
+`PineStrategyHost` now owns the source language state, pending-intent book,
+adapter/journal, policy state and the legacy source scheduler. The base owns
+generic physical/account/run state; native hosts construct no source host. The
+remaining O1 gap is deliberate and material: source hosts still execute the
+moved legacy compatibility loop through `LegacyCompatibilityConsumer`. This
+intermediate hierarchy earns **no R4 credit** and does not mark R4-B or Slice C
+accepted.
+
+## Current R4-C epoch baseline
+
+The current baseline uses `native_order_v4`, engine/host
+`engine_script_run_v16`, `native-consumer/v6`, broker/stream version 16, and
+the source extension domain `pineforge-source-adapter/v1`. The frozen e7cdf05
+provider remains v15. Identity values remain `native_order_v1`; native run-spec
+and calendar remain v1, the driver remains v4, and `PF_ABI_VERSION` remains 4.
 
 ## Completed R3 settlement and observation milestones
 

@@ -23,8 +23,8 @@ checker imports that module's tar extraction/authentication helpers directly.
 | `host-e7d023d` | commit `e7d023dbdff1c98229155ec5bcdd1e4ac534f5fb`, tree `0201bf052429490fb453bbfd6037e5afd1669626`, `native_host.hpp` SHA `871865715f084a0054c9d8e220cb9b957318bfdc0a0e100765d1cda85d7944b3` | `engine_script_run_v12` host/event return layout. Return-only `native_events()` pairing; not a historical runtime. |
 | `order-e7d023d` | same e7d023d commit/tree, `native_order.hpp` SHA `b13006e99554ba9caa3e5b444cca3e4f2b5ebd5e372d3dcbe44bb6a677192a3e` | `native_order_v1`. `CommandEvent` has 10 alternatives. `src/native_order.cpp` is an authentic compile-only old object. |
 | `host-c3ed455` | commit `c3ed45516721d3185fcd2f50bb293793304bc6e6`, tree `bb80c4767dddc0e5c9ae172672edd955ad344890` | Engine/host epoch 13, order epoch 2, driver epoch 3. Full historical host/order/driver library pairing; no current-execution declarations. |
-| `host-f736676` | commit `f736676ea9a558dc664b18f099a488b3a2c0067f`, tree `c69421f0f86d23aa48eeb2c79bf7f475a4db0e83`, tar SHA `37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e` | Frozen 55-header engine/host epoch 14, order epoch 3, driver epoch 4 closure. Active shape-agnostic current-execution compile control and real full-library pairing with current v15. |
-| `host-e7cdf05` | commit `e7cdf052fa44d4c98035804db7b8399d3a5a37b2`, tree `dea028ca5664f78c055b1588820a4f7cce5b137f`, tar SHA `189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3` | Frozen 56-header v15 source-layer-base closure. The immutable same-epoch archive must link with the live v15 archive in every matching native domain. |
+| `host-f736676` | commit `f736676ea9a558dc664b18f099a488b3a2c0067f`, tree `c69421f0f86d23aa48eeb2c79bf7f475a4db0e83`, tar SHA `37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e` | Frozen 55-header engine/host epoch 14, order epoch 3, driver epoch 4 closure. Historical current-execution controls remain authenticated against the current v16 matrix. |
+| `host-e7cdf05` | commit `e7cdf052fa44d4c98035804db7b8399d3a5a37b2`, tree `dea028ca5664f78c055b1588820a4f7cce5b137f`, tar SHA `189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3` | Frozen 56-header v15 source-layer-base closure. It is the immutable old provider for required v15↔v16 rejection pairs. |
 
 Sources were taken from the pairing-audit capture
 `tasks/native-abi-audit/snapshot-20260912T064119Z` and, where that capture
@@ -35,9 +35,10 @@ pairing audit's LLVM `sizeof`/`offsetof` witness and are re-checked here
 with `static_assert` against the frozen headers.
 
 The full settlement matrix comprises e60, 0e, v13, v14, frozen v15 and live
-v15 archives. Host and order cross-epoch pairs reject; driver v4 positively
-links v14↔v15, and the frozen/live v15 pair positively links in every
-same-owner domain. `native-abi-receipt.json` records the authenticated v14
-and frozen-v15 compile controls. `CURRENT_TERMS_SURFACE_READY = True`: the
-complete v15 current-execution, FX and missing-Cancelled controls are active.
+v16 archives. Host and order cross-epoch pairs reject, including mandatory
+v15↔v16 pairs; matching v16 callers/providers link. Driver v4 retains its
+historical same-owner positive controls. `native-abi-receipt.json` records the
+authenticated v14 and frozen-v15 compile controls. `CURRENT_TERMS_SURFACE_READY = True`:
+the complete v16 current-execution, FX and missing-Cancelled controls
+are active.
 Existing order-v1 rejection pairs remain required.

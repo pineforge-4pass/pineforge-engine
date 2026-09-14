@@ -1,6 +1,8 @@
 #pragma once
 
 #include <pineforge/engine.hpp>
+#include <pineforge/compat/pine/intraday_cap.hpp>
+#include <pineforge/compat/pine/order_priority.hpp>
 
 namespace pineforge::source {
 

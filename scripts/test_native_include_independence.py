@@ -8,9 +8,11 @@ import unittest
 
 from check_native_include_independence import (
     Finding,
+    archive_text,
     compile_command_flags,
     forbidden_dependency_entries,
     forbidden_symbol_lines,
+    is_allowed_opaque_legacy_symbol,
     independence_exit_code,
     parse_depfile,
     remove_forbidden_prefix_trees,
@@ -19,6 +21,14 @@ from check_native_include_independence import (
 
 
 class NativeIncludeIndependenceTooling(unittest.TestCase):
+    def test_archive_text_writes_only_when_evidence_is_requested(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "evidence"
+            archive_text(evidence, Path("dependencies/native_host.hpp.d"), "header.d\n")
+            self.assertEqual((evidence / "dependencies/native_host.hpp.d").read_text(), "header.d\n")
+            archive_text(None, Path("ignored"), "ignored\n")
+            self.assertFalse((evidence / "ignored").exists())
+
     def test_remove_forbidden_prefix_trees_keeps_generic_headers(self):
         with tempfile.TemporaryDirectory() as temporary:
             prefix = Path(temporary) / "prefix"
@@ -77,6 +87,20 @@ class NativeIncludeIndependenceTooling(unittest.TestCase):
                                      "/prefix/include/pineforge/compat/pine/legacy.hpp"])
         symbols = "U pineforge::source::PineStrategyHost::run()\nU compat::pine::CapAttachment::x()\n"
         self.assertEqual(forbidden_symbol_lines(symbols), symbols.splitlines())
+
+    def test_only_the_opaque_legacy_override_pointer_is_allowed(self):
+        allowed = ("U pineforge::engine_script_run_v16::BacktestEngine::legacy_run_rich("
+                   "pineforge::Bar const*, pineforge::source::StrategyOverrides const*)")
+        self.assertTrue(is_allowed_opaque_legacy_symbol(allowed))
+        self.assertEqual(forbidden_symbol_lines(allowed), [])
+        self.assertEqual(forbidden_symbol_lines(
+            "U pineforge::source::PineStrategyHost::run()"),
+            ["U pineforge::source::PineStrategyHost::run()"])
+        self.assertEqual(forbidden_symbol_lines(
+            "U pineforge::engine_script_run_v16::BacktestEngine::legacy_run_rich("
+            "pineforge::source::StrategyOverrides const*, pineforge::source::PineStrategyHost const*)"),
+            ["U pineforge::engine_script_run_v16::BacktestEngine::legacy_run_rich("
+             "pineforge::source::StrategyOverrides const*, pineforge::source::PineStrategyHost const*)"])
 
     def test_expect_fail_only_inverts_real_findings(self):
         finding = Finding("dependency", "header", "/prefix/include/pineforge/compat/pine/x.hpp")

@@ -36,8 +36,8 @@ integration-test receiver/orchestrator, never by the running executable.
 The build includes `build-live/lib/native-live-example.so`, a hand-written
 C++ example, `native-market-example.so`, `native-selected-example.so`, and
 `native-live-parser-example.so`, an illustrative parser. The platform's CMake
-module suffix may differ. A strategy's factory returns a
-`BacktestEngine`-derived instance, exports `strategy_create/free` and the
+module suffix may differ. A Pine/generated strategy's factory returns a
+`pineforge::source::PineStrategyHost`-derived instance, exports `strategy_create/free` and the
 input/override setters, and links the engine's C ABI object. See
 [examples/strategy.cpp](examples/strategy.cpp). Codegen-generated libraries
 already provide their strategy factory and setters; no codegen-specific live

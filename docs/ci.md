@@ -23,6 +23,9 @@ prepares the real historical ABI providers, runs CTest, installs the package,
 and builds and runs the `find_package` consumer. The smoke test compares the
 installed library's reported version with `VERSION`. After a successful build,
 a failing test suite does not hide a separate install or package failure.
+Release and native profiles also install into a disposable prefix, remove the
+source-only header trees, and compile the native public roots and examples;
+the preflight source guard rejects those includes before a build.
 
 CI pins Ubuntu 24.04 and macOS 26, the platforms used by the preceding green
 refactor PR, and selects Python 3.12 explicitly. CMake uses the same interpreter as the
@@ -33,10 +36,10 @@ Python. CTest must discover tests; an empty suite is a failure.
 
 | Profile | Build | Additional coverage |
 | --- | --- | --- |
-| `release` | Release, tutorial enabled | Standard CI checks and installed package |
+| `release` | Release, tutorial enabled | Standard CI checks, installed package, and installed native include-independence proof |
 | `debug` | Debug, tutorial enabled | The same checks without Release optimization |
 | `sanitizers` | Debug, ASan and UBSan | Instrumented library, tests and installed consumer; Linux CI also requires leak detection |
-| `native` | Release, live runner enabled | Parser, journal, transport tests and installed runner help |
+| `native` | Release, live runner enabled | Parser, journal, transport tests, installed runner help, and installed native include-independence proof |
 
 By default each profile uses `build-ci-<profile>`. Keep separate build directories
 for different profiles and toolchains. The verifier never deletes a build tree
@@ -86,23 +89,24 @@ their matching prepared receipts under `settlement-abi-base/`,
 configuration and version-source mismatches refuse reuse without deleting the old evidence.
 Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.
-The full settlement matrix uses those five archives plus live v15. Its
-host/order matrix rejects cross-epoch links among v13, v14 and v15; the
-unchanged driver v4 requires positive links in both v14→v15 and v15→v14
-directions, while frozen v15 and live v15 positively pair in every matching
-owner domain. Current-execution callers compile from v14 and both v15 header
-closures.
+The full settlement matrix uses those five archives plus live v16. Its
+host/order matrix retains the historical v13/v14/v15 verdicts and requires
+both v15→v16 and v16→v15 rejection pairs; matching v16 callers/providers
+succeed. The unchanged driver v4 keeps its historical positive links where its
+owner domain is unchanged. Current source callers authenticate the
+`pineforge-source-adapter/v1` domain, while the frozen v15 provider remains an
+immutable historical identity.
 The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
 actual old/new library pairs and their immutable inputs.
 
 CTest writes `settlement-abi-receipt.json` for the six-archive matrix and
 `native-abi-receipt.json` for native controls. The native receipt includes the
-active `v14_current_execution_shape_agnostic_compile` and the frozen-v15
-surface controls against authenticated tar closures. `CURRENT_TERMS_SURFACE_READY = True`:
-the complete current-execution, FX, and missing-Cancelled controls are
-active, and the good caller compiles before its intentional negative compile
-control. Ordinary compile failures remain failures, separate from ABI link
-rejections.
+active `v14_current_execution_shape_agnostic_compile`, frozen-v15 surface
+controls, and v16-current rejection controls against authenticated tar
+closures. `CURRENT_TERMS_SURFACE_READY = True`: the complete current-execution,
+FX, and missing-Cancelled controls are active, and the good caller compiles
+before its intentional negative compile control. Ordinary compile failures
+remain failures, separate from ABI link rejections.
 
 ## Failure evidence
 
