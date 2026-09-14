@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/source/pine_native_host.hpp>
 
 #include "../broker_state_hash_internal.hpp"
 
@@ -314,6 +315,138 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     hash_source_series(f, coof_checkpoint_src_hlcc4_);
     f.d(coof_checkpoint_prev_chart_close_);
     f.d(coof_checkpoint_last_chart_close_);
+}
+
+namespace {
+
+void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
+    f.s(handle.run.session_key); f.u(handle.run.run_number); f.u(handle.incarnation);
+}
+void hash_native_handle_vector(BrokerStateHashSink& f,
+                               const std::vector<native_order::RequestHandle>& handles) {
+    f.u(handles.size());
+    for (const auto& handle : handles) hash_native_handle(f, handle);
+}
+void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& value) {
+    f.i(static_cast<std::int64_t>(value.family)); f.s(value.source_id); f.s(value.from_entry);
+    f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
+    f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
+    f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
+    f.b(value.reverse_to); f.u(value.source_sequence); f.i(value.placement_script_open_ms);
+    f.i(value.placement_sub_open_ms); f.d(value.sizing.equity); f.d(value.sizing.price);
+    f.d(value.sizing.fx); f.d(value.sizing.mark); f.d(value.sizing.frozen_units);
+    f.b(value.sizing.at_fill); f.d(value.exit_levels.limit); f.d(value.exit_levels.stop);
+    f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
+    f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
+    f.d(value.exit_levels.loss_ticks);
+}
+
+} // namespace
+
+void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
+    f.s(kSourceAdapterDomain); f.u(run_counter_); f.u(source_sequence_); f.b(host_ != nullptr);
+    f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
+    f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
+    f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
+    f.i(config_.slippage); f.d(config_.margin_long); f.d(config_.margin_short);
+    f.b(config_.close_entries_rule_any); f.b(config_.src_series_active);
+    f.s(staged_.syminfo.ticker); f.s(staged_.syminfo.tickerid); f.s(staged_.syminfo.currency);
+    f.s(staged_.syminfo.basecurrency); f.s(staged_.syminfo.type); f.s(staged_.syminfo.timezone);
+    f.s(staged_.syminfo.session); f.s(staged_.syminfo.volumetype); f.s(staged_.syminfo.description);
+    f.d(staged_.syminfo.mintick); f.d(staged_.syminfo.pointvalue); f.d(staged_.syminfo.qty_step);
+    f.s(staged_.chart_timezone); f.d(staged_.account_fx);
+    f.b(staged_.quantity_grid.has_value()); if (staged_.quantity_grid) f.d(*staged_.quantity_grid);
+    std::vector<std::string> input_keys;
+    for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
+    std::sort(input_keys.begin(), input_keys.end()); f.u(input_keys.size());
+    for (const auto& key : input_keys) { f.s(key); f.s(staged_.inputs.at(key)); }
+    std::vector<std::string> cohort_keys;
+    for (const auto& pair : cohorts_by_id_) cohort_keys.push_back(pair.first);
+    std::sort(cohort_keys.begin(), cohort_keys.end()); f.u(cohort_keys.size());
+    for (const auto& key : cohort_keys) {
+        const auto& cohort = cohorts_by_id_.at(key);
+        f.s(key); f.u(cohort.handle.value); f.i(cohort.cycle);
+        hash_native_handle_vector(f, cohort.origins); hash_native_handle_vector(f, cohort.opened);
+    }
+    std::vector<std::uint64_t> placement_keys;
+    for (const auto& pair : placement_) placement_keys.push_back(pair.first);
+    std::sort(placement_keys.begin(), placement_keys.end()); f.u(placement_keys.size());
+    for (const auto key : placement_keys) { f.u(key); hash_placement(f, placement_.at(key)); }
+    std::vector<std::uint64_t> live_keys;
+    for (const auto& pair : live_by_source_key_) live_keys.push_back(pair.first);
+    std::sort(live_keys.begin(), live_keys.end()); f.u(live_keys.size());
+    for (const auto key : live_keys) { f.u(key); hash_native_handle(f, live_by_source_key_.at(key)); }
+    std::vector<std::uint64_t> bracket_keys;
+    for (const auto& pair : bracket_families_) bracket_keys.push_back(pair.first);
+    std::sort(bracket_keys.begin(), bracket_keys.end()); f.u(bracket_keys.size());
+    for (const auto key : bracket_keys) { f.u(key); hash_native_handle_vector(f, bracket_families_.at(key)); }
+    hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
+    hash_native_handle_vector(f, pending_view_handles_);
+    f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
+    f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
+    f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);
+    f.i(risk_.direction); f.i(risk_.max_cons_loss_days); f.d(risk_.max_drawdown);
+    f.b(risk_.max_drawdown_percent); f.d(risk_.max_intraday_loss);
+    f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);
+    hash_native_handle(f, short_seed_.long_entry); hash_native_handle(f, short_seed_.materialize_long);
+    hash_native_handle(f, short_seed_.final_short); f.b(short_seed_.active);
+    f.i(last_bar_dual_entry_path_); f.b(pending_view_.owner_ != nullptr);
+    f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);
+    f.b(cap.configuration().skip_noop_market); f.b(cap.configuration().defer_pooc_close);
+    f.b(cap.configuration().count_pooc_full_close); f.b(priority.attached());
+    f.b(priority.retained_parent_first());
+    admission_journal.reflect("journal", [&](const auto& field) { hash_admission_field(f, field); });
+}
+
+void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
+    f.s("pineforge-pine-scheduler/v2"); f.u(retained_.bars.size());
+    for (const auto& bar : retained_.bars) {
+        f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume); f.i(bar.timestamp);
+    }
+    f.s(retained_.input_tf); f.s(retained_.script_tf); f.b(retained_.bar_magnifier);
+    f.i(retained_.magnifier_samples); f.i(static_cast<std::int64_t>(retained_.distribution));
+    f.b(retained_.volume_weighted); f.i(retained_.volume_weighted_min_samples);
+    f.i(retained_.volume_weighted_max_samples); f.b(retained_.is_stream); f.i(retained_.warmup_n);
+    f.i(language_.pos_view_freeze_bar_); f.i(static_cast<std::int64_t>(language_.pos_view_frozen_side_));
+    f.d(language_.pos_view_frozen_qty_); hash_str_double_map(f, language_.pos_view_frozen_entry_qty_);
+    f.b(language_._src_series_active_); hash_source_series(f, language_._src_open_);
+    hash_source_series(f, language_._src_high_); hash_source_series(f, language_._src_low_);
+    hash_source_series(f, language_._src_close_); hash_source_series(f, language_._src_volume_);
+    hash_source_series(f, language_._src_hl2_); hash_source_series(f, language_._src_hlc3_);
+    hash_source_series(f, language_._src_ohlc4_); hash_source_series(f, language_._src_hlcc4_);
+    f.d(language_.prev_chart_close_); f.d(language_.last_chart_close_); f.i(language_.bar_index_offset_);
+    f.b(language_.is_first_tick_); f.b(language_.is_last_tick_); f.b(language_.history_slot_is_new_);
+    f.b(language_.coof_checkpoint_contains_current_bar_);
+    hash_source_series(f, language_.coof_checkpoint_src_open_);
+    hash_source_series(f, language_.coof_checkpoint_src_high_);
+    hash_source_series(f, language_.coof_checkpoint_src_low_);
+    hash_source_series(f, language_.coof_checkpoint_src_close_);
+    hash_source_series(f, language_.coof_checkpoint_src_volume_);
+    hash_source_series(f, language_.coof_checkpoint_src_hl2_);
+    hash_source_series(f, language_.coof_checkpoint_src_hlc3_);
+    hash_source_series(f, language_.coof_checkpoint_src_ohlc4_);
+    hash_source_series(f, language_.coof_checkpoint_src_hlcc4_);
+    f.d(language_.coof_checkpoint_prev_chart_close_); f.d(language_.coof_checkpoint_last_chart_close_);
+    f.u(coof_.size());
+    for (const auto& interval : coof_) { f.u(interval.applied_ordinal); f.i(interval.script_open_ms); f.b(interval.first_open); }
+    f.i(current_script_open_ms_); f.b(saw_open_fill_); f.i(source_bar_count_); f.u(applied_cursor_);
+}
+
+void source::PineNativeHost::hash_source_extension(BrokerStateHashSink& f) const {
+    f.s("pineforge-source-native-fixture/v2");
+    f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
+    f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
+    f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
+    f.i(config_.slippage); f.d(config_.margin_long); f.d(config_.margin_short);
+    f.b(config_.close_entries_rule_any); f.b(config_.src_series_active);
+    f.d(override_.initial_capital); f.d(override_.commission_value); f.d(override_.default_qty_value);
+    f.i(override_.pyramiding); f.i(override_.slippage); f.i(override_.commission_type);
+    f.i(override_.default_qty_type); f.i(override_.process_orders_on_close);
+    f.i(override_.calc_on_order_fills); f.i(override_.close_entries_rule);
+    f.i(static_cast<std::int64_t>(default_qty_type_)); f.d(default_qty_value_);
+    f.i(pyramiding_); f.b(close_entries_rule_any_);
+    f.i(source_bar_index_); f.i(source_last_bar_index_); f.u(source_callback_count_);
+    adapter_.hash_state(f); scheduler_.hash_state(f);
 }
 
 } // namespace pineforge

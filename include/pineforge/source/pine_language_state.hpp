@@ -4,9 +4,12 @@
 
 namespace pineforge::source {
 
+class PineScheduler;
+
 // Data only.  Stateful helpers remain PineStrategyHost members so they retain
 // unqualified access to the generic broker state they read.
 struct PineLanguageState {
+    friend class PineScheduler;
 protected:
     // @source-state begin
     int pos_view_freeze_bar_ = -1;
