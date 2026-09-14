@@ -3,6 +3,7 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_language_state.hpp>
 #include <pineforge/source/pine_pending_intent.hpp>
+#include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
 
 namespace pineforge::source {
@@ -59,6 +60,8 @@ public:
     int pending_order_count() const;
     const MarketAdmissionJournal& market_admission_journal() const;
     const PendingOrder& pending_order_at(int index) const;
+    void enable_pine_intraday_cap();
+    void attach_pine_execution_adapter();
     int observe_last_bar_dual_entry_path_v1() const;
     int observe_pending_count_v1() const;
     int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;
@@ -70,6 +73,7 @@ public:
     double observe_trail_best_price_v1() const;
 
 protected:
+    PineExecutionAdapter adapter_;
     using PineLanguageState::pos_view_freeze_bar_;
     using PineLanguageState::pos_view_frozen_side_;
     using PineLanguageState::pos_view_frozen_qty_;
@@ -105,7 +109,6 @@ protected:
 
     // @source-state begin
     std::vector<PendingOrder> pending_orders_;
-    MarketAdmissionJournal market_admission_journal_;
     // @source-state end
 
     bool history_advances_new_bar() const;
@@ -598,6 +601,29 @@ protected:
     void reclaim_market_admission();
     void record_market_sizing_revision(PendingOrder& order,admission::SizingObservation before,double affordability_before);
     std::vector<admission::Field> market_admission_fields() const;
+    // BEGIN L2 POLICY MEMBERS
+        compat::pine::CapClock pine_cap_clock() const;
+        compat::pine::Calculation pine_cap_calculation() const;
+        static compat::pine::Side pine_cap_side(PositionSide side);
+        static compat::pine::OrderKind pine_cap_kind(OrderType type);
+        compat::pine::MatchedAttempt pine_cap_attempt(const PendingOrder& order) const;
+        bool _intraday_cap_currently_latched();
+        bool tv_money_scope(double price) const;
+        bool rounded_pooc_flat_signal_cost_scope(const PendingOrder& order) const;
+        bool pooc_flat_money_admission_scope(const PendingOrder& order,
+                                             double fill_price) const;
+        bool ordinary_fractional_market_admission_scope(const PendingOrder& order) const;
+        bool rounded_signal_cost_scope(const PendingOrder& order) const;
+        bool rounded_price_admission_scope(const PendingOrder& order) const;
+        bool tv_money_lot_sizing() const;
+        double tv_money_required_margin(double required, double mark) const;
+        double calc_qty(double fill_price) const;
+        double frozen_sizing_price(bool is_buy) const;
+    
+        double frozen_default_market_qty(bool is_buy) const;
+        bool coof_default_market_sizes_at_fill() const;
+        void refresh_frozen_default_sizing_after_margin_call();
+    // END L2 POLICY MEMBERS
     // END L2 SOURCE DECLARATIONS
 };
 

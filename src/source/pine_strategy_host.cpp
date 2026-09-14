@@ -9,7 +9,7 @@ void fill_pending_order_mirror(const source::PendingOrder&,
                                pf_pending_order_v1_t*);
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
-    : BacktestEngine(cap) {}
+    : BacktestEngine(cap), adapter_(cap) {}
 
 void source::PineStrategyHost::on_bar(const Bar& bar) {
     on_source_bar(bar);
@@ -90,7 +90,7 @@ void source::PineStrategyHost::reset_source_pending_book() {
 void source::PineStrategyHost::reset_source_order_and_close_state() {
     exit_leg_event_seq_ = 0;
     next_order_seq_ = 1;
-    market_admission_journal_.reset();
+    adapter_.admission_journal.reset();
     named_entry_cancelled_incarnation_in_current_eval_.clear();
     pending_close_qty_in_bar_ = 0.0;
     pos_view_freeze_bar_ = -1;
@@ -137,7 +137,7 @@ void source::PineStrategyHost::reset_source_risk_and_cap() {
     intraday_loss_block_day_ = -1;
     intraday_loss_evaluating_ = false;
     intraday_loss_cancel_pending_ = false;
-    max_intraday_filled_orders_.reset_run();
+    adapter_.cap.reset_run();
 }
 
 void source::PineStrategyHost::reset_source_margin_and_coof() {
@@ -233,11 +233,22 @@ int source::PineStrategyHost::pending_order_count() const {
 }
 
 const MarketAdmissionJournal& source::PineStrategyHost::market_admission_journal() const {
-    return market_admission_journal_;
+    return adapter_.admission_journal;
 }
 
 const source::PendingOrder& source::PineStrategyHost::pending_order_at(int index) const {
     return pending_orders_[static_cast<size_t>(index)];
+}
+
+void source::PineStrategyHost::enable_pine_intraday_cap() {
+    guard_native_mutation("enable_pine_intraday_cap");
+    adapter_.cap.attach();
+}
+
+void source::PineStrategyHost::attach_pine_execution_adapter() {
+    guard_native_mutation("attach_pine_execution_adapter");
+    adapter_.cap.attach();
+    adapter_.priority.attach();
 }
 
 int source::PineStrategyHost::observe_last_bar_dual_entry_path_v1() const {
@@ -252,7 +263,7 @@ int source::PineStrategyHost::observe_pending_copy_v1(
         int index, pf_pending_order_v1_t* out) const {
     if (!out || index < 0 || index >= static_cast<int>(pending_orders_.size())) return -1;
     fill_pending_order_mirror(pending_orders_[static_cast<size_t>(index)],
-                              &market_admission_journal_, out);
+                              &adapter_.admission_journal, out);
     return 0;
 }
 

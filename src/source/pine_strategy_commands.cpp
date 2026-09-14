@@ -1538,7 +1538,7 @@ void source::PineStrategyHost::flush_active_same_bar_close(
         // A custom committed close bypasses the matched-order dispatcher.
         // Pass value records; Pine policy owns scope and beneficiary choice.
         const auto context = pine_cap_calculation();
-        if (max_intraday_filled_orders_.direct_close_routing(context, closes_full_position)
+        if (adapter_.cap.direct_close_routing(context, closes_full_position)
                 == compat::pine::DirectCloseRouting::Observe) {
             std::vector<compat::pine::ContinuationCandidate> candidates;
             candidates.reserve(pending_orders_.size());
@@ -1546,7 +1546,7 @@ void source::PineStrategyHost::flush_active_same_bar_close(
                 candidates.push_back({pine_cap_kind(pending.type), pending.created_bar,
                     pending.is_long, pending.created_seq, pending.incarnation});
             }
-            max_intraday_filled_orders_.committed_close(pine_cap_clock(), context,
+            adapter_.cap.committed_close(pine_cap_clock(), context,
                 pine_cap_side(side_before), broker_fill_event_seq_, candidates);
         }
         if (coof_scheduler_active_ && coof_direct_fill_events_remaining_ > 0) {

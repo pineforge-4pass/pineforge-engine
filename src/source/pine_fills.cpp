@@ -176,7 +176,7 @@ void source::PineStrategyHost::process_carried_long_money_before_priced_orders(
         || margin_long_ != 100.0 || syminfo_.pointvalue != 1.0
         || active_account_currency_fx() != 1.0
         || !account_currency_fx_timestamps_.empty()
-        || max_intraday_filled_orders_.active()
+        || adapter_.cap.active()
         || risk_max_intraday_loss_ != 0.0 || risk_max_drawdown_ != 0.0
         || risk_max_cons_loss_days_ > 0
         || !std::isfinite(bar.open) || !(bar.open > 0.0)
@@ -293,7 +293,7 @@ void source::PineStrategyHost::process_pending_orders(const Bar& bar, bool befor
         && stream_phase_ == StreamPhase::IDLE
         && slippage_ == 0 && commission_value_ == 0.0
         && account_currency_fx_ == 1.0 && account_currency_fx_timestamps_.empty()
-        && max_intraday_filled_orders_.legacy_limit_is_zero() && risk_max_position_size_ == 0.0
+        && adapter_.cap.legacy_limit_is_zero() && risk_max_position_size_ == 0.0
         && risk_direction_ == RiskDirection::BOTH
         && risk_max_intraday_loss_ == 0.0 && risk_max_drawdown_ == 0.0
         && risk_max_cons_loss_days_ == 0;
@@ -688,7 +688,7 @@ BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_or
                 || commission_value_ != 0 || slippage_ != 0
                 || account_currency_fx_ != 1
                 || !account_currency_fx_timestamps_.empty()
-                || max_intraday_filled_orders_.active()
+                || adapter_.cap.active()
                 || risk_max_intraday_loss_ != 0 || risk_max_drawdown_ != 0
                 || risk_max_cons_loss_days_ > 0
                 || margin_long_ != 100 || opening_obligations_.pending()
@@ -1080,7 +1080,7 @@ void source::PineStrategyHost::process_short_margin_before_script(const Bar& bar
         || margin_short_ != 100.0 || syminfo_.pointvalue != 1.0
         || active_account_currency_fx() != 1.0
         || !account_currency_fx_timestamps_.empty()
-        || max_intraday_filled_orders_.active()
+        || adapter_.cap.active()
         || risk_max_intraday_loss_ != 0.0 || risk_max_drawdown_ != 0.0
         || risk_max_cons_loss_days_ > 0
         || last_margin_call_event_bar_ == bar_index_) {
@@ -1188,7 +1188,7 @@ void source::PineStrategyHost::process_carried_pooc_short_margin_before_script(c
         || margin_short_ != 100.0 || syminfo_.pointvalue != 1.0
         || active_account_currency_fx() != 1.0
         || !account_currency_fx_timestamps_.empty()
-        || max_intraday_filled_orders_.active()
+        || adapter_.cap.active()
         || risk_max_intraday_loss_ != 0.0 || risk_max_drawdown_ != 0.0
         || risk_max_cons_loss_days_ > 0
         || last_margin_call_event_bar_ == bar_index_) {
@@ -1765,7 +1765,7 @@ bool source::PineStrategyHost::pooc_opening_money_scope(const Bar& bar) const {
         || !tv_money_scope(bar.close)
         || bar_magnifier_enabled_ || stream_warmup_mode_
         || stream_phase_ != StreamPhase::IDLE
-        || max_intraday_filled_orders_.active() || risk_max_intraday_loss_ != 0.0
+        || adapter_.cap.active() || risk_max_intraday_loss_ != 0.0
         || risk_max_drawdown_ != 0.0 || risk_max_cons_loss_days_ > 0) {
         return false;
     }
@@ -1855,7 +1855,7 @@ bool source::PineStrategyHost::tv_money_long_margin_call(const Bar& bar,
             || pyramid_entries_.front().entry_bar_index >= bar_index_
             || commission_value_ != 0.0
             || (slippage_ != 0 && !slipped_pooc_open)
-            || account_currency_fx_ != 1.0 || max_intraday_filled_orders_.active()
+            || account_currency_fx_ != 1.0 || adapter_.cap.active()
             || risk_max_intraday_loss_ != 0.0 || risk_max_drawdown_ != 0.0
             || risk_max_cons_loss_days_ > 0) {
             return false;
@@ -2001,7 +2001,7 @@ bool source::PineStrategyHost::tv_money_long_margin_call(const Bar& bar,
         && commission_type_ == CommissionType::PERCENT
         && commission_value_ == 0.0 && slippage_ == 0
         && pv == 1.0 && fx == 1.0
-        && max_intraday_filled_orders_.legacy_limit_is_zero()
+        && adapter_.cap.legacy_limit_is_zero()
         && risk_max_intraday_loss_ == 0.0 && risk_max_drawdown_ == 0.0
         && risk_max_cons_loss_days_ == 0;
     const size_t trades_before = trades_.size();
@@ -2781,7 +2781,7 @@ bool source::PineStrategyHost::pending_flat_market_pair_scope_is_live() const {
         && risk_max_drawdown_ <= 0.0
         && risk_max_intraday_loss_ <= 0.0
         && risk_max_position_size_ <= 0.0
-        && !max_intraday_filled_orders_.active()
+        && !adapter_.cap.active()
         && !risk_halted_;
 }
 
@@ -2815,7 +2815,7 @@ bool source::PineStrategyHost::default_flat_market_gross_scope_is_live()
         && risk_max_drawdown_ <= 0.0
         && risk_max_intraday_loss_ <= 0.0
         && risk_max_position_size_ <= 0.0
-        && !max_intraday_filled_orders_.active()
+        && !adapter_.cap.active()
         && !risk_halted_;
 }
 
@@ -2928,7 +2928,7 @@ void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
             && order.sizing_mark > 0.0;
     };
 
-    const auto history=compat::pine::admission_history(market_admission_journal_);
+    const auto history=compat::pine::admission_history(adapter_.admission_journal);
     const bool source_bar_disqualified=history.default_causes.count(source_bar)!=0;
     if (source_bar_disqualified
         || !eligible(*first)
@@ -3021,7 +3021,7 @@ void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
 
 void source::PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admission() {
     auto review=begin_market_review(admission::Checkpoint::TerminalGross);
-    const auto history=compat::pine::admission_history(market_admission_journal_);
+    const auto history=compat::pine::admission_history(adapter_.admission_journal);
     const bool source_bar_disqualified=history.pair_causes.count(bar_index_)!=0;
     if (!process_orders_on_close_
         || !calc_on_order_fills_
@@ -3037,7 +3037,7 @@ void source::PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admiss
         || risk_max_drawdown_ > 0.0
         || risk_max_intraday_loss_ > 0.0
         || risk_max_position_size_ > 0.0
-        || max_intraday_filled_orders_.active()
+        || adapter_.cap.active()
         || risk_halted_) {
         return;
     }
@@ -3123,7 +3123,7 @@ void source::PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admiss
 
 void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar) {
     auto review=begin_market_review(admission::Checkpoint::ExplicitPair);
-    auto history=compat::pine::admission_history(market_admission_journal_);
+    auto history=compat::pine::admission_history(adapter_.admission_journal);
     std::vector<int64_t> rejected_seqs;
     std::unordered_set<int> finalized_bars;
 
@@ -3296,7 +3296,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
 
     // The Pine frontend alone selects source-shape priority policy. Snapshot
     // an identity-bound value before sorting; the core only applies its keys.
-    const auto priority_decision = pine_order_priority_.select({
+    const auto priority_decision = adapter_.priority.select({
         position_side_ == PositionSide::FLAT, process_orders_on_close_,
         calc_on_order_fills_, coof_scheduler_active_, bar_magnifier_enabled_,
         stream_warmup_mode_, stream_phase_ == StreamPhase::IDLE, bar_index_,
@@ -3424,7 +3424,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
         && risk_max_drawdown_ <= 0.0
         && risk_max_intraday_loss_ <= 0.0
         && risk_max_position_size_ <= 0.0
-        && !max_intraday_filled_orders_.active()
+        && !adapter_.cap.active()
         && !risk_halted_
         && (default_qty_type_ == QtyType::FIXED
             || default_qty_type_ == QtyType::PERCENT_OF_EQUITY
@@ -3618,7 +3618,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
             // keep those configurations on the ordinary broker path.
             && slippage_ == 0
             && commission_value_ == 0.0
-            && compat::pine::last_rejected_command_bar(market_admission_journal_) != source_bar
+            && compat::pine::last_rejected_command_bar(adapter_.admission_journal) != source_bar
             && source[0]->created_seq + 1 == source[1]->created_seq
             && source[1]->created_seq + 1 == source[2]->created_seq
             && source[0]->incarnation + 1 == source[1]->incarnation
@@ -4047,7 +4047,7 @@ bool source::PineStrategyHost::same_bar_market_tx_scope_is_live() const {
         && risk_max_drawdown_ <= 0.0
         && risk_max_intraday_loss_ <= 0.0
         && risk_max_position_size_ <= 0.0
-        && !max_intraday_filled_orders_.active()
+        && !adapter_.cap.active()
         && !risk_halted_;
 }
 
@@ -4524,7 +4524,7 @@ int source::PineStrategyHost::probe_fill_qty(int index, double fill_price, doubl
             opposite_live_position
             && o.created_position_side != position_side_
             && !placement_has_opposite_market_predecessor(
-                market_admission_journal_, o);
+                adapter_.admission_journal, o);
         const bool explicit_fixed_qty =
             std::isfinite(o.qty)
             && o.qty > kQtyEpsilon
@@ -4683,10 +4683,10 @@ void source::PineStrategyHost::apply_filled_order_to_state(
     // of this dispatch may still settle after scheduling its own retirement.
     if (std::find(retired_incarnations.begin(), retired_incarnations.end(), order.incarnation)
         != retired_incarnations.end()) return;
-    cap_origin = max_intraday_filled_orders_.origin(
+    cap_origin = adapter_.cap.origin(
         pine_cap_clock(), pine_cap_calculation(), order.incarnation, broker_fill_event_seq_);
     auto decline_and_cancel = [&]() {
-        max_intraday_filled_orders_.decline(order.incarnation);
+        adapter_.cap.decline(order.incarnation);
         invalidate_pending_flat_market_pair(order.created_seq);
         retired_incarnations.push_back(order.incarnation);
     };
@@ -5205,7 +5205,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
         && !process_orders_on_close_ && !calc_on_order_fills_
         && !coof_scheduler_active_ && !bar_magnifier_enabled_
         && !stream_warmup_mode_ && stream_phase_ == StreamPhase::IDLE
-        && max_intraday_filled_orders_.legacy_limit_is_zero()
+        && adapter_.cap.legacy_limit_is_zero()
         && risk_max_intraday_loss_ == 0 && risk_max_drawdown_ == 0
         && risk_max_cons_loss_days_ == 0
         && std::isfinite(order.sizing_equity) && order.sizing_equity > 0
@@ -5701,7 +5701,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
     // The selected compatibility owner decides admission at the established
     // pre-dispatch checkpoint. This is simulator admission, not ingestion of
     // an already-observed external execution.
-    cap_admission = max_intraday_filled_orders_.pre_dispatch(
+    cap_admission = adapter_.cap.pre_dispatch(
         pine_cap_clock(), pine_cap_calculation(), pine_cap_attempt(order), broker_fill_event_seq_);
     if (cap_admission.dispatch == compat::pine::Dispatch::Decline) {
         decline_and_cancel();
@@ -5872,7 +5872,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
         && (position_cycle_seq_ != position_cycle_before_fill
             || pyramid_entries_.size() > pyramid_lots_before_fill);
 
-    max_intraday_filled_orders_.outcome(
+    adapter_.cap.outcome(
         primary_fill_applied ? compat::pine::FillOutcome::Committed
                              : compat::pine::FillOutcome::NoEffect, cap_origin);
 
@@ -6280,7 +6280,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
     // orders in this iteration are naturally skipped by the flat guard
     // earlier in the inner loop body.
 
-    const auto close_decision = max_intraday_filled_orders_.post_dispatch(
+    const auto close_decision = adapter_.cap.post_dispatch(
         cap_admission, pine_cap_calculation(), pine_cap_attempt(order),
         pine_cap_side(position_side_), position_cycle_seq_,
         {fill_price, bar.open, bar.high, bar.low});
@@ -6302,7 +6302,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
             trades_[ti].exit_comment = now->request.comment;
             trades_[ti].exit_id = "";
         }
-        max_intraday_filled_orders_.after_immediate_close_attempt();
+        adapter_.cap.after_immediate_close_attempt();
     }
 }
 
@@ -6336,7 +6336,7 @@ bool source::PineStrategyHost::replaced_percent_short_market_is_live(
         || margin_long_ != 100 || margin_short_ != 100
         || syminfo_.pointvalue != 1 || account_currency_fx_ != 1
         || !account_currency_fx_timestamps_.empty()
-        || !max_intraday_filled_orders_.legacy_limit_is_zero()
+        || !adapter_.cap.legacy_limit_is_zero()
         || risk_direction_ != RiskDirection::BOTH
         || risk_max_intraday_loss_ != 0 || risk_max_drawdown_ != 0
         || risk_max_cons_loss_days_ != 0 || risk_max_position_size_ != 0) {
@@ -6682,7 +6682,7 @@ void source::PineStrategyHost::apply_entry_order_fill(source::PendingOrder& orde
         // existed (STOP-first / placement-rejected cells leave it false, so
         // they keep the close-only single-close semantics).
         && !placement_has_opposite_market_predecessor(
-            market_admission_journal_, order);
+            adapter_.admission_journal, order);
     const bool explicit_fixed_qty =
         std::isfinite(order.qty)
         && order.qty > kQtyEpsilon
@@ -7345,7 +7345,7 @@ double source::PineStrategyHost::pooc_short_exit_trigger_close(
         && slippage_ == 0 && commission_type_ == CommissionType::PERCENT
         && syminfo_.pointvalue == 1 && account_currency_fx_ == 1
         && account_currency_fx_timestamps_.empty()
-        && max_intraday_filled_orders_.legacy_limit_is_zero()
+        && adapter_.cap.legacy_limit_is_zero()
         && risk_max_intraday_loss_ == 0 && risk_max_drawdown_ == 0
         && risk_max_cons_loss_days_ == 0;
     if (!pinned_reissue) return bar.close;

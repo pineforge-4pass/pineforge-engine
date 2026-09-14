@@ -3595,7 +3595,7 @@ public:
     int pending_exit_count() const {
         return static_cast<int>(std::count_if(
             pending_orders_.begin(), pending_orders_.end(),
-            [](const PendingOrder& order) {
+            [](const source::PendingOrder& order) {
                 return order.type == OrderType::EXIT;
             }));
     }

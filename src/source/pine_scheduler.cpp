@@ -195,7 +195,7 @@ void source::PineStrategyHost::dispatch_bar() {
     // A C-factor inheritance is same-ordinary-bar state. A candidate erased
     // by replacement/OCA/cancel never reaches the fill kernel, so discard any
     // stale identity before starting the next broker batch.
-    max_intraday_filled_orders_.ordinary_open(bar_index_);
+    adapter_.cap.ordinary_open(bar_index_);
 
     // Opt-in POOC intraday-cap candidate: the position left by the prior
     // close's quota-triggering MARKET attempt owns a flatten due at this
@@ -258,7 +258,7 @@ void source::PineStrategyHost::dispatch_bar() {
         invoke_chart_on_bar(current_bar_);       // step 3: strategy logic
         flush_same_bar_close();                  // step 3b: surviving strategy.close fill
         process_pending_orders(current_bar_);    // step 4: new market orders
-        max_intraday_filled_orders_.source_batch_end();
+        adapter_.cap.source_batch_end();
     } else {
         process_pending_orders(current_bar_);
         evaluate_max_intraday_loss_over_path(current_bar_);

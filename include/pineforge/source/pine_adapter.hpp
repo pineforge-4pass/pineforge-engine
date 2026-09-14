@@ -1,9 +1,35 @@
 #pragma once
 
-// Source adapter ownership is filled in by the R4-C L2 transfer (contract
-// sections 3.1 and 3.2).
+#include <pineforge/engine.hpp>
+
 namespace pineforge::source {
 
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v1";
+
+struct PineStrategyConfig {
+    bool process_orders_on_close = false;
+    bool calc_on_order_fills = false;
+    double initial_capital = 1000000.0;
+    int default_qty_type = static_cast<int>(QtyType::FIXED);
+    double default_qty_value = 1.0;
+    int pyramiding = 1;
+    double commission_value = 0.0;
+    int commission_type = static_cast<int>(CommissionType::PERCENT);
+    int slippage = 0;
+    double margin_long = 100.0;
+    double margin_short = 100.0;
+    bool close_entries_rule_any = false;
+    bool src_series_active = false;
+};
+
+struct PineExecutionAdapter {
+    explicit PineExecutionAdapter(
+            compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None)
+        : cap(attachment) {}
+
+    compat::pine::IntradayCap cap;
+    compat::pine::OrderPriority priority;
+    MarketAdmissionJournal admission_journal;
+};
 
 } // namespace pineforge::source
