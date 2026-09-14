@@ -35,6 +35,7 @@ void PineScheduler::reset_language() {
     language_.coof_checkpoint_src_hlc3_.clear(); language_.coof_checkpoint_src_ohlc4_.clear();
     language_.coof_checkpoint_src_hlcc4_.clear();
     coof_.clear(); current_script_open_ms_ = 0; saw_open_fill_ = false;
+    current_script_bar_ = {}; current_script_bar_valid_ = false;
     source_bar_count_ = 0; expected_source_bars_ = 0; applied_cursor_ = 0;
     coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
 }
@@ -50,6 +51,7 @@ void PineScheduler::run_begin(PineNativeHost& host) {
     }
     host.scheduler_prepare_script_run(retained_.bars, static_eligible, expected_source_bars_);
     host.scheduler_configure_security_evaluators();
+    host.scheduler_prepare_chart_day_partition(retained_.bars);
 }
 
 void PineScheduler::publish_series(const Bar& bar) {
@@ -87,9 +89,12 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     }
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
+    current_script_bar_ = script_bar;
+    current_script_bar_valid_ = true;
     publish_series(script_bar);
     host.scheduler_publish_source_bar(script_bar, true);
     ++source_bar_count_;
+    if (terminal_source_bar()) host.scheduler_record_range_end(current_script_bar_);
 }
 
 void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,

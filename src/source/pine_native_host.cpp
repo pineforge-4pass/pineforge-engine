@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_native_host.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <cmath>
 #include <stdexcept>
@@ -134,6 +135,11 @@ void PineNativeHost::on_native_applied(const native_order::ExecutionAppliedEvent
                                        const NativeDecisionContext& context) {
     adapter_.on_applied(event, context);
     scheduler_.applied(event, context, *this);
+    if (scheduler_.terminal_source_bar()) {
+        const Bar terminal = scheduler_.current_script_bar()
+            ? *scheduler_.current_script_bar() : current_bar_;
+        scheduler_record_range_end(terminal);
+    }
 }
 native_order::ExecutionTerms PineNativeHost::resolve_execution_terms(const NativeExecutionTermsFacts& facts) const {
     return adapter_.resolve_terms(facts);
@@ -177,7 +183,11 @@ void PineNativeHost::set_strategy_override(const StrategyOverrides& overrides) {
     adapter_.set_configuration(config_);
     source_configuration_captured_ = true;
 }
-void PineNativeHost::set_pine_risk_direction(int value) { adapter_.set_risk_direction(value); }
+void PineNativeHost::set_pine_risk_direction(int value) {
+    risk_direction_ = value > 0 ? RiskDirection::LONG_ONLY
+        : value < 0 ? RiskDirection::SHORT_ONLY : RiskDirection::BOTH;
+    adapter_.set_risk_direction(value);
+}
 void PineNativeHost::set_pine_risk_max_cons_loss_days(int value) { adapter_.set_risk_max_cons_loss_days(value); }
 void PineNativeHost::set_pine_risk_max_drawdown(double value, bool percent) { adapter_.set_risk_max_drawdown(value, percent); }
 void PineNativeHost::set_pine_risk_max_intraday_loss(double value, bool percent) { adapter_.set_risk_max_intraday_loss(value, percent); }
@@ -194,6 +204,8 @@ void PineNativeHost::set_syminfo_metadata(const std::string& key, double value) 
 void PineNativeHost::strategy_entry(const std::string& id, bool is_long, double limit_price,
                                     double stop_price, double qty, const std::string& comment,
                                     const std::string& oca_name, int oca_type, int qty_type) {
+    adapter_.set_risk_direction(risk_direction_ == RiskDirection::LONG_ONLY ? 1
+        : risk_direction_ == RiskDirection::SHORT_ONLY ? -1 : 0);
     adapter_.entry(id, is_long, limit_price, stop_price, qty, comment, oca_name, oca_type, qty_type);
 }
 void PineNativeHost::strategy_close(const std::string& id, const std::string& comment,
@@ -227,22 +239,74 @@ void PineNativeHost::strategy_order(const std::string& id, bool is_long, double 
 
 void PineNativeHost::scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible,
                                                   int expected_script_bars) {
+    if (const auto state = native_state(); state.spec && !state.spec->timeframe_undetected) {
+        input_tf_ = state.spec->input_tf;
+        script_tf_ = state.spec->script_tf;
+        script_tf_seconds_ = tf_to_seconds(script_tf_);
+    }
     prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()), static_eligible);
     source_last_bar_index_ = expected_script_bars - 1;
 }
 void PineNativeHost::scheduler_configure_security_evaluators() { configure_security_evaluators(); }
+void PineNativeHost::scheduler_prepare_chart_day_partition(const std::vector<Bar>& bars) {
+    prepare_chart_day_partition(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
+}
+void PineNativeHost::scheduler_record_range_end(const Bar& terminal_bar) {
+    range_end_trades_.clear();
+    if (stream_warmup_mode_ || position_side_ == PositionSide::FLAT || equity_curve_.empty()
+        || !std::isfinite(terminal_bar.close)) return;
+    const Bar saved = current_bar_;
+    current_bar_ = terminal_bar;
+    const bool was_long = position_side_ == PositionSide::LONG;
+    const double fill_price = bar_fill_price(current_bar_.close);
+    const auto saved_timestamp = current_bar_.timestamp;
+    current_bar_.timestamp = equity_curve_.back().time_ms;
+    double range_end_pnl = 0.0;
+    for (const auto& lot : pyramid_entries_) {
+        execution::PhysicalExecutionContext context;
+        context.effective_time_ms = current_bar_.timestamp;
+        context.interval_index = bar_index_;
+        context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+        if (!std::isnan(fold_exit_trail_peak_))
+            context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+        Trade row = build_close_trade_with_costs(
+            lot, lot.qty, fill_price, was_long,
+            allocated_entry_commission(lot, lot.qty), calc_commission(fill_price, lot.qty),
+            context);
+        row.open_at_end = true;
+        range_end_pnl += row.pnl;
+        range_end_trades_.push_back(std::move(row));
+    }
+    current_bar_.timestamp = saved_timestamp;
+    auto& last = equity_curve_.back();
+    last.open_profit = 0.0;
+    last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+    max_equity_ = initial_capital_;
+    min_equity_ = initial_capital_;
+    max_drawdown_ = 0.0;
+    max_runup_ = 0.0;
+    for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+    current_bar_ = saved;
+}
 void PineNativeHost::scheduler_publish_source_bar(const Bar& bar, bool, bool advance_source_index) {
     current_bar_ = bar;
     if (advance_source_index) ++source_bar_index_;
     ++source_callback_count_;
     bar_index_ = source_bar_index_;
     barstate_islast_ = source_bar_index_ == source_last_bar_index_;
+    NativeDayPartitionScope chart_day_partition(
+        chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
     on_source_bar(bar);
     // Complete one source evaluation before appending bracket legs for newly
     // pending same-id openings.  Existing legs are re-priced in-call first,
     // preserving the source roster order at the next native candidate.
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
+    if (advance_source_index) {
+        update_equity_extremes();
+        record_equity_point(bar.timestamp);
+        prev_bar_timestamp_ = bar.timestamp;
+    }
 }
 
 } // namespace pineforge::source

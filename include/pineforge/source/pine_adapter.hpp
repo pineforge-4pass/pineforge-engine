@@ -115,6 +115,8 @@ struct PlacementSnapshot {
     bool deferred_cohort = false;
     bool frozen_market_instruction = false;
     bool reverse_to = false;
+    bool replaced_opening = false;
+    bool replacement_predecessor_market = false;
     bool terms_priced_reverse = false;
     double frozen_reversal_transaction = std::numeric_limits<double>::quiet_NaN();
     std::int64_t placement_cycle = 0;

@@ -332,7 +332,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
     f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
-    f.b(value.reverse_to); f.b(value.terms_priced_reverse); f.d(value.frozen_reversal_transaction);
+    f.b(value.reverse_to); f.b(value.replaced_opening); f.b(value.replacement_predecessor_market);
+    f.b(value.terms_priced_reverse);
+    f.d(value.frozen_reversal_transaction);
     f.i(value.placement_cycle); f.u(value.sequential_group); f.u(value.sequential_rank);
     f.b(value.has_full_entry_bracket); f.s(value.bracket_origin.run.session_key);
     f.u(value.bracket_origin.run.run_number); f.u(value.bracket_origin.incarnation);
@@ -553,7 +555,10 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.d(language_.coof_checkpoint_prev_chart_close_); f.d(language_.coof_checkpoint_last_chart_close_);
     f.u(coof_.size());
     for (const auto& interval : coof_) { f.u(interval.applied_ordinal); f.i(interval.script_open_ms); f.b(interval.first_open); }
-    f.i(current_script_open_ms_); f.b(saw_open_fill_); f.i(source_bar_count_);
+    f.i(current_script_open_ms_);
+    f.d(current_script_bar_.open); f.d(current_script_bar_.high); f.d(current_script_bar_.low);
+    f.d(current_script_bar_.close); f.d(current_script_bar_.volume); f.i(current_script_bar_.timestamp);
+    f.b(current_script_bar_valid_); f.b(saw_open_fill_); f.i(source_bar_count_);
     f.i(expected_source_bars_); f.u(applied_cursor_); f.i(coof_callback_script_open_);
 }
 
@@ -569,7 +574,7 @@ void source::PineNativeHost::hash_source_extension(BrokerStateHashSink& f) const
     f.i(override_.default_qty_type); f.i(override_.process_orders_on_close);
     f.i(override_.calc_on_order_fills); f.i(override_.close_entries_rule);
     f.i(static_cast<std::int64_t>(default_qty_type_)); f.d(default_qty_value_);
-    f.i(pyramiding_); f.b(close_entries_rule_any_);
+    f.i(pyramiding_); f.b(close_entries_rule_any_); f.i(static_cast<std::int64_t>(risk_direction_));
     f.i(source_bar_index_); f.i(source_last_bar_index_); f.u(source_callback_count_);
     f.b(source_configuration_captured_);
     adapter_.hash_state(f); scheduler_.hash_state(f);

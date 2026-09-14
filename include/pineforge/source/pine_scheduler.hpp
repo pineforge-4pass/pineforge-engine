@@ -35,6 +35,12 @@ public:
     }
     double previous_chart_close() const noexcept { return language_.prev_chart_close_; }
     int source_bar_count() const noexcept { return source_bar_count_; }
+    bool terminal_source_bar() const noexcept {
+        return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
+    }
+    const Bar* current_script_bar() const noexcept {
+        return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
+    }
 
     void hash_state(BrokerStateHashSink&) const;
 
@@ -67,6 +73,8 @@ private:
     std::deque<CoofInterval> coof_;
     RetainedBegin retained_;
     std::int64_t current_script_open_ms_ = 0;
+    Bar current_script_bar_{};
+    bool current_script_bar_valid_ = false;
     bool saw_open_fill_ = false;
     int source_bar_count_ = 0;
     int expected_source_bars_ = 0;

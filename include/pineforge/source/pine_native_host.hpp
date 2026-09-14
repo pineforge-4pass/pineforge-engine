@@ -119,6 +119,9 @@ public:
     }
 
 protected:
+    // Fixture-compatible source setting used by direct C++ oracle fixtures.
+    // It is translated at command lowering; it is not a generic-kernel field.
+    enum class RiskDirection { BOTH, LONG_ONLY, SHORT_ONLY };
     void hash_source_extension(BrokerStateHashSink&) const override;
 
 private:
@@ -128,6 +131,8 @@ private:
     void scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible,
                                       int expected_script_bars);
     void scheduler_configure_security_evaluators();
+    void scheduler_prepare_chart_day_partition(const std::vector<Bar>& bars);
+    void scheduler_record_range_end(const Bar&);
     void scheduler_publish_source_bar(const Bar&, bool first_tick, bool advance_source_index = true);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     static PineStrategyConfig apply_overrides(PineStrategyConfig, const StrategyOverrides&);
@@ -140,6 +145,7 @@ protected:
     double default_qty_value_ = 1.0;
     int pyramiding_ = 1;
     bool close_entries_rule_any_ = false;
+    RiskDirection risk_direction_ = RiskDirection::BOTH;
     PineExecutionAdapter adapter_;
     PineScheduler scheduler_;
     int source_bar_index_ = -1;
