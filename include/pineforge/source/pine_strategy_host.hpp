@@ -62,6 +62,7 @@ public:
     const PendingOrder& pending_order_at(int index) const;
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
+    void set_syminfo_metadata(const std::string& key, double value) override;
     int observe_last_bar_dual_entry_path_v1() const;
     int observe_pending_count_v1() const;
     int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;

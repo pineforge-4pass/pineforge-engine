@@ -251,6 +251,44 @@ void source::PineStrategyHost::attach_pine_execution_adapter() {
     adapter_.priority.attach();
 }
 
+void source::PineStrategyHost::set_syminfo_metadata(
+        const std::string& key, double value) {
+    BacktestEngine::set_syminfo_metadata(key, value);
+    if (key == "bar_index_offset") {
+        bar_index_offset_ = std::isfinite(value)
+            ? static_cast<int>(std::llround(value))
+            : 0;
+    }
+    if (key == "security_range_start_na_warmup") {
+        if (std::isfinite(value) && value > 0.0) {
+            security_range_start_na_warmup_ = true;
+            security_range_start_ms_ = static_cast<int64_t>(std::llround(value));
+        } else {
+            security_range_start_na_warmup_ = false;
+            security_range_start_ms_ = 0;
+        }
+    }
+    if (key == "chart_ema_na_warmup") {
+        chart_ema_na_warmup_ = std::isfinite(value) && value > 0.0;
+    }
+    if (key == "historical_security_lookahead_projection") {
+        historical_security_lookahead_projection_ =
+            std::isfinite(value) && value > 0.0;
+    }
+    if (key == "margin_zero_cover_full_liquidation") {
+        margin_zero_cover_full_liquidation_ =
+            std::isfinite(value) && value > 0.0;
+    }
+    adapter_.priority.metadata(key, value);
+    adapter_.cap.metadata(key, value);
+    if (key == "margin_long" && margin_long_ == 100.0) {
+        margin_long_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
+    }
+    if (key == "margin_short" && margin_short_ == 100.0) {
+        margin_short_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
+    }
+}
+
 int source::PineStrategyHost::observe_last_bar_dual_entry_path_v1() const {
     return static_cast<int>(last_bar_dual_entry_decision_);
 }

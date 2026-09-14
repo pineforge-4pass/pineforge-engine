@@ -162,10 +162,6 @@ uint64_t BacktestEngine::broker_state_hash() const {
     // --- KI-64 POOC script-visible position freeze snapshot ---
     // While armed, an ordinary POOC strategy.close(qty_percent) sizes against
     // this snapshot instead of the live position.
-    f.i(pos_view_freeze_bar_);
-    f.i(static_cast<int64_t>(pos_view_frozen_side_));
-    f.d(pos_view_frozen_qty_);
-    hash_str_double_map(f, pos_view_frozen_entry_qty_);
 
     // Cumulative same-on_bar strategy.close/close_all qty; read by a later
     // strategy.entry in the same on_bar to compute tv_carry_qty (sizing).

@@ -1167,29 +1167,6 @@ protected:
         uint64_t, std::unordered_map<std::string, double>>
         callsite_close_two_call_first_qty_;
 
-    // --- KI-64: POOC script-visible position freeze ---
-    // Under process_orders_on_close, a strategy.close/close_all that fills
-    // IN-LINE (execute_immediate_close) mutates the broker position mid-on_bar,
-    // but TradingView keeps the SCRIPT position accessor
-    // ``strategy.position_size`` (signed_position_size(), and the
-    // opentrades/position_avg_price na-guards derived from it) reporting the
-    // PRE-close position until the NEXT bar. While ``pos_view_freeze_bar_ ==
-    // bar_index_`` the script-facing signed_position_size() returns this frozen
-    // snapshot. Ordinary POOC strategy.close(qty_percent) also sizes against
-    // the snapshot's per-id quantities (round 12 AG-D); other broker/order
-    // sizing and internal position_qty_ / position_side_ reads are unaffected.
-    // Armed in strategy_close on the ordinary POOC
-    // immediate-close path (NOT immediately=true, which is defined to reflect
-    // its fill at once); cleared at the top of flush_same_bar_close() — the
-    // first thing after every POOC on_bar — so step-4 and post-run reads see
-    // the real position. The bar_index_ scoping is a defensive backstop: the
-    // snapshot auto-expires when the script advances a bar even if a clear site
-    // is ever missed.
-    int pos_view_freeze_bar_ = -1;
-    PositionSide pos_view_frozen_side_ = PositionSide::FLAT;
-    double pos_view_frozen_qty_ = 0.0;
-    std::unordered_map<std::string, double> pos_view_frozen_entry_qty_;
-
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
     bool process_orders_on_close_ = false;
@@ -1382,81 +1359,9 @@ protected:
         return it != syminfo_metadata_.end() ? it->second : na<double>();
     }
 
-    // --- Native source-series history (input.source) ---
-    // input.source supports runtime override of WHICH price series feeds an
-    // indicator. The generated subclass only materializes ``_s_<field>`` for
-    // fields whose history it subscripts, so those cannot back a runtime
-    // override to an arbitrary native source. These base-class series are the
-    // canonical, always-resolvable backing store. They are advanced exactly
-    // once per script bar (same cadence as the subclass ``_s_<field>``) by
-    // ``_push_source_series()`` and only when ``_src_series_active_`` — the
-    // generated ctor sets it true iff the script uses at least one
-    // input.source, so scripts that don't pay nothing but the (small) member
-    // footprint.
-    bool _src_series_active_ = false;
-    Series<double> _src_open_;
-    Series<double> _src_high_;
-    Series<double> _src_low_;
-    Series<double> _src_close_;
-    Series<double> _src_volume_;
-    Series<double> _src_hl2_;
-    Series<double> _src_hlc3_;
-    Series<double> _src_ohlc4_;
-    Series<double> _src_hlcc4_;
-
-    // Advance every native source series by the current bar. Mirrors the
-    // subclass ``_s_<field>`` idiom: push on the first tick, update intrabar
-    // (magnifier). Called at each on_bar dispatch point; no-op when inactive.
-    // A historical post-C fill recalculation remains barstate.isnew, but the
-    // completed ordinary close execution already owns this bar's history
-    // slot. Generated history/TA code uses the same predicate so that such an
-    // execution recomputes the slot instead of appending a duplicate bar.
-    bool history_advances_new_bar() const {
-        return is_first_tick_ && history_slot_is_new_;
-    }
-
-    // issue #178: the previous CHART bar's close, tracked at every on_bar
-    // dispatch regardless of _src_series_active_ (it costs two doubles).
-    // A ta.atr / ta.tr call site inside a block that does not execute every
-    // bar must read its true range against THIS value (TradingView pin,
-    // 2026-09-06: 398/398 sparse executions on BINANCE:BTCUSDT 60), not
-    // against the close of the site's previous execution. Advances once
-    // per history slot (history_advances_new_bar()); intrabar ticks and a
-    // fill recalculation of an owned slot refresh last_chart_close_ only.
-    double prev_chart_close_ = std::numeric_limits<double>::quiet_NaN();
-    double last_chart_close_ = std::numeric_limits<double>::quiet_NaN();
-    double prev_chart_close() const { return prev_chart_close_; }
-
-    void _push_source_series() {
-        if (history_advances_new_bar()) prev_chart_close_ = last_chart_close_;
-        last_chart_close_ = current_bar_.close;
-        if (!_src_series_active_) return;
-        const double o = current_bar_.open;
-        const double h = current_bar_.high;
-        const double l = current_bar_.low;
-        const double c = current_bar_.close;
-        const double v = current_bar_.volume;
-        const double hl2   = (h + l) / 2.0;
-        const double hlc3  = (h + l + c) / 3.0;
-        const double ohlc4 = (o + h + l + c) / 4.0;
-        const double hlcc4 = (h + l + c + c) / 4.0;
-        if (history_advances_new_bar()) {
-            _src_open_.push(o);   _src_high_.push(h);   _src_low_.push(l);
-            _src_close_.push(c);  _src_volume_.push(v);
-            _src_hl2_.push(hl2);  _src_hlc3_.push(hlc3);
-            _src_ohlc4_.push(ohlc4); _src_hlcc4_.push(hlcc4);
-        } else {
-            _src_open_.update(o);   _src_high_.update(h);   _src_low_.update(l);
-            _src_close_.update(c);  _src_volume_.update(v);
-            _src_hl2_.update(hl2);  _src_hlc3_.update(hlc3);
-            _src_ohlc4_.update(ohlc4); _src_hlcc4_.update(hlcc4);
-        }
-    }
-
     // --- Runtime state ---
     Bar current_bar_;
     int bar_index_ = 0;
-    int bar_index_offset_ = 0;
     // Opt-in KI-55 chart warmup parity (see set_syminfo_metadata,
     // "chart_ema_na_warmup"). When enabled, chart-timeframe ta.ema instances
     // first used by on_bar na-warm per TV built-in semantics. This selector is
@@ -2860,20 +2765,7 @@ protected:
     }
 
     // --- Strategy variable accessors ---
-    double signed_position_size() const {
-        // KI-64: while a POOC same-bar in-line close is frozen for this bar,
-        // the SCRIPT sees the pre-close position (TV defers close visibility to
-        // the next bar). Broker/internal reads use position_side_/position_qty_
-        // directly and are unaffected.
-        if (pos_view_freeze_bar_ == bar_index_) {
-            if (pos_view_frozen_side_ == PositionSide::LONG) return pos_view_frozen_qty_;
-            if (pos_view_frozen_side_ == PositionSide::SHORT) return -pos_view_frozen_qty_;
-            return 0.0;
-        }
-        if (position_side_ == PositionSide::LONG) return position_qty_;
-        if (position_side_ == PositionSide::SHORT) return -position_qty_;
-        return 0.0;
-    }
+
 
     // KI-64: freeze the pre-close position for the script-visible position
     // accessor before an ordinary POOC strategy.close/close_all fills in-line
@@ -2881,20 +2773,11 @@ protected:
     // FIRST pre-close snapshot). Caller guards process_orders_on_close_ &&
     // !immediately; this reads position_side_/position_qty_ while they still
     // hold the pre-close values (execute_immediate_close has not run yet).
-    void freeze_script_position_view() {
-        if (pos_view_freeze_bar_ == bar_index_) return;
-        pos_view_freeze_bar_ = bar_index_;
-        pos_view_frozen_side_ = position_side_;
-        pos_view_frozen_qty_ = position_qty_;
-        pos_view_frozen_entry_qty_.clear();
-        for (const auto& entry : pyramid_entries_) {
-            pos_view_frozen_entry_qty_[entry.entry_id] += entry.qty;
-        }
-    }
+
     // KI-64: release the freeze so the next script-visible read returns the real
     // (post-close) position. Called at the top of flush_same_bar_close(), i.e.
     // immediately after every POOC on_bar returns.
-    void clear_script_position_view() { pos_view_freeze_bar_ = -1; }
+
 
     double net_profit() const { return net_profit_sum_; }
     double gross_profit() const { return gross_profit_sum_; }
@@ -3085,13 +2968,10 @@ protected:
 
     // --- Bar magnifier state ---
     bool bar_magnifier_enabled_ = false;
-    bool is_first_tick_ = true;
-    bool is_last_tick_ = true;
     bool barstate_islast_ = false;
     // Independent from barstate.isnew. False only when a COOF execution
     // restores a completed ordinary-close checkpoint that already contains
     // the current bar's one committed history slot.
-    bool history_slot_is_new_ = true;
     int magnifier_samples_ = 4;
     MagnifierDistribution magnifier_dist_ = MagnifierDistribution::ENDPOINTS;
     // When true, run_magnified_bar scales per-sub-bar sample count by
@@ -3156,7 +3036,6 @@ protected:
     // leg-end waypoint POINT even when is_entry_bar (entry + exit share a bar).
     // Reset right after that evaluation; never set on the magnifier path.
     bool coof_cascade_force_wp_gap_ = false;
-    bool coof_checkpoint_contains_current_bar_ = false;
     double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
     // Direct strategy.close / POOC fills can occur inside on_bar rather than
     // through process_next_pending_order. The scheduler refreshes this budget
@@ -3170,27 +3049,6 @@ protected:
     // gates that cross the bar boundary (engine_fills.cpp).
     uint64_t broker_fill_event_seq_ = 0;
     // @broker-state end
-
-    // input.source histories are base-owned script state and must roll back
-    // with generated state between historical fill recalculations.
-    Series<double> coof_checkpoint_src_open_;
-    Series<double> coof_checkpoint_src_high_;
-    Series<double> coof_checkpoint_src_low_;
-    Series<double> coof_checkpoint_src_close_;
-    Series<double> coof_checkpoint_src_volume_;
-    Series<double> coof_checkpoint_src_hl2_;
-    Series<double> coof_checkpoint_src_hlc3_;
-    Series<double> coof_checkpoint_src_ohlc4_;
-    Series<double> coof_checkpoint_src_hlcc4_;
-    // issue #178 (JOAT aureate, round 9): the chart-close tracker
-    // (prev_chart_close_ / last_chart_close_) is base-owned script state
-    // too. Every historical fill recalculation and the ordinary close
-    // execution start from this checkpoint and push the bar's slot again
-    // (history_slot_is_new_), so without rolling the tracker back the close
-    // execution of a bar whose open filled an order read prev_chart_close_
-    // = the recalc's own close: its true range lost the gap to close[1].
-    double coof_checkpoint_prev_chart_close_ = std::numeric_limits<double>::quiet_NaN();
-    double coof_checkpoint_last_chart_close_ = std::numeric_limits<double>::quiet_NaN();
 
     // --- Session predicate bar-state tracking ---
     // Tracks whether the previous bar was inside the regular session.
@@ -4961,112 +4819,11 @@ public:
         margin_call_enabled_ = enabled;
     }
     bool margin_call_enabled() const { return margin_call_enabled_; }
-    void set_syminfo_metadata(const std::string& key, double value) {
-        guard_native_mutation("set_syminfo_metadata");
-        syminfo_metadata_[key] = value;
-        // Pine's public bar_index is chart-history relative. Validation feeds
-        // can start after TradingView's hidden first chart bar, while engine
-        // internals still need zero-based array indices for TA precalc and
-        // broker bookkeeping. This metadata key shifts only codegen-emitted
-        // Pine bar_index reads via pine_bar_index()/pine_last_bar_index().
-        if (key == "bar_index_offset") {
-            bar_index_offset_ = std::isfinite(value)
-                ? static_cast<int>(std::llround(value))
-                : 0;
-        }
-        // Opt-in KI-55 HTF warmup parity. The value is the TV deep-backtest
-        // range start in epoch-ms (exactly representable as a double for any
-        // realistic date — 2025 is ~1.7e12 << 2^53). A positive, finite value
-        // enables it; anything else (0 / NaN / negative) is the disabled
-        // default, so a run that never sets this key is byte-identical.
-        if (key == "security_range_start_na_warmup") {
-            if (std::isfinite(value) && value > 0.0) {
-                security_range_start_na_warmup_ = true;
-                security_range_start_ms_ =
-                    static_cast<int64_t>(std::llround(value));
-            } else {
-                security_range_start_na_warmup_ = false;
-                security_range_start_ms_ = 0;
-            }
-        }
-        // Opt-in KI-55 chart-timeframe EMA warmup parity. This is a boolean
-        // run configuration carried through the existing metadata channel:
-        // positive finite values enable it; 0 / NaN / negative disable it.
-        // Unlike security_range_start_na_warmup, it carries no timestamp and
-        // does not change request.security aggregation boundaries.
-        if (key == "chart_ema_na_warmup") {
-            chart_ema_na_warmup_ = std::isfinite(value) && value > 0.0;
-        }
-        // Historical batch-only lookahead projection. This is intentionally a
-        // default-off verifier candidate: regular execution and every stream
-        // path keep progressive HTF aggregation unless a caller explicitly
-        // supplies a positive finite metadata value.
-        if (key == "historical_security_lookahead_projection") {
-            historical_security_lookahead_projection_ =
-                std::isfinite(value) && value > 0.0;
-        }
-        // Default-off verifier candidate for a finite-price margin call whose
-        // lot-quantized restore quantity is zero.  Positive finite values close
-        // the residual; absent/zero/non-finite values preserve the established
-        // one-step progress fallback.
-        if (key == "margin_zero_cover_full_liquidation") {
-            margin_zero_cover_full_liquidation_ =
-                std::isfinite(value) && value > 0.0;
-        }
-        pine_order_priority_.metadata(key, value);
-        // Forward through the real base setter used by the C ABI. A selected
-        // frontend owns recognition and numeric validation; no derived shadow
-        // setter or cap-key interpretation belongs in this transport.
-        max_intraday_filled_orders_.metadata(key, value);
-        // "qty_step" is the per-instrument lot increment used by the forced-
-        // liquidation quantizer. Route it onto the dedicated member so the
-        // codegen run(const Bar*, int) path (which never overwrites it) keeps
-        // the value the data feed injected. A non-positive value disables it.
-        if (key == "qty_step") {
-            qty_step_ = (std::isfinite(value) && value > 0.0) ? value : 0.0;
-            syminfo_.qty_step = qty_step_;
-        }
-        // Account-currency FX rate (account-currency units per quote-currency
-        // unit). Scales the broker affordability gate's required_margin when
-        // the script's currency differs from the symbol quote currency. A
-        // non-positive / non-finite value resets to the 1.0 (no-op) default.
-        if (key == "account_currency_fx") {
-            account_currency_fx_ =
-                (std::isfinite(value) && value > 0.0) ? value : 1.0;
-        }
-        // Per-instrument margin/leverage DEFAULT (percent of position value
-        // required as collateral; 100 = fully collateralized / no leverage,
-        // matching Pine's own margin_long/margin_short default). This is a
-        // data-feed-level fallback for a script whose header OMITS
-        // margin_long/margin_short — without it, a leveraged futures/
-        // perpetual instrument has no way to reflect its real (non-100%)
-        // exchange margin requirement (see the tv-margin-call-gap project
-        // history). It must NOT override an EXPLICIT strategy(...,
-        // margin_long=X) header arg. Unlike qty_step/account_currency_fx,
-        // this can't rely on "whichever assignment runs last wins": the
-        // codegen-generated constructor assigns margin_long_/margin_short_
-        // from an explicit header arg in strategy_create(), which the C ABI
-        // / run_strategy.py call BEFORE strategy_set_syminfo_metadata — so a
-        // later injected default would silently clobber an explicit script
-        // value. Guard on "still at the class's own 100.0 default", i.e.
-        // apply only when the header did NOT already set it (the one
-        // imprecise edge case — a header that explicitly writes
-        // margin_long=100, matching the default value — is indistinguishable
-        // from "unset" here, but 100 is also the semantic no-override value,
-        // so this is a no-op in that case either way).
-        if (key == "margin_long" && margin_long_ == 100.0) {
-            margin_long_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
-        }
-        if (key == "margin_short" && margin_short_ == 100.0) {
-            margin_short_ = (std::isfinite(value) && value > 0.0) ? value : 100.0;
-        }
-    }
+    virtual void set_syminfo_metadata(const std::string& key, double value);
 
     // Returns the script's active timeframe string (e.g. "15" for 15-minute,
     // "D" for daily). Backs timeframe.main_period in generated Pine v6 code.
     const std::string& main_period() const { return script_tf_; }
-    int pine_bar_index() const { return bar_index_ + bar_index_offset_; }
-    int pine_last_bar_index() const { return last_bar_index_ + bar_index_offset_; }
 
     // Live-runtime tail semantics (spec §3.1, ABI v4): the caller's fed array
     // ends with a still-forming bar rather than the chart's rightmost
@@ -5298,7 +5055,11 @@ public:
     // strategy.equity, which adds open profit on top of this (see the
     // sizing_equity formula and the equity-curve remark below, both
     // current_equity() + open_profit(...)).
-    virtual double live_position_size() const { return signed_position_size(); }
+    virtual double live_position_size() const {
+        if (position_side_ == PositionSide::LONG) return position_qty_;
+        if (position_side_ == PositionSide::SHORT) return -position_qty_;
+        return 0.0;
+    }
     virtual int observe_last_bar_dual_entry_path_v1() const;
     virtual int observe_pending_count_v1() const;
     virtual int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;

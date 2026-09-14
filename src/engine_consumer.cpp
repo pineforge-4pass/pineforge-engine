@@ -115,6 +115,19 @@ void BacktestEngine::guard_native_mutation(const char* operation) {
     execution_consumer().refuse_source_mutation(operation);
 }
 
+void BacktestEngine::set_syminfo_metadata(const std::string& key, double value) {
+    guard_native_mutation("set_syminfo_metadata");
+    syminfo_metadata_[key] = value;
+    if (key == "qty_step") {
+        qty_step_ = (std::isfinite(value) && value > 0.0) ? value : 0.0;
+        syminfo_.qty_step = qty_step_;
+    }
+    if (key == "account_currency_fx") {
+        account_currency_fx_ =
+            (std::isfinite(value) && value > 0.0) ? value : 1.0;
+    }
+}
+
 void BacktestEngine::run(const Bar* bars, int n) {
     execution_consumer().run_simple(*this, bars, n);
 }
