@@ -180,13 +180,6 @@ struct StreamOrderAction {
 // its result with a tick-built price at the ulp, so a floor(x/u+0.5)*u
 // construction (n x fl(1e-9), 6.7e-17 above the decimal) would decide the
 // ties wrongly — 100/507 on the famr3 sweeps.
-inline double tv_money_round(double value) {
-    if (!std::isfinite(value) || value == 0.0) return value;
-    const double magnitude = std::floor(std::log10(std::abs(value)));
-    const double scale = std::pow(10.0, 9.0 - magnitude);
-    const double rounded = std::floor(std::abs(value) * scale + 0.5) / scale;
-    return value < 0.0 ? -rounded : rounded;
-}
 // The broker's lot floor on ten-digit money (rule 1): the RAW double floor
 // of the scaled quantity, no representation nudge — a nudge would promote
 // the 918062.29999999992 quotient above to918062.30, one lot more than TV.
@@ -195,16 +188,6 @@ inline double tv_money_round(double value) {
 // reconstructed grid quantity does not exceed the input. The 1.169 pin
 // keeps8595.81; the older 1.085 pin still floors918062.29999999993 to918062.29
 // because the next grid point is above that input. Other scales stay unchanged.
-inline double tv_money_floor_lot(double qty, double step) {
-    if (!(step > 0.0) || !std::isfinite(qty) || qty <= 0.0) return qty;
-    double floored = std::floor(qty / step) * step;
-    if (step == 0.01) {
-        const double cent_candidate = std::floor(qty * 100.0) * step;
-        if (cent_candidate > floored && cent_candidate <= qty)
-            floored = cent_candidate;
-    }
-    return floored < qty ? floored : qty;
-}
 
 // Forward declaration of an internal enum used by some BacktestEngine
 // method signatures. The full definition lives in src/engine_internal.hpp
@@ -433,15 +416,6 @@ enum class CommissionType { PERCENT = 0, CASH_PER_ORDER = 1, CASH_PER_CONTRACT =
 
 // Pine user enum → str.tostring (field payloads). Transpiler enforces enum decl before
 // input.enum; this clamps the index so bad values never read past the table.
-inline const std::string& pine_enum_str_at(const std::string* table, std::size_t n,
-                                           int idx) {
-    static const std::string kEmpty;
-    if (n == 0 || table == nullptr) return kEmpty;
-    std::size_t u = static_cast<std::size_t>(idx);
-    if (u >= n) u = n - 1;
-    return table[u];
-}
-
 struct SymInfo {
     std::string ticker = "UNKNOWN";
     std::string tickerid = "UNKNOWN";
@@ -1163,7 +1137,6 @@ protected:
                         const std::string& oca_name = "",
                         int oca_type = 0);
 
-    void process_pending_orders(const Bar& bar, bool before_pooc_script = false);
     struct CoofFillResult {
         bool filled = false;
         double fill_price = std::numeric_limits<double>::quiet_NaN();
@@ -2147,33 +2120,6 @@ protected:
     // and the prev/next bookkeeping does not apply.
     void set_session_bar_state(bool in_session, bool intraday_islastbar);
 
-    // The session.is* market-state variables as the generated strategy
-    // evaluates them. Codegen lowers session.ismarket / ispremarket /
-    // ispostmarket to the unqualified call
-    //   pine_session_is*(syminfo_.session, syminfo_.timezone, current_bar_.timestamp)
-    // inside the generated class, and class-scope lookup resolves it to these
-    // members (a member hides the namespace-scope function of the same name
-    // and suppresses ADL), so the chart timeframe joins the predicate with
-    // the emitted code unchanged. TradingView: on "1D" and above
-    // session.ismarket is always true, ispremarket / ispostmarket always
-    // false — OANDA:XAUUSD @1D (1800-1700, bars stamped 17:00 ET) took 0
-    // trades against TradingView's 57 while the time-of-day test decided.
-    // Every BacktestEngine member resolves here too; the one caller that
-    // wants the raw time-of-day test (the streaming clock's closed-interval
-    // skip) qualifies pineforge:: explicitly.
-    bool pine_session_ismarket(const std::string& session,
-                               const std::string& tz, int64_t bar_ms) const {
-        return pineforge::pine_session_ismarket(session, tz, bar_ms, script_tf_);
-    }
-    bool pine_session_ispremarket(const std::string& session,
-                                  const std::string& tz, int64_t bar_ms) const {
-        return pineforge::pine_session_ispremarket(session, tz, bar_ms, script_tf_);
-    }
-    bool pine_session_ispostmarket(const std::string& session,
-                                   const std::string& tz, int64_t bar_ms) const {
-        return pineforge::pine_session_ispostmarket(session, tz, bar_ms, script_tf_);
-    }
-
     // --- Timeframe state ---
     std::string input_tf_;
     std::string script_tf_;
@@ -2787,10 +2733,6 @@ protected:
         return (initial_capital_ > 0.0) ? (max_drawdown_ / initial_capital_) * 100.0 : 0.0;
     }
 
-    int64_t time_close() const {
-        return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session, syminfo_.timezone, script_tf_);
-    }
-
     // Internal sizing helper; protected (alongside calc_qty) so the sizing-guard
     // test can exercise the fill_price<=0 / NaN rejection path directly. See
     // tests/test_adversarial_ohlcv.cpp.
@@ -2975,7 +2917,6 @@ protected:
     bool pending_flat_market_pair_scope_is_live() const;
     bool default_flat_market_gross_scope_is_live() const;
     void finalize_default_flat_market_gross_admission();
-    void apply_pooc_coof_explicit_flat_market_gross_admission();
     void finalize_pending_flat_market_pairs(const Bar& bar);
     void sort_orders_by_fill_phase(const Bar& bar);
     bool short_seed_collision_materialization_is_live(
@@ -3061,11 +3002,6 @@ protected:
     // Opening-only callers retain the actual chart bar for all eligibility
     // checks while restricting valuation to its first path point. A scoped
     // old trailing exit can instead bound valuation strictly before its fill.
-    bool tv_money_long_margin_call(const Bar& bar,
-                                  bool carried_pooc_pre_close = false,
-                                  bool opening_only = false,
-                                  double before_exit_path_position =
-                                      std::numeric_limits<double>::quiet_NaN());
     bool pooc_trail_money_pre_exit_scope(const Bar& bar,
                                         const source::PendingOrder& order,
                                         double exit_path_position) const;
@@ -3455,29 +3391,6 @@ protected:
     void invoke_chart_on_bar(const Bar& bar);
     void dispatch_bar();
     void dispatch_bar_calc_on_order_fills();
-    void snapshot_coof_script_state();
-    void restore_coof_script_state();
-    void commit_coof_script_state();
-    uint64_t execute_coof_script_body(const Bar& script_bar,
-                                      double broker_cursor_price,
-                                      bool cursor_is_bar_point,
-                                      const OrderBirth& evaluation_origin,
-                                      uint64_t direct_fill_event_budget,
-                                      bool opening_money_prefix = false);
-    uint64_t run_coof_recalc_chain(const Bar& script_bar,
-                                   double broker_cursor_price,
-                                   bool cursor_is_bar_point,
-                                   BirthCursor cursor,
-                                   uint64_t& evaluation_ordinal,
-                                   uint64_t triggering_events,
-                                   uint64_t max_events,
-                                   uint64_t events_already,
-                                   bool grouped_stop_recalc = false,
-                                   uint64_t market_entry_incarnation = 0,
-                                   bool opening_money_prefix = false);
-    void run_simple_bar_loop(const Bar* input_bars, int n_input);
-    void run_aggregation_bar_loop(const Bar* input_bars, int n_input,
-                                  bool bar_magnifier, int expected_script_bars);
     // Live-runtime tail (spec §3.1): once script_tf_seconds_ is known for
     // this run, freeze pine_last_bar_index()/last_bar_time_ at the horizon
     // bar instead of the fed array's actual last index. No-op unless

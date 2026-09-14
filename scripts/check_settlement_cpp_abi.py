@@ -968,7 +968,7 @@ def main() -> int:
                             link(caller+'-'+name+'-'+provider+('-real' if positive else '-rejected'),
                                  obj,runtime,engine='pineforge::'+engine_epoch(native_providers[caller][1])+'::BacktestEngine::',
                                  symbol_missing=None if positive else needle)
-                for caller in ('v14','v15-frozen',current_label):
+                for caller in ('v14', current_label):
                     _,headers,generated = native_providers[caller]
                     epoch = engine_epoch(headers)
                     caller_engine = 'pineforge::'+epoch+'::BacktestEngine::'

@@ -28,6 +28,8 @@
 
 namespace pineforge {
 using source::PendingOrder;
+using source::tv_money_floor_lot;
+using source::tv_money_round;
 using namespace internal;
 
 namespace {

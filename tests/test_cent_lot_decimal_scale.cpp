@@ -3,12 +3,15 @@
 // capital uses8595.80. The raw quotient can multiply by100 to an integer
 // while division bybinary64(0.01) lands one ULP below it. No epsilon is added.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <vector>
 using namespace pineforge;
+using pineforge::source::tv_money_floor_lot;
+using pineforge::source::tv_money_round;
 namespace {
 constexpr double qnan=std::numeric_limits<double>::quiet_NaN();
 int passed=0,failed=0;

@@ -45,11 +45,14 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_tv_money_precision_data.hpp"
 
 using namespace pineforge;
+using pineforge::source::tv_money_floor_lot;
+using pineforge::source::tv_money_round;
 using namespace tv_money_tape_data;
 
 static int tests_passed = 0;

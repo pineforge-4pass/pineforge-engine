@@ -19,9 +19,11 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
+using pineforge::source::tv_money_round;
 using pineforge::source::PendingOrder;
 
 static int passed = 0;
