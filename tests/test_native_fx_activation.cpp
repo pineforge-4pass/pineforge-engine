@@ -162,6 +162,62 @@ void a_f3_fee_and_a_f4_batch_rate_facts() {
     CHECK(rates[0] == 2.0 && rates[1] == 2.0);
     CHECK(host.rows().size() == 1);
     CHECK(host.rows().front().commission > 0.0);
+
+    struct PercentRow {
+        double at_entry = 0.0;
+        double marked_up = 0.0;
+        double commission = 0.0;
+        double signed_units_before_close = 0.0;
+        std::vector<double> rates;
+    };
+    auto percent_row = [](const char* key, double signed_units) {
+        TermsHost percent;
+        PercentRow out;
+        percent.resolver = [&](const NativeExecutionTermsFacts& facts) {
+            out.rates.push_back(facts.active_fx);
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                       no::OpeningShape::Transact};
+        };
+        percent.calculation = [&](Host& base) {
+            auto& h = static_cast<TermsHost&>(base);
+            const auto open = put(h, tx(signed_units, "percent-open"));
+            REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(
+                h.execute_current(command(open))));
+            out.at_entry = h.native_marked_equity(100.0);
+            out.marked_up = h.native_marked_equity(110.0);
+            out.signed_units_before_close = h.physical_position().signed_units;
+            const auto close = put(h, reduce(1.0, "percent-close"));
+            REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(
+                h.execute_current(command(close))));
+        };
+        auto configuration = spec(key);
+        configuration.fee_kind = NativeFeeKind::Percent;
+        configuration.fee_value = 1.0;
+        REQUIRE(percent.configure_native(configuration).status == NativeSetupStatus::Applied);
+        REQUIRE(percent.configure_native_fx_curve(NativeFxCurve{{T}, {2.0}}).status
+                == NativeSetupStatus::Applied);
+        const Bar bar{100, 100, 100, 100, 1, T};
+        percent.run(&bar, 1);
+        completed(percent);
+        REQUIRE(percent.rows().size() == 1);
+        out.commission = percent.rows().front().commission;
+        return out;
+    };
+
+    const auto long_row = percent_row("fx-percent-long", 1.0);
+    const auto short_row = percent_row("fx-percent-short", -1.0);
+    REQUIRE(long_row.rates.size() >= 2 && short_row.rates.size() >= 2);
+    for (double rate : long_row.rates) CHECK(bits(rate) == bits(2.0));
+    for (double rate : short_row.rates) CHECK(bits(rate) == bits(2.0));
+    // At 2 account units per quote unit, a 10-point mark moves one contract
+    // by 20 account units.  The sign proves the short path uses the same FX
+    // basis rather than a long-only fee/equity shortcut.
+    near(long_row.marked_up - long_row.at_entry, 20.0);
+    near(short_row.marked_up - short_row.at_entry, -20.0);
+    near(long_row.commission, 4.0);
+    near(short_row.commission, 4.0);
+    CHECK(bits(long_row.signed_units_before_close) == bits(1.0));
+    CHECK(bits(short_row.signed_units_before_close) == bits(-1.0));
 }
 
 void a_f7_candidate_timestamp_sink_pin() {

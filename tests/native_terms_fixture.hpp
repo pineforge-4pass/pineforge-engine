@@ -2,6 +2,13 @@
 
 #include "native_current_fixture.hpp"
 
+// The A-T13 control needs to force the otherwise impossible post-binding
+// NoChange branch without adding a product test hook.  The consumer layout is
+// unchanged; this only gives the test fixture access to its private core.
+#define private public
+#include "../src/native_execution_consumer.hpp"
+#undef private
+
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -72,6 +79,17 @@ struct TermsHost : Host {
         if (report.trace_len > 0) timestamp = report.trace[report.trace_len - 1].timestamp;
         BacktestEngine::free_report(&report);
         return timestamp;
+    }
+
+    void inject_post_binding_no_change(const no::RequestHandle& target) {
+        auto& consumer = as_native_consumer(execution_consumer());
+        const auto* found = consumer.requests_.find_live(target);
+        REQUIRE(found);
+        // prepare_terms copies this state into its binding mutation.  The
+        // subsequent prepare_execution therefore takes its normal
+        // NotEligible NoChange branch after the receipt is installed.
+        auto* live = const_cast<no::LiveRequest*>(found);
+        live->trigger_state = no::StopIdle{};
     }
 
     no::ExecutionTerms resolve_execution_terms(

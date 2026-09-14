@@ -2127,6 +2127,12 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
 
         const double resolved_price = terms.resolved_price;
         const bool zero_units_terminal = unresolved && *terms.units == 0.0;
+        // A group-exhausting binding has no executable plan, just like the
+        // zero-units terminal.  The current finite-price boundary must not
+        // attempt its provisional inspection on the still-deferred row: the
+        // receipt itself installs the terminal Cancelled{Group} outcome.
+        const bool no_plan_terminal = zero_units_terminal
+            || (unresolved && after == 0.0 && deduction > 0.0);
         // Price rejection is deliberately ahead of receipt installation. The
         // sole finite-current exception needs a stack-only plan inspection to
         // distinguish a pure close from an opening plan.
@@ -2137,7 +2143,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (!current && resolved_price <= 0.0 && !zero_units_terminal) {
             return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
         }
-        if (current && resolved_price <= 0.0 && !zero_units_terminal) {
+        if (current && resolved_price <= 0.0 && !no_plan_terminal) {
             const auto provisional = inspect_candidate(engine, *live, evaluation.cursor, resolved_price,
                                                        plan ? &*plan : nullptr);
             if (provisional.inspect.would_open) {
@@ -2145,7 +2151,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                                 nonidentity_attempt);
             }
         }
-        if (!zero_units_terminal
+        if (!no_plan_terminal
             && (std::holds_alternative<native_order::LimitReady>(live->trigger_state)
             || std::holds_alternative<native_order::StopLimitLive>(live->trigger_state))) {
             std::optional<double> level;

@@ -237,6 +237,69 @@ void a_s2_absorbed_close_opposite_flattens_entire_roster() {
     CHECK(reduce_reached);
 }
 
+void a_s2_partial_and_oversized_close_opposite_terms() {
+    TermsHost partial;
+    partial.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price,
+                                       facts.opposite_book_units - 1.0,
+                                       no::OpeningShape::CloseOpposite};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool partial_reached = false;
+    partial.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(3.0, 100.0, 231);
+        const auto target = put(h, host_open(no::Side::Short, "partial-close-opposite"));
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::ExecutionAppliedEvent>(result));
+        const auto& applied = std::get<no::ExecutionAppliedEvent>(result);
+        CHECK(bits(applied.closed_units) == bits(2.0));
+        CHECK(bits(applied.opened_units) == bits(0.0));
+        REQUIRE(!h.precommit_views.empty());
+        const auto* plan = std::get_if<order_action::Reduce>(&h.precommit_views.back().plan);
+        REQUIRE(plan);
+        CHECK(bits(plan->units) == bits(2.0));
+        CHECK(bits(h.physical_position().signed_units) == bits(1.0));
+        partial_reached = true;
+    };
+    run(partial, spec("partial-close-opposite"), {100.0});
+    completed(partial);
+    CHECK(partial_reached);
+
+    TermsHost oversized;
+    oversized.resolver = [](const NativeExecutionTermsFacts& facts) {
+        if (std::holds_alternative<no::HostSized>(facts.definition->request.intent)) {
+            return no::ExecutionTerms{facts.default_resolved_price,
+                                       facts.opposite_book_units + 1.0,
+                                       no::OpeningShape::CloseOpposite};
+        }
+        return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                   no::OpeningShape::Transact};
+    };
+    bool oversized_reached = false;
+    oversized.calculation = [&](Host& base) {
+        auto& h = static_cast<TermsHost&>(base);
+        h.seed(3.0, 100.0, 241);
+        const auto target = put(h, host_open(no::Side::Short, "oversized-close-opposite"));
+        const auto result = h.execute_current(command(target));
+        REQUIRE(std::holds_alternative<no::MatchRejectedEvent>(result));
+        const auto& rejected = std::get<no::MatchRejectedEvent>(result);
+        CHECK(rejected.reason == no::MatchRejectReason::InvalidTerms);
+        REQUIRE(rejected.attempted_terms && rejected.attempted_terms->units);
+        CHECK(bits(*rejected.attempted_terms->units) == bits(4.0));
+        CHECK(rejected.attempted_terms->shape == no::OpeningShape::CloseOpposite);
+        CHECK(bits(h.physical_position().signed_units) == bits(3.0));
+        CHECK(h.rows().empty() && h.precommit_views.empty());
+        oversized_reached = true;
+    };
+    run(oversized, spec("oversized-close-opposite"), {100.0});
+    completed(oversized);
+    CHECK(oversized_reached);
+}
+
 void a_r1_exact_queued_reverse_both_signs() {
     const double target = from_bits(0x3fb999999999999aULL);
     for (const double sign : {1.0, -1.0}) {
@@ -376,6 +439,7 @@ int main() {
     test("host-sized CloseOpposite Flatten", host_sized_close_opposite_uses_flatten);
     test("identity ReverseTo rejection terms", explicit_reverse_rejection_records_only_nonidentity_terms);
     test("A-S2 absorbed CloseOpposite Flatten", a_s2_absorbed_close_opposite_flattens_entire_roster);
+    test("A-S2 partial and oversized CloseOpposite", a_s2_partial_and_oversized_close_opposite_terms);
     test("A-R1 exact queued reverse both signs", a_r1_exact_queued_reverse_both_signs);
     test("A-R2/A-R4 priced and flat reverse", a_r2_priced_stop_reverse_and_r4_no_opposite);
     test("A-R3 current reversal preview", a_r3_preview_rows_match_current_reverse);
