@@ -55,6 +55,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -88,7 +89,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
     return b;
 }
 
-class CycleProbe : public BacktestEngine {
+class CycleProbe : public pineforge::source::PineStrategyHost {
 public:
     CycleProbe() {
         initial_capital_ = 1000000.0;
@@ -140,7 +141,7 @@ public:
 //  bar 7  it fills                        pos 0
 class TwoBucketProbe : public CycleProbe {
 public:
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0:
                 strategy_entry("S", false, kNaN, kNaN, 2.0);
@@ -180,7 +181,7 @@ static std::vector<Bar> two_bucket_bars() {
 // ── C: a leg bound to an entry id that never filled is still Removed ───────
 class GhostLegProbe : public CycleProbe {
 public:
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         strategy_entry("S", false, kNaN, kNaN, 2.0);
         // "NEVER" is never issued as an entry: this leg must never fire, even
@@ -200,7 +201,7 @@ class StaleLegProbe : public CycleProbe {
 public:
     explicit StaleLegProbe(bool reuse_id) : reuse_id_(reuse_id) {}
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0:
                 strategy_entry("S", false, kNaN, kNaN, 2.0);

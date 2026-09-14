@@ -34,6 +34,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -58,7 +59,7 @@ bool near(double a, double b, double eps = 1e-9) {
     return std::fabs(a - b) <= eps;
 }
 
-class CoofBase : public BacktestEngine {
+class CoofBase : public pineforge::source::PineStrategyHost {
 public:
     explicit CoofBase(bool enabled = true) {
         calc_on_order_fills_ = enabled;
@@ -89,7 +90,7 @@ public:
 // after W2, C is ineligible, so it converts to resting and fills on bar 2.
 class CascadeBracketW2CProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("E", true);
@@ -142,7 +143,7 @@ void test_r1_cascade_bracket_does_not_exact_fill_on_w2_c_segment() {
 // the C tick (95); the new rule rolls it to the next bar's open (96).
 class CascadeMarketRollProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("E", true);
@@ -191,7 +192,7 @@ void test_r2_cascade_market_only_c_remains_rolls_to_next_open() {
 // truncates the 5th (aureate's deficit direction); the new rule fills all five.
 class RestingLimitSweepProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             for (int i = 0; i < 5; ++i) {
                 strategy_entry("E" + std::to_string(i), true,
@@ -221,7 +222,7 @@ void test_r3_more_than_four_resting_fills_are_not_budget_truncated() {
 // the same bar (green before AND after — provenance is bar-open, not mid-bar).
 class BarOpenBracketProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("L", true);
@@ -255,7 +256,7 @@ void test_g3_bar_open_recalc_bracket_keeps_exact_level_fill() {
 class LegacyProbe final : public CoofBase {
 public:
     explicit LegacyProbe() : CoofBase(/*enabled=*/false) {}
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (position_side_ == PositionSide::LONG) {
             strategy_exit("X", "L", kNaN, 99.0);
@@ -292,7 +293,7 @@ void test_g4_flag_off_path_is_legacy_identical() {
 // magnifier-regression guard; this pins the KI-67 scoping directly.)
 class MagnifierBracketProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("L", true);

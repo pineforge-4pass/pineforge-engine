@@ -4,6 +4,7 @@
 // order schedule has no strategy signals; the price/quantity ownership is
 // the contract. An already-marketable exit retains its own opening priority.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -35,7 +36,7 @@ std::vector<Bar> bars() {
     };
 }
 enum class Mode { Bracket, Funded, OpenRace, NonpositiveOpen, Half, Stop, Disabled };
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
     Mode mode_;
 public:
     double script_size = kNa;
@@ -52,7 +53,7 @@ public:
         syminfo_.pointvalue = 1;
         set_margin_call_enabled(mode != Mode::Disabled);
     }
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (bar_index_ == 0) {
             strategy_entry("Owned", true);
             if (mode_ != Mode::OpenRace && mode_ != Mode::NonpositiveOpen
@@ -116,7 +117,7 @@ void check_script_after_open_call() {
 // The existing high-value fractional class excludes priced-origin lots.
 // A bar can cross the one-account-unit lot-value boundary; evaluating only O
 // must not change which existing class the actual chart bar belongs to.
-class BoundaryProbe : public BacktestEngine {
+class BoundaryProbe : public pineforge::source::PineStrategyHost {
 public:
     static constexpr double qty = 100001.1;
     static constexpr double entry_price = 9.9999;
@@ -129,7 +130,7 @@ public:
         commission_value_ = 0.0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar& current) override {
+    void on_source_bar(const Bar& current) override {
         if (bar_index_ != 0) return;
         // A priced lot born at the prior close has no earlier path to mark.
         position_side_ = PositionSide::LONG;

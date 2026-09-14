@@ -31,6 +31,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -58,7 +59,7 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 // Momentum-flip probe: long on up-close, short on down-close. Every flip
 // closes the prior position, producing a deterministic blotter of wins and
 // losses.
-class PvProbe : public BacktestEngine {
+class PvProbe : public pineforge::source::PineStrategyHost {
 public:
     double prev_close_ = kNaN;
 
@@ -72,7 +73,7 @@ public:
         commission_value_ = commission_pct;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!std::isnan(prev_close_)) {
             if (bar.close > prev_close_)
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "up");

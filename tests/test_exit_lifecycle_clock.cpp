@@ -1,5 +1,6 @@
 // Native lifecycle clocks and a literal engine hook/rebind control.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <cstdio>
 #include <functional>
@@ -108,7 +109,7 @@ void completion_clocks() {
     CHECK(routed.apply(routed.target(), selected) == Result::Applied);
     CHECK(!routed.pending_replacement());
 }
-class HookBook : public BacktestEngine {
+class HookBook : public pineforge::source::PineStrategyHost {
     bool bound_ = false;
     void local(Operation op) {
         auto& o = pending_orders_.back();
@@ -117,7 +118,7 @@ class HookBook : public BacktestEngine {
     }
 public:
     HookBook() { initial_capital_ = 100000; commission_value_ = 0; margin_long_ = margin_short_ = 0; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("E", true, absent(), absent(), 1);
         if (bar_index_ != 1) return;
         CHECK(position_qty_ == 1);

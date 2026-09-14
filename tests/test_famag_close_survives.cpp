@@ -56,6 +56,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_famag_close_survives_data.hpp"
 
@@ -110,7 +111,7 @@ std::vector<Bar> tape_bars() {
 // commission 0, margin 100/100, OANDA:EURUSD (mintick 1e-5, lot 0.01),
 // market fills at the next open, margin calls on. Same-bar actions are issued
 // in the tape's script order (entry then close, or close then entry).
-class TapeProbe : public BacktestEngine {
+class TapeProbe : public pineforge::source::PineStrategyHost {
 public:
     TapeProbe(double capital, const Action* actions, int n_actions)
         : actions_(actions), n_actions_(n_actions) {
@@ -129,7 +130,7 @@ public:
         process_orders_on_close_ = false;
         set_margin_call_enabled(true);
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         const double nan = std::numeric_limits<double>::quiet_NaN();
         for (int i = 0; i < n_actions_; ++i) {
             const Action& a = actions_[i];

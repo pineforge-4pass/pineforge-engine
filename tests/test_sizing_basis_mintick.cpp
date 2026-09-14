@@ -67,6 +67,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -110,7 +111,7 @@ namespace {
 // commission, 1x margin both sides, margin-call emulation OFF so the sizing
 // basis and the fill-time admission arms are the only mechanisms in play.
 // The feed is deliberately NOT on-tick — that is the point of the file.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double mintick, int slippage_ticks) {
         initial_capital_ = capital;
@@ -131,7 +132,7 @@ public:
     // frozen basis / qty the broker snapshot took on that bar.
     std::string script;
     std::vector<double> basis_buy, basis_sell, frozen_qty;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         const char a = script[bar_index_];
         if (a == 'L' || a == 'S') {
@@ -361,7 +362,7 @@ void test_slippage_added_after_rounding() {
 // Short-cascade probe, the test_margin_call.cpp "A" shape: 1000 capital, 100%
 // short at 1x fills on the bar-0 close (POC), never exits; the adverse
 // cascade is the only mechanism (continuous lots, qty_step 0).
-class ShortCascadeProbe : public BacktestEngine {
+class ShortCascadeProbe : public pineforge::source::PineStrategyHost {
 public:
     ShortCascadeProbe() {
         initial_capital_ = 1000.0;
@@ -377,7 +378,7 @@ public:
     // E3: a take-profit limit armed on bar 1 (position live) so it RESTS on
     // bar 2 and routes the deficit test through the chronological hook.
     double tp_limit = kNaN;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("S", false, kNaN, kNaN, kNaN);
         if (bar_index_ == 1 && std::isfinite(tp_limit)) {
             strategy_exit("X", "S", tp_limit, kNaN, kNaN, kNaN, kNaN,

@@ -51,6 +51,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -110,7 +111,7 @@ static const Instrument kBTC = {1.0,  1.0,  0.001};
 //   'B' explicit LONG  "Buy" qty = entry_qty_ (the rampatel reversal id)
 //   'E' explicit LONG  "L" qty = strategy.equity / close (the all-in idiom)
 //   'C' strategy.close("L")                        '.' nothing
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, const Instrument& ins, QtyType qty_type,
           double qty_value, double comm_pct, double margin, int pyramiding,
@@ -133,7 +134,7 @@ public:
     std::string script;
     double entry_qty_ = 1.0;
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': strategy_entry("L", true); break;
@@ -434,13 +435,13 @@ void test_declined_reversal_with_coqueued_close() {
     class P2 : public Probe {
     public:
         using Probe::Probe;
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 2) {
                 strategy_entry("S", false);
                 strategy_close("L");
                 return;
             }
-            Probe::on_bar(bar);
+            Probe::on_source_bar(bar);
         }
     };
     P2 eng(385000.0, kNQ, QtyType::FIXED, 1.0, 0.0, 100.0, 0, false);
@@ -521,12 +522,12 @@ void test_explicit_add_costed_as_resulting_position() {
         class P2 : public Probe {
         public:
             using Probe::Probe;
-            void on_bar(const Bar& bar) override {
+            void on_source_bar(const Bar& bar) override {
                 if (bar_index_ == 2) {
                     strategy_entry("L2", true, kNaN, kNaN, 40.0);
                     return;
                 }
-                Probe::on_bar(bar);
+                Probe::on_source_bar(bar);
             }
         };
         P2 eng(10000.0, kF, QtyType::FIXED, 1.0, 0.0, 100.0, 2, false);

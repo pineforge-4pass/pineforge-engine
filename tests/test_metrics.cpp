@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/metrics.hpp>
 
@@ -38,7 +39,7 @@ static int tests_failed = 0;
 
 namespace {
 
-class MomoFlip : public BacktestEngine {
+class MomoFlip : public pineforge::source::PineStrategyHost {
 public:
     double prev_close_ = std::numeric_limits<double>::quiet_NaN();
     MomoFlip() {
@@ -50,7 +51,7 @@ public:
         commission_value_ = 0.1;
         pyramiding_ = 1;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!std::isnan(prev_close_)) {
             if (bar.close > prev_close_)
                 strategy_entry("L", true, std::numeric_limits<double>::quiet_NaN(),
@@ -335,10 +336,10 @@ static void test_equity_stats_edges() {
 
 namespace {
 
-class NeverTrades : public BacktestEngine {
+class NeverTrades : public pineforge::source::PineStrategyHost {
 public:
     NeverTrades() { initial_capital_ = 1'000'000; }
-    void on_bar(const Bar&) override {}     // never trades
+    void on_source_bar(const Bar&) override {}     // never trades
     const std::vector<pf_equity_point_t>& curve() const { return equity_curve_; }
     int64_t bim() const { return bars_in_market_; }
 };
@@ -363,7 +364,7 @@ static void test_flat_strategy_bars_in_market() {
 
 namespace {
 
-class CashPerContractFlip : public BacktestEngine {
+class CashPerContractFlip : public pineforge::source::PineStrategyHost {
 public:
     double prev_close_ = std::numeric_limits<double>::quiet_NaN();
     CashPerContractFlip() {
@@ -375,7 +376,7 @@ public:
         commission_value_ = 2.5;             // $2.50 per contract per leg
         pyramiding_ = 1;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!std::isnan(prev_close_)) {
             if (bar.close > prev_close_)
                 strategy_entry("L", true, std::numeric_limits<double>::quiet_NaN(),

@@ -52,6 +52,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -85,7 +86,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
     return b;
 }
 
-class BracketProbe : public BacktestEngine {
+class BracketProbe : public pineforge::source::PineStrategyHost {
 public:
     BracketProbe() {
         initial_capital_ = 1000000.0;
@@ -133,7 +134,7 @@ protected:
 //  bar 4  low 90 crosses the 95 stop -> ALL FOUR legs fire @95
 class CarriedPairProbe : public BracketProbe {
 public:
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0:
                 strategy_entry("L", true, kNaN, kNaN, 2.0);
@@ -179,7 +180,7 @@ static std::vector<Bar> carried_pair_bars() {
 //  bar 7  low 90 crosses the 95 stop -> 2 units @95, BOTH tagged T2
 class ConsumedLegProbe : public BracketProbe {
 public:
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0:
                 strategy_entry("L", true, kNaN, kNaN, 2.0);

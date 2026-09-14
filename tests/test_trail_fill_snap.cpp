@@ -51,6 +51,7 @@
  * BacktestEngine end to end over the registry feed bars (`lab bars`).
  */
 
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -449,7 +450,7 @@ void test_resolver_btc_short_activation_after_tolerant_ceil() {
 
 // ── engine-level fixtures ─────────────────────────────────────────────
 
-class TrailEngine : public BacktestEngine {
+class TrailEngine : public pineforge::source::PineStrategyHost {
 public:
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
@@ -475,7 +476,7 @@ public:
         syminfo_mintick_ = mintick;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("E", is_long_, kNaN, kNaN, /*qty=*/1.0);
             const double stop = with_stop_
@@ -672,7 +673,7 @@ void test_engine_on_tick_open_and_resting_stop_gap_unchanged() {
             process_orders_on_close_ = false;
             syminfo_mintick_ = 0.01;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E", true, kNaN, kNaN, /*qty=*/1.0);
             } else if (bar_index_ == 1) {

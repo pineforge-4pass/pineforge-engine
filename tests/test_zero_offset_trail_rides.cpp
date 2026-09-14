@@ -73,6 +73,7 @@
  * aapl-ctl-tp384-off1: 196.12).
  */
 
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -137,7 +138,7 @@ struct TapeCase {
 
 #include "zero_offset_trail_rides_cases.inc"
 
-class TapeProbe : public BacktestEngine {
+class TapeProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit TapeProbe(const TapeCase& c) : c_(c) {
         initial_capital_ = 1'000'000.0;
@@ -149,7 +150,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("E", c_.is_long, kNaN, kNaN, /*qty=*/1.0);
             if (c_.mode == Mode::kAlongside) issue(bar);

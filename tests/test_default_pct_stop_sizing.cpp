@@ -57,6 +57,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -423,7 +424,7 @@ std::vector<Bar> aht0404_bars() {
     return b;
 }
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     // NYSE:F: mintick 0.01, whole shares, Pine v6 defaults (margin 100,
     // pyramiding 0 = one entry, no commission / slippage, margin call ON in
@@ -446,7 +447,7 @@ public:
         set_margin_call_enabled(false);
     }
     std::function<void(Probe&, int)> script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (script) script(*this, bar_index_);
     }
 

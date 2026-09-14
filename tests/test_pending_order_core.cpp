@@ -2,6 +2,7 @@
 // external broker, campaign, or generated expected values.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstdio>
 #include <stdexcept>
@@ -21,7 +22,7 @@ struct BindLayers {
 };
 template struct PrivateMember<BindLayers, &BacktestEngine::reconcile_deferred_layered_exits>;
 
-class Book : public BacktestEngine {
+class Book : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 100000;
@@ -33,7 +34,7 @@ public:
         close_entries_rule_any_ = true;
         current_bar_ = {100,100,100,100,1,0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void step() {
         ++bar_index_;
         current_bar_ = {100,100,100,100,1,int64_t(bar_index_)*60000};

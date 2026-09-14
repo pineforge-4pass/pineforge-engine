@@ -12,6 +12,7 @@
 #include <limits>
 #include <vector>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 namespace {
@@ -34,7 +35,7 @@ struct Control {
     double injected_long_snapshot = NaN;
 };
 
-class Pair : public BacktestEngine {
+class Pair : public pineforge::source::PineStrategyHost {
 public:
     explicit Pair(Control control) : c(control) {
         initial_capital_ = c.capital;
@@ -49,7 +50,7 @@ public:
         set_margin_call_enabled(true);
         set_path_order(c.forced_path);
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             auto enter = [&](bool is_long) {
                 strategy_entry(is_long ? "L" : "S", is_long, NaN,

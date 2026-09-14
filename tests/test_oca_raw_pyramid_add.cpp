@@ -36,6 +36,7 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -62,7 +63,7 @@ namespace {
 
 // Probe driving the leftover-bracket scenario. Each phase uses
 // strategy_order so all fills route through apply_raw_order_fill.
-class LeftoverBracketProbe : public BacktestEngine {
+class LeftoverBracketProbe : public pineforge::source::PineStrategyHost {
 public:
     // Expose protected state for assertions.
     PositionSide live_side() const { return position_side_; }
@@ -88,7 +89,7 @@ public:
         pyramiding_ = 2;  // allow one pyramid-add on top of L0
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (bar_index_ == 0) {
             // Open long via strategy.entry (fills at bar 1 open as MARKET).

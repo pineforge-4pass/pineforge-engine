@@ -28,6 +28,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -67,11 +68,11 @@ struct SeenBar {
     bool raw_ispostmarket = false;
 };
 
-class SessionProbeEngine : public BacktestEngine {
+class SessionProbeEngine : public pineforge::source::PineStrategyHost {
 public:
     std::vector<SeenBar> seen;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         SeenBar s;
         s.ts = current_bar_.timestamp;
         // Byte-for-byte the expressions visit_expr.py emits for

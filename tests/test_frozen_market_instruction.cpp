@@ -2,6 +2,7 @@
 // Literal native instruction and book transitions. No external data, reference
 // trades, strategy compiler or campaign grading participates in this test.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cmath>
 #include <cstddef>
@@ -95,7 +96,7 @@ void exclusive_instruction_and_revocation() {
     CHECK(!close.active() && !close.targeted_close());
 }
 
-class Book : public BacktestEngine {
+class Book : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 1000000;
@@ -107,7 +108,7 @@ public:
         bar_index_ = 0;
         current_bar_ = {100, 100, 100, 100, 1, 0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void entry(const std::string& id, bool buy, double units) {
         strategy_entry(id, buy, nan, nan, units);
     }

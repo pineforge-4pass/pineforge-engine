@@ -3,6 +3,7 @@
 // Liquidation/callback timing is a separate factor; sum all fragments to recover
 // the one accepted entry quantity rather than hiding a later margin slice.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -43,7 +44,7 @@ void check(bool value, const Case& c, int cap, const char* what) {
     if (value) ++passed;
     else { ++failed; std::printf("FAIL %s pyramiding=%d: %s\n",c.name,cap,what); }
 }
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
     const Case& c_;
 public:
     Probe(const Case& c, int cap, QtyType defaults) : c_(c) {
@@ -54,7 +55,7 @@ public:
         set_syminfo_mintick(0.00001); process_orders_on_close_=true;
         calc_on_order_fills_=c.coof;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na=std::numeric_limits<double>::quiet_NaN();
         if (bar_index_==0 && position_side_==PositionSide::FLAT && trades_.empty())
             strategy_entry("L",true,na,na,c_.explicit_qty?c_.qty:na);

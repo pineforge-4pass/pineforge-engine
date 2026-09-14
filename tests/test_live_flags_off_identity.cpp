@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -8,9 +9,9 @@ namespace {
 int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++failures; } } while (0)
 Bar bar(double o, double h, double l, double c, int64_t ts) { return Bar{o, h, l, c, 1.0, ts}; }
-class Sma final : public BacktestEngine {   // a modulo-bar_index entry/exit schedule with a bracket, exercises fills
+class Sma final : public pineforge::source::PineStrategyHost {   // a modulo-bar_index entry/exit schedule with a bracket, exercises fills
 public:
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         // strategy_exit's signature is (id, from_entry, limit_price, stop_price, ...) --
         // limit BEFORE stop. A bracket exit with a stop 2% below close and a
         // limit 3% above close is therefore limit=close*1.03, stop=close*0.98.

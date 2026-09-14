@@ -25,6 +25,7 @@
  * UTC-stamped; tape times are UTC+8 evenings of the same day.
  */
 
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -100,7 +101,7 @@ std::vector<Bar> f15_0415() {
 // while short, strategy.exit("X", "E", trail_points = <mode>, trail_offset =
 // 0) is re-issued every bar — trail_points either fixed (fixed_points_) or
 // close * 0.008 / mintick (the probe's form).
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe() {
         initial_capital_ = 10000.0;
@@ -121,7 +122,7 @@ public:
     double fixed_points_ = kNaN;   // NaN -> close * 0.008 / mintick
     double trail_offset_ = 0.0;
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("E", false);
         if (position_side_ != PositionSide::FLAT) {
             const double points = std::isnan(fixed_points_)

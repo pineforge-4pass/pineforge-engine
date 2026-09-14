@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 // A hand-written native strategy. Codegen output exposes the same lifecycle.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
-class NativeExample final : public pineforge::BacktestEngine {
+class NativeExample final : public pineforge::source::PineStrategyHost {
   public:
     NativeExample() {
         initial_capital_ = 100000;
         default_qty_value_ = 1;
     }
-    void on_bar(const pineforge::Bar &) override {
+    void on_source_bar(const pineforge::Bar &) override {
         // Alternating market entry/close gives a small deterministic test.
         if (bar_index_ % 4 == 1)
             strategy_entry("Long", true);

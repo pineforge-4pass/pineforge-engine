@@ -24,6 +24,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -52,7 +53,7 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 // Long entry @100 on bar0 (market, fills bar1 open=100), bracket exit armed on
 // bar1, resolved on bar2 (the tie-break OHLC under test).
-class BracketProbe : public BacktestEngine {
+class BracketProbe : public pineforge::source::PineStrategyHost {
 public:
     double tp_, sl_;
     BracketProbe(double tp, double sl) : tp_(tp), sl_(sl) {
@@ -64,7 +65,7 @@ public:
         pyramiding_ = 1;
         syminfo_mintick_ = 0.01;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 1.0, "enter");
         }

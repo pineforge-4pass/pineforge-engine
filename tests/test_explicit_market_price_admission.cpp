@@ -1,6 +1,7 @@
 // Explicit MARKET admission: independent covered TradingView boundary controls.
 // Fixtures pin observed decisions; the test does not recompute the price rule.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -89,7 +90,7 @@ void check(bool value, const char* name, const char* property) {
     if (value) ++passed;
     else { ++failed; std::printf("FAIL %s default=%d: %s\n", name, current_defaults, property); }
 }
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
     const Case& fixture_;
 public:
     double admitted_qty = 0;
@@ -109,7 +110,7 @@ public:
         set_syminfo_mintick(0.00001);
         set_margin_call_enabled(true);
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             balance_on_signal = current_equity();
             const double na = std::numeric_limits<double>::quiet_NaN();

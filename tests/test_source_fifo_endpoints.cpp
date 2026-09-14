@@ -1,6 +1,7 @@
 // Literal source FIFO endpoint calls paired with the actual native Reduce owner.
 // No BacktestEngine::run(), generated strategy, tape, corpus or grading loop.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -60,7 +61,7 @@ void near(double actual, double expected) {
     CHECK(ok);
 }
 
-struct Book final : BacktestEngine {
+struct Book final : pineforge::source::PineStrategyHost {
     Book() {
         initial_capital_ = 1000;
         commission_type_ = CommissionType::CASH_PER_ORDER;
@@ -75,7 +76,7 @@ struct Book final : BacktestEngine {
         stream_observe_actions_ = true;
         bar(1, 100);
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void bar(int index, double price) {
         current_bar_ = {price, price + 20, price - 20, price, 1, 1736121600000LL + index * 60000};
         bar_index_ = index;

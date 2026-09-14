@@ -33,6 +33,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -73,7 +74,7 @@ namespace {
 // Scripted all-in reversal probe. margin_call OFF so a held short can ride
 // deeply underwater (its unbounded adverse excursion drives realized + open
 // equity NEGATIVE) — the exact state that used to size a reversal negative.
-class RevProbe : public BacktestEngine {
+class RevProbe : public pineforge::source::PineStrategyHost {
 public:
     RevProbe(double capital, double qty_step, bool mc) {
         initial_capital_ = capital;
@@ -87,7 +88,7 @@ public:
         set_margin_call_enabled(mc);
     }
     std::string script;   // 'S' short, 'L' long, '.' nothing (one char per bar)
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'S': strategy_entry("S", false); break;

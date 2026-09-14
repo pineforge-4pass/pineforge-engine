@@ -75,6 +75,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -108,7 +109,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
     return b;
 }
 
-class PyramidProbe : public BacktestEngine {
+class PyramidProbe : public pineforge::source::PineStrategyHost {
 public:
     PyramidProbe() {
         initial_capital_ = 1000000.0;
@@ -167,7 +168,7 @@ public:
     std::string third_id = "C";
     int slots_after_drain = -1;
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0: strategy_entry("A", true, kNaN, kNaN, 2.0); break;
             case 1: strategy_exit("X1", "A", 110.0, kNaN, kNaN, kNaN, kNaN,
@@ -263,7 +264,7 @@ namespace {
 // monotone counter and the size-derived counter agree throughout.
 class NoDrainProbe : public PyramidProbe {
 public:
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0: strategy_entry("A", true, kNaN, kNaN, 2.0); break;
             case 1: strategy_exit("X1", "A", 110.0, kNaN, kNaN, kNaN, kNaN,
@@ -322,7 +323,7 @@ namespace {
 //  bar 7  close_all fills -> flat
 class CloseDrainProbe : public PyramidProbe {
 public:
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0: strategy_entry("A", true, kNaN, kNaN, 2.0); break;
             case 1: strategy_exit("X1", "A", 110.0, kNaN, kNaN, kNaN, kNaN,
@@ -394,7 +395,7 @@ public:
     bool is_long=true, full_first=false;
     double first_qty=1, final_qty=1;
     int slots=-1;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         switch(bar_index_) {
             case 0:
                 slots=-1;

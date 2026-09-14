@@ -10,13 +10,14 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
 namespace {
 
-struct MetaHarness : public BacktestEngine {
-    void on_bar(const Bar& /*bar*/) override {}
+struct MetaHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar& /*bar*/) override {}
     double meta(const std::string& key) const { return get_syminfo_metadata(key); }
     const SymInfo& sym() const { return syminfo_; }
     void set_internal_indices(int bar_idx, int last_idx) {

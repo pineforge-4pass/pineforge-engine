@@ -1,4 +1,5 @@
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -12,7 +13,7 @@
 using namespace pineforge;
 
 namespace {
-class LiteralBook final : public BacktestEngine {
+class LiteralBook final : public pineforge::source::PineStrategyHost {
 public:
     LiteralBook() {
         position_side_ = PositionSide::LONG;
@@ -38,7 +39,7 @@ public:
         pyramid_entries_.push_back(entry);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         // This hook must never be reached by a hash-only fixture.
         std::abort();
     }

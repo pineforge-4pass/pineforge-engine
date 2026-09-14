@@ -35,6 +35,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -59,9 +60,9 @@ namespace {
 // no-op ``on_bar`` so ``BacktestEngine``'s pure-virtual surface is
 // satisfied (the test never drives a ``run()`` so the override is
 // unused but required for instantiation).
-class TimeProbeEngine : public BacktestEngine {
+class TimeProbeEngine : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void set_bar_timestamp(int64_t ts_ms) {
         current_bar_.timestamp = ts_ms;
     }

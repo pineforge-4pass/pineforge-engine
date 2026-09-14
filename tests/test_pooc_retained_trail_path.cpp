@@ -26,6 +26,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -49,7 +50,7 @@ Bar mk(double open, double high, double low, double close) {
 
 enum class Action { None, Restart, NewCycle };
 
-struct Probe final : BacktestEngine {
+struct Probe final : pineforge::source::PineStrategyHost {
     bool is_long = true;
     double points = 150;
     double offset = 100;
@@ -70,7 +71,7 @@ struct Probe final : BacktestEngine {
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("E", is_long, kNaN, kNaN, 8);
             strategy_exit("X", "E", kNaN, kNaN, points, offset);

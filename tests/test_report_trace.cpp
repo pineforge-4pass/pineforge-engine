@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 
 using namespace pineforge;
@@ -39,7 +40,7 @@ static int tests_failed = 0;
 // deterministic functions of the bar so we can pin exact expected numbers.
 //   "ema_fast" -> bar.close
 //   "signal"   -> bar.high - bar.low   (the bar's range)
-class TraceStrategy : public BacktestEngine {
+class TraceStrategy : public pineforge::source::PineStrategyHost {
 public:
     TraceStrategy() {
         initial_capital_ = 100000;
@@ -49,7 +50,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         // Emit via the double overload and via the int overload to exercise the
         // forwarding overload path too. "signal" is computed as an int range.
         trace("ema_fast", bar.close);

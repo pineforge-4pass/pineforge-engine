@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -47,7 +48,7 @@ namespace {
 // bar, short when it fell. Market entries auto-reverse at pyramiding=1, so the
 // flip stream produces a long sequence of opens+closes — plenty of trades to
 // make a determinism mismatch visible.
-class MomoFlip : public BacktestEngine {
+class MomoFlip : public pineforge::source::PineStrategyHost {
 public:
     double prev_close_ = std::numeric_limits<double>::quiet_NaN();
 
@@ -60,7 +61,7 @@ public:
         pyramiding_ = 1;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!std::isnan(prev_close_)) {
             if (bar.close > prev_close_) {
                 strategy_entry("L", true, std::numeric_limits<double>::quiet_NaN(),

@@ -10,6 +10,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -43,7 +44,7 @@ Bar bar(double price, int64_t timestamp = 2000) {
     return result;
 }
 
-class FeeEquityProbe : public BacktestEngine {
+class FeeEquityProbe : public pineforge::source::PineStrategyHost {
 public:
     FeeEquityProbe() {
         initial_capital_ = 1000.0;
@@ -56,7 +57,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void set_commission_type(CommissionType type) { commission_type_ = type; }
     void set_default_percent(double value) { default_qty_value_ = value; }
@@ -123,7 +124,7 @@ private:
     }
 };
 
-class PartialFeeSnapshotProbe : public BacktestEngine {
+class PartialFeeSnapshotProbe : public pineforge::source::PineStrategyHost {
 public:
     PartialFeeSnapshotProbe() {
         initial_capital_ = 1000.0;
@@ -138,7 +139,7 @@ public:
         set_margin_call_enabled(false);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/10.0);
         } else if (bar_index_ == 1) {
@@ -163,7 +164,7 @@ private:
 // A percent-typed reversal sizes only after the old position has been fully
 // realized. Its closed entry/exit commissions are already in net profit; the
 // old lot's open-PnL and entry-fee snapshot must not be counted a second time.
-class PercentTypedReversalProbe : public BacktestEngine {
+class PercentTypedReversalProbe : public pineforge::source::PineStrategyHost {
 public:
     PercentTypedReversalProbe() {
         initial_capital_ = 10000.0;
@@ -178,7 +179,7 @@ public:
         set_margin_call_enabled(false);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, /*qty=*/1.0);
         } else if (bar_index_ == 1) {
@@ -202,7 +203,7 @@ private:
 
 // Exact quantities exported by the clean-room Pine v6 KI-56 holding and
 // adverse-margin discriminators on ETHUSDT.P, 15m, 2025-04-02.
-class Ki56TvOracleProbe : public BacktestEngine {
+class Ki56TvOracleProbe : public pineforge::source::PineStrategyHost {
 public:
     Ki56TvOracleProbe() {
         initial_capital_ = 10000.0;
@@ -217,7 +218,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     double holding_probe_qty() {
         seed_position(PositionSide::LONG, 1900.21, 1.0);

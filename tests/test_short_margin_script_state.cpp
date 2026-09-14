@@ -3,6 +3,7 @@
 // to the close-time script; a replacement may receive its own explicit bracket.
 // Compact command fixtures use synthetic timestamps and fixed exit distances.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -16,7 +17,7 @@ int passed = 0, failed = 0;
 bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 
 enum class Mode { DYNAMIC, EXPLICIT_BRACKET, DIFFERENT_ID, EXPLICIT_QTY, FIXED, PARTIAL_CLOSE };
-class ScriptView : public BacktestEngine {
+class ScriptView : public pineforge::source::PineStrategyHost {
 public:
     Mode mode;
     double visible_first = qnan, visible_second = qnan;
@@ -34,7 +35,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) {
             visible_first = signed_position_size();
             first_equity = current_equity();
@@ -145,7 +146,7 @@ void test_partial_close_reads_reduced_quantity() {
     CHECK(near(engine.rows()[2].exit_price, 115639.51));
 }
 
-class CarriedView : public BacktestEngine {
+class CarriedView : public pineforge::source::PineStrategyHost {
 public:
     bool resting_bracket, partial_close;
     double carried_partial_view = qnan, full_close_view = qnan;
@@ -161,7 +162,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("Short", false, qnan, qnan, 0.09525);
         if (bar_index_ == 2) carried_partial_view = signed_position_size();
         if (bar_index_ == 3) {
@@ -230,7 +231,7 @@ void test_carried_liquidation_script_state() {
 // The same broker snapshot liquidates when this checkpoint owns it. Other
 // dispatchers and pending-order lifecycles must retain both their live position
 // and their order book for their existing settlement path.
-class CheckpointOwnership : public BacktestEngine {
+class CheckpointOwnership : public pineforge::source::PineStrategyHost {
 public:
     explicit CheckpointOwnership(int scenario) {
         initial_capital_ = 50.0;
@@ -298,7 +299,7 @@ public:
             pending_orders_.push_back(order);
         }
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void checkpoint() { process_short_margin_before_script(current_bar_); }
     std::size_t trades_count() const { return trades_.size(); }
     std::size_t pending_count() const { return pending_orders_.size(); }

@@ -11,6 +11,7 @@
 #include <vector>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 static int passed = 0, failed = 0;
@@ -24,7 +25,7 @@ bool near(double a, double b) { return std::abs(a-b) < 1e-7; }
 enum class Guard { None, RawParent, PricedParent, CompetingOrder,
                    DirectPartial, ReachableStop, LimitBelowLow };
 
-class RecrossProbe : public BacktestEngine {
+class RecrossProbe : public pineforge::source::PineStrategyHost {
 public:
     RecrossProbe(bool eur, bool high = false, bool fresh = false,
                  Guard guard = Guard::None)
@@ -41,7 +42,7 @@ public:
         calc_on_order_fills_ = true;
         process_orders_on_close_ = false;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trade_count() == 0)
             strategy_entry("L", true, N, N, eur_ ? 8389.91 : 840, "OLD");

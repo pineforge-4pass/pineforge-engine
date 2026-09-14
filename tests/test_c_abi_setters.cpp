@@ -38,6 +38,7 @@
 // per-strategy declarations visible (engine.hpp defines PINEFORGE_NO_STRATEGY_DECLS).
 #include <pineforge/pineforge.h>   // the C ABI under test (extern "C")
 #include <pineforge/engine.hpp>    // BacktestEngine (to mint a valid handle)
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>        // is_na (absent-metadata sentinel)
 
@@ -62,9 +63,9 @@ static int g_fail = 0;
 // setters mutate. The protected members are visible to this subclass, so
 // we read them back to confirm each forwarding line actually ran.
 namespace {
-class ProbeEngine : public pineforge::BacktestEngine {
+class ProbeEngine : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const pineforge::Bar&) override {}  // never invoked here
+    void on_source_bar(const pineforge::Bar&) override {}  // never invoked here
 
     // Thin protected-member accessors (this subclass owns the access).
     const std::string& tz_chart()    const { return chart_timezone_; }

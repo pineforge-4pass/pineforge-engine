@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 
 using namespace pineforge;
@@ -79,7 +80,7 @@ static std::vector<Bar> make_minute_bars(int n, double open, double high,
 // ─────────────────────────────────────────────────────────────────────
 static void test_cancel_all_clears_pending() {
     std::printf("test_cancel_all_clears_pending\n");
-    class CancelAllProbe : public BacktestEngine {
+    class CancelAllProbe : public pineforge::source::PineStrategyHost {
     public:
         int pending_after_place = -1;   // count snapshot at bar 2 (post-place)
         int pending_after_cancel = -1;  // count snapshot at bar 3 (post-cancel)
@@ -92,7 +93,7 @@ static void test_cancel_all_clears_pending() {
             commission_value_ = 0;
             pyramiding_ = 100;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Bar 1: arm three buy-stop RAW_ORDER entries above the bar
             // (so they do NOT fire until a higher bar prints).
@@ -146,7 +147,7 @@ static void test_cancel_all_clears_pending() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_trade_start_buffer_gate() {
     std::printf("test_trade_start_buffer_gate\n");
-    class GateProbe : public BacktestEngine {
+    class GateProbe : public pineforge::source::PineStrategyHost {
     public:
         int place_bar = -1;
         double final_pos = 1234.0;
@@ -158,7 +159,7 @@ static void test_trade_start_buffer_gate() {
             slippage_ = 0;
             commission_value_ = 0;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Market RAW_ORDER (no limit/stop): fills next bar's open if
             // the gate admits it.
@@ -213,7 +214,7 @@ static void test_trade_start_buffer_gate() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_raw_market_order_fills_at_open() {
     std::printf("test_raw_market_order_fills_at_open\n");
-    class RawProbe : public BacktestEngine {
+    class RawProbe : public pineforge::source::PineStrategyHost {
     public:
         bool saw_nan_prices = false;
         double final_pos = 1234.0;
@@ -225,7 +226,7 @@ static void test_raw_market_order_fills_at_open() {
             slippage_ = 0;
             commission_value_ = 0;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_order("R", /*is_long=*/true, /*qty=*/3.0,
@@ -277,7 +278,7 @@ static void test_raw_market_order_fills_at_open() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_immediate_close_purges_exit_orders() {
     std::printf("test_immediate_close_purges_exit_orders\n");
-    class PurgeProbe : public BacktestEngine {
+    class PurgeProbe : public pineforge::source::PineStrategyHost {
     public:
         int exit_pending_before_close = -1;
         int exit_pending_after_close = -1;
@@ -295,7 +296,7 @@ static void test_immediate_close_purges_exit_orders() {
             for (const auto& o : v) if (o.type == OrderType::EXIT) ++c;
             return c;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Bar 0: open a long qty 4 immediately (process_orders_on_close
             // fills market entries at bar close).
@@ -346,7 +347,7 @@ static void run_reservation_case(bool explicit_qty,
                                  double& exit_qp_out,
                                  double& close_qp_out,
                                  bool& close_qty_is_nan_out) {
-    class ResProbe : public BacktestEngine {
+    class ResProbe : public pineforge::source::PineStrategyHost {
     public:
         bool use_explicit_qty;
         double exit_qty = -1, exit_qp = -1, close_qp = -1;
@@ -360,7 +361,7 @@ static void run_reservation_case(bool explicit_qty,
             commission_value_ = 0;
             close_entries_rule_any_ = true;  // "ANY" → deferred close keyed by id
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Bar 0: open long qty 4 (market, fills bar 1 open).
             if (bar_index_ == 0) {

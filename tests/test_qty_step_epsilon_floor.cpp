@@ -10,6 +10,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -43,9 +44,9 @@ int tests_failed = 0;
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
-class QtyFloorProbe : public BacktestEngine {
+class QtyFloorProbe : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     double regular(double qty, double step) {
         qty_step_ = step;
@@ -93,7 +94,7 @@ void test_integer_and_fractional_controls() {
     CHECK_NEAR(probe.partial_exit(0.5, 1e-5), 0.5, 0.0);
 }
 
-class TwoHalfExitProbe : public BacktestEngine {
+class TwoHalfExitProbe : public pineforge::source::PineStrategyHost {
 public:
     TwoHalfExitProbe() {
         initial_capital_ = 1'000'000.0;
@@ -106,7 +107,7 @@ public:
         margin_call_enabled_ = false;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 1.0);
         } else if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {

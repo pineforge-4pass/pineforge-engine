@@ -1,3 +1,4 @@
+#include <pineforge/source/pine_strategy_host.hpp>
 #include "exit_lifecycle_reflection_access.hpp"
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstddef>
@@ -23,8 +24,8 @@ static_assert(offsetof(pf_pending_order_v1_t,legs_target_incarnation)==sizeof(pr
 namespace {
 int checks=0,failed=0,mutations=0;
 #define CHECK(x) do{++checks;if(!(x)){++failed;std::fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);}}while(0)
-class Probe:public BacktestEngine{
-public:void on_bar(const Bar&)override{}
+class Probe:public pineforge::source::PineStrategyHost{
+public:void on_source_bar(const Bar&)override{}
     void set(Lifecycle x){PendingOrder p{};p.type=OrderType::EXIT;p.incarnation=41;p.legs=std::move(x);pending_orders_={p};}
     pf_pending_order_v1_t mirror()const{pf_pending_order_v1_t m{};fill_pending_order_mirror(pending_orders_.front(),&m);return m;}
 };

@@ -1,5 +1,6 @@
 // Literal native source-boundary witness. No Pine, reference tape or grader.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstddef>
 namespace prior_leg_mirror {
@@ -146,7 +147,7 @@ const Bar bars[] = {
     {90, 112, 80, 100, 1, 120000},
     {100, 112, 80, 100, 1, 180000},
 };
-class FutureOwner : public BacktestEngine {
+class FutureOwner : public pineforge::source::PineStrategyHost {
 public:
     explicit FutureOwner(bool stop) : use_stop(stop) {
         calc_on_order_fills_ = true;
@@ -170,7 +171,7 @@ public:
     int64_t rebound_stop_bar = -1, rebound_limit_bar = -1;
     int64_t first_activation_cycle = 0, rebound_activation_cycle = 0;
     int seen_entry_callbacks = 0;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("A", true, nan, nan, 1);
             return;
@@ -261,13 +262,13 @@ int preserved_rebinding_controls() {
 namespace {
 int native_checks = 0, native_failures = 0;
 #define CHECK(x) do { ++native_checks; if (!(x)) { ++native_failures; std::fprintf(stderr,"FAIL %d %s\n",__LINE__,#x); } } while (0)
-class NativeBook : public BacktestEngine {
+class NativeBook : public pineforge::source::PineStrategyHost {
 public:
     NativeBook() {
         initial_capital_=100000; commission_value_=0; margin_long_=margin_short_=0;
         pyramiding_=10; current_bar_={100,100,100,100,1,0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void step(double price=100) {
         ++bar_index_; current_bar_={price,price,price,price,1,bar_index_*60000LL};
         process_pending_orders(current_bar_);

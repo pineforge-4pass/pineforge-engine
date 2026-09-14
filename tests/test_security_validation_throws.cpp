@@ -32,6 +32,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 // This suite verifies via assert(). The CLAUDE.md-prescribed gate builds
 // Release (-DNDEBUG), which would no-op assert() and make every check vacuous.
@@ -55,8 +56,8 @@ void expect_contains(const std::string& haystack, const std::string& needle,
 
 // ---- Validation-throw harness (mirrors the template's ValidationHarness) ----
 // Exposes register_security{,_lower_tf}_eval and never dispatches.
-struct ThrowHarness : public BacktestEngine {
-    void on_bar(const Bar&) override {}
+struct ThrowHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar&) override {}
     void evaluate_security(int, const Bar&, bool) override {}
 
     void add_security_lower_tf(const std::string& requested_tf) {
@@ -125,8 +126,8 @@ void test_ltf_req_not_integer_multiple_of_input_rejected() {
 // ---- security_series_slot_is_new harness (lines 228-236) ----
 // Exposes the protected predicate and lets us hand-craft eval states so
 // every return arm is hit deterministically (no run() needed).
-struct SlotHarness : public BacktestEngine {
-    void on_bar(const Bar&) override {}
+struct SlotHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar&) override {}
     void evaluate_security(int, const Bar&, bool) override {}
 
     bool slot_is_new(int sec_id) const { return security_series_slot_is_new(sec_id); }
@@ -186,7 +187,7 @@ void test_slot_lookahead_on_depends_on_sub_bar_count() {
 // HTF request.security with lookahead_on=true. Each input bar inside an
 // aggregation group that does NOT complete the HTF bar must trigger a
 // partial (is_complete=false) evaluate_security call.
-struct PartialEvalHarness : public BacktestEngine {
+struct PartialEvalHarness : public pineforge::source::PineStrategyHost {
     std::vector<std::pair<double, bool>> dispatches;  // (close, is_complete)
     int partial_calls = 0;
     int complete_calls = 0;
@@ -205,7 +206,7 @@ struct PartialEvalHarness : public BacktestEngine {
         else partial_calls++;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 // 4. Eight 15m input bars => two complete 60m HTF bars. With lookahead_on

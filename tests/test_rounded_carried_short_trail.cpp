@@ -1,6 +1,7 @@
 // Literal command fixtures pinned by independent TradingView controls. Synthetic
 // timestamps avoid any strategy/date routing; no historical feed is loaded.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -26,7 +27,7 @@ const std::vector<Bar> bars = {
     {1.12386, 1.12424, 1.12383, 1.12420, 1294, 7000},
 };
 
-class RoundedShort : public BacktestEngine {
+class RoundedShort : public pineforge::source::PineStrategyHost {
 public:
     Action action;
     ExitShape exit_shape;
@@ -49,7 +50,7 @@ public:
         pyramiding_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, qnan, qnan, funded ? 891902.61 : qnan);
             if (competing) strategy_entry("Parked", true, 0.50, qnan, 1.0);
@@ -137,7 +138,7 @@ void test_other_order_shapes_retain_the_existing_checkpoint() {
     CHECK(competing.boundary_closed == 1);
 }
 
-class ExcursionShort : public BacktestEngine {
+class ExcursionShort : public pineforge::source::PineStrategyHost {
 public:
     ExcursionShort() {
         initial_capital_ = 1532722.4186011;
@@ -152,7 +153,7 @@ public:
         pyramiding_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", false);
         strategy_exit("SX", "S", qnan, qnan, qnan, 1.0, 60000.0);
         if (bar_index_ == 2) strategy_close_all();

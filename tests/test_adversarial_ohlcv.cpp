@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -44,7 +45,7 @@ namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kInf = std::numeric_limits<double>::infinity();
 
-class QtyProbe : public BacktestEngine {
+class QtyProbe : public pineforge::source::PineStrategyHost {
 public:
     QtyProbe() {
         initial_capital_ = 100'000;
@@ -52,13 +53,13 @@ public:
         default_qty_value_ = 10.0;   // 10% of equity
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     double cq(double fp, double qv, int qt) { return calc_qty_for_type(fp, qv, qt); }
     double cq_default(double fp) { return calc_qty(fp); }
 };
 
 // Momentum %-equity strategy used to stress degenerate feeds end-to-end.
-class StressProbe : public BacktestEngine {
+class StressProbe : public pineforge::source::PineStrategyHost {
 public:
     double prev_ = kNaN;
     StressProbe() {
@@ -67,7 +68,7 @@ public:
         default_qty_value_ = 5.0;
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
     }
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (!std::isnan(prev_)) {
             if (b.close > prev_) strategy_entry("L", true, kNaN, kNaN, kNaN, "up");
             else if (b.close < prev_) strategy_entry("S", false, kNaN, kNaN, kNaN, "dn");

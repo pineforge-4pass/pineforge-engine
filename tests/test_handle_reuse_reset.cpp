@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -41,7 +42,7 @@ static int tests_failed = 0;
 
 namespace {
 
-class MomoFlip : public BacktestEngine {
+class MomoFlip : public pineforge::source::PineStrategyHost {
 public:
     double prev_close_ = std::numeric_limits<double>::quiet_NaN();
     MomoFlip() {
@@ -50,7 +51,7 @@ public:
         default_qty_value_ = 1.0;
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!std::isnan(prev_close_)) {
             if (bar.close > prev_close_)
                 strategy_entry("L", true, std::numeric_limits<double>::quiet_NaN(),

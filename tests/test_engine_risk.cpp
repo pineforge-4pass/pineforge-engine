@@ -31,6 +31,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -55,11 +56,11 @@ constexpr int64_t kDay_ms = 86'400'000LL;
 
 // Test harness exposing the protected risk surface so each halt path can be
 // driven and asserted independently.
-class RiskProbe : public BacktestEngine {
+class RiskProbe : public pineforge::source::PineStrategyHost {
 public:
     // on_bar is pure-virtual on BacktestEngine; these probes drive the risk
     // methods directly and never call run(), so a no-op body suffices.
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     // --- state setters ---
     void set_max_drawdown(double v, bool is_pct) {
@@ -398,7 +399,7 @@ void test_max_position_size_gate() {
 void test_halt_blocks_entries_end_to_end() {
     std::printf("test_halt_blocks_entries_end_to_end\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000.0;
@@ -411,7 +412,7 @@ void test_halt_blocks_entries_end_to_end() {
             risk_max_drawdown_ = 1.0;
             risk_max_drawdown_is_pct_ = false;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             std::string id = "L" + std::to_string(bar_index_);
             strategy_entry(id, true);
         }

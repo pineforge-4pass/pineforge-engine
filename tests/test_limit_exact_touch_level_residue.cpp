@@ -37,6 +37,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -70,7 +71,7 @@ static Bar mk(int i, double o, double h, double l, double c) {
 }
 
 // mintick 0.1 (COMEX micro gold), fixed 1 contract, no slippage/commission.
-class LimitTouchProbe : public BacktestEngine {
+class LimitTouchProbe : public pineforge::source::PineStrategyHost {
 public:
     bool is_long_;
     double limit_, stop_;
@@ -84,7 +85,7 @@ public:
         pyramiding_ = 1;
         syminfo_mintick_ = 0.1;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("E", is_long_, kNaN, kNaN, 1.0);
         if (bar_index_ >= 1) strategy_exit("X", "E", limit_, stop_);
     }

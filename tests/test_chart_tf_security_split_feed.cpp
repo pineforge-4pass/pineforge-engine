@@ -51,6 +51,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 
 #include "test_m45_singletons_data.hpp"
@@ -132,7 +133,7 @@ int d_bias_from(const std::array<double, 3>& kdr) {
     return bull >= 2 ? 1 : 0;
 }
 
-class MtfProbe final : public BacktestEngine {
+class MtfProbe final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<Bucket> daily, weekly, hourly;
     std::map<int64_t, std::array<double, 3>> chart_kdr;
@@ -159,7 +160,7 @@ public:
             hourly.push_back(b);
         }
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         chart_kdr[bar.timestamp] = chart_vote.feed(bar.close);
     }
 };

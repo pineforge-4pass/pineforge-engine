@@ -36,6 +36,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -1326,10 +1327,10 @@ static const CensusPair kFourDp[] = {
 
 
 // Exposes the protected rounding helpers on a 0.01-tick symbol.
-class RoundingProbe : public BacktestEngine {
+class RoundingProbe : public pineforge::source::PineStrategyHost {
 public:
     RoundingProbe() { syminfo_mintick_ = 0.01; }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     double nearest(double p) const { return round_to_mintick(p); }
     double bar_fill(double p) const { return bar_fill_price(p); }
     double directional(double p, bool up) const {
@@ -1427,7 +1428,7 @@ static void test_census_replay() {
 // half-cent prints. Every case below is chosen so the OLD directional snap
 // on the raw bar price gives a DIFFERENT answer.
 // ─────────────────────────────────────────────────────────────────────
-class TickEngine : public BacktestEngine {
+class TickEngine : public pineforge::source::PineStrategyHost {
 public:
     TickEngine() {
         initial_capital_ = 1'000'000;
@@ -1446,7 +1447,7 @@ public:
 class PoocLong : public TickEngine {
 public:
     PoocLong() { process_orders_on_close_ = true; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (bar_index_ == 3) strategy_close("L", "close");
     }
@@ -1475,7 +1476,7 @@ static void test_pooc_market_fills_nearest_tick() {
 //    rounds DOWN (228.765 -> 228.76; old buy-ceil: 228.77).
 class OpenShort : public TickEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", false, kNaN, kNaN, 1.0, "short");
         if (bar_index_ == 2) strategy_close("S", "cover");
     }
@@ -1535,7 +1536,7 @@ static void test_slippage_applies_after_nearest_rounding() {
 class StopEntry : public TickEngine {
 public:
     explicit StopEntry(double stop) : stop_(stop) {}
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true, kNaN, stop_, 1.0, "stop long");
         if (bar_index_ == 3) strategy_close("L", "close");
     }

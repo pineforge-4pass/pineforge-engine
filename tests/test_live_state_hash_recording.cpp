@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <vector>
 using namespace pineforge;
@@ -7,9 +8,9 @@ namespace {
 int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++failures; } } while (0)
 Bar flat_bar(double p, int64_t ts) { return Bar{p, p, p, p, 1.0, ts}; }
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) strategy_entry("L", true);
         if (bar_index_ == 4) strategy_close_all();
     }
@@ -18,9 +19,9 @@ public:
 // (engine_stream.cpp) is a fourth script-bar dispatch site distinct from
 // the three run() loops above. Same entry/close shape as Probe so both the
 // warmup run() and the realtime-tick dispatch record.
-class StreamProbe final : public BacktestEngine {
+class StreamProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) strategy_entry("L", true);
         if (bar_index_ == 4) strategy_close_all();
     }
@@ -28,9 +29,9 @@ public:
 // Review fix round 1, Minor #3: exercise run_aggregation_bar_loop's
 // non-magnifier branch (1m input -> 5m script), the one dispatch site the
 // Probe/StreamProbe cases above don't reach.
-class AggProbe final : public BacktestEngine {
+class AggProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
     }
 };

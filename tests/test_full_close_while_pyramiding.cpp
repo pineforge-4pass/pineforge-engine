@@ -34,6 +34,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -90,7 +91,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
 // ─────────────────────────────────────────────────────────────────────
 static void test_full_close_reexpands_while_pyramiding() {
     std::printf("test_full_close_reexpands_while_pyramiding\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -103,7 +104,7 @@ static void test_full_close_reexpands_while_pyramiding() {
         }
         // Expose the protected position-size accessor for external assertions.
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             // Three DCA entries on bars 0,1,2 → fill @100 on bars 1,2,3.
             if (bar_index_ <= 2) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
@@ -169,7 +170,7 @@ static void test_full_close_reexpands_while_pyramiding() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_partial_reissue_keeps_preserved_qty() {
     std::printf("test_partial_reissue_keeps_preserved_qty\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -182,7 +183,7 @@ static void test_partial_reissue_keeps_preserved_qty() {
         }
         // Expose the protected position-size accessor for external assertions.
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ <= 2) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
             }

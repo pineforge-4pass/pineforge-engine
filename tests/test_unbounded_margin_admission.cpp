@@ -1,5 +1,6 @@
 // Literal order admission only: no Engine::run, feed or reference engine.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -9,7 +10,7 @@ namespace {
 int checks = 0, failures = 0;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; std::printf("FAIL %d: %s\n", __LINE__, #x); } } while (0)
 
-class Account final : public BacktestEngine {
+class Account final : public pineforge::source::PineStrategyHost {
 public:
     explicit Account(double capital = 10000) {
         initial_capital_ = capital;
@@ -23,7 +24,7 @@ public:
         current_bar_ = {100, 100, 100, 100, 1, 60000};
         bar_index_ = 0;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void request(bool buy, double units, bool stop) {
         const double absent = std::numeric_limits<double>::quiet_NaN();
         strategy_entry("order", buy, absent, stop ? 101 : absent, units);

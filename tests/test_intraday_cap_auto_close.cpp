@@ -30,6 +30,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -61,9 +62,9 @@ constexpr int64_t kNextDay_UTC = kT0_UTC + 86'400'000LL;  // 2025-04-01 00:00 UT
 // Policy selection stays independent of runtime ownership. In particular,
 // resetting one candidate through metadata must not enable either sibling.
 void test_intraday_candidate_metadata_preserves_default_off_policies() {
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
-        void on_bar(const Bar&) override {}
+        void on_source_bar(const Bar&) override {}
         bool policy(int index) const {
             if (index == 0) return max_intraday_filled_orders_.configuration().skip_noop_market;
             if (index == 1) return max_intraday_filled_orders_.configuration().defer_pooc_close;
@@ -158,7 +159,7 @@ void test_due_cap_close_has_one_boundary_and_position_owner() {
 void test_cap_latches_until_day_rollover() {
     std::printf("test_cap_latches_until_day_rollover\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -170,7 +171,7 @@ void test_cap_latches_until_day_rollover() {
             max_intraday_filled_orders_ = 2;
         }
         int queued_count = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             std::string id = "L" + std::to_string(queued_count);
             strategy_entry(id, true);
             ++queued_count;
@@ -240,7 +241,7 @@ void test_cap_latches_until_day_rollover() {
 void test_cap_disabled_does_not_inject_auto_close() {
     std::printf("test_cap_disabled_does_not_inject_auto_close\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -251,7 +252,7 @@ void test_cap_disabled_does_not_inject_auto_close() {
             pyramiding_ = 10;
             // Leave max_intraday_filled_orders_ at 0 (unlimited).
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             std::string id = "L" + std::to_string(bar_index_);
             strategy_entry(id, true);
         }
@@ -283,7 +284,7 @@ void test_noop_market_attempt_does_not_consume_cap(bool is_long) {
     std::printf("test_noop_market_attempt_does_not_consume_cap(%s)\n",
                 is_long ? "long" : "short");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction, bool skip_noop = true) : is_long(direction) {
             initial_capital_ = 100000;
@@ -298,7 +299,7 @@ void test_noop_market_attempt_does_not_consume_cap(bool is_long) {
                 set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
         }
         bool is_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E", is_long);
             } else if (bar_index_ == 1) {
@@ -352,7 +353,7 @@ void test_pooc_cap_close_defers_to_next_open(bool is_long) {
     std::printf("test_pooc_cap_close_defers_to_next_open(%s)\n",
                 is_long ? "long" : "short");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : is_long(direction) {
             initial_capital_ = 100000;
@@ -366,7 +367,7 @@ void test_pooc_cap_close_defers_to_next_open(bool is_long) {
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
         bool is_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("E", is_long);
         }
     };
@@ -397,7 +398,7 @@ void test_pooc_cap_close_defers_to_next_open(bool is_long) {
 // before today's script can open a new position. Each day's close is consumed
 // once, at its own next open, without charging the newly renewed quota.
 void test_due_pooc_cap_close_survives_day_gap(bool is_long) {
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : is_long(direction) {
             initial_capital_ = 100000;
@@ -414,7 +415,7 @@ void test_due_pooc_cap_close_survives_day_gap(bool is_long) {
         bool flat_at_reopen = false;
         bool latched_at_reopen = true;
         int quota_at_reopen = -1;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("OLD", is_long);
             if (bar_index_ == 1) {
                 flat_at_reopen = std::fabs(signed_position_size()) < 1e-9;
@@ -470,7 +471,7 @@ void test_due_pooc_cap_close_survives_day_gap(bool is_long) {
 // A one-bar run can end with an unconsumed due close. A second run on the same
 // engine starts a new lifecycle even when its literal timestamps are reused.
 void test_new_run_discards_old_due_close_and_quota(bool is_long) {
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : is_long(direction) {
             initial_capital_ = 100000;
@@ -485,7 +486,7 @@ void test_new_run_discards_old_due_close_and_quota(bool is_long) {
         bool place_entry = true;
         bool due_on_first_callback = false;
         int slots_on_first_callback = -1;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ != 0) return;
             due_on_first_callback = position_close_obligation_.pending();
             slots_on_first_callback = max_intraday_filled_orders_.budget().charged_slots();
@@ -530,7 +531,7 @@ void test_noop_filter_preserves_same_tick_close_then_reentry(bool is_long) {
     std::printf("test_noop_filter_preserves_same_tick_close_then_reentry(%s)\n",
                 is_long ? "long" : "short");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : is_long(direction) {
             initial_capital_ = 100000;
@@ -542,7 +543,7 @@ void test_noop_filter_preserves_same_tick_close_then_reentry(bool is_long) {
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
         }
         bool is_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E", is_long);
             } else if (bar_index_ == 1) {
@@ -570,7 +571,7 @@ void test_noop_filter_preserves_same_tick_reversal(bool starts_long) {
     std::printf("test_noop_filter_preserves_same_tick_reversal(%s)\n",
                 starts_long ? "long-to-short" : "short-to-long");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : starts_long(direction) {
             initial_capital_ = 100000;
@@ -582,7 +583,7 @@ void test_noop_filter_preserves_same_tick_reversal(bool starts_long) {
             set_syminfo_metadata("intraday_cap_skip_noop_market_fills", 1.0);
         }
         bool starts_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("FIRST", starts_long);
             } else if (bar_index_ == 1) {
@@ -612,7 +613,7 @@ void test_pooc_strategy_close_consumes_cap(bool is_long) {
     std::printf("test_pooc_strategy_close_consumes_cap(%s)\n",
                 is_long ? "long" : "short");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : is_long(direction) {
             initial_capital_ = 100000;
@@ -625,7 +626,7 @@ void test_pooc_strategy_close_consumes_cap(bool is_long) {
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool is_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E", is_long);
             } else if (bar_index_ == 1) {
@@ -656,7 +657,7 @@ void test_pooc_close_coqueued_with_reversal_counts_once(bool starts_long) {
     std::printf("test_pooc_close_coqueued_with_reversal_counts_once(%s)\n",
                 starts_long ? "long-to-short" : "short-to-long");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : starts_long(direction) {
             initial_capital_ = 100000;
@@ -668,7 +669,7 @@ void test_pooc_close_coqueued_with_reversal_counts_once(bool starts_long) {
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("FIRST", starts_long);
             } else if (bar_index_ == 1) {
@@ -707,7 +708,7 @@ void test_pooc_close_coqueued_with_reversal_counts_once(bool starts_long) {
 // FIFO trade rows from one direct close consume one slot and one broker event.
 // This does not broaden the grader's restricted pyramiding=0 policy oracle.
 void test_pooc_full_close_counts_one_fill_for_two_fifo_rows(bool is_long) {
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat(bool direction, bool count_close) : is_long(direction) {
             initial_capital_ = 100000;
@@ -722,7 +723,7 @@ void test_pooc_full_close_counts_one_fill_for_two_fifo_rows(bool is_long) {
                 set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool is_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ < 2) strategy_entry("E", is_long);
             if (bar_index_ == 2) strategy_close("E");
         }
@@ -768,7 +769,7 @@ void test_pooc_close_count_survives_rejected_reversal(bool starts_long) {
     std::printf("test_pooc_close_count_survives_rejected_reversal(%s)\n",
                 starts_long ? "long-held" : "short-held");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : starts_long(direction) {
             initial_capital_ = 100000;
@@ -782,7 +783,7 @@ void test_pooc_close_count_survives_rejected_reversal(bool starts_long) {
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("FIRST", starts_long);
             } else if (bar_index_ == 1) {
@@ -818,7 +819,7 @@ void test_pooc_close_count_survives_cancelled_reversal(bool starts_long) {
     std::printf("test_pooc_close_count_survives_cancelled_reversal(%s)\n",
                 starts_long ? "long-held" : "short-held");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : starts_long(direction) {
             initial_capital_ = 100000;
@@ -830,7 +831,7 @@ void test_pooc_close_count_survives_cancelled_reversal(bool starts_long) {
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("FIRST", starts_long);
             } else if (bar_index_ == 1) {
@@ -868,7 +869,7 @@ void test_pooc_close_count_survives_noop_reversal(bool starts_long) {
     std::printf("test_pooc_close_count_survives_noop_reversal(%s)\n",
                 starts_long ? "long-to-short" : "short-to-long");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : starts_long(direction) {
             initial_capital_ = 100000;
@@ -881,7 +882,7 @@ void test_pooc_close_count_survives_noop_reversal(bool starts_long) {
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("FIRST", starts_long);
             } else if (bar_index_ == 1) {
@@ -917,7 +918,7 @@ void test_intervening_fill_expires_pooc_close_inheritance(bool starts_long) {
     std::printf("test_intervening_fill_expires_pooc_close_inheritance(%s)\n",
                 starts_long ? "long-to-short" : "short-to-long");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool direction) : starts_long(direction) {
             initial_capital_ = 100000;
@@ -930,7 +931,7 @@ void test_intervening_fill_expires_pooc_close_inheritance(bool starts_long) {
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
         bool starts_long;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("FIRST", starts_long);
             } else if (bar_index_ == 1) {
@@ -974,7 +975,7 @@ void test_intervening_fill_expires_pooc_close_inheritance(bool starts_long) {
 void test_pooc_close_count_candidate_excludes_magnifier() {
     std::printf("test_pooc_close_count_candidate_excludes_magnifier\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -985,7 +986,7 @@ void test_pooc_close_count_candidate_excludes_magnifier() {
             max_intraday_filled_orders_ = 2;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("FIRST", true);
             if (bar_index_ == 1) strategy_close("FIRST");
         }
@@ -1012,7 +1013,7 @@ void test_pooc_close_count_candidate_excludes_magnifier() {
 void test_pooc_deferred_cap_candidate_excludes_magnifier() {
     std::printf("test_pooc_deferred_cap_candidate_excludes_magnifier\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1023,7 +1024,7 @@ void test_pooc_deferred_cap_candidate_excludes_magnifier() {
             max_intraday_filled_orders_ = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("FIRST", true);
         }
         double position_size() const { return signed_position_size(); }
@@ -1049,7 +1050,7 @@ void test_pooc_deferred_cap_candidate_excludes_magnifier() {
 void test_pooc_deferred_cap_candidate_excludes_coof() {
     std::printf("test_pooc_deferred_cap_candidate_excludes_coof\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1061,7 +1062,7 @@ void test_pooc_deferred_cap_candidate_excludes_coof() {
             max_intraday_filled_orders_ = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0 && std::fabs(signed_position_size()) < 1e-9) {
                 strategy_entry("FIRST", true);
             }
@@ -1085,7 +1086,7 @@ void test_pooc_deferred_cap_candidate_excludes_coof() {
 void test_pooc_close_count_candidate_excludes_coof() {
     std::printf("test_pooc_close_count_candidate_excludes_coof\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1097,7 +1098,7 @@ void test_pooc_close_count_candidate_excludes_coof() {
             max_intraday_filled_orders_ = 3;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0 && std::fabs(signed_position_size()) < 1e-9) {
                 strategy_entry("FIRST", true);
             } else if (bar_index_ == 1
@@ -1127,7 +1128,7 @@ void test_pooc_close_count_candidate_excludes_coof() {
 void test_pooc_close_count_candidate_excludes_any_mode() {
     std::printf("test_pooc_close_count_candidate_excludes_any_mode\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1139,7 +1140,7 @@ void test_pooc_close_count_candidate_excludes_any_mode() {
             max_intraday_filled_orders_ = 3;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("FIRST", true);
             if (bar_index_ == 1) strategy_close("FIRST");
         }
@@ -1164,7 +1165,7 @@ void test_pooc_close_count_candidate_excludes_any_mode() {
 void test_pooc_close_count_candidate_excludes_stream_realtime() {
     std::printf("test_pooc_close_count_candidate_excludes_stream_realtime\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1175,7 +1176,7 @@ void test_pooc_close_count_candidate_excludes_stream_realtime() {
             max_intraday_filled_orders_ = 3;
             set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("FIRST", true);
             if (bar_index_ == 1) strategy_close("FIRST");
         }
@@ -1205,7 +1206,7 @@ void test_pooc_close_count_candidate_excludes_stream_realtime() {
 void test_pooc_deferred_cap_candidate_excludes_stream_warmup() {
     std::printf("test_pooc_deferred_cap_candidate_excludes_stream_warmup\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1216,7 +1217,7 @@ void test_pooc_deferred_cap_candidate_excludes_stream_warmup() {
             max_intraday_filled_orders_ = 1;
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("FIRST", true);
         }
         double position_size() const { return signed_position_size(); }

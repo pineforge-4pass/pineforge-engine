@@ -35,6 +35,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -61,7 +62,7 @@ namespace {
 
 // Common probe shell: pyramiding=1, fixed qty=1, no commission/slippage,
 // process_orders_on_close=false (the path probe 62 exercises).
-class StopReplaceProbe : public BacktestEngine {
+class StopReplaceProbe : public pineforge::source::PineStrategyHost {
 public:
     struct TradeRow {
         std::string entry_id;
@@ -134,7 +135,7 @@ static void test_filled_stop_unaffected_by_same_id_replace() {
         //        position_size==0 and SHOULD NOT replace.
         // Bar 2: idle.
         // Bar 3: full close.
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("LE", true,
                                std::numeric_limits<double>::quiet_NaN(),
@@ -187,7 +188,7 @@ static void test_unfilled_stop_replaced_for_next_bar() {
     std::printf("test_unfilled_stop_replaced_for_next_bar\n");
     class Probe : public StopReplaceProbe {
     public:
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("LE", true,
                                std::numeric_limits<double>::quiet_NaN(),
@@ -244,7 +245,7 @@ static void test_new_entry_after_same_bar_fill_defers_to_next_bar() {
             // after stop fill" branch isn't blocked by pyramiding.
             pyramiding_ = 2;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("LE1", true,
                                std::numeric_limits<double>::quiet_NaN(),
@@ -313,7 +314,7 @@ static void test_carry_capture_on_flat_session_start() {
     std::printf("test_carry_capture_on_flat_session_start\n");
     class Probe : public StopReplaceProbe {
     public:
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 // Session has just started; no fills have happened.
                 // position_side_ == FLAT, position_qty_ == default.

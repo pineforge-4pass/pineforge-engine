@@ -19,6 +19,7 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -86,7 +87,7 @@ enum class Shape {
     CANCELED_THIRD,
 };
 
-struct Probe : public BacktestEngine {
+struct Probe : public pineforge::source::PineStrategyHost {
     explicit Probe(Shape shape = Shape::OPPOSITE) : shape_(shape) {
         initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
@@ -164,7 +165,7 @@ struct Probe : public BacktestEngine {
         return result;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && !placed_) {
             placed_ = true;
             switch (shape_) {
@@ -354,7 +355,7 @@ enum class ConfigControl {
     MAGNIFIER,
 };
 
-struct ConfigProbe : public BacktestEngine {
+struct ConfigProbe : public pineforge::source::PineStrategyHost {
     explicit ConfigProbe(ConfigControl control) : control_(control) {
         initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
@@ -446,7 +447,7 @@ struct ConfigProbe : public BacktestEngine {
         return result;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && !placed_) {
             placed_ = true;
             if (control_ == ConfigControl::EXPLICIT_KI65_5_5) {

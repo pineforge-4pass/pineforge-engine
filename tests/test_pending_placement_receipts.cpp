@@ -1,6 +1,7 @@
 // Literal command/identity tests. No Pine source, reference tape or grader.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cmath>
 #include <cstdio>
@@ -17,7 +18,7 @@ int passed = 0, failed = 0;
 #define CHECK(value) do { if (value) ++passed; else { ++failed; \
     std::printf("FAIL %d: %s\n", __LINE__, #value); } } while (false)
 
-class Book final : public BacktestEngine {
+class Book final : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 10000;
@@ -26,7 +27,7 @@ public:
         pyramiding_ = 10;
         current_bar_ = {100,100,100,100,1,0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void entry(const std::string& id, bool buy=true, double qty=1, double stop=missing) {
         strategy_entry(id,buy,missing,stop,qty);
     }

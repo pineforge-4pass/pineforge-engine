@@ -1,6 +1,7 @@
 // Native order-action integration seams. This test does not call Engine::run,
 // load a feed, compile Pine, or compare against a reference engine.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <cmath>
 #include <limits>
@@ -31,7 +32,7 @@ struct MemberArguments<R (C::*)(A, B, D)> { using third = D; };
 using ReductionCause = typename MemberArguments<
     decltype(access(PartialExitAccess{}))>::third;
 
-class Book final : public BacktestEngine {
+class Book final : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 10000.0;
@@ -43,7 +44,7 @@ public:
         bar_index_ = 1;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void seed_two_lots() {
         position_side_ = PositionSide::LONG;

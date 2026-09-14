@@ -36,6 +36,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -82,7 +83,7 @@ namespace {
 //   'L' default-sized LONG market entry "L"    'S' default SHORT "S"
 //   'l' explicit LONG "L" qty = entry_qty_     'C' strategy.close("L")
 //   '.' nothing
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double pct, double margin, bool enable_mc) {
         initial_capital_ = capital;
@@ -109,7 +110,7 @@ public:
     int default_entries_pending_after_call = 0;
     int default_entries_with_snapshot = 0;
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': default_entry("L", true); break;

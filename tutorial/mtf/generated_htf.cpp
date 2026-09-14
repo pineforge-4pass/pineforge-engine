@@ -9,6 +9,7 @@
 // runs *after* set_input but *before* the bar loop — see the dispatch
 // order in src/engine_run.cpp around line 174.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/math.hpp>
 #include <pineforge/series.hpp>
@@ -30,7 +31,7 @@
 
 using namespace pineforge;
 
-class GeneratedStrategy : public BacktestEngine {
+class GeneratedStrategy : public pineforge::source::PineStrategyHost {
 public:
     // HTF-side state (one per request.security call).
     double _req_sec_0 = na<double>();   // HTF ta.sma(close, smaLen)
@@ -89,7 +90,7 @@ public:
         _sec0_sma = ta::SMA(get_input_int("SMA Length", 20));
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!_ta_initialized_) {
             _ta_macd = ta::MACD(get_input_int("Fast Length", 12),
                                  get_input_int("Slow Length", 26),

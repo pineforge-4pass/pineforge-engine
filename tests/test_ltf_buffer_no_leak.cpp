@@ -14,12 +14,13 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
 namespace {
 
-struct LtfBufferHarness : public BacktestEngine {
+struct LtfBufferHarness : public pineforge::source::PineStrategyHost {
     std::vector<std::vector<double>> per_bar_closes;
     std::vector<std::vector<bool>> per_bar_bulls;
     std::vector<double> _ltf_close{};
@@ -39,7 +40,7 @@ struct LtfBufferHarness : public BacktestEngine {
         _ltf_bull.push_back(bar.close > bar.open);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         per_bar_closes.push_back(_ltf_close);
         per_bar_bulls.push_back(_ltf_bull);

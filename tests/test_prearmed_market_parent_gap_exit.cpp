@@ -32,6 +32,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -63,7 +64,7 @@ enum class Cell {
     ReversalShortPostOpen,
 };
 
-class PrearmedMarketBracketProbe final : public BacktestEngine {
+class PrearmedMarketBracketProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit PrearmedMarketBracketProbe(Cell cell) : cell_(cell) {
         initial_capital_ = 100'000.0;
@@ -79,7 +80,7 @@ public:
     double live_qty() const { return position_qty_; }
     bool is_flat() const { return position_side_ == PositionSide::FLAT; }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const bool flat_parent = cell_ == Cell::FlatLongGap
                               || cell_ == Cell::FlatShortGap;
         const bool opens_long = cell_ == Cell::FlatLongGap
@@ -177,7 +178,7 @@ static void check_reversal(Cell cell, bool new_is_long, bool post_open) {
     CHECK(near(probe.live_qty(), 0.0));
 }
 
-class PartialFlatBracket final : public BacktestEngine {
+class PartialFlatBracket final : public pineforge::source::PineStrategyHost {
 public:
     explicit PartialFlatBracket(double exit_qty) : exit_qty_(exit_qty) {
         initial_capital_ = 100'000.0;
@@ -186,7 +187,7 @@ public:
         pyramiding_ = 1;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
         strategy_entry("E", true, kNaN, kNaN, 1.0);
         strategy_exit("X", "E", 120.0, 105.0,
@@ -225,7 +226,7 @@ enum class LimitCell {
     ReversalDualMarketable,      // stop AND limit marketable: open scratch
 };
 
-class PrearmedLimitBracketProbe final : public BacktestEngine {
+class PrearmedLimitBracketProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit PrearmedLimitBracketProbe(LimitCell cell) : cell_(cell) {
         initial_capital_ = 100'000.0;
@@ -241,7 +242,7 @@ public:
     double live_qty() const { return position_qty_; }
     bool is_flat() const { return position_side_ == PositionSide::FLAT; }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const bool flat_parent = cell_ == LimitCell::FlatLongLimit
                               || cell_ == LimitCell::FlatShortLimit;
         const bool opens_long = cell_ != LimitCell::FlatShortLimit
@@ -397,7 +398,7 @@ static void check_reversal_dual_marketable_scratches_at_open() {
 // issued. The prearmed oracle must not treat it as a parent-fill-bar scratch
 // (position_open_bar_ gate): the exit fills on its ordinary next-bar
 // resting-order path and the trade keeps its original entry bar.
-class OngoingPositionReissue final : public BacktestEngine {
+class OngoingPositionReissue final : public pineforge::source::PineStrategyHost {
 public:
     OngoingPositionReissue() {
         initial_capital_ = 100'000.0;
@@ -410,7 +411,7 @@ public:
 
     double live_qty() const { return position_qty_; }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("E", true, kNaN, kNaN, 1.0, "hold");
         } else if (bar_index_ == 2) {
@@ -441,7 +442,7 @@ static void check_ongoing_position_reissue_keeps_entry() {
     CHECK(near(probe.live_qty(), 0.0));
 }
 
-class PartialFlatLimitBracket final : public BacktestEngine {
+class PartialFlatLimitBracket final : public pineforge::source::PineStrategyHost {
 public:
     explicit PartialFlatLimitBracket(double exit_qty) : exit_qty_(exit_qty) {
         initial_capital_ = 100'000.0;
@@ -450,7 +451,7 @@ public:
         pyramiding_ = 1;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
         strategy_entry("E", true, kNaN, kNaN, 1.0);
         strategy_exit("X", "E", /*limit=*/95.0, /*stop=*/90.0,
@@ -476,7 +477,7 @@ static void check_partial_limit_does_not_scratch_parent_open() {
     CHECK(near(probe.live_qty(), 1.0));
 }
 
-class MultipleFlatParents final : public BacktestEngine {
+class MultipleFlatParents final : public pineforge::source::PineStrategyHost {
 public:
     MultipleFlatParents() {
         initial_capital_ = 100'000.0;
@@ -485,7 +486,7 @@ public:
         pyramiding_ = 2;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
         strategy_entry("E", true, kNaN, kNaN, 1.0);
         strategy_entry("F", true, kNaN, kNaN, 1.0);

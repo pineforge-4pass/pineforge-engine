@@ -54,6 +54,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 
 using namespace pineforge;
@@ -87,7 +88,7 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 // Feed convention: o=h=l=c=100 (±0.5 wick) so market fills land at 100
 // and q_plain = 2% * 1,000,000 / 100 = 200 exactly (PnL-neutral closes
 // keep equity at 1,000,000 through the race).
-class RaceProbe : public BacktestEngine {
+class RaceProbe : public pineforge::source::PineStrategyHost {
 public:
     struct TradeRow {
         std::string entry_id, exit_id;
@@ -121,7 +122,7 @@ public:
         commission_value_ = 0.0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == seed_bar && seed_qty > 0.0) {
             strategy_entry("Seed", seed_is_long, kNaN, kNaN, seed_qty, "");
         }
@@ -429,7 +430,7 @@ static void test_poc_close_batch_then_sequential_entries() {
     class PocProbe : public RaceProbe {
     public:
         PocProbe() { process_orders_on_close_ = true; }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Seed", true, kNaN, kNaN, 50.0, "");
             }
@@ -474,7 +475,7 @@ static void test_single_entry_reversal_unchanged() {
     std::printf("test_single_entry_reversal_unchanged\n");
     class SingleProbe : public RaceProbe {
     public:
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Seed", false, kNaN, kNaN, 300.0, "");
             }

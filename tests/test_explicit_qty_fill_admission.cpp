@@ -51,6 +51,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -100,7 +101,7 @@ namespace {
 //   'B' explicit LONG market entry + protective strategy.exit stop = exit_stop_
 //   'H' immediate close of "E" + explicit LONG reentry "R2" qty = reentry_qty_
 //   '.' nothing
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double comm_pct, int slippage, double margin,
           bool pooc, bool enable_mc) {
@@ -124,7 +125,7 @@ public:
     double stop_ = kNaN;
     double exit_stop_ = kNaN;
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': strategy_entry("E", true,  kNaN, kNaN, entry_qty_); break;

@@ -3,6 +3,7 @@
 // broker fixture uses a four-bar ordinary market entry and next-open close.
 // Oracle controls and source/CSV hashes live in the campaign discovery state.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -34,7 +35,7 @@ std::vector<Bar> bars() {
         bar(3, 1.15788, 1.15804, 1.15762, 1.15762),
     };
 }
-class ResidualProbe : public BacktestEngine {
+class ResidualProbe : public pineforge::source::PineStrategyHost {
 public:
     ResidualProbe(double capital, bool enabled = true, double realized = 0.0,
                   double quantity = kQuantity, bool unbounded = false)
@@ -54,7 +55,7 @@ public:
         qty_step_ = 0.01;
         set_margin_call_enabled(enabled);
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             // Initialize equivalent closed ledgers before any opening order.
             // The synthetic prior PnL isolates numerical representation from
@@ -104,7 +105,7 @@ void check_capital(double capital, bool expects_call, bool enabled = true,
 // its uncertainty must still protect a later exact-money tie. The live
 // position is initialized after those trades to isolate the margin checkpoint
 // from entry admission, which is a different broker contract.
-class HistoryProbe : public BacktestEngine {
+class HistoryProbe : public pineforge::source::PineStrategyHost {
 public:
     bool with_history = true;
     HistoryProbe() {
@@ -120,7 +121,7 @@ public:
         set_syminfo_mintick(std::ldexp(1.0, -24));
         qty_step_ = std::ldexp(1.0, -16);
     }
-    void on_bar(const Bar& current) override {
+    void on_source_bar(const Bar& current) override {
         if (bar_index_ == 0) set_margin_call_enabled(false);
         if (with_history) {
             const double na = std::numeric_limits<double>::quiet_NaN();
@@ -206,7 +207,7 @@ public:
     explicit OrdinaryHistoryProbe(bool injected)
         : ResidualProbe(1032383.8221439 - 0.25 - (injected ? 100.0 : 0.0)),
           injected_(injected) {}
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             if (injected_) net_profit_sum_ = 100.0;

@@ -40,6 +40,7 @@
  * whose carried best is the entry price itself.
  */
 
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -349,7 +350,7 @@ void test_subtick_offset_arms_from_the_carried_best() {
 
 // ── engine-level fixtures ─────────────────────────────────────────────
 
-class TrailEngine : public BacktestEngine {
+class TrailEngine : public pineforge::source::PineStrategyHost {
 public:
     double exit_price(int i) const { return closed_trade_exit_price(i); }
     double entry_price(int i) const { return closed_trade_entry_price(i); }
@@ -375,7 +376,7 @@ public:
         syminfo_mintick_ = mintick;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("E", is_long_, kNaN, kNaN, /*qty=*/1.0);
         }
@@ -448,7 +449,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/1.0);
         } else if (bar_index_ == 1) {

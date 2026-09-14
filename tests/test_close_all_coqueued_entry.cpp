@@ -41,6 +41,7 @@
 #include <limits>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -73,7 +74,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
 }
 
 // Common probe base: fixed 1-lot sizing, no slippage/commission, tick 0.01.
-class ProbeBase : public BacktestEngine {
+class ProbeBase : public pineforge::source::PineStrategyHost {
 public:
     explicit ProbeBase(int pyr) {
         initial_capital_ = 1'000'000;
@@ -99,7 +100,7 @@ public:
         calc_on_order_fills_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (coof_fill_recalc_active_) return;
         if (bar_index_ == 0) strategy_entry("S", false);
         if (bar_index_ == 1)
@@ -175,7 +176,7 @@ static void test_R_KEEP_mkt_undercap_survives() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L0", true);
             if (bar_index_ == 1) strategy_entry("L1", true);
             if (bar_index_ == 2) {
@@ -216,7 +217,7 @@ static void test_R_KEEP_stop_undercap_survives() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S0", false);
             if (bar_index_ == 1) strategy_entry("S1", false);
             if (bar_index_ == 2) {
@@ -258,7 +259,7 @@ static void test_G_DROP_mkt_overcap_probe65() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(1) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, 1.0, "open long");
             if (bar_index_ == 1) {
                 strategy_entry("L", true, kNaN, kNaN, 1.0, "same-pass add long");
@@ -301,7 +302,7 @@ static void test_G_DROP_stop_overcap_bracket() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(1) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L0", true);
             if (bar_index_ == 1) {
                 strategy_entry("LG", true, kNaN, /*stop=*/200.0, kNaN, "re-armed long stop");
@@ -342,7 +343,7 @@ static void test_G_DROP_mkt_overcap_pyr2() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(2) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L0", true);
             if (bar_index_ == 1) strategy_entry("L1", true);
             if (bar_index_ == 2) {
@@ -384,7 +385,7 @@ static void test_G_carry_priorbar_still_cancelled() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(2) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L0", true);
             if (bar_index_ == 1)
                 strategy_entry("LC", true, kNaN, /*stop=*/120.0, kNaN, "prior-bar carry");
@@ -425,7 +426,7 @@ static void test_G_opposite_unchanged_ki64() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(2) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L0", true);
             if (bar_index_ == 1) {
                 strategy_entry("SOPP", false, kNaN, /*stop=*/90.0, kNaN, "opposite short stop");
@@ -461,7 +462,7 @@ static void test_R_KEEP_priorbar_same_id_stop_touched_on_close_fill_bar() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -493,7 +494,7 @@ static void test_R_KEEP_priorbar_same_id_stop_survives_compaction() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -527,7 +528,7 @@ static void test_G_no_physical_same_id_stop_still_cancelled() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("A", true);
             if (bar_index_ == 1) strategy_entry("B", true);
             if (bar_index_ == 2) strategy_close("B");
@@ -563,7 +564,7 @@ static void test_G_close_id_same_id_priorbar_stop_still_cancelled() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -594,7 +595,7 @@ static void test_G_same_id_priorbar_limit_carry_unchanged() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1)
                 strategy_entry("L", true, /*limit=*/90.0, kNaN, kNaN,
@@ -627,7 +628,7 @@ static void test_G_same_id_priorbar_stop_limit_still_cancelled() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1)
                 strategy_entry("L", true, /*limit=*/115.0, /*stop=*/110.0,
@@ -662,7 +663,7 @@ static void test_G_raw_before_close_all_does_not_authorize_same_id_stop() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -699,7 +700,7 @@ static void test_G_any_close_id_before_close_all_does_not_authorize_same_id_stop
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) { close_entries_rule_any_ = true; }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -735,7 +736,7 @@ static void test_R_KEEP_replaced_close_all_refreshes_stop_identity() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -772,7 +773,7 @@ static void test_G_raw_same_id_replacement_cannot_impersonate_close_all() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,
@@ -811,7 +812,7 @@ static void test_R_KEEP_close_all_before_any_close_id_preserves_stop() {
     class Probe : public ProbeBase {
     public:
         Probe() : ProbeBase(4) { close_entries_rule_any_ = true; }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("S", false);
             if (bar_index_ == 1)
                 strategy_entry("S", false, kNaN, /*stop=*/90.0, kNaN,

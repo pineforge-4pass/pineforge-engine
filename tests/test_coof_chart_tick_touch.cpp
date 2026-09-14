@@ -19,6 +19,7 @@
 #include <vector>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 static int passed = 0, failed = 0;
@@ -30,7 +31,7 @@ namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 bool near(double a, double b) { return std::abs(a-b) < 1e-8; }
 
-class TickProbe : public BacktestEngine {
+class TickProbe : public pineforge::source::PineStrategyHost {
 public:
     TickProbe(bool is_long, double qty, double stop, double limit,
               int end_bar, bool coof = true)
@@ -47,7 +48,7 @@ public:
         calc_on_order_fills_ = coof;
         process_orders_on_close_ = false;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT)
             strategy_entry("E", long_, kNaN, kNaN, qty_, "SEED");
         if (position_side_ != PositionSide::FLAT) {

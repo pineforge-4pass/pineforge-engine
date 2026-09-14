@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -16,10 +17,10 @@ Bar bar(double o, double h, double l, double c, int64_t ts) { return Bar{o, h, l
 // at 2N-1 for the ENTIRE run (not just the tail bar), so the trigger
 // condition (bar_index == last_bar_index - 5 == 2N-6) is never satisfied
 // within the fed [0, N-1] range: the entry never happens.
-class LastBarDependentStrategy final : public BacktestEngine {
+class LastBarDependentStrategy final : public pineforge::source::PineStrategyHost {
 public:
     int entry_bar = -1;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (pine_bar_index() == pine_last_bar_index() - 5) {
             strategy_entry("L", true);
             entry_bar = bar_index_;
@@ -38,9 +39,9 @@ public:
 // this engine-level pin since fill_report's trades_len already excludes it
 // unless a position happens to still be open, which this schedule avoids by
 // closing everything at bar_index % 11 == 9 well inside the feed).
-class Indifferent final : public BacktestEngine {
+class Indifferent final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (bar_index_ % 7 == 3) { strategy_entry("L", true); strategy_exit("x", "L", b.close * 1.03, b.close * 0.98); }
         if (bar_index_ % 11 == 9) strategy_close_all();
     }

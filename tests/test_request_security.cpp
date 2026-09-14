@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/series.hpp>
 #include <pineforge/ta.hpp>
 
@@ -14,7 +15,7 @@ static void require(bool condition, const std::string& message) {
     }
 }
 
-class MockSecurityStrategy : public BacktestEngine {
+class MockSecurityStrategy : public pineforge::source::PineStrategyHost {
 public:
     Series<double> _s_close;
     double _req_sec_0 = na<double>();
@@ -32,7 +33,7 @@ public:
         last_htf_val = _req_sec_0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (is_first_tick_) {
             _s_close.push(current_bar_.close);
@@ -45,18 +46,18 @@ public:
     }
 };
 
-class LowerTimeframeSecurityHarness : public BacktestEngine {
+class LowerTimeframeSecurityHarness : public pineforge::source::PineStrategyHost {
 public:
     LowerTimeframeSecurityHarness() {
         register_security_eval(0, "7", "", false, false);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
     }
 };
 
-class LowerTimeframeEmulationHarness : public BacktestEngine {
+class LowerTimeframeEmulationHarness : public pineforge::source::PineStrategyHost {
 public:
     double _req_sec_0 = na<double>();
     std::vector<int> completed_counts_per_input_bar;
@@ -82,12 +83,12 @@ public:
         _req_sec_0 = bar.close;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
     }
 };
 
-class LowerTimeframeUnsupportedFlagHarness : public BacktestEngine {
+class LowerTimeframeUnsupportedFlagHarness : public pineforge::source::PineStrategyHost {
 public:
     explicit LowerTimeframeUnsupportedFlagHarness(bool lookahead_on, bool gaps_on) {
         // Register the LTF-array path then override the flags so we
@@ -101,23 +102,23 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
     }
 };
 
-class HigherTimeframeUnknownInputHarness : public BacktestEngine {
+class HigherTimeframeUnknownInputHarness : public pineforge::source::PineStrategyHost {
 public:
     HigherTimeframeUnknownInputHarness() {
         register_security_eval(0, "60", "", false, false);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
     }
 };
 
-class HelperSecurityTaHarness : public BacktestEngine {
+class HelperSecurityTaHarness : public pineforge::source::PineStrategyHost {
 public:
     ta::EMA _ta_ema_1{3};
     ta::EMA _sec0__ta_ema_1{3};
@@ -141,7 +142,7 @@ public:
         last_htf_ema = _req_sec_0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         last_main_ema = f();
     }
@@ -327,7 +328,7 @@ void test_request_security_higher_tf_requires_inferable_input_tf() {
 // ``lower_tf_sub_bar_index`` at the start of each chart bar's
 // synthesis loop and increments it after every per-sub-bar dispatch
 // so the codegen can detect index 0 and clear its accumulator vector.
-class LowerTfArraySecurityHarness : public BacktestEngine {
+class LowerTfArraySecurityHarness : public pineforge::source::PineStrategyHost {
 public:
     std::vector<double> _req_sec_lower_tf_0{};
     std::vector<std::vector<double>> per_bar_arrays;
@@ -348,19 +349,19 @@ public:
         _req_sec_lower_tf_0.push_back(bar.close);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         per_bar_arrays.push_back(_req_sec_lower_tf_0);
     }
 };
 
-class LowerTfArrayUnsupportedTfHarness : public BacktestEngine {
+class LowerTfArrayUnsupportedTfHarness : public pineforge::source::PineStrategyHost {
 public:
     LowerTfArrayUnsupportedTfHarness(const char* requested_tf) {
         register_security_lower_tf_eval(0, requested_tf, "");
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
     }
 };
@@ -567,7 +568,7 @@ void test_request_security_helper_ta_uses_security_local_state() {
 //     (ta.highest(high,20)[1], lookahead_off, "5" on 15m): 100.0% -> 93.7%
 //   - ungated lookahead_on broke 3commas triple-RSI DCA
 //     (ta.rsi(close,7)[1], lookahead_on, "5" on 15m): 100.0% -> 50.5%
-class FinerTfPublishGateHarness : public BacktestEngine {
+class FinerTfPublishGateHarness : public pineforge::source::PineStrategyHost {
 public:
     std::vector<int64_t> published_ts;  // bucket-start ts of is_complete evals
     std::vector<int64_t> evaluated_ts;  // every requested-context evaluation
@@ -595,7 +596,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         chart_last_eval_ts.push_back(last_evaluated_ts);
     }
@@ -791,7 +792,7 @@ void test_request_security_finer_tf_sparse_boundary_uses_final_caller_child() {
 // per script bar on the magnifier path, after the per-sub-bar security
 // feed), and asserts the observed per-script-bar cadence against the
 // arithmetic expectation.
-class MagnifierCoarserSecurityCadenceHarness : public BacktestEngine {
+class MagnifierCoarserSecurityCadenceHarness : public pineforge::source::PineStrategyHost {
 public:
     double _req_sec_60 = na<double>();
     double _req_sec_240 = na<double>();
@@ -817,7 +818,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         // One capture per script bar (magnifier on_bar fires only on the
         // last tick of the last sub-bar, after that sub-bar's security
         // feed has already published any boundary completion).

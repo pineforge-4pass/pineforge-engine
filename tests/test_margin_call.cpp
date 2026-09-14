@@ -32,6 +32,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -67,7 +68,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c, double v) 
 // Thin base exposing the protected closed-trade accessors / liquidation price
 // for the test harness (these are protected on BacktestEngine, accessible only
 // from subclasses).
-class MCEngine : public BacktestEngine {
+class MCEngine : public pineforge::source::PineStrategyHost {
 public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
@@ -123,7 +124,7 @@ public:
         account_currency_fx_ = account_fx;
         if (disable_mc_) set_margin_call_enabled(false);
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             // Short the whole account; never exit. Fills at bar0 close = 100.
             strategy_entry("S", false, kNaN, kNaN, kNaN);
@@ -280,7 +281,7 @@ public:
         qty_step_ = qty_step;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, kNaN);
         }
@@ -465,7 +466,7 @@ public:
         set_syminfo_metadata("margin_zero_cover_full_liquidation",
                              full_residual ? 1.0 : 0.0);
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, kNaN);
         }
@@ -524,7 +525,7 @@ public:
         set_syminfo_metadata("margin_zero_cover_full_liquidation",
                              full_residual ? 1.0 : 0.0);
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/2.119);
         } else if (bar_index_ == 1) {
@@ -623,7 +624,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/10.0);
         } else if (bar_index_ == 1) {
@@ -694,7 +695,7 @@ public:
         margin_long_ = 100.0;             // 1x -> denominator (1 - 1) = 0 -> na
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, kNaN);
     }
 };
@@ -737,7 +738,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, kNaN);
     }
 };
@@ -825,7 +826,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/1.0);
         } else if (bar_index_ == 1) {
@@ -884,7 +885,7 @@ public:
         account_currency_fx_ = account_fx;
         syminfo_.pointvalue = pointvalue;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, qty_);
     }
 private:
@@ -914,7 +915,7 @@ public:
         syminfo_mintick_ = 0.0001;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, kNaN);
         }
@@ -1176,7 +1177,7 @@ public:
         syminfo_mintick_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         if (kind_ == Kind::Stop) {
             strategy_entry("L", true, kNaN, /*stop=*/120.2, /*qty=*/10.0);
@@ -1259,7 +1260,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_order("RAW", true, /*qty=*/10.0);
     }
 };
@@ -1317,7 +1318,7 @@ public:
         account_currency_fx_ = account_fx;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
 
         // Both calls are placed from FLAT within one on_bar and fill at the
@@ -1423,7 +1424,7 @@ public:
         pyramiding_ = 2;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("BASE", false, kNaN, kNaN, /*qty=*/2.0);
         } else if (bar_index_ == 1) {
@@ -1472,7 +1473,7 @@ public:
         account_currency_fx_ = 85.3567;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         strategy_entry("BASE", false, kNaN, kNaN, /*qty=*/2.0);
         strategy_entry("ADD", false, kNaN, kNaN, /*qty=*/2.0);
@@ -1525,7 +1526,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         // The priced control must be a real fill, not merely a pending shape.
         // Arm it below the market on bar 0, then observe its short fill after
         // bar 1 gaps to the limit. dispatch_bar's step 1 applies that resting
@@ -1616,7 +1617,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true, kNaN, kNaN, kNaN);
         } else if (bar_index_ == 1) {
@@ -1700,7 +1701,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false, kNaN, kNaN, kNaN);
         } else if (bar_index_ == 1) {
@@ -1791,7 +1792,7 @@ public:
         id_unclosed_qty_["S"] = qty;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ = mk_bar(
@@ -1874,7 +1875,7 @@ public:
             broker::OpeningContinuation::RemainingAdversePath);
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ = mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0);
@@ -1941,7 +1942,7 @@ public:
             broker::OpeningContinuation::RemainingAdversePath);
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ = mk_bar(2000, 100.0, 105.0, 99.0, 100.0, 1.0);
@@ -1991,7 +1992,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false, kNaN, kNaN, kNaN);
         } else if (bar_index_ == 1) {
@@ -2068,7 +2069,7 @@ public:
         id_unclosed_qty_["Short"] = qty;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ = mk_bar(
@@ -2117,7 +2118,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false, kNaN, kNaN, kNaN);
         } else if (bar_index_ == 1) {
@@ -2216,7 +2217,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false, kNaN, kNaN, kNaN);
         } else if (bar_index_ == 1) {
@@ -2309,7 +2310,7 @@ public:
         pyramiding_ = 2;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
 
         strategy_entry("BASE", false, kNaN, kNaN, /*qty=*/2.0);
@@ -2396,7 +2397,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
 
         strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
@@ -2475,7 +2476,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
         process_pending_orders(current_bar_);
@@ -2527,7 +2528,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
         process_pending_orders(current_bar_);
@@ -2579,7 +2580,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
         process_pending_orders(current_bar_);
@@ -2633,7 +2634,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         strategy_entry("OPEN", true, kNaN, kNaN, /*qty=*/10.0);
         process_pending_orders(current_bar_);
@@ -2699,7 +2700,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/1.0);
         } else if (bar_index_ == 1) {
@@ -2751,7 +2752,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
 
         // Seed the already-partially-liquidated short immediately before the
@@ -2864,7 +2865,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, kNaN);
         }
@@ -2906,7 +2907,7 @@ public:
         seed_opening_check(entry, broker::OpeningContinuation::None);
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ = mk_bar(2000, 100.0, 100.0, 100.0, 100.0, 1.0);
@@ -2949,7 +2950,7 @@ public:
         id_unclosed_qty_["S"] = qty;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ = mk_bar(
@@ -3122,7 +3123,7 @@ public:
         qty_step_ = 1.0;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         saw_clean_run_start = position_side_ == PositionSide::FLAT
             && !opening_obligations_.pending()
@@ -3180,7 +3181,7 @@ public:
         margin_long_ = 50.0;              // 50% margin -> 2x limit; at the edge
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("L", true, kNaN, kNaN, 20.0);
     }
 };

@@ -22,6 +22,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/series.hpp>
 
 using namespace pineforge;
@@ -55,7 +56,7 @@ std::vector<Bar> standard_feed() {
     };
 }
 
-class CoofBase : public BacktestEngine {
+class CoofBase : public pineforge::source::PineStrategyHost {
 public:
     explicit CoofBase(bool enabled = true) {
         calc_on_order_fills_ = enabled;
@@ -88,7 +89,7 @@ class MarketCloseProbe final : public CoofBase {
 public:
     using CoofBase::CoofBase;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("L", true);
@@ -120,7 +121,7 @@ void test_market_close_fills_same_bar_at_entry_price() {
 // later endpoint and not on the following bar.
 class BracketProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("L", true);
@@ -178,7 +179,7 @@ void test_recalc_bracket_uses_remaining_path() {
 // bar below to pin the exported O,O,H,L sequence exactly.
 class RefillProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ <= 1 && position_qty_ < 6.0) {
             strategy_entry("L" + std::to_string(position_entry_count_), true);
         }
@@ -231,7 +232,7 @@ void test_historical_refill_is_exact_o_o_near_far_and_capped_at_four() {
 // for the NEXT waypoint/tick even when the fill price equals the endpoint.
 class EndpointMarketAddProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("Stop", true, kNaN, 105.0);
         } else if (bar_index_ == 1 && coof_fill_recalc_active_
@@ -290,7 +291,7 @@ void test_magnifier_endpoint_fill_consumes_tick_before_market_add() {
 // contract.
 class MagnifierGapBoundaryProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && pending_orders_.empty() && trades_.empty()) {
             strategy_entry("GapLimit", true, 95.0, kNaN, 1.0);
@@ -323,7 +324,7 @@ void test_real_magnifier_gap_fills_limit_at_fresh_subbar_open() {
 
 class MagnifierGapStopBoundaryProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && pending_orders_.empty() && trades_.empty()) {
             strategy_entry("GapStop", true, kNaN, 105.0, 1.0);
@@ -357,7 +358,7 @@ void test_real_magnifier_gap_fills_stop_at_fresh_subbar_open() {
 // event. Four events produce exactly two round trips: O/O then H/L.
 class AlternatingFillKindsProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && trades_.empty()
             && position_side_ == PositionSide::FLAT) {
             strategy_entry("L0", true);
@@ -398,7 +399,7 @@ void test_exit_fills_consume_historical_event_budget() {
 // cursor must continue from 105 so the farther trigger remains reachable.
 class RestingPricedChronologyProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Far", true, kNaN, 108.0);
             strategy_entry("Near", true, kNaN, 105.0);
@@ -434,7 +435,7 @@ void test_same_segment_priced_orders_fill_nearest_first() {
 // limit can fill later at 95.
 class StopLimitActivationProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("A", true, 95.0, 105.0);
             strategy_entry("B", true, 100.0, kNaN);
@@ -472,7 +473,7 @@ void test_stop_limit_activation_survives_segment_split() {
 // not a cascade order, so the cascade waypoint gate never applies to it.
 class StopLimitSpeculationProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("M0", true);
             strategy_entry("M1", true);
@@ -516,7 +517,7 @@ void test_stop_limit_activation_commits_only_through_consumed_cursor() {
 // interpolated 108 level on the L->H segment.
 class RecalcPricedEntryCascadeProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("L0", true);
         } else if (bar_index_ == 1 && position_entry_count_ == 1) {
@@ -558,7 +559,7 @@ void test_fill_recalc_priced_entries_bypass_legacy_bar_throttle() {
 // one-priced-entry-per-bar arbitration on the later bar.
 class RecalcPricedCarryThrottleProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("L0", true);
         } else if (bar_index_ == 1 && coof_fill_recalc_active_
@@ -596,7 +597,7 @@ void test_recalc_priced_entry_exemption_expires_after_creation_bar() {
 // events share one historical bar.
 class CloseReopenCycleProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("Old", true);
             return;
@@ -655,7 +656,7 @@ public:
 
     explicit RecalcEntryBarBracketProbe(Shape shape) : shape_(shape) {}
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("L", true);
         } else if (bar_index_ == 1 && position_side_ == PositionSide::LONG
@@ -759,7 +760,7 @@ void test_recalc_wrong_limit_does_not_hide_valid_stop_leg() {
 // carried limit must exit at 95 on the next bar.
 class InteriorExitReentryCarryProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("S0", false);
             return;
@@ -818,7 +819,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("A", true, kNaN, 100.0);
             return;
@@ -870,7 +871,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("A", true, kNaN, 100.0);
             return;
@@ -918,7 +919,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT) {
             strategy_entry("A", true, kNaN, 105.0);
             return;
@@ -997,7 +998,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("L", true, kNaN, 105.0);
@@ -1069,7 +1070,7 @@ public:
     std::vector<bool> body_isnew;
     std::vector<bool> body_isconfirmed;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         scalar_before_body.push_back(script_scalar);
         body_bar.push_back(bar_index_);
         body_isnew.push_back(is_first_tick_);
@@ -1166,7 +1167,7 @@ public:
         pyramiding_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const std::string entry_id = is_long_ ? "L" : "S";
         if (coof_fill_recalc_active_ && coof_cursor_is_bar_close_) {
             ++terminal_recalc_calls;
@@ -1258,7 +1259,7 @@ public:
         pyramiding_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (coof_fill_recalc_active_ && coof_cursor_is_bar_close_) {
             ++terminal_recalc_calls;
             return;
@@ -1314,7 +1315,7 @@ public:
         pyramiding_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (coof_fill_recalc_active_ && coof_cursor_is_bar_close_) {
             ++terminal_recalc_calls;
         }
@@ -1383,7 +1384,7 @@ public:
         pyramiding_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (coof_fill_recalc_active_ && coof_cursor_is_bar_close_) {
             ++terminal_recalc_calls;
         }
@@ -1461,7 +1462,7 @@ public:
         pyramiding_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (coof_fill_recalc_active_ && coof_cursor_is_bar_close_) {
             ++terminal_recalc_calls;
         }
@@ -1510,7 +1511,7 @@ void test_pooc_ordinary_close_reversal_siblings_share_live_c() {
 // recalculations occur before the terminal close phase.
 class RecalcChainBudgetProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (position_side_ == PositionSide::FLAT && trades_.empty()) {
             strategy_entry("L", true, kNaN, kNaN, 5.0);
         } else if (position_side_ == PositionSide::LONG) {
@@ -1548,7 +1549,7 @@ class FalsePathProbe final : public CoofBase {
 public:
     explicit FalsePathProbe(bool enabled) : CoofBase(enabled) {}
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         ++body_calls;
         if (bar_index_ == 0) strategy_entry("L", true);
         if (position_side_ == PositionSide::LONG && bar_index_ >= 1) {

@@ -8,6 +8,7 @@
 // These compact command fixtures use synthetic timestamps, fixed distances,
 // and a short bar sequence; they do not run a corpus strategy or a verifier.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -21,7 +22,7 @@ int passed = 0, failed = 0;
 bool near(double a, double b) { return std::abs(a - b) < 1e-7; }
 
 enum class Mode { OPENING_HALF, CARRIED_HALF, DYNAMIC, EXPLICIT, UNIT };
-class IntegerScript : public BacktestEngine {
+class IntegerScript : public pineforge::source::PineStrategyHost {
 public:
     Mode mode;
     double opening_view = qnan, carried_view = qnan, carried_average = qnan;
@@ -52,7 +53,7 @@ public:
         strategy_exit("XS", "S", average - 2.0 * distance, average + distance);
         strategy_close("S");
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", false, qnan, qnan, mode == Mode::UNIT ? 1.0 : 991.0);
         if (bar_index_ == 1) {
             opening_view = signed_position_size();
@@ -189,7 +190,7 @@ enum class Shape { CURRENT, UNKNOWN, OLD, FUTURE, HELD, OLD_HOLD, REISSUED, TRAI
                    FOREIGN, GLOBAL, UNPRICED, STOP_ORIGIN, OFF_GRID, BIG_STEP,
                    LIMIT_ONLY, PARTIAL, COARSE_FRACTIONAL, TRAIL_OFFSET, NAKED,
                    PENDING_ENTRY, INFINITE_PERCENT };
-class DormantCheckpoint : public BacktestEngine {
+class DormantCheckpoint : public pineforge::source::PineStrategyHost {
 public:
     explicit DormantCheckpoint(Shape shape) {
         initial_capital_ = 10000.0;
@@ -266,7 +267,7 @@ public:
         default: break;
         }
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void checkpoint() { process_short_margin_before_script(current_bar_); }
     void late_margin() { process_margin_call(current_bar_); }
     const std::vector<Trade>& rows() const { return trades_; }

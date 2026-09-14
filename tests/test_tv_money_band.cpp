@@ -38,6 +38,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_tv_money_band_data.hpp"
 
@@ -91,7 +92,7 @@ std::vector<Bar> tape_bars() {
 // The sweeps' account: initial_capital as declared, percent_of_equity 100,
 // commission 0, margin 100/100, OANDA:EURUSD (mintick 1e-5, lot 0.01),
 // market fills at the next open, margin calls on.
-class SweepProbe : public BacktestEngine {
+class SweepProbe : public pineforge::source::PineStrategyHost {
 public:
     SweepProbe(double capital, const Signal* signals, int n_signals)
         : signals_(signals), n_signals_(n_signals) {
@@ -110,7 +111,7 @@ public:
         process_orders_on_close_ = false;
         set_margin_call_enabled(true);
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         for (int i = 0; i < n_signals_; ++i) {
             if (signals_[i].ts != bar.timestamp) continue;
             if (signals_[i].kind == 0) {

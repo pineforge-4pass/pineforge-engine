@@ -72,6 +72,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_coof_open_recalc_context_data.hpp"
 
@@ -143,7 +144,7 @@ int index_of_day(const std::vector<Bar>& bars, int64_t ts) {
 
 // BINANCE:BTCUSDT: 0.01 tick, 1e-5 lot step (the tapes carry 5-decimal
 // quantities).
-class BtcProbe : public BacktestEngine {
+class BtcProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit BtcProbe(bool coof) {
         calc_on_order_fills_ = coof;
@@ -309,7 +310,7 @@ public:
     }
     std::vector<EngineFiring> firings;
 
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         const int64_t next_ts = b.timestamp + kDayMs;
         const bool ordinary = !recalc_active();
         // D-1's ordinary close calc: arm tomorrow's trigger.
@@ -501,7 +502,7 @@ public:
         margin_long_ = 0.0;
         margin_short_ = 0.0;
     }
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (b.timestamp == day_ts(2025, 10, 1) && flat() && confirmed()) {
             strategy_entry("A", true);
         }
@@ -560,7 +561,7 @@ public:
 class Joat1111Probe final : public JoatProbe {
 public:
     using JoatProbe::JoatProbe;
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (b.timestamp == day_ts(2025, 11, 4) && flat() && trades() == 0) {
             strategy_entry("Short", false);
         }
@@ -615,7 +616,7 @@ void test_joat_1111_recalc_entry_sized_at_open_fill() {
 class Joat0225Probe final : public JoatProbe {
 public:
     using JoatProbe::JoatProbe;
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (b.timestamp == day_ts(2026, 2, 22) && flat() && trades() == 0) {
             strategy_entry("Short", false);                 // TV 8
         }
@@ -680,7 +681,7 @@ void test_joat_0225_cascade_entry_sized_at_w2_fill() {
 class OrdinaryProbe final : public JoatProbe {
 public:
     using JoatProbe::JoatProbe;
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (b.timestamp == day_ts(2025, 11, 4) && flat() && trades() == 0) {
             strategy_entry("Short", false);
         }
@@ -723,7 +724,7 @@ void test_coof_off_keeps_signal_close_freeze() {
 class CloseCalcInsideCoofProbe final : public JoatProbe {
 public:
     using JoatProbe::JoatProbe;
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (b.timestamp == day_ts(2025, 12, 3) && flat() && trades() == 0) {
             strategy_entry("Long", true);   // close 93429.95 -> fills 12-04 open
         }
@@ -768,7 +769,7 @@ public:
     }
     Bar recalc_bar{};
     bool recalc_seen = false;
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (b.timestamp == day_ts(2025, 10, 3) && flat() && confirmed()) {
             strategy_order("LL", true, 1.0, b.close * 0.995);   // 121620.84
         }

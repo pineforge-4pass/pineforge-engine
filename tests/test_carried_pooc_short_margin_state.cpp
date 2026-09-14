@@ -4,6 +4,7 @@
 // independently pinned by the R26 bare, reversal, half, funded and trail TV
 // controls. The original historical probe remains unchanged.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -17,7 +18,7 @@ int passed = 0, failed = 0;
 bool near(double a, double b) { return std::abs(a - b) < 1e-8; }
 
 enum class Action { HOLD, REVERSE, HALF };
-class CarriedShort : public BacktestEngine {
+class CarriedShort : public pineforge::source::PineStrategyHost {
 public:
     Action action;
     bool trail = false;
@@ -38,7 +39,7 @@ public:
         pyramiding_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", false, qnan, qnan, 12.60172);
         if (bar_index_ == 1) first_view = signed_position_size();
         if (bar_index_ == 2) {
@@ -120,7 +121,7 @@ void test_funded_and_competing_order_controls() {
     CHECK(rounded_margin.second_closed == 1);
 }
 
-class FreshShort : public BacktestEngine {
+class FreshShort : public pineforge::source::PineStrategyHost {
 public:
     double view = qnan;
     explicit FreshShort(bool stop) : stop_(stop) {
@@ -133,7 +134,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, qnan, qnan, 10.0);
             if (stop_) strategy_exit("Stop", "S", qnan, 101.0);
@@ -166,7 +167,7 @@ void test_fresh_close_fill_and_earlier_stop_are_not_replayed() {
     CHECK(!stopped.rows().empty() && stopped.rows()[0].exit_id == "Stop");
 }
 
-class FullReplacement : public BacktestEngine {
+class FullReplacement : public pineforge::source::PineStrategyHost {
 public:
     double view = qnan;
     bool dead_bracket_visible = false;
@@ -181,7 +182,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, qnan, qnan, 0.07912);
             strategy_exit("Owned", "S", qnan, 130000.0);

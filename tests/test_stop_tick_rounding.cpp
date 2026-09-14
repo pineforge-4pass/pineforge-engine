@@ -54,6 +54,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -143,7 +144,7 @@ std::vector<Bar> series(std::initializer_list<Bar> bars) {
 // While a position is open the bracket strategy.exit("X", "E", limit =
 // exit_limit_, stop = exit_stop_, trail_points_, trail_offset_) is re-issued
 // every bar, exactly like the pins' `if strategy.position_size != 0`.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe() {
         initial_capital_ = 1000000000.0;
@@ -172,7 +173,7 @@ public:
     // entry and is live on the entry's own fill bar (same-bar bracket).
     bool arm_exit_flat_ = false;
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ >= 0 && bar_index_ < (int)script.size()) {
             switch (script[bar_index_]) {
                 case 'L': strategy_entry("E", true); break;

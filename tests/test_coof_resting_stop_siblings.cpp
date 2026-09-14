@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 namespace {
@@ -19,7 +20,7 @@ constexpr double N=std::numeric_limits<double>::quiet_NaN();
 enum class Mode { Same, Once, Different, CancelSame, CancelDifferent,
                   MoveSame, Partial, NewStop, NewMarket, OriginalBracket,
                   AfterTwoCancel, AfterTwoClose };
-struct Probe final: BacktestEngine {
+struct Probe final: pineforge::source::PineStrategyHost {
     Mode mode;
     bool armed=false;
     int seen2=0,seen1=0;
@@ -36,7 +37,7 @@ struct Probe final: BacktestEngine {
         margin_long_=margin_short_=100;
         syminfo_.pointvalue=50;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if(bar_index_==0 && position_side_==PositionSide::FLAT)
             strategy_entry("L",true,N,N,3);
         if(bar_index_==2) {

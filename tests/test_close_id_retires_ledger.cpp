@@ -72,6 +72,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -114,7 +115,7 @@ Bar flat_bar(int i, double px) {
 
 // Scripted probe: the test hands it one action per bar index. Grid-bot
 // shape: many lots under distinct ids, explicit qty per entry, no costs.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     explicit Probe(bool pooc) {
         initial_capital_ = 1'000'000.0;
@@ -153,7 +154,7 @@ public:
     // Runs on the recalc passes of a bar only (COOF); `steps` run on the
     // ordinary pass only.
     std::vector<std::function<void(Probe&)>> recalc_steps;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ < 0) return;
         if (coof_fill_recalc_active_) {
             if (bar_index_ < (int)recalc_steps.size() && recalc_steps[bar_index_])

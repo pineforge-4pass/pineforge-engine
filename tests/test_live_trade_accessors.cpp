@@ -20,6 +20,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -37,9 +38,9 @@ Bar bar(double o, double h, double l, double c, int64_t ts) { return Bar{o, h, l
 
 // --- Case 1: a bracket exit (close_cause BRACKET=2) followed by a script
 // close (close_cause SCRIPT=1). ---
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 1) strategy_exit("x", "L", na<double>(), 95.0);          // bracket stop
         if (bar_index_ == 4) strategy_entry("S", false);
@@ -52,7 +53,7 @@ public:
 // short force-liquidated by a rising market): entry fills at bar0 close,
 // bar1's high breaches the liquidation price and forces an exit whose
 // exit_id the engine sets to the "__margin_call__" sentinel. ---
-class MarginCallProbe final : public BacktestEngine {
+class MarginCallProbe final : public pineforge::source::PineStrategyHost {
 public:
     MarginCallProbe() {
         initial_capital_ = 1000.0;
@@ -63,7 +64,7 @@ public:
         margin_short_ = 100.0;               // 1x, default TV margin
         process_orders_on_close_ = true;     // market entry fills at bar close
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", false);
     }
 };
@@ -72,9 +73,9 @@ public:
 // RANGE_END=6). Shape copied from tests/test_live_realtime_tail.cpp's
 // HoldStrategy: enter long and hold; with strategy_set_realtime_tail left
 // off (the default), the final bar synthesizes a range-end row. ---
-class HoldProbe final : public BacktestEngine {
+class HoldProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 2) strategy_entry("L", true);
     }
 };
@@ -94,7 +95,7 @@ public:
 // both rows (probe TV#160/161); the engine's own row-for-row pin is
 // test_aapl15_margin_brackets.cpp's check_trade(p, 1, ...) with exit_tag
 // "X" (the bracket id). ---
-class FastScalperReviveProbe final : public BacktestEngine {
+class FastScalperReviveProbe final : public pineforge::source::PineStrategyHost {
 public:
     FastScalperReviveProbe() {
         initial_capital_ = 1056333.80;
@@ -113,7 +114,7 @@ public:
         process_orders_on_close_ = false;
         set_margin_call_enabled(true);
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) {
             strategy_entry("S", false, na<double>(), na<double>(), 4889.0, "");
             strategy_exit("X", "S", na<double>(), 212.83);
@@ -137,7 +138,7 @@ public:
 // tests/test_risk_max_intraday_loss_tv.cpp pins it against real multi-day
 // registry tapes (tests/test_m45_singletons_data.hpp) -- so this is the
 // smallest one that does, per the review's own fallback instruction. ---
-class IntradayLossCapProbe final : public BacktestEngine {
+class IntradayLossCapProbe final : public pineforge::source::PineStrategyHost {
 public:
     IntradayLossCapProbe() {
         initial_capital_ = 100000.0;
@@ -148,7 +149,7 @@ public:
         risk_max_intraday_loss_ = 5.0;
         risk_max_intraday_loss_is_pct_ = false;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
     }
 };
@@ -160,7 +161,7 @@ public:
 // followed by TV's synthetic full close at the same fill price, tagged
 // "Close Position (Max number of filled orders in one day)" (exit_id
 // stays empty, per engine_run.cpp / engine_fills.cpp). ---
-class IntradayFillCapProbe final : public BacktestEngine {
+class IntradayFillCapProbe final : public pineforge::source::PineStrategyHost {
 public:
     IntradayFillCapProbe() {
         initial_capital_ = 100000.0;
@@ -171,7 +172,7 @@ public:
         pyramiding_ = 10;
         max_intraday_filled_orders_ = 1;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
     }
 };

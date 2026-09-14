@@ -28,6 +28,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -65,7 +66,7 @@ namespace {
 // qty (mirrors the probe's `qty = equity/lvl`), reissued every bar from bar 0
 // unless arm_once (place once at bar 0). margin_call OFF so admission is
 // isolated from the KI-31 entry-bar nibble.
-class StopProbe : public BacktestEngine {
+class StopProbe : public pineforge::source::PineStrategyHost {
 public:
     StopProbe(double capital, double ml, double ms, bool mc) {
         initial_capital_ = capital;
@@ -81,7 +82,7 @@ public:
     double level = 100.0;     // stop price
     double qty = 100.0;       // explicit qty
     bool arm_once = false;
-    void on_bar(const Bar& /*b*/) override {
+    void on_source_bar(const Bar& /*b*/) override {
         if (arm_once && bar_index_ != 0) return;
         if (bar_index_ < 0) return;
         strategy_entry("BO", is_long, kNaN, level, qty);

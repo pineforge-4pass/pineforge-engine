@@ -31,6 +31,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 
 using namespace pineforge;
@@ -169,7 +170,7 @@ static void test_tr_four_arg() {
 // 4. BacktestEngine::prev_chart_close() is the previous chart bar's close on
 //    every on_bar dispatch (na on bar 0), and a sparse ATR site fed with it
 //    reproduces the pinned values inside a running strategy.
-class SparseAtrProbe : public BacktestEngine {
+class SparseAtrProbe : public pineforge::source::PineStrategyHost {
 public:
     ta::ATR atr_{3};
     std::vector<double> prev_seen;
@@ -180,7 +181,7 @@ public:
         default_qty_value_ = 1.0;
         syminfo_mintick_ = 0.01;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         prev_seen.push_back(prev_chart_close());
         if (sparse(bar_index_)) {
             atr_seen.push_back(history_advances_new_bar()
@@ -259,7 +260,7 @@ static std::vector<Bar> gapped_chart() {
     };
 }
 
-class CoofAtrProbe : public BacktestEngine {
+class CoofAtrProbe : public pineforge::source::PineStrategyHost {
 public:
     struct Seen { int bar; double prev; double atr; bool fill_recalc; };
     std::vector<Seen> seen;
@@ -276,7 +277,7 @@ public:
     void snapshot_script_state() override { atr_ckpt_ = atr_; }
     void restore_script_state() override { atr_ = atr_ckpt_; }
     void commit_script_state() override { atr_ckpt_ = atr_; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double v = history_advances_new_bar()
             ? atr_.compute(current_bar_.high, current_bar_.low, current_bar_.close, prev_chart_close())
             : atr_.recompute(current_bar_.high, current_bar_.low, current_bar_.close, prev_chart_close());
@@ -355,7 +356,7 @@ static void test_engine_prev_chart_close_rolls_back_with_coof_checkpoint() {
 //    the recalc's own close (the full script bar), i.e. true range high - low
 //    (TradingView pin: lab tv i178-coof-atr-sense-aapl15, ta.atr(14) ==
 //    ta.rma(ta.tr(true), 14) on 4315/4315 executions).
-class CoofEveryBarAtrProbe : public BacktestEngine {
+class CoofEveryBarAtrProbe : public pineforge::source::PineStrategyHost {
 public:
     ta::ATR atr_{3};
     ta::ATR atr_ckpt_{3};
@@ -376,7 +377,7 @@ public:
     void snapshot_script_state() override { atr_ckpt_ = atr_; }
     void restore_script_state() override { atr_ = atr_ckpt_; }
     void commit_script_state() override { atr_ckpt_ = atr_; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double v = history_advances_new_bar()
             ? atr_.compute(current_bar_.high, current_bar_.low, current_bar_.close, prev_chart_close())
             : atr_.recompute(current_bar_.high, current_bar_.low, current_bar_.close, prev_chart_close());

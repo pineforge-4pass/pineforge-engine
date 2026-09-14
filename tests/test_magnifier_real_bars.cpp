@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 
@@ -46,7 +47,7 @@ static bool near(double a, double b, double tol = 1e-9) {
 // Strategy used by every test in this file: market-buy on bar 0 then attach a
 // protective stop. Subclass exposes the protected closed-trade accessors so
 // the tests can read them after run().
-class StopHitStrat : public BacktestEngine {
+class StopHitStrat : public pineforge::source::PineStrategyHost {
 public:
     StopHitStrat() {
         initial_capital_ = 100000;
@@ -56,7 +57,7 @@ public:
         process_orders_on_close_ = false;
     }
     int exit_bar_for(int idx) const { return closed_trade_exit_bar_index(idx); }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (bar_index_ == 0) {
             strategy_entry("L", true);
@@ -152,9 +153,9 @@ static void test_distribution_irrelevant_when_real_sub_bars() {
 static void test_legacy_path_used_when_single_sub_bar() {
     std::printf("test_legacy_path_used_when_single_sub_bar\n");
 
-    class NoopStrat : public BacktestEngine {
+    class NoopStrat : public pineforge::source::PineStrategyHost {
     public:
-        void on_bar(const Bar& bar) override { (void)bar; }
+        void on_source_bar(const Bar& bar) override { (void)bar; }
     };
 
     NoopStrat strat;
@@ -183,7 +184,7 @@ static void test_legacy_path_used_when_single_sub_bar() {
 // (entry == exit). Verified empirically across magnifier-dist-probe-01 ..
 // 08b: 340 / 871 trades on probe-01 are wrong-side entries that TV fires
 // at entry while the legacy engine left them dangling.
-class WrongSideStopStrat : public BacktestEngine {
+class WrongSideStopStrat : public pineforge::source::PineStrategyHost {
 public:
     WrongSideStopStrat() {
         initial_capital_ = 100000;
@@ -192,7 +193,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = false;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (bar_index_ == 0) {
             strategy_entry("L", true);

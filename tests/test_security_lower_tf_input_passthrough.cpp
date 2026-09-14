@@ -10,12 +10,13 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
 namespace {
 
-struct InputPassthroughHarness : public BacktestEngine {
+struct InputPassthroughHarness : public pineforge::source::PineStrategyHost {
     std::vector<double> _ltf_close{};
     std::vector<std::vector<double>> per_bar_arrays;
     std::vector<int> per_dispatch_indices;
@@ -33,7 +34,7 @@ struct InputPassthroughHarness : public BacktestEngine {
         _ltf_close.push_back(bar.close);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         per_bar_arrays.push_back(_ltf_close);
     }

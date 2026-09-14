@@ -1,6 +1,7 @@
 #include "exit_lifecycle_fixture.hpp"
 // Literal native readiness contracts. No Pine, external tapes, or grader.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -12,7 +13,7 @@ constexpr double missing = std::numeric_limits<double>::quiet_NaN();
 int checks = 0, failures = 0;
 #define CHECK(value) do { ++checks; if (!(value)) { ++failures; std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #value); } } while (0)
 
-class MarginBook : public BacktestEngine {
+class MarginBook : public pineforge::source::PineStrategyHost {
 public:
     MarginBook() {
         initial_capital_ = 1000;
@@ -22,7 +23,7 @@ public:
         qty_step_ = 1;
         current_bar_ = {100, 100, 100, 100, 1, 0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     PendingOrder& child() {
         for (auto& order : pending_orders_) if (order.id == "X") return order;
         throw std::logic_error("missing native bracket");
@@ -83,7 +84,7 @@ public:
 
 enum class GapCase { HeldStop, ReadyLimit, HeldWithTrail, ReadyStop,
                      BothHeld, ForeignWithTrail, BothReady, LimitOnly };
-class PrearmedFrame : public BacktestEngine {
+class PrearmedFrame : public pineforge::source::PineStrategyHost {
 public:
     PrearmedFrame() {
         initial_capital_ = 100000;
@@ -94,7 +95,7 @@ public:
         syminfo_mintick_ = 0.01;
         current_bar_ = {100, 100, 100, 100, 1, 0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void exercise(GapCase mode) {
         const bool trail = mode == GapCase::HeldWithTrail || mode == GapCase::ForeignWithTrail;
         strategy_entry("E", true, missing, missing, 1);
@@ -136,7 +137,7 @@ public:
     }
 };
 
-class ChartPointBook : public BacktestEngine {
+class ChartPointBook : public pineforge::source::PineStrategyHost {
     bool long_side_;
     bool stop_leg_;
     bool armed_ = false;
@@ -154,7 +155,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
     double level() const { return long_side_ == stop_leg_ ? 9.90 : 10.26; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("E", long_side_, missing, missing, 1);
         if (bar_index_ != 1 || !coof_fill_recalc_active_ || armed_) return;
         armed_ = true;

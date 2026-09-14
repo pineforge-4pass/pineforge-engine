@@ -2,6 +2,7 @@
 // still receive rounded-money margin calls. Synthetic three-bar fixtures pin
 // the BTC low waypoint and XAU opening valuation without any corpus execution.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -13,7 +14,7 @@ constexpr double qnan=std::numeric_limits<double>::quiet_NaN();
 int failures=0,passed=0;
 #define CHECK(x) do {if(x)++passed;else{++failures;std::printf("FAIL %d %s\n",__LINE__,#x);}}while(0)
 bool near(double a,double b){return std::abs(a-b)<1e-7;}
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     double explicit_qty=qnan;
     double entry_limit=qnan, entry_stop=qnan;
@@ -29,7 +30,7 @@ public:
     void constant_fx(){account_currency_fx_=2;}
     void double_point_value(){syminfo_.pointvalue=2;}
     void larger_pyramid_cap(){pyramiding_=2;}
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if(bar_index_==0){
             if(raw_order)strategy_order("L",true,explicit_qty,entry_limit,entry_stop);
             else strategy_entry("L",true,entry_limit,entry_stop,explicit_qty);

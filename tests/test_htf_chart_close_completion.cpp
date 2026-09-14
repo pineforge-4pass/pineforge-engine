@@ -33,6 +33,7 @@
 //      bar's body runs.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/timeframe.hpp>
 #include <pineforge/bar.hpp>
 
@@ -306,7 +307,7 @@ void test_early_close_completes_singleton_bucket() {
 // 3. End to end on the split feed: the "60" bucket ending at the 17:15Z
 //    chart bar (whose slice lacks 17:29Z) is published before that chart
 //    bar's body runs, so the body's [1] window is TradingView's.
-class OrderProbe final : public BacktestEngine {
+class OrderProbe final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<std::pair<std::string, int64_t>> events;
     void configure_security_evaluators() override {
@@ -316,7 +317,7 @@ public:
     void evaluate_security(int sec_id, const Bar& bar, bool is_complete) override {
         if (sec_id == 0 && is_complete) events.emplace_back("h60", bar.timestamp);
     }
-    void on_bar(const Bar& bar) override { events.emplace_back("bar", bar.timestamp); }
+    void on_source_bar(const Bar& bar) override { events.emplace_back("bar", bar.timestamp); }
 };
 
 void test_split_feed_publishes_before_the_chart_body() {

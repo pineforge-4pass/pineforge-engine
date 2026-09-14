@@ -47,6 +47,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -131,7 +132,7 @@ const int kFillP = 6;
 // The sensors' account: NASDAQ:AAPL (mintick 0.01, one-share lots), the
 // declared initial_capital, percent_of_equity 100, commission 0, margin
 // 100/100, slippage 0, market fills at the next open, margin calls on.
-class Sensor : public BacktestEngine {
+class Sensor : public pineforge::source::PineStrategyHost {
 public:
     Sensor(double capital, int signal_bar, int close_bar)
         : signal_bar_(signal_bar), close_bar_(close_bar) {
@@ -149,7 +150,7 @@ public:
         margin_short_ = 100.0;
         margin_call_enabled_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == signal_bar_) strategy_entry("Long", true);
         if (bar_index_ == close_bar_ && signed_position_size() > 0.0) {
             strategy_close_all();
@@ -220,9 +221,9 @@ class SizingProbe : public Sensor {
 public:
     SizingProbe(double capital, int signal_bar) : Sensor(capital, signal_bar, 1 << 20) {}
     double seen = kNaN;
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 5) seen = sized_at_signal();
-        Sensor::on_bar(bar);
+        Sensor::on_source_bar(bar);
     }
 };
 

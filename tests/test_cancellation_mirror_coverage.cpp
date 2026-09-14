@@ -3,6 +3,7 @@
 // receipt API, and checks both the broker hash and the C mirror snapshot.
 // No Pine/reference/corpus/grader execution is involved.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <pineforge/pineforge.h>
 #include <cmath>
@@ -21,9 +22,9 @@ int failures = 0;
     std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #x); ++failures; \
 } } while (0)
 
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
     }
 

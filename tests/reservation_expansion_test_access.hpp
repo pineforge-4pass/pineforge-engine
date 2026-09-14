@@ -1,6 +1,7 @@
 #pragma once
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <algorithm>
 #include <stdexcept>
@@ -31,7 +32,7 @@ CHECKPOINT(Revive, revive_position_brackets_after_margin_call_partial);
 
 using namespace pineforge;
 constexpr double missing = std::numeric_limits<double>::quiet_NaN();
-class Book : public BacktestEngine {
+class Book : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_=100000; commission_value_=0; margin_long_=margin_short_=0;
@@ -39,7 +40,7 @@ public:
         current_bar_={100,100,100,100,1,0}; next_position_cycle_seq_=7;
         next_order_incarnation_=40;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     std::vector<uint64_t> retired;
     double trail=missing; int closed_bar=-1; uint64_t closed_id=0; bool was_long=false;
     PendingOrder& get(const std::string& id) {

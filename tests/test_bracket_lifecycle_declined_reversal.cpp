@@ -50,6 +50,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -94,7 +95,7 @@ enum class Op { EnterLong, EnterShort, ExitStop90, ExitStop95, ExitStop105,
                 CloseAll };
 struct Action { Op op; };
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe() {
         initial_capital_ = 10000.0;
@@ -106,7 +107,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
     std::vector<std::vector<Action>> plan;   // plan[bar_index] = actions
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ < 0 || bar_index_ >= (int)plan.size()) return;
         for (const auto& a : plan[bar_index_]) {
             switch (a.op) {
@@ -262,7 +263,7 @@ public:
         margin_call_enabled_ = true;
         margin_short_ = 20.0;                          // 5x short
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false);
             strategy_exit("X", "S", kNaN, stop_price_, kNaN, kNaN, kNaN,

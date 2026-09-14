@@ -1,6 +1,7 @@
 // Native literal lifecycle fixtures. No Pine, market files, reference trades,
 // or generated expected results. RAW quantity/fee policy is deliberately fixed.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -59,7 +60,7 @@ struct Retire {
 template struct PrivateMember<Retire, &BacktestEngine::compact_filled_pending_orders>;
 #endif
 
-class Book final : public BacktestEngine {
+class Book final : public pineforge::source::PineStrategyHost {
 public:
     using BacktestEngine::open_trade_entry_id;
     Book() {
@@ -74,7 +75,7 @@ public:
         current_bar_ = point(100, 0);
         bar_index_ = 0;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void seed(bool long_side, double qty = 2) {
         strategy_order("seed", long_side, qty);
         current_bar_ = point(100, 1);
@@ -409,7 +410,7 @@ void fee_control(bool coof, CommissionType fee, double expected) {
     REQUIRE(b.closed()[0].exit_id == "A");
 }
 
-class CallbackBook final : public BacktestEngine {
+class CallbackBook final : public pineforge::source::PineStrategyHost {
 public:
     int observed_close_callbacks = 0;
     uint64_t replaced = 0, fresh = 0;
@@ -424,7 +425,7 @@ public:
         margin_long_ = margin_short_ = 0;
         calc_on_order_fills_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (coof_fill_recalc_active_) {
             if (trades_.size() == 1 && observed_close_callbacks == 0) {
                 REQUIRE(position_side_ == PositionSide::FLAT);

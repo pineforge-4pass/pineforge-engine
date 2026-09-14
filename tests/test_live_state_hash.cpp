@@ -1,6 +1,7 @@
 #include "placement_observation_fixture.hpp"
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <cstdint>
 #include <functional>
@@ -15,9 +16,9 @@ int failures = 0;
 Bar flat_bar(double p, int64_t ts) { return Bar{p, p, p, p, 1.0, ts}; }
 const std::vector<Bar> kBars = {flat_bar(100, 0), flat_bar(101, 60'000), flat_bar(102, 120'000)};
 
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override { if (bar_index_ == 1) strategy_entry("L", true); }
+    void on_source_bar(const Bar&) override { if (bar_index_ == 1) strategy_entry("L", true); }
 
     // Mutation pin: {name, mutate}. `mutate` perturbs exactly one hashed
     // member of an already-built Probe.

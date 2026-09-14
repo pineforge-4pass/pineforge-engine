@@ -2,6 +2,7 @@
 // declared trading-session day boundary (17:00 New York, with DST). Constant
 // synthetic prices isolate the risk clock from strategy signals and PnL.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -13,7 +14,7 @@ int passed = 0, failed = 0;
 constexpr int64_t hour = 3600000;
 constexpr int64_t minute = 60000;
 
-class SessionOrders : public BacktestEngine {
+class SessionOrders : public pineforge::source::PineStrategyHost {
 public:
     bool market_close;
     explicit SessionOrders(const std::string& display_zone, bool close_command = false)
@@ -32,7 +33,7 @@ public:
         set_chart_timezone(display_zone);
         set_syminfo_metadata("intraday_cap_count_pooc_full_close_fills", 1.0);
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (market_close && signed_position_size() > 0) strategy_close("L");
         const bool request = bar_index_ == 0 || bar_index_ == 2 || bar_index_ == 4
             || (bar_index_ >= 6 && bar_index_ <= 10)
@@ -82,9 +83,9 @@ void test_session_boundary_uses_exchange_clock_and_dst() {
     }
 }
 
-class LegacyClock : public BacktestEngine {
+class LegacyClock : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void exhaust_at(int64_t time) {
         max_intraday_filled_orders_ = 6;
         current_bar_.timestamp = time;

@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -52,7 +53,7 @@ static bool near(double a, double b, double tol = 1e-6) {
 namespace {
 
 // Momentum-flip generator (wins + losses), exposing the protected accumulators.
-class ReconProbe : public BacktestEngine {
+class ReconProbe : public pineforge::source::PineStrategyHost {
 public:
     double prev_close_ = std::numeric_limits<double>::quiet_NaN();
 
@@ -64,7 +65,7 @@ public:
         commission_value_ = 0;      // exact recompute
         pyramiding_ = 1;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!std::isnan(prev_close_)) {
             if (bar.close > prev_close_)
                 strategy_entry("L", true, std::numeric_limits<double>::quiet_NaN(),

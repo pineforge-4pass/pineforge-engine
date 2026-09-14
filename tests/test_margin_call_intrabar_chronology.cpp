@@ -40,6 +40,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -72,7 +73,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c, double v) 
     return b;
 }
 
-class MCEngine : public BacktestEngine {
+class MCEngine : public pineforge::source::PineStrategyHost {
 public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     double exit_price(int i) const { return closed_trade_exit_price(i); }
@@ -116,7 +117,7 @@ public:
         if (disable_mc) set_margin_call_enabled(false);
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             // Market short queued at the signal bar; fills at bar1 open.
             strategy_entry("S", false, kNaN, kNaN, /*qty=*/2.5105);

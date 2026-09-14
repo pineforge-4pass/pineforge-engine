@@ -26,6 +26,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -53,7 +54,7 @@ constexpr int64_t k15m = 900'000LL;
 }  // namespace
 
 // Common config: slippage = 2 ticks, mintick = 0.01, no commission.
-class SlipEngine : public BacktestEngine {
+class SlipEngine : public pineforge::source::PineStrategyHost {
 public:
     SlipEngine() {
         initial_capital_ = 1'000'000;
@@ -78,7 +79,7 @@ public:
 // ─────────────────────────────────────────────────────────────────────
 class TpLimitExit : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (position_side_ == PositionSide::LONG)
@@ -116,7 +117,7 @@ static void test_tp_limit_exit_snaps_favorably_no_slip() {
 // ─────────────────────────────────────────────────────────────────────
 class SlStopExit : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (position_side_ == PositionSide::LONG)
@@ -152,7 +153,7 @@ static void test_sl_stop_exit_keeps_slippage() {
 // ─────────────────────────────────────────────────────────────────────
 class LimitEntry : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, /*limit=*/98.485, kNaN, 1.0, "limit long");
         if (bar_index_ == 2 && position_side_ == PositionSide::LONG)
@@ -190,7 +191,7 @@ static void test_limit_entry_snaps_favorably_no_slip() {
 // ─────────────────────────────────────────────────────────────────────
 class TpLimitGap : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (position_side_ == PositionSide::LONG)
@@ -227,7 +228,7 @@ static void test_tp_limit_gap_fills_at_open_no_slip() {
 // ─────────────────────────────────────────────────────────────────────
 class LimitEntryGap : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, /*limit=*/98.485, kNaN, 1.0, "limit long");
         if (bar_index_ == 2 && position_side_ == PositionSide::LONG)
@@ -259,7 +260,7 @@ static void test_limit_entry_gap_fills_at_open_no_slip() {
 // ─────────────────────────────────────────────────────────────────────
 class TrailExit : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (position_side_ == PositionSide::LONG)
@@ -303,7 +304,7 @@ static void test_trail_exit_keeps_slippage() {
 // ─────────────────────────────────────────────────────────────────────
 class LimitThenStopSameBar : public SlipEngine {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (position_side_ == PositionSide::LONG) {

@@ -8,6 +8,7 @@
 #include <limits>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 static int passed=0,failed=0;
@@ -18,7 +19,7 @@ namespace {
 constexpr double N=std::numeric_limits<double>::quiet_NaN();
 enum class Mode { Default, Short, Explicit, Cash, Fixed, Half, Pooc, Coof,
                   Fee, Slip, Fx, Competing, Replacement, Fractional };
-class BudgetProbe : public BacktestEngine {
+class BudgetProbe : public pineforge::source::PineStrategyHost {
 public:
     BudgetProbe(double equity,Mode mode=Mode::Default,int pyramiding=0):mode_(mode) {
         initial_capital_=equity;
@@ -40,7 +41,7 @@ public:
         calc_on_order_fills_=mode==Mode::Coof;
         account_currency_fx_=mode==Mode::Fx?2:1;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if(bar_index_==0) {
             if(mode_==Mode::Competing) strategy_order("Idle",true,1,N,1000);
             if(mode_==Mode::Replacement) strategy_entry("E",true);

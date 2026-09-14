@@ -42,6 +42,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -108,7 +109,7 @@ std::vector<Bar> vec(const Bar (&arr)[N]) {
 // percent_of_equity 100, process_orders_on_close, no commission / slippage,
 // TradingView's default 100% margin; NQ: 20 USD per point, tick 0.25, whole
 // contracts (qty_step 1, what the harness injects for the lane).
-class CloseProbe : public BacktestEngine {
+class CloseProbe : public pineforge::source::PineStrategyHost {
 public:
     CloseProbe() {
         initial_capital_ = 1500000.0;
@@ -131,7 +132,7 @@ public:
         set_syminfo_type("futures");
     }
     std::function<void(CloseProbe&, int)> script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (script) script(*this, bar_index_);
     }
     bool is_long() const { return position_side_ == PositionSide::LONG; }
@@ -294,13 +295,13 @@ struct DayRow {
 // What the generated strategy body reads per chart bar: the symbol-clock
 // pine_time / pine_time_close forms (script_tf, syminfo tz + session),
 // tf_change(prev_bar_timestamp_, ...) and ta::VWAP's session anchor.
-class DayProbe : public BacktestEngine {
+class DayProbe : public pineforge::source::PineStrategyHost {
 public:
     std::map<int64_t, DayRow> rows;
     ta::VWAP vwap;
     int64_t prev_time_d = 0;
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         DayRow r;
         const int64_t ts = current_bar_.timestamp;
         r.time_d = pine_time(ts, "D", "", "", script_tf_, syminfo_.timezone, syminfo_.session);

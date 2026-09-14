@@ -3,6 +3,7 @@
 // capital uses8595.80. The raw quotient can multiply by100 to an integer
 // while division bybinary64(0.01) lands one ULP below it. No epsilon is added.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -32,7 +33,7 @@ void test_recorded_quantities(){
         CHECK(tv_money_floor_lot(x,step)==expected);
     }
 }
-class Reversal : public BacktestEngine {
+class Reversal : public pineforge::source::PineStrategyHost {
 public:
     int side_after=-1;double frozen=qnan;
     explicit Reversal(double extra){
@@ -40,7 +41,7 @@ public:
         default_qty_type_=QtyType::PERCENT_OF_EQUITY;default_qty_value_=100;
         qty_step_=0.01;syminfo_mintick_=0.00001;commission_value_=0;slippage_=0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if(bar_index_==0)strategy_entry("L",true,qnan,qnan,8595.66);
         if(bar_index_==1){
             strategy_entry("S",false);

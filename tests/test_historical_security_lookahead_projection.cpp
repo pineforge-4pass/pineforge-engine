@@ -2,6 +2,7 @@
 // request.security(..., gaps_off, lookahead_on) sites.
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/na.hpp>
 
 #include <cmath>
@@ -32,7 +33,7 @@ struct Dispatch {
     bool complete;
 };
 
-class ProjectionHarness final : public BacktestEngine {
+class ProjectionHarness final : public pineforge::source::PineStrategyHost {
 public:
     explicit ProjectionHarness(bool lookahead_on = true, bool gaps_on = false,
                                const char* requested_tf = "60",
@@ -48,7 +49,7 @@ public:
         visible_close = bar.close;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         chart_values.push_back(visible_close);
     }
 

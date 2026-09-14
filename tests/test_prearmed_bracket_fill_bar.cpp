@@ -37,6 +37,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -72,7 +73,7 @@ enum class DualCell {
     ShortStopOnlyGap,   // control: single-leg gap keeps its existing path
 };
 
-class DualMarketableBracket final : public BacktestEngine {
+class DualMarketableBracket final : public pineforge::source::PineStrategyHost {
 public:
     DualMarketableBracket(DualCell cell, bool reversal)
         : cell_(cell), reversal_(reversal) {
@@ -88,7 +89,7 @@ public:
     double live_qty() const { return position_qty_; }
     bool is_flat() const { return position_side_ == PositionSide::FLAT; }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const int arm_bar = reversal_ ? 1 : 0;
         if (reversal_ && bar_index_ == 0) {
             strategy_entry("OLD", !opens_long(), kNaN, kNaN, 1.0, "seed");
@@ -182,7 +183,7 @@ static void check_explicit_qty_bracket_no_gap_control() {
 
 // ── (1b) trail-carrying leg ────────────────────────────────────────────
 
-class TrailBracket final : public BacktestEngine {
+class TrailBracket final : public pineforge::source::PineStrategyHost {
 public:
     TrailBracket(bool opens_long, bool reversal, bool percent_sizing)
         : opens_long_(opens_long), reversal_(reversal) {
@@ -202,7 +203,7 @@ public:
     double live_qty() const { return position_qty_; }
     bool is_flat() const { return position_side_ == PositionSide::FLAT; }
 
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         const int arm_bar = reversal_ ? 1 : 0;
         if (reversal_ && bar_index_ == 0) {
             strategy_entry("OLD", !opens_long_, kNaN, kNaN, kNaN, "seed");
@@ -287,7 +288,7 @@ static void check_trail_stop_intrabar_control() {
 
 // ── (2) relative-ticks bracket, parent fills intrabar ─────────────────
 
-class IntrabarLimitParentTicks final : public BacktestEngine {
+class IntrabarLimitParentTicks final : public pineforge::source::PineStrategyHost {
 public:
     explicit IntrabarLimitParentTicks(double loss_ticks, double profit_ticks,
                                       bool reissue_every_bar)
@@ -305,7 +306,7 @@ public:
     double live_qty() const { return position_qty_; }
     bool is_flat() const { return position_side_ == PositionSide::FLAT; }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("long", true, /*limit=*/1.17323, kNaN, 1.0,
                            "resting limit");

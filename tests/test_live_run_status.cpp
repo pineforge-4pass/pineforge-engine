@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pineforge.h>
 #include <cstdio>
 using namespace pineforge;
@@ -7,9 +8,9 @@ namespace {
 int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++failures; } } while (0)
 Bar flat_bar(double p, int64_t ts) { return Bar{p, p, p, p, 1.0, ts}; }
-class NoopStrategy final : public BacktestEngine {
+class NoopStrategy final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 }
 int main() {

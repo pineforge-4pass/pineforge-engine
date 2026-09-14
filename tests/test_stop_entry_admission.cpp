@@ -54,6 +54,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -193,7 +194,7 @@ std::vector<Bar> xau_bars() {
     return b;
 }
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double margin, double mintick, double lot) {
         initial_capital_ = capital;
@@ -214,7 +215,7 @@ public:
     }
     // The Pine body, called with bar_index_ on every bar.
     std::function<void(Probe&, int)> script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (script) script(*this, bar_index_);
     }
 

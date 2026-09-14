@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <limits>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 namespace {
@@ -21,7 +22,7 @@ const Bar bars[] = {
     {PRICE, PRICE, PRICE, PRICE, 1, 5000},
 };
 
-class Opening : public BacktestEngine {
+class Opening : public pineforge::source::PineStrategyHost {
 public:
     Opening(double budget, bool new_long, bool seed, bool same_side = false,
             bool competing = false, double percent = 100)
@@ -35,7 +36,7 @@ public:
         qty_step_ = syminfo_.pointvalue = 1;
         set_syminfo_mintick(.01);
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && seed_)
             strategy_entry("Seed", same_side_ ? new_long_ : !new_long_, NA, NA, 1);
         if (bar_index_ == 1) {

@@ -3,6 +3,7 @@
 // its completed margin event to the script; an unhit pending entry survives.
 // Compact command fixtures use synthetic timestamps, not historical replay.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -24,7 +25,7 @@ const std::vector<Bar> bars = {
     {114514.05, 114865.32, 114449.91, 114697.22, 1, 6000},
 };
 
-class StopBook : public BacktestEngine {
+class StopBook : public pineforge::source::PineStrategyHost {
 public:
     bool opposite, half_close, smaller, carried_half;
     double first_view = qnan;
@@ -43,7 +44,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) {
             first_view = signed_position_size();
             first_closed = trades_.size();
@@ -131,7 +132,7 @@ void test_partial_and_no_opening_event() {
     }
 }
 
-class PathAndLifetime : public BacktestEngine {
+class PathAndLifetime : public pineforge::source::PineStrategyHost {
 public:
     bool preserve;
     double first_view = qnan;
@@ -144,7 +145,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             if (preserve) strategy_entry("Long", true, qnan, 117030.0, 0.01);
             strategy_entry("Short", false, qnan, preserve ? 114560.0 : 114500.0, 0.07912);
@@ -187,7 +188,7 @@ void test_prior_high_and_pending_entry_lifetime() {
 
 enum class Origin { STOP, MARKET, LIMIT, STOP_LIMIT, RAW_STOP, OCA_STOP,
                     REPLACED_STOP, REUSED_ID, ZERO_STOP, DECLINED_ADD };
-class OriginBook : public BacktestEngine {
+class OriginBook : public pineforge::source::PineStrategyHost {
 public:
     Origin mode;
     bool stop_origin = false, market_origin = false, final_stop = false;
@@ -198,7 +199,7 @@ public:
         syminfo_mintick_ = 0.01;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             if (mode == Origin::RAW_STOP) {
                 strategy_order("S", false, 0.5, qnan, 101.0);
@@ -263,7 +264,7 @@ void test_origin_is_an_accepted_physical_stop_fill() {
 
 // Exercise the checkpoint independently of the earlier order loop. A touched
 // but deferred entry is still pending, so pending alone cannot prove unhit.
-class PendingGuard : public BacktestEngine {
+class PendingGuard : public pineforge::source::PineStrategyHost {
 public:
     explicit PendingGuard(int scenario) {
         initial_capital_ = 50;
@@ -321,7 +322,7 @@ public:
         }
         pending_orders_.push_back(pending);
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void checkpoint() { process_short_margin_before_script(current_bar_); }
     std::size_t closed() const { return trades_.size(); }
     std::size_t pending() const { return pending_orders_.size(); }

@@ -1,6 +1,7 @@
 // Literal controls for the rounding trim before a carried POOC long's trail.
 // Synthetic timestamps; no historical feed, Pine source or grader is loaded.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -19,7 +20,7 @@ const std::vector<Bar> bars = {
     {1.15240, 1.15272, 1.15210, 1.15263, 1659, 4000},
 };
 
-class LongTrail : public BacktestEngine {
+class LongTrail : public pineforge::source::PineStrategyHost {
 public:
     bool explicit_qty = false;
     bool foreign = true;
@@ -42,7 +43,7 @@ public:
         pyramiding_ = pyramid;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, qnan, qnan, explicit_qty ? entry_qty : qnan);
             if (parked) strategy_entry("Parked", true, 0.50, qnan, 1.0);

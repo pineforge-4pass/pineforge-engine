@@ -11,6 +11,7 @@
 #include <vector>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 static int passed = 0, failed = 0;
@@ -52,7 +53,7 @@ Panel panel(int n) {
         {12.50,12.515,12.47,12.48,1,4000}}};
 }
 
-class CloseTickProbe : public BacktestEngine {
+class CloseTickProbe : public pineforge::source::PineStrategyHost {
 public:
     CloseTickProbe(Panel data, Guard guard = Guard::None, bool unbound = false)
         : p_(std::move(data)), guard_(guard), unbound_(unbound) {
@@ -69,7 +70,7 @@ public:
         slippage_ = guard == Guard::Slip ? 1 : 0;
         account_currency_fx_ = guard == Guard::Fx ? 2 : 1;
     }
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         const int seed_bar = guard_ == Guard::EntryBar ? 2 : 0;
         if (bar_index_ == seed_bar && position_side_ == PositionSide::FLAT
             && trades_.empty())

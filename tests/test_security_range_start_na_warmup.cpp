@@ -21,6 +21,7 @@
 // assertions below would fail.
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/na.hpp>
 
@@ -51,7 +52,7 @@ static bool exact_eq(double a, double b) {
 // One HTF request.security ("60" from "15"), lookahead_off, with an embedded
 // ta.ema(close, 3). Records every completed HTF bar's plain close and embedded
 // EMA value, in order.
-class RangeStartWarmupHarness : public BacktestEngine {
+class RangeStartWarmupHarness : public pineforge::source::PineStrategyHost {
 public:
     ta::EMA sec_ema_{3};
     std::vector<double> htf_close_seq;
@@ -70,7 +71,7 @@ public:
         htf_ema_seq.push_back(sec_ema_.compute(bar.close));
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 // 8 hours of 15m bars (4 bars/hour). Hour k's four bars all carry close

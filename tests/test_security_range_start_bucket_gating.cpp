@@ -42,6 +42,7 @@
 // pre-range bucket's open instead.
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
@@ -165,7 +166,7 @@ static void test_bucket_open_forex_session() {
 
 // Three lookahead_off evaluators on one input feed; records the OPEN
 // timestamp (= aggregated bar timestamp) of every completed HTF bar per id.
-class BucketGateHarness : public BacktestEngine {
+class BucketGateHarness : public pineforge::source::PineStrategyHost {
 public:
     std::vector<int64_t> completed[3];
     std::vector<double> completed_close[3];
@@ -182,7 +183,7 @@ public:
         completed[sec_id].push_back(bar.timestamp);
         completed_close[sec_id].push_back(bar.close);
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 // 15m OANDA:EURUSD-shaped feed: Sun 17:00 EDT .. Fri 17:00 EDT, every week
@@ -361,7 +362,7 @@ static void test_intraday_mid_bucket_range_start_drops_whole_bucket() {
 // Three lookahead_off evaluators registered at run time (the split feed
 // re-inits them on the auxiliary input tf); records every completed HTF bar's
 // label per id.
-class SplitGateHarness : public BacktestEngine {
+class SplitGateHarness : public pineforge::source::PineStrategyHost {
 public:
     std::vector<int64_t> completed[3];
     std::string tfs[3];
@@ -376,7 +377,7 @@ public:
         if (!is_complete || sec_id < 0 || sec_id > 2) return;
         completed[sec_id].push_back(bar.timestamp);
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 // Session-shaped bars every `step_ms` from `begin` to `end`: `open_at` says
@@ -678,7 +679,7 @@ static void test_single_feed_cfd_actual_open_is_not_partial() {
 // Equivalent to request.security("D", ta.atr(14)[1]) plus D close. The
 // synthetic bars have true range 8; a deliberately extreme initial partial
 // day must never enter either the ATR seed or the projected daily roster.
-class OtcDailyAtrHarness : public BacktestEngine {
+class OtcDailyAtrHarness : public pineforge::source::PineStrategyHost {
 public:
     ta::ATR atr{14};
     std::vector<double> atr_history;
@@ -700,7 +701,7 @@ public:
             ? atr_history[atr_history.size()-2] : na<double>();
         visible_close=bar.close;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (first_projected_child==0
             && !security_eval_states_[0].historical_projections.empty()) {
             first_projected_child=

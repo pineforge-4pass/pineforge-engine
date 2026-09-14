@@ -7,6 +7,7 @@
 #include <vector>
 #include <pineforge/timeframe.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -226,9 +227,9 @@ static void test_calendar_weekly_aggregation() {
 
 // ─── script_tf finer than input_tf must throw ─────────────────────────────────
 
-class NoopStrategy : public BacktestEngine {
+class NoopStrategy : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 static void test_run_rejects_script_tf_finer_than_input_tf() {

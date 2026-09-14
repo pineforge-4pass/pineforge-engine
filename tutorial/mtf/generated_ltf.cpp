@@ -20,6 +20,7 @@
 // validation) and src/engine_lower_tf.cpp (sub-bar synthesis from the
 // input bar's OHLC path).
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/math.hpp>
 #include <pineforge/series.hpp>
@@ -41,7 +42,7 @@
 
 using namespace pineforge;
 
-class GeneratedStrategy : public BacktestEngine {
+class GeneratedStrategy : public pineforge::source::PineStrategyHost {
 public:
     // The accumulated vector of per-sub-bar closes for the current
     // chart bar. Cleared at sub-bar index 0, pushed at every dispatch,
@@ -105,7 +106,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         double rangePct = get_input_double("Range threshold (% of bar close)", 0.5);
 
         double subHi = na<double>();

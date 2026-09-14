@@ -72,6 +72,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -109,7 +110,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c) {
 
 namespace {
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(QtyType qty_type, double qty_value, int pyramiding, double step) {
         initial_capital_ = 10000.0;
@@ -125,7 +126,7 @@ public:
     // 'L' = default long "L", 'A' = default long add "L2",
     // 'S' = default short "S", '.' = nothing.
     std::string script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': strategy_entry("L", true); break;

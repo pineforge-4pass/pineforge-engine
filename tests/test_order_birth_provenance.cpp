@@ -1,5 +1,6 @@
 // Literal native event/cursor tests. No Pine source, corpus, or external tape.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstdio>
 #include <functional>
@@ -23,7 +24,7 @@ int failed = 0;
 const double nan = std::numeric_limits<double>::quiet_NaN();
 const Bar bars[] = {{100, 101, 99, 100, 1, 0}, {100, 110, 95, 108, 1, 60000}};
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe() {
         initial_capital_ = 100000;
@@ -65,7 +66,7 @@ public:
     OrderBirth replaced_birth, replacement_birth;
     uint64_t replaced_incarnation = 0, replacement_incarnation = 0;
     int64_t replaced_priority = 0, replacement_priority = 0;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("seed", true, nan, nan, 1);
             direct("replace");
@@ -97,7 +98,7 @@ class LaterOpenPolicy : public Probe {
 public:
     int bar_one_calls = 0;
     OrderBirth trailing_birth, priced_birth;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("A", true, nan, nan, 1);
             strategy_entry("B", true, nan, nan, 1);
@@ -115,7 +116,7 @@ class SegmentOrigin : public Probe {
 public:
     int bar_one_calls = 0;
     OrderBirth receipt;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) { strategy_entry("stop", true, nan, 105, 1); return; }
         if (bar_index_ == 1 && bar_one_calls++ == 0) {
             direct("segment-witness");
@@ -128,7 +129,7 @@ class ProducerOrigins : public Probe {
 public:
     bool captured = false;
     std::vector<OrderBirth> births;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) { strategy_entry("seed", true, nan, nan, 1); return; }
         if (bar_index_ != 1 || captured) return;
         captured = true;
@@ -141,7 +142,7 @@ public:
 
 class ThrowsInFill : public Probe {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("seed", true, nan, nan, 1);
         else throw std::runtime_error("literal callback failure");
     }

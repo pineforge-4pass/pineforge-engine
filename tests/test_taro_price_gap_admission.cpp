@@ -16,6 +16,7 @@
 #include <vector>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 static int passed = 0, failed = 0;
@@ -46,7 +47,7 @@ struct Config {
     bool magnifier = false;
     bool close_first = false;
 };
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     explicit Probe(Config config) : cfg_(config) {
         initial_capital_ = config.capital;
@@ -69,7 +70,7 @@ public:
             CHECK(set_account_currency_fx_series(times, rates, 1));
         }
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (!cfg_.flat && bar_index_ == 0)
             strategy_entry("Seed", cfg_.seed_long, kNaN, kNaN,
                            cfg_.seed_qty, "SEED");

@@ -15,6 +15,7 @@
 #include <vector>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 using namespace pineforge;
 static int passed=0,failed=0;
 #define CHECK(x) do { if(x)++passed;else { \
@@ -24,7 +25,7 @@ constexpr double NaN=std::numeric_limits<double>::quiet_NaN();
 bool near(double a,double b,double tol=1e-6){return std::abs(a-b)<tol;}
 enum class Shape {Exact,NoMc,Headroom,Earlier,Partial,Explicit,Half,Cancel};
 struct Config {Shape shape=Shape::Exact;bool provider=false;};
-class Probe:public BacktestEngine{
+class Probe:public pineforge::source::PineStrategyHost{
 public:
  explicit Probe(Config c):cfg(c){
   initial_capital_=(c.shape==Shape::NoMc||c.shape==Shape::Partial)
@@ -39,7 +40,7 @@ public:
   if(c.provider){const int64_t ts[]={1000};const double fx[]={1};
     CHECK(set_account_currency_fx_series(ts,fx,1));}
  }
- void on_bar(const Bar&)override{
+ void on_source_bar(const Bar&)override{
   if(bar_index_==0)strategy_entry("L",true,NaN,NaN,
       (cfg.shape==Shape::NoMc||cfg.shape==Shape::Partial)?888240.18:888241.18);
   const int reverse=cfg.shape==Shape::Earlier?3:1;

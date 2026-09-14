@@ -45,6 +45,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -69,7 +70,7 @@ bool near(double a, double b, double eps = 1e-9) {
     return std::fabs(a - b) <= eps;
 }
 
-class CoofBase : public BacktestEngine {
+class CoofBase : public pineforge::source::PineStrategyHost {
 public:
     explicit CoofBase(bool enabled = true) {
         calc_on_order_fills_ = enabled;
@@ -94,7 +95,7 @@ public:
         : entry_stop_(entry_stop), exit_limit_(exit_limit),
           exit_stop_(exit_stop) {}
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("E", true, /*limit=*/kNaN, /*stop=*/entry_stop_);
@@ -234,7 +235,7 @@ void test_m1_marketable_at_placement_is_suppressed_and_rolls() {
 //         exit-cascade gate only touches coof_born_mid_bar exits. ────────────
 class BarOpenExitProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("E", true);   // market -> fills at bar 1 open (bar-open recalc)
@@ -276,7 +277,7 @@ public:
     explicit SecondSameOpenRefillProbe(bool combined_bracket = false)
         : combined_bracket_(combined_bracket) {}
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("S", false);  // carried market entry -> bar 1 O
@@ -365,7 +366,7 @@ void test_r6_second_same_open_short_combined_bracket() {
 //         bracket has a marketable long limit and an unmarketable long stop. ─
 class SecondSameOpenLongRefillProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("L", true);
@@ -420,7 +421,7 @@ void test_r7_second_same_open_limit_exception_is_side_symmetric() {
 //         O fill keeps the established whole-entry-bar suppression and rolls. ─
 class SecondSameOpenMarketableStopProbe final : public CoofBase {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("S", false);
@@ -478,7 +479,7 @@ class SecondSameOpenTrailingExitProbe final : public CoofBase {
 public:
     SecondSameOpenTrailingExitProbe() { syminfo_mintick_ = 1.0; }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             strategy_entry("S", false);

@@ -18,6 +18,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "../src/engine_internal.hpp"
 
@@ -44,7 +45,7 @@ static constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 enum class Cell { LongPre, LongPost, ShortPre, ShortPost };
 
-class RestingBracketProbe final : public BacktestEngine {
+class RestingBracketProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit RestingBracketProbe(Cell cell) : cell_(cell) {
         initial_capital_ = 1'000'000.0;
@@ -57,7 +58,7 @@ public:
         calc_on_order_fills_ = false;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
         const bool is_long = cell_ == Cell::LongPre || cell_ == Cell::LongPost;
         const double entry = is_long ? 110.0 : 90.0;
@@ -91,7 +92,7 @@ enum class BookVariant {
     MultipleChildren,
 };
 
-class FreshParentProbe final : public BacktestEngine {
+class FreshParentProbe final : public pineforge::source::PineStrategyHost {
 public:
     FreshParentProbe(Cell cell, int parent_first_factor,
                      BookVariant variant = BookVariant::ExactPair,
@@ -114,7 +115,7 @@ public:
         }
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const bool is_long =
             cell_ == Cell::LongPre || cell_ == Cell::LongPost;
         const double child_stop = is_long ? 90.0 : 110.0;
@@ -286,7 +287,7 @@ private:
     BookVariant variant_;
 };
 
-class CancelTokenScopeProbe final : public BacktestEngine {
+class CancelTokenScopeProbe final : public pineforge::source::PineStrategyHost {
 public:
     CancelTokenScopeProbe() {
         process_orders_on_close_ = true;
@@ -294,7 +295,7 @@ public:
         default_qty_value_ = 1.0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("E", true, kNaN, 130.0, kNaN,
                            "cancelled parent");

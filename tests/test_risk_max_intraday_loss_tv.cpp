@@ -53,6 +53,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_m45_singletons_data.hpp"
 
@@ -120,7 +121,7 @@ int feb_day(int64_t ts) {
 
 // The sensor tapes' broker: 100000 USDT, 0.01% commission, 1x margin, no
 // slippage, market fills at the next tick, pyramiding 10, fixed quantities.
-class RiskProbe : public BacktestEngine {
+class RiskProbe : public pineforge::source::PineStrategyHost {
 public:
     RiskProbe(double loss_pct, bool coof) {
         initial_capital_ = 100000.0;
@@ -143,7 +144,7 @@ public:
         set_margin_call_enabled(true);
     }
     std::function<void(RiskProbe&, const Bar&)> script;
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (script) script(*this, bar);
     }
     void entry_market(const std::string& id, bool is_long, double qty) {

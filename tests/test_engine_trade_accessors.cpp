@@ -19,6 +19,7 @@
 #include <limits>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -47,7 +48,7 @@ namespace {
 
 // Pyramid two long entries, capture every accessor at each bar so we can
 // inspect the FLAT pre-entry, partially-open, and fully-open snapshots.
-class PyramidProbe : public BacktestEngine {
+class PyramidProbe : public pineforge::source::PineStrategyHost {
 public:
     static constexpr int N_BARS = 6;
 
@@ -84,7 +85,7 @@ public:
         pyramiding_ = 5;          // allow multi-entry pyramid
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         // Bar 1: enter "L1" with comment "first"
         if (bar_index_ == 1) {
             strategy_entry("L1", true,
@@ -223,7 +224,7 @@ static void test_open_trade_accessors_flat_then_pyramid() {
 // Short-side variant: confirms the !is_long branch in
 // open_trade_profit / open_trade_profit_percent.
 namespace {
-class ShortProbe : public BacktestEngine {
+class ShortProbe : public pineforge::source::PineStrategyHost {
 public:
     double profit_at_close = 0;
     double pct_at_close = 0;
@@ -233,7 +234,7 @@ public:
         default_qty_value_ = 2.0;
         commission_value_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (bar_index_ == 1) {
             strategy_entry("S1", false);
@@ -279,7 +280,7 @@ static void test_open_trade_short_path() {
 // them via thin public wrappers on the probe to call from outside the
 // class hierarchy.
 namespace {
-class ZeroPriceProbe : public BacktestEngine {
+class ZeroPriceProbe : public pineforge::source::PineStrategyHost {
 public:
     void inject_zero_priced_pyramid_entry() {
         position_side_ = PositionSide::LONG;
@@ -307,7 +308,7 @@ public:
     void set_script_tf(const std::string& tf) { script_tf_ = tf; }
     void set_syminfo_session(const std::string& sess) { syminfo_.session = sess; }
     void set_syminfo_timezone(const std::string& tz) { syminfo_.timezone = tz; }
-    void on_bar(const Bar& bar) override { (void)bar; }
+    void on_source_bar(const Bar& bar) override { (void)bar; }
 };
 }  // namespace
 

@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -13,12 +14,12 @@ Bar bar(double o, double h, double l, double c, int64_t ts) { return Bar{o, h, l
 // Re-issues a stop exit every bar (the dominant Pine idiom) at 1% below the
 // current close, entering long on bar 1. Snapshots the pending book as seen
 // at on_bar entry (= the book in force during that bar).
-class ReissueStop final : public BacktestEngine {
+class ReissueStop final : public pineforge::source::PineStrategyHost {
 public:
     using BacktestEngine::position_side_;  // expose the protected member for CHECKs below
     std::vector<std::vector<double>> book_at_on_bar_entry;  // stop prices per bar
     int on_bar_calls = 0;
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         ++on_bar_calls;
         std::vector<double> stops;
         for (const auto& o : pending_orders_) stops.push_back(o.legs.prices().stop_price);

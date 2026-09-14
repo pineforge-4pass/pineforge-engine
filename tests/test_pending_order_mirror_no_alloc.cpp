@@ -2,6 +2,7 @@
 // There is no strategy run, feed, reference output, or grading in this test.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -28,7 +29,7 @@ void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
 namespace {
-class LiteralBook : public pineforge::BacktestEngine {
+class LiteralBook : public pineforge::source::PineStrategyHost {
 public:
     LiteralBook() {
         initial_capital_ = 1000;
@@ -44,7 +45,7 @@ public:
         strategy_entry(id, true, missing, missing, missing, comment, oca, 0);
         strategy_entry("priced", false, missing, 150, 1);
     }
-    void on_bar(const pineforge::Bar&) override {}
+    void on_source_bar(const pineforge::Bar&) override {}
 };
 
 int failures = 0;

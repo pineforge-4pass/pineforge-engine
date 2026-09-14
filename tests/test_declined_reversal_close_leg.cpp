@@ -49,6 +49,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -93,7 +94,7 @@ namespace {
 enum class Op { EnterLong, EnterShort, EnterLongAdd, CloseId, CloseL, CloseAll };
 struct Action { Op op; };
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(int pyramiding = 1) {
         initial_capital_ = 10000.0;
@@ -105,7 +106,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
     std::vector<std::vector<Action>> plan;   // plan[bar_index] = actions
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ < 0 || bar_index_ >= (int)plan.size()) return;
         for (const auto& a : plan[bar_index_]) {
             switch (a.op) {
@@ -306,7 +307,7 @@ static void test_G_two_reversals_idempotent() {
     class TwoShortProbe : public Probe {
     public:
         TwoShortProbe() : Probe(2) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1) {
                 strategy_entry("S", false);          // reversal #1 (created 1st)
@@ -332,7 +333,7 @@ static void test_G_partial_close_not_suppressed() {
     std::printf("-- G: partial close excluded (not suppressed) --\n");
     class PartialProbe : public Probe {
     public:
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1) {
                 strategy_entry("S", false);
@@ -356,7 +357,7 @@ static void test_G_multiple_pending_orders() {
     std::printf("-- G: only the matching close is suppressed --\n");
     class MultiProbe : public Probe {
     public:
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1) {
                 // A resting deep-limit LONG that never fills on these bars.
@@ -383,7 +384,7 @@ static void test_G_exit_bracket_not_suppressed() {
     std::printf("-- G: strategy.exit bracket not suppressed (call-time cancel caveat) --\n");
     class BracketProbe : public Probe {
     public:
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1) {
                 strategy_exit("X", "L", 1000.0, 1.0, kNaN, kNaN, kNaN, 100.0, "");

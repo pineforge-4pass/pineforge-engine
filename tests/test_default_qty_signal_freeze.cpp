@@ -39,6 +39,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -81,7 +82,7 @@ namespace {
 // Scripted probe: runs a fixed action per bar_index. All prices in the tests
 // are on-tick (mintick 0.01) so the zero-slippage directional snap is an
 // identity and fills land exactly at the bar prices.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(QtyType qty_type, double qty_value, bool poc) {
         initial_capital_ = 10000.0;
@@ -97,7 +98,7 @@ public:
     // action per bar: 'L' = default-sized long entry, 'S' = default-sized
     // short entry, 'C' = close all, '.' = nothing.
     std::string script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': strategy_entry("L", true); break;
@@ -264,7 +265,7 @@ void test_cash_freeze() {
 //   bar2  100  A fills first: opposite raw fill closes the LONG (5 lots,
 //              filled_qty=5) -> reduce_oca_group must CANCEL default-sized B
 //   end        position FLAT, exactly 1 trade (the closed long)
-class OcaProbe : public BacktestEngine {
+class OcaProbe : public pineforge::source::PineStrategyHost {
 public:
     OcaProbe() {
         initial_capital_ = 10000.0;
@@ -273,7 +274,7 @@ public:
         commission_value_ = 0.0;
         margin_call_enabled_ = false;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 5.0);
         } else if (bar_index_ == 1) {
@@ -316,7 +317,7 @@ void test_oca_default_sibling_cancelled() {
 //   bar2  100            S fills @100: flip -> close LONG 1, open SHORT 100
 //   bar3  100/106/100    SX buy-stop fires @105 -> must close the FULL 100
 //   end                  position FLAT; short trade qty 100, pnl -500
-class ReversalBindProbe : public BacktestEngine {
+class ReversalBindProbe : public pineforge::source::PineStrategyHost {
 public:
     ReversalBindProbe() {
         initial_capital_ = 10000.0;
@@ -325,7 +326,7 @@ public:
         commission_value_ = 0.0;
         margin_call_enabled_ = false;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 1.0);
         } else if (bar_index_ == 1) {
@@ -381,7 +382,7 @@ void test_reversal_bracket_binding_survives_freeze() {
 // therefore 6.2789 here; the dispatch invariant this test pins — the frozen
 // value reaches the position, lot and ledger UNCHANGED — is unaffected. The
 // explicit-qty controls (I/K) are not default-sized and keep 6.2790.
-class FrozenDispatchBoundaryProbe : public BacktestEngine {
+class FrozenDispatchBoundaryProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit FrozenDispatchBoundaryProbe(bool explicit_qty)
         : explicit_qty_(explicit_qty) {
@@ -393,7 +394,7 @@ public:
         margin_call_enabled_ = false;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ != 0) return;
         if (explicit_qty_) {
             // Adjacent control: an explicit raw quantity is not frozen and
@@ -468,7 +469,7 @@ void test_explicit_true_flat_market_keeps_single_floor() {
 // short->long flip must consume that frozen contracts value directly.  The
 // adjacent explicit-qty reversal remains un-frozen and therefore still gets
 // exactly one ordinary fill-side floor.
-class FrozenReversalBoundaryProbe : public BacktestEngine {
+class FrozenReversalBoundaryProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit FrozenReversalBoundaryProbe(bool explicit_reversal)
         : explicit_reversal_(explicit_reversal) {
@@ -480,7 +481,7 @@ public:
         margin_call_enabled_ = false;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("SEED", false, kNaN, kNaN, 1.0);
         } else if (bar_index_ == 1) {

@@ -2,6 +2,7 @@
 // minimum lot is worth more than one account unit. Synthetic timestamps keep
 // these compact command fixtures independent of a historical backtest.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -14,7 +15,7 @@ int passed = 0, failed = 0;
 #define CHECK(x) do { if (x) ++passed; else { ++failed; std::printf("FAIL %d %s\n", __LINE__, #x); } } while (0)
 bool near(double a, double b) { return std::abs(a - b) < 1e-8; }
 
-class Reversal : public BacktestEngine {
+class Reversal : public pineforge::source::PineStrategyHost {
 public:
     bool separate_close, explicit_quantity;
     bool resting_bracket = false;
@@ -31,7 +32,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false, qnan, qnan, 9.10793);
             if (resting_bracket) strategy_exit("Resting", "Short", 100.0, 200000.0);
@@ -94,7 +95,7 @@ void test_reversal_signal_cost_boundary() {
 }
 
 enum class Context { ORDINARY, FEE, FX, MULTIPLIER, INTEGER_LOTS, CLOSE_FILL, RESTING_ENTRY };
-class Flat : public BacktestEngine {
+class Flat : public pineforge::source::PineStrategyHost {
 public:
     double observed = qnan;
     Context context;
@@ -115,7 +116,7 @@ public:
         if (mode == Context::INTEGER_LOTS) qty_step_ = 1.0;
         if (mode == Context::CLOSE_FILL) process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
             if (context == Context::RESTING_ENTRY) strategy_entry("Parked", true, 300.0, qnan, 0.01);

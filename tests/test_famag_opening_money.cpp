@@ -23,6 +23,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -41,7 +42,7 @@ bool near(double a, double b, double tolerance = 1e-6) {
     return std::abs(a - b) < tolerance;
 }
 
-class OpeningMoneyProbe : public BacktestEngine {
+class OpeningMoneyProbe : public pineforge::source::PineStrategyHost {
 public:
     OpeningMoneyProbe(double capital, bool seed_long, double seed_qty,
                       int seed_bar, int reverse_bar, int flatten_bar,
@@ -64,7 +65,7 @@ public:
         set_margin_call_enabled(true);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == seed_bar_)
             strategy_entry("Seed", seed_long_, kNaN, kNaN, seed_qty_, "SEED");
         if (bar_index_ == reverse_bar_) {

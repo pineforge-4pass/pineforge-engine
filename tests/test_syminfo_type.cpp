@@ -11,14 +11,15 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pineforge.h>
 
 using namespace pineforge;
 
 namespace {
 
-struct TypeHarness : public BacktestEngine {
-    void on_bar(const Bar& /*bar*/) override {}
+struct TypeHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar& /*bar*/) override {}
     const SymInfo& sym() const { return syminfo_; }
     // The pip idiom every FX script spells out; evaluated the way the codegen
     // emits it (syminfo_.type / syminfo_.mintick member reads).

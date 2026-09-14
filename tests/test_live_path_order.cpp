@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -15,9 +16,9 @@ Bar bar(double o, double h, double l, double c, int64_t ts) { return Bar{o, h, l
 // AUTO-low-first shape can drive the same fixture (Important 1: a test
 // bar that is already high-first under AUTO cannot tell HIGH_FIRST from
 // AUTO, since both branches agree).
-class Bracket final : public BacktestEngine {
+class Bracket final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         // strategy_exit(id, from_entry, limit_price, stop_price, ...) --
         // engine.hpp's real parameter order puts limit_price BEFORE
@@ -46,7 +47,7 @@ const Bar kLowFirstTouchBar = bar(100, 102.0, 98.5, 100, 120'000);
 // forced order actually decides the winner (unlike a degenerate O=H=L=C
 // bar, where both stops are marketable at the open and tie at position 0
 // regardless of leg order).
-class DualEntryPair final : public BacktestEngine {
+class DualEntryPair final : public pineforge::source::PineStrategyHost {
 public:
     DualEntryPair() {
         initial_capital_ = 1'000'000;
@@ -66,7 +67,7 @@ public:
         // fills) structure Important 2 flagged.
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, na<double>(), 101.0, 1.0);
             strategy_entry("S", false, na<double>(), 99.0, 1.0);

@@ -8,6 +8,7 @@
 // These compact synthetic schedules preserve the pinned account budgets;
 // they contain no indicator, symbol, date, or strategy-specific dispatch.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -41,7 +42,7 @@ std::vector<Bar> schedule(Mode mode, Leg leg) {
                          : bar(4, 1.13189, 1.13282, 1.13156, 1.13231),
     };
 }
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
     Mode mode_;
     Leg leg_;
 public:
@@ -60,7 +61,7 @@ public:
         set_syminfo_mintick(0.00001);
         set_margin_call_enabled(true);
     }
-    void on_bar(const Bar& b) override {
+    void on_source_bar(const Bar& b) override {
         if (bar_index_ == 0) {
             strategy_entry("Owned", false, kNa, kNa, 870000.0);
             strategy_exit("Standing", "Owned",

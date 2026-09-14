@@ -1,6 +1,7 @@
 // Covered POOC controls pin rounded signal-cost admission while flat. A child
 // bracket has no live owner until its sole parent entry is admitted.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -13,7 +14,7 @@ int passed = 0, failed = 0;
 #define CHECK(x) do { if (x) ++passed; else { ++failed; std::printf("FAIL %d %s\n", __LINE__, #x); } } while (0)
 bool near(double a, double b) { return std::abs(a - b) < 1e-8; }
 
-class FlatClose : public BacktestEngine {
+class FlatClose : public pineforge::source::PineStrategyHost {
 public:
     bool children, long_entry;
     double frozen = qnan;
@@ -31,7 +32,7 @@ public:
         pyramiding_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry(long_entry ? "L" : "S", long_entry);
             for (const auto& order : pending_orders_) {

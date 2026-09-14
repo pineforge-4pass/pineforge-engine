@@ -3,6 +3,7 @@
 // Positive slippage: the one-unit money event is at next O. COOF closes the
 // survivor there; ordinary close-calc waits until C. A funded book has no event.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -26,7 +27,7 @@ struct Seen {
 };
 enum class Guard { None, Pending, Fee, Risk, Fx, Pyramiding, Raw };
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
     Guard guard_;
     bool cycle_, default_entry_;
 public:
@@ -58,7 +59,7 @@ public:
             CHECK(set_account_currency_fx_series(times, rates, 1));
         }
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty()) {
             if (guard_ == Guard::Raw) strategy_order("Owned", true, qty);

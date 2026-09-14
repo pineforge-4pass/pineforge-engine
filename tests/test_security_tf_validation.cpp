@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -16,8 +17,8 @@ namespace {
 // Subclass exposing register_security{,_lower_tf}_eval (protected in
 // the base) so each test can wire up exactly one security with the
 // timeframe combo under test.
-struct ValidationHarness : public BacktestEngine {
-    void on_bar(const Bar&) override {}
+struct ValidationHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar&) override {}
     void evaluate_security(int, const Bar&, bool) override {}
 
     void add_security(const std::string& requested_tf,

@@ -11,13 +11,14 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
 namespace {
 
-struct GetterHarness : public BacktestEngine {
-    void on_bar(const Bar& /*bar*/) override {}
+struct GetterHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar& /*bar*/) override {}
     int64_t call(const std::string& key, int64_t default_val) const {
         return get_input_int64(key, default_val);
     }

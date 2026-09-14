@@ -27,6 +27,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -57,7 +58,7 @@ namespace {
 // because process_orders_on_close is on), then closes it on bar 1. Whether the
 // entry survives the affordability gate is observable as trade_count() == 1 (or
 // 0 if rejected).
-class FxProbe : public BacktestEngine {
+class FxProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit FxProbe(double fx_or_nan, double commission_percent = 0.0) {
         initial_capital_ = 1000.0;
@@ -70,7 +71,7 @@ public:
         if (!std::isnan(fx_or_nan))
             set_syminfo_metadata("account_currency_fx", fx_or_nan);
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0);  // qty=1 market long
         else if (bar_index_ == 1)
@@ -84,7 +85,7 @@ public:
 // A default 100%-of-equity order is placed under FX=1.0 and fills on the
 // next bar after FX rolls to 1.001. TV admits the frozen signal snapshot, then
 // revalues the live fill and emits a broker margin trim at the new rate.
-class FrozenFxRolloverProbe : public BacktestEngine {
+class FrozenFxRolloverProbe : public pineforge::source::PineStrategyHost {
 public:
     FrozenFxRolloverProbe() {
         initial_capital_ = 10000.0;
@@ -96,7 +97,7 @@ public:
         qty_step_ = 0.0001;
         process_orders_on_close_ = false;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("L", true);
     }
     int trades() const { return trade_count(); }
@@ -109,7 +110,7 @@ public:
 // A live 1x long crosses a timestamped FX epoch on bar 2.  The broker must
 // consume that epoch and emit any required trim at bar OPEN, before on_bar can
 // observe the position or place another order.
-class CarriedFxRolloverOrderingProbe : public BacktestEngine {
+class CarriedFxRolloverOrderingProbe : public pineforge::source::PineStrategyHost {
 public:
     CarriedFxRolloverOrderingProbe() {
         initial_capital_ = 10000.0;
@@ -120,7 +121,7 @@ public:
         qty_step_ = 0.0001;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         ++on_bar_calls_;
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 100.0);
@@ -150,7 +151,7 @@ private:
 // liquidation rule. They must reject before on_bar instead of silently
 // falling through to the end-of-bar adverse-price pass.  (1x short is
 // supported by cell A1; keep this probe for leveraged-only fail-closed.)
-class UnsupportedCarriedFxRolloverProbe : public BacktestEngine {
+class UnsupportedCarriedFxRolloverProbe : public pineforge::source::PineStrategyHost {
 public:
     UnsupportedCarriedFxRolloverProbe(bool is_long, double margin_pct)
         : is_long_(is_long) {
@@ -161,7 +162,7 @@ public:
         margin_short_ = is_long ? 100.0 : margin_pct;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         ++on_bar_calls_;
         if (bar_index_ == 0) {
             strategy_entry(is_long_ ? "L" : "S", is_long_,
@@ -177,7 +178,7 @@ private:
 
 // Cell A1 dual of CarriedFxRolloverOrderingProbe: carried 1x short under a
 // timestamped FX epoch change.  Mirrors long sizing (qty=100, capital=10000).
-class CarriedShortFxRolloverProbe : public BacktestEngine {
+class CarriedShortFxRolloverProbe : public pineforge::source::PineStrategyHost {
 public:
     CarriedShortFxRolloverProbe() {
         initial_capital_ = 10000.0;
@@ -189,7 +190,7 @@ public:
         qty_step_ = 0.0001;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         ++on_bar_calls_;
         if (bar_index_ == 0) {
             strategy_entry("S", /*is_long=*/false, kNaN, kNaN, 100.0);
@@ -221,7 +222,7 @@ private:
 // crossed that epoch while still flat.  The flat crossing must consume the
 // rollover permanently: once margin calls are enabled after the fill, the next
 // bar must not replay the old epoch against the newly opened position.
-class FlatEpochConsumptionProbe : public BacktestEngine {
+class FlatEpochConsumptionProbe : public pineforge::source::PineStrategyHost {
 public:
     FlatEpochConsumptionProbe() {
         initial_capital_ = 10000.0;
@@ -233,7 +234,7 @@ public:
         qty_step_ = 0.1;
         process_orders_on_close_ = false;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             // Signal under FX=1.0; the frozen admission tuple lets this fill at
             // the next open after FX=1.001 becomes effective.
@@ -263,7 +264,7 @@ private:
 // Entry fees are paid in account currency at the entry fill. A later FX epoch
 // changes open gross PnL and exit-time trade reporting, but must not reprice the
 // already-paid fee exposed by strategy.opentrades.* while the slice is live.
-class EntryFeeAccessorLifecycleProbe : public BacktestEngine {
+class EntryFeeAccessorLifecycleProbe : public pineforge::source::PineStrategyHost {
 public:
     EntryFeeAccessorLifecycleProbe(CommissionType type, double value,
                                    double qty)
@@ -275,7 +276,7 @@ public:
         margin_long_ = 0.0;  // isolate accounting from broker liquidation
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, qty_);
         } else if (bar_index_ == 1) {
@@ -299,7 +300,7 @@ private:
 
 // Exercises lifecycle transitions that retain or replace PyramidEntry slices:
 // a rate-1 entry, a rate-2 pyramid add, a FIFO partial exit, then a reversal.
-class PyramidEntryFeeLifecycleProbe : public BacktestEngine {
+class PyramidEntryFeeLifecycleProbe : public pineforge::source::PineStrategyHost {
 public:
     PyramidEntryFeeLifecycleProbe() {
         initial_capital_ = 10000.0;
@@ -311,7 +312,7 @@ public:
         process_orders_on_close_ = true;
         pyramiding_ = 3;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L1", true, kNaN, kNaN, 2.0);
         } else if (bar_index_ == 1) {
@@ -355,7 +356,7 @@ private:
 // With a 2x FX rollover, repricing the old 10% entry fee would manufacture a
 // broker-open deficit and an 0.08-contract margin row. The paid rate-1 fee
 // leaves the carried 2.75-contract position affordable.
-class CarriedEntryFeeSnapshotProbe : public BacktestEngine {
+class CarriedEntryFeeSnapshotProbe : public pineforge::source::PineStrategyHost {
 public:
     CarriedEntryFeeSnapshotProbe() {
         initial_capital_ = 600.0;
@@ -366,7 +367,7 @@ public:
         qty_step_ = 0.01;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 2.75);
         } else if (bar_index_ == 1) {
@@ -385,7 +386,7 @@ private:
 // Post-fill affordability must sum each live slice's paid fee: rate-1 L1 costs
 // 20 and rate-2 L2 costs 10. Repricing both at rate 2 would use 50 instead of
 // 30 and manufacture a margin trim from an otherwise affordable position.
-class PostFillEntryFeeSnapshotProbe : public BacktestEngine {
+class PostFillEntryFeeSnapshotProbe : public pineforge::source::PineStrategyHost {
 public:
     PostFillEntryFeeSnapshotProbe() {
         initial_capital_ = 540.0;
@@ -397,7 +398,7 @@ public:
         process_orders_on_close_ = true;
         pyramiding_ = 2;
     }
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L1", true, kNaN, kNaN, 2.0);
         } else if (bar_index_ == 1) {
@@ -816,7 +817,7 @@ int main() {
         };
         const int64_t timestamps[] = {1000, 2000};
         const double rates[] = {1.0, 1.001};
-        class FlatEpochShortProbe : public BacktestEngine {
+        class FlatEpochShortProbe : public pineforge::source::PineStrategyHost {
         public:
             FlatEpochShortProbe() {
                 initial_capital_ = 10000.0;
@@ -829,7 +830,7 @@ int main() {
                 qty_step_ = 0.1;
                 process_orders_on_close_ = false;
             }
-            void on_bar(const Bar& /*bar*/) override {
+            void on_source_bar(const Bar& /*bar*/) override {
                 if (bar_index_ == 0) {
                     strategy_entry("S", /*is_long=*/false);
                 } else if (bar_index_ == 1) {

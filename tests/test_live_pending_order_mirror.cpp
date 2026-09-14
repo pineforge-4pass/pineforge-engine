@@ -11,6 +11,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -38,9 +39,9 @@ uint64_t fnv1a64(const std::string& s) {
 
 const std::string kLongId(70, 'x');   // > 63 bytes: exercises truncation + hash64
 
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         // bar 1: the MARKET entry filled at this bar's open; rest a stop-only
         // exit with an over-long id so the mirror's char[64] truncates.
@@ -224,9 +225,9 @@ int main() {
     // --- the accessors track the live book -------------------------------------
     {
         const std::vector<Bar> bars = {flat_bar(100, 0), flat_bar(100, 60'000)};
-        class Empty final : public BacktestEngine {
+        class Empty final : public pineforge::source::PineStrategyHost {
         public:
-            void on_bar(const Bar&) override {}
+            void on_source_bar(const Bar&) override {}
         } e;
         e.run(bars.data(), 2);
         CHECK(strategy_pending_orders_len(&e) == 0);

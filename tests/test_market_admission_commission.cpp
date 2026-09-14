@@ -40,6 +40,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_market_admission_commission_data.hpp"
 
@@ -133,7 +134,7 @@ std::vector<Bar> slice(const std::vector<Bar>& bars, int64_t from, int64_t to) {
 // percent commission, 1x margin on both sides, margin calls on, market fills
 // at the next bar's open. The instrument is set by (mintick, qty_step):
 // NYSE:F = (0.01, 1 share), OANDA:XAUUSD cfd = (0.005, 0.01 lot).
-class AdmissionProbe : public BacktestEngine {
+class AdmissionProbe : public pineforge::source::PineStrategyHost {
 public:
     AdmissionProbe(double mintick, double qty_step, double capital) {
         initial_capital_ = capital;
@@ -181,7 +182,7 @@ class TapeProbe : public AdmissionProbe {
 public:
     TapeProbe(double mintick, double qty_step, bool is_long)
         : AdmissionProbe(mintick, qty_step, 10000.0), is_long_(is_long) {}
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ % 4 == 0
             && std::fabs(signed_position_size()) <= 1e-12) {
             strategy_entry("E", is_long_);
@@ -200,7 +201,7 @@ public:
                 std::set<int64_t> signals)
         : AdmissionProbe(mintick, qty_step, capital),
           signals_(std::move(signals)) {}
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (signals_.count(bar.timestamp)) strategy_entry("E", true);
     }
 private:

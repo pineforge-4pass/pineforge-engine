@@ -1,11 +1,12 @@
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <limits>
 using namespace pineforge;
-class Book:public BacktestEngine {
+class Book:public pineforge::source::PineStrategyHost {
 public:
  Book(){initial_capital_=1000000;default_qty_type_=QtyType::FIXED;default_qty_value_=1;commission_value_=0;slippage_=0;margin_long_=margin_short_=0;pyramiding_=1;bar_index_=0;current_bar_={100,100,100,100,1,0};}
- void on_bar(const Bar&)override{}
+ void on_source_bar(const Bar&)override{}
  void step(){++bar_index_;current_bar_={100,100,100,100,1,int64_t(bar_index_)*60000};process_pending_orders(current_bar_);}
  bool run_case(){const double n=std::numeric_limits<double>::quiet_NaN();strategy_entry("E",true,n,n,1);step();if(position_side_!=PositionSide::LONG||position_qty_!=1)return false;
  strategy_exit("X","E",n,95);if(pending_orders_.size()!=1)return false;auto& o=pending_orders_.front();

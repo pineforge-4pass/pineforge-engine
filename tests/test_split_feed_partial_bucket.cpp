@@ -43,6 +43,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -104,7 +105,7 @@ struct Publication {
 // dispatch (is_complete) advances the exposed history, which the chart body
 // reads through its latest slot -- ``r`` -- and the one before -- ``r[1]``
 // in the requested context.
-class FinerRsiProbe final : public BacktestEngine {
+class FinerRsiProbe final : public pineforge::source::PineStrategyHost {
 public:
     ta::RSI rsi_off{14};
     ta::RSI rsi_on{14};
@@ -144,7 +145,7 @@ public:
             {bar.timestamp, state.current_sub_bar_count, bar.close, v});
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         ChartRead r;
         r.chart_ts = bar.timestamp;
         r.off_count = off.size();

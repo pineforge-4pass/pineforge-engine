@@ -1,5 +1,6 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cassert>
 #include <cmath>
@@ -15,7 +16,7 @@ using namespace pineforge;
 
 namespace {
 
-class SplitFeedProbe final : public BacktestEngine {
+class SplitFeedProbe final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<int> chart_indexes;
     std::vector<double> chart_closes;
@@ -53,7 +54,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         chart_indexes.push_back(bar_index_);
         chart_closes.push_back(bar.close);
         security_at_chart_close.push_back(latest_security_close);
@@ -67,7 +68,7 @@ public:
 };
 
 
-class OvernightLowerTfProbe final : public BacktestEngine {
+class OvernightLowerTfProbe final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<double> current;
     std::vector<double> chart_array;
@@ -84,13 +85,13 @@ public:
         current.push_back(bar.close);
     }
 
-    void on_bar(const Bar&) override { chart_array = current; }
+    void on_source_bar(const Bar&) override { chart_array = current; }
 };
 
 
-class RoutingOnlyProbe final : public BacktestEngine {
+class RoutingOnlyProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 bool near(double a, double b) {

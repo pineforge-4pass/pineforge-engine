@@ -71,6 +71,7 @@
 #include <pineforge/pineforge.h>   // strategy_closed_trade_entry_incarnation (pin I)
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -113,7 +114,7 @@ constexpr int64_t kDay = 86'400'000;
 // Scripted probe: fixed qty 1, commission and slippage per constructor,
 // 1x margin, margin-call emulation off. 'L' / 'S' place a market entry that
 // fills on the next bar's open; 'C' closes everything; '.' does nothing.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double commission_pct = 0.0, int slippage_ticks = 0,
           int pyramiding = 1) {
@@ -131,7 +132,7 @@ public:
         margin_call_enabled_ = false;
     }
     std::string script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': strategy_entry("L", true); break;

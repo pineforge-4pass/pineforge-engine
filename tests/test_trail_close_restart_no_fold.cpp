@@ -39,6 +39,7 @@
  *              array starts 05-07 00:00Z.
  */
 
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -83,7 +84,7 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 // The pins' broker: fixed qty, process_orders_on_close, no commission, no
 // slippage, 100% margin, 1e8 capital (sizing never binds).
-class WinTheTrade : public BacktestEngine {
+class WinTheTrade : public pineforge::source::PineStrategyHost {
 public:
     enum Shape { ATR2 = 0, POINTS_ALT = 1, OFFSET_ALT = 2 };
 
@@ -108,7 +109,7 @@ public:
     bool signal_long = false;
     Shape shape = ATR2;
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         const double atr = atr_.compute(bar.high, bar.low, bar.close);
         if (bar.timestamp == signal_ts) {
             strategy_entry(signal_long ? "Long" : "Short", signal_long);

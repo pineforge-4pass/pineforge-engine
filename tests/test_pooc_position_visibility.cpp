@@ -33,6 +33,7 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -79,7 +80,7 @@ static Bar bars4[4] = {
 // ─────────────────────────────────────────────────────────────────────
 enum class CloseKind { CloseAll, CloseIdAny };
 
-class ProbeKernel : public BacktestEngine {
+class ProbeKernel : public pineforge::source::PineStrategyHost {
 public:
     CloseKind kind;
     int  entry_bar = -1;
@@ -100,7 +101,7 @@ public:
         if (kind == CloseKind::CloseAll) strategy_close_all();
         else                             strategy_close("L");   // any-rule full close
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 2) pos_on_next_bar = signed_position_size();
         // close trigger: one bar after entry (probe's `bar_index > entry_bar`)
         if (signed_position_size() != 0.0 && entry_bar >= 0 && bar_index_ > entry_bar) {
@@ -153,7 +154,7 @@ static void test_G1_non_pooc_unchanged() {
 // same bar must still fire (the freeze arms only AT the close). pyramiding=2.
 static void test_G2_pooc_entry_before_close_still_fires() {
     std::printf("G2: POOC — position_size!=0 entry BEFORE close still fires\n");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         bool add_placed = false;
         Strat() {
@@ -161,7 +162,7 @@ static void test_G2_pooc_entry_before_close_still_fires() {
             default_qty_value_ = 1.0; commission_value_ = 0.0; slippage_ = 0;
             pyramiding_ = 2; process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() != 0.0) {
                 strategy_entry("L_add", true);   // gated on != 0, BEFORE the close
@@ -181,7 +182,7 @@ static void test_G2_pooc_entry_before_close_still_fires() {
 static void test_pooc_undercap_entry_before_closeall_survives(bool held_long) {
     std::printf("R3/R4: POOC under-cap %s entry before close_all survives\n",
                 held_long ? "long" : "short");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool held_long) : held_long_(held_long) {
             initial_capital_ = 1'000'000;
@@ -192,7 +193,7 @@ static void test_pooc_undercap_entry_before_closeall_survives(bool held_long) {
             pyramiding_ = 2;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("BASE", held_long_);
             const double pos = signed_position_size();
             const bool holding = held_long_ ? pos > 0.0 : pos < 0.0;
@@ -218,7 +219,7 @@ static void test_pooc_undercap_entry_before_closeall_survives(bool held_long) {
 static void test_pooc_overcap_entry_before_closeall_drops(bool held_long) {
     std::printf("control: POOC over-cap %s entry before close_all drops\n",
                 held_long ? "long" : "short");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool held_long) : held_long_(held_long) {
             initial_capital_ = 1'000'000;
@@ -229,7 +230,7 @@ static void test_pooc_overcap_entry_before_closeall_drops(bool held_long) {
             pyramiding_ = 1;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("BASE", held_long_);
             const double pos = signed_position_size();
             const bool holding = held_long_ ? pos > 0.0 : pos < 0.0;
@@ -257,7 +258,7 @@ static void test_coof_pooc_undercap_entry_before_closeall_still_cancels(
         bool held_long) {
     std::printf("control: COOF+POOC under-cap %s entry before close_all cancels\n",
                 held_long ? "long" : "short");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         explicit Strat(bool held_long) : held_long_(held_long) {
             initial_capital_ = 1'000'000;
@@ -269,7 +270,7 @@ static void test_coof_pooc_undercap_entry_before_closeall_still_cancels(
             process_orders_on_close_ = true;
             calc_on_order_fills_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0 && !base_placed_) {
                 base_placed_ = true;
                 strategy_entry("BASE", held_long_);
@@ -301,7 +302,7 @@ static void test_coof_pooc_undercap_entry_before_closeall_still_cancels(
 // market re-entry is cancelled (test_integration :3896 shape). pyramiding=2.
 static void test_G3_pooc_immediately_not_deferred() {
     std::printf("G3: POOC immediately=true — NOT deferred (visible at once)\n");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         double mid_bar_pos = -999.0;
         Strat() {
@@ -309,7 +310,7 @@ static void test_G3_pooc_immediately_not_deferred() {
             default_qty_value_ = 1.0; commission_value_ = 0.0; slippage_ = 0;
             pyramiding_ = 2; process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_entry("L_add", true);
@@ -329,14 +330,14 @@ static void test_G3_pooc_immediately_not_deferred() {
 // SHORT under POOC (affordable-reversal class). No close, no freeze.
 static void test_G5a_pooc_pure_reversal_flips() {
     std::printf("G5a: POOC — opposite entry (no close) flips LONG->SHORT\n");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 1'000'000; default_qty_type_ = QtyType::FIXED;
             default_qty_value_ = 1.0; commission_value_ = 0.0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() > 0.0)
                 strategy_entry("S", false);   // reversal, NOT gated on == 0
@@ -351,14 +352,14 @@ static void test_G5a_pooc_pure_reversal_flips() {
 // must NOT block the reversal (S is not flat-gated). Ends SHORT.
 static void test_G5b_pooc_closeall_then_opposite_entry_flips() {
     std::printf("G5b: POOC — close_all + opposite entry still flips to SHORT\n");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 1'000'000; default_qty_type_ = QtyType::FIXED;
             default_qty_value_ = 1.0; commission_value_ = 0.0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_close_all();
@@ -384,14 +385,14 @@ static void test_G6_pooc_next_bar_reads_flat() {
 // (flat) position, not the frozen snapshot (guards the flush-time clear).
 static void test_G7_pooc_post_run_read_is_real() {
     std::printf("G7: POOC — post-run read after last-bar close_all is FLAT\n");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 1'000'000; default_qty_type_ = QtyType::FIXED;
             default_qty_value_ = 1.0; commission_value_ = 0.0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() > 0.0) strategy_close_all();
         }

@@ -24,6 +24,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -77,7 +78,7 @@ enum class PostPlacementMutation {
     DEFAULT_SIZING,
 };
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(QtyType qty_type = QtyType::PERCENT_OF_EQUITY,
           double qty_value = 100.0, double margin = 100.0,
@@ -108,7 +109,7 @@ public:
     bool placed_at_0 = false;
     bool placed_at_reissue = false;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0 && bar_index_ != reissue_bar) return;
         const double qty = explicit_qty ? 7.0 : kNaN;
         const double level = (bar_index_ == reissue_bar && !std::isnan(reissue_stop))

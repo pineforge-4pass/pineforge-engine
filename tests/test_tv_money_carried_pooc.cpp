@@ -30,6 +30,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -52,7 +53,7 @@ bool near(double a, double b, double tolerance = 1e-6) {
     return std::abs(a-b) < tolerance;
 }
 
-class MoneyProbe : public BacktestEngine {
+class MoneyProbe : public pineforge::source::PineStrategyHost {
 public:
     MoneyProbe(double capital = kCapital, double qty = kQty,
                Entry entry = Entry::DEFAULT_CLOSE, Close close = Close::LATER,
@@ -73,7 +74,7 @@ public:
         set_margin_call_enabled(true);
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if ((entry_ == Entry::EXPLICIT_STOP && bar_index_ == 0)
             || (entry_ != Entry::EXPLICIT_STOP && bar_index_ == 1)) {
             strategy_entry("L", true, kNaN,

@@ -2,6 +2,7 @@
 // platform expected trades, strategy compilation or campaign measurement.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <cmath>
 #include <cstddef>
@@ -160,7 +161,7 @@ void quantity_values_have_distinct_meaning() {
     CHECK(request.requests_all() && !request.reservation());
 }
 
-class Book : public BacktestEngine {
+class Book : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 100000;
@@ -169,7 +170,7 @@ public:
         pyramiding_ = 10;
         current_bar_ = {100,100,100,100,1,0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void entry(double qty) { strategy_entry("E", true, nan, nan, qty); }
     void step(double price = 100) {
         ++bar_index_;

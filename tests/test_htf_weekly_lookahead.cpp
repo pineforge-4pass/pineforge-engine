@@ -32,6 +32,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -102,7 +103,7 @@ bool within(double v, double expected, double tol) {
 //   sec 1: ta.ema(close, 12) - ta.ema(close, 26)
 //   sec 2: the requested-context bar ordinal (one per new slot)
 //   sec 3: close
-class WeeklyProbe final : public BacktestEngine {
+class WeeklyProbe final : public pineforge::source::PineStrategyHost {
 public:
     ta::EMA e12{12}, e26{26}, e9{9}, m12{12}, m26{26};
     Series indi, sig, hist, cc;
@@ -169,7 +170,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         Read r;
         r.ts = bar.timestamp;
         for (int s = 0; s < 4; ++s) r.v[s] = exposed[s];

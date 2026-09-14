@@ -45,6 +45,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -86,7 +87,7 @@ namespace {
 
 // Scripted probe: per-bar action, all prices on-tick (mintick 0.01) so the
 // zero-slippage directional snap is an identity.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(QtyType qty_type, double qty_value, int pyramiding) {
         initial_capital_ = 10000.0;
@@ -103,7 +104,7 @@ public:
     // execution, 'C' = default short then long in one execution,
     // 'E' = explicit-qty long then short in one execution, '.' = nothing.
     std::string script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'L': strategy_entry("L", true); break;

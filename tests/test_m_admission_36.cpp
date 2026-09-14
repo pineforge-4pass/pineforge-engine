@@ -80,6 +80,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include "test_m_admission_36_data.hpp"
 
@@ -185,7 +186,7 @@ std::vector<Bar> synth_bars(const std::vector<Ohlc>& rows) {
 // on, market fills at the next open, pyramiding 0 (both scripts). Sizing is
 // the script's default: percent_of_equity 100 (market-logic) or the fixed
 // 1-contract default (jaysharma, whose strategy() sets neither).
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double mintick, double lot, QtyType qty_type,
           double qty_value) {
@@ -206,7 +207,7 @@ public:
         set_margin_call_enabled(true);
     }
     std::function<void(Probe&, const Bar&)> script;
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (script) script(*this, bar);
     }
     void entry_market(const std::string& id, bool is_long, double qty = kNaN) {

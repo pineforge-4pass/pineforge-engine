@@ -2,6 +2,7 @@
 // These commands intentionally exercise the Pine close-artifact contract;
 // they do not claim that a generic native reduction can open exposure.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -15,7 +16,7 @@ int failures = 0;
     std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); \
     ++failures; } } while (0)
 
-class Book : public BacktestEngine {
+class Book : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         initial_capital_ = 1000000;
@@ -28,7 +29,7 @@ public:
         bar_index_ = 0;
         current_bar_ = {100, 100, 100, 100, 1, 0};
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void entry(const std::string& id, bool buy, double amount) {
         const double nan = std::numeric_limits<double>::quiet_NaN();
         strategy_entry(id, buy, nan, nan, amount);

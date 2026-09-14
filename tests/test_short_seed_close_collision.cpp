@@ -10,6 +10,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -34,7 +35,7 @@ Bar flat_bar(int64_t timestamp) {
     return {100.0, 101.0, 99.0, 100.0, 1'000.0, timestamp};
 }
 
-class SourceOrderChain final : public BacktestEngine {
+class SourceOrderChain final : public pineforge::source::PineStrategyHost {
 public:
     explicit SourceOrderChain(bool source_long) : source_long_(source_long) {
         initial_capital_ = 1'000'000.0;
@@ -45,7 +46,7 @@ public:
         commission_value_ = 0.0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const std::string held = source_long_ ? "Long" : "Short";
         const std::string opposite = source_long_ ? "Short" : "Long";
         if (bar_index_ == 0) {
@@ -87,7 +88,7 @@ private:
     std::vector<OrderType> queued_types_;
 };
 
-class SameDirectionCloseControl final : public BacktestEngine {
+class SameDirectionCloseControl final : public pineforge::source::PineStrategyHost {
 public:
     explicit SameDirectionCloseControl(bool source_long)
         : source_long_(source_long) {
@@ -100,7 +101,7 @@ public:
         commission_value_ = 0.0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const std::string held = source_long_ ? "Long" : "Short";
         if (bar_index_ == 0) {
             strategy_entry(held, source_long_);
@@ -122,7 +123,7 @@ private:
 
 enum class RejectedLeg { FirstOpposite, SecondHeld };
 
-class RejectionControl final : public BacktestEngine {
+class RejectionControl final : public pineforge::source::PineStrategyHost {
 public:
     explicit RejectionControl(RejectedLeg rejected_leg)
         : rejected_leg_(rejected_leg) {
@@ -142,7 +143,7 @@ public:
         }
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         } else if (bar_index_ == 1) {
@@ -314,7 +315,7 @@ void run_rejection_control(RejectedLeg rejected_leg) {
 }
 
 void run_empty_held_id_fail_closed(bool source_long) {
-    class Probe final : public BacktestEngine {
+    class Probe final : public pineforge::source::PineStrategyHost {
     public:
         explicit Probe(bool source_long) : source_long_(source_long) {
             initial_capital_ = 1'000'000.0;
@@ -324,7 +325,7 @@ void run_empty_held_id_fail_closed(bool source_long) {
             commission_value_ = 0.0;
             slippage_ = 0;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("", source_long_);
             } else if (bar_index_ == 1) {
@@ -358,7 +359,7 @@ void run_empty_held_id_fail_closed(bool source_long) {
 }
 
 void run_mismatched_reentry_qty_fail_closed(bool source_long) {
-    class Probe final : public BacktestEngine {
+    class Probe final : public pineforge::source::PineStrategyHost {
     public:
         explicit Probe(bool source_long) : source_long_(source_long) {
             initial_capital_ = 1'000'000.0;
@@ -368,7 +369,7 @@ void run_mismatched_reentry_qty_fail_closed(bool source_long) {
             commission_value_ = 0.0;
             slippage_ = 0;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             const std::string held = source_long_ ? "Long" : "Short";
             const std::string opposite = source_long_ ? "Short" : "Long";
             if (bar_index_ == 0) {
@@ -413,7 +414,7 @@ void run_mismatched_reentry_qty_fail_closed(bool source_long) {
     CHECK(probe.trade_count() == 3);
 }
 
-class StructuralIdProbe final : public BacktestEngine {
+class StructuralIdProbe final : public pineforge::source::PineStrategyHost {
 public:
     StructuralIdProbe() {
         initial_capital_ = 1'000'000.0;
@@ -424,7 +425,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false);
         } else if (bar_index_ == 1) {
@@ -464,7 +465,7 @@ void run_structural_id_control() {
 }
 
 void run_projected_final_admission_fail_closed() {
-    class Probe final : public BacktestEngine {
+    class Probe final : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000.0;
@@ -477,7 +478,7 @@ void run_projected_final_admission_fail_closed() {
             slippage_ = 0;
         }
 
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("Short", false);
             } else if (bar_index_ == 1) {
@@ -527,7 +528,7 @@ void run_projected_final_admission_fail_closed() {
 }
 
 void run_partial_close_fragments_share_entry_incarnation() {
-    class Probe final : public BacktestEngine {
+    class Probe final : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000.0;
@@ -538,7 +539,7 @@ void run_partial_close_fragments_share_entry_incarnation() {
             slippage_ = 0;
         }
 
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1) {
@@ -570,7 +571,7 @@ void run_partial_close_fragments_share_entry_incarnation() {
 }
 
 void run_internal_close_id_collision_fail_closed() {
-    class Probe final : public BacktestEngine {
+    class Probe final : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000.0;
@@ -581,7 +582,7 @@ void run_internal_close_id_collision_fail_closed() {
             slippage_ = 0;
         }
 
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("Short", false);
             } else if (bar_index_ == 1) {
@@ -634,7 +635,7 @@ enum class GateControl {
     NonzeroCommission,
 };
 
-class GateControlProbe final : public BacktestEngine {
+class GateControlProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit GateControlProbe(GateControl control) : control_(control) {
         initial_capital_ = 1'000'000.0;
@@ -669,7 +670,7 @@ public:
         }
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0 && !seed_issued_) {
             seed_issued_ = true;
             strategy_entry("Short", false);

@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -74,7 +75,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
 // ─────────────────────────────────────────────────────────────────────
 static void test_three_partial_limits_each_at_own_price() {
     std::printf("test_three_partial_limits_each_at_own_price\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -85,7 +86,7 @@ static void test_three_partial_limits_each_at_own_price() {
             pyramiding_ = 1;
             syminfo_mintick_ = 0.01;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
             }
@@ -142,7 +143,7 @@ static void test_three_partial_limits_each_at_own_price() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_shared_stop_fires_all_siblings_at_stop_price() {
     std::printf("test_shared_stop_fires_all_siblings_at_stop_price\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -153,7 +154,7 @@ static void test_shared_stop_fires_all_siblings_at_stop_price() {
             pyramiding_ = 1;
             syminfo_mintick_ = 0.01;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
             }
@@ -208,7 +209,7 @@ static void test_shared_stop_fires_all_siblings_at_stop_price() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_mixed_limit_then_stop_precedence() {
     std::printf("test_mixed_limit_then_stop_precedence\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -219,7 +220,7 @@ static void test_mixed_limit_then_stop_precedence() {
             pyramiding_ = 1;
             syminfo_mintick_ = 0.01;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
             }
@@ -282,7 +283,7 @@ static void test_mixed_limit_then_stop_precedence() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_gap_through_open_all_partial_limits() {
     std::printf("test_gap_through_open_all_partial_limits\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -293,7 +294,7 @@ static void test_gap_through_open_all_partial_limits() {
             pyramiding_ = 1;
             syminfo_mintick_ = 0.01;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
             }
@@ -352,7 +353,7 @@ static void test_gap_through_open_all_partial_limits() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_only_one_partial_fires_position_stays_open() {
     std::printf("test_only_one_partial_fires_position_stays_open\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -363,7 +364,7 @@ static void test_only_one_partial_fires_position_stays_open() {
             pyramiding_ = 1;
             syminfo_mintick_ = 0.01;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "enter");
             }

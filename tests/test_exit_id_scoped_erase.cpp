@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -72,7 +73,7 @@ static std::vector<Bar> make_bars(const std::vector<BarSpec>& specs) {
 }
 
 // Common probe shell: fixed qty=1, no commission/slippage.
-class ExitProbe : public BacktestEngine {
+class ExitProbe : public pineforge::source::PineStrategyHost {
 public:
     ExitProbe() {
         initial_capital_ = 1'000'000;
@@ -123,7 +124,7 @@ static void test_same_bar_entry_and_exit_same_id() {
     struct Probe : public ExitProbe {
         int entry_orders_at_bar0 = -1;
         int exit_orders_at_bar0 = -1;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 // Reuse the SAME id "X" for both entry and exit.
                 strategy_entry("X", true, NA, NA, 1.0, "enter");
@@ -167,7 +168,7 @@ static void test_reissued_exit_replaces_prior() {
     struct Probe : public ExitProbe {
         int exits_after_replace = -1;
         double limit_after_replace = NA;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("X", true, NA, NA, 1.0, "enter");   // market long
             }
@@ -218,7 +219,7 @@ static void test_exit_same_id_distinct_from_entry_coexist() {
         int exit_EA = -1;
         int exit_EB = -1;
         Probe() { pyramiding_ = 2; }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("EA", true, NA, NA, 1.0, "enterA");
                 strategy_entry("EB", true, NA, NA, 1.0, "enterB");

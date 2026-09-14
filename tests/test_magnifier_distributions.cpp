@@ -39,6 +39,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/magnifier.hpp>
 
@@ -65,7 +66,7 @@ static bool near(double a, double b, double tol = 1e-9) {
 // price range. Different magnifier distributions traverse the OHLC path with
 // different intermediate sample positions, which can cause stops near a
 // bar's interior to fill at slightly different prices and/or sub-bar ticks.
-class MagnifierProbeStrat : public BacktestEngine {
+class MagnifierProbeStrat : public pineforge::source::PineStrategyHost {
 public:
     MagnifierProbeStrat() {
         initial_capital_ = 100000;
@@ -74,7 +75,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = false;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (bar_index_ == 0) {
             strategy_entry("L", true);

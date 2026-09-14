@@ -3,6 +3,7 @@
 // neither a Pine execution nor evidence of TradingView parity.
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -20,10 +21,10 @@ const char* keys[] = {"intraday_cap_skip_noop_market_fills",
                       "intraday_cap_count_pooc_full_close_fills"};
 const char* cap_comment = "Close Position (Max number of filled orders in one day)";
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe() { configure_fixture(); } // Exercise the real native default.
-    explicit Probe(CapAttachment attachment) : BacktestEngine(attachment) {
+    explicit Probe(CapAttachment attachment) : pineforge::source::PineStrategyHost(attachment) {
         configure_fixture();
     }
     void configure_fixture() {
@@ -35,7 +36,7 @@ public:
         commission_value_ = 0;
         slippage_ = 0;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void limit(int value) { max_intraday_filled_orders_ = value; }
     int limit() const { return max_intraday_filled_orders_.configuration().limit; }
     bool flag(int index) const {
@@ -113,7 +114,7 @@ public:
         : Probe(attachment), commands(commands), direction(direction) {}
     Commands commands;
     bool direction;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("FIRST", direction);
         if (bar_index_ == 1) {
             if (commands == Commands::Noop) strategy_entry("NOOP", direction);
@@ -172,9 +173,9 @@ void test_native_default_and_constructor_frontend_activation() {
             : Script(Commands::Noop, direction) {
             if (frontend) enable_pine_intraday_cap();
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) limit(2);
-            Script::on_bar(bar);
+            Script::on_source_bar(bar);
         }
     };
     for (bool direction : {false, true}) {
@@ -354,7 +355,7 @@ void test_due_next_open_precedes_resting_price_exit() {
             limit(due_close ? 1 : 0);
             set_syminfo_metadata("intraday_cap_defer_pooc_close", 1.0);
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ != 0) return;
             strategy_entry("FIRST", true);
             strategy_exit("RESTING", "FIRST", 140.0,
@@ -394,7 +395,7 @@ void test_statement_time_limit_changes_preserve_spent_day() {
         Changing() { pyramiding_ = 10; }
         int limits[7] = {};
         int slots_before[7] = {};
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) limit(3);
             const bool execute_conditional_rule = bar_index_ == 2;
             if (execute_conditional_rule) { limit(4); limit(3); }

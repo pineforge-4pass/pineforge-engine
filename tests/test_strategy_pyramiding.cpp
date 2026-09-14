@@ -30,6 +30,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -64,7 +65,7 @@ namespace {
 // low*0.1 always <= high → LE fills at max(open, low*0.1)=open). This
 // makes the fill price independent of any sub-bar path so per-leg PnL
 // drift can only come from the carry-qty schedule.
-class DeferredFlipProbe : public BacktestEngine {
+class DeferredFlipProbe : public pineforge::source::PineStrategyHost {
 public:
     struct TradeRow { std::string entry_id; double qty; double pnl; };
     std::vector<TradeRow> closed_trades;
@@ -78,7 +79,7 @@ public:
         pyramiding_ = 1;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         bool isDown = (bar_index_ % 2) == 0;  // bars 0,2,4,... are "down"
         bool isUp   = (bar_index_ % 2) == 1;  // bars 1,3,5,... are "up"
 
@@ -127,7 +128,7 @@ public:
 // short entry fires from flat. One source variant contains an unreachable
 // close command; it must not change runtime behavior.
 template <bool IncludeUnreachableClose>
-class BracketExitDeferredFlipProbe : public BacktestEngine {
+class BracketExitDeferredFlipProbe : public pineforge::source::PineStrategyHost {
 public:
     BracketExitDeferredFlipProbe() {
         initial_capital_ = 1'000'000;
@@ -139,7 +140,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if constexpr (IncludeUnreachableClose) {
             if (false) strategy_close("unreachable");
         }
@@ -249,7 +250,7 @@ static void test_unreachable_strategy_close_is_semantically_inert() {
 // to the carry source.
 static void test_same_direction_no_carry() {
     std::printf("test_same_direction_no_carry\n");
-    class SameDirProbe : public BacktestEngine {
+    class SameDirProbe : public pineforge::source::PineStrategyHost {
     public:
         struct TradeRow { std::string entry_id; double qty; };
         std::vector<TradeRow> closed_trades;
@@ -264,7 +265,7 @@ static void test_same_direction_no_carry() {
             commission_value_ = 0;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L1", true,
                                std::numeric_limits<double>::quiet_NaN(),
@@ -382,7 +383,7 @@ static void test_two_cycle_siblings_independent_carry() {
     //          B's carry is preserved.
     //   bar 7+: snapshot B's tv_carry_qty in pending_orders_. With the
     //          fix, B still has carry=1.
-    class TwoCycleSiblingProbe : public BacktestEngine {
+    class TwoCycleSiblingProbe : public pineforge::source::PineStrategyHost {
     public:
         struct PendingSnap { std::string id; double carry; int created_bar; };
         std::vector<PendingSnap> pending_at_end;
@@ -395,7 +396,7 @@ static void test_two_cycle_siblings_independent_carry() {
             commission_value_ = 0;
             pyramiding_ = 5;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_entry("LA", true,
@@ -539,7 +540,7 @@ static void test_per_bar_pending_close_resets_in_script_tf_run() {
 // each at its own leg entry.
 static void test_per_leg_fifo_pnl_three_legs() {
     std::printf("test_per_leg_fifo_pnl_three_legs\n");
-    class ThreePyramidProbe : public BacktestEngine {
+    class ThreePyramidProbe : public pineforge::source::PineStrategyHost {
     public:
         struct TradeRow {
             std::string entry_id;
@@ -558,7 +559,7 @@ static void test_per_leg_fifo_pnl_three_legs() {
             commission_value_ = 0;
             pyramiding_ = 3;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Three sequential market entries at distinct opens: bar
             // 0 → leg1, bar 1 → leg2, bar 2 → leg3 (each fills at the
@@ -631,7 +632,7 @@ static void test_per_leg_fifo_pnl_three_legs() {
 // order-entry-overcap-priced-admission-01, phase A.
 static void test_overcap_priced_entry_does_not_survive_reversal() {
     std::printf("test_overcap_priced_entry_does_not_survive_reversal\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         struct TradeRow {
             std::string entry_id;
@@ -649,7 +650,7 @@ static void test_overcap_priced_entry_does_not_survive_reversal() {
             pyramiding_ = 1;
         }
 
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("base-long", true);
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG)
@@ -695,7 +696,7 @@ static void test_overcap_priced_entry_does_not_survive_reversal() {
 // order-entry-overcap-priced-admission-01, phase B.
 static void test_overcap_same_id_reissue_removes_old_pending_order() {
     std::printf("test_overcap_same_id_reissue_removes_old_pending_order\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         struct TradeRow {
             std::string entry_id;
@@ -713,7 +714,7 @@ static void test_overcap_same_id_reissue_removes_old_pending_order() {
             pyramiding_ = 1;
         }
 
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("pending-long", true,
                                std::numeric_limits<double>::quiet_NaN(),

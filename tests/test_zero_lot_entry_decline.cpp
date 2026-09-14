@@ -35,6 +35,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -82,7 +83,7 @@ namespace {
 //   'L' explicit SHORT LIMIT add,   qty = add_cash_ / close, limit = limit_
 //   'M' explicit SHORT LIMIT add,   qty = fixed_qty_,        limit = limit_
 //   '.' nothing
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double qty_step, bool pooc, QtyType default_type, double default_value,
           int pyramiding = 1) {
@@ -105,7 +106,7 @@ public:
     double add_cash_ = 280.0;
     double limit_ = kNaN;
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ < 0 || bar_index_ >= (int)script.size()) return;
         switch (script[bar_index_]) {
             case 'S': strategy_entry("E", false, kNaN, kNaN, cash_ / bar.close); break;
@@ -277,12 +278,12 @@ void test_red5_limit_add_zero_lot_declined_no_slot() {
     // Bar 3 places the 1-share limit add directly (no script char for it).
     struct Driver : Probe {
         using Probe::Probe;
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 3) {
                 strategy_entry("E", false, /*limit=*/292.0, kNaN, /*qty=*/1.0);
                 return;
             }
-            Probe::on_bar(bar);
+            Probe::on_source_bar(bar);
         }
     };
     Driver d(/*qty_step=*/1.0, /*pooc=*/false, QtyType::FIXED, 1.0, /*pyramiding=*/2);

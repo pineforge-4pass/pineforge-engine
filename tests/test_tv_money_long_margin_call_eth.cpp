@@ -58,6 +58,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -124,7 +125,7 @@ static std::vector<Bar> bars_1124() {
 // The probe's shape: an explicit-qty long at the 00:00Z bar's close (fills
 // at the next open), strategy.close two bars later; commission 0, slippage 0,
 // margin 100/100, ETHUSDT.P lane facts (mintick 0.01, qty step 0.0001).
-class MirrorProbe : public BacktestEngine {
+class MirrorProbe : public pineforge::source::PineStrategyHost {
 public:
     MirrorProbe(double capital, double qty, double qty_step = 0.0001,
                 bool emulator = true)
@@ -143,7 +144,7 @@ public:
         if (!emulator) set_margin_call_enabled(false);
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 1 && signed_position_size() == 0.0) {
             strategy_entry("E", true,
                            std::numeric_limits<double>::quiet_NaN(),

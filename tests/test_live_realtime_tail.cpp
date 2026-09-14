@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -10,12 +11,12 @@ int failures = 0;
 bool near(double a, double b, double eps = 1e-9) { return std::fabs(a - b) <= eps; }
 Bar flat_bar(double p, int64_t ts) { return Bar{p, p, p, p, 1.0, ts}; }
 // Enters long on bar 2 and holds; records islast, islastbar and last_bar_index per bar.
-class HoldStrategy final : public BacktestEngine {
+class HoldStrategy final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<bool> islast, islastbar;
     std::vector<int> last_index;
     int64_t last_time = 0;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         islast.push_back(barstate_islast_);
         islastbar.push_back(session_islastbar_);
         last_index.push_back(pine_last_bar_index());

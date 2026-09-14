@@ -65,6 +65,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -339,7 +340,7 @@ static const BarRow kFordBouga0808[] = {
 // the next open, integer lots, mintick 0.01, no commission. FIXED default
 // sizing by default (the tapes' fixed lots); PERCENT_OF_EQUITY 100 for the
 // all-in reversal shapes.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     explicit Probe(double capital, double default_qty = 1.0) {
         initial_capital_ = capital;
@@ -359,7 +360,7 @@ public:
         set_margin_call_enabled(true);
     }
     std::function<void(Probe&, int)> script;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (script) script(*this, bar_index_);
     }
     void all_in() {

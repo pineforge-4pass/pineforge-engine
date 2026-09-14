@@ -1,5 +1,6 @@
 // Actual matching/settlement, with literal in-memory bars only.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include "../src/engine_internal.hpp"
 #include <cstdio>
 #include <cmath>
@@ -9,12 +10,12 @@ namespace {
 const double na=std::numeric_limits<double>::quiet_NaN();
 int checks=0,failed=0;
 #define CHECK(x) do{++checks;if(!(x)){++failed;std::fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);}}while(0)
-class Book:public BacktestEngine{
+class Book:public pineforge::source::PineStrategyHost{
     bool buy_,coof_;
 public:
     Book(bool buy,bool coof):buy_(buy),coof_(coof){initial_capital_=1000000;commission_value_=0;slippage_=0;margin_long_=margin_short_=0;
         pyramiding_=1;bar_index_=0;current_bar_={100,100,100,100,1,0};calc_on_order_fills_=coof;}
-    void on_bar(const Bar&)override{}
+    void on_source_bar(const Bar&)override{}
     void step(double price=100){++bar_index_;current_bar_={price,price,price,price,1,int64_t(bar_index_)*60000};
         if(coof_){coof_scheduler_active_=true;int closed=-1;uint64_t inc=0;bool side=false;
             process_next_pending_order(current_bar_,true,closed,inc,side);coof_scheduler_active_=false;
@@ -64,12 +65,12 @@ void unpriced_and_trail(bool buy,bool coof){
     // Mixed-trail ordering remains out of the fixed-only metric's scope.
     trail.get().legs.set_stop_price(buy?95:105);CHECK(std::isinf(trail.metric()));
 }
-class Chart:public BacktestEngine{
+class Chart:public pineforge::source::PineStrategyHost{
     bool buy_,stop_,suspend_,sibling_ready_,armed_=false;
 public:
     Chart(bool buy,bool stop,bool suspend,bool sibling_ready):buy_(buy),stop_(stop),suspend_(suspend),sibling_ready_(sibling_ready){initial_capital_=100000;commission_value_=0;
         margin_long_=margin_short_=0;pyramiding_=0;calc_on_order_fills_=true;syminfo_mintick_=0.01;}
-    void on_bar(const Bar&)override{
+    void on_source_bar(const Bar&)override{
         if(bar_index_==0)strategy_entry("E",buy_,na,na,1);
         if(bar_index_!=1||!coof_fill_recalc_active_||armed_)return;
         armed_=true;

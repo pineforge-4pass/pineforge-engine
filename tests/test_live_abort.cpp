@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cstdio>
 #include <vector>
 using namespace pineforge;
@@ -8,10 +9,10 @@ int failures = 0;
 #define CHECK(cond) do { if (!(cond)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++failures; } } while (0)
 Bar flat_bar(double p, int64_t ts) { return Bar{p, p, p, p, 1.0, ts}; }
 // Requests its own abort from inside on_bar at bar 5, as a tick thread would.
-class AbortAtFive final : public BacktestEngine {
+class AbortAtFive final : public pineforge::source::PineStrategyHost {
 public:
     int bars_seen = 0;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         ++bars_seen;
         if (bar_index_ == 5) request_abort();
     }

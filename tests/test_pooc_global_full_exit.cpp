@@ -6,6 +6,7 @@
  */
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/na.hpp>
 
 #include <cmath>
@@ -60,7 +61,7 @@ struct CaseConfig {
     bool defer_exit_until_bar4 = false;
 };
 
-class ReservationProbe final : public BacktestEngine {
+class ReservationProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit ReservationProbe(CaseConfig config) : config_(std::move(config)) {
         initial_capital_ = 1'000'000.0;
@@ -72,7 +73,7 @@ public:
         process_orders_on_close_ = config_.pooc;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("BASE", /*is_long=*/true,
                            kNaN, kNaN, /*qty=*/1.0);

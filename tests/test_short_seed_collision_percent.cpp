@@ -21,6 +21,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -51,7 +52,7 @@ Bar make_bar(double open, double high, double low, double close,
 // Short must re-open exactly the surplus L - S. A later strategy.close on the
 // remnant proves the ledger / id / incarnation provenance of the re-opened
 // lot.
-class PercentRemnantProbe final : public BacktestEngine {
+class PercentRemnantProbe final : public pineforge::source::PineStrategyHost {
 public:
     PercentRemnantProbe() {
         initial_capital_ = 1'000'000.0;
@@ -62,7 +63,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false);
         } else if (bar_index_ == 1) {
@@ -185,7 +186,7 @@ void run_percent_remnant_case() {
 // collision bar, the frozen default qty L is below the seed S, the second
 // zero trade is min(S, L) == L, and the episode ends FLAT with no same-bar
 // short.
-class PercentFlatProbe final : public BacktestEngine {
+class PercentFlatProbe final : public pineforge::source::PineStrategyHost {
 public:
     PercentFlatProbe() {
         initial_capital_ = 1'000'000.0;
@@ -196,7 +197,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false);
         } else if (bar_index_ == 1) {
@@ -259,7 +260,7 @@ void run_percent_flat_case() {
 }
 
 // CASH default sizing follows the same frozen-snapshot collision shape.
-class CashRemnantProbe final : public BacktestEngine {
+class CashRemnantProbe final : public pineforge::source::PineStrategyHost {
 public:
     CashRemnantProbe() {
         initial_capital_ = 1'000'000.0;
@@ -270,7 +271,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false);
         } else if (bar_index_ == 1) {
@@ -318,7 +319,7 @@ void run_cash_remnant_case() {
 // frozen reversal re-check, and the ordinary path's atomic decline
 // (entry declined, co-queued close suppressed, same-direction re-add
 // declined) is preserved byte-for-byte.
-class PercentGapDeclineControl final : public BacktestEngine {
+class PercentGapDeclineControl final : public pineforge::source::PineStrategyHost {
 public:
     PercentGapDeclineControl() {
         initial_capital_ = 1'000'000.0;
@@ -330,7 +331,7 @@ public:
         margin_call_enabled_ = false;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false);
         } else if (bar_index_ == 1) {
@@ -376,7 +377,7 @@ void run_percent_gap_decline_control() {
 // book under percent sizing exactly as it does for the FIXED cohort — the
 // stale close is removed and the engine keeps its ordinary two-reversal
 // outcome with a full-size short.
-class PercentPartialCloseControl final : public BacktestEngine {
+class PercentPartialCloseControl final : public pineforge::source::PineStrategyHost {
 public:
     PercentPartialCloseControl() {
         initial_capital_ = 1'000'000.0;
@@ -387,7 +388,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("Short", false);
         } else if (bar_index_ == 1) {

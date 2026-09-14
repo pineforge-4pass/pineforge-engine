@@ -1,5 +1,6 @@
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cmath>
 #include <limits>
@@ -35,11 +36,11 @@ TradeTick tick(int64_t timestamp, uint64_t id, double price,
     return TradeTick{timestamp, id, price, qty};
 }
 
-class ContinuityStrategy final : public BacktestEngine {
+class ContinuityStrategy final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<bool> saw_islast;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         saw_islast.push_back(barstate_islast_);
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 1) strategy_close_all();
@@ -49,9 +50,9 @@ public:
     std::size_t pending_count() const { return pending_orders_.size(); }
 };
 
-class StopStrategy final : public BacktestEngine {
+class StopStrategy final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 1) {
             strategy_entry("stop", true, na<double>(), 103.0);
         }
@@ -62,12 +63,12 @@ public:
     double position_size() const { return signed_position_size(); }
 };
 
-class CaptureStrategy final : public BacktestEngine {
+class CaptureStrategy final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<Bar> bars;
     std::vector<int> indices;
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         bars.push_back(bar);
         indices.push_back(bar_index_);
     }
@@ -204,10 +205,10 @@ void test_rejects_replayed_or_out_of_order_ticks() {
     CHECK(strategy.last_error().find("backwards") != std::string::npos);
 }
 
-class LedgerStrategy final : public BacktestEngine {
+class LedgerStrategy final : public pineforge::source::PineStrategyHost {
 public:
     explicit LedgerStrategy(bool pooc = false) { process_orders_on_close_ = pooc; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", true, na<double>(), na<double>(), 2, "open long");
         if (bar_index_ == 1) strategy_close("L", "partial", 1);
         if (bar_index_ == 2) strategy_entry("S", false, na<double>(), na<double>(), 3, "reverse");
@@ -283,9 +284,9 @@ void test_order_action_exact_tick_time_and_comments() {
     CHECK(b.entry_incarnation == a.entry_incarnation);
 }
 
-class SameBarRoundtrip final : public BacktestEngine {
+class SameBarRoundtrip final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, na<double>(), na<double>(), 2, "entry");
             strategy_exit("bracket", "L", 110, 90, na<double>(), na<double>(),
@@ -310,10 +311,10 @@ void test_same_input_entry_exit_survives_flat_position() {
     CHECK(a.entry_incarnation == b.entry_incarnation);
 }
 
-class PyramidClose final : public BacktestEngine {
+class PyramidClose final : public pineforge::source::PineStrategyHost {
 public:
     PyramidClose() { pyramiding_ = 3; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ < 2) strategy_entry("L", true, na<double>(), na<double>(), bar_index_ + 1);
         if (bar_index_ == 2) strategy_close_all();
     }
@@ -339,10 +340,10 @@ void test_fifo_exit_fragments_keep_physical_order() {
     CHECK(c.sequence == 3 && d.sequence == 4);
 }
 
-class UnsupportedCoof final : public BacktestEngine {
+class UnsupportedCoof final : public pineforge::source::PineStrategyHost {
 public:
     UnsupportedCoof() { calc_on_order_fills_ = true; }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 };
 
 void test_unsupported_stream_configuration_fails_closed() {

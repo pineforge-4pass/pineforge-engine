@@ -43,6 +43,7 @@
 
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
@@ -102,7 +103,7 @@ struct Publication {
 // its exposed value from the published history BEFORE pushing the current
 // evaluation (the codegen's ``_req = hist[k-1]; if (is_complete) hist.push``);
 // a plain site exposes the current evaluation.
-class FirstBucketProbe final : public BacktestEngine {
+class FirstBucketProbe final : public pineforge::source::PineStrategyHost {
 public:
     ta::RSI rsi[4]{ta::RSI(14), ta::RSI(14), ta::RSI(14), ta::RSI(14)};
     std::vector<double> hist[4];
@@ -149,7 +150,7 @@ public:
         published[sec_id].push_back({bar.timestamp, v});
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         ChartRead r;
         r.chart_ts = bar.timestamp;
         for (int s = 0; s < 4; ++s) {

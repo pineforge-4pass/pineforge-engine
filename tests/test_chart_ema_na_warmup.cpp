@@ -12,6 +12,7 @@
 // also proves that the thread-local selector is restored when on_bar throws.
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/na.hpp>
 #include <pineforge/ta.hpp>
 
@@ -52,13 +53,13 @@ std::vector<Bar> flat_bars(int count, int64_t step_ms = 60'000) {
     return bars;
 }
 
-class EmaValueHarness final : public BacktestEngine {
+class EmaValueHarness final : public pineforge::source::PineStrategyHost {
 public:
     ta::EMA ema{3};
     std::vector<bool> flags;
     std::vector<double> values;
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         flags.push_back(ta::ema_na_warmup_flag());
         values.push_back(ema.compute(bar.close));
     }
@@ -109,7 +110,7 @@ void test_default_off_on_and_disable_zero() {
           "disable=0: EMA returns to src-seed behavior");
 }
 
-class DispatchHarness final : public BacktestEngine {
+class DispatchHarness final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<bool> flags;
     std::vector<bool> realtime_flags;
@@ -119,7 +120,7 @@ public:
         calc_on_order_fills_ = coof;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const bool flag = ta::ema_na_warmup_flag();
         flags.push_back(flag);
         if (barstate_islast_) realtime_flags.push_back(flag);
@@ -191,7 +192,7 @@ void test_streaming_dispatch_is_scoped() {
     CHECK(strat.stream_end(false), "streaming: stream ends cleanly");
 }
 
-class IndependenceHarness final : public BacktestEngine {
+class IndependenceHarness final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<bool> chart_flags;
     std::vector<bool> security_flags;
@@ -207,7 +208,7 @@ public:
         }
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         chart_flags.push_back(ta::ema_na_warmup_flag());
     }
 };
@@ -246,11 +247,11 @@ void test_chart_and_security_flags_are_independent() {
     CHECK(!ta::ema_na_warmup_flag(), "independence: ambient flag restored");
 }
 
-class ThrowingHarness final : public BacktestEngine {
+class ThrowingHarness final : public pineforge::source::PineStrategyHost {
 public:
     bool observed = false;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         observed = ta::ema_na_warmup_flag();
         throw std::runtime_error("chart warmup restoration probe");
     }

@@ -33,6 +33,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -55,9 +56,9 @@ namespace {
 // access to ``current_bar_`` plus an ``on_bar`` no-op so the abstract
 // base can be instantiated. We additionally re-export the new
 // chart-tz helper.
-class TimeProbeEngine : public BacktestEngine {
+class TimeProbeEngine : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     void set_bar_timestamp(int64_t ts_ms) {
         current_bar_.timestamp = ts_ms;
     }

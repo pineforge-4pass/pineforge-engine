@@ -28,6 +28,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 
 using namespace pineforge;
@@ -82,7 +83,7 @@ enum class Shape {
     CarriedBracket,
 };
 
-struct Probe : public BacktestEngine {
+struct Probe : public pineforge::source::PineStrategyHost {
     Probe(Seed seed, Shape shape) : seed_(seed), shape_(shape) {
         initial_capital_ = 1000.0;
         default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
@@ -107,7 +108,7 @@ struct Probe : public BacktestEngine {
     int trades_after_fill = 0;
     std::string entry_ids_after_fill;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             if (shape_ == Shape::CarriedBracket) {
                 // A resting priced bracket armed a bar before the pair.

@@ -4,6 +4,7 @@
 // to isolate admission from the later intrabar margin trims. No corpus,
 // indicator, historical strategy or grader is executed by this test.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -20,7 +21,7 @@ int passed = 0, failed = 0;
 bool near(double a, double b) { return std::abs(a - b) < 1e-8; }
 enum class Ordering { Bare, EntryFirst, CloseFirst };
 
-class Reversal : public BacktestEngine {
+class Reversal : public pineforge::source::PineStrategyHost {
 public:
     Ordering ordering;
     bool seed_long;
@@ -41,7 +42,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("Seed", seed_long, na, na, 1.0);
         if (bar_index_ == 1) {
             if (ordering == Ordering::CloseFirst) strategy_close("Seed");
@@ -115,7 +116,7 @@ void test_funding_and_sizing_controls() {
     CHECK(fractional.rows().size() == 2);
 }
 
-class Flat : public BacktestEngine {
+class Flat : public pineforge::source::PineStrategyHost {
 public:
     bool is_long;
     double after = na;
@@ -131,7 +132,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("New", is_long);
         if (bar_index_ == 1) { after = signed_position_size(); strategy_close_all(); }
     }

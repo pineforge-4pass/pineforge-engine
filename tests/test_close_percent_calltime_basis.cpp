@@ -17,6 +17,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -45,7 +46,7 @@ struct Design {
     double step = 0.01;
 };
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     explicit Probe(Design design) : design_(design) {
         initial_capital_ = 10000000;
@@ -60,7 +61,7 @@ public:
         set_syminfo_mintick(0.00001);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("L", design_.is_long);
         if (bar_index_ == 2) {
             close("P1");
@@ -116,7 +117,7 @@ void check(Design design, double first, double second, double remainder,
 }
 
 void check_entry_id_basis(bool any) {
-    class MultiProbe : public BacktestEngine {
+    class MultiProbe : public pineforge::source::PineStrategyHost {
     public:
         explicit MultiProbe(bool any) {
             initial_capital_ = 10000000;
@@ -126,7 +127,7 @@ void check_entry_id_basis(bool any) {
             commission_value_ = 0;
             margin_long_ = margin_short_ = 0;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) strategy_entry("A", true, kNaN, kNaN, 100);
             if (bar_index_ == 1) strategy_entry("B", true, kNaN, kNaN, 200);
             if (bar_index_ == 3) {

@@ -45,6 +45,7 @@
 #include <limits>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
@@ -81,7 +82,7 @@ static Bar mk(double p, int64_t ts) {
 }
 
 // Common probe framing: from flat, pyramiding=0, 1x margin, no slip/comm.
-struct DualProbeBase : public BacktestEngine {
+struct DualProbeBase : public pineforge::source::PineStrategyHost {
     DualProbeBase(double capital = 1'000'000) {
         initial_capital_ = capital;
         default_qty_type_ = QtyType::FIXED;
@@ -140,7 +141,7 @@ struct PendingMarketProbeBase : public DualProbeBase {
 static void test_R1_ms_lf_a_short_held() {
     std::printf("test_R1_ms_lf_a_short_held\n");
     struct P : DualProbeBase {
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E1", true,  kNaN, kNaN,   1.0, "MS-LF-1");  // long market
                 strategy_entry("E2", false, kNaN, 200.0,  1.0, "MS-LF-2");  // short stop, marketable
@@ -176,7 +177,7 @@ static void test_R1_ms_lf_a_short_held() {
 static void test_R2_ms_sf_a_long_held() {
     std::printf("test_R2_ms_sf_a_long_held\n");
     struct P : DualProbeBase {
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E1", false, kNaN, kNaN,  1.0, "MS-SF-1");  // short market
                 strategy_entry("E2", true,  kNaN, 50.0,  1.0, "MS-SF-2");  // long stop, marketable
@@ -207,7 +208,7 @@ static void test_R2_ms_sf_a_long_held() {
 static void test_R3_second_call_sizing_two_lot() {
     std::printf("test_R3_second_call_sizing_two_lot\n");
     struct P : DualProbeBase {
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E1", true,  kNaN, kNaN,   1.0, "MS-LF-1");  // long market qty 1
                 strategy_entry("E2", false, kNaN, 200.0,  2.0, "MS-LF-2");  // short stop own qty 2
@@ -236,7 +237,7 @@ static void test_R3_second_call_sizing_two_lot() {
 static void test_G1_ss_lf_a_single_close_flat() {
     std::printf("test_G1_ss_lf_a_single_close_flat\n");
     struct P : DualProbeBase {
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E1", true,  kNaN, 50.0,   1.0, "SS-LF-1");  // long stop, marketable
                 strategy_entry("E2", false, kNaN, 200.0,  1.0, "SS-LF-2");  // short stop, marketable
@@ -263,7 +264,7 @@ static void test_G1_ss_lf_a_single_close_flat() {
 static void test_G2_mm_both_market_unchanged() {
     std::printf("test_G2_mm_both_market_unchanged\n");
     struct P : DualProbeBase {
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E1", true,  kNaN, kNaN, 1.0, "MM-LF-1");  // long market
                 strategy_entry("E2", false, kNaN, kNaN, 1.0, "MM-LF-2");  // short market
@@ -288,7 +289,7 @@ static void test_G3_placement_rejected_contributes_zero() {
     std::printf("test_G3_placement_rejected_contributes_zero\n");
     struct P : DualProbeBase {
         P() : DualProbeBase(1000.0) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("E1", true,  kNaN, kNaN,  1000.0, "REJ-1");  // over-notional → rejected
                 strategy_entry("E2", false, kNaN, 200.0,    1.0, "SS-2");   // short stop, affordable
@@ -322,7 +323,7 @@ static void test_MM_HSF_buy_first_exact_trade_decomposition() {
         size_t queued_after_signal = 0;
         bool own_qty_preserved = false;
         double ledger_after_pair = 0.0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("HSF-E1-S", false, kNaN, kNaN, 2.5, "HSF-E1-S");
                 strategy_entry("HSF-E2-L", true,  kNaN, kNaN, 2.5, "HSF-E2-L");
@@ -369,7 +370,7 @@ static void test_MM_HLF_gross_sell_transaction_mirror() {
         size_t queued_after_signal = 0;
         bool own_qty_preserved = false;
         double ledger_after_pair = 0.0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("HLF-E1-L", true,  kNaN, kNaN, 2.5, "HLF-E1-L");
                 strategy_entry("HLF-E2-S", false, kNaN, kNaN, 2.5, "HLF-E2-S");
@@ -417,7 +418,7 @@ static void test_MM_HSF_interleaved_brackets_keep_fill_iteration_stable() {
     struct P : PendingMarketProbeBase {
         size_t queued_after_signal = 0;
         int candidate_market_orders = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("BR-E1-S", false, kNaN, kNaN, 2.5);
                 strategy_exit("BR-X-LIM", "BR-E1-S", 90.0, kNaN,
@@ -465,7 +466,7 @@ static void test_MM_tight_gross_110pct_rejects_later_leg_both_directions() {
         size_t queued_after_signal = 0;
         bool both_own_orders_queued = false;
         double position_after_finalization = 0.0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("TSF-E1-S", false, kNaN, kNaN, 5.5, "TSF-E1-S");
                 strategy_entry("TSF-E2-L", true,  kNaN, kNaN, 5.5, "TSF-E2-L");
@@ -483,7 +484,7 @@ static void test_MM_tight_gross_110pct_rejects_later_leg_both_directions() {
         size_t queued_after_signal = 0;
         bool both_own_orders_queued = false;
         double position_after_finalization = 0.0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("TLF-E1-L", true,  kNaN, kNaN, 5.5, "TLF-E1-L");
                 strategy_entry("TLF-E2-S", false, kNaN, kNaN, 5.5, "TLF-E2-S");
@@ -530,7 +531,7 @@ static void test_MM_tight_single_55pct_controls_admit() {
     struct CTL : PendingMarketProbeBase {
         bool long_side;
         explicit CTL(bool side) : long_side(side) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry(long_side ? "CTL-L" : "CTL-S", long_side,
                                kNaN, kNaN, 5.5,
@@ -590,7 +591,7 @@ static void test_MM_scope_predicates_do_not_pair_or_gross_gate() {
             queued = pending_count();
             metadata_clean = pending_pair_metadata_clean();
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ != 0 || issued) return;
             issued = true;
             switch (mode) {
@@ -676,7 +677,7 @@ static void test_MM_cross_bar_calls_do_not_pair() {
     struct P : PendingMarketProbeBase {
         size_t queued = 0;
         bool metadata_clean = false;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("XB-S", false, kNaN, kNaN, 5.5);
             } else if (bar_index_ == 1) {
@@ -702,7 +703,7 @@ static void test_MM_prior_bar_gapped_limit_disqualifies_current_pair() {
     struct P : PendingMarketProbeBase {
         double position_after_fills = 0.0;
         int trades_after_fills = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("REST-L", true, 90.0, kNaN, 1.0);
             } else if (bar_index_ == 1) {
@@ -738,7 +739,7 @@ static void test_MM_cancel_and_replacement_unpair_survivors() {
     struct Cancel : PendingMarketProbeBase {
         size_t queued = 0;
         bool survivor_clean = false;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("CAN-S", false, kNaN, kNaN, 2.5);
                 strategy_entry("CAN-L", true, kNaN, kNaN, 2.5);
@@ -766,7 +767,7 @@ static void test_MM_cancel_and_replacement_unpair_survivors() {
         bool both_clean = false;
         double position_after_fills = 0.0;
         int trades_after_fills = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("REP-S", false, kNaN, kNaN, 2.5);
                 strategy_entry("REP-L", true, kNaN, kNaN, 2.5);
@@ -793,7 +794,7 @@ static void test_MM_cancel_and_replacement_unpair_survivors() {
     struct CancelRearm : PendingMarketProbeBase {
         int trades_after_fills = 0;
         double position_after_fills = 0.0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("CR-A-L", true,  kNaN, kNaN, 2.5);
                 strategy_entry("CR-B-S", false, kNaN, kNaN, 2.5);
@@ -824,7 +825,7 @@ static void test_MM_prior_bar_entry_replacement_taints_current_pair_set() {
     struct P : PendingMarketProbeBase {
         double position_after_fills = 0.0;
         int trades_after_fills = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("REP-A", true, 90.0, kNaN, 1.0);
             } else if (bar_index_ == 1) {
@@ -864,7 +865,7 @@ static void test_MM_alternating_three_call_sets_remain_ordinary() {
         double position_after_fills = 0.0;
         int trades_after_fills = 0;
         explicit P(bool sf) : short_first(sf) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 if (short_first) {
                     strategy_entry("SLS-1-S", false, kNaN, kNaN, 5.5);
@@ -910,7 +911,7 @@ static void test_MM_pair_scope_revalidated_before_fill() {
         size_t queued_after_signal = 0;
         double position_after_fills = 0.0;
         int trades_after_fills = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("RISK-S", false, kNaN, kNaN, 2.5);
                 strategy_entry("RISK-L", true,  kNaN, kNaN, 2.5);
@@ -945,7 +946,7 @@ static void test_MM_mixed_third_entry_like_order_disqualifies_pair() {
         int trades_after_fills = 0;
         bool first_trade_is_ordinary_short = false;
         explicit P(Third t) : third(t) {}
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("MIX-E1-S", false, kNaN, kNaN, 2.5);
                 strategy_entry("MIX-E2-L", true,  kNaN, kNaN, 2.5);
@@ -995,7 +996,7 @@ static void test_MM_pair_uses_sum_of_frozen_quantized_own_qty() {
         double position_after_pair = 0.0;
         double ledger_after_pair = 0.0;
         P() { qty_step_ = 1.0; }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("Q-S", false, kNaN, kNaN, 5.1);
                 strategy_entry("Q-L", true,  kNaN, kNaN, 5.1);
@@ -1025,7 +1026,7 @@ static void test_MM_pair_fill_gap_gate_uses_gross_transaction_qty() {
     struct P : PendingMarketProbeBase {
         double position_after_gap = 0.0;
         int trades_after_gap = 0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("GAP-S", false, kNaN, kNaN, 4.0);
                 strategy_exit("GAP-X1", "GAP-L", 180.0, kNaN,
@@ -1060,7 +1061,7 @@ static void test_MM_pair_defers_percent_exit_reconciliation_until_net() {
         double ledger_after_pair = 0.0;
         double exit_one_qty = 0.0;
         double exit_two_qty = 0.0;
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("LAY-S", false, kNaN, kNaN, 2.5);
                 strategy_exit("LAY-X1", "LAY-L", 150.0, kNaN,

@@ -51,6 +51,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -84,7 +85,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c) {
     return b;
 }
 
-class MCEngine : public BacktestEngine {
+class MCEngine : public pineforge::source::PineStrategyHost {
 public:
     std::string exit_comment(int i) const { return closed_trade_exit_comment(i); }
     std::string exit_id(int i) const { return closed_trade_exit_id(i); }
@@ -124,7 +125,7 @@ public:
         if (disable_mc) set_margin_call_enabled(false);
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) strategy_entry("S", false);
         if (bar_index_ == 2) {
             strategy_entry("L", true);
@@ -167,7 +168,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0) {
             strategy_entry("L", is_long_, kNaN, kNaN, /*qty=*/99.95);
             strategy_exit("X", "L", kNaN, stop_level_, kNaN, kNaN, kNaN,

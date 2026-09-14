@@ -44,6 +44,7 @@
 #include <limits>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -98,7 +99,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
 // ─────────────────────────────────────────────────────────────────────
 static void test_carry_stop_flips_opposite_close_only() {
     std::printf("test_carry_stop_flips_opposite_close_only\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -110,7 +111,7 @@ static void test_carry_stop_flips_opposite_close_only() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("SH", false, kNaN, kNaN, kNaN, "short setup");
             if (bar_index_ == 1 && position_side_ == PositionSide::SHORT)
@@ -158,7 +159,7 @@ static void test_carry_stop_flips_opposite_close_only() {
 // ─────────────────────────────────────────────────────────────────────
 static void test_same_cycle_reverse_still_opens() {
     std::printf("test_same_cycle_reverse_still_opens\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -170,7 +171,7 @@ static void test_same_cycle_reverse_still_opens() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L", true, kNaN, kNaN, kNaN, "long setup");
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG)
@@ -212,7 +213,7 @@ static void test_same_cycle_reverse_still_opens() {
 // ──────────────────────────────────────────────────────────────────
 static void test_same_cycle_frozen_transaction_exactly_flattens_long() {
     std::printf("test_same_cycle_frozen_transaction_exactly_flattens_long\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -224,7 +225,7 @@ static void test_same_cycle_frozen_transaction_exactly_flattens_long() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L1", true, kNaN, kNaN, 1.0, "base long");
             }
@@ -263,7 +264,7 @@ static void test_same_cycle_frozen_transaction_exactly_flattens_long() {
 // fill closes both shorts and opens no long remainder.
 static void test_same_cycle_frozen_transaction_exactly_flattens_short() {
     std::printf("test_same_cycle_frozen_transaction_exactly_flattens_short\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -275,7 +276,7 @@ static void test_same_cycle_frozen_transaction_exactly_flattens_short() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("S1", false, kNaN, kNaN, 1.0, "base short");
             }
@@ -312,7 +313,7 @@ static void test_same_cycle_frozen_transaction_exactly_flattens_short() {
 // equality-only, so live<frozen retains the legacy close-and-open reversal.
 static void test_same_cycle_explicit_fixed_live_less_than_frozen_unchanged() {
     std::printf("test_same_cycle_explicit_fixed_live_less_than_frozen_unchanged\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -324,7 +325,7 @@ static void test_same_cycle_explicit_fixed_live_less_than_frozen_unchanged() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L", true, kNaN, kNaN, 1.0);
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG)
@@ -350,7 +351,7 @@ static void test_same_cycle_explicit_fixed_live_less_than_frozen_unchanged() {
 // to explicit FIXED sizing; this fill closes both longs and opens a small short.
 static void test_same_cycle_finite_cash_qty_unchanged() {
     std::printf("test_same_cycle_finite_cash_qty_unchanged\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -362,7 +363,7 @@ static void test_same_cycle_finite_cash_qty_unchanged() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L1", true, kNaN, kNaN, 1.0);
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
@@ -395,7 +396,7 @@ static void test_same_cycle_finite_cash_qty_unchanged() {
 // behavior, ending SHORT1 rather than close-only FLAT.
 static void test_double_flip_same_side_is_not_same_position_cycle() {
     std::printf("test_double_flip_same_side_is_not_same_position_cycle\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -407,7 +408,7 @@ static void test_double_flip_same_side_is_not_same_position_cycle() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L", true, kNaN, kNaN, 1.0);
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
@@ -437,7 +438,7 @@ static void test_double_flip_same_side_is_not_same_position_cycle() {
 // transaction and must retain ordinary close-and-open behavior.
 static void test_market_same_cycle_reversal_unchanged() {
     std::printf("test_market_same_cycle_reversal_unchanged\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -448,7 +449,7 @@ static void test_market_same_cycle_reversal_unchanged() {
             pyramiding_ = 1;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG)
@@ -474,7 +475,7 @@ static void test_market_same_cycle_reversal_unchanged() {
 // legacy full reversal to SHORT 1 rather than inferring a partial reduction.
 static void test_same_cycle_live_greater_than_frozen_unchanged() {
     std::printf("test_same_cycle_live_greater_than_frozen_unchanged\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -486,7 +487,7 @@ static void test_same_cycle_live_greater_than_frozen_unchanged() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L1", true, kNaN, kNaN, 1.0);
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
@@ -515,7 +516,7 @@ static void test_same_cycle_live_greater_than_frozen_unchanged() {
 // legacy full-reversal path.
 static void test_default_fixed_exact_size_unchanged() {
     std::printf("test_default_fixed_exact_size_unchanged\n");
-    class Probe : public BacktestEngine {
+    class Probe : public pineforge::source::PineStrategyHost {
     public:
         Probe() {
             initial_capital_ = 1'000'000;
@@ -527,7 +528,7 @@ static void test_default_fixed_exact_size_unchanged() {
             syminfo_mintick_ = 0.01;
         }
         double pos_size() const { return signed_position_size(); }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0)
                 strategy_entry("L1", true, kNaN, kNaN, 1.0);
             if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {

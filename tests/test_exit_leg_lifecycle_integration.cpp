@@ -1,5 +1,6 @@
 // Source-policy-selected native margin/replacement witnesses. Literal money,
 // no external data or generated source. No financial4afb behavior is imported.
+#include <pineforge/source/pine_strategy_host.hpp>
 #include "exit_lifecycle_fixture.hpp"
 #include <cmath>
 #include <cstdio>
@@ -8,11 +9,11 @@ namespace {
 int checks=0,failures=0;
 #define CHECK(x) do{++checks;if(!(x)){++failures;std::fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);}}while(0)
 const double nan=std::numeric_limits<double>::quiet_NaN();
-class Book:public BacktestEngine {
+class Book:public pineforge::source::PineStrategyHost {
 public:
     Book(bool buy):buy_(buy){initial_capital_=1000;commission_value_=0;slippage_=0;
         margin_long_=margin_short_=0;pyramiding_=10;qty_step_=1;current_bar_={100,100,100,100,1,0};}
-    void on_bar(const Bar&)override{}
+    void on_source_bar(const Bar&)override{}
     void seed(bool two=false){
         strategy_entry("E",buy_,nan,nan,two?10:20);step(100);
         if(two){strategy_entry("F",buy_,nan,nan,10);step(100);}

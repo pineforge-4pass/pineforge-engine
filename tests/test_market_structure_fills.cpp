@@ -17,6 +17,7 @@
 #include <limits>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -42,9 +43,9 @@ static bool near(double a, double b, double tol = 1e-9) {
 namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
-class SnapProbe : public BacktestEngine {
+class SnapProbe : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {}   // helper-only; never run
+    void on_source_bar(const Bar&) override {}   // helper-only; never run
     void set_mintick(double m) { syminfo_mintick_ = m; }
     // long stop snaps UP (ceil), short stop snaps DOWN (floor).
     double dsnap(double price, bool is_long_stop) const {
@@ -96,7 +97,7 @@ static void test_snap_parametric_across_mintick() {
 
 // End-to-end: short stop entry at a sub-tick price floors, and the fill lands
 // on the snapped grid value (proves the path uses the snap, not just the helper).
-class ShortStopRealize : public BacktestEngine {
+class ShortStopRealize : public pineforge::source::PineStrategyHost {
 public:
     ShortStopRealize() {
         initial_capital_ = 1'000'000;
@@ -105,7 +106,7 @@ public:
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
         syminfo_mintick_ = 0.01;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("S", false, std::numeric_limits<double>::quiet_NaN(),
                            /*stop=*/99.994, 1.0, "short stop sub-tick");

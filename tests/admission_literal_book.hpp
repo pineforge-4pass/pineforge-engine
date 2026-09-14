@@ -1,6 +1,7 @@
 #pragma once
 #include <pineforge/pineforge.h>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/pending_order_mirror.hpp>
 #include <algorithm>
 #include <stdexcept>
@@ -18,11 +19,11 @@ POINT(Dispatch,apply_filled_order_to_state);
 POINT(Compact,compact_filled_pending_orders);
 POINT(Reduce,reduce_oca_group);
 #undef POINT
-class Book:public BacktestEngine{
+class Book:public pineforge::source::PineStrategyHost{
 public:
     Book(){initial_capital_=1000;commission_value_=0;slippage_=0;pyramiding_=2;qty_step_=1;
         current_bar_={100,100,100,100,1,0};next_order_incarnation_=41;next_order_seq_=4;}
-    void on_bar(const Bar&)override{}
+    void on_source_bar(const Bar&)override{}
     void add(const char* id,double qty,bool buy=true,double stop=missing){strategy_entry(id,buy,missing,stop,qty);}
     void raw(const char* id,double qty,bool buy=true){strategy_order(id,buy,qty);}
     void cancel(const char* id){strategy_cancel(id);}

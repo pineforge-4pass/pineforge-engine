@@ -1,4 +1,5 @@
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/ta.hpp>
 #include <pineforge/math.hpp>
 #include <pineforge/series.hpp>
@@ -99,7 +100,7 @@ static inline std::string _pf_derive_country(const std::string& tickerid) {
 }
 // --- end syminfo derivation helpers ---
 
-class GeneratedStrategy : public BacktestEngine {
+class GeneratedStrategy : public pineforge::source::PineStrategyHost {
 public:
     ta::MACD _ta_macd_1;
     ta::Crossover _ta_crossover_2;
@@ -145,7 +146,7 @@ public:
         }
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (!_inputs_initialized_) {
             fastLen = get_input_int("Fast Length", 12);
             slowLen = get_input_int("Slow Length", 26);

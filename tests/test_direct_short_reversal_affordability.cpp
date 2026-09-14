@@ -20,6 +20,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -64,7 +65,7 @@ Bar bar(int64_t timestamp, double open, double high, double low, double close) {
     return out;
 }
 
-class DirectShortReversalProbe : public BacktestEngine {
+class DirectShortReversalProbe : public pineforge::source::PineStrategyHost {
 public:
     double position_size() const { return signed_position_size(); }
     bool has_live_short_position() const {
@@ -147,7 +148,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
         seed_position(
             PositionSide::LONG, 3167.25, 31.4892, "L",
@@ -198,7 +199,7 @@ public:
             full_residual ? 1.0 : 0.0);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
         seed_position(
             PositionSide::LONG, 4629.63, 2.7738, "L",
@@ -288,7 +289,7 @@ public:
             + (adverse - entry) * qty;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void trigger() {
         current_bar_ =
@@ -378,7 +379,7 @@ public:
         }
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void exercise() {
         current_bar_ = bar(1000, 100.0, 100.0, 100.0, 100.0);
@@ -474,7 +475,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void exercise() {
         current_bar_ = bar(1000, 100.0, 100.0, 100.0, 100.0);
@@ -551,7 +552,7 @@ void test_no_effect_same_side_add_keeps_owner_without_new_obligation() {
     }
 }
 
-class FreshOpeningResetProbe final : public BacktestEngine {
+class FreshOpeningResetProbe final : public pineforge::source::PineStrategyHost {
 public:
     enum class Opening {
         HighLevelEntry,
@@ -566,7 +567,7 @@ public:
         margin_call_enabled_ = false;
     }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void exercise() {
         current_bar_ = bar(1000, 100.0, 100.0, 100.0, 100.0);
@@ -653,7 +654,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             seed_position(
                 PositionSide::LONG, 100.0, 100.0, "L",
@@ -752,11 +753,11 @@ void test_direct_reversal_owner_and_obligation_follow_script_mutations() {
     }
 }
 
-class RunResetControlProbe final : public BacktestEngine {
+class RunResetControlProbe final : public pineforge::source::PineStrategyHost {
 public:
     RunResetControlProbe() { margin_call_enabled_ = false; }
 
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
 
     void prime_opening_obligation() {
         opening_obligations_.replace(broker::OpeningReceipt::check(

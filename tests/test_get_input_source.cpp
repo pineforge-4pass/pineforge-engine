@@ -12,14 +12,15 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
 namespace {
 
-struct SourceHarness : public BacktestEngine {
+struct SourceHarness : public pineforge::source::PineStrategyHost {
     explicit SourceHarness(bool active = true) { _src_series_active_ = active; }
-    void on_bar(const Bar& /*bar*/) override {}
+    void on_source_bar(const Bar& /*bar*/) override {}
 
     const Series<double>& resolve(const std::string& key) {
         return get_input_source(key, _src_close_);

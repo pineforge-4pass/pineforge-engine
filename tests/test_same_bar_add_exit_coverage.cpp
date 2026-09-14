@@ -41,6 +41,7 @@
 #include <limits>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -73,7 +74,7 @@ static Bar mk(double o, double h, double l, double c, int64_t ts) {
 }
 
 // Common probe base: fixed 1-lot sizing, no slippage/commission, tick 0.01.
-class ProbeBase : public BacktestEngine {
+class ProbeBase : public pineforge::source::PineStrategyHost {
 public:
     explicit ProbeBase(int pyr) {
         initial_capital_ = 1'000'000;
@@ -109,7 +110,7 @@ struct Fixture {
 class CollisionProbe : public ProbeBase {
 public:
     CollisionProbe(int pyr, Fixture f) : ProbeBase(pyr), f_(f) {}
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("P", f_.is_long);            // base lot1 (market)
         }

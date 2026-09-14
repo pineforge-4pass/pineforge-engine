@@ -1,5 +1,6 @@
 // Literal native settlement contracts; no Engine::run, feed or reference data.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -16,7 +17,7 @@ void near(double a, double b) {
     if (!equal) std::printf("actual=%.17g expected=%.17g\n",a,b);
     CHECK(equal);
 }
-class Book final : public BacktestEngine {
+class Book final : public pineforge::source::PineStrategyHost {
 public:
     Book() {
         current_bar_ = {100, 125, 95, 120, 1, 60000};
@@ -29,7 +30,7 @@ public:
         qty_step_ = 10;
         pyramiding_ = 1;
     }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     execution::Result settle(execution::Action action, double price = 120,
                              const char* id = "N", uint64_t incarnation = 100,
                              std::optional<double> commission_account = {}) {

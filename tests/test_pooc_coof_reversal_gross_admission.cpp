@@ -21,6 +21,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -56,7 +57,7 @@ static Bar bar(int64_t ts, double price) {
     return Bar{price, price, price, price, 1.0, ts};
 }
 
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
     Probe(bool first_long, double qty) : first_long_(first_long), qty_(qty) {
         initial_capital_ = 10'000.0;
@@ -82,7 +83,7 @@ public:
     double margin_pct = 100.0;
     int slip_ticks = 0;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         calc_on_order_fills_ = coof;
         process_orders_on_close_ = pooc;
         commission_value_ = commission_pct;
@@ -169,7 +170,7 @@ static void test_green_fixed_probe_and_margin_equality_policy() {
     }
 }
 
-class MutationProbe final : public BacktestEngine {
+class MutationProbe final : public pineforge::source::PineStrategyHost {
 public:
     enum class Shape {
         SameBarReplacement,
@@ -202,7 +203,7 @@ public:
     double observed_size = 0.0;
     int observed_trades = 0;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (shape_ == Shape::SameBarReplacement) {
             if (bar_index_ == 0) {
                 strategy_entry("SR-A", true, kNaN, kNaN, 55.0);

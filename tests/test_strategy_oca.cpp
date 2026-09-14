@@ -15,6 +15,7 @@
 #include <string>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -42,7 +43,7 @@ namespace {
 // Probe that places a configurable batch of OCA-grouped limit orders on
 // bar 1, then exposes pending_orders_ each bar so the test can inspect
 // remaining qty after the first sibling fires.
-class OcaProbe : public BacktestEngine {
+class OcaProbe : public pineforge::source::PineStrategyHost {
 public:
     struct Sibling {
         std::string id;
@@ -67,7 +68,7 @@ public:
         pyramiding_ = 100;  // allow many entries to coexist
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 1) {
             for (const auto& s : siblings) {
                 strategy_order(s.id, s.is_long, s.qty, s.limit_price,
@@ -203,7 +204,7 @@ static void test_cancel_unchanged() {
 // post-fill OCA dispatch in apply_filled_order_to_state.
 static void test_cross_group_isolation() {
     std::printf("test_cross_group_isolation\n");
-    class CrossGroupProbe : public BacktestEngine {
+    class CrossGroupProbe : public pineforge::source::PineStrategyHost {
     public:
         struct PendingSnap { std::string id; double qty; std::string oca_name; };
         std::vector<std::vector<PendingSnap>> pending_per_bar;
@@ -216,7 +217,7 @@ static void test_cross_group_isolation() {
             commission_value_ = 0;
             pyramiding_ = 100;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 1) {
                 // Group A: CANCEL siblings (each qty=2)
@@ -302,7 +303,7 @@ static void test_cross_group_isolation() {
 // Without the gate, A_SL is wiped immediately.
 static void test_cancel_oca_partial_fill_keeps_sibling() {
     std::printf("test_cancel_oca_partial_fill_keeps_sibling\n");
-    class PartialFillProbe : public BacktestEngine {
+    class PartialFillProbe : public pineforge::source::PineStrategyHost {
     public:
         struct PendingSnap { std::string id; double qty; };
         std::vector<std::vector<PendingSnap>> pending_per_bar;
@@ -315,7 +316,7 @@ static void test_cancel_oca_partial_fill_keeps_sibling() {
             commission_value_ = 0;
             pyramiding_ = 100;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Bar 1: open long qty 2.
             if (bar_index_ == 1) {
@@ -412,7 +413,7 @@ static void test_none_unchanged() {
 // bracket never placed).
 static void test_strategy_exit_two_brackets_independent_oca_groups() {
     std::printf("test_strategy_exit_two_brackets_independent_oca_groups\n");
-    class TwoBracketProbe : public BacktestEngine {
+    class TwoBracketProbe : public pineforge::source::PineStrategyHost {
     public:
         struct TradeRow {
             std::string entry_id;
@@ -430,7 +431,7 @@ static void test_strategy_exit_two_brackets_independent_oca_groups() {
             commission_value_ = 0;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             // Bar 0: open long qty 2 (default_qty_value_).
             if (bar_index_ == 0) {

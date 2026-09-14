@@ -48,6 +48,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -137,7 +138,7 @@ std::vector<Bar> series(std::initializer_list<Bar> bars) {
 // Script chars (indexed by bar_index_): 'L' / 'S' market entry, '.' nothing;
 // while in a position strategy.exit("X", "E", limit = exit_limit_, stop =
 // exit_stop_) is re-issued every bar.
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     explicit Probe(double mintick, double qty = 100.0) {
         initial_capital_ = 1000000000.0;
@@ -158,7 +159,7 @@ public:
     std::string script;
     double exit_stop_ = kNaN;
     double exit_limit_ = kNaN;
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ >= 0 && bar_index_ < (int)script.size()) {
             switch (script[bar_index_]) {
                 case 'L': strategy_entry("E", true); break;

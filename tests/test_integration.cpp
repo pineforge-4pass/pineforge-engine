@@ -8,6 +8,7 @@
 
 #include <pineforge/ta.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/timeframe.hpp>
 #include <pineforge/magnifier.hpp>
 #include <pineforge/na.hpp>
@@ -204,7 +205,7 @@ static void test_high_sample_count() {
 
 // ---- 7. Strategy engine - basic subclass ------------------------------------
 
-class TestStrategy : public BacktestEngine {
+class TestStrategy : public pineforge::source::PineStrategyHost {
 public:
     int bar_count = 0;
     std::vector<double> close_history;
@@ -217,7 +218,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         close_history.push_back(bar.close);
         bar_count++;
     }
@@ -246,7 +247,7 @@ static void test_engine_single_bar() {
 static void test_request_security_gaps_on_emits_na_between_completions() {
     std::printf("test_request_security_gaps_on_emits_na_between_completions\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             register_security_eval(0, "60", "15", false, true);
@@ -264,7 +265,7 @@ static void test_request_security_gaps_on_emits_na_between_completions() {
             }
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             seen_.push_back(sec_val_);
         }
 
@@ -316,7 +317,7 @@ static void test_request_security_gaps_on_emits_na_between_completions() {
 static void test_priced_entry_not_filled_same_bar_when_pooc_false() {
     std::printf("test_priced_entry_not_filled_same_bar_when_pooc_false\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -326,7 +327,7 @@ static void test_priced_entry_not_filled_same_bar_when_pooc_false() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, na<double>(), 101.0);
             }
@@ -349,7 +350,7 @@ static void test_priced_entry_not_filled_same_bar_when_pooc_false() {
 static void test_priced_entry_fill_rounds_to_mintick() {
     std::printf("test_priced_entry_fill_rounds_to_mintick\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -360,7 +361,7 @@ static void test_priced_entry_fill_rounds_to_mintick() {
             syminfo_mintick_ = 0.01;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, na<double>(), 100.006);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -386,13 +387,13 @@ static void test_priced_entry_fill_rounds_to_mintick() {
 static void test_barstate_flags_simple_run() {
     std::printf("test_barstate_flags_simple_run\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         std::vector<bool> isnew_values;
         std::vector<bool> isconfirmed_values;
         std::vector<bool> islast_values;
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             isnew_values.push_back(is_first_tick_);
             isconfirmed_values.push_back(is_last_tick_);
@@ -421,13 +422,13 @@ static void test_barstate_flags_simple_run() {
 static void test_barstate_flags_magnifier_run() {
     std::printf("test_barstate_flags_magnifier_run\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         std::vector<bool> isnew_values;
         std::vector<bool> isconfirmed_values;
         std::vector<bool> islast_values;
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             isnew_values.push_back(is_first_tick_);
             isconfirmed_values.push_back(is_last_tick_);
@@ -456,7 +457,7 @@ static void test_barstate_flags_magnifier_run() {
 static void test_buy_stop_limit_requires_stop_before_limit_on_path() {
     std::printf("test_buy_stop_limit_requires_stop_before_limit_on_path\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -465,7 +466,7 @@ static void test_buy_stop_limit_requires_stop_before_limit_on_path() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Buy stop-limit: stop activates at 105, limit fills at 95 only after activation.
                 strategy_entry("L", true, 95.0, 105.0);
@@ -490,7 +491,7 @@ static void test_buy_stop_limit_requires_stop_before_limit_on_path() {
 static void test_buy_stop_limit_fills_when_limit_seen_after_activation() {
     std::printf("test_buy_stop_limit_fills_when_limit_seen_after_activation\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -499,7 +500,7 @@ static void test_buy_stop_limit_fills_when_limit_seen_after_activation() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, 95.0, 105.0);
             } else if (bar_index_ == 2 && signed_position_size() > 0.0) {
@@ -528,7 +529,7 @@ static void test_buy_stop_limit_fills_when_limit_seen_after_activation() {
 static void test_sell_stop_limit_requires_stop_before_limit_on_path() {
     std::printf("test_sell_stop_limit_requires_stop_before_limit_on_path\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -537,7 +538,7 @@ static void test_sell_stop_limit_requires_stop_before_limit_on_path() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Sell stop-limit: stop activates at 95, limit fills at 105 only after activation.
                 strategy_entry("S", false, 105.0, 95.0);
@@ -563,7 +564,7 @@ static void test_sell_stop_limit_requires_stop_before_limit_on_path() {
 static void test_sell_stop_limit_fills_when_limit_seen_after_activation() {
     std::printf("test_sell_stop_limit_fills_when_limit_seen_after_activation\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -572,7 +573,7 @@ static void test_sell_stop_limit_fills_when_limit_seen_after_activation() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("S", false, 105.0, 95.0);
             } else if (bar_index_ == 2 && signed_position_size() < 0.0) {
@@ -598,7 +599,7 @@ static void test_sell_stop_limit_fills_when_limit_seen_after_activation() {
 
 // ---- 8. Strategy with risk limits -------------------------------------------
 
-class RiskTestStrategy : public BacktestEngine {
+class RiskTestStrategy : public pineforge::source::PineStrategyHost {
 public:
     RiskTestStrategy() {
         initial_capital_ = 10000;
@@ -610,7 +611,7 @@ public:
         pyramiding_ = 5;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         // Try to pyramid every bar
         strategy_entry("Long", true);
     }
@@ -632,7 +633,7 @@ static void test_risk_max_position_size() {
 static void test_allow_entry_in_opposite_entry_closes_without_reversing() {
     std::printf("test_allow_entry_in_opposite_entry_closes_without_reversing\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -642,7 +643,7 @@ static void test_allow_entry_in_opposite_entry_closes_without_reversing() {
             slippage_ = 0;
             risk_direction_ = RiskDirection::LONG_ONLY;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) strategy_entry("L", true);
             if (bar_index_ == 1 && signed_position_size() > 0.0) {
                 strategy_entry("S_BLOCKED", false);
@@ -667,7 +668,7 @@ static void test_allow_entry_in_opposite_entry_closes_without_reversing() {
 static void test_blocked_entry_does_not_consume_intraday_fill_quota() {
     std::printf("test_blocked_entry_does_not_consume_intraday_fill_quota\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -680,7 +681,7 @@ static void test_blocked_entry_does_not_consume_intraday_fill_quota() {
             risk_max_position_size_ = 2.0;
             max_intraday_filled_orders_ = 3;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) strategy_entry("L1", true);
             if (bar_index_ == 1) strategy_entry("L2", true);
             if (bar_index_ == 2) strategy_entry("L3_BLOCKED", true);
@@ -716,7 +717,7 @@ static void test_blocked_entry_does_not_consume_intraday_fill_quota() {
 static void test_flat_bracket_dual_stop_closes_on_opposite_touch() {
     std::printf("test_flat_bracket_dual_stop_closes_on_opposite_touch\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -728,7 +729,7 @@ static void test_flat_bracket_dual_stop_closes_on_opposite_touch() {
             process_orders_on_close_ = false;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_entry("LE", true, na<double>(), 102.0);
@@ -758,7 +759,7 @@ static void test_flat_bracket_dual_stop_closes_on_opposite_touch() {
 static void test_flat_bracket_dual_stop_cross_bar_closes_on_opposite_touch() {
     std::printf("test_flat_bracket_dual_stop_cross_bar_closes_on_opposite_touch\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -770,7 +771,7 @@ static void test_flat_bracket_dual_stop_cross_bar_closes_on_opposite_touch() {
             process_orders_on_close_ = false;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_entry("LE", true, na<double>(), 105.0);
@@ -806,7 +807,7 @@ static void test_flat_bracket_dual_stop_cross_bar_closes_on_opposite_touch() {
 static void test_flat_bracket_dual_stop_open_equals_stop_prefers_long() {
     std::printf("test_flat_bracket_dual_stop_open_equals_stop_prefers_long\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -818,7 +819,7 @@ static void test_flat_bracket_dual_stop_open_equals_stop_prefers_long() {
             process_orders_on_close_ = false;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Source order intentionally puts the short leg first to prove
                 // it does not affect arbitration when both legs tie at open.
@@ -858,7 +859,7 @@ static void test_flat_bracket_dual_stop_open_equals_stop_prefers_long() {
 static void test_flat_armed_priced_entries_pyramid_within_one_bar() {
     std::printf("test_flat_armed_priced_entries_pyramid_within_one_bar\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -870,7 +871,7 @@ static void test_flat_armed_priced_entries_pyramid_within_one_bar() {
             process_orders_on_close_ = false;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_entry("S_NEAR", false, na<double>(), 99.0);
@@ -892,7 +893,7 @@ static void test_flat_armed_priced_entries_pyramid_within_one_bar() {
 
 // ---- 9. Magnifier sub-bar processing ---------------------------------------
 
-class MagnifierTestStrategy : public BacktestEngine {
+class MagnifierTestStrategy : public pineforge::source::PineStrategyHost {
 public:
     int on_bar_calls = 0;
     int first_tick_count = 0;
@@ -906,7 +907,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         on_bar_calls++;
         if (is_first_tick_) first_tick_count++;
         if (is_last_tick_) last_tick_count++;
@@ -966,7 +967,7 @@ static void test_nan_propagation() {
 
 // ---- 11. Per-trade extreme tracking -----------------------------------------
 
-class ExtremeTrackingStrategy : public BacktestEngine {
+class ExtremeTrackingStrategy : public pineforge::source::PineStrategyHost {
 public:
     ExtremeTrackingStrategy() {
         initial_capital_ = 100000;
@@ -976,7 +977,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         }
@@ -1064,7 +1065,7 @@ static void test_rsi_sma_bb_chain() {
 
 // ---- 14. Strategy entry/exit roundtrip PnL ----------------------------------
 
-class PnlTestStrategy : public BacktestEngine {
+class PnlTestStrategy : public pineforge::source::PineStrategyHost {
 public:
     PnlTestStrategy() {
         initial_capital_ = 100000;
@@ -1074,7 +1075,7 @@ public:
         slippage_ = 0;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         }
@@ -1094,7 +1095,7 @@ public:
 static void test_trail_points_activation_ceils_to_mintick() {
     std::printf("test_trail_points_activation_ceils_to_mintick\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1106,7 +1107,7 @@ static void test_trail_points_activation_ceils_to_mintick() {
             process_orders_on_close_ = false;
             pyramiding_ = 1;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
@@ -1146,7 +1147,7 @@ static void test_trail_points_activation_ceils_to_mintick() {
 static void test_exit_profit_loss_materializes_after_pending_entry_fill() {
     std::printf("test_exit_profit_loss_materializes_after_pending_entry_fill\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1159,7 +1160,7 @@ static void test_exit_profit_loss_materializes_after_pending_entry_fill() {
             pyramiding_ = 1;
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             (void)bar;
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
@@ -1256,7 +1257,7 @@ static void test_supertrend_basic() {
 
 // ---- 17. Strategy with process_orders_on_close ------------------------------
 
-class CloseOrderStrategy : public BacktestEngine {
+class CloseOrderStrategy : public pineforge::source::PineStrategyHost {
 public:
     CloseOrderStrategy() {
         initial_capital_ = 100000;
@@ -1267,7 +1268,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         }
@@ -1407,7 +1408,7 @@ static void test_multi_indicator_confluence() {
 
 // ---- 22. Position reversal (Long -> Short in one bar) ----------------------
 
-class ReversalStrategy : public BacktestEngine {
+class ReversalStrategy : public pineforge::source::PineStrategyHost {
 public:
     ReversalStrategy() {
         initial_capital_ = 100000;
@@ -1416,7 +1417,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 1) strategy_entry("Long", true);
         if (bar_index_ == 3) strategy_entry("Short", false);
         if (bar_index_ == 5) strategy_close("Short");
@@ -1444,7 +1445,7 @@ static void test_position_reversal() {
 static void test_reversal_uses_explicit_qty_for_new_side() {
     std::printf("test_reversal_uses_explicit_qty_for_new_side\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1454,7 +1455,7 @@ static void test_reversal_uses_explicit_qty_for_new_side() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, na<double>(), na<double>(), 2.0);
             }
@@ -1489,7 +1490,7 @@ static void test_reversal_uses_explicit_qty_for_new_side() {
 
 // ---- 23. Pyramiding + partial exit (qty_percent=50) ------------------------
 
-class PyramidPartialExitStrategy : public BacktestEngine {
+class PyramidPartialExitStrategy : public pineforge::source::PineStrategyHost {
 public:
     double position_before_close_all = -1.0;
     int partial_trade_rows = -1;
@@ -1502,7 +1503,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 3;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 1) strategy_entry("E1", true);
         if (bar_index_ == 2) strategy_entry("E2", true);
         if (bar_index_ == 3) strategy_entry("E3", true);
@@ -1552,7 +1553,7 @@ static void test_pyramid_partial_exit() {
 static void test_exit_qty_percent_reduces_position() {
     std::printf("test_exit_qty_percent_reduces_position\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1562,7 +1563,7 @@ static void test_exit_qty_percent_reduces_position() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             }
@@ -1596,7 +1597,7 @@ static void test_exit_qty_percent_reduces_position() {
 static void test_partial_exit_id_fills_once_per_position() {
     std::printf("test_partial_exit_id_fills_once_per_position\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1606,7 +1607,7 @@ static void test_partial_exit_id_fills_once_per_position() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             }
@@ -1639,7 +1640,7 @@ static void test_partial_exit_id_fills_once_per_position() {
 
 // ---- 24. close_entries_rule = "ANY" ----------------------------------------
 
-class CloseEntriesAnyStrategy : public BacktestEngine {
+class CloseEntriesAnyStrategy : public pineforge::source::PineStrategyHost {
 public:
     CloseEntriesAnyStrategy() {
         initial_capital_ = 100000;
@@ -1651,7 +1652,7 @@ public:
         process_orders_on_close_ = true;
         close_entries_rule_any_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 1) strategy_entry("A", true);
         if (bar_index_ == 2) strategy_entry("B", true);
         if (bar_index_ == 3) strategy_entry("C", true);
@@ -1681,7 +1682,7 @@ static void test_close_entries_any() {
 
 // ---- 25. Trailing stop mechanics -------------------------------------------
 
-class TrailingStopStrategy : public BacktestEngine {
+class TrailingStopStrategy : public pineforge::source::PineStrategyHost {
 public:
     TrailingStopStrategy() {
         initial_capital_ = 100000;
@@ -1691,7 +1692,7 @@ public:
         slippage_ = 0;
         syminfo_mintick_ = 1.0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         }
@@ -1725,7 +1726,7 @@ static void test_trailing_stop() {
 static void test_limit_exit_beats_trailing_stop_after_activation() {
     std::printf("test_limit_exit_beats_trailing_stop_after_activation\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1737,7 +1738,7 @@ static void test_limit_exit_beats_trailing_stop_after_activation() {
             process_orders_on_close_ = false;
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -1768,7 +1769,7 @@ static void test_limit_exit_beats_trailing_stop_after_activation() {
 static void test_trailing_stop_fills_at_crossing_level_after_activation() {
     std::printf("test_trailing_stop_fills_at_crossing_level_after_activation\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1780,7 +1781,7 @@ static void test_trailing_stop_fills_at_crossing_level_after_activation() {
             process_orders_on_close_ = false;
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -1811,7 +1812,7 @@ static void test_trailing_stop_fills_at_crossing_level_after_activation() {
 static void test_trailing_stop_does_not_lookahead_bar_high_at_open() {
     std::printf("test_trailing_stop_does_not_lookahead_bar_high_at_open\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1823,7 +1824,7 @@ static void test_trailing_stop_does_not_lookahead_bar_high_at_open() {
             process_orders_on_close_ = false;
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -1854,7 +1855,7 @@ static void test_trailing_stop_does_not_lookahead_bar_high_at_open() {
 static void test_trailing_stop_ignores_entry_bar_extreme_before_exit_creation() {
     std::printf("test_trailing_stop_ignores_entry_bar_extreme_before_exit_creation\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1866,7 +1867,7 @@ static void test_trailing_stop_ignores_entry_bar_extreme_before_exit_creation() 
             process_orders_on_close_ = false;
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -1895,7 +1896,7 @@ static void test_trailing_stop_ignores_entry_bar_extreme_before_exit_creation() 
 static void test_trailing_points_without_offset_exits_at_activation() {
     std::printf("test_trailing_points_without_offset_exits_at_activation\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -1907,7 +1908,7 @@ static void test_trailing_points_without_offset_exits_at_activation() {
             process_orders_on_close_ = false;
         }
 
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("S", false);
                 strategy_exit("TS", "S",
@@ -1936,7 +1937,7 @@ static void test_trailing_points_without_offset_exits_at_activation() {
 
 // ---- 26. Magnifier + limit order fill precision ----------------------------
 
-class MagnifierLimitStrategy : public BacktestEngine {
+class MagnifierLimitStrategy : public pineforge::source::PineStrategyHost {
 public:
     MagnifierLimitStrategy() {
         initial_capital_ = 100000;
@@ -1945,7 +1946,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true, 97.0);  // limit price
         }
@@ -2042,7 +2043,7 @@ static void test_magnifier_ta_consistency() {
 
 // ---- 28. Risk halt — max_drawdown stops trading ----------------------------
 
-class RiskHaltStrategy : public BacktestEngine {
+class RiskHaltStrategy : public pineforge::source::PineStrategyHost {
 public:
     int entries_attempted = 0;
     RiskHaltStrategy() {
@@ -2053,7 +2054,7 @@ public:
         slippage_ = 0;
         risk_max_drawdown_ = 500;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         entries_attempted++;
         if (position_side_ == PositionSide::FLAT) {
             strategy_entry("Long", true);
@@ -2082,7 +2083,7 @@ static void test_risk_halt_max_drawdown() {
 
 // ---- 29. Equity extremes accuracy ------------------------------------------
 
-class EquityTrackStrategy : public BacktestEngine {
+class EquityTrackStrategy : public pineforge::source::PineStrategyHost {
 public:
     EquityTrackStrategy() {
         initial_capital_ = 10000;
@@ -2091,7 +2092,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 4) strategy_close("L");
     }
@@ -2103,7 +2104,7 @@ public:
 
 // ---- 28b. Per-trade MAE/MFE propagated to ReportC --------------------------
 
-class MaeMfeStrategy : public BacktestEngine {
+class MaeMfeStrategy : public pineforge::source::PineStrategyHost {
 public:
     MaeMfeStrategy() {
         initial_capital_ = 10000;
@@ -2112,7 +2113,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 3) strategy_close("L");
     }
@@ -2208,7 +2209,7 @@ static void test_series_history() {
 
 // ---- 31. process_orders_on_close with stop/limit ---------------------------
 
-class POOCStopLimitStrategy : public BacktestEngine {
+class POOCStopLimitStrategy : public pineforge::source::PineStrategyHost {
 public:
     POOCStopLimitStrategy() {
         initial_capital_ = 100000;
@@ -2218,7 +2219,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         }
@@ -2250,7 +2251,7 @@ static void test_pooc_stop_deferred() {
 
 // ---- 32. OCA order groups --------------------------------------------------
 
-class OCAStrategy : public BacktestEngine {
+class OCAStrategy : public pineforge::source::PineStrategyHost {
 public:
     OCAStrategy() {
         initial_capital_ = 100000;
@@ -2259,7 +2260,7 @@ public:
         commission_value_ = 0.0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) {
             strategy_entry("Long", true);
         }
@@ -2291,7 +2292,7 @@ static void test_oca_one_cancels_other() {
 // ---- 33. Multi-TF aggregation (disabled: register_request_tf / request_security_field not in runtime) ----
 
 #if 0
-class MultiTFStrategy : public BacktestEngine {
+class MultiTFStrategy : public pineforge::source::PineStrategyHost {
 public:
     double hourly_close = 0;
     int hourly_updates = 0;
@@ -2306,7 +2307,7 @@ public:
         register_request_tf("60");
     }
 
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         double hc = request_security_field("60", "close");
         if (!is_na(hc) && hc != hourly_close) {
             hourly_close = hc;
@@ -2335,7 +2336,7 @@ static void test_multi_tf_aggregation() {
 
 // ---- 34. Simple long — position_size, avg_price, equity, openprofit, netprofit
 
-class PositionLongStrategy : public BacktestEngine {
+class PositionLongStrategy : public pineforge::source::PineStrategyHost {
 public:
     // Snapshots at each bar
     double pos_size[5] = {};
@@ -2353,7 +2354,7 @@ public:
         commission_value_ = 0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("Long", true);
         if (bar_index_ == 3) strategy_close("Long");
 
@@ -2410,7 +2411,7 @@ static void test_position_long_lifecycle() {
 
 // ---- 35. Simple short — mirror of long test
 
-class PositionShortStrategy : public BacktestEngine {
+class PositionShortStrategy : public pineforge::source::PineStrategyHost {
 public:
     double pos_size[5] = {};
     double pos_avg_price[5] = {};
@@ -2423,7 +2424,7 @@ public:
         commission_value_ = 0;
         slippage_ = 0;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("Short", false);
         if (bar_index_ == 3) strategy_close("Short");
         int i = bar_index_;
@@ -2456,7 +2457,7 @@ static void test_position_short_lifecycle() {
 
 // ---- 36. Pyramiding — 3 entries at different prices, verify avg_price
 
-class PyramidStrategy : public BacktestEngine {
+class PyramidStrategy : public pineforge::source::PineStrategyHost {
 public:
     double pos_size[7] = {};
     double pos_avg[7] = {};
@@ -2471,7 +2472,7 @@ public:
         slippage_ = 0;
         pyramiding_ = 3;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("E1", true);
         if (bar_index_ == 1) strategy_entry("E2", true);
         if (bar_index_ == 2) strategy_entry("E3", true);
@@ -2519,7 +2520,7 @@ static void test_pyramid_avg_price() {
 
 // ---- 37. Win/loss sequence — verify wintrades, losstrades, grossprofit, grossloss
 
-class WinLossStrategy : public BacktestEngine {
+class WinLossStrategy : public pineforge::source::PineStrategyHost {
 public:
     WinLossStrategy() {
         initial_capital_ = 10000;
@@ -2529,7 +2530,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = true;  // fills at close for exact prices
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         switch(bar_index_) {
             case 0: strategy_entry("T1", true); break;   // buy at 100
             case 1: strategy_close("T1"); break;                     // sell at 120
@@ -2584,7 +2585,7 @@ static void test_win_loss_tracking() {
 
 // ---- 38. Position reversal — long to short, verify intermediate state
 
-class ReversalPositionStrategy : public BacktestEngine {
+class ReversalPositionStrategy : public pineforge::source::PineStrategyHost {
 public:
     double pos_size[6] = {};
     double pos_avg[6] = {};
@@ -2598,7 +2599,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("Long", true);
         if (bar_index_ == 2) strategy_entry("Short", false); // reversal
         if (bar_index_ == 4) strategy_close("Short");
@@ -2675,7 +2676,7 @@ static void test_position_reversal_state() {
 // intermediate replaced calls keep theirs. Empirically derived from 3commas
 // (xau/xlm/pol/xrp) — see fix/same-bar-multi-close-single-fill.
 
-class SameBarMultiCloseStrategy : public BacktestEngine {
+class SameBarMultiCloseStrategy : public pineforge::source::PineStrategyHost {
 public:
     double final_pos = -1.0;  // signed position size seen on the last bar
     SameBarMultiCloseStrategy() {
@@ -2687,7 +2688,7 @@ public:
         pyramiding_ = 10;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 2.0);
@@ -2735,7 +2736,7 @@ static void test_same_bar_multi_close_single_fill() {
     CHECK(near(strat.final_pos, 0.0));
 }
 
-class CloseReplacementProbeBase : public BacktestEngine {
+class CloseReplacementProbeBase : public pineforge::source::PineStrategyHost {
 public:
     CloseReplacementProbeBase() {
         initial_capital_ = 100000;
@@ -2772,7 +2773,7 @@ public:
     double released_res_b = -1.0;
     double released_first_b = -1.0;
     double final_pos = -1.0;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 2.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 3.0);
@@ -2848,7 +2849,7 @@ public:
     double final_pos = -1.0;
     size_t final_reservations = 99;
     size_t final_provenance = 99;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("X", true, na, na, 1.0);
@@ -2925,7 +2926,7 @@ public:
     double res_b = -1.0;
     double res_d = -1.0;
     double first_d = -1.0;
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
@@ -3000,7 +3001,7 @@ public:
         return total;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("seed", true, na, na, 5.0);
         if (bar_index_ == 1) {
@@ -3076,7 +3077,7 @@ public:
     double first_b = -1.0;
     double total_res = -1.0;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("seed", true, na, na, 6.0);
         if (bar_index_ == 1) {
@@ -3119,7 +3120,7 @@ static void test_positive_truncated_close_reservation_keeps_ledger_only() {
 }
 // ---- 38a2. Pine-v6 POOC default-FIFO close queue --------------------------
 
-class SameBarMultiCloseQueueStrategy : public BacktestEngine {
+class SameBarMultiCloseQueueStrategy : public pineforge::source::PineStrategyHost {
 public:
     double visible_after_first = -1.0;
     double visible_after_second = -1.0;
@@ -3142,7 +3143,7 @@ public:
         return it == id_unclosed_qty_.end() ? 0.0 : it->second;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 2.0);
@@ -3190,7 +3191,7 @@ static void test_same_bar_multi_close_queues_all_in_source_order() {
     CHECK(near(strat.final_pos, 0.0));
 }
 
-class OverlappingIdCallsiteReservationStrategy : public BacktestEngine {
+class OverlappingIdCallsiteReservationStrategy : public pineforge::source::PineStrategyHost {
 public:
     double ledger_a_after_calls = -1.0;
     double ledger_b_after_calls = -1.0;
@@ -3220,7 +3221,7 @@ public:
         return total;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
@@ -3264,7 +3265,7 @@ static void test_overlapping_id_callsites_reserve_before_replacement() {
     CHECK(near(strat.final_pos, 0.0));
 }
 
-class SameIdDistinctCallsiteCapacityStrategy : public BacktestEngine {
+class SameIdDistinctCallsiteCapacityStrategy : public pineforge::source::PineStrategyHost {
 public:
     int admitted_sites_after_calls = -1;
     double admitted_qty_after_calls = -1.0;
@@ -3279,7 +3280,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("C", true, na, na, 2.0);
         if (bar_index_ == 1) {
@@ -3318,7 +3319,7 @@ static void test_distinct_sites_same_id_share_physical_capacity() {
     }
 }
 
-class SameCallsiteLoopCloseStrategy : public BacktestEngine {
+class SameCallsiteLoopCloseStrategy : public pineforge::source::PineStrategyHost {
 public:
     double visible_after_loop = -1.0;
     double ledger_a_after_loop = -1.0;
@@ -3341,7 +3342,7 @@ public:
         return it == id_unclosed_qty_.end() ? 0.0 : it->second;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
@@ -3402,7 +3403,7 @@ static void test_same_callsite_loop_close_replaces_in_place() {
     CHECK(near(strat.final_pos, 0.0));
 }
 
-class SameCallsiteCarryCompatibilityStrategy : public BacktestEngine {
+class SameCallsiteCarryCompatibilityStrategy : public pineforge::source::PineStrategyHost {
 public:
     explicit SameCallsiteCarryCompatibilityStrategy(bool tokenized)
         : tokenized_(tokenized) {
@@ -3419,7 +3420,7 @@ public:
     double admitted_total_after_replacement = -1.0;
     double later_entry_carry = -1.0;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
@@ -3474,7 +3475,7 @@ static void test_callsite_replacement_separates_live_claim_from_entry_debt() {
     CHECK(near(tokenized.later_entry_carry, 0.0));
 }
 
-class SingleCallsiteReplacementCapacityStrategy : public BacktestEngine {
+class SingleCallsiteReplacementCapacityStrategy : public pineforge::source::PineStrategyHost {
 public:
     explicit SingleCallsiteReplacementCapacityStrategy(bool tokenized)
         : tokenized_(tokenized) {
@@ -3500,7 +3501,7 @@ public:
         }
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 1.2542);
@@ -3568,7 +3569,7 @@ static void test_single_site_replacement_reuses_own_live_claim() {
     CHECK(near(tokenized.final_position, 0.8982));
 }
 
-class RejectedCallsiteReplacementStrategy : public BacktestEngine {
+class RejectedCallsiteReplacementStrategy : public pineforge::source::PineStrategyHost {
 public:
     int exits_before_rejected = -1;
     int exits_after_rejected = -1;
@@ -3599,7 +3600,7 @@ public:
             }));
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
@@ -3652,7 +3653,7 @@ static void test_rejected_replacement_has_no_debt_or_order_side_effects() {
     CHECK(strat.site_queue_after_rejected == 2);
 }
 
-class OwnerAwareCloseReservationStrategy : public BacktestEngine {
+class OwnerAwareCloseReservationStrategy : public pineforge::source::PineStrategyHost {
 public:
     explicit OwnerAwareCloseReservationStrategy(bool cleanup_site_first)
         : cleanup_site_first_(cleanup_site_first) {
@@ -3696,7 +3697,7 @@ public:
         strategy_close("K", "T2_SURVIVOR_K", na, na, false, 732);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 6.0);
@@ -3769,7 +3770,7 @@ static void test_owner_reservation_survives_other_token_cleanup_permutations() {
     }
 }
 
-class CrossOwnerReserveBackingStrategy : public BacktestEngine {
+class CrossOwnerReserveBackingStrategy : public pineforge::source::PineStrategyHost {
 public:
     double t1_b_claim = -1.0;
     double t1_b_provenance = -1.0;
@@ -3799,7 +3800,7 @@ public:
         return value == owner->second.end() ? 0.0 : value->second;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 3.0);
@@ -3865,7 +3866,7 @@ static void test_cross_owner_post_fill_backing_is_physically_bounded() {
 // different-id capacity rule as token 0. After B and C each retain one unit,
 // a fresh D close for three units can use only the two unclaimed units of the
 // four-unit live position.
-class CrossBarDifferentIdClaimCapacityStrategy : public BacktestEngine {
+class CrossBarDifferentIdClaimCapacityStrategy : public pineforge::source::PineStrategyHost {
 public:
     double position_before_d = -1.0;
     double claims_before_d = -1.0;
@@ -3882,7 +3883,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 6.0);
@@ -3940,7 +3941,7 @@ static void test_cross_bar_different_id_claims_cap_fresh_site() {
     }
 }
 
-class SameIdOwnerClaimsShareBackingStrategy : public BacktestEngine {
+class SameIdOwnerClaimsShareBackingStrategy : public pineforge::source::PineStrategyHost {
 public:
     double admitted_d = -1.0;
     double final_position = -1.0;
@@ -3955,7 +3956,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 4.0);
@@ -4003,7 +4004,7 @@ static void test_same_id_owner_claims_share_physical_backing() {
 }
 
 class SameIdAliasesExcludedFromPostFillBackingStrategy
-    : public BacktestEngine {
+    : public pineforge::source::PineStrategyHost {
 public:
     double new_a_claim = -1.0;
     double final_position = -1.0;
@@ -4018,7 +4019,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 2.0);
@@ -4070,7 +4071,7 @@ static void test_post_fill_backing_excludes_all_same_id_aliases() {
     }
 }
 
-class UnequalAliasLocalReleaseStrategy : public BacktestEngine {
+class UnequalAliasLocalReleaseStrategy : public pineforge::source::PineStrategyHost {
 public:
     UnequalAliasLocalReleaseStrategy(double current_claim,
                                      double competing_claim)
@@ -4090,7 +4091,7 @@ public:
     double competing_claim_after = -1.0;
     bool current_claim_erased = false;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("seed", true, na, na, 4.0);
@@ -4167,7 +4168,7 @@ static void test_local_alias_release_frees_only_marginal_backing() {
     }
 }
 
-class InterleavedCallsiteCloseStrategy : public BacktestEngine {
+class InterleavedCallsiteCloseStrategy : public pineforge::source::PineStrategyHost {
 public:
     double ledger_a_after_calls = -1.0;
     double ledger_b_after_calls = -1.0;
@@ -4188,7 +4189,7 @@ public:
         return it == id_unclosed_qty_.end() ? 0.0 : it->second;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
         if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
@@ -4237,7 +4238,7 @@ static void test_interleaved_callsite_replacement_preserves_queue_position() {
 // syntactic sites; reissuing site A after site B updates A in place without
 // moving its first-admission queue slot. The next bar's two distinct inner UDF
 // statements are new sites and must not be blocked by A's prior provenance.
-class ExportedCallsiteInterleavingOracleStrategy : public BacktestEngine {
+class ExportedCallsiteInterleavingOracleStrategy : public pineforge::source::PineStrategyHost {
 public:
     ExportedCallsiteInterleavingOracleStrategy() {
         initial_capital_ = 1000000;
@@ -4249,7 +4250,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("X", true, na, na, 1.0, "ENTRY_X");
@@ -4296,7 +4297,7 @@ static void test_exported_callsite_interleaving_tv_oracle() {
 // Direct engine mirror of pf-probe-close-callsite-udf. All invocations route
 // through one shared inner strategy.close statement, so two written outer
 // calls replace each other and three loop evaluations retain only the last.
-class ExportedSharedInnerUdfOracleStrategy : public BacktestEngine {
+class ExportedSharedInnerUdfOracleStrategy : public pineforge::source::PineStrategyHost {
 public:
     ExportedSharedInnerUdfOracleStrategy() {
         initial_capital_ = 1000000;
@@ -4313,7 +4314,7 @@ public:
         strategy_close(id, comment, na, na, false, 711);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
             strategy_entry("A", true, na, na, 1.0, "ENTRY_A");
@@ -4357,7 +4358,7 @@ static void test_exported_shared_inner_udf_tv_oracle() {
     }
 }
 
-class XauCloseLedgerCubeStrategy : public BacktestEngine {
+class XauCloseLedgerCubeStrategy : public pineforge::source::PineStrategyHost {
 public:
     std::array<double, 8> visible_after_prior{};
     int reset_violations = 0;
@@ -4389,7 +4390,7 @@ public:
         strategy_close(id, comment, na, na, false, token);
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         constexpr int kCellBars = 20;
         const int cell = bar_index_ / kCellBars;
         const int step = bar_index_ % kCellBars;
@@ -4514,7 +4515,7 @@ static void test_xau_close_ledger_cube_matches_authoritative_tv_tape() {
 // [JOAT] same-bar-close family (engine previously immediate-filled POOC market
 // entries and produced spurious zero-duration trades).
 
-class EntryBarCloseGuardStrategy : public BacktestEngine {
+class EntryBarCloseGuardStrategy : public pineforge::source::PineStrategyHost {
 public:
     int close_calls_on_entry_bar = 0;
     EntryBarCloseGuardStrategy() {
@@ -4525,7 +4526,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         (void)bar;
         if (bar_index_ == 0) strategy_entry("L", true);
         if (signed_position_size() != 0.0) {
@@ -4556,7 +4557,7 @@ static void test_pooc_exit_not_triggered_on_entry_bar() {
 
 // ---- 39. Commission impact on P&L
 
-class CommissionStrategy : public BacktestEngine {
+class CommissionStrategy : public pineforge::source::PineStrategyHost {
 public:
     CommissionStrategy() {
         initial_capital_ = 10000;
@@ -4567,7 +4568,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 2) strategy_close("L");
     }
@@ -4594,7 +4595,7 @@ static void test_commission_deducted() {
 
 // ---- 40. Slippage impact
 
-class SlippageStrategy : public BacktestEngine {
+class SlippageStrategy : public pineforge::source::PineStrategyHost {
 public:
     SlippageStrategy() {
         initial_capital_ = 10000;
@@ -4604,7 +4605,7 @@ public:
         slippage_ = 5;         // 5 ticks
         syminfo_mintick_ = 0.1; // tick = 0.1, so 5 ticks = 0.5
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 2) strategy_close("L");
     }
@@ -4631,7 +4632,7 @@ static void test_slippage_applied() {
 
 // ---- 41. qty_type = PERCENT_OF_EQUITY
 
-class PercentEquityStrategy : public BacktestEngine {
+class PercentEquityStrategy : public pineforge::source::PineStrategyHost {
 public:
     PercentEquityStrategy() {
         initial_capital_ = 10000;
@@ -4641,7 +4642,7 @@ public:
         slippage_ = 0;
         process_orders_on_close_ = true;
     }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 2) strategy_close("L");
     }
@@ -4666,7 +4667,7 @@ static void test_qty_percent_of_equity() {
 
 static void test_qty_percent_of_equity_includes_open_profit_for_pyramid_add() {
     std::printf("test_qty_percent_of_equity_includes_open_profit_for_pyramid_add\n");
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 10000;
@@ -4684,7 +4685,7 @@ static void test_qty_percent_of_equity_includes_open_profit_for_pyramid_add() {
             position_entry_price_ = 100.0;
             return calc_qty(110.0);
         }
-        void on_bar(const Bar&) override {}
+        void on_source_bar(const Bar&) override {}
     } strat;
 
     // The second default percent-of-equity entry sizes from live
@@ -4704,14 +4705,14 @@ static void test_price_path_bullish_stop_first() {
     // Long position with stop=95, limit=110
     // Stop at 95 is hit first (on the way down to L=90)
 
-    class StopFirstStrategy : public BacktestEngine {
+    class StopFirstStrategy : public pineforge::source::PineStrategyHost {
     public:
         StopFirstStrategy() {
             initial_capital_ = 100000; default_qty_value_ = 1.0;
             commission_value_ = 0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
                 strategy_exit("X", "L", 110.0, 95.0);
@@ -4738,14 +4739,14 @@ static void test_price_path_bearish_limit_first() {
     // Long position with stop=92, limit=115
     // Limit at 115 is hit first (on the way up to H=120)
 
-    class LimitFirstStrategy : public BacktestEngine {
+    class LimitFirstStrategy : public pineforge::source::PineStrategyHost {
     public:
         LimitFirstStrategy() {
             initial_capital_ = 100000; default_qty_value_ = 1.0;
             commission_value_ = 0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
                 strategy_exit("X", "L", 115.0, 92.0);
@@ -4772,14 +4773,14 @@ static void test_price_path_short_stop_first() {
     // Path: O(110) -> H(120) -> L(85) -> C(95)
     // Stop at 115 hit first (on the way up to H=120)
 
-    class ShortStopStrategy : public BacktestEngine {
+    class ShortStopStrategy : public pineforge::source::PineStrategyHost {
     public:
         ShortStopStrategy() {
             initial_capital_ = 100000; default_qty_value_ = 1.0;
             commission_value_ = 0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("S", false);
                 strategy_exit("X", "S", 90.0, 115.0);
@@ -4810,14 +4811,14 @@ static void test_price_path_vs_open_proximity() {
     //   On way to H(120): crosses 108 (limit)
     //   -> stop hit first (CORRECT)
 
-    class PathVsProximityStrategy : public BacktestEngine {
+    class PathVsProximityStrategy : public pineforge::source::PineStrategyHost {
     public:
         PathVsProximityStrategy() {
             initial_capital_ = 100000; default_qty_value_ = 1.0;
             commission_value_ = 0; slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
                 strategy_exit("X", "L", 108.0, 93.0);
@@ -4843,7 +4844,7 @@ static void test_price_path_vs_open_proximity() {
 static void test_price_path_bullish_open_near_high_hits_limit_first() {
     std::printf("test_price_path_bullish_open_near_high_hits_limit_first\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -4852,7 +4853,7 @@ static void test_price_path_bullish_open_near_high_hits_limit_first() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
                 strategy_exit("X", "L", 111.0, 95.0);
@@ -4880,7 +4881,7 @@ static void test_price_path_bullish_open_near_high_hits_limit_first() {
 static void test_price_path_open_near_low_hits_stop_first() {
     std::printf("test_price_path_open_near_low_hits_stop_first\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -4889,7 +4890,7 @@ static void test_price_path_open_near_low_hits_stop_first() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
                 strategy_exit("X", "L", 110.0, 95.0);
@@ -4914,7 +4915,7 @@ static void test_price_path_open_near_low_hits_stop_first() {
 static void test_opposite_stop_entries_follow_path_order() {
     std::printf("test_opposite_stop_entries_follow_path_order\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -4923,7 +4924,7 @@ static void test_opposite_stop_entries_follow_path_order() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (position_side_ == PositionSide::FLAT) {
                 // Insertion order intentionally long then short.
                 strategy_entry("LStop", true, na<double>(), 105.0);
@@ -4968,7 +4969,7 @@ static void test_opposite_stop_entries_follow_path_order() {
 static void test_opposite_stop_entries_use_open_proximity_path_priority() {
     std::printf("test_opposite_stop_entries_use_open_proximity_path_priority\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -4977,7 +4978,7 @@ static void test_opposite_stop_entries_use_open_proximity_path_priority() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (position_side_ == PositionSide::FLAT) {
                 strategy_entry("LStop", true, na<double>(), 105.0);
                 strategy_entry("SStop", false, na<double>(), 97.0);
@@ -5020,7 +5021,7 @@ static void test_opposite_stop_entries_use_open_proximity_path_priority() {
 static void test_strategy_entry_oca_cancel_group() {
     std::printf("test_strategy_entry_oca_cancel_group\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5030,7 +5031,7 @@ static void test_strategy_entry_oca_cancel_group() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, na<double>(), 105.0, na<double>(), "", "entry_oca", 1);
                 strategy_entry("S", false, na<double>(), 95.0, na<double>(), "", "entry_oca", 1);
@@ -5056,7 +5057,7 @@ static void test_strategy_entry_oca_cancel_group() {
 static void test_strategy_entry_qty_type_cash_overrides_default_sizing() {
     std::printf("test_strategy_entry_qty_type_cash_overrides_default_sizing\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5066,7 +5067,7 @@ static void test_strategy_entry_qty_type_cash_overrides_default_sizing() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true, na<double>(), na<double>(), 1000.0, "", "", 0, 2);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5093,7 +5094,7 @@ static void test_strategy_entry_qty_type_cash_overrides_default_sizing() {
 static void test_strategy_close_respects_entry_id() {
     std::printf("test_strategy_close_respects_entry_id\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5102,7 +5103,7 @@ static void test_strategy_close_respects_entry_id() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Long", true);
             } else if (bar_index_ == 1) {
@@ -5129,7 +5130,7 @@ static void test_strategy_close_respects_entry_id() {
 static void test_market_close_fills_before_same_bar_opposite_stop_entry() {
     std::printf("test_market_close_fills_before_same_bar_opposite_stop_entry\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5139,7 +5140,7 @@ static void test_market_close_fills_before_same_bar_opposite_stop_entry() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5175,7 +5176,7 @@ static void test_market_close_fills_before_same_bar_opposite_stop_entry() {
 static void test_strategy_close_non_matching_does_not_persist() {
     std::printf("test_strategy_close_non_matching_does_not_persist\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5184,7 +5185,7 @@ static void test_strategy_close_non_matching_does_not_persist() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Long", true);
             } else if (bar_index_ == 1) {
@@ -5220,7 +5221,7 @@ static void test_strategy_close_non_matching_does_not_persist() {
 static void test_stale_exit_does_not_carry_to_future_position() {
     std::printf("test_stale_exit_does_not_carry_to_future_position\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5230,7 +5231,7 @@ static void test_stale_exit_does_not_carry_to_future_position() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Long", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5267,7 +5268,7 @@ static void test_stale_exit_does_not_carry_to_future_position() {
 static void test_oca_exit_orders_follow_path_priority() {
     std::printf("test_oca_exit_orders_follow_path_priority\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5277,7 +5278,7 @@ static void test_oca_exit_orders_follow_path_priority() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             }
@@ -5308,7 +5309,7 @@ static void test_oca_exit_orders_follow_path_priority() {
 static void test_oca_exit_orders_use_open_proximity_path_priority() {
     std::printf("test_oca_exit_orders_use_open_proximity_path_priority\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5318,7 +5319,7 @@ static void test_oca_exit_orders_use_open_proximity_path_priority() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             }
@@ -5352,7 +5353,7 @@ static void test_oca_exit_orders_use_open_proximity_path_priority() {
 static void test_noop_entry_does_not_block_later_opposite_stop() {
     std::printf("test_noop_entry_does_not_block_later_opposite_stop\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5363,7 +5364,7 @@ static void test_noop_entry_does_not_block_later_opposite_stop() {
             pyramiding_ = 1;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L0", true);
             }
@@ -5395,7 +5396,7 @@ static void test_noop_entry_does_not_block_later_opposite_stop() {
 static void test_partial_exit_ignored_when_full_exit_present() {
     std::printf("test_partial_exit_ignored_when_full_exit_present\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5405,7 +5406,7 @@ static void test_partial_exit_ignored_when_full_exit_present() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             }
@@ -5439,7 +5440,7 @@ static void test_partial_exit_ignored_when_full_exit_present() {
 static void test_partial_exit_reservation_limits_full_exit() {
     std::printf("test_partial_exit_reservation_limits_full_exit\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5449,7 +5450,7 @@ static void test_partial_exit_reservation_limits_full_exit() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             }
@@ -5489,7 +5490,7 @@ static void test_partial_exit_reservation_limits_full_exit() {
 static void test_priced_exit_not_filled_same_bar_when_pooc_false() {
     std::printf("test_priced_exit_not_filled_same_bar_when_pooc_false\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5499,7 +5500,7 @@ static void test_priced_exit_not_filled_same_bar_when_pooc_false() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 // Market entry fills on next bar open.
                 strategy_entry("L", true);
@@ -5534,7 +5535,7 @@ static void test_priced_exit_not_filled_same_bar_when_pooc_false() {
 static void test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pass_reversal() {
     std::printf("test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pass_reversal\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5544,7 +5545,7 @@ static void test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pas
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5575,7 +5576,7 @@ static void test_strategy_close_cancels_prior_pending_entries_but_keeps_same_pas
 static void test_strategy_close_any_non_matching_keeps_pending_entry_live() {
     std::printf("test_strategy_close_any_non_matching_keeps_pending_entry_live\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5587,7 +5588,7 @@ static void test_strategy_close_any_non_matching_keeps_pending_entry_live() {
             close_entries_rule_any_ = true;
             pyramiding_ = 2;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5615,7 +5616,7 @@ static void test_strategy_close_any_non_matching_keeps_pending_entry_live() {
 static void test_strategy_close_pooc_missing_id_noops() {
     std::printf("test_strategy_close_pooc_missing_id_noops\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5625,7 +5626,7 @@ static void test_strategy_close_pooc_missing_id_noops() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5650,7 +5651,7 @@ static void test_strategy_close_pooc_missing_id_noops() {
 static void test_strategy_close_pooc_cancels_same_bar_market_reentry() {
     std::printf("test_strategy_close_pooc_cancels_same_bar_market_reentry\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5661,7 +5662,7 @@ static void test_strategy_close_pooc_cancels_same_bar_market_reentry() {
             pyramiding_ = 2;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5687,7 +5688,7 @@ static void test_strategy_close_pooc_cancels_same_bar_market_reentry() {
 static void test_strategy_close_pooc_keeps_same_bar_market_reversal() {
     std::printf("test_strategy_close_pooc_keeps_same_bar_market_reversal\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5697,7 +5698,7 @@ static void test_strategy_close_pooc_keeps_same_bar_market_reversal() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5723,7 +5724,7 @@ static void test_strategy_close_pooc_keeps_same_bar_market_reversal() {
 static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry() {
     std::printf("test_strategy_close_immediate_cancels_prior_same_bar_market_reentry\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         double visible_after_close = -1.0;
         bool callsite_queue_empty_after_close = false;
@@ -5737,7 +5738,7 @@ static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry(
             pyramiding_ = 2;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5769,7 +5770,7 @@ static void test_strategy_close_immediate_cancels_prior_same_bar_market_reentry(
 static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
     std::printf("test_strategy_close_pooc_keeps_same_bar_pending_entry\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5779,7 +5780,7 @@ static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L0", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -5809,7 +5810,7 @@ static void test_strategy_close_pooc_keeps_same_bar_pending_entry() {
 static void test_strategy_close_pooc_partial_close_keeps_other_exit_bracket() {
     std::printf("test_strategy_close_pooc_partial_close_keeps_other_exit_bracket\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5820,7 +5821,7 @@ static void test_strategy_close_pooc_partial_close_keeps_other_exit_bracket() {
             process_orders_on_close_ = true;
             pyramiding_ = 2;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("A", true);
             } else if (bar_index_ == 1) {
@@ -5858,7 +5859,7 @@ static void test_strategy_close_pooc_partial_close_keeps_other_exit_bracket() {
 static void test_strategy_close_fifo_only_closes_requested_leg_size() {
     std::printf("test_strategy_close_fifo_only_closes_requested_leg_size\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5869,7 +5870,7 @@ static void test_strategy_close_fifo_only_closes_requested_leg_size() {
             process_orders_on_close_ = false;
             pyramiding_ = 2;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Buy1", true);
             } else if (bar_index_ == 1) {
@@ -5905,7 +5906,7 @@ static void test_strategy_close_fifo_only_closes_requested_leg_size() {
 static void test_strategy_close_pooc_fifo_only_closes_requested_leg_size() {
     std::printf("test_strategy_close_pooc_fifo_only_closes_requested_leg_size\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -5916,7 +5917,7 @@ static void test_strategy_close_pooc_fifo_only_closes_requested_leg_size() {
             process_orders_on_close_ = true;
             pyramiding_ = 2;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("Buy1", true);
             } else if (bar_index_ == 1) {
@@ -5958,7 +5959,7 @@ static void test_strategy_close_pooc_fifo_only_closes_requested_leg_size() {
 static void test_strategy_close_reused_id_closes_one_logical_slot() {
     std::printf("test_strategy_close_reused_id_closes_one_logical_slot\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 1'000'000;
@@ -5969,7 +5970,7 @@ static void test_strategy_close_reused_id_closes_one_logical_slot() {
             process_orders_on_close_ = true;
             pyramiding_ = 10;
         }
-        void on_bar(const Bar&) override {
+        void on_source_bar(const Bar&) override {
             switch (bar_index_) {
                 case 0: strategy_entry("A", true); break;  // older, different id
                 case 1: strategy_entry("L", true); break;  // L lot #1
@@ -6004,7 +6005,7 @@ static void test_strategy_close_reused_id_closes_one_logical_slot() {
 static void test_strategy_close_pooc_sets_exit_comment() {
     std::printf("test_strategy_close_pooc_sets_exit_comment\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -6014,7 +6015,7 @@ static void test_strategy_close_pooc_sets_exit_comment() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -6040,7 +6041,7 @@ static void test_strategy_close_pooc_sets_exit_comment() {
 static void test_strategy_close_qty_percent_reduces_position() {
     std::printf("test_strategy_close_qty_percent_reduces_position\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -6050,7 +6051,7 @@ static void test_strategy_close_qty_percent_reduces_position() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -6084,7 +6085,7 @@ static void test_strategy_close_qty_percent_reduces_position() {
 static void test_strategy_close_qty_reduces_position() {
     std::printf("test_strategy_close_qty_reduces_position\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -6094,7 +6095,7 @@ static void test_strategy_close_qty_reduces_position() {
             slippage_ = 0;
             process_orders_on_close_ = true;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -6122,7 +6123,7 @@ static void test_strategy_close_qty_reduces_position() {
 static void test_strategy_close_immediately_fills_current_close() {
     std::printf("test_strategy_close_immediately_fills_current_close\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -6132,7 +6133,7 @@ static void test_strategy_close_immediately_fills_current_close() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {
@@ -6160,7 +6161,7 @@ static void test_strategy_close_immediately_fills_current_close() {
 static void test_stale_close_all_does_not_close_future_reentry() {
     std::printf("test_stale_close_all_does_not_close_future_reentry\n");
 
-    class Strat : public BacktestEngine {
+    class Strat : public pineforge::source::PineStrategyHost {
     public:
         Strat() {
             initial_capital_ = 100000;
@@ -6170,7 +6171,7 @@ static void test_stale_close_all_does_not_close_future_reentry() {
             slippage_ = 0;
             process_orders_on_close_ = false;
         }
-        void on_bar(const Bar& bar) override {
+        void on_source_bar(const Bar& bar) override {
             if (bar_index_ == 0) {
                 strategy_entry("L", true);
             } else if (bar_index_ == 1 && signed_position_size() > 0.0) {

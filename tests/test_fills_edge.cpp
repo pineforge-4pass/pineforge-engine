@@ -37,6 +37,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -74,7 +75,7 @@ constexpr int64_t kNextDay_UTC = kT0_UTC + 86'400'000LL;
 // gap-fills at the open (std::max(open, stop) == open) and the
 // directional ceil snap is skipped because fill_price is not > open.
 // ─────────────────────────────────────────────────────────────────────
-class GapLongStop : public BacktestEngine {
+class GapLongStop : public pineforge::source::PineStrategyHost {
 public:
     GapLongStop() {
         initial_capital_ = 1'000'000;
@@ -83,7 +84,7 @@ public:
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
         syminfo_mintick_ = 0.01;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         // Stop @ 100.005 (sub-tick). Bar 1 opens at 101 (already above the
         // stop) -> gap-fill at open=101, NOT at a snapped 100.01.
         if (bar_index_ == 0)
@@ -122,7 +123,7 @@ static void test_gap_open_long_stop_fills_at_open() {
 // arm (engine_fills.cpp lines ~929-934) plus the fill-phase-0 short
 // exit/entry gap classification.
 // ─────────────────────────────────────────────────────────────────────
-class GapShortLimit : public BacktestEngine {
+class GapShortLimit : public pineforge::source::PineStrategyHost {
 public:
     GapShortLimit() {
         initial_capital_ = 1'000'000;
@@ -131,7 +132,7 @@ public:
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
         syminfo_mintick_ = 0.01;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         // Short sell-limit @ 100. Bar 1 gaps open to 105 (above the limit)
         // -> fills at open=105.
         if (bar_index_ == 0)
@@ -174,7 +175,7 @@ static void test_gap_open_short_limit_fills_at_open() {
 // partial limit fires first (qty 1 @ 110), then the full stop closes the
 // remaining qty 1 @ 95. Two closed trades, exit prices 110 and 95.
 // ─────────────────────────────────────────────────────────────────────
-class TwoSiblingExits : public BacktestEngine {
+class TwoSiblingExits : public pineforge::source::PineStrategyHost {
 public:
     TwoSiblingExits() {
         initial_capital_ = 1'000'000;
@@ -183,7 +184,7 @@ public:
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
         syminfo_mintick_ = 0.01;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 2.0, "long");
         if (position_side_ == PositionSide::LONG) {
@@ -233,7 +234,7 @@ static void test_two_sibling_exits_path_order() {
 // bar.high (NOT the entry's stop price). The latch then blocks the second
 // same-day stop entry; the next chart-day's stop entry is accepted afresh.
 // ─────────────────────────────────────────────────────────────────────
-class CapBarExtremeClose : public BacktestEngine {
+class CapBarExtremeClose : public pineforge::source::PineStrategyHost {
 public:
     CapBarExtremeClose() {
         initial_capital_ = 1'000'000;
@@ -243,7 +244,7 @@ public:
         syminfo_mintick_ = 0.01;
         max_intraday_filled_orders_ = 1;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         // Place a fresh long STOP entry every bar (stop above the open so it
         // fires intra-bar when high reaches it). Placement-time latch gate
         // drops these once the day is latched.
@@ -295,7 +296,7 @@ static void test_cap_autoclose_at_bar_extreme_and_rollover() {
 // to entry "L"; bar 2 high 111 fires it -> closes 25% of the 4-lot
 // matched entry = qty 1 @ 110, leaving qty 3 open.
 // ─────────────────────────────────────────────────────────────────────
-class PartialByEntryPercent : public BacktestEngine {
+class PartialByEntryPercent : public pineforge::source::PineStrategyHost {
 public:
     PartialByEntryPercent() {
         initial_capital_ = 1'000'000;
@@ -305,7 +306,7 @@ public:
         syminfo_mintick_ = 0.01;
         close_entries_rule_any_ = true;  // route to *_by_entry_percent
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 4.0, "long");
         if (position_side_ == PositionSide::LONG) {
@@ -343,7 +344,7 @@ static void test_partial_exit_by_entry_percent() {
 // filling on the same bar must close that frozen absolute quantity from the
 // matching entry id — it must not reapply qty_percent to the position already
 // reduced by the earlier sibling (Vimal layered TP1/TP2/TP3 + residual TSL).
-class LayeredPartialByEntryQty : public BacktestEngine {
+class LayeredPartialByEntryQty : public pineforge::source::PineStrategyHost {
 public:
     LayeredPartialByEntryQty() {
         initial_capital_ = 1'000'000;
@@ -353,7 +354,7 @@ public:
         syminfo_mintick_ = 0.01;
         close_entries_rule_any_ = true;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 10.0, "long");
         if (position_side_ == PositionSide::LONG) {
@@ -398,7 +399,7 @@ static void test_layered_partial_by_entry_uses_frozen_qty() {
 // the existing downstream fill resolver. An inert call is NOT a market exit;
 // the explicit market-close APIs remain strategy.close / strategy.close_all.
 // ─────────────────────────────────────────────────────────────────────
-class NoActionableExitFresh : public BacktestEngine {
+class NoActionableExitFresh : public pineforge::source::PineStrategyHost {
 public:
     int exits_after_inert = -1;
     double pos_after_inert = -1.0;
@@ -413,7 +414,7 @@ public:
         process_orders_on_close_ = true;  // matches the TV N0 probe
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
 
@@ -472,7 +473,7 @@ static void test_no_actionable_exit_fresh_is_inert() {
 
 // NR: replacing a live same-id stop with an all-actionable-NaN call cancels
 // the prior bracket and creates no replacement. The old stop must not fire.
-class NoActionableExitReissue : public BacktestEngine {
+class NoActionableExitReissue : public pineforge::source::PineStrategyHost {
 public:
     int exits_after_stop = -1;
     int exits_after_inert = -1;
@@ -495,7 +496,7 @@ public:
         return count;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
@@ -551,7 +552,7 @@ static void test_no_actionable_reissue_cancels_prior_exit() {
 // While flat, an inert exit must not bind itself to a same-pass pending entry.
 // The entry remains live, opens normally under POOC, and only strategy.close
 // ends the trade on the following bar.
-class NoActionableExitPendingEntry : public BacktestEngine {
+class NoActionableExitPendingEntry : public pineforge::source::PineStrategyHost {
 public:
     int entries_after_calls = -1;
     int exits_after_calls = -1;
@@ -565,7 +566,7 @@ public:
         process_orders_on_close_ = true;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
             strategy_exit("X", "L", kNaN, kNaN, kNaN, kNaN, kNaN,
@@ -613,7 +614,7 @@ static void test_inert_exit_does_not_bind_pending_entry() {
 // An inert same-id call must release the old qty/OCA reservation, and its own
 // qty/OCA arguments must not reserve anything. A following sibling can reserve
 // the full two-lot position.
-class NoActionableExitReservation : public BacktestEngine {
+class NoActionableExitReservation : public pineforge::source::PineStrategyHost {
 public:
     int exits_after_reissue = -1;
     bool found_x = false;
@@ -629,7 +630,7 @@ public:
         syminfo_mintick_ = 0.01;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 2.0, "long");
         if (bar_index_ == 1 && position_side_ == PositionSide::LONG) {
@@ -695,7 +696,7 @@ enum class ExitActionForm {
 
 // Snapshot placement, not fill behavior: this isolates the high-level
 // strategy_exit predicate from the generic fill resolver.
-class ExitActionabilityProbe : public BacktestEngine {
+class ExitActionabilityProbe : public pineforge::source::PineStrategyHost {
 public:
     explicit ExitActionabilityProbe(ExitActionForm form) : form_(form) {
         initial_capital_ = 1'000'000;
@@ -707,7 +708,7 @@ public:
 
     int exits_after_call = -1;
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (bar_index_ != 1 || position_side_ != PositionSide::LONG) return;
@@ -793,7 +794,7 @@ static void test_trailing_activation_is_actionable_but_offset_only_is_inert() {
 // Bars below are the real 2025-04-09 discriminating tape: the engine used to
 // exit at the 14:15 open 1475.99 while TV holds to 16:30 @1501.19.
 // ─────────────────────────────────────────────────────────────────────
-class ReissuedTrailRetroArmProbe : public BacktestEngine {
+class ReissuedTrailRetroArmProbe : public pineforge::source::PineStrategyHost {
 public:
     ReissuedTrailRetroArmProbe() {
         initial_capital_ = 1'000'000;
@@ -804,7 +805,7 @@ public:
     }
     double exit_px(int i) const { return closed_trade_exit_price(i); }
     int exit_bar_index(int i) const { return closed_trade_exit_bar_index(i); }
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == 0)
             strategy_entry("Long", true, kNaN, kNaN, 1.0, "L");
         // Pine: if strategy.position_size > 0 -> strategy.exit(trail_points =
@@ -844,7 +845,7 @@ static void test_reissued_trail_holds_to_tv_exit_no_retro_arm() {
 }
 
 // strategy.close is still an ordinary deferred market close when POOC is off.
-class ExplicitMarketClose : public BacktestEngine {
+class ExplicitMarketClose : public pineforge::source::PineStrategyHost {
 public:
     ExplicitMarketClose() {
         initial_capital_ = 1'000'000;
@@ -852,7 +853,7 @@ public:
         default_qty_value_ = 1.0;
         slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0)
             strategy_entry("L", true, kNaN, kNaN, 1.0, "long");
         if (bar_index_ == 2 && position_side_ == PositionSide::LONG)

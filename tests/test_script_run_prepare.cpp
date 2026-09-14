@@ -1,13 +1,14 @@
 // Literal lifecycle contract test. Compiled Pine/indicator reuse is a separate
 // Cloud diagnostic: this test establishes the engine-owned dispatch boundary.
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cassert>
 #include <stdexcept>
 #include <vector>
 
 using namespace pineforge;
 
-class ScriptProbe final : public BacktestEngine {
+class ScriptProbe final : public pineforge::source::PineStrategyHost {
 public:
     int preparations = 0;
     int configurations = 0;
@@ -38,15 +39,15 @@ public:
         ++configurations;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         assert(prepared);
         observed.push_back(++value);
     }
 };
 
-class CycleProbe final : public BacktestEngine {
+class CycleProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ % 3 == 0)
             strategy_entry("L", true, na<double>(), na<double>(), 1.0);
         if (bar_index_ % 3 == 1) strategy_close_all();

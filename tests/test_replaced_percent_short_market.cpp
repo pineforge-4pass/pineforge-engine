@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 namespace {
@@ -21,7 +22,7 @@ int passed = 0;
     std::printf("FAIL %d: %s\n", __LINE__, #x); } } while (0)
 bool near(double a, double b) { return std::abs(a-b) < 1e-9; }
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     double seed_qty = 3;
     int calls = 2;
@@ -53,7 +54,7 @@ public:
         if (child) strategy_exit("First exit", "First", mirror ? 120 : 80,
             mirror ? 80 : 120, nan, nan, nan, 100, "", nan, "");
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             issued_calls = 0;
             strategy_entry("Seed", !mirror, nan, nan,

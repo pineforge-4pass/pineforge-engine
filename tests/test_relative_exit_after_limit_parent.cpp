@@ -16,6 +16,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -45,7 +46,7 @@ enum class Cell {
     ShortPreEntryTarget,
 };
 
-class RelativeLimitBracketProbe final : public BacktestEngine {
+class RelativeLimitBracketProbe final : public pineforge::source::PineStrategyHost {
 public:
     explicit RelativeLimitBracketProbe(Cell cell) : cell_(cell) {
         initial_capital_ = 100'000.0;
@@ -59,7 +60,7 @@ public:
         calc_on_order_fills_ = false;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
 
         const bool is_long = cell_ == Cell::LongPostEntryStop
@@ -81,7 +82,7 @@ private:
     Cell cell_;
 };
 
-class MultiChildFenceProbe final : public BacktestEngine {
+class MultiChildFenceProbe final : public pineforge::source::PineStrategyHost {
 public:
     MultiChildFenceProbe() {
         initial_capital_ = 100'000.0;
@@ -95,7 +96,7 @@ public:
         calc_on_order_fills_ = false;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
 
         strategy_entry("E", true, /*limit=*/100.0, /*stop=*/kNaN,
@@ -113,7 +114,7 @@ public:
     }
 };
 
-class MultiParentFenceProbe final : public BacktestEngine {
+class MultiParentFenceProbe final : public pineforge::source::PineStrategyHost {
 public:
     MultiParentFenceProbe() {
         initial_capital_ = 100'000.0;
@@ -127,7 +128,7 @@ public:
         calc_on_order_fills_ = false;
     }
 
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ != 0) return;
 
         strategy_entry("E1", true, /*limit=*/100.0, /*stop=*/kNaN,

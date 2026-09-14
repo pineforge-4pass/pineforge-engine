@@ -35,6 +35,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -69,7 +70,7 @@ static Bar mk_bar(int64_t ts, double o, double h, double l, double c, double v) 
 
 // ---- Test 1: 3-trade scenario asserting final running-max values -----------
 
-class MaxContractsProbe : public BacktestEngine {
+class MaxContractsProbe : public pineforge::source::PineStrategyHost {
 public:
     MaxContractsProbe() {
         initial_capital_ = 100000.0;
@@ -79,7 +80,7 @@ public:
         commission_value_ = 0.0;  // zero commission for even-trade test
     }
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         switch (bar_index_) {
             case 0:
                 // Place entry; fills at bar 1
@@ -154,14 +155,14 @@ static void test_max_contracts_held() {
 
 // ---- Test 2: FLAT-only run leaves all counters at 0 -----------------------
 
-class FlatOnlyProbe : public BacktestEngine {
+class FlatOnlyProbe : public pineforge::source::PineStrategyHost {
 public:
     FlatOnlyProbe() {
         initial_capital_ = 100000.0;
         default_qty_type_ = QtyType::FIXED;
         default_qty_value_ = 1.0;
     }
-    void on_bar(const Bar& /*bar*/) override {}
+    void on_source_bar(const Bar& /*bar*/) override {}
 };
 
 static void test_flat_state_no_update() {
@@ -186,7 +187,7 @@ static void test_flat_state_no_update() {
 // 8 bars: entries on 0,2,4 — fills on 1,3,5 — closes on 1,3,5 — fills on 2,4,6.
 // That gives 3 round-trips completed by bar 6, bar 7 is flat.
 
-class MultiEventProbe : public BacktestEngine {
+class MultiEventProbe : public pineforge::source::PineStrategyHost {
 public:
     MultiEventProbe() {
         initial_capital_ = 100000.0;
@@ -200,7 +201,7 @@ public:
     // Round-trip 1: entry bar 0, close bar 1 (fills 1 and 2)
     // Round-trip 2: entry bar 2, close bar 3 (fills 3 and 4)
     // Round-trip 3: entry bar 4, close bar 5 (fills 5 and 6)
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == 0 || bar_index_ == 2 || bar_index_ == 4) {
             strategy_entry("LE", true, kNaN, kNaN, 1.0);
         }

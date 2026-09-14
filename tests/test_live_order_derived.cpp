@@ -12,6 +12,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -33,9 +34,9 @@ constexpr int kExplicit = 0, kFrozenPlacement = 1, kDefaultStopPlacement = 2, kA
 // A. Explicit-qty MARKET entry + offset bracket (the brief's case).
 // Bar 0: strategy.entry("L", qty=2) + strategy.exit("x", "L", profit=300t,
 // loss=200t); mintick 0.01. The MARKET rests until bar 1's open (100).
-class ExplicitBracketProbe final : public BacktestEngine {
+class ExplicitBracketProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             // strategy_entry(id, is_long, limit, stop, qty, ...) on this branch.
             strategy_entry("L", true, kNaN, kNaN, 2.0);
@@ -123,7 +124,7 @@ void test_explicit_bracket() {
 // qty = floor_step(equity * pct / tick(level)) = floor(10000 / 101) = 99
 // (default_stop_placement_qty, engine_strategy_commands.cpp). A non-positive
 // fill print falls back to AT_FILL and calc_qty returns 0 there.
-class DefaultStopProbe final : public BacktestEngine {
+class DefaultStopProbe final : public pineforge::source::PineStrategyHost {
 public:
     DefaultStopProbe() {
         initial_capital_ = 10000.0;
@@ -131,7 +132,7 @@ public:
         default_qty_value_ = 100.0;
         qty_step_ = 1.0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", true, kNaN, /*stop=*/101.0);
     }
 };
@@ -171,7 +172,7 @@ void test_default_stop_placement() {
 // engine_strategy_commands.cpp strategy_entry MARKET branch) -> partition
 // FROZEN_PLACEMENT; the FIXED default carries no snapshot and sizes at the
 // fill (calc_qty == apply_qty_step(default_qty_value_)) -> AT_FILL.
-class PercentMarketProbe final : public BacktestEngine {
+class PercentMarketProbe final : public pineforge::source::PineStrategyHost {
 public:
     PercentMarketProbe() {
         initial_capital_ = 10000.0;
@@ -179,24 +180,24 @@ public:
         default_qty_value_ = 100.0;
         qty_step_ = 1.0;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("M", true);
     }
 };
-class FixedMarketProbe final : public BacktestEngine {
+class FixedMarketProbe final : public pineforge::source::PineStrategyHost {
 public:
     FixedMarketProbe() { default_qty_type_ = QtyType::FIXED; default_qty_value_ = 3.0; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("M", true);
     }
 };
 // strategy.order: apply_raw_order_fill opens the explicit qty VERBATIM (no
 // lot step, unlike strategy.entry's apply_qty_step) -- qty_step 1 with qty
 // 2.5 pins the difference.
-class RawOrderProbe final : public BacktestEngine {
+class RawOrderProbe final : public pineforge::source::PineStrategyHost {
 public:
     RawOrderProbe() { qty_step_ = 1.0; }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_order("R", true, 2.5);
     }
 };
@@ -241,9 +242,9 @@ void test_default_market_partitions() {
 // position whose cycle it was not born in (created_position_side FLAT !=
 // LONG) and no same-bar opposite market was pending at its placement, so its
 // fill would be close-only. Same shape, opposite live side absent -> 0.
-class PriorCycleProbe final : public BacktestEngine {
+class PriorCycleProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) strategy_entry("S", false, kNaN, /*stop=*/95.0, 1.0);
         if (bar_index_ == 1) strategy_entry("L", true, kNaN, kNaN, 1.0);
     }
@@ -279,9 +280,9 @@ void test_prior_cycle_close_only() {
 // (engine_path_resolve.cpp): activation = snap_trail_level_to_tick_grid(entry
 // + ticks * mintick) for a long, ticks = ceil(trail_points - 5e-5). A short
 // bracket resolves the offsets with the sign flipped.
-class TrailProbe final : public BacktestEngine {
+class TrailProbe final : public pineforge::source::PineStrategyHost {
 public:
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", false, kNaN, kNaN, 1.0);
             strategy_exit("t", "S", kNaN, kNaN, /*trail_points=*/50.0,
@@ -315,7 +316,7 @@ void test_trail_activation_short() {
 //   same side, kept over cap -> add sbmt_tx_qty;
 //   FLAT, tx > own -> dispatch sbmt_tx_qty (sbmt_flat_frozen_tx).
 // All four shapes are reached through the public strategy API.
-class SbmtProbe final : public BacktestEngine {
+class SbmtProbe final : public pineforge::source::PineStrategyHost {
 public:
     enum class Shape { Reversal, ReversalAfterClose, KeptOverCap, FlatPair };
     SbmtProbe(Shape shape, double default_qty) : shape_(shape) {
@@ -323,7 +324,7 @@ public:
         default_qty_type_ = QtyType::FIXED;
         default_qty_value_ = default_qty;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         switch (shape_) {
             case Shape::Reversal:
                 if (bar_index_ == 0) strategy_entry("Long", true);
@@ -444,10 +445,10 @@ PendingOrder make_order(const std::string& id, OrderType type, bool is_long, int
     return o;
 }
 
-class ShortSeedProbe final : public BacktestEngine {
+class ShortSeedProbe final : public pineforge::source::PineStrategyHost {
 public:
     ShortSeedProbe() { default_qty_type_ = QtyType::FIXED; default_qty_value_ = 1.0; }
-    void on_bar(const Bar&) override {}
+    void on_source_bar(const Bar&) override {}
     int bar() const { return bar_index_; }
     // Long lot L (id "Long"), materialized lot min(S, L) (id "__close__Short"),
     // both filled on the current bar; the final short "Short" (MARKET, born
@@ -512,7 +513,7 @@ void test_short_seed_final_short() {
 // current_fill_is_limit_): with slippage 2 ticks a CASH-default pure-STOP
 // entry sizes at apply_slippage(100, buy) = 100.02 and a pure-LIMIT entry at
 // apply_limit_fill(100, buy) = 100 -- calc_qty CASH = 1000 / tick(basis).
-class SlipProbe final : public BacktestEngine {
+class SlipProbe final : public pineforge::source::PineStrategyHost {
 public:
     SlipProbe() {
         initial_capital_ = 10000.0;
@@ -520,7 +521,7 @@ public:
         default_qty_value_ = 1000.0;
         slippage_ = 2;
     }
-    void on_bar(const Bar&) override {
+    void on_source_bar(const Bar&) override {
         if (bar_index_ == 0) {
             strategy_entry("S", true, kNaN, /*stop=*/101.0);
             strategy_entry("L", true, /*limit=*/99.0);

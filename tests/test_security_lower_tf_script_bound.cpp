@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -28,8 +29,8 @@ namespace {
 // Minimal harness exposing register_security_lower_tf_eval (protected
 // in BacktestEngine) so each case wires exactly one LTF security with
 // the timeframe combo under test.
-struct LtfBoundHarness : public BacktestEngine {
-    void on_bar(const Bar&) override {}
+struct LtfBoundHarness : public pineforge::source::PineStrategyHost {
+    void on_source_bar(const Bar&) override {}
     void evaluate_security(int, const Bar&, bool) override {}
 
     explicit LtfBoundHarness(const std::string& requested_tf) {

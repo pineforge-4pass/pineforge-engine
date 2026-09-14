@@ -1,4 +1,5 @@
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cstdio>
 #include <limits>
@@ -24,7 +25,7 @@ Bar bar(double price, int64_t timestamp, double volume = 1.0) {
     return Bar{price, price, price, price, volume, timestamp};
 }
 
-class Probe final : public BacktestEngine {
+class Probe final : public pineforge::source::PineStrategyHost {
 public:
     std::vector<Bar> observed;
 
@@ -34,7 +35,7 @@ public:
         default_qty_value_ = 1;
     }
 
-    void on_bar(const Bar& value) override {
+    void on_source_bar(const Bar& value) override {
         observed.push_back(value);
         if (bar_index_ == 0) strategy_entry("L", true);
         if (bar_index_ == 1) strategy_close_all();

@@ -55,6 +55,7 @@
 
 #include <pineforge/bar.hpp>
 #include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 using namespace pineforge;
 
@@ -187,7 +188,7 @@ struct Signal {
     double trail_offset;
 };
 
-class Probe : public BacktestEngine {
+class Probe : public pineforge::source::PineStrategyHost {
 public:
     Probe(double capital, double mintick, double qty_step, double pct = 100.0) {
         initial_capital_ = capital;
@@ -204,7 +205,7 @@ public:
         margin_call_enabled_ = true;
     }
     std::vector<Signal> signals;
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         for (const Signal& s : signals) {
             if (s.bar != bar_index_) continue;
             const std::string id = s.is_long ? "Long" : "Short";

@@ -34,6 +34,7 @@
  * family-Z ledger notes; the run function below takes either side).
  */
 
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -135,7 +136,7 @@ const Bar kEth1001_1215 = mk(4295.18, 4312.34, 4287.0, 4306.58, 1759320900000);
 
 // The probe's broker: 10x margin both sides, all-in percent_of_equity,
 // 0.0001 lots, mintick 0.01, no commission, market fills at the next open.
-class Goat : public BacktestEngine {
+class Goat : public pineforge::source::PineStrategyHost {
 public:
     explicit Goat(double capital) {
         initial_capital_ = capital;
@@ -160,7 +161,7 @@ public:
     // bar (tapes famz-trail-*-D); 2: trail_offset alternates 50/51t (-E).
     int alternate = 0;
 
-    void on_bar(const Bar& /*bar*/) override {
+    void on_source_bar(const Bar& /*bar*/) override {
         if (bar_index_ == signal_bar) {
             if (signal_long) {
                 strategy_close("Short", "Flip to Long");
@@ -393,7 +394,7 @@ void test_changed_points_restart_changed_offset_keeps() {
 // 4323.54 the carried-best arming would print; B1: entry 11:15Z @4295.18,
 // re-issue 11:45Z, exit @4300.18 = the level on the 12:00Z bar, not its
 // open 4295.88).
-class OneShot : public BacktestEngine {
+class OneShot : public pineforge::source::PineStrategyHost {
 public:
     OneShot() {
         initial_capital_ = 1'000'000.0;
@@ -411,7 +412,7 @@ public:
     }
     int signal_bar = -1;
     int reissue_bar = -1;
-    void on_bar(const Bar& bar) override {
+    void on_source_bar(const Bar& bar) override {
         if (bar_index_ == signal_bar) {
             strategy_entry("L", true);
             strategy_exit("x", "L", kNaN, bar.close * 0.98, /*trail_points=*/1500.0);
