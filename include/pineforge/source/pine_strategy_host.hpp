@@ -59,6 +59,7 @@ public:
     double live_position_size() const override;
     int pending_order_count() const;
     const MarketAdmissionJournal& market_admission_journal() const;
+    std::vector<admission::Field> market_admission_fields() const;
     const PendingOrder& pending_order_at(int index) const;
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
@@ -109,7 +110,110 @@ protected:
     using PineLanguageState::coof_checkpoint_last_chart_close_;
 
     // @source-state begin
+    std::set<std::string> cycle_filled_entry_ids_;
+    std::unordered_map<std::string, double> id_unclosed_qty_;
+    bool sb_close_active_ = false;
+    int sb_close_bar_ = -1;
+    int sb_close_calls_ = 0;
+    std::string sb_close_first_id_;
+    double sb_close_first_target_ = 0.0;
+    bool sb_close_first_carry_valid_ = false;
+    double sb_close_first_carry_qty_ = 0.0;
+    std::string sb_close_id_;
+    std::string sb_close_comment_;
+    std::unordered_map<std::string, double> close_reserved_qty_;
+    std::unordered_map<std::string, double> close_two_call_first_qty_;
+    int callsite_close_bar_ = -1;
+    uint64_t callsite_close_queue_seq_ = 0;
+    struct SameBarCloseCallsite {
+        uint64_t token = 0;
+        bool active = false;
+        int calls = 0;
+        std::string first_id;
+        double first_target = 0.0;
+        bool first_ledger_consumed = false;
+        bool first_carry_valid = false;
+        double first_carry_qty = 0.0;
+        std::string id;
+        std::string comment;
+        double target = 0.0;
+        std::vector<std::string> deferred_cleanup_ids;
+        uint64_t queue_seq = 0;
+        bool retire_ledger_whole = true;
+    };
+    std::unordered_map<uint64_t, SameBarCloseCallsite> callsite_close_callsites_;
+    double callsite_close_admitted_total_ = 0.0;
+    std::unordered_map<uint64_t, std::unordered_map<std::string, double>>
+        callsite_close_reserved_qty_;
+    std::unordered_map<uint64_t, std::unordered_map<std::string, double>>
+        callsite_close_two_call_first_qty_;
+    QtyType default_qty_type_ = QtyType::FIXED;
+    double default_qty_value_ = 1.0;
+    int pyramiding_ = 1;
+    bool margin_zero_cover_full_liquidation_ = false;
+    bool close_entries_rule_any_ = false;
+    double margin_long_ = 100.0;
+    double margin_short_ = 100.0;
+    int last_margin_call_event_bar_ = -1;
+    int intrabar_exit_margin_call_bar_ = -1;
+    int open_margin_slice_bar_ = -1;
+    double pending_close_qty_in_bar_ = 0.0;
+    int64_t next_order_seq_ = 1;
+    uint64_t exit_leg_event_seq_ = 0;
+    struct NamedEntryCancelContext {
+        uint64_t entry_incarnation = 0;
+        uint64_t surviving_exit_incarnation = 0;
+    };
     std::vector<PendingOrder> pending_orders_;
+    std::unordered_map<std::string, NamedEntryCancelContext>
+        named_entry_cancelled_incarnation_in_current_eval_;
+    std::unordered_set<std::string> consumed_partial_exit_ids_;
+    std::unordered_set<std::string> scratch_skip_ids_;
+    std::vector<uint64_t> scratch_filled_incarnations_;
+    internal::DualEntryStopPathWinner dual_entry_path_{};
+    internal::DualEntryStopPathWinner last_bar_dual_entry_decision_{};
+    double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
+    int trail_close_restart_bar_ = -1;
+    double trail_best_before_bar_ = std::numeric_limits<double>::quiet_NaN();
+    int trail_best_before_bar_index_ = -1;
+    int64_t trail_best_before_bar_position_cycle_ = 0;
+    uint64_t trail_best_before_bar_fill_seq_ = 0;
+    bool last_exit_fill_was_trail_ = false;
+    bool current_fill_is_limit_ = false;
+    enum class RiskDirection { BOTH, LONG_ONLY, SHORT_ONLY };
+    RiskDirection risk_direction_ = RiskDirection::BOTH;
+    int risk_max_cons_loss_days_ = 0;
+    double risk_max_drawdown_ = 0.0;
+    bool risk_max_drawdown_is_pct_ = false;
+    double risk_max_intraday_loss_ = 0.0;
+    bool risk_max_intraday_loss_is_pct_ = false;
+    double risk_max_position_size_ = 0.0;
+    int cons_loss_day_count_ = 0;
+    int last_loss_day_ = -1;
+    bool risk_halted_ = false;
+    double intraday_pnl_ = 0.0;
+    int intraday_pnl_day_ = -1;
+    double intraday_loss_day_start_equity_ = std::numeric_limits<double>::quiet_NaN();
+    int intraday_loss_day_ = -1;
+    int intraday_loss_block_day_ = -1;
+    bool intraday_loss_evaluating_ = false;
+    bool intraday_loss_cancel_pending_ = false;
+    bool coof_scheduler_active_ = false;
+    bool coof_fill_recalc_active_ = false;
+    bool coof_cursor_is_bar_close_ = false;
+    bool coof_cursor_is_bar_point_ = false;
+    bool coof_evaluating_path_segment_ = false;
+    bool coof_recalc_at_bar_open_ = false;
+    bool coof_recalc_after_first_open_fill_ = false;
+    uint64_t coof_market_entry_recalc_incarnation_ = 0;
+    uint64_t coof_market_entry_recalc_fill_seq_ = 0;
+    bool coof_at_extreme_waypoint_ = false;
+    bool coof_hist_is_segment_ = false;
+    int coof_hist_path_index_ = -1;
+    int coof_cascade_recalc_leg_ = -1;
+    bool coof_cascade_force_wp_gap_ = false;
+    double coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
+    uint64_t coof_direct_fill_events_remaining_ = 0;
     // @source-state end
 
     bool history_advances_new_bar() const;
@@ -223,6 +327,7 @@ protected:
     bool legacy_stream_advance_time(int64_t timestamp_ms);
     bool legacy_stream_end(bool finalize_partial_input_bar);
     void stream_dispatch_script_bar(const Bar& bar, bool had_tick);
+    void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
     void register_security_eval(int sec_id, const std::string& requested_tf,
                                 const std::string& input_tf, bool lookahead_on,
                                 bool gaps_on = false, bool heikinashi = false);
@@ -602,7 +707,6 @@ protected:
     admission::ReviewCapture begin_market_review(admission::Checkpoint checkpoint);
     void reclaim_market_admission();
     void record_market_sizing_revision(PendingOrder& order,admission::SizingObservation before,double affordability_before);
-    std::vector<admission::Field> market_admission_fields() const;
     // BEGIN L2 POLICY MEMBERS
         compat::pine::CapClock pine_cap_clock() const;
         compat::pine::Calculation pine_cap_calculation() const;

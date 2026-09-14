@@ -195,7 +195,7 @@ void test_overrides_applied_to_config_and_equity() {
     std::printf("test_overrides_applied_to_config_and_equity\n");
     PyramidEntryStrat s;
 
-    StrategyOverrides ov;
+    source::StrategyOverrides ov;
     ov.initial_capital = 250000.0;
     ov.pyramiding = 2;
     ov.slippage = 3;
@@ -264,7 +264,7 @@ void test_overrides_large_pyramiding_opens_all_legs() {
     std::printf("test_overrides_large_pyramiding_opens_all_legs\n");
     PyramidEntryStrat s;
 
-    StrategyOverrides ov;
+    source::StrategyOverrides ov;
     ov.initial_capital = 1'000'000.0;
     ov.pyramiding = 10;
     ov.default_qty_value = 1.0;
@@ -345,7 +345,7 @@ void test_override_process_orders_on_close_fills_at_close() {
     // (105), close placed bar 1 fills at bar 1 close (115). PnL = (115-105)*1.
     {
         CloseThenExitStrat s;
-        StrategyOverrides ov;
+        source::StrategyOverrides ov;
         ov.process_orders_on_close = 1;  // ON
         ov.slippage = 0;
         ov.commission_value = 0.0;
@@ -363,7 +363,7 @@ void test_override_process_orders_on_close_fills_at_close() {
     // (110), close placed bar 1 fills at bar 2 open (120). PnL = (120-110)*1.
     {
         CloseThenExitStrat s;
-        StrategyOverrides ov;
+        source::StrategyOverrides ov;
         ov.process_orders_on_close = 0;  // OFF
         ov.slippage = 0;
         ov.commission_value = 0.0;
@@ -398,7 +398,7 @@ void test_override_commission_reduces_pnl() {
     SymInfo sym;
 
     CloseThenExitStrat s;
-    StrategyOverrides ov;
+    source::StrategyOverrides ov;
     ov.process_orders_on_close = 0;
     ov.slippage = 0;
     ov.commission_value = 2.5;
@@ -432,7 +432,7 @@ void test_empty_tf_triggers_detect_timeframe() {
         make_bars(bars, N, /*step_ms=*/300'000);  // 5 minutes
         std::unordered_map<std::string, std::string> inputs;
         SymInfo sym;
-        StrategyOverrides ov;
+        source::StrategyOverrides ov;
         ov.pyramiding = 10;  // irrelevant here, just keep config explicit
         // Empty input_tf + empty script_tf → both go through detect_timeframe.
         s.run(bars, N, "", "", inputs, sym, &ov);

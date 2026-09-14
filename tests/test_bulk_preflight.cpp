@@ -122,7 +122,7 @@ void invoke(Probe& p, Route r, const Bar* bars, int n) {
         symbol.pointvalue = 50;
         symbol.mintick = 0.25;
         symbol.qty_step = 0.5;
-        StrategyOverrides overrides;
+        source::StrategyOverrides overrides;
         overrides.initial_capital = 54321;
         overrides.commission_value = 0.2;
         overrides.commission_type = 0;

@@ -3592,7 +3592,7 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const Bar*, int,
                                        const std::string&, const std::string&,
                                        const std::unordered_map<std::string, std::string>&,
-                                       const SymInfo&, const StrategyOverrides*,
+                                       const SymInfo&, const source::StrategyOverrides*,
                                        bool, int, MagnifierDistribution) {
     try {
         refuse_source_mutation("run(inputs,syminfo,overrides)");

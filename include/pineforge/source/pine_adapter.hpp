@@ -22,6 +22,19 @@ struct PineStrategyConfig {
     bool src_series_active = false;
 };
 
+struct StrategyOverrides {
+    double initial_capital = std::numeric_limits<double>::quiet_NaN();
+    double commission_value = std::numeric_limits<double>::quiet_NaN();
+    double default_qty_value = std::numeric_limits<double>::quiet_NaN();
+    int pyramiding = -1;
+    int slippage = -1;
+    int commission_type = -1;
+    int default_qty_type = -1;
+    int process_orders_on_close = -1;
+    int calc_on_order_fills = -1;
+    int close_entries_rule = -1;
+};
+
 struct PineExecutionAdapter {
     explicit PineExecutionAdapter(
             compat::pine::CapAttachment attachment = compat::pine::CapAttachment::None)

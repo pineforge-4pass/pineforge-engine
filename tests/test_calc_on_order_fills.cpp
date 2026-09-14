@@ -1598,7 +1598,7 @@ void test_false_flag_path_is_legacy_identical_and_never_calls_hooks() {
     auto bars = standard_feed();
     default_false.run(bars.data(), static_cast<int>(bars.size()));
 
-    StrategyOverrides ov;
+    source::StrategyOverrides ov;
     ov.calc_on_order_fills = 0;
     std::unordered_map<std::string, std::string> inputs;
     SymInfo sym;
@@ -1625,7 +1625,7 @@ void test_strategy_override_can_enable_and_disable_coof() {
     SymInfo sym;
 
     MarketCloseProbe enabled_by_override(false);
-    StrategyOverrides on;
+    source::StrategyOverrides on;
     on.calc_on_order_fills = 1;
     enabled_by_override.run(bars.data(), static_cast<int>(bars.size()),
                             "15", "15", inputs, sym, &on);
@@ -1637,7 +1637,7 @@ void test_strategy_override_can_enable_and_disable_coof() {
     }
 
     MarketCloseProbe disabled_by_override(true);
-    StrategyOverrides off;
+    source::StrategyOverrides off;
     off.calc_on_order_fills = 0;
     disabled_by_override.run(bars.data(), static_cast<int>(bars.size()),
                              "15", "15", inputs, sym, &off);

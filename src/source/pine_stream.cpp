@@ -23,6 +23,18 @@ Bar price_point(double price, double volume, int64_t timestamp) {
 
 }  // namespace
 
+void source::PineStrategyHost::source_stream_entry_comment(
+        const PyramidEntry& pe, std::string& comment) const {
+    // Most kernels attach entry_comment after opening the lot. Preserve the
+    // pending order's own text even if the new lot closes in this same input.
+    for (const auto& order : pending_orders_) {
+        if (order.incarnation == pe.entry_incarnation && order.id == pe.entry_id) {
+            comment = order.comment;
+            break;
+        }
+    }
+}
+
 bool source::PineStrategyHost::legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
                                   const std::string& input_tf,
                                   const std::string& script_tf) {

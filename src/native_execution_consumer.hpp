@@ -33,7 +33,7 @@ public:
                   const std::string& script_tf,
                   const std::unordered_map<std::string, std::string>& inputs,
                   const SymInfo& syminfo,
-                  const StrategyOverrides* overrides,
+                  const source::StrategyOverrides* overrides,
                   bool bar_magnifier,
                   int magnifier_samples,
                   MagnifierDistribution magnifier_dist) override;

@@ -150,14 +150,7 @@ void BacktestEngine::stream_observe_entry(const PyramidEntry& pe) {
     action.order_id = pe.entry_id;
     action.comment = pe.entry_comment;
     action.entry_incarnation = pe.entry_incarnation;
-    // Most kernels attach entry_comment after opening the lot. Preserve the
-    // pending order's own text even if the new lot closes in this same input.
-    for (const auto& order : pending_orders_) {
-        if (order.incarnation == pe.entry_incarnation && order.id == pe.entry_id) {
-            action.comment = order.comment;
-            break;
-        }
-    }
+    source_stream_entry_comment(pe, action.comment);
     stream_order_actions_.push_back(std::move(action));
 }
 

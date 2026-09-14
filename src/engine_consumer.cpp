@@ -35,7 +35,7 @@ public:
                   const std::string& script_tf,
                   const std::unordered_map<std::string, std::string>& inputs,
                   const SymInfo& syminfo,
-                  const StrategyOverrides* overrides,
+                  const source::StrategyOverrides* overrides,
                   bool bar_magnifier,
                   int magnifier_samples,
                   MagnifierDistribution magnifier_dist) override {
@@ -147,7 +147,7 @@ void BacktestEngine::run(const Bar* input_bars, int n_input,
                          const std::string& script_tf,
                          const std::unordered_map<std::string, std::string>& inputs,
                          const SymInfo& syminfo,
-                         const StrategyOverrides* overrides,
+                         const source::StrategyOverrides* overrides,
                          bool bar_magnifier,
                          int magnifier_samples,
                          MagnifierDistribution magnifier_dist) {
@@ -192,6 +192,8 @@ void BacktestEngine::legacy_run_simple(const Bar*, int) {
     throw_native_only_route("legacy_run_simple");
 }
 
+void BacktestEngine::source_stream_entry_comment(const PyramidEntry&, std::string&) const {}
+
 void BacktestEngine::legacy_run_tf(const Bar*, int, const std::string&,
                                    const std::string&, bool, int,
                                    MagnifierDistribution) {
@@ -201,7 +203,7 @@ void BacktestEngine::legacy_run_tf(const Bar*, int, const std::string&,
 void BacktestEngine::legacy_run_rich(
         const Bar*, int, const std::string&, const std::string&,
         const std::unordered_map<std::string, std::string>&, const SymInfo&,
-        const StrategyOverrides*, bool, int, MagnifierDistribution) {
+        const source::StrategyOverrides*, bool, int, MagnifierDistribution) {
     throw_native_only_route("legacy_run_rich");
 }
 
