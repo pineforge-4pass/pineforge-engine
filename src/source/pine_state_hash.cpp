@@ -401,6 +401,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(staged_.syminfo.session); f.s(staged_.syminfo.volumetype); f.s(staged_.syminfo.description);
     f.d(staged_.syminfo.mintick); f.d(staged_.syminfo.pointvalue); f.d(staged_.syminfo.qty_step);
     f.s(staged_.chart_timezone); f.d(staged_.account_fx);
+    f.u(staged_.account_fx_effective_from_ms.size());
+    for (const auto timestamp : staged_.account_fx_effective_from_ms) f.i(timestamp);
+    f.u(staged_.account_fx_per_quote.size());
+    for (const auto rate : staged_.account_fx_per_quote) f.d(rate);
     f.b(staged_.quantity_grid.has_value()); if (staged_.quantity_grid) f.d(*staged_.quantity_grid);
     std::vector<std::string> input_keys;
     for (const auto& pair : staged_.inputs) input_keys.push_back(pair.first);
@@ -499,6 +503,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
     for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
     f.d(pooc_open_basis_); f.i(pooc_open_script_bar_); f.i(close_all_pending_script_bar_);
+    f.d(last_fx_rate_); f.i(position_open_script_bar_); f.b(source_margin_call_enabled_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
     f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);

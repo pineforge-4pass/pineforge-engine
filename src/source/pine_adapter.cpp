@@ -119,6 +119,8 @@ void PineExecutionAdapter::reset_for_run() {
     pooc_open_basis_ = 0.0;
     pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    last_fx_rate_ = kNaN;
+    position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     day_ledger_ = {};
     short_seed_ = {};
     short_seed_candidate_long_ = {};
@@ -182,8 +184,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
     if (config.pyramiding > 0) spec.max_open_lots = static_cast<std::uint64_t>(config.pyramiding);
     spec.allowed_open_directions = directions_for(risk_.direction);
-    const double margin = std::min(config.margin_long, config.margin_short);
-    if (finite_positive(margin)) spec.initial_margin_fraction = margin / 100.0;
+    // Pine's frozen default sizing admits against its signal-time tuple.  The
+    // generic initial-margin gate only sees the later fill-time FX rate, so
+    // source admission is reproduced in validate_precommit instead.
     if (args.bar_magnifier) {
         if (spec.timeframe_undetected) {
             throw std::logic_error("undetected timeframe cannot form an intrabar path");
@@ -234,6 +237,8 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
         snapshot.equity = host.native_marked_equity(point->price);
     }
     snapshot.fx = staged_.account_fx;
+    if (const auto point = host.current_execution_point())
+        snapshot.fx = active_staged_fx(point->decision.sub_bar_open_ms);
     return snapshot;
 }
 
@@ -352,6 +357,107 @@ double PineExecutionAdapter::quantize_close_units(double basis, double percent) 
         if (units == 0.0) units = step;
     }
     return units;
+}
+
+double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const noexcept {
+    double rate = staged_.account_fx;
+    const std::size_t count = std::min(staged_.account_fx_effective_from_ms.size(),
+                                       staged_.account_fx_per_quote.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        if (staged_.account_fx_effective_from_ms[i] > timestamp_ms) break;
+        rate = staged_.account_fx_per_quote[i];
+    }
+    return std::isfinite(rate) && rate > 0.0 ? rate : 1.0;
+}
+
+void PineExecutionAdapter::submit_fx_margin_slice(
+        const Bar& bar, const NativeDecisionContext&, double rate) {
+    const auto position = require_host().physical_position();
+    const double held = std::abs(position.signed_units);
+    const double margin = position.signed_units > 0.0 ? config_.margin_long : config_.margin_short;
+    if (!source_margin_call_enabled_ || !(held > 0.0) || !finite_positive(margin) || margin != 100.0
+        || !finite_positive(bar.open) || !finite_positive(staged_.syminfo.pointvalue)) return;
+    const double required = held * bar.open * staged_.syminfo.pointvalue * rate;
+    const double equity = require_host().native_marked_equity(bar.open);
+    if (!(required > equity) || !std::isfinite(equity)) return;
+    const double raw_minimum = (required - equity)
+        / (bar.open * staged_.syminfo.pointvalue * rate);
+    if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return;
+    double minimum = raw_minimum;
+    if (staged_.quantity_grid) minimum = floor_quantity_grid(minimum, staged_.quantity_grid);
+    double units = 0.0;
+    if (minimum > 0.0) {
+        // The source broker floors the restore quantity before applying its
+        // fourfold liquidation multiplier, then floors the executable result.
+        units = 4.0 * minimum;
+        if (staged_.quantity_grid) units = floor_quantity_grid(units, staged_.quantity_grid);
+    } else if (staged_.quantity_grid && *staged_.quantity_grid <= 1.0
+               && raw_minimum > 1e-12 && raw_minimum < 1.0) {
+        // A positive deficit which floors below one lot is discontinuous in
+        // the legacy FX rollover path: it closes one whole contract (G2).
+        const double candidate = std::min(1.0, held);
+        const double gridded = floor_quantity_grid(candidate, staged_.quantity_grid);
+        const double guard = std::max(1e-12, std::abs(candidate) * 1e-12);
+        if (candidate >= held - 1e-12 || std::abs(gridded - candidate) <= guard)
+            units = candidate;
+    }
+    units = std::min(held, units);
+    if (!(units > 0.0) || !std::isfinite(units)) return;
+    native_order::Request request;
+    request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+    request.label = "__margin_call__";
+    request.comment = "Margin call";
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::Margin;
+    snapshot.source_id = request.label;
+    snapshot.requested_qty = units;
+    snapshot.sizing = sizing_snapshot();
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
+                                            "__margin_call__");
+    if (accepted) {
+        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
+    }
+}
+
+void PineExecutionAdapter::apply_fx_open_margin_slice(
+        const Bar& bar, const NativeDecisionContext& context) {
+    const double rate = active_staged_fx(context.sub_bar_open_ms);
+    const double prior = last_fx_rate_;
+    last_fx_rate_ = rate;
+    if (!std::isfinite(prior) || prior == rate) return;
+    const auto position = require_host().physical_position();
+    if (position.signed_units == 0.0
+        || position_open_script_bar_ >= context.script_bar_open_ms) return;
+    const double margin = position.signed_units > 0.0 ? config_.margin_long : config_.margin_short;
+    if (source_margin_call_enabled_ && finite_positive(margin) && margin != 100.0) {
+        throw std::runtime_error(
+            "timestamped account-currency FX broker-open rollover supports "
+            "only carried 1x full-margin positions");
+    }
+    submit_fx_margin_slice(bar, context, rate);
+}
+
+void PineExecutionAdapter::apply_fx_opening_margin_slice(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    const auto found = placement_.find(event.handle().incarnation);
+    if (found == placement_.end() || !found->second.opening
+        || found->second.family != PineOrderFamily::Entry
+        || !finite_positive(found->second.sizing.frozen_units)
+        || config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        || config_.commission_type != static_cast<int>(CommissionType::PERCENT)
+        || !(config_.commission_value > 0.0)) {
+        return;
+    }
+    const double rate = active_staged_fx(context.sub_bar_open_ms);
+    if (!std::isfinite(found->second.sizing.fx) || found->second.sizing.fx == rate) return;
+    Bar opening;
+    opening.open = event.resolved_price;
+    opening.high = event.resolved_price;
+    opening.low = event.resolved_price;
+    opening.close = event.resolved_price;
+    opening.timestamp = context.sub_bar_open_ms;
+    submit_fx_margin_slice(opening, context, rate);
 }
 
 void PineExecutionAdapter::consume_cohort_units(
@@ -588,11 +694,21 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     if (default_sized && finite_positive(snapshot.sizing.price)) {
         if (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
             && finite_positive(snapshot.sizing.equity)) {
-            snapshot.sizing.frozen_units = floor_quantity_grid(config_.default_qty_value / 100.0
-                * snapshot.sizing.equity / snapshot.sizing.price, staged_.quantity_grid);
+            double cash = config_.default_qty_value / 100.0 * snapshot.sizing.equity;
+            if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+                && config_.commission_value > 0.0) {
+                cash /= 1.0 + config_.commission_value / 100.0;
+            }
+            const double denominator = snapshot.sizing.price * staged_.syminfo.pointvalue
+                * snapshot.sizing.fx;
+            snapshot.sizing.frozen_units = finite_positive(denominator)
+                ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
         } else if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
-            snapshot.sizing.frozen_units = floor_quantity_grid(
-                config_.default_qty_value / snapshot.sizing.price, staged_.quantity_grid);
+            const double denominator = snapshot.sizing.price * staged_.syminfo.pointvalue
+                * snapshot.sizing.fx;
+            snapshot.sizing.frozen_units = finite_positive(denominator)
+                ? floor_quantity_grid(config_.default_qty_value / denominator,
+                                      staged_.quantity_grid) : 0.0;
         }
         snapshot.sizing.at_fill = config_.calc_on_order_fills;
     }
@@ -1081,8 +1197,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const double equity = source.sizing.at_fill
             ? require_host().native_marked_equity(result.resolved_price) : source.sizing.equity;
         const double price = source.sizing.at_fill ? result.resolved_price : source.sizing.price;
-        result.units = finite_positive(equity) && finite_positive(price)
-            ? equity * config_.default_qty_value / 100.0 / price : 0.0;
+        const double fx = source.sizing.at_fill ? facts.active_fx : source.sizing.fx;
+        const double denominator = price * staged_.syminfo.pointvalue * fx;
+        double cash = equity * config_.default_qty_value / 100.0;
+        if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+            && config_.commission_value > 0.0) {
+            cash /= 1.0 + config_.commission_value / 100.0;
+        }
+        result.units = finite_positive(equity) && finite_positive(denominator)
+            ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
     }
     if (source.family == PineOrderFamily::Entry && source.sequential_group != 0
         && source.sequential_rank != 0 && source.has_full_entry_bracket) {
@@ -1116,6 +1239,40 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         return NativePrecommitVerdict::Refuse;
     if (risk_.max_cons_loss_days > 0 && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days)
         return NativePrecommitVerdict::Refuse;
+    if (!view.account.would_open) return NativePrecommitVerdict::Proceed;
+    const auto snapshot = placement_.find(view.target.incarnation);
+    if (snapshot == placement_.end()) return NativePrecommitVerdict::Refuse;
+    const auto& source = snapshot->second;
+    const double margin_pct = view.account.incoming_short
+        ? config_.margin_short : config_.margin_long;
+    if (!(margin_pct > 0.0) || !std::isfinite(margin_pct))
+        return NativePrecommitVerdict::Proceed;
+    const double fraction = margin_pct / 100.0;
+    if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill) {
+        const double frozen_required = std::abs(source.sizing.frozen_units)
+            * source.sizing.price * staged_.syminfo.pointvalue * source.sizing.fx * fraction;
+        if (!std::isfinite(frozen_required) || !std::isfinite(source.sizing.equity)
+            || frozen_required > source.sizing.equity) {
+            return NativePrecommitVerdict::Refuse;
+        }
+        // The frozen tuple protects a rate rollover (the FX opening checkpoint
+        // owns that later adjustment), but an ordinary price gap is still
+        // rechecked at the fill just as the legacy KI-54 admission path does.
+        const double active_fx = active_staged_fx(view.cursor.point.effective_time_ms);
+        if (active_fx == source.sizing.fx) {
+            const double fill_required = view.account.resulting_abs_notional * fraction;
+            if (!std::isfinite(fill_required) || !std::isfinite(view.account.marked_equity)
+                || fill_required > view.account.marked_equity) {
+                return NativePrecommitVerdict::Refuse;
+            }
+        }
+        return NativePrecommitVerdict::Proceed;
+    }
+    const double required = view.account.resulting_abs_notional * fraction;
+    if (!std::isfinite(required) || !std::isfinite(view.account.marked_equity)
+        || required > view.account.marked_equity) {
+        return NativePrecommitVerdict::Refuse;
+    }
     return NativePrecommitVerdict::Proceed;
 }
 
@@ -1142,6 +1299,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         day_ledger_.intraday_start_equity = require_host().native_marked_equity(bar.open);
         day_ledger_.intraday_realized = 0.0;
     }
+    apply_fx_open_margin_slice(bar, context);
     cap.ordinary_open(0);
 }
 
@@ -1150,8 +1308,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     const auto placement = placement_.find(event.handle().incarnation);
     const double live_position = require_host().physical_position().signed_units;
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
-    if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign))
+    if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign)) {
         ++current_position_cycle_;
+        position_open_script_bar_ = context.script_bar_open_ms;
+    }
     current_position_sign_ = next_sign;
     if (placement != placement_.end() && placement->second.opening
         && std::abs(event.opened_units) > 0.0) {
@@ -1173,6 +1333,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         for (auto& cohort : cohorts_by_id_) cohort.second.live_units_by_origin.clear();
     }
     if (require_host().physical_position().signed_units == 0.0) {
+        position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
         for (auto& cohort : cohorts_by_id_) {
             cohort.second.opened.clear();
             cohort.second.live_units_by_origin.clear();
@@ -1196,6 +1357,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
+    apply_fx_opening_margin_slice(event, context);
     refresh_pending_view();
 }
 
@@ -1212,6 +1374,9 @@ void PineExecutionAdapter::set_risk_max_cons_loss_days(int value) noexcept { ris
 void PineExecutionAdapter::set_risk_max_drawdown(double value, bool percent) noexcept { risk_.max_drawdown = value; risk_.max_drawdown_percent = percent; }
 void PineExecutionAdapter::set_risk_max_intraday_loss(double value, bool percent) noexcept { risk_.max_intraday_loss = value; risk_.max_intraday_loss_percent = percent; }
 void PineExecutionAdapter::set_risk_max_position_size(double value) noexcept { risk_.max_position_size = value; }
+void PineExecutionAdapter::set_margin_call_enabled(bool enabled) noexcept {
+    source_margin_call_enabled_ = enabled;
+}
 void PineExecutionAdapter::enable_intraday_cap() noexcept { cap.attach(); }
 void PineExecutionAdapter::attach_execution_adapter() noexcept { priority.attach(); }
 

@@ -61,6 +61,8 @@ struct StagedConfiguration {
     InputsMap inputs{};
     std::string chart_timezone{};
     double account_fx = 1.0;
+    std::vector<std::int64_t> account_fx_effective_from_ms{};
+    std::vector<double> account_fx_per_quote{};
     std::optional<double> quantity_grid{};
 };
 
@@ -240,6 +242,7 @@ public:
     void set_risk_max_drawdown(double value, bool percent) noexcept;
     void set_risk_max_intraday_loss(double value, bool percent) noexcept;
     void set_risk_max_position_size(double value) noexcept;
+    void set_margin_call_enabled(bool enabled) noexcept;
     void enable_intraday_cap() noexcept;
     void attach_execution_adapter() noexcept;
     bool calc_on_order_fills() const noexcept { return config_.calc_on_order_fills; }
@@ -328,6 +331,11 @@ private:
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
+    double active_staged_fx(std::int64_t) const noexcept;
+    void apply_fx_open_margin_slice(const Bar&, const NativeDecisionContext&);
+    void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
+                                       const NativeDecisionContext&);
+    void submit_fx_margin_slice(const Bar&, const NativeDecisionContext&, double rate);
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
     void cancel_bracket_origin(const native_order::RequestHandle&);
@@ -381,6 +389,9 @@ private:
     double pooc_open_basis_ = 0.0;
     std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    double last_fx_rate_ = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    bool source_margin_call_enabled_ = true;
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};

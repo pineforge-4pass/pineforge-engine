@@ -40,6 +40,8 @@ StagedConfiguration PineNativeHost::staged_configuration() const {
     staged.inputs = inputs_;
     staged.chart_timezone = chart_timezone_;
     staged.account_fx = account_currency_fx_;
+    staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
+    staged.account_fx_per_quote = account_currency_fx_rates_;
     if (std::isfinite(qty_step_) && qty_step_ > 0.0) staged.quantity_grid = qty_step_;
     return staged;
 }
@@ -82,9 +84,18 @@ void PineNativeHost::prepare_native_begin(const NativeBeginArgs& args) {
         effective = apply_overrides(effective, *overrides);
     }
     const StagedConfiguration staged = staged_configuration();
+    if (!staged.account_fx_effective_from_ms.empty() && effective.calc_on_order_fills) {
+        throw std::logic_error(
+            "timestamped account-currency FX is not supported with calc_on_order_fills");
+    }
+    if (!staged.account_fx_effective_from_ms.empty() && args.bar_magnifier) {
+        throw std::logic_error(
+            "timestamped account-currency FX is not supported with bar magnifier");
+    }
     adapter_.reset_for_run();
     adapter_.set_configuration(effective);
     adapter_.set_staged_configuration(staged);
+    adapter_.set_margin_call_enabled(margin_call_enabled_);
     scheduler_.capture_begin(args);
     bar_magnifier_enabled_ = args.bar_magnifier;
     diag_magnifier_sub_bars_processed_ = 0;
