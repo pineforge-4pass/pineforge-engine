@@ -186,15 +186,17 @@ void PineNativeHost::strategy_order(const std::string& id, bool is_long, double 
     adapter_.order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type);
 }
 
-void PineNativeHost::scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible) {
+void PineNativeHost::scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible,
+                                                  int expected_script_bars) {
     prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()), static_eligible);
-    source_last_bar_index_ = bars.empty() ? -1 : static_cast<int>(bars.size()) - 1;
+    source_last_bar_index_ = expected_script_bars - 1;
 }
 void PineNativeHost::scheduler_configure_security_evaluators() { configure_security_evaluators(); }
 void PineNativeHost::scheduler_publish_source_bar(const Bar& bar, bool) {
     current_bar_ = bar;
     ++source_bar_index_; ++source_callback_count_;
     bar_index_ = source_bar_index_;
+    barstate_islast_ = source_bar_index_ == source_last_bar_index_;
     on_source_bar(bar);
 }
 

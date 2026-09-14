@@ -72,7 +72,6 @@ void replacement_growth() {
     const Bar bars[] = {bar(100,100,100,100,1000), bar(100,100,100,100,2000),
                         bar(100,100,94,96,3000), bar(96,106,96,105,4000)};
     host.run(bars, 4);
-    if (!host.last_error().empty()) std::printf("replacement error: %s\n", host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(host.trade_count() == 1);
     if (host.trade_count() == 1) {
@@ -88,7 +87,6 @@ void same_id_reentry() {
     const Bar bars[] = {bar(100,100,100,100,1000), bar(100,100,94,96,2000),
                         bar(96,106,96,105,3000), bar(105,105,105,105,4000)};
     host.run(bars, 4);
-    if (!host.last_error().empty()) std::printf("reentry error: %s\n", host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(host.trade_count() == 2);
     if (host.trade_count() == 2) {
@@ -106,7 +104,6 @@ void flat_percent_resolves_at_fill() {
     const Bar bars[] = {bar(100,100,100,100,1000), bar(100,100,94,96,2000),
                         bar(96,106,96,105,3000), bar(105,105,105,105,4000)};
     host.run(bars, 4);
-    if (!host.last_error().empty()) std::printf("percent error: %s\n", host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(host.trade_count() == 1);
     if (host.trade_count() == 1) {
@@ -121,7 +118,6 @@ void never_opened_target_stays_deferred_and_close_drops() {
     const Bar bars[] = {bar(100,100,100,100,1000), bar(100,100,100,100,2000),
                         bar(100,100,100,100,3000)};
     host.run(bars, 3);
-    if (!host.last_error().empty()) std::printf("no-target error: %s\n", host.last_error().c_str());
     CHECK(host.last_error().empty());
     CHECK(host.trade_count() == 0);
     CHECK(host.pending() == 2);

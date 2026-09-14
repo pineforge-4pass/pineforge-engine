@@ -87,6 +87,9 @@ void PineExecutionAdapter::reset_for_run() {
     live_handles_.clear();
     first_open_newborns_.clear();
     pending_view_handles_.clear();
+    pooc_close_basis_by_script_bar_.clear();
+    pooc_open_basis_ = 0.0;
+    pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     day_ledger_ = {};
     short_seed_ = {};
     last_bar_dual_entry_path_ = 0;
@@ -140,6 +143,10 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.fee_kind = fee_kind_for(config.commission_type);
     spec.fee_value = config.commission_value;
     spec.quantity_grid = staged.quantity_grid;
+    // A13: source hosts opt into the generic legacy-compatible batch ingress.
+    // Native-only hosts retain the strict Canonical/None defaults.
+    spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+    spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
     spec.close_execution = config.process_orders_on_close
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
     if (config.pyramiding > 0) spec.max_open_lots = static_cast<std::uint64_t>(config.pyramiding);
@@ -328,21 +335,45 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
 }
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
-                                 double qty_percent, bool immediately, std::uint64_t) {
+                                 double qty_percent, bool immediately, std::uint64_t callsite_token) {
     const auto openings = openings_for(id);
     // P-DA3: strategy.close against an empty cohort is dropped at the command.
     if (openings.empty()) return;
-    const bool dynamic = std::isnan(qty);
+    const double requested_percent = std::isnan(qty_percent) ? 100.0 : qty_percent;
+    // Ordinary POOC closes freeze their source-call basis. This preserves the
+    // same-pass pair behavior: two 30% close calls see the script's pre-fill
+    // 800000-unit position, whereas immediate closes re-read after execution.
+    const auto state = require_host().native_state();
+    const bool after_calculation = state.spec
+        && state.spec->close_execution == NativeCloseExecution::AfterCalculation;
+    const bool freeze_pooc = std::isnan(qty)
+        && (config_.process_orders_on_close || after_calculation) && !immediately;
+    double frozen_qty = qty;
+    if (freeze_pooc) {
+        const auto point = require_host().current_execution_point();
+        const std::int64_t bar_key = point ? point->decision.script_bar_open_ms
+                                           : require_host().native_decision_floor();
+        const double live_basis = std::abs(require_host().physical_position().signed_units);
+        const auto inserted = pooc_close_basis_by_script_bar_.emplace(bar_key, live_basis);
+        const double script_basis = pooc_open_script_bar_ == std::numeric_limits<std::int64_t>::min()
+            ? inserted.first->second : pooc_open_basis_;
+        frozen_qty = script_basis * requested_percent / 100.0;
+    }
+    const bool host_sized = std::isnan(qty) || freeze_pooc;
     native_order::Request request;
-    request.intent = dynamic
+    request.intent = host_sized
         ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Close, std::nullopt}}
-        : native_order::OrderIntent{native_order::Reduce{native_order::ExplicitUnits{qty}}};
-    request.label = id; request.comment = comment; request.owner = owner_for_close(id, dynamic);
+        : native_order::OrderIntent{native_order::Reduce{native_order::ExplicitUnits{frozen_qty}}};
+    request.label = id; request.comment = comment; request.owner = owner_for_close(id, host_sized);
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Close; snapshot.source_id = id; snapshot.from_entry = id;
-    snapshot.comment = comment; snapshot.requested_qty = qty; snapshot.qty_percent = qty_percent;
-    snapshot.immediately = immediately; snapshot.deferred_cohort = dynamic; snapshot.sizing = sizing_snapshot();
-    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, id + "#close");
+    snapshot.comment = comment; snapshot.requested_qty = frozen_qty; snapshot.qty_percent = qty_percent;
+    snapshot.immediately = immediately; snapshot.deferred_cohort = host_sized; snapshot.sizing = sizing_snapshot();
+    // Only the generated callsite-token form represents source replacement.
+    // Independent close statements in one evaluation must coexist (P1/P2).
+    const SourceId replacement_key = callsite_token == 0
+        ? SourceId{} : id + "#close#" + std::to_string(callsite_token);
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, replacement_key);
     if (immediately && accepted)
         (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
 }
@@ -463,16 +494,25 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     const auto snapshot = placement_.find(facts.target.incarnation);
     if (snapshot == placement_.end()) return result;
     const auto& source = snapshot->second;
+    // Explicit native intents already carry their canonical trigger/fill
+    // price. Re-rounding a binary64 limit here can move it one representable
+    // value beyond its immutable level and turn an otherwise valid limit fill
+    // into InvalidTerms (the 65-resting-order oracle exposes exactly that).
+    if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent))
+        return result;
     double resolved = facts.default_resolved_price;
     const bool market_like = std::holds_alternative<native_order::Market>(facts.definition->request.trigger);
     if (market_like && config_.slippage != 0 && finite_positive(staged_.syminfo.mintick)) {
         resolved += facts.is_buy ? config_.slippage * staged_.syminfo.mintick
                                  : -config_.slippage * staged_.syminfo.mintick;
     }
-    result.resolved_price = nearest_tick(resolved, staged_.syminfo.mintick);
-    if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) return result;
+    if (market_like) result.resolved_price = nearest_tick(resolved, staged_.syminfo.mintick);
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail) {
+        if (finite_positive(source.requested_qty)) {
+            result.units = source.requested_qty;
+            return result;
+        }
         double percent = source.qty_percent;
         if (std::isnan(percent)) percent = 100.0;
         result.units = std::max(0.0, facts.scope_exposure_units * percent / 100.0);
@@ -510,6 +550,8 @@ std::int64_t PineExecutionAdapter::day_key(std::int64_t timestamp_ms) noexcept {
 }
 
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
+    pooc_open_script_bar_ = context.script_bar_open_ms;
+    pooc_open_basis_ = std::abs(require_host().physical_position().signed_units);
     day_ledger_.current_day = day_key(context.sub_bar_open_ms);
     if (day_ledger_.intraday_loss_day != day_ledger_.current_day) {
         day_ledger_.intraday_loss_day = day_ledger_.current_day;
@@ -522,7 +564,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
 void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent& event,
                                       const NativeDecisionContext& context) {
     const auto placement = placement_.find(event.handle().incarnation);
-    if (placement != placement_.end() && placement->second.opening && event.opened_units > 0.0) {
+    if (placement != placement_.end() && placement->second.opening
+        && std::abs(event.opened_units) > 0.0) {
         auto& facts = cohorts_by_id_[placement->second.source_id];
         facts.cycle = event.cycle_after;
         if (std::find(facts.opened.begin(), facts.opened.end(), event.handle()) == facts.opened.end())

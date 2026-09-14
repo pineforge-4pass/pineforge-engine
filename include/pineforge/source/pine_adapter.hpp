@@ -282,6 +282,9 @@ private:
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     std::vector<native_order::RequestHandle> pending_view_handles_;
+    std::unordered_map<std::int64_t, double> pooc_close_basis_by_script_bar_;
+    double pooc_open_basis_ = 0.0;
+    std::int64_t pooc_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};

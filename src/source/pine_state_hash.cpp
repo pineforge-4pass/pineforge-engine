@@ -382,6 +382,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto key : bracket_keys) { f.u(key); hash_native_handle_vector(f, bracket_families_.at(key)); }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
     hash_native_handle_vector(f, pending_view_handles_);
+    std::vector<std::int64_t> pooc_basis_keys;
+    for (const auto& pair : pooc_close_basis_by_script_bar_) pooc_basis_keys.push_back(pair.first);
+    std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
+    for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
+    f.d(pooc_open_basis_); f.i(pooc_open_script_bar_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
     f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);
@@ -429,7 +434,8 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.d(language_.coof_checkpoint_prev_chart_close_); f.d(language_.coof_checkpoint_last_chart_close_);
     f.u(coof_.size());
     for (const auto& interval : coof_) { f.u(interval.applied_ordinal); f.i(interval.script_open_ms); f.b(interval.first_open); }
-    f.i(current_script_open_ms_); f.b(saw_open_fill_); f.i(source_bar_count_); f.u(applied_cursor_);
+    f.i(current_script_open_ms_); f.b(saw_open_fill_); f.i(source_bar_count_);
+    f.i(expected_source_bars_); f.u(applied_cursor_);
 }
 
 void source::PineNativeHost::hash_source_extension(BrokerStateHashSink& f) const {

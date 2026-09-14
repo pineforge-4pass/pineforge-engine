@@ -1,6 +1,7 @@
 #include <pineforge/source/pine_scheduler.hpp>
 
 #include <pineforge/source/pine_native_host.hpp>
+#include <pineforge/timeframe.hpp>
 
 #include <stdexcept>
 #include <utility>
@@ -34,14 +35,19 @@ void PineScheduler::reset_language() {
     language_.coof_checkpoint_src_hlc3_.clear(); language_.coof_checkpoint_src_ohlc4_.clear();
     language_.coof_checkpoint_src_hlcc4_.clear();
     coof_.clear(); current_script_open_ms_ = 0; saw_open_fill_ = false;
-    source_bar_count_ = 0; applied_cursor_ = 0;
+    source_bar_count_ = 0; expected_source_bars_ = 0; applied_cursor_ = 0;
 }
 
 void PineScheduler::run_begin(PineNativeHost& host) {
     reset_language();
     const bool static_eligible = !retained_.is_stream && !retained_.bar_magnifier
         && retained_.input_tf.empty() && retained_.script_tf.empty();
-    host.scheduler_prepare_script_run(retained_.bars, static_eligible);
+    expected_source_bars_ = static_cast<int>(retained_.bars.size());
+    const int ratio = tf_ratio(retained_.input_tf, retained_.script_tf);
+    if (ratio > 1 && expected_source_bars_ > 0) {
+        expected_source_bars_ = (expected_source_bars_ + ratio - 1) / ratio;
+    }
+    host.scheduler_prepare_script_run(retained_.bars, static_eligible, expected_source_bars_);
     host.scheduler_configure_security_evaluators();
 }
 

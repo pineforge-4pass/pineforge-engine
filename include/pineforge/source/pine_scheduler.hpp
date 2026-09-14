@@ -25,6 +25,7 @@ public:
                  PineNativeHost&);
 
     bool is_first_tick() const noexcept { return language_.is_first_tick_; }
+    bool is_last_tick() const noexcept { return language_.is_last_tick_; }
     bool history_advances_new_bar() const noexcept {
         return language_.is_first_tick_ && language_.history_slot_is_new_;
     }
@@ -67,6 +68,7 @@ private:
     std::int64_t current_script_open_ms_ = 0;
     bool saw_open_fill_ = false;
     int source_bar_count_ = 0;
+    int expected_source_bars_ = 0;
     std::uint64_t applied_cursor_ = 0;
     // @source-state end
 };

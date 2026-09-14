@@ -39,6 +39,11 @@ set(TEST_SOURCES
     test_native_adapter_lowering_l1
     test_native_adapter_lowering_l2
     test_native_oracle_deferred_any_witnesses_l2
+    test_native_oracle_more_than_64_fills_l2
+    test_native_oracle_magnifier_barstate_l2
+    test_native_oracle_pooc_immediate_l2
+    test_native_oracle_reversal_l2
+    test_native_oracle_frozen_size_l2
     test_source_layer_native_defaults
     test_source_fingerprint
     test_source_host_intraday_cap_setter

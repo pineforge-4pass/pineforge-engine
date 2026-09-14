@@ -85,6 +85,7 @@ public:
                         const std::string& oca_name = {}, int oca_type = 0);
 
     bool is_first_tick() const noexcept { return scheduler_.is_first_tick(); }
+    bool is_last_tick() const noexcept { return scheduler_.is_last_tick(); }
     bool history_advances_new_bar() const noexcept {
         return scheduler_.history_advances_new_bar();
     }
@@ -124,7 +125,8 @@ private:
     friend class PineScheduler;
 
     StagedConfiguration staged_configuration() const;
-    void scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible);
+    void scheduler_prepare_script_run(const std::vector<Bar>& bars, bool static_eligible,
+                                      int expected_script_bars);
     void scheduler_configure_security_evaluators();
     void scheduler_publish_source_bar(const Bar&, bool first_tick);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
