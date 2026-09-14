@@ -757,7 +757,7 @@ protected:
         double tv_money_required_margin(double required, double mark) const;
         double calc_qty(double fill_price) const;
         double frozen_sizing_price(bool is_buy) const;
-    
+
         double frozen_default_market_qty(bool is_buy) const;
         bool coof_default_market_sizes_at_fill() const;
         void refresh_frozen_default_sizing_after_margin_call();
