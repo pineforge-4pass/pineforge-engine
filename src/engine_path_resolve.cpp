@@ -3,6 +3,7 @@
  */
 
 #include "engine_internal.hpp"
+#include <pineforge/source/pine_pending_intent.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -180,7 +181,7 @@ bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
 // For flat-position opposing stop entries (long stop vs short stop), return
 // true if any opposite stop is touched earlier on the bar path than `current`.
 bool opposing_stop_entry_hits_first(const Bar& bar,
-                                           const std::vector<PendingOrder>& orders,
+                                           const std::vector<source::PendingOrder>& orders,
                                            std::size_t current_idx,
                                            int current_bar_index) {
     return opposing_stop_entry_hits_first(bar, bar_path_uses_high_first(bar),
@@ -188,12 +189,12 @@ bool opposing_stop_entry_hits_first(const Bar& bar,
 }
 
 bool opposing_stop_entry_hits_first(const Bar& bar, bool high_first,
-                                    const std::vector<PendingOrder>& orders,
+                                    const std::vector<source::PendingOrder>& orders,
                                     std::size_t current_idx,
                                     int current_bar_index) {
     if (current_idx >= orders.size()) return false;
-    const PendingOrder& current = orders[current_idx];
-    auto deferred_at_consumed_close = [&](const PendingOrder& order) {
+    const source::PendingOrder& current = orders[current_idx];
+    auto deferred_at_consumed_close = [&](const source::PendingOrder& order) {
         return current_bar_index >= 0
             && order.birth.at_terminal_fill()
             && order.created_bar == current_bar_index;
@@ -214,7 +215,7 @@ bool opposing_stop_entry_hits_first(const Bar& bar, bool high_first,
     const double eps = kPathPosEps;
     for (std::size_t j = 0; j < orders.size(); ++j) {
         if (j == current_idx) continue;
-        const PendingOrder& other = orders[j];
+        const source::PendingOrder& other = orders[j];
         if (deferred_at_consumed_close(other)) continue;
         if (other.type != OrderType::ENTRY) continue;
         if (other.is_long == current.is_long) continue;
@@ -239,18 +240,18 @@ bool opposing_stop_entry_hits_first(const Bar& bar, bool high_first,
 
 
 DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
-                                                          const std::vector<PendingOrder>& orders,
+                                                          const std::vector<source::PendingOrder>& orders,
                                                           int current_bar_index) {
     return dual_entry_stop_path_winner(bar, bar_path_uses_high_first(bar),
                                        orders, current_bar_index);
 }
 
 DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar, bool high_first,
-                                                     const std::vector<PendingOrder>& orders,
+                                                     const std::vector<source::PendingOrder>& orders,
                                                      int current_bar_index) {
-    const PendingOrder* long_ord = nullptr;
-    const PendingOrder* short_ord = nullptr;
-    for (const PendingOrder& o : orders) {
+    const source::PendingOrder* long_ord = nullptr;
+    const source::PendingOrder* short_ord = nullptr;
+    for (const source::PendingOrder& o : orders) {
         if (current_bar_index >= 0
             && o.birth.at_terminal_fill()
             && o.created_bar == current_bar_index) {
@@ -302,7 +303,7 @@ DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar, bool high_fi
 // For OCA exit siblings (e.g., separate TP and SL strategy.order calls),
 // compute first-touch position on OHLC path for a single-priced order.
 bool exit_order_touch_position(const Bar& bar,
-                                      const PendingOrder& order,
+                                      const source::PendingOrder& order,
                                       PositionSide pos,
                                       double* out_pos) {
     return exit_order_touch_position(bar, bar_path_uses_high_first(bar),
@@ -310,7 +311,7 @@ bool exit_order_touch_position(const Bar& bar,
 }
 
 bool exit_order_touch_position(const Bar& bar, bool high_first,
-                               const PendingOrder& order,
+                               const source::PendingOrder& order,
                                PositionSide pos,
                                double* out_pos) {
     if (out_pos == nullptr || pos == PositionSide::FLAT) return false;
@@ -355,7 +356,7 @@ bool exit_order_touch_position(const Bar& bar, bool high_first,
 
 
 bool oca_exit_sibling_hits_first(const Bar& bar,
-                                        const std::vector<PendingOrder>& orders,
+                                        const std::vector<source::PendingOrder>& orders,
                                         std::size_t current_idx,
                                         PositionSide pos) {
     return oca_exit_sibling_hits_first(bar, bar_path_uses_high_first(bar),
@@ -363,11 +364,11 @@ bool oca_exit_sibling_hits_first(const Bar& bar,
 }
 
 bool oca_exit_sibling_hits_first(const Bar& bar, bool high_first,
-                                 const std::vector<PendingOrder>& orders,
+                                 const std::vector<source::PendingOrder>& orders,
                                  std::size_t current_idx,
                                  PositionSide pos) {
     if (current_idx >= orders.size() || pos == PositionSide::FLAT) return false;
-    const PendingOrder& current = orders[current_idx];
+    const source::PendingOrder& current = orders[current_idx];
     if (current.type != OrderType::RAW_ORDER) return false;
     if (current.oca_name.empty() || (current.oca_type != 1 && current.oca_type != 2)) return false;
 
@@ -380,7 +381,7 @@ bool oca_exit_sibling_hits_first(const Bar& bar, bool high_first,
     const double eps = kPathPosEps;
     for (std::size_t j = 0; j < orders.size(); ++j) {
         if (j == current_idx) continue;
-        const PendingOrder& other = orders[j];
+        const source::PendingOrder& other = orders[j];
         if (other.type != OrderType::RAW_ORDER) continue;
         if (other.oca_name != current.oca_name) continue;
         bool other_exit_style = (pos == PositionSide::LONG) ? !other.is_long : other.is_long;
@@ -397,7 +398,7 @@ bool oca_exit_sibling_hits_first(const Bar& bar, bool high_first,
 // strategy.exit → OrderType::EXIT; strategy.order → RAW_ORDER. When a raw order's
 // direction opposes the open position, stop/limit/trail behave like closing orders,
 // not entries (fixes wrong fill prices for bracket TP/SL from strategy.order).
-bool order_is_exit_style(const PendingOrder& o, PositionSide pos) {
+bool order_is_exit_style(const source::PendingOrder& o, PositionSide pos) {
     if (o.type == OrderType::EXIT) return true;
     if (o.type != OrderType::RAW_ORDER || pos == PositionSide::FLAT) return false;
     if (pos == PositionSide::LONG && !o.is_long) return true;
@@ -1105,7 +1106,7 @@ void select_no_trail_exit_segment_levels(bool is_long, bool rising, bool falling
 // to full-before-partial).
 double exit_order_earliest_path_metric_no_trail(
     const Bar& bar,
-    const PendingOrder& order,
+    const source::PendingOrder& order,
     PositionSide position_side,
     bool is_entry_bar,
     double position_entry_price, int64_t position_cycle, int64_t bar_index) {
@@ -1117,7 +1118,7 @@ double exit_order_earliest_path_metric_no_trail(
 double exit_order_earliest_path_metric_no_trail(
     const Bar& bar,
     bool high_first,
-    const PendingOrder& order,
+    const source::PendingOrder& order,
     PositionSide position_side,
     bool is_entry_bar,
     double position_entry_price, int64_t position_cycle, int64_t bar_index) {

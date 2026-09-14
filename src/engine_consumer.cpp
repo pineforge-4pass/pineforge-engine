@@ -4,6 +4,7 @@
 #include <pineforge/native_host.hpp>
 
 #include <stdexcept>
+#include <limits>
 #include <utility>
 
 namespace pineforge {
@@ -225,6 +226,11 @@ void BacktestEngine::finish_intraday_loss_cancel() {}
 bool BacktestEngine::check_risk_allow_entry(bool) const { return true; }
 void BacktestEngine::update_risk_state() {}
 void BacktestEngine::update_per_trade_extremes() {}
+void BacktestEngine::reset_source_pending_book() {}
+void BacktestEngine::reset_source_order_and_close_state() {}
+void BacktestEngine::reset_source_risk_and_cap() {}
+void BacktestEngine::reset_source_margin_and_coof() {}
+void BacktestEngine::reset_source_bar_projections() {}
 void BacktestEngine::reset_source_language_series() {}
 
 BacktestEngine::BarTime BacktestEngine::_decompose_bar_time_chart_tz() const {
@@ -254,35 +260,47 @@ execution::Status BacktestEngine::preflight_source_close_observation(
 void BacktestEngine::observe_source_close_rows(
         const Trade*, size_t, std::optional<int>) {}
 
-exit_legs::Frame BacktestEngine::next_leg_event(exit_legs::Phase phase) {
-    return {0, 0, exit_legs::Domain::Ordinary, phase};
+std::optional<execution::Status> BacktestEngine::validate_source_lifecycle(
+        const execution::LifecycleEffects& lifecycle) const {
+    if (!lifecycle.pre_close && lifecycle.removals.empty()) return std::nullopt;
+    return execution::Status::InvalidLifecycle;
 }
 
-exit_legs::Frame BacktestEngine::preview_next_leg_event(exit_legs::Phase phase) const {
-    return {0, 0, exit_legs::Domain::Ordinary, phase};
+std::optional<execution::Status> BacktestEngine::preflight_source_lifecycle(
+        const execution::LifecycleEffects&, bool, bool) {
+    return std::nullopt;
 }
 
-exit_legs::Domain BacktestEngine::current_exit_leg_domain() const {
-    return exit_legs::Domain::Ordinary;
-}
+void BacktestEngine::apply_source_pre_close_lifecycle(
+        const execution::LifecycleBatch&) {}
 
-BacktestEngine::ExitLegTransitionResult BacktestEngine::transition_exit_leg(
-        exit_legs::Lifecycle&, uint64_t, exit_legs::Operation,
-        std::optional<exit_legs::Frame>, uint64_t&, int64_t) const {
-    return ExitLegTransitionResult::ActionRefused;
-}
+void BacktestEngine::apply_source_pending_removals(
+        const std::vector<execution::PendingRemoval>&) {}
 
-const PendingOrder* BacktestEngine::find_unique_pending(uint64_t, int64_t) const {
-    return nullptr;
-}
+void BacktestEngine::reset_source_exit_activations_before_flatten() {}
+void BacktestEngine::reset_source_trail_after_flatten() {}
+void BacktestEngine::reset_source_position_ledgers_after_book_clear() {}
+void BacktestEngine::on_source_append_quoted_lot_before_book(const PyramidEntry&) {}
+void BacktestEngine::on_source_append_quoted_lot_after_book(const PyramidEntry&) {}
+void BacktestEngine::reset_source_open_position_trail_before_book_clear(
+        const PyramidEntry&) {}
+void BacktestEngine::reset_source_open_position_ledgers_before_book(
+        const PyramidEntry&) {}
+void BacktestEngine::on_source_open_position_booked(const PyramidEntry&) {}
 
-PendingOrder* BacktestEngine::find_unique_pending(uint64_t, int64_t) {
-    return nullptr;
+int BacktestEngine::observe_last_bar_dual_entry_path_v1() const { return 0; }
+int BacktestEngine::observe_pending_count_v1() const { return 0; }
+int BacktestEngine::observe_pending_copy_v1(int, pf_pending_order_v1_t*) const { return -1; }
+int BacktestEngine::observe_probe_fill_qty(int, double, double*, int*, int*) const {
+    return -1;
 }
-
-void BacktestEngine::bind_exit_activation(PendingOrder&) {}
-void BacktestEngine::bind_retained_exit_activations() {}
-void BacktestEngine::unbind_exit_activations() {}
+int BacktestEngine::observe_pending_level_resolved(int) const { return -1; }
+int BacktestEngine::observe_pending_effective_levels(int, double*, double*, double*) const {
+    return -1;
+}
+double BacktestEngine::observe_trail_best_price_v1() const {
+    return std::numeric_limits<double>::quiet_NaN();
+}
 
 void BacktestEngine::stream_dispatch_script_bar(const Bar&, bool) {
     throw_native_only_route("stream_dispatch_script_bar");

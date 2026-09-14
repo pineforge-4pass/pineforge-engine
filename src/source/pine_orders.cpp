@@ -441,7 +441,7 @@ void source::PineStrategyHost::execute_partial_exit_by_entry_percent(double fill
     execute_partial_exit_by_entry_qty(fill_price, from_entry, qty_to_close, cause);
 }
 
-double source::PineStrategyHost::cover_samebar_market_adds_on_exit(const PendingOrder& order,
+double source::PineStrategyHost::cover_samebar_market_adds_on_exit(const source::PendingOrder& order,
                                                          double fill_price,
                                                          PositionReductionCause cause) {
     if (order.from_entry.empty()) return 0.0;
@@ -482,7 +482,7 @@ void source::PineStrategyHost::cancel_oca_group(std::string oca_name, std::strin
     if (oca_name.empty()) return;
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
-            [&](const PendingOrder& o) {
+            [&](const source::PendingOrder& o) {
                 return o.oca_name == oca_name && o.id != exclude_id;
             }),
         pending_orders_.end());
@@ -495,7 +495,7 @@ void source::PineStrategyHost::reduce_oca_group(std::string oca_name,
     if (!(filled_qty > 0.0)) return;  // nothing to subtract
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
-            [&](PendingOrder& o) {
+            [&](source::PendingOrder& o) {
                 if (o.oca_name != oca_name || o.id == exclude_id) return false;
                 if (std::isnan(o.qty)) return true;  // default-sized: cancel
                 o.qty -= filled_qty;
@@ -519,7 +519,7 @@ void source::PineStrategyHost::purge_exit_orders(bool retain_for_pending_entries
         }
         pending_orders_.erase(
             std::remove_if(pending_orders_.begin(), pending_orders_.end(),
-                [&](const PendingOrder& o) {
+                [&](const source::PendingOrder& o) {
                     return o.type == OrderType::EXIT
                         && !(!o.from_entry.empty()
                              && pending_entry_ids.count(o.from_entry));
@@ -529,7 +529,7 @@ void source::PineStrategyHost::purge_exit_orders(bool retain_for_pending_entries
     }
     pending_orders_.erase(
         std::remove_if(pending_orders_.begin(), pending_orders_.end(),
-            [](const PendingOrder& o) { return o.type == OrderType::EXIT; }),
+            [](const source::PendingOrder& o) { return o.type == OrderType::EXIT; }),
         pending_orders_.end());
 }
 
@@ -568,7 +568,7 @@ exit_legs::Frame source::PineStrategyHost::next_leg_event(exit_legs::Phase phase
     return frame;
 }
 
-void source::PineStrategyHost::apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
+void source::PineStrategyHost::apply_leg_action(source::PendingOrder& order, exit_legs::Operation operation,
                                       std::optional<exit_legs::Frame> supplied) {
     // Rebinding can require a later receipt event at this same hook. Preserve
     // its phase when replacing that receipt; an after-margin completion must
@@ -594,7 +594,7 @@ void source::PineStrategyHost::apply_leg_action(PendingOrder& order, exit_legs::
     throw std::logic_error("exit lifecycle action refused");
 }
 
-void source::PineStrategyHost::bind_exit_activation(PendingOrder& order) {
+void source::PineStrategyHost::bind_exit_activation(source::PendingOrder& order) {
     if (order.type != OrderType::EXIT) return;
     if (!order.legs.target().incarnation) order.legs.attach(order.incarnation, position_cycle_seq_);
     if (order.legs.target().owner != position_cycle_seq_)

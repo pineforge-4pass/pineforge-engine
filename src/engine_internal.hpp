@@ -256,20 +256,20 @@ bool entry_stop_first_touch(const Bar& bar, bool high_first, double stop_level,
 // For flat-position opposing stop entries (long stop vs short stop), return
 // true if any opposite stop is touched earlier on the bar path than `current`.
 bool opposing_stop_entry_hits_first(const Bar& bar,
-                                    const std::vector<PendingOrder>& orders,
+                                    const std::vector<source::PendingOrder>& orders,
                                     std::size_t current_idx,
                                     int current_bar_index = -1);
 bool opposing_stop_entry_hits_first(const Bar& bar, bool high_first,
-                                    const std::vector<PendingOrder>& orders,
+                                    const std::vector<source::PendingOrder>& orders,
                                     std::size_t current_idx,
                                     int current_bar_index);
 
 
 DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar,
-                                                     const std::vector<PendingOrder>& orders,
+                                                     const std::vector<source::PendingOrder>& orders,
                                                      int current_bar_index = -1);
 DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar, bool high_first,
-                                                     const std::vector<PendingOrder>& orders,
+                                                     const std::vector<source::PendingOrder>& orders,
                                                      int current_bar_index);
 
 
@@ -277,7 +277,7 @@ DualEntryStopPathWinner dual_entry_stop_path_winner(const Bar& bar, bool high_fi
 // declined by fill-time margin admission. Kept runtime-private so focused
 // tests can pin the POOC/COOF/magnifier and order-book fences directly.
 bool dual_stop_margin_decline_can_continue_path(
-    const std::vector<PendingOrder>& orders,
+    const std::vector<source::PendingOrder>& orders,
     DualEntryStopPathWinner winner,
     bool process_orders_on_close,
     bool calc_on_order_fills,
@@ -287,21 +287,21 @@ bool dual_stop_margin_decline_can_continue_path(
 // For OCA exit siblings (e.g., separate TP and SL strategy.order calls),
 // compute first-touch position on OHLC path for a single-priced order.
 bool exit_order_touch_position(const Bar& bar,
-                                      const PendingOrder& order,
+                                      const source::PendingOrder& order,
                                       PositionSide pos,
                                       double* out_pos);
 bool exit_order_touch_position(const Bar& bar, bool high_first,
-                               const PendingOrder& order,
+                               const source::PendingOrder& order,
                                PositionSide pos,
                                double* out_pos);
 
 
 bool oca_exit_sibling_hits_first(const Bar& bar,
-                                        const std::vector<PendingOrder>& orders,
+                                        const std::vector<source::PendingOrder>& orders,
                                         std::size_t current_idx,
                                         PositionSide pos);
 bool oca_exit_sibling_hits_first(const Bar& bar, bool high_first,
-                                 const std::vector<PendingOrder>& orders,
+                                 const std::vector<source::PendingOrder>& orders,
                                  std::size_t current_idx,
                                  PositionSide pos);
 
@@ -309,7 +309,7 @@ bool oca_exit_sibling_hits_first(const Bar& bar, bool high_first,
 // strategy.exit → OrderType::EXIT; strategy.order → RAW_ORDER. When a raw order's
 // direction opposes the open position, stop/limit/trail behave like closing orders,
 // not entries (fixes wrong fill prices for bracket TP/SL from strategy.order).
-bool order_is_exit_style(const PendingOrder& o, PositionSide pos);
+bool order_is_exit_style(const source::PendingOrder& o, PositionSide pos);
 
 
 void fill_bar_path_points(const Bar& bar, double path[4]);
@@ -373,14 +373,14 @@ bool resolve_entry_stop_limit_fill(const Bar& bar,
 // to full-before-partial).
 double exit_order_earliest_path_metric_no_trail(
     const Bar& bar,
-    const PendingOrder& order,
+    const source::PendingOrder& order,
     PositionSide position_side,
     bool is_entry_bar,
     double position_entry_price, int64_t position_cycle = 0, int64_t bar_index = 0);
 double exit_order_earliest_path_metric_no_trail(
     const Bar& bar,
     bool high_first,
-    const PendingOrder& order,
+    const source::PendingOrder& order,
     PositionSide position_side,
     bool is_entry_bar,
     double position_entry_price, int64_t position_cycle = 0, int64_t bar_index = 0);

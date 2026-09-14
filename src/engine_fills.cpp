@@ -1,5 +1,6 @@
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <pineforge/compat/pine/market_admission.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 /*
  * engine_fills.cpp — process_pending_orders — the bar-pump fill loop
  */
@@ -100,7 +101,7 @@ bool preserves_same_id_stop_across_deferred_close_all(
 // true-flat, unlinked strategy.entry pure STOPs and no competing entry-like
 // orders. EXIT orders are harmless while flat and retain ordinary cleanup.
 bool is_true_flat_unlinked_stop_pair(
-        const std::vector<PendingOrder>& orders,
+        const std::vector<source::PendingOrder>& orders,
         DualEntryStopPathWinner winner) {
     if (winner != DualEntryStopPathWinner::LongFirst
         && winner != DualEntryStopPathWinner::ShortFirst) {
@@ -110,7 +111,7 @@ bool is_true_flat_unlinked_stop_pair(
     int pure_stop_entries = 0;
     int source_bar = 0;
     bool have_source_bar = false;
-    for (const PendingOrder& order : orders) {
+    for (const source::PendingOrder& order : orders) {
         const bool entry_like = order.type == OrderType::ENTRY
             || order.type == OrderType::MARKET
             || order.type == OrderType::RAW_ORDER;
@@ -175,7 +176,7 @@ double BacktestEngine::percent_commission_live_equity(
 
 
 bool internal::dual_stop_margin_decline_can_continue_path(
-        const std::vector<PendingOrder>& orders,
+        const std::vector<source::PendingOrder>& orders,
         DualEntryStopPathWinner winner,
         bool process_orders_on_close,
         bool calc_on_order_fills,
@@ -197,12 +198,12 @@ bool internal::dual_stop_margin_decline_can_continue_path(
 // a same-id pair) is outside the tapes; strip the membership so every order
 // takes its established kernel, byte-identical to the pre-famS engine.
 void compat::pine::finalize_frozen_market_book(
-        std::vector<PendingOrder>& orders, bool source_scope_live) {
+        std::vector<source::PendingOrder>& orders, bool source_scope_live) {
     bool any_member = false;
     bool exact = true;
     int market_members = 0;
     std::string first_market_id;
-    for (const PendingOrder& order : orders) {
+    for (const source::PendingOrder& order : orders) {
         if (!order.pine_frozen_market_instruction.active()) {
             exact = false;
             continue;
@@ -218,7 +219,7 @@ void compat::pine::finalize_frozen_market_book(
         }
     }
     if (!any_member || (exact && source_scope_live)) return;
-    for (PendingOrder& order : orders) {
+    for (source::PendingOrder& order : orders) {
         order.pine_frozen_market_instruction.revoke();
     }
 }

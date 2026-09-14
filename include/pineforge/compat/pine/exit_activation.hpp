@@ -9,8 +9,8 @@
 
 namespace pineforge {
 enum class PositionSide;
-inline namespace engine_script_run_v15 { struct PendingOrder; }
 }
+namespace pineforge::source { struct PendingOrder; }
 namespace pineforge::compat::pine {
 
 enum class LimitContinuationCause : int32_t { LaterSameOpen, FirstHighRecross };
@@ -87,7 +87,7 @@ struct ExitActivationContext {
     double tick_high;
 };
 
-ExitActivationPolicy select_exit_activation(const PendingOrder& order,
+ExitActivationPolicy select_exit_activation(const source::PendingOrder& order,
     double requested_stop, double requested_limit, const ExitActivationContext& context);
 
 } // namespace pineforge::compat::pine

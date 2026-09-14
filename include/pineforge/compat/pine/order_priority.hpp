@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace pineforge { inline namespace engine_script_run_v15 { struct PendingOrder; } }
+namespace pineforge::source { struct PendingOrder; }
 namespace pineforge::compat::pine {
 
 struct OrderPriorityContext {
@@ -36,7 +36,7 @@ public:
     }
     std::optional<broker::OrderPriorityDecision> select(
         const OrderPriorityContext& ctx,
-        const std::vector<PendingOrder>& book) const;
+        const std::vector<source::PendingOrder>& book) const;
 private:
     bool attached_ = false;
     bool retained_parent_first_ = true;

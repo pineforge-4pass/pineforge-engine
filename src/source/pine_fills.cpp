@@ -63,7 +63,7 @@ struct PendingOrderHandle {
     uint64_t incarnation;
     size_t index_hint;
 
-    size_t resolve(const std::vector<PendingOrder>& orders) const {
+    size_t resolve(const std::vector<source::PendingOrder>& orders) const {
         if (index_hint < orders.size()
             && orders[index_hint].incarnation == incarnation) return index_hint;
         for (size_t i = 0; i < orders.size(); ++i) {
@@ -73,7 +73,7 @@ struct PendingOrderHandle {
     }
 };
 
-bool same_pending_order(const PendingOrder& a, const PendingOrder& b) {
+bool same_pending_order(const source::PendingOrder& a, const source::PendingOrder& b) {
     // Preserve address identity for legacy hand-built zero-ID fixtures; an
     // owned matched-order value uses the production object's nonzero identity.
     return &a == &b || (a.incarnation != 0 && a.incarnation == b.incarnation);
@@ -83,7 +83,7 @@ bool same_pending_order(const PendingOrder& a, const PendingOrder& b) {
 // physical same-id fact is snapshotted when deferred close_all is called,
 // because the filling close drains pyramid_entries_ before cleanup runs.
 bool preserves_same_id_stop_across_deferred_close_all(
-        const PendingOrder& order,
+        const source::PendingOrder& order,
         int exit_closed_from_bar,
         uint64_t exit_closed_from_incarnation,
         bool exit_closed_was_long) {
@@ -113,7 +113,7 @@ bool preserves_same_id_stop_across_deferred_close_all(
 // true-flat, unlinked strategy.entry pure STOPs and no competing entry-like
 // orders. EXIT orders are harmless while flat and retain ordinary cleanup.
 bool is_true_flat_unlinked_stop_pair(
-        const std::vector<PendingOrder>& orders,
+        const std::vector<source::PendingOrder>& orders,
         DualEntryStopPathWinner winner) {
     if (winner != DualEntryStopPathWinner::LongFirst
         && winner != DualEntryStopPathWinner::ShortFirst) {
@@ -123,7 +123,7 @@ bool is_true_flat_unlinked_stop_pair(
     int pure_stop_entries = 0;
     int source_bar = 0;
     bool have_source_bar = false;
-    for (const PendingOrder& order : orders) {
+    for (const source::PendingOrder& order : orders) {
         const bool entry_like = order.type == OrderType::ENTRY
             || order.type == OrderType::MARKET
             || order.type == OrderType::RAW_ORDER;
@@ -298,7 +298,7 @@ void source::PineStrategyHost::process_pending_orders(const Bar& bar, bool befor
         && risk_max_intraday_loss_ == 0.0 && risk_max_drawdown_ == 0.0
         && risk_max_cons_loss_days_ == 0;
     if (flat_dual_stop_pair) {
-        for (const PendingOrder& member : pending_orders_) {
+        for (const source::PendingOrder& member : pending_orders_) {
             const bool explicit_fixed = std::isfinite(member.qty)
                 && member.qty > kQtyEpsilon
                 && (member.qty_type < 0
@@ -340,7 +340,7 @@ void source::PineStrategyHost::process_pending_orders(const Bar& bar, bool befor
         if (i == pending_orders_.size()) continue; // canceled earlier this pass
         FillEvaluation fill;
         {
-        PendingOrder& order = pending_orders_[i];
+        source::PendingOrder& order = pending_orders_[i];
         if (intraday_loss_cancel_pending_) {
             // strategy.risk.max_intraday_loss fired on an earlier fill of
             // this sweep: TradingView cancels every pending order there.
@@ -391,7 +391,7 @@ void source::PineStrategyHost::process_pending_orders(const Bar& bar, bool befor
         if (i == pending_orders_.size()) continue;
         bool path_winner_stop_margin_decline;
         {
-        const PendingOrder& order = pending_orders_[i];
+        const source::PendingOrder& order = pending_orders_[i];
         path_winner_stop_margin_decline =
             continue_after_stop_margin_decline_scope
             && ((dual_entry_path_ == DualEntryStopPathWinner::LongFirst
@@ -474,7 +474,7 @@ BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_or
         traversed.high = std::max(bar.open, cursor_price);
         traversed.low = std::min(bar.open, cursor_price);
         traversed.close = cursor_price;
-        for (PendingOrder& pending : pending_orders_) {
+        for (source::PendingOrder& pending : pending_orders_) {
             if (pending.birth.at_terminal_fill()
                 && pending.created_bar == bar_index_) {
                 continue;
@@ -512,7 +512,7 @@ BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_or
         candidates.reserve(pending_orders_.size());
 
         for (size_t i = 0; i < pending_orders_.size(); ++i) {
-            PendingOrder& order = pending_orders_[i];
+            source::PendingOrder& order = pending_orders_[i];
             auto eligibility = classify_order_eligibility(
                 order, opposing_pass, dual_entry_path, pass0_opposing_skip_ids,
                 exit_closed_from_bar, exit_closed_from_incarnation,
@@ -695,7 +695,7 @@ BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_or
                 || !(bar.close < bar.open)) return false;
             const std::string& entry_id = pyramid_entries_.front().entry_id;
             double reserved = 0;
-            for (const PendingOrder& pending : pending_orders_) {
+            for (const source::PendingOrder& pending : pending_orders_) {
                 if (pending.type != OrderType::EXIT
                     || pending.from_entry != entry_id || entry_id.empty()
                     || pending.created_bar >= bar_index_
@@ -711,7 +711,7 @@ BacktestEngine::CoofFillResult source::PineStrategyHost::process_next_pending_or
             for (const FillCandidate& candidate : candidates) {
                 const size_t index = candidate.order.resolve(pending_orders_);
                 if (index == pending_orders_.size()) return false;
-                const PendingOrder& pending = pending_orders_[index];
+                const source::PendingOrder& pending = pending_orders_[index];
                 if (candidate.was_trail || candidate.fill.is_limit_fill
                     || !candidate.fill.exit_path_fill
                     || pending.legs.prices().stop_price > bar.open
@@ -1775,7 +1775,7 @@ bool source::PineStrategyHost::pooc_opening_money_scope(const Bar& bar) const {
 }
 
 bool source::PineStrategyHost::pooc_trail_money_pre_exit_scope(
-        const Bar& bar, const PendingOrder& order, double exit_path_position) const {
+        const Bar& bar, const source::PendingOrder& order, double exit_path_position) const {
     if (!process_orders_on_close_ || position_side_ != PositionSide::LONG
         || calc_on_order_fills_ || coof_scheduler_active_ || bar_magnifier_enabled_
         || stream_warmup_mode_ || stream_phase_ != StreamPhase::IDLE
@@ -2065,8 +2065,8 @@ void source::PineStrategyHost::revive_position_brackets_after_margin_call_partia
         double margin_call_event_price) {
     const double mc_price = margin_call_event_price;
     if (position_side_ == PositionSide::FLAT) return;
-    PendingOrder* marketable = nullptr;
-    for (PendingOrder& o : pending_orders_) {
+    source::PendingOrder* marketable = nullptr;
+    for (source::PendingOrder& o : pending_orders_) {
         if (o.type != OrderType::EXIT) continue;
         if (o.cancellation.cancelled()) continue;
         if (o.id.size() >= kClosePrefix.size()
@@ -2076,7 +2076,7 @@ void source::PineStrategyHost::revive_position_brackets_after_margin_call_partia
         // script (the reversal pair's strategy.close) post-dates the bar's
         // extreme — the pass here models an event that already happened
         // before the script ran. Not revivable on this bar; the pair's fate
-        // is decided at the next open (see PendingOrder::dormant_hold_bar).
+        // is decided at the next open (see source::PendingOrder::dormant_hold_bar).
         if (o.legs.hold_bar() == bar_index_) continue;
         // finding-347: mirror the dormancy predicate — position-cycle
         // provenance, not bucket residency, so a leg orphaned by a sibling's
@@ -2130,7 +2130,7 @@ void source::PineStrategyHost::revive_position_brackets_after_margin_call_partia
         // The bracket filled: consume the pending order object.
         pending_orders_.erase(
             std::remove_if(pending_orders_.begin(), pending_orders_.end(),
-                [&](const PendingOrder& o) {
+                [&](const source::PendingOrder& o) {
                     return o.incarnation == exit_incarnation;
                 }),
             pending_orders_.end());
@@ -2140,7 +2140,7 @@ void source::PineStrategyHost::revive_position_brackets_after_margin_call_partia
 void source::PineStrategyHost::settle_dormant_bracket_reissues(exit_legs::Domain domain) {
     auto completed = next_leg_event(exit_legs::Phase::AfterMargin);
     completed.domain = domain;
-    for (PendingOrder& order : pending_orders_) {
+    for (source::PendingOrder& order : pending_orders_) {
         const auto completion = compat::pine::select_exit_completion(order, completed);
         if (completion) apply_leg_action(order, *completion, completed);
     }
@@ -2478,7 +2478,7 @@ bool source::PineStrategyHost::whole_position_market_close_rests_for_open() cons
     // the open's margin evaluation. The decline is decided inside the fill
     // loop, after this open-boundary check, so the guard must not trust a
     // close whose fate hangs on that decision.
-    for (const PendingOrder& o : pending_orders_) {
+    for (const source::PendingOrder& o : pending_orders_) {
         const bool entry_like = o.type == OrderType::MARKET
             || o.type == OrderType::ENTRY
             || o.type == OrderType::RAW_ORDER;
@@ -2488,7 +2488,7 @@ bool source::PineStrategyHost::whole_position_market_close_rests_for_open() cons
             o.is_long ? PositionSide::LONG : PositionSide::SHORT;
         if (requested != position_side_) return false;
     }
-    for (const PendingOrder& o : pending_orders_) {
+    for (const source::PendingOrder& o : pending_orders_) {
         if (o.type != OrderType::EXIT) continue;
         if (o.id.size() < kClosePrefix.size()
             || o.id.compare(0, kClosePrefix.size(), kClosePrefix) != 0) {
@@ -2696,11 +2696,11 @@ void source::PineStrategyHost::update_trail_best_for_bar_open(const Bar& bar) {
     }
     // Round 10 family AE: a trail leg revived after a declined reversal
     // keeps its own running extreme, which skips the decline bar
-    // (PendingOrder::dormant_trail_best) and follows every later bar. The
+    // (source::PendingOrder::dormant_trail_best) and follows every later bar. The
     // fill walk reads the PRE-bar value (dormant_trail_best_start), exactly
     // as the position's own trail_best_path_state is snapshotted before this
     // function folds the bar in.
-    for (PendingOrder& o : pending_orders_) {
+    for (source::PendingOrder& o : pending_orders_) {
         if (!o.legs.dormant() || o.type != OrderType::EXIT) continue;
         if (o.legs.excluded_bar() < 0
             || o.legs.excluded_bar() >= bar_index_) continue;
@@ -2720,12 +2720,12 @@ void source::PineStrategyHost::sort_exit_siblings_by_path_fill(const Bar& bar) {
     const Bar trigger_bar = broker_trigger_bar(bar);
     const bool high_first = internal::bar_path_uses_high_first(bar);
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
-        [&](const PendingOrder& a, const PendingOrder& b) {
+        [&](const source::PendingOrder& a, const source::PendingOrder& b) {
             if (a.type != OrderType::EXIT || b.type != OrderType::EXIT
                 || a.from_entry != b.from_entry || a.from_entry.empty()) {
                 return false;
             }
-            auto qp = [](const PendingOrder& o) {
+            auto qp = [](const source::PendingOrder& o) {
                 double q = std::isnan(o.qty_percent) ? 100.0 : std::clamp(o.qty_percent, 0.0, 100.0);
                 return q;
             };
@@ -2846,8 +2846,8 @@ void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
         return;
     }
 
-    PendingOrder* first = &pending_orders_[group[0]];
-    PendingOrder* second = &pending_orders_[group[1]];
+    source::PendingOrder* first = &pending_orders_[group[0]];
+    source::PendingOrder* second = &pending_orders_[group[1]];
     if (second->incarnation < first->incarnation) std::swap(first, second);
     const int source_bar = first->created_bar;
 
@@ -2872,7 +2872,7 @@ void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
     int intervening_close_legs = 0;
     for (size_t i = 0; i < pending_orders_.size(); ++i) {
         if (group_indices.count(i) != 0) continue;
-        const PendingOrder& other = pending_orders_[i];
+        const source::PendingOrder& other = pending_orders_[i];
         const auto prices=admission_current_prices(other);
         const bool same_bar_market_close =
             other.type == OrderType::EXIT
@@ -2896,7 +2896,7 @@ void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
         }
     }
 
-    auto eligible = [&](const PendingOrder& order) {
+    auto eligible = [&](const source::PendingOrder& order) {
         return order.type == OrderType::MARKET
             && std::isnan(order.qty)
             && std::isfinite(order.frozen_default_qty)
@@ -3013,7 +3013,7 @@ void source::PineStrategyHost::finalize_default_flat_market_gross_admission() {
     pending_orders_.erase(
         std::remove_if(
             pending_orders_.begin(), pending_orders_.end(),
-            [&](const PendingOrder& order) {
+            [&](const source::PendingOrder& order) {
                 return order.incarnation == rejected_incarnation;
             }),
         pending_orders_.end());
@@ -3042,11 +3042,11 @@ void source::PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admiss
         return;
     }
 
-    PendingOrder* first = &pending_orders_[0];
-    PendingOrder* second = &pending_orders_[1];
+    source::PendingOrder* first = &pending_orders_[0];
+    source::PendingOrder* second = &pending_orders_[1];
     if (second->incarnation < first->incarnation) std::swap(first, second);
 
-    auto eligible = [&](const PendingOrder& order) {
+    auto eligible = [&](const source::PendingOrder& order) {
         return order.type == OrderType::MARKET
             && compat::pine::explicit_qualification(order.market_admission)
             && std::isfinite(order.qty)
@@ -3115,7 +3115,7 @@ void source::PineStrategyHost::apply_pooc_coof_explicit_flat_market_gross_admiss
     pending_orders_.erase(
         std::remove_if(
             pending_orders_.begin(), pending_orders_.end(),
-            [&](const PendingOrder& order) {
+            [&](const source::PendingOrder& order) {
                 return order.incarnation == rejected_incarnation;
             }),
         pending_orders_.end());
@@ -3128,7 +3128,7 @@ void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar
     std::unordered_set<int> finalized_bars;
 
     for (size_t seed = 0; seed < pending_orders_.size(); ++seed) {
-        PendingOrder& seed_order = pending_orders_[seed];
+        source::PendingOrder& seed_order = pending_orders_[seed];
         if (!compat::pine::awaits_pair_review(seed_order.market_admission)) continue;
         const int source_bar = seed_order.created_bar;
         if (!finalized_bars.insert(source_bar).second) continue;
@@ -3136,7 +3136,7 @@ void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar
         std::vector<size_t> group;
         int pending_entry_like_orders = 0;
         for (size_t i = 0; i < pending_orders_.size(); ++i) {
-            const PendingOrder& order = pending_orders_[i];
+            const source::PendingOrder& order = pending_orders_[i];
             const bool entry_like =
                 order.type == OrderType::MARKET
                 || order.type == OrderType::ENTRY
@@ -3160,8 +3160,8 @@ void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar
             || !pending_flat_market_pair_scope_is_live()) {
             continue;
         }
-        PendingOrder* first = &pending_orders_[group[0]];
-        PendingOrder* second = &pending_orders_[group[1]];
+        source::PendingOrder* first = &pending_orders_[group[0]];
+        source::PendingOrder* second = &pending_orders_[group[1]];
         if (second->created_seq < first->created_seq) std::swap(first, second);
         if (first->type != OrderType::MARKET
             || second->type != OrderType::MARKET
@@ -3208,7 +3208,7 @@ void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar
         // can swap the pair around interleaved brackets. The buy is the first
         // broker fill. When it is also the later source call (HSF), cost its
         // GROSS transaction; otherwise cost the earlier buy's own quantity.
-        PendingOrder* buy = first->is_long ? first : second;
+        source::PendingOrder* buy = first->is_long ? first : second;
         const double buy_transaction_qty = (buy == second)
             ? gross_qty
             : first->paired_flat_market_own_qty;
@@ -3261,7 +3261,7 @@ void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar
         pending_orders_.erase(
             std::remove_if(
                 pending_orders_.begin(), pending_orders_.end(),
-                [&](const PendingOrder& order) {
+                [&](const source::PendingOrder& order) {
                     return std::find(rejected_seqs.begin(), rejected_seqs.end(),
                                      order.created_seq) != rejected_seqs.end();
                 }),
@@ -3273,7 +3273,7 @@ void source::PineStrategyHost::finalize_pending_flat_market_pairs(const Bar& bar
 void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
     // Roles are derived from the complete live book at each broker boundary;
     // never let a partially surviving or carried object retain the transaction.
-    for (PendingOrder& order : pending_orders_) {
+    for (source::PendingOrder& order : pending_orders_) {
         order.short_seed_collision_role = ShortSeedCollisionRole::NONE;
     }
     if (pending_orders_.size() < 2) return;  // nothing to order; skips stable_sort's temp-buffer alloc
@@ -3288,7 +3288,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
     // on the sort algorithm's transient moves. The immutable sequence set
     // below instead gives the comparator a stable, transitive key.
     std::unordered_set<int64_t> live_flat_market_pair_seqs;
-    for (const PendingOrder& order : pending_orders_) {
+    for (const source::PendingOrder& order : pending_orders_) {
         if (pending_flat_market_pair_is_live(order)) {
             live_flat_market_pair_seqs.insert(order.created_seq);
         }
@@ -3325,12 +3325,12 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
         && !calc_on_order_fills_
         && !bar_magnifier_enabled_
         && std::isfinite(bar.open)) {
-        for (const PendingOrder& order : pending_orders_) {
+        for (const source::PendingOrder& order : pending_orders_) {
             if (order.type == OrderType::EXIT && !order.from_entry.empty()) {
                 ++exit_children_by_parent[order.from_entry];
             }
         }
-        for (const PendingOrder& order : pending_orders_) {
+        for (const source::PendingOrder& order : pending_orders_) {
             const bool pure_limit_parent =
                 order.type == OrderType::ENTRY
                 && !order.id.empty()
@@ -3352,7 +3352,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
                         order.created_bar, order.created_seq});
             }
         }
-        for (const PendingOrder& order : pending_orders_) {
+        for (const source::PendingOrder& order : pending_orders_) {
             auto parent = non_gap_limit_parents.find(order.from_entry);
             if (parent == non_gap_limit_parents.end()) continue;
             // The child may have been (re-)issued on any bar from the
@@ -3435,16 +3435,16 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
         && position_entry_count_ == 1
         && position_cycle_seq_ > 0
         && pyramid_entries_.size() == 1) {
-        PendingOrder* source[3] = {
+        source::PendingOrder* source[3] = {
             &pending_orders_[0], &pending_orders_[1], &pending_orders_[2]};
         std::sort(
             source, source + 3,
-            [](const PendingOrder* lhs, const PendingOrder* rhs) {
+            [](const source::PendingOrder* lhs, const source::PendingOrder* rhs) {
                 return lhs->created_seq < rhs->created_seq;
             });
 
         const int source_bar = source[0]->created_bar;
-        const auto fresh_plain_object = [&](const PendingOrder& order) {
+        const auto fresh_plain_object = [&](const source::PendingOrder& order) {
             return order.created_bar == source_bar
                 && source_bar + 1 == bar_index_
                 && order.created_position_side == PositionSide::SHORT
@@ -3459,7 +3459,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
         };
         const bool fixed_default_sizing =
             default_qty_type_ == QtyType::FIXED;
-        const auto pure_default_market_entry = [&](const PendingOrder& order) {
+        const auto pure_default_market_entry = [&](const source::PendingOrder& order) {
             // FIXED default sizing keeps qty NaN end to end (no freeze).
             // PERCENT_OF_EQUITY / CASH default sizing must carry the complete
             // placement-frozen snapshot the fill-time consumers (dispatch qty,
@@ -3491,7 +3491,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
                 && !placement_has_prior_close(order);
         };
         const auto exact_full_fifo_close_short =
-            [&](const PendingOrder& order, const std::string& held_id) {
+            [&](const source::PendingOrder& order, const std::string& held_id) {
             return order.type == OrderType::EXIT
                 && order.id == "__close__" + held_id
                 && order.from_entry.empty()
@@ -3590,7 +3590,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
             // need no mirror.
             if (default_qty_type_ == QtyType::PERCENT_OF_EQUITY
                 && default_qty_value_ <= 100.0) {
-                for (const PendingOrder* entry : {source[0], source[1]}) {
+                for (const source::PendingOrder* entry : {source[0], source[1]}) {
                     const double leg_admit_price =
                         apply_fill_slippage(bar_fill_price(bar.open),
                                             entry->is_long);
@@ -3676,7 +3676,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
     bool opposite_market_pending = false;
     if (position_side_ != PositionSide::FLAT) {
         const bool pos_long = position_side_ == PositionSide::LONG;
-        for (const PendingOrder& order : pending_orders_) {
+        for (const source::PendingOrder& order : pending_orders_) {
             if (order.type == OrderType::MARKET && order.is_long != pos_long) {
                 opposite_market_pending = true;
                 break;
@@ -3684,8 +3684,8 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
         }
     }
     std::stable_sort(pending_orders_.begin(), pending_orders_.end(),
-        [&](const PendingOrder& a, const PendingOrder& b) {
-            auto fill_phase = [&](const PendingOrder& o) {
+        [&](const source::PendingOrder& a, const source::PendingOrder& b) {
+            auto fill_phase = [&](const source::PendingOrder& o) {
                 if (relative_limit_child_incarnations.count(o.incarnation) != 0) {
                     return 1;
                 }
@@ -3738,7 +3738,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
             // close-Long -1). Non-members keep their established order and
             // rank with the buys; the key is a pure function of the order.
             if (pa == 0) {
-                auto sbmt_sell_rank = [](const PendingOrder& o) {
+                auto sbmt_sell_rank = [](const source::PendingOrder& o) {
                     if (!o.pine_frozen_market_instruction.active()) return 0;
                     const bool buy = o.type == OrderType::MARKET
                         ? o.is_long : (o.created_position_side == PositionSide::SHORT);
@@ -3764,7 +3764,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
                 // to a precomputed book fact keeps the comparator a strict
                 // weak order.
                 if (opposite_market_pending) {
-                    auto gapped_bracket_rank = [&](const PendingOrder& o) {
+                    auto gapped_bracket_rank = [&](const source::PendingOrder& o) {
                         if (o.type != OrderType::EXIT) return 0;
                         if (!order_is_exit_style(o, position_side_)) return 0;
                         if (o.cancellation.cancelled()) return 0;
@@ -3786,7 +3786,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
                     b.incarnation, b.created_seq);
                 if (a_seq != b_seq) return a_seq < b_seq;
             }
-            auto is_entry_same_as_current_position = [&](const PendingOrder& o) {
+            auto is_entry_same_as_current_position = [&](const source::PendingOrder& o) {
                 return (o.type == OrderType::MARKET || o.type == OrderType::ENTRY)
                     && ((position_side_ == PositionSide::LONG && o.is_long)
                         || (position_side_ == PositionSide::SHORT && !o.is_long));
@@ -3804,8 +3804,8 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
             // the blanket exit-before-same-dir-entry rule (which keeps every
             // add → uniform-KEEP). Returns 1 = exit first, 0 = add first,
             // -1 = not this collision (fall through to the blanket rule).
-            auto samebar_add_exit_first = [&](const PendingOrder& ex,
-                                              const PendingOrder& add) -> int {
+            auto samebar_add_exit_first = [&](const source::PendingOrder& ex,
+                                              const source::PendingOrder& add) -> int {
                 if (ex.type != OrderType::EXIT) return -1;
                 if (ex.from_entry.empty() || ex.from_entry != add.id) return -1;
                 // The add must be a pure market order (no priced/trail leg).
@@ -3853,7 +3853,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
             // then-deferred-flip-stop). Without this rule the priced entry
             // would flip the still-open position at the open, eating the
             // close-driven exit's deferred-flip carry.
-            auto is_full_market_exit = [&](const PendingOrder& o) {
+            auto is_full_market_exit = [&](const source::PendingOrder& o) {
                 if (o.type != OrderType::EXIT) return false;
                 bool has_stop = !std::isnan(o.legs.prices().stop_price);
                 bool has_limit = !std::isnan(o.legs.prices().limit_price);
@@ -3862,7 +3862,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
                 double qp = std::isnan(o.qty_percent) ? 100.0 : o.qty_percent;
                 return qp >= 100.0 - kFullPercentEps;
             };
-            auto is_opposite_priced_entry = [&](const PendingOrder& o) {
+            auto is_opposite_priced_entry = [&](const source::PendingOrder& o) {
                 if (o.type != OrderType::ENTRY) return false;
                 if (position_side_ == PositionSide::FLAT) return false;
                 bool entry_long = o.is_long;
@@ -3881,7 +3881,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
             // existing sequence slots (buy=min, sell=max), rather than adding a
             // pair-only comparator edge that could cycle around interleaved
             // orders such as strategy.exit brackets.
-            auto effective_seq = [&](const PendingOrder& order) {
+            auto effective_seq = [&](const source::PendingOrder& order) {
                 if (live_flat_market_pair_seqs.count(order.created_seq) == 0) {
                     return order.created_seq;
                 }
@@ -3899,7 +3899,7 @@ void source::PineStrategyHost::sort_orders_by_fill_phase(const Bar& bar) {
 }
 
 bool source::PineStrategyHost::short_seed_collision_materialization_is_live(
-        const PendingOrder& order) const {
+        const source::PendingOrder& order) const {
     if (!PINEFORGE_SHORT_SEED_COLLISION_MATERIALIZE_LONG
         || order.short_seed_collision_role
             != ShortSeedCollisionRole::MATERIALIZE_LONG
@@ -3913,12 +3913,12 @@ bool source::PineStrategyHost::short_seed_collision_materialization_is_live(
         return false;
     }
 
-    const PendingOrder* long_entry = nullptr;
-    const PendingOrder* final_short = nullptr;
+    const source::PendingOrder* long_entry = nullptr;
+    const source::PendingOrder* final_short = nullptr;
     int long_roles = 0;
     int materialize_roles = 0;
     int final_short_roles = 0;
-    for (const PendingOrder& pending : pending_orders_) {
+    for (const source::PendingOrder& pending : pending_orders_) {
         switch (pending.short_seed_collision_role) {
             case ShortSeedCollisionRole::LONG_ENTRY:
                 ++long_roles;
@@ -3958,7 +3958,7 @@ bool source::PineStrategyHost::short_seed_collision_materialization_is_live(
 }
 
 bool source::PineStrategyHost::short_seed_collision_final_short_is_live(
-        const PendingOrder& order) const {
+        const source::PendingOrder& order) const {
     if (!PINEFORGE_SHORT_SEED_COLLISION_FINAL_SHORT_CLOSE_ONLY
         || order.short_seed_collision_role != ShortSeedCollisionRole::FINAL_SHORT
         || order.type != OrderType::MARKET
@@ -3972,12 +3972,12 @@ bool source::PineStrategyHost::short_seed_collision_final_short_is_live(
         return false;
     }
 
-    const PendingOrder* long_entry = nullptr;
-    const PendingOrder* materialize_long = nullptr;
+    const source::PendingOrder* long_entry = nullptr;
+    const source::PendingOrder* materialize_long = nullptr;
     int long_roles = 0;
     int materialize_roles = 0;
     int final_short_roles = 0;
-    for (const PendingOrder& pending : pending_orders_) {
+    for (const source::PendingOrder& pending : pending_orders_) {
         switch (pending.short_seed_collision_role) {
             case ShortSeedCollisionRole::LONG_ENTRY:
                 ++long_roles;
@@ -4052,7 +4052,7 @@ bool source::PineStrategyHost::same_bar_market_tx_scope_is_live() const {
 }
 
 bool source::PineStrategyHost::same_bar_market_close_artifact_is_live(
-        const PendingOrder& order) const {
+        const source::PendingOrder& order) const {
     if (!order.pine_frozen_market_instruction.targeted_close()
         || order.type != OrderType::EXIT
         || !std::isfinite(order.quantity_request.intent()->units())
@@ -4073,11 +4073,11 @@ bool source::PineStrategyHost::same_bar_market_close_artifact_is_live(
     const std::string& target_id = order.pine_frozen_market_instruction.targeted_close()->target_id;
     if (order.id.substr(kClosePrefix.size()) != target_id) return false;
     const auto live = std::find_if(pending_orders_.begin(), pending_orders_.end(),
-        [&](const PendingOrder& pending) { return same_pending_order(pending, order); });
+        [&](const source::PendingOrder& pending) { return same_pending_order(pending, order); });
     if (live == pending_orders_.end()) return false;
     const size_t self = static_cast<size_t>(live - pending_orders_.begin());
     for (size_t j = self + 1; j < pending_orders_.size(); ++j) {
-        const PendingOrder& sib = pending_orders_[j];
+        const source::PendingOrder& sib = pending_orders_[j];
         if (sib.type == OrderType::MARKET
             && sib.pine_frozen_market_instruction.transaction()
             && sib.id == target_id
@@ -4090,7 +4090,7 @@ bool source::PineStrategyHost::same_bar_market_close_artifact_is_live(
 }
 
 void source::PineStrategyHost::apply_same_bar_market_tx_reversal(
-        PendingOrder& order, double fill_price, const Bar& bar,
+        source::PendingOrder& order, double fill_price, const Bar& bar,
         double& trail_best_path_state) {
     const double tx = order.pine_frozen_market_instruction.transaction()->transaction_units;
     // Pine has already resolved the source instruction to physical units.
@@ -4133,7 +4133,7 @@ void source::PineStrategyHost::apply_same_bar_market_tx_reversal(
 }
 
 bool source::PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
-        const PendingOrder& order, const Bar& bar,
+        const source::PendingOrder& order, const Bar& bar,
         bool* limit_leg) const {
     if (limit_leg != nullptr) *limit_leg = false;
     if (process_orders_on_close_ || calc_on_order_fills_ || bar_magnifier_enabled_) {
@@ -4196,7 +4196,7 @@ bool source::PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
     if (limit_leg != nullptr) *limit_leg = limit_marketable && !stop_gapped;
 
     int matching_children = 0;
-    for (const PendingOrder& pending : pending_orders_) {
+    for (const source::PendingOrder& pending : pending_orders_) {
         if (pending.type == OrderType::EXIT
             && pending.from_entry == order.from_entry) {
             ++matching_children;
@@ -4220,7 +4220,7 @@ bool source::PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
         return false;
     }
 
-    for (const PendingOrder& parent : pending_orders_) {
+    for (const source::PendingOrder& parent : pending_orders_) {
         if (parent.id != order.from_entry
             || parent.type != OrderType::MARKET
             || parent.created_bar != order.created_bar
@@ -4240,14 +4240,14 @@ bool source::PineStrategyHost::prearmed_market_parent_bracket_gaps_at_open(
 }
 
 bool source::PineStrategyHost::pending_flat_market_pair_is_live(
-        const PendingOrder& order) const {
+        const source::PendingOrder& order) const {
     if (!pending_flat_market_pair_scope_is_live()
         || order.type != OrderType::MARKET
         || order.paired_flat_market_peer_seq <= 0
         || !std::isfinite(order.paired_flat_market_transaction_qty)) {
         return false;
     }
-    for (const PendingOrder& peer : pending_orders_) {
+    for (const source::PendingOrder& peer : pending_orders_) {
         if (peer.created_seq != order.paired_flat_market_peer_seq) continue;
         return peer.type == OrderType::MARKET
             && peer.paired_flat_market_peer_seq == order.created_seq
@@ -4263,7 +4263,7 @@ bool source::PineStrategyHost::pending_flat_market_pair_is_live(
 
 void source::PineStrategyHost::invalidate_pending_flat_market_pair(int64_t created_seq) {
     if (created_seq <= 0) return;
-    for (PendingOrder& order : pending_orders_) {
+    for (source::PendingOrder& order : pending_orders_) {
         if (order.created_seq == created_seq
             || order.paired_flat_market_peer_seq == created_seq) {
             order.paired_flat_market_peer_seq = 0;
@@ -4342,7 +4342,7 @@ void source::PineStrategyHost::compact_filled_pending_orders(
 }
 
 bool source::PineStrategyHost::flat_dual_stop_opposite_is_live(
-        const PendingOrder& order, bool flat_dual_stop_pair) const {
+        const source::PendingOrder& order, bool flat_dual_stop_pair) const {
     return flat_dual_stop_pair
         && order.type == OrderType::ENTRY
         && std::isfinite(order.legs.prices().stop_price) && std::isnan(order.legs.prices().limit_price)
@@ -4356,7 +4356,7 @@ bool source::PineStrategyHost::flat_dual_stop_opposite_is_live(
 }
 
 bool source::PineStrategyHost::use_default_stop_placement_qty(
-        const PendingOrder& order, double fill_price,
+        const source::PendingOrder& order, double fill_price,
         bool flat_dual_stop_pair) const {
     if (order.type != OrderType::ENTRY
         || std::isnan(order.legs.prices().stop_price)
@@ -4382,7 +4382,7 @@ int source::PineStrategyHost::probe_fill_qty(int index, double fill_price, doubl
         || !qty || !close_only || !partition) {
         return -1;
     }
-    const PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
+    const source::PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
     *qty = std::numeric_limits<double>::quiet_NaN();
     *close_only = 0;
     *partition = -1;
@@ -4558,7 +4558,7 @@ int source::PineStrategyHost::probe_fill_qty(int index, double fill_price, doubl
 
 int source::PineStrategyHost::pending_order_level_resolved(int index) const {
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())) return -1;
-    const PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
+    const source::PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
     if (o.type != OrderType::EXIT || o.from_entry.empty()) return 1;
     return cycle_filled_entry_ids_.count(o.from_entry) ? 1 : 0;
 }
@@ -4570,7 +4570,7 @@ int source::PineStrategyHost::pending_order_effective_levels(int index, double* 
         || !stop || !limit || !trail_activation) {
         return -1;
     }
-    const PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
+    const source::PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
     const double nan = std::numeric_limits<double>::quiet_NaN();
     *stop = o.legs.prices().stop_price;
     *limit = o.legs.prices().limit_price;
@@ -4615,7 +4615,7 @@ int source::PineStrategyHost::pending_order_effective_levels(int index, double* 
 }
 
 bool source::PineStrategyHost::stop_entry_margin_admission_declines(
-        const PendingOrder& order, double fill_price, const Bar& /*bar*/,
+        const source::PendingOrder& order, double fill_price, const Bar& /*bar*/,
         bool flat_dual_stop_pair) const {
     if (order.type != OrderType::ENTRY
         || std::isnan(order.legs.prices().stop_price)
@@ -4670,7 +4670,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
         bool& exit_closed_was_long,
         std::vector<uint64_t>& retired_incarnations,
         bool flat_dual_stop_pair) {
-    PendingOrder matched_order;
+    source::PendingOrder matched_order;
     compat::pine::AttemptOrigin cap_origin;
     compat::pine::Admission cap_admission;
     // Admission decisions shared with post-dispatch opening ownership. They
@@ -4678,7 +4678,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
     bool admitted_flat_on_frozen_sizing_price = false;
     bool admitted_flat_on_price_gap_band = false;
     {
-    PendingOrder& order = pending_orders_.at(order_index);
+    source::PendingOrder& order = pending_orders_.at(order_index);
     // A deferred-compaction object is not actionable twice. The owned copy
     // of this dispatch may still settle after scheduling its own retirement.
     if (std::find(retired_incarnations.begin(), retired_incarnations.end(), order.incarnation)
@@ -4812,7 +4812,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
 
     // KI-54: TradingView fill-time margin admission for FROZEN default-sized
     // market orders (the snapshot fields are captured at placement — see
-    // PendingOrder::sizing_equity/sizing_price, engine.hpp):
+    // source::PendingOrder::sizing_equity/sizing_price, engine.hpp):
     //
     //   same_dir    = position open AND order direction matches it
     //   reversal    = position open AND order direction opposes it
@@ -5527,7 +5527,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
 
     // design-market-entry-affordability: the FILL-time half of TradingView's
     // market-entry admission (rule, pins and evidence on
-    // PendingOrder::affordability_placement_equity, engine.hpp; the placement
+    // source::PendingOrder::affordability_placement_equity, engine.hpp; the placement
     // half is in strategy_entry). The quantity is exactly what the market
     // kernel is about to dispatch (the frozen CASH or >100%-of-equity default,
     // the FIXED default, or the lot-floored explicit qty), a same-direction
@@ -5714,7 +5714,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
     // elements before trade metadata and cap handling finish using this order.
     matched_order = order;
     }
-    PendingOrder& order = matched_order;
+    source::PendingOrder& order = matched_order;
 
     // Track trades before fill to set exit_comment/exit_id on new trades
     size_t trades_before = trades_.size();
@@ -5795,7 +5795,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
             // Build the child index once. Ordinary flat opens and adds skip all
             // bracket scans, and a reversal remains linear in queue size.
             std::unordered_map<std::string, int64_t> full_bracket_child_seq;
-            for (const PendingOrder& child : pending_orders_) {
+            for (const source::PendingOrder& child : pending_orders_) {
                 const bool actionable = !std::isnan(child.legs.prices().limit_price)
                     || !std::isnan(child.legs.prices().stop_price)
                     || !std::isnan(child.legs.prices().trail_points)
@@ -5820,14 +5820,14 @@ void source::PineStrategyHost::apply_filled_order_to_state(
                     it->second = child.created_seq;
                 }
             }
-            auto has_full_bracket_child = [&](const PendingOrder& entry) {
+            auto has_full_bracket_child = [&](const source::PendingOrder& entry) {
                 const auto it = full_bracket_child_seq.find(entry.id);
                 return it != full_bracket_child_seq.end()
                     && it->second > entry.created_seq;
             };
             if (has_full_bracket_child(order)) {
                 for (size_t j = order_index + 1; j < pending_orders_.size(); ++j) {
-                    const PendingOrder& sib = pending_orders_[j];
+                    const source::PendingOrder& sib = pending_orders_[j];
                     if (sib.type == OrderType::MARKET
                         && sib.is_long == order.is_long
                         && sib.id != order.id
@@ -6235,7 +6235,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
     // stop/limit/trail/profit/loss leg -- but OrderType::EXIT alone is not
     // enough to tell one from a deferred strategy.close/close_all: queue_
     // deferred_close_order (engine_strategy_commands.cpp) also materializes
-    // its synthetic close as an OrderType::EXIT PendingOrder (reusing the
+    // its synthetic close as an OrderType::EXIT source::PendingOrder (reusing the
     // exit-fill qty/level machinery), tagged with the kClosePrefix id prefix
     // it and execute_immediate_close both use -- the same structural marker
     // revive_position_brackets_after_margin_call_partial's own candidate
@@ -6307,7 +6307,7 @@ void source::PineStrategyHost::apply_filled_order_to_state(
 }
 
 bool source::PineStrategyHost::replaced_percent_short_market_is_live(
-        const PendingOrder& order) const {
+        const source::PendingOrder& order) const {
     if (order.type != OrderType::MARKET || order.is_long
         || (order.replaced_order_incarnation == 0)
         || order.replaced_default_market_incarnation == 0
@@ -6342,7 +6342,7 @@ bool source::PineStrategyHost::replaced_percent_short_market_is_live(
         || risk_max_cons_loss_days_ != 0 || risk_max_position_size_ != 0) {
         return false;
     }
-    for (const PendingOrder& other : pending_orders_) {
+    for (const source::PendingOrder& other : pending_orders_) {
         if (same_pending_order(other, order)) continue;
         if (other.type == OrderType::EXIT) {
             const bool bracket = std::isfinite(other.legs.prices().stop_price)
@@ -6373,7 +6373,7 @@ bool source::PineStrategyHost::replaced_percent_short_market_is_live(
     return true;
 }
 
-void source::PineStrategyHost::apply_market_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_market_order_fill(source::PendingOrder& order, double fill_price,
                                              const Bar& bar,
                                              double& trail_best_path_state,
                                              bool later_same_tick_entry) {
@@ -6478,7 +6478,7 @@ void source::PineStrategyHost::apply_market_order_fill(PendingOrder& order, doub
         return;
     }
 
-    // round 8 family S (PendingOrder::sbmt_member): a member's broker size is
+    // round 8 family S (source::PendingOrder::sbmt_member): a member's broker size is
     // the transaction frozen at placement. Against the live opposite position
     // it closes min(tx, live) and opens the remainder (rules 1/2); a same-
     // direction over-cap member whose opposite market never moved the
@@ -6545,7 +6545,7 @@ void source::PineStrategyHost::apply_market_order_fill(PendingOrder& order, doub
             order.frozen_default_qty, -1,
             /*explicit_qty_prequantized=*/true, order.incarnation,
             std::move(lifecycle));
-        for (PendingOrder& sibling : pending_orders_) {
+        for (source::PendingOrder& sibling : pending_orders_) {
             if (sibling.type == OrderType::MARKET
                 && sibling.created_seq > order.created_seq
                 && sibling.created_bar == order.created_bar && !sibling.is_long) {
@@ -6619,7 +6619,7 @@ void source::PineStrategyHost::apply_market_order_fill(PendingOrder& order, doub
     trail_best_path_state = trail_best_after_fill;
 }
 
-void source::PineStrategyHost::apply_entry_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_entry_order_fill(source::PendingOrder& order, double fill_price,
                                             const Bar& bar,
                                             double& trail_best_path_state,
                                             bool flat_dual_stop_pair) {
@@ -6825,7 +6825,7 @@ void source::PineStrategyHost::apply_entry_order_fill(PendingOrder& order, doubl
     }
 }
 
-void source::PineStrategyHost::apply_exit_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_exit_order_fill(source::PendingOrder& order, double fill_price,
                                            int& exit_closed_from_bar,
                                            uint64_t& exit_closed_from_incarnation,
                                            bool& exit_closed_was_long) {
@@ -6851,7 +6851,7 @@ void source::PineStrategyHost::apply_exit_order_fill(PendingOrder& order, double
         return;
     }
 
-    // round 8 family S, rule 4 (PendingOrder::sbmt_member): a member close
+    // round 8 family S, rule 4 (source::PendingOrder::sbmt_member): a member close
     // exits what remains of the side it was sized against — min(frozen
     // target, live) — and, when that side is gone, either fills as TV's
     // artifact lot (its same-id entry still pending: "Close entry(s) order
@@ -7012,7 +7012,7 @@ void source::PineStrategyHost::apply_exit_order_fill(PendingOrder& order, double
     // when the last leg carrying it is gone.
     if (order.quantity_request.is_partial(kFullQtyEps, kFullPercentEps) && trades_.size() > trades_before_exit) {
         bool sibling_leg_still_live = false;
-        for (const PendingOrder& sibling : pending_orders_) {
+        for (const source::PendingOrder& sibling : pending_orders_) {
             if (sibling.type != OrderType::EXIT) continue;
             if (sibling.incarnation == order.incarnation) continue;  // self
             if (sibling.id != order.id) continue;
@@ -7126,7 +7126,7 @@ void source::PineStrategyHost::reconcile_deferred_layered_exits(
     }
 }
 
-void source::PineStrategyHost::apply_raw_order_fill(PendingOrder& order, double fill_price,
+void source::PineStrategyHost::apply_raw_order_fill(source::PendingOrder& order, double fill_price,
                                           double& trail_best_path_state,
                                           int& exit_closed_from_bar,
                                           uint64_t& exit_closed_from_incarnation,
@@ -7229,8 +7229,8 @@ void source::PineStrategyHost::materialize_relative_exit_prices_for_live_positio
 }
 
 void source::PineStrategyHost::suppress_declined_reversal_close_legs(
-        const PendingOrder& declined_entry) {
-    for (PendingOrder& co : pending_orders_) {
+        const source::PendingOrder& declined_entry) {
+    for (source::PendingOrder& co : pending_orders_) {
         if (co.cancellation.cancelled()) continue;   // idempotent
         if (co.type != OrderType::EXIT) continue;
         if (co.id.size() <= kClosePrefix.size()) continue;      // bare close_all excluded
@@ -7261,7 +7261,7 @@ void source::PineStrategyHost::suppress_declined_reversal_close_legs(
     }
 }
 
-bool source::PineStrategyHost::dormant_bracket_trail_leg_live(const PendingOrder& o) const {
+bool source::PineStrategyHost::dormant_bracket_trail_leg_live(const source::PendingOrder& o) const {
     // The trail leg of a killed bracket is live from the bar AFTER the
     // decline, never on the decline bar itself. TradingView's declined
     // reversal is a flip attempt at that bar's open (the reversal MARKET
@@ -7290,7 +7290,7 @@ source::PineStrategyHost::select_declined_reversal_pre_close(const Bar& bar) con
     const double prior_best = trail_best_before_bar_index_ == bar_index_
         ? trail_best_before_bar_ : trail_best_price_;
     const bool open_slice = open_margin_slice_bar_ == bar_index_;
-    for (const PendingOrder& order : pending_orders_) {
+    for (const source::PendingOrder& order : pending_orders_) {
         const bool standing = order.from_entry.empty()
             || cycle_filled_entry_ids_.count(order.from_entry) != 0;
         const auto selected = compat::pine::select_exit_suspension(order,
@@ -7311,11 +7311,11 @@ source::PineStrategyHost::select_declined_reversal_pre_close(const Bar& bar) con
 void source::PineStrategyHost::mark_position_brackets_dormant_on_declined_reversal(const Bar& bar) {
     const auto batch = select_declined_reversal_pre_close(bar);
     if (!batch) return;
-    apply_pre_close_lifecycle_batch(*batch);
+    apply_source_pre_close_lifecycle(*batch);
 }
 
 double source::PineStrategyHost::pooc_short_exit_trigger_close(
-        const PendingOrder& order, const Bar& bar) const {
+        const source::PendingOrder& order, const Bar& bar) const {
     // Hariss F POOC pins: newly reissued short exits test the broker's tick
     // close, while Pine still sees raw OHLC and the order levels stay raw.
     // C11.575 ->11.58 skips limit11.576782; C11.695 ->11.70 reaches
@@ -7349,7 +7349,7 @@ double source::PineStrategyHost::pooc_short_exit_trigger_close(
         && risk_max_intraday_loss_ == 0 && risk_max_drawdown_ == 0
         && risk_max_cons_loss_days_ == 0;
     if (!pinned_reissue) return bar.close;
-    for (const PendingOrder& other : pending_orders_) {
+    for (const source::PendingOrder& other : pending_orders_) {
         if (&other == &order) continue;
         // Hariss emits both directional EXITs at every close. An unbound
         // sibling is removed by the existing position-cycle liveness gate;
@@ -7364,7 +7364,7 @@ double source::PineStrategyHost::pooc_short_exit_trigger_close(
 }
 
 BacktestEngine::OrderEligibility source::PineStrategyHost::classify_order_eligibility(
-        PendingOrder& order, int opposing_pass,
+        source::PendingOrder& order, int opposing_pass,
         internal::DualEntryStopPathWinner dual_entry_path,
         const std::unordered_set<std::string>& pass0_opposing_skip_ids,
         int exit_closed_from_bar, uint64_t exit_closed_from_incarnation,
@@ -7730,7 +7730,7 @@ BacktestEngine::OrderEligibility source::PineStrategyHost::classify_order_eligib
 }
 
 BacktestEngine::FillEvaluation source::PineStrategyHost::evaluate_fill_price(
-        PendingOrder& order, size_t order_index, const Bar& bar,
+        source::PendingOrder& order, size_t order_index, const Bar& bar,
         int opposing_pass, double trail_best_path_state,
         std::unordered_set<std::string>& pass0_opposing_skip_ids) {
     bool exit_style = order_is_exit_style(order, position_side_);
@@ -7800,7 +7800,7 @@ BacktestEngine::FillEvaluation source::PineStrategyHost::evaluate_fill_price(
 
     // If every non-trailing priced leg is suppressed on the entry bar, the
     // order is dormant rather than becoming a market exit. The original
-    // prices remain stored on PendingOrder and become active next bar.
+    // prices remain stored on source::PendingOrder and become active next bar.
     if (order.type != OrderType::EXIT && exit_style && !has_stop && !has_limit && !has_trail
         && (suppress_stop || suppress_limit)) {
         return {FillEvaluation::Kind::NoFill, 0.0};
@@ -7858,7 +7858,7 @@ BacktestEngine::FillEvaluation source::PineStrategyHost::evaluate_fill_price(
             && !bar_magnifier_enabled_
             && !(calc_on_order_fills_ && coof_scheduler_active_)) {
             int matching_exit_orders = 0;
-            for (const PendingOrder& pending : pending_orders_) {
+            for (const source::PendingOrder& pending : pending_orders_) {
                 if (pending.type == OrderType::EXIT
                     && pending.from_entry == order.from_entry) {
                     ++matching_exit_orders;

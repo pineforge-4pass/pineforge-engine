@@ -1,6 +1,6 @@
 #pragma once
 #include "../../exit_leg_lifecycle.hpp"
-namespace pineforge { inline namespace engine_script_run_v15 { struct PendingOrder; } }
+namespace pineforge::source { struct PendingOrder; }
 namespace pineforge::compat::pine {
 struct ExitSuspensionContext {
     exit_legs::Frame cause;
@@ -13,10 +13,10 @@ struct ExitSuspensionContext {
     bool standing;
 };
 std::optional<exit_legs::Operation> select_exit_suspension(
-    const PendingOrder&, const ExitSuspensionContext&);
-exit_legs::Operation select_pair_hold(const PendingOrder&, exit_legs::Frame);
-exit_legs::Definition select_replacement_revival_definition(const PendingOrder&);
-double select_margin_revival_stop(const PendingOrder&);
+    const source::PendingOrder&, const ExitSuspensionContext&);
+exit_legs::Operation select_pair_hold(const source::PendingOrder&, exit_legs::Frame);
+exit_legs::Definition select_replacement_revival_definition(const source::PendingOrder&);
+double select_margin_revival_stop(const source::PendingOrder&);
 std::optional<exit_legs::Operation> select_exit_completion(
-    const PendingOrder&, exit_legs::Frame completed);
+    const source::PendingOrder&, exit_legs::Frame completed);
 } // namespace pineforge::compat::pine

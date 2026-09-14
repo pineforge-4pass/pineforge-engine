@@ -49,16 +49,6 @@
 // Angle-bracket form is the installed public path (deliberate).
 #include <pineforge/pineforge.h>
 
-// The public C mirror needs the engine's admission journal to derive
-// source-bound placement facts. The context-free form refuses a bound priced
-// entry whose original history is needed; other orders have no predecessor.
-namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&,
-                               const MarketAdmissionJournal*,
-                               pf_pending_order_v1_t*);
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
-}
-
 // Generated modules using the full script lifecycle reset must be rebuilt
 // against a runtime providing this hook. This is an internal C++ capability;
 // it does not change any public C POD or exported C function signature.
@@ -4181,34 +4171,15 @@ protected:
     // close-time re-issue takes effect once the bar's broker events are
     // done). Called right after every process_margin_call dispatch site.
     void settle_dormant_bracket_reissues(exit_legs::Domain domain);
-    virtual exit_legs::Frame next_leg_event(exit_legs::Phase phase = exit_legs::Phase::Observation);
-    virtual exit_legs::Frame preview_next_leg_event(
-        exit_legs::Phase phase = exit_legs::Phase::Observation) const;
-    void apply_leg_action(PendingOrder& order, exit_legs::Operation operation,
-                          std::optional<exit_legs::Frame> cause = std::nullopt);
-    virtual exit_legs::Domain current_exit_leg_domain() const;
-    enum class ExitLegTransitionResult {
-        Applied, Replay, StaleIdentity, BindRefused, ActionRefused, Exhausted,
-        RevisionExhausted
-    };
-    virtual ExitLegTransitionResult transition_exit_leg(
-        exit_legs::Lifecycle& legs, uint64_t order_incarnation,
-        exit_legs::Operation operation, std::optional<exit_legs::Frame> supplied,
-        uint64_t& event_seq, int64_t position_cycle) const;
-    virtual std::optional<execution::Status> validate_lifecycle_effects(
+    virtual std::optional<execution::Status> validate_source_lifecycle(
         const execution::LifecycleEffects& lifecycle) const;
-    virtual std::optional<execution::Status> preflight_settlement_lifecycle(
+    virtual std::optional<execution::Status> preflight_source_lifecycle(
         const execution::LifecycleEffects& lifecycle,
         bool will_reset_to_flat, bool will_open_quoted);
-    virtual void apply_pre_close_lifecycle_batch(const execution::LifecycleBatch& batch);
-    virtual void apply_authorized_pending_removals(
+    virtual void apply_source_pre_close_lifecycle(
+        const execution::LifecycleBatch& batch);
+    virtual void apply_source_pending_removals(
         const std::vector<execution::PendingRemoval>& removals);
-    std::vector<execution::PendingRemoval> snapshot_exit_pending_removals() const;
-    std::optional<execution::LifecycleBatch> select_declined_reversal_pre_close(
-        const Bar& bar) const;
-    virtual const PendingOrder* find_unique_pending(
-        uint64_t incarnation, int64_t created_seq) const;
-    virtual PendingOrder* find_unique_pending(uint64_t incarnation, int64_t created_seq);
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
@@ -4416,6 +4387,11 @@ protected:
     // are set before run() and must survive it. Called at the top of every
     // run() loop entrypoint. See tests/test_handle_reuse_reset.cpp.
     void reset_run_state();
+    virtual void reset_source_pending_book();
+    virtual void reset_source_order_and_close_state();
+    virtual void reset_source_risk_and_cap();
+    virtual void reset_source_margin_and_coof();
+    virtual void reset_source_bar_projections();
     virtual void reset_source_language_series();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
@@ -4478,9 +4454,16 @@ protected:
         double fill_price, double qty_value, int qty_type, double equity) const;
     virtual double source_reversal_qty(double fill_price, double explicit_qty,
                                int explicit_qty_type, bool prequantized) const;
-    virtual void bind_exit_activation(PendingOrder& order);
-    virtual void bind_retained_exit_activations();
-    virtual void unbind_exit_activations();
+    virtual void reset_source_exit_activations_before_flatten();
+    virtual void reset_source_trail_after_flatten();
+    virtual void reset_source_position_ledgers_after_book_clear();
+    virtual void on_source_append_quoted_lot_before_book(const PyramidEntry& lot);
+    virtual void on_source_append_quoted_lot_after_book(const PyramidEntry& lot);
+    virtual void reset_source_open_position_trail_before_book_clear(
+        const PyramidEntry& lot);
+    virtual void reset_source_open_position_ledgers_before_book(
+        const PyramidEntry& lot);
+    virtual void on_source_open_position_booked(const PyramidEntry& lot);
     void open_fresh_position(PositionSide requested, double fill_price,
                              double qty, const std::string& id,
                              uint64_t entry_incarnation);
@@ -5316,6 +5299,16 @@ public:
     // sizing_equity formula and the equity-curve remark below, both
     // current_equity() + open_profit(...)).
     virtual double live_position_size() const { return signed_position_size(); }
+    virtual int observe_last_bar_dual_entry_path_v1() const;
+    virtual int observe_pending_count_v1() const;
+    virtual int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;
+    virtual int observe_probe_fill_qty(int index, double fill_price, double* qty,
+                                       int* close_only, int* partition) const;
+    virtual int observe_pending_level_resolved(int index) const;
+    virtual int observe_pending_effective_levels(int index, double* stop,
+                                                 double* limit,
+                                                 double* trail_activation) const;
+    virtual double observe_trail_best_price_v1() const;
     double live_current_equity() const { return current_equity(); }
     // ABI v4 live-runtime surface (task 9): total SCRIPT bars dispatched by
     // the most recent run() (mirrors pf_report_t::script_bars_processed,

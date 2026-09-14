@@ -1,5 +1,6 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/compat/pine/exit_activation.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include "../../engine_internal.hpp"
 #include <cmath>
 
@@ -24,7 +25,7 @@ ExitLegActivationBounds ExitActivationPolicy::resolve(int64_t cycle, int entry_b
     return {cycle, first + (holds_stop() ? 1 : 0), first + (holds_limit() ? 1 : 0)};
 }
 
-ExitActivationPolicy select_exit_activation(const PendingOrder& order,
+ExitActivationPolicy select_exit_activation(const source::PendingOrder& order,
         double stop, double limit, const ExitActivationContext& c) {
     if (!c.fill_recalc || !c.scheduler || !std::isfinite(c.cursor_price)
         || c.side == PositionSide::FLAT || c.position_open_bar != c.bar_index)

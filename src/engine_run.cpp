@@ -207,47 +207,12 @@ void BacktestEngine::reset_run_state() {
     // A flat transition within a run must keep advancing it; only a new run
     // returns the allocator to its constructor value.
     next_position_cycle_seq_ = 1;
-    pending_orders_.clear();
+    reset_source_pending_book();
     // PendingOrder incarnations are report provenance scoped to one run.
     // Resetting keeps a reused handle byte/identity-equivalent to a fresh
     // handle while preserving the invariant that zero means unavailable.
     next_order_incarnation_ = 1;
-    exit_leg_event_seq_ = 0;
-    next_order_seq_ = 1;
-    market_admission_journal_.reset();
-    named_entry_cancelled_incarnation_in_current_eval_.clear();
-    pending_close_qty_in_bar_ = 0.0;
-    pos_view_freeze_bar_ = -1;   // KI-64: fresh run starts with no frozen view
-    pos_view_frozen_side_ = PositionSide::FLAT;
-    pos_view_frozen_qty_ = 0.0;
-    pos_view_frozen_entry_qty_.clear();
-    sb_close_active_ = false;
-    sb_close_bar_ = -1;
-    sb_close_calls_ = 0;
-    sb_close_first_id_.clear();
-    sb_close_first_target_ = 0.0;
-    sb_close_first_carry_valid_ = false;
-    sb_close_first_carry_qty_ = 0.0;
-    sb_close_id_.clear();
-    sb_close_comment_.clear();
-    close_reserved_qty_.clear();
-    close_two_call_first_qty_.clear();
-    callsite_close_bar_ = -1;
-    callsite_close_queue_seq_ = 0;
-    callsite_close_callsites_.clear();
-    callsite_close_admitted_total_ = 0.0;
-    callsite_close_reserved_qty_.clear();
-    callsite_close_two_call_first_qty_.clear();
-    fold_exit_path_extremes_ = false;
-    fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
-    last_exit_fill_was_trail_ = false;
-    trail_best_before_bar_ = std::numeric_limits<double>::quiet_NaN();
-    trail_best_before_bar_index_ = -1;
-    trail_best_before_bar_position_cycle_ = 0;
-    trail_best_before_bar_fill_seq_ = 0;
-    priced_entry_activity_bar_ = -1;
-    priced_entry_filled_this_bar_ = false;
-    open_margin_slice_bar_ = -1;
+    reset_source_order_and_close_state();
 
     // Equity + position-size extremes.
     max_equity_ = initial_capital_;
@@ -263,38 +228,10 @@ void BacktestEngine::reset_run_state() {
     broker_state_hashes_.clear();    // ABI v4 task 6: retain capacity like equity_curve_
 
     // Risk halt latch + day trackers (one-way halt must not survive a rerun).
-    risk_halted_ = false;
-    cons_loss_day_count_ = 0;
-    last_loss_day_ = -1;
-    intraday_pnl_ = 0.0;
-    intraday_pnl_day_ = -1;
-    intraday_loss_day_start_equity_ = std::numeric_limits<double>::quiet_NaN();
-    intraday_loss_day_ = -1;
-    intraday_loss_block_day_ = -1;
-    intraday_loss_evaluating_ = false;
-    intraday_loss_cancel_pending_ = false;
-    max_intraday_filled_orders_.reset_run();
+    reset_source_risk_and_cap();
     position_close_obligation_ = {};
     broker_fill_event_seq_ = 0;
-    last_margin_call_event_bar_ = -1;        // finding-308: bar-keyed one-shot
-    intrabar_exit_margin_call_bar_ = -1;     // markers must not survive a rerun
-    coof_scheduler_active_ = false;
-    coof_fill_recalc_active_ = false;
-    coof_recalc_at_bar_open_ = false;
-    coof_recalc_after_first_open_fill_ = false;
-    coof_market_entry_recalc_incarnation_ = 0;
-    coof_market_entry_recalc_fill_seq_ = 0;
-    coof_cursor_is_bar_close_ = false;
-    coof_evaluating_path_segment_ = false;
-    coof_at_extreme_waypoint_ = false;
-    coof_hist_is_segment_ = false;
-    coof_hist_path_index_ = -1;
-    coof_cascade_recalc_leg_ = -1;
-    coof_cascade_force_wp_gap_ = false;
-    coof_cursor_price_ = std::numeric_limits<double>::quiet_NaN();
-    coof_direct_fill_events_remaining_ = 0;
-    coof_checkpoint_contains_current_bar_ = false;
-    history_slot_is_new_ = true;
+    reset_source_margin_and_coof();
 
     // Per-bar cursor + session-predicate state.
     bar_index_ = 0;
@@ -303,8 +240,7 @@ void BacktestEngine::reset_run_state() {
     // dispatch_bar(), engine_run.cpp), which would otherwise leave a reused
     // handle's last_bar_dual_entry_decision_ (also hashed by
     // engine_state_hash.cpp) reading the PREVIOUS run's value.
-    last_bar_dual_entry_decision_ = internal::DualEntryStopPathWinner::None;
-    trail_close_restart_bar_ = -1;
+    reset_source_bar_projections();
     prev_bar_timestamp_ = 0;
     // The chart's native daily partition is rebuilt per run by the
     // multi-timeframe run() (prepare_chart_day_partition); a run that never

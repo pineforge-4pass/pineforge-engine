@@ -1,9 +1,10 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include "../../engine_internal.hpp"
 
 namespace pineforge::compat::pine {
-std::vector<uint64_t> select_reservation_growth_sources(const std::vector<PendingOrder>& book,
+std::vector<uint64_t> select_reservation_growth_sources(const std::vector<source::PendingOrder>& book,
         const std::string& from_entry, bool process_on_close, bool effectively_flat,
         double percent, int bar, PositionSide side) {
     if (!from_entry.empty() || !process_on_close || effectively_flat

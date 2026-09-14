@@ -1,7 +1,7 @@
 #pragma once
 #include "../../order_birth.hpp"
 
-namespace pineforge { inline namespace engine_script_run_v15 { struct PendingOrder; } }
+namespace pineforge::source { struct PendingOrder; }
 namespace pineforge::compat::pine {
 
 // Historical Pine permissions remain policy, not physical birth facts.
@@ -12,7 +12,7 @@ inline bool first_open_fill_evaluation(const OrderBirth& birth) {
 }
 HistoricalBirthReach select_historical_birth_reach(const OrderBirth& birth,
                                                    bool requested_trailing_exit);
-bool historical_cascade_reach(const PendingOrder& order);
+bool historical_cascade_reach(const source::PendingOrder& order);
 
 } // namespace pineforge::compat::pine
 

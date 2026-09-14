@@ -20,7 +20,7 @@ admission::Configuration source::PineStrategyHost::admission_configuration() con
         risk_max_cons_loss_days_,risk_max_drawdown_,risk_max_intraday_loss_,risk_max_position_size_,
         max_intraday_filled_orders_.active(),risk_halted_};
 }
-admission::CurrentPrices source::PineStrategyHost::admission_current_prices(const PendingOrder& order) const {
+admission::CurrentPrices source::PineStrategyHost::admission_current_prices(const source::PendingOrder& order) const {
     const auto& prices = order.legs.prices();
     return {prices.limit_price, prices.stop_price, prices.trail_points,
             prices.trail_price, prices.trail_offset};
@@ -31,7 +31,7 @@ bool source::PineStrategyHost::opening_admission_eligible(const MarketAdmissionD
     // native model without importing a source-language policy header.
     return compat::pine::opening_qualification(draft);
 }
-admission::BookObservation source::PineStrategyHost::admission_book_observation(const PendingOrder& order) const {
+admission::BookObservation source::PineStrategyHost::admission_book_observation(const source::PendingOrder& order) const {
     return {order.incarnation,order.created_seq,order.created_bar,static_cast<int>(order.type),
             static_cast<int>(order.created_position_side),order.is_long,order.id,order.oca_name,order.oca_type,order.birth,admission_current_prices(order),order.market_admission};
 }
@@ -65,7 +65,7 @@ admission::CommandCapture source::PineStrategyHost::begin_market_command(admissi
         market_admission_journal_.append(std::move(event));reclaim_market_admission();
     });
 }
-void source::PineStrategyHost::bind_market_command(PendingOrder& order,admission::CommandCapture& command) {
+void source::PineStrategyHost::bind_market_command(source::PendingOrder& order,admission::CommandCapture& command) {
     const auto& input=command.input();const auto& c=input.configuration;
     std::optional<admission::SizingObservation> original;
     if((order.type==OrderType::MARKET||order.type==OrderType::RAW_ORDER)
@@ -112,7 +112,7 @@ void source::PineStrategyHost::reclaim_market_admission() {
     std::vector<uint64_t> live;for(const auto& order:pending_orders_)live.push_back(order.incarnation);
     market_admission_journal_.retain(compat::pine::admission_retention(market_admission_journal_,live));
 }
-void source::PineStrategyHost::record_market_sizing_revision(PendingOrder& order,admission::SizingObservation before,double affordability_before) {
+void source::PineStrategyHost::record_market_sizing_revision(source::PendingOrder& order,admission::SizingObservation before,double affordability_before) {
     // Only an actual committed liquidation/refresh caller owns this revision.
     if(!order.market_admission.observation()||broker_fill_event_seq_==0)return;
     admission::SizingEvent event;

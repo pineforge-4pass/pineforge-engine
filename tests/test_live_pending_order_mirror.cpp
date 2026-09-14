@@ -22,7 +22,7 @@
 #include <vector>
 using namespace pineforge;
 namespace pineforge {
-void fill_pending_order_mirror(const PendingOrder&, pf_pending_order_v1_t*);
+void fill_pending_order_mirror(const source::PendingOrder&, pf_pending_order_v1_t*);
 const pf_field_desc_t* pending_order_layout(int*);
 }
 namespace {
@@ -47,7 +47,7 @@ public:
         // exit with an over-long id so the mirror's char[64] truncates.
         if (bar_index_ == 1) strategy_exit(kLongId, "L", na<double>(), 95.0);
     }
-    const std::vector<PendingOrder>& book() const { return pending_orders_; }
+    const std::vector<source::PendingOrder>& book() const { return pending_orders_; }
 };
 
 Probe Build2Bars() {
@@ -66,7 +66,7 @@ int main() {
     Probe s = Build2Bars();
     CHECK(s.book().size() == 1);
     if (s.book().empty()) return 1;
-    const PendingOrder& o = s.book()[0];
+    const source::PendingOrder& o = s.book()[0];
 
     // --- fill_pending_order_mirror: value semantics -----------------------
     pf_pending_order_v1_t m;
@@ -109,7 +109,7 @@ int main() {
         CHECK(std::memcmp(&m, &m2, sizeof m) == 0);
     }
     {
-        PendingOrder cancelled = o;
+        source::PendingOrder cancelled = o;
         CancellationTarget target{cancelled.legs.target().incarnation,
                                   cancelled.legs.target().owner,
                                   cancelled.legs.revision()};

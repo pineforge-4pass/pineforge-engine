@@ -8,9 +8,7 @@
 #include <variant>
 #include <vector>
 
-namespace pineforge {
-inline namespace engine_script_run_v15 { struct PendingOrder; }
-}
+namespace pineforge::source { struct PendingOrder; }
 
 namespace pineforge::compat::pine {
 
@@ -63,7 +61,7 @@ private:
 
 // Full-book admission is one source-policy step before native matching.
 // source_scope_live is the engine's current selector result, not stored state.
-void finalize_frozen_market_book(std::vector<PendingOrder>& orders, bool source_scope_live);
+void finalize_frozen_market_book(std::vector<source::PendingOrder>& orders, bool source_scope_live);
 
 } // namespace pineforge::compat::pine
 

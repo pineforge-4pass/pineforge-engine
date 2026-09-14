@@ -1,21 +1,22 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/compat/pine/order_priority.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include <limits>
 
 namespace pineforge::compat::pine {
 
 std::optional<broker::OrderPriorityDecision> OrderPriority::select(
         const OrderPriorityContext& ctx,
-        const std::vector<PendingOrder>& book) const {
+        const std::vector<source::PendingOrder>& book) const {
     if (!attached_ || !retained_parent_first_
         || !ctx.broker_flat || !ctx.process_orders_on_close
         || ctx.calc_on_order_fills || ctx.coof_scheduler_active
         || ctx.bar_magnifier_enabled || ctx.stream_warmup_mode
         || !ctx.stream_idle || book.size() != 2) return std::nullopt;
 
-    const PendingOrder* parent = nullptr;
-    const PendingOrder* child = nullptr;
-    for (const PendingOrder& order : book) {
+    const source::PendingOrder* parent = nullptr;
+    const source::PendingOrder* child = nullptr;
+    for (const source::PendingOrder& order : book) {
         if (order.type == OrderType::ENTRY) parent = &order;
         else if (order.type == OrderType::EXIT) child = &order;
     }

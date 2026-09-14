@@ -261,7 +261,7 @@ void BacktestEngine::stage_native_settlement(
         return;
     }
     if (lifecycle) {
-        if (auto invalid = validate_lifecycle_effects(*lifecycle)) {
+        if (auto invalid = validate_source_lifecycle(*lifecycle)) {
             fail(*invalid);
             return;
         }
@@ -352,7 +352,7 @@ void BacktestEngine::stage_native_settlement(
         return;
     }
     if (lifecycle) {
-        if (auto invalid = validate_lifecycle_effects(*lifecycle)) {
+        if (auto invalid = validate_source_lifecycle(*lifecycle)) {
             fail(*invalid);
             return;
         }
@@ -713,7 +713,7 @@ execution::Status BacktestEngine::preflight_native_settlement_effects(
     const bool will_reset = stage.closed > 0.0 && stage.survivors.empty();
     const bool will_open_quoted = stage.opening > 0.0
         && (position_side_ == PositionSide::FLAT || stage.survivors.empty());
-    if (auto invalid = preflight_settlement_lifecycle(
+    if (auto invalid = preflight_source_lifecycle(
             lifecycle, will_reset, will_open_quoted))
         return *invalid;
 
@@ -742,7 +742,7 @@ execution::Result BacktestEngine::commit_prepared_native_settlement_stage(
     // synchronous kernel does not promise recovery/replay of a failed commit.
     // Order: authorized pre-close events, close observations and old-cycle
     // unbind, authorized pending removals, then quoted opening bind.
-    if (lifecycle.pre_close) apply_pre_close_lifecycle_batch(*lifecycle.pre_close);
+    if (lifecycle.pre_close) apply_source_pre_close_lifecycle(*lifecycle.pre_close);
     for (auto& trade : closed_trades) record_close_trade(std::move(trade));
     if (stage.closed > 0.0) {
         if (stage.survivors.empty()) {
@@ -754,7 +754,7 @@ execution::Result BacktestEngine::commit_prepared_native_settlement_stage(
             position_entry_count_ = static_cast<int>(pyramid_entries_.size());
         }
     }
-    apply_authorized_pending_removals(lifecycle.removals);
+    apply_source_pending_removals(lifecycle.removals);
     if (stage.opening > 0.0) {
         const double opening_commission = stage.current_costs.back();
         PyramidEntry lot{fill.price, context.effective_time_ms, stage.opening, fill.id,

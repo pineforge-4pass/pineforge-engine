@@ -249,12 +249,10 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
     position_entry_price_ = average_price;
     position_qty_ = total_qty;
     ++position_entry_count_;
-    trail_best_price_ = lot.price;
+    on_source_append_quoted_lot_before_book(lot);
     pyramid_entries_.push_back(std::move(lot));
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
-    const auto& filled = pyramid_entries_.back();
-    id_unclosed_qty_[filled.entry_id] += filled.qty;
-    cycle_filled_entry_ids_.insert(filled.entry_id);
+    on_source_append_quoted_lot_after_book(pyramid_entries_.back());
 }
 
 
@@ -506,7 +504,7 @@ void BacktestEngine::validate_close_trade_counters(const Trade* rows, size_t cou
 // every full-close path (execute_market_exit) and by partial-exit settlement
 // when the FIFO loop drained the position.
 void BacktestEngine::reset_position_state_to_flat() {
-    unbind_exit_activations();
+    reset_source_exit_activations_before_flatten();
     position_side_ = PositionSide::FLAT;
     position_cycle_seq_ = 0;
     position_entry_price_ = 0.0;
@@ -515,19 +513,9 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_qty_ = 0.0;
     position_entry_count_ = 0;
     position_open_bar_ = -1;
-    trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
-    trail_close_restart_bar_ = -1;
+    reset_source_trail_after_flatten();
     pyramid_entries_.clear();
-    id_unclosed_qty_.clear();
-    // Bracket legs live for the POSITION cycle, so the provenance that keeps
-    // them alive dies exactly here — going flat is what makes a from_entry
-    // bracket stale and un-fireable against a future same-id position.
-    cycle_filled_entry_ids_.clear();
-    close_reserved_qty_.clear();
-    close_two_call_first_qty_.clear();
-    callsite_close_reserved_qty_.clear();
-    callsite_close_two_call_first_qty_.clear();
-    consumed_partial_exit_ids_.clear();
+    reset_source_position_ledgers_after_book_clear();
 }
 
 
@@ -601,21 +589,12 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
     position_qty_ = lot.qty;
     position_entry_count_ = 1;
     position_open_bar_ = lot.entry_bar_index;
-    trail_best_price_ = lot.price;
+    reset_source_open_position_trail_before_book_clear(lot);
     pyramid_entries_.clear();
-    id_unclosed_qty_.clear();
-    cycle_filled_entry_ids_.clear();
-    close_reserved_qty_.clear();
-    close_two_call_first_qty_.clear();
-    callsite_close_reserved_qty_.clear();
-    callsite_close_two_call_first_qty_.clear();
-    consumed_partial_exit_ids_.clear();
+    reset_source_open_position_ledgers_before_book(lot);
     pyramid_entries_.push_back(std::move(lot));
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
-    const auto& filled = pyramid_entries_.back();
-    id_unclosed_qty_[filled.entry_id] += filled.qty;
-    cycle_filled_entry_ids_.insert(filled.entry_id);
-    bind_retained_exit_activations();
+    on_source_open_position_booked(pyramid_entries_.back());
 }
 
 

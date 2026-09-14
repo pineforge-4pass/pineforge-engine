@@ -73,10 +73,6 @@ int pf_cabi_int(Fn&& fn) noexcept {
 }  // namespace
 
 namespace pineforge {
-// Generated (src/pending_order_mirror.cpp, scripts/gen_pending_order_mirror.py).
-void fill_pending_order_mirror(const PendingOrder& src,
-                               const MarketAdmissionJournal* journal,
-                               pf_pending_order_v1_t* out);
 const pf_field_desc_t* pending_order_layout(int* count);
 }  // namespace pineforge
 
@@ -420,7 +416,7 @@ PF_API void strategy_set_path_order(pf_strategy_t s, int mode) {
  * the standard (non-calc_on_order_fills) dispatch path updates this. */
 PF_API int strategy_last_bar_dual_entry_path(pf_strategy_t s) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->last_bar_dual_entry_path();
+    return static_cast<const pineforge::BacktestEngine*>(s)->observe_last_bar_dual_entry_path_v1();
 }
 
 /* ABI v4 live-runtime surface (task 6): toggle per-script-bar broker-state
@@ -450,7 +446,7 @@ PF_API uint64_t strategy_broker_state_hash(pf_strategy_t s) {
  * changes because a caller read them. */
 PF_API int strategy_pending_orders_len(pf_strategy_t s) {
     if (!s) return 0;
-    return static_cast<const pineforge::BacktestEngine*>(s)->pending_order_count();
+    return static_cast<const pineforge::BacktestEngine*>(s)->observe_pending_count_v1();
 }
 
 /* Copies min(size_in, sizeof(pf_pending_order_v1_t)) bytes so an older
@@ -464,10 +460,9 @@ PF_API int strategy_pending_order_get(pf_strategy_t s, int index, void* out, siz
     if (!s || !out) return -1;
     if (size_in < offsetof(pf_pending_order_v1_t, size) + sizeof(uint32_t)) return -1;
     const auto* engine = static_cast<const pineforge::BacktestEngine*>(s);
-    if (index < 0 || index >= engine->pending_order_count()) return -1;
+    if (index < 0 || index >= engine->observe_pending_count_v1()) return -1;
     pf_pending_order_v1_t tmp;
-    pineforge::fill_pending_order_mirror(engine->pending_order_at(index),
-        &engine->market_admission_journal(), &tmp);
+    if (engine->observe_pending_copy_v1(index, &tmp) != 0) return -1;
     std::memcpy(out, &tmp, size_in < sizeof(tmp) ? size_in : sizeof(tmp));
     return 0;
 }
@@ -485,19 +480,19 @@ PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count) {
 PF_API int strategy_pending_order_fill_qty(pf_strategy_t s, int index, double fill_price,
                                            double* qty, int* close_only, int* partition) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->probe_fill_qty(
+    return static_cast<const pineforge::BacktestEngine*>(s)->observe_probe_fill_qty(
         index, fill_price, qty, close_only, partition);
 }
 
 PF_API int strategy_pending_order_level_resolved(pf_strategy_t s, int index) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->pending_order_level_resolved(index);
+    return static_cast<const pineforge::BacktestEngine*>(s)->observe_pending_level_resolved(index);
 }
 
 PF_API int strategy_pending_order_effective_levels(pf_strategy_t s, int index, double* stop,
                                                    double* limit, double* trail_activation) {
     if (!s) return -1;
-    return static_cast<const pineforge::BacktestEngine*>(s)->pending_order_effective_levels(
+    return static_cast<const pineforge::BacktestEngine*>(s)->observe_pending_effective_levels(
         index, stop, limit, trail_activation);
 }
 
@@ -505,7 +500,7 @@ PF_API int strategy_pending_order_effective_levels(pf_strategy_t s, int index, d
  * until a position has filled). */
 PF_API double strategy_trail_best_price(pf_strategy_t s) {
     if (!s) return std::numeric_limits<double>::quiet_NaN();
-    return static_cast<const pineforge::BacktestEngine*>(s)->trail_best_price();
+    return static_cast<const pineforge::BacktestEngine*>(s)->observe_trail_best_price_v1();
 }
 
 /* NaN when @p s is NULL or the position is flat (the engine keeps

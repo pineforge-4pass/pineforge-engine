@@ -1,9 +1,10 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include "../../engine_internal.hpp"
 namespace pineforge::compat::pine {
 std::optional<exit_legs::Operation> select_exit_suspension(
-        const PendingOrder& o, const ExitSuspensionContext& c) {
+        const source::PendingOrder& o, const ExitSuspensionContext& c) {
     if (c.open_slice_this_bar || !c.standing || o.type != OrderType::EXIT
         || o.cancellation.cancelled()
         || o.id.compare(0, internal::kClosePrefix.size(), internal::kClosePrefix) == 0)
@@ -29,21 +30,21 @@ std::optional<exit_legs::Operation> select_exit_suspension(
     return exit_legs::Suspend{{exit_legs::Leg::Stop, exit_legs::Leg::Limit},
                             {}, window, retire};
 }
-exit_legs::Operation select_pair_hold(const PendingOrder& o, exit_legs::Frame cause) {
+exit_legs::Operation select_pair_hold(const source::PendingOrder& o, exit_legs::Frame cause) {
     if (o.legs.dormant()) return exit_legs::CancelDeferredActivation{};
     return exit_legs::Suspend{{exit_legs::Leg::Stop, exit_legs::Leg::Limit},
                              exit_legs::Barrier{cause}, {}, {}};
 }
-exit_legs::Definition select_replacement_revival_definition(const PendingOrder& o) {
+exit_legs::Definition select_replacement_revival_definition(const source::PendingOrder& o) {
     if (o.legs.pending_replacement()) return *o.legs.suspension()->revival_definition;
     return o.legs.definition(o.incarnation);
 }
-double select_margin_revival_stop(const PendingOrder& o) {
+double select_margin_revival_stop(const source::PendingOrder& o) {
     const double original = o.legs.original_stop();
     return std::isfinite(original) ? original : o.legs.prices().stop_price;
 }
 std::optional<exit_legs::Operation> select_exit_completion(
-        const PendingOrder& o, exit_legs::Frame completed) {
+        const source::PendingOrder& o, exit_legs::Frame completed) {
     // Absence of a Pine raw-tick release hook is frontend timing policy.
     // The native reducer can fulfill an explicitly targeted RawTicks barrier.
     if (completed.domain == exit_legs::Domain::RawTicks

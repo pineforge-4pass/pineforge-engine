@@ -1,5 +1,6 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/compat/pine/order_birth.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 
 namespace pineforge::compat::pine {
 
@@ -16,7 +17,7 @@ HistoricalBirthReach select_historical_birth_reach(const OrderBirth& birth,
                                    : HistoricalBirthReach::ExtremeWaypoints;
 }
 
-bool historical_cascade_reach(const PendingOrder& order) {
+bool historical_cascade_reach(const source::PendingOrder& order) {
     return order.pine_birth_reach == HistoricalBirthReach::ExtremeWaypoints;
 }
 

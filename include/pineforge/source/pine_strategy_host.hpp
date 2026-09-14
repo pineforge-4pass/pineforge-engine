@@ -2,6 +2,7 @@
 
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_language_state.hpp>
+#include <pineforge/source/pine_pending_intent.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
 
 namespace pineforge::source {
@@ -55,6 +56,18 @@ public:
     int pine_last_bar_index() const;
     double prev_chart_close() const;
     double live_position_size() const;
+    int pending_order_count() const;
+    const MarketAdmissionJournal& market_admission_journal() const;
+    const PendingOrder& pending_order_at(int index) const;
+    int observe_last_bar_dual_entry_path_v1() const;
+    int observe_pending_count_v1() const;
+    int observe_pending_copy_v1(int index, pf_pending_order_v1_t* out) const;
+    int observe_probe_fill_qty(int index, double fill_price, double* qty,
+                               int* close_only, int* partition) const;
+    int observe_pending_level_resolved(int index) const;
+    int observe_pending_effective_levels(int index, double* stop, double* limit,
+                                         double* trail_activation) const;
+    double observe_trail_best_price_v1() const;
 
 protected:
     using PineLanguageState::pos_view_freeze_bar_;
@@ -90,12 +103,42 @@ protected:
     using PineLanguageState::coof_checkpoint_prev_chart_close_;
     using PineLanguageState::coof_checkpoint_last_chart_close_;
 
+    // @source-state begin
+    std::vector<PendingOrder> pending_orders_;
+    MarketAdmissionJournal market_admission_journal_;
+    // @source-state end
+
     bool history_advances_new_bar() const;
     void _push_source_series();
     double signed_position_size() const;
     void freeze_script_position_view();
     void clear_script_position_view();
+    void reset_source_pending_book();
+    void reset_source_order_and_close_state();
+    void reset_source_risk_and_cap();
+    void reset_source_margin_and_coof();
+    void reset_source_bar_projections();
     void reset_source_language_series();
+    std::optional<execution::Status> validate_source_lifecycle(
+        const execution::LifecycleEffects& lifecycle) const;
+    std::optional<execution::Status> preflight_source_lifecycle(
+        const execution::LifecycleEffects& lifecycle,
+        bool will_reset_to_flat, bool will_open_quoted);
+    void apply_source_pre_close_lifecycle(const execution::LifecycleBatch& batch);
+    void apply_source_pending_removals(
+        const std::vector<execution::PendingRemoval>& removals);
+    void reset_source_exit_activations_before_flatten();
+    void reset_source_trail_after_flatten();
+    void reset_source_position_ledgers_after_book_clear();
+    void on_source_append_quoted_lot_before_book(const PyramidEntry& lot);
+    void on_source_append_quoted_lot_after_book(const PyramidEntry& lot);
+    void reset_source_open_position_trail_before_book_clear(const PyramidEntry& lot);
+    void reset_source_open_position_ledgers_before_book(const PyramidEntry& lot);
+    void on_source_open_position_booked(const PyramidEntry& lot);
+    enum class ExitLegTransitionResult {
+        Applied, Replay, StaleIdentity, BindRefused, ActionRefused, Exhausted,
+        RevisionExhausted
+    };
 
     // L2 mechanically generated declarations for relocated members appear
     // between these markers while the source layer is assembled.
@@ -458,7 +501,7 @@ protected:
             uint64_t incarnation, int64_t created_seq) const;
     PendingOrder* find_unique_pending(
             uint64_t incarnation, int64_t created_seq);
-    BacktestEngine::ExitLegTransitionResult transition_exit_leg(
+    ExitLegTransitionResult transition_exit_leg(
             exit_legs::Lifecycle& legs, uint64_t order_incarnation,
             exit_legs::Operation operation, std::optional<exit_legs::Frame> supplied,
             uint64_t& event_seq, int64_t position_cycle) const;
