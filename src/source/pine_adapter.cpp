@@ -99,6 +99,8 @@ void PineExecutionAdapter::reset_for_run() {
     bracket_families_.clear();
     pending_bracket_legs_.clear();
     pending_entries_.clear();
+    pending_same_bar_commands_.clear();
+    pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
     pending_coof_requests_.clear();
     live_handles_.clear();
@@ -182,7 +184,14 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
     spec.close_execution = config.process_orders_on_close
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
-    if (config.pyramiding > 0) spec.max_open_lots = static_cast<std::uint64_t>(config.pyramiding);
+    // Pine's pyramiding gate is source-command policy (including its
+    // same-bar frozen-market exception), so leave one generic lot of headroom
+    // for the source-side transaction batch and enforce ordinary additions in
+    // entry() before they reach native matching.
+    if (config.pyramiding > 0) {
+        spec.max_open_lots = static_cast<std::uint64_t>(config.pyramiding)
+            + (config.default_qty_type == static_cast<int>(QtyType::FIXED) ? 1U : 0U);
+    }
     spec.allowed_open_directions = directions_for(risk_.direction);
     // Pine's frozen default sizing admits against its signal-time tuple.  The
     // generic initial-margin gate only sees the later fill-time FX rate, so
@@ -240,6 +249,22 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     if (const auto point = host.current_execution_point())
         snapshot.fx = active_staged_fx(point->decision.sub_bar_open_ms);
     return snapshot;
+}
+
+bool PineExecutionAdapter::same_bar_market_tx_scope() const {
+    if (!host_ || config_.process_orders_on_close || config_.calc_on_order_fills
+        || coof_recalc_active_ || config_.close_entries_rule_any
+        || config_.pyramiding > 1
+        || config_.default_qty_type != static_cast<int>(QtyType::FIXED)
+        || config_.slippage != 0 || config_.commission_value != 0.0
+        || risk_.direction != 0 || risk_.max_cons_loss_days != 0
+        || risk_.max_drawdown > 0.0 || risk_.max_intraday_loss > 0.0
+        || risk_.max_position_size > 0.0 || risk_.halted || cap.active()) {
+        return false;
+    }
+    const auto state = require_host().native_state();
+    return state.phase == NativeRunPhase::Batch && state.spec != nullptr
+        && state.spec->intrabar.is_none();
 }
 
 native_order::Trigger PineExecutionAdapter::trigger_for(double limit_price, double stop_price,
@@ -622,13 +647,18 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                                  const std::string& oca_name, int oca_type, int qty_type) {
     native_order::Request request;
     const bool default_sized = std::isnan(qty);
+    const bool priced = !std::isnan(limit_price) || !std::isnan(stop_price);
     const double signed_target = is_long ? qty : -qty;
     const double current = require_host().physical_position().signed_units;
     const auto source_point = require_host().current_execution_point();
     const bool short_seed_long_candidate = current < 0.0 && is_long;
     const bool short_seed_final_candidate = current < 0.0 && !is_long
         && short_seed_candidate_long_.incarnation != 0;
-    if (config_.pyramiding > 0 && current != 0.0
+    const bool same_bar_market_candidate = same_bar_market_tx_scope()
+        && !priced && oca_name.empty()
+        && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED))
+        && (default_sized || finite_positive(qty));
+    if (!same_bar_market_candidate && config_.pyramiding > 0 && current != 0.0
         && ((current > 0.0) == is_long)) {
         std::size_t accepted_in_cycle = 0;
         for (const auto& cohort : cohorts_by_id_) {
@@ -701,7 +731,6 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
         }
     }
-    const bool priced = !std::isnan(limit_price) || !std::isnan(stop_price);
     const bool cash_sized = qty_type == static_cast<int>(QtyType::CASH);
     const bool fixed_priced_reverse = reverses && !default_sized && priced && !cash_sized;
     const bool cash_priced_reverse = reverses && !default_sized && priced && cash_sized;
@@ -857,6 +886,83 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             }
         }
     }
+    if (same_bar_market_candidate) {
+        const double own_units = floor_quantity_grid(default_sized
+                ? config_.default_qty_value : std::abs(qty), staged_.quantity_grid);
+        bool opposite_market_pending = false;
+        bool opposite_entry_pending = false;
+        double opposite_pending_own = 0.0;
+        const auto inspect_pending = [&](const PlacementSnapshot& prior) {
+            if (!prior.opening || prior.source_id == id || prior.is_long == is_long) {
+                return;
+            }
+            if (prior.frozen_market_instruction
+                && finite_positive(prior.frozen_market_own_units)) {
+                opposite_market_pending = true;
+                opposite_pending_own += prior.frozen_market_own_units;
+            } else {
+                opposite_entry_pending = true;
+            }
+        };
+        for (const auto& pending : pending_same_bar_commands_) inspect_pending(pending.snapshot);
+        if (const auto point = require_host().current_execution_point()) {
+            for (const auto& handle : live_handles_) {
+                const auto prior = placement_.find(handle.incarnation);
+                if (prior == placement_.end()
+                    || prior->second.placement_script_open_ms
+                        != point->decision.script_bar_open_ms) {
+                    continue;
+                }
+                inspect_pending(prior->second);
+            }
+        }
+        const bool same_side = current != 0.0 && ((current > 0.0) == is_long);
+        const bool over_cap = same_side && config_.pyramiding > 0
+            && require_host().physical_position().lot_count
+                >= static_cast<std::size_t>(config_.pyramiding);
+        if (over_cap && !opposite_market_pending && !opposite_entry_pending) return;
+        if (!(over_cap && !opposite_market_pending)
+            && finite_positive(own_units)) {
+            const double held_opposite = current != 0.0 && ((current > 0.0) != is_long)
+                ? std::max(0.0, std::abs(current) - pending_same_bar_close_qty_) : 0.0;
+            const double transaction = own_units + held_opposite + opposite_pending_own;
+            if (finite_positive(transaction)) {
+                if (over_cap && opposite_market_pending) {
+                    // The kept over-cap member is admitted at its source
+                    // call as the whole frozen broker movement: held side,
+                    // this member's own leg, and every opposite pending
+                    // MARKET leg.  The eventual net position is smaller,
+                    // but using it here would incorrectly admit famS's
+                    // 3-lot ES/NQ census rows.
+                    const double gross_units = std::abs(current) + own_units
+                        + opposite_pending_own;
+                    const double margin = is_long ? config_.margin_long : config_.margin_short;
+                    const double required = gross_units * snapshot.sizing.price
+                        * staged_.syminfo.pointvalue * snapshot.sizing.fx * margin / 100.0;
+                    if (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity)
+                        || required > snapshot.sizing.equity) {
+                        return;
+                    }
+                }
+                snapshot.opening = true;
+                snapshot.frozen_market_instruction = true;
+                snapshot.frozen_market_own_units = own_units;
+                snapshot.frozen_market_transaction_units = transaction;
+                auto existing = std::find_if(pending_same_bar_commands_.begin(),
+                    pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& row) {
+                        return !row.snapshot.frozen_market_targeted_close
+                            && row.replacement_key == id;
+                    });
+                PendingSameBarCommand pending{std::move(request), std::move(snapshot), id, true};
+                if (existing == pending_same_bar_commands_.end()) {
+                    pending_same_bar_commands_.push_back(std::move(pending));
+                } else {
+                    *existing = std::move(pending);
+                }
+                return;
+            }
+        }
+    }
     const bool pooc_same_side_add = config_.process_orders_on_close
         && !config_.calc_on_order_fills && current != 0.0
         && ((current > 0.0) == is_long)
@@ -882,6 +988,28 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
                                  double qty_percent, bool immediately, std::uint64_t callsite_token) {
+    // The public empty-id spelling is the source route's full-position
+    // strategy.close form.  It is not a cohort lookup (there is no empty
+    // entry-id cohort), and it retains its caller-supplied report comment.
+    if (id.empty()) {
+        if (const auto point = require_host().current_execution_point())
+            close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
+        native_order::Request request;
+        request.intent = native_order::Flatten{};
+        request.label = "__pine_close_all";
+        request.comment = comment;
+        PlacementSnapshot snapshot;
+        snapshot.family = PineOrderFamily::CloseAll;
+        snapshot.source_id = request.label;
+        snapshot.comment = comment;
+        snapshot.sizing = sizing_snapshot();
+        (void)qty;
+        (void)qty_percent;
+        (void)immediately;
+        (void)callsite_token;
+        submit_or_replace(std::move(request), std::move(snapshot), false, "__pine_close_all");
+        return;
+    }
     const auto openings = openings_for(id);
     // P-DA3: strategy.close against an empty cohort is dropped at the command.
     if (openings.empty()) return;
@@ -910,6 +1038,35 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         const double script_basis = source_basis > 0.0 ? source_basis : fallback_basis;
         pooc_close_basis_by_script_bar_.emplace(bar_key, script_basis);
         frozen_qty = quantize_close_units(script_basis, requested_percent);
+    }
+    const double current = require_host().physical_position().signed_units;
+    if (same_bar_market_tx_scope() && !immediately && id.size() != 0
+        && std::isnan(qty) && std::isnan(qty_percent) && current != 0.0
+        && finite_positive(frozen_qty)) {
+        native_order::Request request;
+        request.label = "__close__" + id;
+        request.comment = comment;
+        PlacementSnapshot snapshot;
+        snapshot.family = PineOrderFamily::Close;
+        snapshot.source_id = id;
+        snapshot.from_entry = id;
+        snapshot.comment = comment;
+        snapshot.requested_qty = frozen_qty;
+        snapshot.qty_percent = qty_percent;
+        snapshot.frozen_market_instruction = true;
+        snapshot.frozen_market_targeted_close = true;
+        snapshot.frozen_market_target_was_long = current > 0.0;
+        snapshot.sizing = sizing_snapshot();
+        if (const auto point = require_host().current_execution_point()) {
+            snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
+            snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
+        }
+        const SourceId replacement_key = callsite_token == 0
+            ? SourceId{} : id + "#close#" + std::to_string(callsite_token);
+        pending_same_bar_commands_.push_back(
+            {std::move(request), std::move(snapshot), replacement_key, false});
+        pending_same_bar_close_qty_ += frozen_qty;
+        return;
     }
     // P-DA4: an immediate close has a live cohort at the command boundary;
     // materialize its percentage quantity and bind that fixed roster before
@@ -1138,11 +1295,115 @@ void PineExecutionAdapter::flush_pending_bracket_legs() {
 }
 
 void PineExecutionAdapter::flush_pending_entries() {
+    flush_pending_same_bar_commands();
     auto queued = std::move(pending_entries_);
     pending_entries_.clear();
     for (auto& entry : queued) {
         (void)submit_or_replace(std::move(entry.request), std::move(entry.snapshot), true,
                                 entry.replacement_key);
+    }
+}
+
+void PineExecutionAdapter::flush_pending_same_bar_commands() {
+    auto queued = std::move(pending_same_bar_commands_);
+    pending_same_bar_commands_.clear();
+    pending_same_bar_close_qty_ = 0.0;
+    if (queued.empty()) return;
+
+    // Legacy `finalize_same_bar_market_tx_book` retains command order within
+    // each broker-side pass but moves every BUY member before every SELL
+    // member.  The generic request core keeps submission order on an equal
+    // point, so materialising the source batch in that order is sufficient
+    // and does not add a source branch to generic matching.
+    std::stable_sort(queued.begin(), queued.end(), [](const PendingSameBarCommand& left,
+                                                       const PendingSameBarCommand& right) {
+        const auto buy_rank = [](const PendingSameBarCommand& command) {
+            if (command.snapshot.frozen_market_targeted_close)
+                return command.snapshot.frozen_market_target_was_long ? 1 : 0;
+            return command.snapshot.is_long ? 0 : 1;
+        };
+        return buy_rank(left) < buy_rank(right);
+    });
+
+    const bool single_entry = queued.size() == 1
+        && !queued.front().snapshot.frozen_market_targeted_close;
+    const double batch_start = require_host().physical_position().signed_units;
+    double simulated = batch_start;
+    std::optional<native_order::RequestHandle> short_seed_long;
+    std::optional<native_order::RequestHandle> short_seed_materialize;
+    std::optional<native_order::RequestHandle> short_seed_final;
+    for (std::size_t i = 0; i < queued.size(); ++i) {
+        auto& command = queued[i];
+        auto request = std::move(command.request);
+        auto snapshot = std::move(command.snapshot);
+        bool opening = command.opening;
+        const bool long_candidate = batch_start < 0.0 && opening
+            && snapshot.family == PineOrderFamily::Entry && snapshot.is_long;
+        const bool final_short_candidate = batch_start < 0.0 && opening
+            && snapshot.family == PineOrderFamily::Entry && !snapshot.is_long;
+        const bool materialize_candidate = batch_start < 0.0
+            && snapshot.frozen_market_targeted_close
+            && !snapshot.frozen_market_target_was_long;
+
+        if (!snapshot.frozen_market_targeted_close) {
+            const double units = snapshot.frozen_market_transaction_units;
+            if (!finite_positive(units)) continue;
+            if (single_entry) {
+                const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), opening,
+                                                        command.replacement_key);
+                if (accepted && long_candidate) short_seed_long = *accepted;
+                if (accepted && final_short_candidate) short_seed_final = *accepted;
+                continue;
+            }
+            request.intent = native_order::Transact{snapshot.is_long ? units : -units};
+            simulated += snapshot.is_long ? units : -units;
+        } else {
+            const double target = snapshot.requested_qty;
+            if (!finite_positive(target) || simulated == 0.0) continue;
+            const bool target_long = snapshot.frozen_market_target_was_long;
+            const bool still_target_side = (simulated > 0.0) == target_long;
+            const double units = std::min(target, std::abs(simulated));
+            if (!finite_positive(units)) continue;
+            if (still_target_side) {
+                request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+                simulated += simulated > 0.0 ? -units : units;
+            } else {
+                // A default-FIFO close whose original side was consumed may
+                // become the legacy artifact only when its same-id frozen
+                // MARKET entry is still later in the sorted broker pass.
+                bool artifact = false;
+                for (std::size_t later = i + 1; later < queued.size(); ++later) {
+                    const auto& sibling = queued[later];
+                    if (!sibling.snapshot.frozen_market_targeted_close
+                        && sibling.snapshot.frozen_market_instruction
+                        && sibling.snapshot.source_id == snapshot.source_id
+                        && sibling.snapshot.is_long == target_long) {
+                        artifact = true;
+                        break;
+                    }
+                }
+                if (!artifact) continue;
+                const double signed_units = simulated > 0.0 ? units : -units;
+                request.intent = native_order::Transact{signed_units};
+                simulated += signed_units;
+                // This is a broker-created artifact lot carrying the close
+                // label, not a new source-id cohort member.
+                opening = false;
+            }
+        }
+        const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), opening,
+                                                command.replacement_key);
+        if (accepted && long_candidate) short_seed_long = *accepted;
+        if (accepted && materialize_candidate) short_seed_materialize = *accepted;
+        if (accepted && final_short_candidate) short_seed_final = *accepted;
+    }
+    if (short_seed_long && short_seed_materialize && short_seed_final) {
+        short_seed_candidate_long_ = *short_seed_long;
+        short_seed_candidate_final_short_ = *short_seed_final;
+        short_seed_.long_entry = *short_seed_long;
+        short_seed_.materialize_long = *short_seed_materialize;
+        short_seed_.final_short = *short_seed_final;
+        short_seed_.active = true;
     }
 }
 
@@ -1206,6 +1467,15 @@ void PineExecutionAdapter::exit_cancel_bracket(const SourceId& exit_id,
 }
 
 void PineExecutionAdapter::cancel(const SourceId& id) {
+    pending_same_bar_commands_.erase(std::remove_if(pending_same_bar_commands_.begin(),
+        pending_same_bar_commands_.end(), [&](const PendingSameBarCommand& command) {
+            return command.snapshot.source_id == id;
+        }), pending_same_bar_commands_.end());
+    pending_same_bar_close_qty_ = 0.0;
+    for (const auto& command : pending_same_bar_commands_) {
+        if (command.snapshot.frozen_market_targeted_close)
+            pending_same_bar_close_qty_ += command.snapshot.requested_qty;
+    }
     pending_relative_exits_.erase(std::remove_if(pending_relative_exits_.begin(), pending_relative_exits_.end(),
         [&](const PendingRelativeExit& value) { return value.exit_id == id || value.from_entry == id; }),
         pending_relative_exits_.end());
@@ -1234,6 +1504,8 @@ void PineExecutionAdapter::cancel_all() {
     bracket_families_.clear();
     pending_bracket_legs_.clear();
     pending_entries_.clear();
+    pending_same_bar_commands_.clear();
+    pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
 }
 

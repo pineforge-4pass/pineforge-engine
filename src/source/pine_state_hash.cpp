@@ -332,6 +332,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
     f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
+    f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);
+    f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
     f.b(value.reverse_to); f.b(value.replaced_opening); f.b(value.replacement_predecessor_market);
     f.b(value.terms_priced_reverse);
     f.d(value.frozen_reversal_transaction);
@@ -450,6 +452,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         hash_native_request(f, entry.request); hash_placement(f, entry.snapshot);
         f.s(entry.replacement_key);
     }
+    f.u(pending_same_bar_commands_.size());
+    for (const auto& command : pending_same_bar_commands_) {
+        hash_native_request(f, command.request); hash_placement(f, command.snapshot);
+        f.s(command.replacement_key); f.b(command.opening);
+    }
+    f.d(pending_same_bar_close_qty_);
     f.u(pending_relative_exits_.size());
     for (const auto& exit : pending_relative_exits_) {
         f.s(exit.exit_id); f.s(exit.from_entry); f.d(exit.trail_points); f.d(exit.trail_offset);

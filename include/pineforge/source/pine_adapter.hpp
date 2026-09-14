@@ -114,6 +114,10 @@ struct PlacementSnapshot {
     bool opening = false;
     bool deferred_cohort = false;
     bool frozen_market_instruction = false;
+    double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
+    double frozen_market_transaction_units = std::numeric_limits<double>::quiet_NaN();
+    bool frozen_market_targeted_close = false;
+    bool frozen_market_target_was_long = false;
     bool reverse_to = false;
     bool replaced_opening = false;
     bool replacement_predecessor_market = false;
@@ -301,6 +305,18 @@ private:
         SourceId replacement_key;
     };
 
+    // The legacy same-bar MARKET transaction is a source-side command batch:
+    // all BUY members are admitted before SELL members at the next broker
+    // open, while each member retains its placement-time physical quantity.
+    // Keep the batch outside the generic core; it contains source ids and the
+    // targeted-close artifact that the generic request model must not learn.
+    struct PendingSameBarCommand {
+        native_order::Request request;
+        PlacementSnapshot snapshot;
+        SourceId replacement_key;
+        bool opening = false;
+    };
+
     struct PendingRelativeExit {
         SourceId exit_id;
         SourceId from_entry;
@@ -347,6 +363,8 @@ private:
     bool defer_coof_tail() const noexcept;
     void flush_coof_tail();
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
+    bool same_bar_market_tx_scope() const;
+    void flush_pending_same_bar_commands();
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
     native_order::Group group_for(const std::string&, int) const;
@@ -367,6 +385,8 @@ private:
     std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
+    std::vector<PendingSameBarCommand> pending_same_bar_commands_;
+    double pending_same_bar_close_qty_ = 0.0;
     std::vector<PendingRelativeExit> pending_relative_exits_;
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<native_order::RequestHandle> live_handles_;
