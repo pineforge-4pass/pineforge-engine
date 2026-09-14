@@ -76,6 +76,10 @@ else()
 endif()
 
 # === pineforge library =================================================
+set(PINEFORGE_SOURCE_LAYER_SOURCES
+    src/source/pine_strategy_host.cpp
+)
+
 add_library(pineforge STATIC
     src/c_abi.cpp
     src/compat/pine/order_birth.cpp
@@ -123,6 +127,7 @@ add_library(pineforge STATIC
     src/native_calendar.cpp
     src/native_run_spec.cpp
     src/native_fx_curve.cpp
+    ${PINEFORGE_SOURCE_LAYER_SOURCES}
 )
 
 # Canonical alias for downstream find_package(PineForge) consumers.
