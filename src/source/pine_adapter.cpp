@@ -57,6 +57,25 @@ double floor_quantity_grid(double units, const std::optional<double>& grid) noex
     return std::floor(units / *grid + 1e-12) * *grid;
 }
 
+double source_money_round(double value) noexcept {
+    if (!std::isfinite(value) || value == 0.0) return value;
+    const double magnitude = std::floor(std::log10(std::abs(value)));
+    const double scale = std::pow(10.0, 9.0 - magnitude);
+    const double rounded = std::floor(std::abs(value) * scale + 0.5) / scale;
+    return value < 0.0 ? -rounded : rounded;
+}
+
+double source_money_floor_lot(double units, const std::optional<double>& grid) noexcept {
+    if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
+    if (!std::isfinite(units) || units <= 0.0) return units;
+    double floored = std::floor(units / *grid) * *grid;
+    if (*grid == 0.01) {
+        const double cent_candidate = std::floor(units * 100.0) * *grid;
+        if (cent_candidate > floored && cent_candidate <= units) floored = cent_candidate;
+    }
+    return floored < units ? floored : units;
+}
+
 NativeFeeKind fee_kind_for(int commission_type) noexcept {
     switch (static_cast<CommissionType>(commission_type)) {
     case CommissionType::CASH_PER_CONTRACT: return NativeFeeKind::CashPerUnit;
@@ -251,6 +270,31 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     return snapshot;
 }
 
+double PineExecutionAdapter::default_sizing_units(const PineSizingSnapshot& sizing) const noexcept {
+    if (!finite_positive(sizing.price) || !finite_positive(sizing.fx)) return 0.0;
+    if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
+        const double denominator = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
+        return finite_positive(denominator)
+            ? floor_quantity_grid(config_.default_qty_value / denominator, staged_.quantity_grid)
+            : 0.0;
+    }
+    if (config_.default_qty_type != static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        || !finite_positive(sizing.equity)) {
+        return 0.0;
+    }
+    const double equity = staged_.quantity_grid ? source_money_round(sizing.equity) : sizing.equity;
+    double cash = config_.default_qty_value / 100.0 * equity;
+    if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+        && config_.commission_value > 0.0) {
+        cash /= 1.0 + config_.commission_value / 100.0;
+    }
+    const double denominator = sizing.price * staged_.syminfo.pointvalue * sizing.fx;
+    if (!finite_positive(denominator)) return 0.0;
+    const double units = cash / denominator;
+    return staged_.quantity_grid ? source_money_floor_lot(units, staged_.quantity_grid)
+                                 : floor_quantity_grid(units, staged_.quantity_grid);
+}
+
 bool PineExecutionAdapter::same_bar_market_tx_scope() const {
     if (!host_ || config_.process_orders_on_close || config_.calc_on_order_fills
         || coof_recalc_active_ || config_.close_entries_rule_any
@@ -316,6 +360,15 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key) {
     auto& host = require_host();
+    if (auto* member = std::get_if<native_order::Member>(&request.group)) {
+        if (source_sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+            throw std::overflow_error("Pine OCA member sequence exhausted");
+        }
+        // The generic group member's cohort distinguishes siblings. A source
+        // OCA name identifies the group; every accepted source instruction is
+        // a distinct member of it, including replacement incarnations.
+        member->cohort = static_cast<std::int64_t>(source_sequence_ + 1U);
+    }
     const auto key = replacement_key.empty() ? 0 : key_for(replacement_key);
     std::optional<native_order::RequestHandle> accepted;
     if (key != 0) {
@@ -648,7 +701,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     native_order::Request request;
     const bool default_sized = std::isnan(qty);
     const bool priced = !std::isnan(limit_price) || !std::isnan(stop_price);
-    const double signed_target = is_long ? qty : -qty;
+    const bool explicit_fixed = !default_sized
+        && (qty_type < 0 || qty_type == static_cast<int>(QtyType::FIXED));
+    const double normalized_qty = explicit_fixed
+        ? floor_quantity_grid(std::abs(qty), staged_.quantity_grid) : qty;
+    const double signed_target = is_long ? normalized_qty : -normalized_qty;
     const double current = require_host().physical_position().signed_units;
     const auto source_point = require_host().current_execution_point();
     const bool short_seed_long_candidate = current < 0.0 && is_long;
@@ -734,6 +791,19 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const bool cash_sized = qty_type == static_cast<int>(QtyType::CASH);
     const bool fixed_priced_reverse = reverses && !default_sized && priced && !cash_sized;
     const bool cash_priced_reverse = reverses && !default_sized && priced && cash_sized;
+    const bool default_stop_scope = default_sized && std::isnan(limit_price)
+        && finite_positive(stop_price)
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && config_.default_qty_value <= 100.0;
+    double default_stop_sizing_price = kNaN;
+    if (default_stop_scope && finite_positive(staged_.syminfo.mintick)) {
+        stop_price = directional_tick(stop_price, staged_.syminfo.mintick, is_long);
+        const double signal = source_point
+            ? nearest_tick(source_point->price, staged_.syminfo.mintick) : kNaN;
+        const bool marketable = finite_positive(signal)
+            && (is_long ? stop_price <= signal : stop_price >= signal);
+        default_stop_sizing_price = marketable ? signal : stop_price;
+    }
     if (default_sized) {
         request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
             is_long ? native_order::Side::Long : native_order::Side::Short};
@@ -770,7 +840,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Entry; snapshot.source_id = id; snapshot.comment = comment;
     snapshot.oca_name = oca_name; snapshot.oca_type = oca_type; snapshot.qty_type = qty_type;
-    snapshot.requested_qty = qty; snapshot.is_long = is_long; snapshot.deferred_cohort = default_sized;
+    snapshot.requested_qty = normalized_qty; snapshot.is_long = is_long;
+    snapshot.deferred_cohort = default_sized;
     // Reuse the durable level tuple for the parent trigger facts.  A deferred
     // relative exit may safely arm from a non-gap LIMIT parent's known entry
     // level before that parent is applied.
@@ -835,33 +906,39 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     snapshot.terms_priced_reverse = fixed_priced_reverse || cash_priced_reverse;
     snapshot.placement_cycle = current_position_cycle_;
-    if (fixed_priced_reverse) snapshot.frozen_reversal_transaction = std::abs(current) + qty;
-    if (default_sized && finite_positive(stop_price) && finite_positive(staged_.syminfo.mintick)) {
+    if (fixed_priced_reverse) {
+        snapshot.frozen_reversal_transaction = std::abs(current) + normalized_qty;
+    }
+    if (default_stop_scope && finite_positive(default_stop_sizing_price)) {
         // A default-sized stop entry freezes its quantity against the
-        // directionally snapped stop level, not the script close or later
-        // gap-through quote (the stop-snapshot source rule).
-        snapshot.sizing.price = directional_tick(stop_price, staged_.syminfo.mintick, is_long);
+        // directionally snapped level, except an already-marketable stop
+        // which is a next-open market order and therefore freezes at the
+        // source close. Neither path re-sizes at its later fill quote.
+        snapshot.sizing.price = default_stop_sizing_price;
     }
     if (default_sized && finite_positive(snapshot.sizing.price)) {
         if (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
-            && finite_positive(snapshot.sizing.equity)) {
-            double cash = config_.default_qty_value / 100.0 * snapshot.sizing.equity;
-            if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-                && config_.commission_value > 0.0) {
-                cash /= 1.0 + config_.commission_value / 100.0;
-            }
-            const double denominator = snapshot.sizing.price * staged_.syminfo.pointvalue
-                * snapshot.sizing.fx;
-            snapshot.sizing.frozen_units = finite_positive(denominator)
-                ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
-        } else if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
-            const double denominator = snapshot.sizing.price * staged_.syminfo.pointvalue
-                * snapshot.sizing.fx;
-            snapshot.sizing.frozen_units = finite_positive(denominator)
-                ? floor_quantity_grid(config_.default_qty_value / denominator,
-                                      staged_.quantity_grid) : 0.0;
+            || config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
+            snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
         }
         snapshot.sizing.at_fill = config_.calc_on_order_fills;
+    }
+    if (default_stop_scope && finite_positive(snapshot.sizing.frozen_units)
+        && finite_positive(snapshot.sizing.mark)) {
+        const double margin = is_long ? config_.margin_long : config_.margin_short;
+        const double required = snapshot.sizing.frozen_units * snapshot.sizing.mark
+            * staged_.syminfo.pointvalue * snapshot.sizing.fx * margin / 100.0;
+        if (margin > 0.0 && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity)
+            || required > snapshot.sizing.equity)) {
+            // Legacy replacement first removes the prior same-id resting
+            // stop, then leaves the rejected re-issue absent from the book.
+            const auto prior = live_by_source_key_.find(key_for(id));
+            if (prior != live_by_source_key_.end()) {
+                const auto result = require_host().cancel(prior->second);
+                if (result.status == native_order::CancelStatus::Cancelled) retire(prior->second);
+            }
+            return;
+        }
     }
     if (const auto point = require_host().current_execution_point()) {
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
@@ -1513,13 +1590,33 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                                  double limit_price, double stop_price,
                                  const std::string& oca_name, int oca_type) {
     native_order::Request request;
-    request.intent = native_order::Transact{is_long ? qty : -qty};
+    const bool default_sized = std::isnan(qty);
+    const double normalized_qty = default_sized ? qty
+        : floor_quantity_grid(std::abs(qty), staged_.quantity_grid);
+    request.intent = default_sized
+        ? native_order::OrderIntent{native_order::HostSized{native_order::HostSizedKind::Open,
+            is_long ? native_order::Side::Long : native_order::Side::Short}}
+        : native_order::OrderIntent{native_order::Transact{is_long ? normalized_qty : -normalized_qty}};
     request.label = id; request.trigger = trigger_for(limit_price, stop_price, kNaN, kNaN);
     request.group = group_for(oca_name, oca_type);
+    if (default_sized && oca_type == 2) {
+        if (auto* member = std::get_if<native_order::Member>(&request.group)) {
+            // Pine's default-sized RAW sibling is cancelled after an OCA
+            // reduce member fills; only an explicit quantity consumes the
+            // group reduction as a residual working amount.
+            member->effect = native_order::GroupEffect::Cancel;
+        }
+    }
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Order; snapshot.source_id = id; snapshot.oca_name = oca_name;
-    snapshot.oca_type = oca_type; snapshot.requested_qty = qty; snapshot.is_long = is_long;
+    snapshot.oca_type = oca_type; snapshot.requested_qty = normalized_qty; snapshot.is_long = is_long;
     snapshot.sizing = sizing_snapshot();
+    if (default_sized && finite_positive(snapshot.sizing.price)
+        && (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            || config_.default_qty_type == static_cast<int>(QtyType::CASH))) {
+        snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
+        snapshot.sizing.at_fill = config_.calc_on_order_fills;
+    }
     submit_or_replace(std::move(request), std::move(snapshot), true, id);
 }
 
@@ -1534,8 +1631,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     // price. Re-rounding a binary64 limit here can move it one representable
     // value beyond its immutable level and turn an otherwise valid limit fill
     // into InvalidTerms (the 65-resting-order oracle exposes exactly that).
-    if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent))
+    if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
+        if (std::holds_alternative<native_order::Market>(facts.definition->request.trigger)) {
+            result.resolved_price = nearest_tick(result.resolved_price, staged_.syminfo.mintick);
+        }
         return result;
+    }
     double resolved = facts.default_resolved_price;
     const bool market_like = std::holds_alternative<native_order::Market>(facts.definition->request.trigger);
     if (market_like && config_.slippage != 0 && finite_positive(staged_.syminfo.mintick)) {
@@ -1600,6 +1701,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         result.units = finite_positive(equity) && finite_positive(denominator)
             ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
+    }
+    if (source.family == PineOrderFamily::Order) {
+        const bool opposite = facts.position.signed_units != 0.0
+            && ((facts.position.signed_units > 0.0) != source.is_long);
+        if (opposite) {
+            result.units = std::min(*result.units, facts.opposite_book_units);
+            result.shape = native_order::OpeningShape::CloseOpposite;
+        }
+        return result;
     }
     if (source.family == PineOrderFamily::Entry && source.sequential_group != 0
         && source.sequential_rank != 0 && source.has_full_entry_bracket) {

@@ -22,6 +22,8 @@ namespace pineforge::source {
 // kernel-owned identifier type.
 using SourceId = std::string;
 
+class PineNativeHost;
+
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v2";
 
 struct PineStrategyConfig {
@@ -242,6 +244,12 @@ public:
 
     int short_seed_collision_role_v1(native_order::RequestHandle) const noexcept;
     const PendingIntentView& pending_intent_view() const noexcept { return pending_view_; }
+    // Fixture-only read of the source cohort's currently live quantity. It
+    // projects the adapter's truthful opening facts; it does not recreate the
+    // deleted executable id ledger.
+    double source_unclosed_qty_for(const SourceId& id) const noexcept {
+        return cohort_exposure_for(id);
+    }
 
     void set_risk_direction(int direction) noexcept;
     void set_risk_max_cons_loss_days(int value) noexcept;
@@ -279,6 +287,7 @@ public:
 
 private:
     friend class PendingIntentView;
+    friend class PineNativeHost;
     struct CohortFacts {
         native_order::CohortHandle handle{};
         std::vector<native_order::RequestHandle> origins;
@@ -365,6 +374,7 @@ private:
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
     void flush_pending_same_bar_commands();
+    double default_sizing_units(const PineSizingSnapshot&) const noexcept;
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
     native_order::Group group_for(const std::string&, int) const;

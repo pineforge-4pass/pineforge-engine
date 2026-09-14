@@ -8,6 +8,7 @@
 #include <limits>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace pineforge::source {
 
@@ -16,6 +17,51 @@ namespace pineforge::source {
 // generated route can reach this lowering before L3a switches inheritance.
 class PineNativeHost : public NativeStrategyHost {
 public:
+    enum class FixturePendingOrderType { MARKET, EXIT, ENTRY, RAW_ORDER };
+    struct FixturePendingOrder {
+        std::string id;
+        FixturePendingOrderType type = FixturePendingOrderType::MARKET;
+        double default_stop_placement_qty = std::numeric_limits<double>::quiet_NaN();
+        double default_stop_sizing_price = std::numeric_limits<double>::quiet_NaN();
+    };
+
+    // A read-only map-shaped facade lets fixture twins express legacy ledger
+    // observations against the adapter's live source cohort facts without
+    // retaining the executable legacy id ledger. It is deliberately protected
+    // below rather than part of the generated surface.
+    class SourceIdLedgerView {
+    public:
+        struct value_type { double second = 0.0; };
+        class const_iterator {
+        public:
+            const value_type* operator->() const noexcept { return &value_; }
+            bool operator==(const const_iterator& other) const noexcept {
+                return present_ == other.present_;
+            }
+            bool operator!=(const const_iterator& other) const noexcept {
+                return !(*this == other);
+            }
+        private:
+            friend class SourceIdLedgerView;
+            bool present_ = false;
+            value_type value_{};
+        };
+
+        const_iterator find(const std::string& id) const noexcept {
+            const double units = host_ ? host_->adapter_.source_unclosed_qty_for(id) : 0.0;
+            const_iterator result;
+            result.present_ = units > 0.0;
+            result.value_.second = units;
+            return result;
+        }
+        const_iterator end() const noexcept { return {}; }
+
+    private:
+        friend class PineNativeHost;
+        explicit SourceIdLedgerView(const PineNativeHost* host) noexcept : host_(host) {}
+        const PineNativeHost* host_ = nullptr;
+    };
+
     explicit PineNativeHost(
         compat::pine::CapAttachment cap = compat::pine::CapAttachment::None);
     ~PineNativeHost() override;
@@ -122,6 +168,41 @@ protected:
     // Fixture-compatible source setting used by direct C++ oracle fixtures.
     // It is translated at command lowering; it is not a generic-kernel field.
     enum class RiskDirection { BOTH, LONG_ONLY, SHORT_ONLY };
+    SourceIdLedgerView source_id_ledger_view() const noexcept {
+        return SourceIdLedgerView(this);
+    }
+    const std::vector<FixturePendingOrder>& source_pending_view() const {
+        source_pending_view_cache_.clear();
+        source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
+            + adapter_.live_handles_.size());
+        const auto append = [&](const PlacementSnapshot& snapshot) {
+            FixturePendingOrderType type = FixturePendingOrderType::MARKET;
+            switch (snapshot.family) {
+            case PineOrderFamily::Close:
+            case PineOrderFamily::CloseAll:
+            case PineOrderFamily::ExitLimit:
+            case PineOrderFamily::ExitStop:
+            case PineOrderFamily::ExitTrail:
+            case PineOrderFamily::Margin:
+                type = FixturePendingOrderType::EXIT;
+                break;
+            case PineOrderFamily::Order:
+                type = FixturePendingOrderType::RAW_ORDER;
+                break;
+            case PineOrderFamily::Entry:
+                type = FixturePendingOrderType::MARKET;
+                break;
+            }
+            source_pending_view_cache_.push_back({snapshot.source_id, type,
+                snapshot.sizing.frozen_units, snapshot.sizing.price});
+        };
+        for (const auto& command : adapter_.pending_same_bar_commands_) append(command.snapshot);
+        for (const auto& handle : adapter_.live_handles_) {
+            const auto found = adapter_.placement_.find(handle.incarnation);
+            if (found != adapter_.placement_.end()) append(found->second);
+        }
+        return source_pending_view_cache_;
+    }
     void hash_source_extension(BrokerStateHashSink&) const override;
 
 private:
@@ -136,6 +217,11 @@ private:
     void scheduler_publish_source_bar(const Bar&, bool first_tick, bool advance_source_index = true);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     static PineStrategyConfig apply_overrides(PineStrategyConfig, const StrategyOverrides&);
+
+    // Read-only, derived fixture cache for exact oracle observations. It does
+    // not participate in behavior or persistence; the durable adapter facts
+    // it projects are hashed by PineExecutionAdapter::hash_state.
+    mutable std::vector<FixturePendingOrder> source_pending_view_cache_;
 
 protected:
     // @source-state begin
@@ -158,5 +244,8 @@ protected:
     bool source_configuration_captured_ = false;
     // @source-state end
 };
+
+using FixturePendingOrder = PineNativeHost::FixturePendingOrder;
+using FixturePendingOrderType = PineNativeHost::FixturePendingOrderType;
 
 } // namespace pineforge::source
