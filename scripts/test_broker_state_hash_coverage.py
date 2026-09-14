@@ -18,7 +18,7 @@ class SourceHashCoverage(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="pf-source-hash-") as temporary:
             root = Path(temporary) / "repo"
             shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-                "build*", ".git", "corpus", "*.so", "*.a"))
+                "build*", ".git", "corpus", "*.so", "*.a", ".native-fx-introduced-*"))
             for relative, before, after in mutations:
                 target = root / relative
                 text = target.read_text()
