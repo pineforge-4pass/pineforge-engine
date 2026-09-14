@@ -384,6 +384,8 @@ private:
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};
+    native_order::RequestHandle short_seed_candidate_long_{};
+    native_order::RequestHandle short_seed_candidate_final_short_{};
     int last_bar_dual_entry_path_ = 0;
     PendingIntentView pending_view_{};
     // @source-state end

@@ -49,6 +49,9 @@ set(TEST_SOURCES
     test_native_oracle_relative_exit_l2
     test_native_oracle_reversal_close_only_l2
     test_native_oracle_reversal_later_tick_l2
+    test_native_oracle_stop_snapshot_l2
+    test_native_oracle_short_seed_l2
+    test_native_oracle_short_seed_percent_l2
     test_source_layer_native_defaults
     test_source_fingerprint
     test_source_host_intraday_cap_setter

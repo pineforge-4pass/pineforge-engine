@@ -45,6 +45,18 @@ double nearest_tick(double value, double tick) noexcept {
     return std::round(value / tick) * tick;
 }
 
+double directional_tick(double value, double tick, bool upward) noexcept {
+    if (!std::isfinite(value) || !finite_positive(tick)) return value;
+    const double scaled = value / tick;
+    return (upward ? std::ceil(scaled - 1e-12) : std::floor(scaled + 1e-12)) * tick;
+}
+
+double floor_quantity_grid(double units, const std::optional<double>& grid) noexcept {
+    if (!std::isfinite(units) || units <= 0.0) return 0.0;
+    if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
+    return std::floor(units / *grid + 1e-12) * *grid;
+}
+
 NativeFeeKind fee_kind_for(int commission_type) noexcept {
     switch (static_cast<CommissionType>(commission_type)) {
     case CommissionType::CASH_PER_CONTRACT: return NativeFeeKind::CashPerUnit;
@@ -109,6 +121,8 @@ void PineExecutionAdapter::reset_for_run() {
     close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     day_ledger_ = {};
     short_seed_ = {};
+    short_seed_candidate_long_ = {};
+    short_seed_candidate_final_short_ = {};
     last_bar_dual_entry_path_ = 0;
     source_sequence_ = 0;
     cap.reset_run();
@@ -258,6 +272,12 @@ void PineExecutionAdapter::retire(const native_order::RequestHandle& handle) noe
         first_open_newborns_.end(), handle), first_open_newborns_.end());
     for (auto it = live_by_source_key_.begin(); it != live_by_source_key_.end();) {
         if (it->second == handle) it = live_by_source_key_.erase(it); else ++it;
+    }
+    if (handle == short_seed_candidate_long_) short_seed_candidate_long_ = {};
+    if (handle == short_seed_candidate_final_short_) short_seed_candidate_final_short_ = {};
+    if (short_seed_.active && (handle == short_seed_.long_entry
+        || handle == short_seed_.materialize_long || handle == short_seed_.final_short)) {
+        short_seed_.active = false;
     }
     refresh_pending_view();
 }
@@ -481,6 +501,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const bool default_sized = std::isnan(qty);
     const double signed_target = is_long ? qty : -qty;
     const double current = require_host().physical_position().signed_units;
+    const auto source_point = require_host().current_execution_point();
+    const bool short_seed_long_candidate = current < 0.0 && is_long;
+    const bool short_seed_final_candidate = current < 0.0 && !is_long
+        && short_seed_candidate_long_.incarnation != 0;
     if (config_.pyramiding > 0 && current != 0.0
         && ((current > 0.0) == is_long)) {
         std::size_t accepted_in_cycle = 0;
@@ -498,9 +522,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
         // Pine's cap is a monotone entry-incarnation count for the current
         // position cycle; a partial close does not free a pyramiding slot.
-        if (accepted_in_cycle >= static_cast<std::size_t>(config_.pyramiding)) return;
+        if (accepted_in_cycle >= static_cast<std::size_t>(config_.pyramiding)
+            && !short_seed_final_candidate) return;
     }
-    const auto current_point = require_host().current_execution_point();
+    const auto current_point = source_point;
     const bool close_all_precedes = current_point
         && close_all_pending_script_bar_ == current_point->decision.script_bar_open_ms;
     const bool reverses = current != 0.0 && ((current > 0.0) != is_long) && !close_all_precedes;
@@ -554,13 +579,20 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     snapshot.terms_priced_reverse = fixed_priced_reverse || cash_priced_reverse;
     snapshot.placement_cycle = current_position_cycle_;
     if (fixed_priced_reverse) snapshot.frozen_reversal_transaction = std::abs(current) + qty;
+    if (default_sized && finite_positive(stop_price) && finite_positive(staged_.syminfo.mintick)) {
+        // A default-sized stop entry freezes its quantity against the
+        // directionally snapped stop level, not the script close or later
+        // gap-through quote (the stop-snapshot source rule).
+        snapshot.sizing.price = directional_tick(stop_price, staged_.syminfo.mintick, is_long);
+    }
     if (default_sized && finite_positive(snapshot.sizing.price)) {
         if (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
             && finite_positive(snapshot.sizing.equity)) {
-            snapshot.sizing.frozen_units = config_.default_qty_value / 100.0
-                * snapshot.sizing.equity / snapshot.sizing.price;
+            snapshot.sizing.frozen_units = floor_quantity_grid(config_.default_qty_value / 100.0
+                * snapshot.sizing.equity / snapshot.sizing.price, staged_.quantity_grid);
         } else if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
-            snapshot.sizing.frozen_units = config_.default_qty_value / snapshot.sizing.price;
+            snapshot.sizing.frozen_units = floor_quantity_grid(
+                config_.default_qty_value / snapshot.sizing.price, staged_.quantity_grid);
         }
         snapshot.sizing.at_fill = config_.calc_on_order_fills;
     }
@@ -603,7 +635,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         pending_coof_requests_.push_back({std::move(request), std::move(snapshot), id, true, 0});
         return;
     }
-    submit_or_replace(std::move(request), std::move(snapshot), true, id);
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), true, id);
+    if (accepted) {
+        if (short_seed_long_candidate) short_seed_candidate_long_ = *accepted;
+        if (short_seed_final_candidate) short_seed_candidate_final_short_ = *accepted;
+    }
 }
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
@@ -658,6 +694,14 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     const SourceId replacement_key = callsite_token == 0
         ? SourceId{} : id + "#close#" + std::to_string(callsite_token);
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, replacement_key);
+    if (accepted && short_seed_candidate_long_.incarnation != 0
+        && short_seed_candidate_final_short_.incarnation != 0
+        && !short_seed_.active) {
+        short_seed_.long_entry = short_seed_candidate_long_;
+        short_seed_.materialize_long = *accepted;
+        short_seed_.final_short = short_seed_candidate_final_short_;
+        short_seed_.active = true;
+    }
     if (immediately && accepted) {
         const auto outcome = require_host().execute_current(
             {*accepted, NativeCurrentPriceRule::NearestTick});

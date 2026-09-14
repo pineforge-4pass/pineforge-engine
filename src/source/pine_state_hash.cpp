@@ -507,6 +507,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);
     hash_native_handle(f, short_seed_.long_entry); hash_native_handle(f, short_seed_.materialize_long);
     hash_native_handle(f, short_seed_.final_short); f.b(short_seed_.active);
+    hash_native_handle(f, short_seed_candidate_long_);
+    hash_native_handle(f, short_seed_candidate_final_short_);
     f.i(last_bar_dual_entry_path_); f.b(pending_view_.owner_ != nullptr);
     f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);
     f.b(cap.configuration().skip_noop_market); f.b(cap.configuration().defer_pooc_close);
