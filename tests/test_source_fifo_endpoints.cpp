@@ -362,7 +362,7 @@ void frozen_reservation(double sign) {
     book.open(sign * .7, 100, 11, "old-first", 7);
     book.bar(2, 100);
     book.open(sign * .1, 100, 12, "old-second", 1);
-    PendingOrder order;
+    PendingOrder order{};
     order.type = OrderType::EXIT;
     order.id = "frozen-basket";
     order.from_entry = "";

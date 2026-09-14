@@ -134,7 +134,7 @@ struct Book final : pineforge::source::PineStrategyHost {
     uint64_t lifecycle_sequence() const { return exit_leg_event_seq_; }
     uint64_t next_order() const { return next_order_incarnation_; }
     void pending_exit() {
-        PendingOrder order;
+        PendingOrder order{};
         order.id = "pending"; order.type = OrderType::EXIT; order.incarnation = 700; order.created_seq = 700;
         order.legs.attach(order.incarnation, position_cycle_seq_);
         pending_orders_.push_back(std::move(order));

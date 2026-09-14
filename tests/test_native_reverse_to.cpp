@@ -115,7 +115,7 @@ struct Book final : PineStrategyHost {
     void exhaust_wins() { win_trades_count_ = std::numeric_limits<int>::max(); }
     void exhaust_lifecycle() { exit_leg_event_seq_ = UINT64_MAX; }
     void pending_exit() {
-        PendingOrder order;
+        PendingOrder order{};
         order.type = OrderType::EXIT;
         order.id = "retained";
         order.from_entry = "seed-11";
@@ -123,6 +123,7 @@ struct Book final : PineStrategyHost {
         order.created_seq = 700;
         order.legs.attach(order.incarnation, position_cycle_seq_);
         pending_orders_.push_back(std::move(order));
+        CHECK(!pending_orders_.back().is_long);
     }
     size_t pending_count() const { return pending_orders_.size(); }
     const PendingOrder* pending_data() const { return pending_orders_.data(); }

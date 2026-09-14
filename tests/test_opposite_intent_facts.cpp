@@ -49,7 +49,7 @@ admission::Journal journal_with(admission::BookObservation peer,
 }
 
 PendingOrder current_order(const std::shared_ptr<const admission::CommandObservation>& current) {
-    PendingOrder order;
+    PendingOrder order{};
     order.type = OrderType::ENTRY;
     order.is_long = current->buy;
     order.created_position_side = PositionSide::FLAT;
@@ -123,7 +123,7 @@ void removed_peer_and_unknown_peer_fail_closed() {
 }
 
 void absent_current_draft_and_controls_fail_closed() {
-    PendingOrder manual;
+    PendingOrder manual{};
     manual.type = OrderType::ENTRY;
     manual.created_position_side = PositionSide::FLAT;
     manual.created_seq = 2;

@@ -93,7 +93,7 @@ struct Book final : pineforge::source::PineStrategyHost {
     }
     void already_resolved_slippage() { slippage_ = 99; }
     void retain_exit() {
-        PendingOrder order;
+        PendingOrder order{};
         order.id = "retained";
         order.from_entry = "old";
         order.type = OrderType::EXIT;

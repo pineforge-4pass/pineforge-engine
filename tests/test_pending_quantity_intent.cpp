@@ -335,7 +335,7 @@ void legacy_mirror_prefix_and_new_facts() {
     CHECK(std::memcmp(prefix.data(),&out,sizeof(prior_mirror::pf_pending_order_v1_t)) == 0);
     for (size_t i=sizeof(prior_mirror::pf_pending_order_v1_t); i<prefix.size(); ++i)
         CHECK(prefix[i] == 0xA5);
-    PendingOrder plain;
+    PendingOrder plain{};
     fill_pending_order_mirror(plain,&out);
     CHECK(out.quantity_intent_kind == 0 && out.quantity_reservation_present == 0);
     CHECK(out.requested_partial == 0 && out.full_percent_exit_request == 0);

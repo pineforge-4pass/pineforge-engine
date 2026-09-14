@@ -88,7 +88,7 @@ struct Book final:PineStrategyHost{
     auto& lots(){return pyramid_entries_;}const auto& lots()const{return pyramid_entries_;}
     const auto& rows()const{return trades_;}const auto& actions()const{return stream_order_actions_;}
     double ledger(const char* id)const{auto at=id_unclosed_qty_.find(id);return at==id_unclosed_qty_.end()?0:at->second;}
-    void retain_exit(){PendingOrder o;o.id="retained";o.from_entry="old";o.type=OrderType::EXIT;o.incarnation=999;o.created_seq=999;pending_orders_.push_back(std::move(o));}
+    void retain_exit(){PendingOrder o{};o.id="retained";o.from_entry="old";o.type=OrderType::EXIT;o.incarnation=999;o.created_seq=999;pending_orders_.push_back(std::move(o));}
     size_t pending()const{return pending_orders_.size();}const PendingOrder* pending_data()const{return pending_orders_.data();}
 };
 
@@ -112,7 +112,7 @@ void refused_provenance(bool zero,bool scratch){
     b.open(3,100,33,"untouched");
     if(scratch)b.lots()[0].market_pyramid_add=true;
     const auto hash=b.broker_state_hash();const auto action_count=b.actions().size();bool threw=false;
-    try{if(scratch){PendingOrder o;o.from_entry="A";o.legs.set_stop_price(99);(void)b.scratch(o,110);}
+    try{if(scratch){PendingOrder o{};o.from_entry="A";o.legs.set_stop_price(99);(void)b.scratch(o,110);}
         else b.by_all(110,"A");}catch(const std::runtime_error& e){threw=true;CHECK(std::string(e.what()).size()>0);}
     CHECK(threw);CHECK(b.broker_state_hash()==hash&&b.rows().empty()&&b.actions().size()==action_count);
     near(b.qty(),5);
@@ -184,7 +184,7 @@ void frozen_quantity_provenance(double sign){
 
 void raw_cycles_and_noeffect(double sign){
     scenario="RAW one cycle allocator and after-Applied stamps";Book b;
-    PendingOrder o;o.type=OrderType::RAW_ORDER;o.id="raw";o.is_long=sign>0;o.qty=1.25;o.incarnation=11;
+    PendingOrder o{};o.type=OrderType::RAW_ORDER;o.id="raw";o.is_long=sign>0;o.qty=1.25;o.incarnation=11;
     o.created_position_side=PositionSide::FLAT;b.raw(o,100);
     REQUIRE(b.lots().size()==1);CHECK(b.cycle()==1&&b.next_cycle()==2);CHECK(b.ledger("raw")==1.25);
     PendingOrder add=o;add.id="raw-add";add.incarnation=22;add.created_position_side=sign>0?PositionSide::LONG:PositionSide::SHORT;
@@ -203,7 +203,7 @@ void source_slots_and_scratch(){
         b.partial(110,1,cause);CHECK(b.lots().size()==1);CHECK(b.slots()==(cause==Bracket?7:1));}
     scenario="R20 release remains after bracket slot restoration";Book unique;unique.pyramid(2);
     unique.bar(0,100);unique.open(1,100,11,"A");unique.bar(1,100);unique.open(1,100,22,"B");unique.bar(3,110);
-    PendingOrder o;o.type=OrderType::EXIT;o.id="X";o.from_entry="A";o.qty=1;o.qty_percent=50;o.incarnation=99;o.created_seq=99;
+    PendingOrder o{};o.type=OrderType::EXIT;o.id="X";o.from_entry="A";o.qty=1;o.qty_percent=50;o.incarnation=99;o.created_seq=99;
     o.created_bar=2;o.created_position_side=PositionSide::LONG;o.created_position_cycle_seq=unique.cycle();
     o.quantity_request.request(QuantityIntent::units(1));o.quantity_request.reserve(1,2);o.legs.set_limit_price(110);
     unique.exit(o,110);REQUIRE(unique.lots().size()==1);CHECK(unique.lots()[0].entry_incarnation==22&&unique.slots()==1);
@@ -211,7 +211,7 @@ void source_slots_and_scratch(){
     scratch.bar(1,100);scratch.open(1,100,55,"A");scratch.bar(3,110);
     scratch.open(1,100,11,"A");scratch.open(2,100,11,"A");scratch.open(4,100,22,"Other");
     scratch.lots()[1].market_pyramid_add=true;scratch.lots()[2].market_pyramid_add=true;scratch.slots(5);
-    PendingOrder bracket;bracket.type=OrderType::EXIT;bracket.id="scratch-bracket";bracket.from_entry="A";
+    PendingOrder bracket{};bracket.type=OrderType::EXIT;bracket.id="scratch-bracket";bracket.from_entry="A";
     bracket.qty=1;bracket.qty_percent=12.5;bracket.incarnation=100;bracket.created_seq=100;
     bracket.quantity_request.request(QuantityIntent::units(1));bracket.quantity_request.reserve(1,8);
     bracket.legs.set_limit_price(110);
