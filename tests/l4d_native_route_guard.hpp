@@ -1,0 +1,268 @@
+#pragma once
+
+// Every L4d parity twin binds the switched source host. The historical test
+// spelling is macro-mapped only after this header has completed, so product
+// headers retain their real `PineStrategyHost` declarations.
+#include <pineforge/pineforge.h>
+#include <pineforge/source/pine_strategy_host.hpp>
+
+#include <cmath>
+#include <cstring>
+#include <limits>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#ifndef PINEFORGE_HAS_NATIVE_LOWERING_V1
+#error "L4d native-route twins require the v17 native lowering surface"
+#endif
+
+namespace pineforge::source {
+
+// Test-only, read-only projection of a live PendingIntentView row. It is not
+// a compatibility order or a second matching book: every populated field is
+// copied from strategy_pending_order_get / the frozen public POD. Mutating a
+// returned row changes only that test's local snapshot; it can never affect a
+// future native decision. A29 twins use public commands for executable paths
+// and ledger any historical owner-only mutation that has no projection.
+enum class L4dOrderType { MARKET = 0, ENTRY = 1, EXIT = 2, RAW_ORDER = 3 };
+enum class L4dShortSeedRole : std::uint8_t {
+    NONE = 0, LONG_ENTRY = 1, MATERIALIZE_LONG = 2, FINAL_SHORT = 3,
+};
+
+struct L4dLegPrices {
+    double limit_price = std::numeric_limits<double>::quiet_NaN();
+    double stop_price = std::numeric_limits<double>::quiet_NaN();
+    double trail_points = std::numeric_limits<double>::quiet_NaN();
+    double trail_price = std::numeric_limits<double>::quiet_NaN();
+    double trail_offset = std::numeric_limits<double>::quiet_NaN();
+};
+
+struct L4dLegTarget {
+    std::uint64_t incarnation = 0;
+    std::uint64_t owner = 0;
+    std::uint64_t revision = 0;
+};
+
+struct L4dLegs {
+    L4dLegPrices prices_{};
+    L4dLegTarget target_{};
+    const L4dLegPrices& prices() const noexcept { return prices_; }
+    const L4dLegTarget& target() const noexcept { return target_; }
+    std::uint64_t revision() const noexcept { return target_.revision; }
+    void attach(std::uint64_t incarnation, std::int64_t owner) noexcept {
+        target_.incarnation = incarnation;
+        target_.owner = static_cast<std::uint64_t>(owner);
+    }
+    double set_limit_price(double value) noexcept { prices_.limit_price = value; return value; }
+    double set_stop_price(double value) noexcept { prices_.stop_price = value; return value; }
+    double set_trail_points(double value) noexcept { prices_.trail_points = value; return value; }
+    double set_trail_price(double value) noexcept { prices_.trail_price = value; return value; }
+    double set_trail_offset(double value) noexcept { prices_.trail_offset = value; return value; }
+};
+
+struct L4dQuantityRequest {
+    double requested = std::numeric_limits<double>::quiet_NaN();
+    double reserved = std::numeric_limits<double>::quiet_NaN();
+    bool partial = false;
+    template <typename T> void request(T) noexcept {}
+    void reserve(double request, double held) noexcept { requested = request; reserved = held; }
+    bool is_partial(double, double) const noexcept { return partial; }
+};
+
+struct L4dFrozenMarketTransaction {
+    double transaction_units = std::numeric_limits<double>::quiet_NaN();
+    double own_units = std::numeric_limits<double>::quiet_NaN();
+};
+
+struct L4dFrozenMarketInstruction {
+    bool active_ = false;
+    L4dFrozenMarketTransaction transaction_{};
+    bool active() const noexcept { return active_; }
+    const L4dFrozenMarketTransaction* transaction() const noexcept {
+        return active_ ? &transaction_ : nullptr;
+    }
+    L4dFrozenMarketTransaction* transaction() noexcept {
+        return active_ ? &transaction_ : nullptr;
+    }
+};
+
+struct L4dIntentRow {
+    std::string id;
+    std::string from_entry;
+    std::string comment;
+    std::string oca_name;
+    L4dOrderType type = L4dOrderType::MARKET;
+    bool is_long = true;
+    double limit_price = std::numeric_limits<double>::quiet_NaN();
+    double stop_price = std::numeric_limits<double>::quiet_NaN();
+    double trail_points = std::numeric_limits<double>::quiet_NaN();
+    double trail_price = std::numeric_limits<double>::quiet_NaN();
+    double trail_offset = std::numeric_limits<double>::quiet_NaN();
+    double profit_ticks = std::numeric_limits<double>::quiet_NaN();
+    double loss_ticks = std::numeric_limits<double>::quiet_NaN();
+    double qty = std::numeric_limits<double>::quiet_NaN();
+    int qty_type = -1;
+    double qty_percent = std::numeric_limits<double>::quiet_NaN();
+    int oca_type = 0;
+    int created_bar = -1;
+    std::int64_t created_seq = 0;
+    std::uint64_t incarnation = 0;
+    PositionSide created_position_side = PositionSide::FLAT;
+    std::int64_t created_position_cycle_seq = 0;
+    double tv_carry_qty = std::numeric_limits<double>::quiet_NaN();
+    double frozen_default_qty = std::numeric_limits<double>::quiet_NaN();
+    double default_stop_placement_qty = std::numeric_limits<double>::quiet_NaN();
+    double default_stop_sizing_price = std::numeric_limits<double>::quiet_NaN();
+    double sizing_equity = std::numeric_limits<double>::quiet_NaN();
+    double sizing_price = std::numeric_limits<double>::quiet_NaN();
+    double sizing_fx = std::numeric_limits<double>::quiet_NaN();
+    double sizing_mark = std::numeric_limits<double>::quiet_NaN();
+    std::uint64_t replaced_order_incarnation = 0;
+    std::uint64_t replaced_default_market_incarnation = 0;
+    std::uint64_t recreated_after_named_cancelled_entry_incarnation = 0;
+    std::uint64_t named_cancel_surviving_exit_incarnation = 0;
+    std::uint64_t same_id_stop_deferred_close_all_incarnation = 0;
+    int same_id_stop_deferred_close_all_bar = -1;
+    int coof_cascade_seg_i = -1;
+    L4dShortSeedRole short_seed_collision_role = L4dShortSeedRole::NONE;
+    double signal_close_mc_remaining_qty = std::numeric_limits<double>::quiet_NaN();
+    std::uint64_t signal_close_mc_entry_incarnation = 0;
+    int signal_close_mc_bar = -1;
+    L4dLegs legs{};
+    L4dQuantityRequest quantity_request{};
+    L4dFrozenMarketInstruction pine_frozen_market_instruction{};
+    MarketAdmissionDraft market_admission{};
+    OrderCancellationReceipt cancellation{};
+};
+
+// These are test-local observation scratchpads for twins whose historical
+// bodies explicitly inspect the deleted close-reservation owner.  They never
+// feed adapter execution: native commands continue to be submitted through
+// strategy_close and all live facts come from the ABI-v4 projection.  A twin
+// that needs one of these scratchpads remains l4-pending until its owning
+// policy lane supplies an observable replacement; Appendix 5 records every
+// owner-only CHECK literal rather than treating this storage as a second book.
+struct L4dCloseCallsite {
+    bool active = false;
+    double target = 0.0;
+    int calls = 0;
+    std::string id;
+    std::string comment;
+    std::uint64_t queue_seq = 0;
+};
+
+class L4dPineHost : public PineStrategyHost {
+protected:
+    using PineStrategyHost::fixture_configuration;
+    using PineStrategyHost::fixture_default_qty_type_slot;
+    using PineStrategyHost::fixture_commission_type_slot;
+    using PineStrategyHost::fixture_risk_direction_slot;
+    using PineStrategyHost::source_id_ledger_view;
+    using PineStrategyHost::source_pending_view;
+
+    const PineStrategyConfig& fixture_configuration() const noexcept {
+        return const_cast<L4dPineHost*>(this)->PineStrategyHost::fixture_configuration();
+    }
+    QtyType fixture_default_qty_type_slot() const noexcept {
+        return static_cast<QtyType>(fixture_configuration().default_qty_type);
+    }
+    CommissionType fixture_commission_type_slot() const noexcept {
+        return static_cast<CommissionType>(fixture_configuration().commission_type);
+    }
+    bool l4d_coof_fill_recalc_active() const noexcept { return false; }
+    bool l4d_coof_cursor_is_bar_close() const noexcept { return false; }
+
+    std::vector<L4dIntentRow>& l4d_pending_rows() const {
+        l4d_pending_rows_.clear();
+        const int count = pending_order_count();
+        for (int index = 0; index < count; ++index) {
+            pf_pending_order_v1_t row{};
+            if (observe_pending_copy_v1(index, &row) != 0) continue;
+            L4dIntentRow view;
+            view.id = row.id; view.from_entry = row.from_entry; view.comment = row.comment;
+            view.oca_name = row.oca_name;
+            view.type = static_cast<L4dOrderType>(row.type);
+            view.is_long = row.is_long != 0;
+            view.limit_price = row.limit_price; view.stop_price = row.stop_price;
+            view.trail_points = row.trail_points; view.trail_price = row.trail_price;
+            view.trail_offset = row.trail_offset; view.profit_ticks = row.profit_ticks;
+            view.loss_ticks = row.loss_ticks; view.qty = row.qty; view.qty_type = row.qty_type;
+            view.qty_percent = row.qty_percent; view.oca_type = row.oca_type;
+            view.created_bar = row.created_bar; view.created_seq = row.created_seq;
+            view.incarnation = row.incarnation;
+            view.created_position_side = static_cast<PositionSide>(row.created_position_side);
+            view.created_position_cycle_seq = row.created_position_cycle_seq;
+            view.tv_carry_qty = row.tv_carry_qty; view.frozen_default_qty = row.frozen_default_qty;
+            view.default_stop_placement_qty = row.default_stop_placement_qty;
+            view.default_stop_sizing_price = row.default_stop_sizing_price;
+            view.sizing_equity = row.sizing_equity; view.sizing_price = row.sizing_price;
+            view.sizing_fx = row.sizing_fx; view.sizing_mark = row.sizing_mark;
+            view.replaced_order_incarnation = row.replaced_order_incarnation;
+            view.replaced_default_market_incarnation = row.replaced_default_market_incarnation;
+            view.recreated_after_named_cancelled_entry_incarnation = row.recreated_after_named_cancelled_entry_incarnation;
+            view.named_cancel_surviving_exit_incarnation = row.named_cancel_surviving_exit_incarnation;
+            view.same_id_stop_deferred_close_all_incarnation = row.same_id_stop_deferred_close_all_incarnation;
+            view.same_id_stop_deferred_close_all_bar = row.same_id_stop_deferred_close_all_bar;
+            view.coof_cascade_seg_i = row.coof_cascade_seg_i;
+            view.short_seed_collision_role =
+                static_cast<L4dShortSeedRole>(row.short_seed_collision_role);
+            view.signal_close_mc_remaining_qty = row.signal_close_mc_remaining_qty;
+            view.signal_close_mc_entry_incarnation = row.signal_close_mc_entry_incarnation;
+            view.signal_close_mc_bar = row.signal_close_mc_bar;
+            view.legs.set_limit_price(row.limit_price);
+            view.legs.set_stop_price(row.stop_price);
+            view.legs.set_trail_points(row.trail_points);
+            view.legs.set_trail_price(row.trail_price);
+            view.legs.set_trail_offset(row.trail_offset);
+            view.legs.attach(row.incarnation, row.created_position_cycle_seq);
+            view.pine_frozen_market_instruction.active_ = row.pine_frozen_market_instruction_kind != 0;
+            view.pine_frozen_market_instruction.transaction_.own_units =
+                row.pine_frozen_market_instruction_own_units;
+            view.pine_frozen_market_instruction.transaction_.transaction_units =
+                row.pine_frozen_market_instruction_transaction_units;
+            l4d_pending_rows_.push_back(std::move(view));
+        }
+        return l4d_pending_rows_;
+    }
+
+public:
+    const L4dIntentRow& pending_order_at(int index) const {
+        return l4d_pending_rows().at(static_cast<std::size_t>(index));
+    }
+
+private:
+    mutable std::vector<L4dIntentRow> l4d_pending_rows_;
+
+protected:
+    std::unordered_map<std::string, double> l4d_fixture_id_unclosed_qty_;
+    std::unordered_map<std::string, double> l4d_fixture_close_reserved_qty_;
+    std::unordered_map<std::string, double> l4d_fixture_close_two_call_first_qty_;
+    std::unordered_map<std::uint64_t, std::unordered_map<std::string, double>>
+        l4d_fixture_callsite_close_reserved_qty_;
+    std::unordered_map<std::uint64_t, std::unordered_map<std::string, double>>
+        l4d_fixture_callsite_close_two_call_first_qty_;
+    std::unordered_map<std::uint64_t, L4dCloseCallsite>
+        l4d_fixture_callsite_close_callsites_;
+    double l4d_fixture_pending_close_qty_in_bar_ = 0.0;
+    double l4d_fixture_callsite_close_admitted_total_ = 0.0;
+};
+
+using L4dPendingOrder = L4dIntentRow;
+
+}  // namespace pineforge::source
+
+namespace pineforge {
+
+using L4dOrderType = source::L4dOrderType;
+using L4dPendingOrder = source::L4dPendingOrder;
+using L4dShortSeedRole = source::L4dShortSeedRole;
+
+inline bool placement_has_opposite_market_predecessor(
+        const MarketAdmissionJournal&, const L4dPendingOrder&) noexcept {
+    return false;
+}
+inline bool placement_at_entry_capacity(const L4dPendingOrder&) noexcept { return false; }
+
+}  // namespace pineforge
