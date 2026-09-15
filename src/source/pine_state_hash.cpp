@@ -43,6 +43,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);
     f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
+    f.b(value.direction_gate); f.b(value.affordability_policy_active);
+    f.b(value.affordability_close_only);
+    f.b(value.affordability_keep_mc_close_surplus);
     f.b(value.reverse_to); f.b(value.replaced_opening); f.b(value.replacement_predecessor_market);
     f.b(value.terms_priced_reverse);
     f.d(value.frozen_reversal_transaction);
@@ -51,6 +54,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     hash_source_run_identity(f, value.bracket_origin.run);
     f.u(value.bracket_origin.incarnation);
     f.u(value.source_sequence);
+    f.u(value.command_ordinal); f.u(value.placement_open_epoch);
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
@@ -71,6 +75,13 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
+}
+
+void hash_short_seed_plan(BrokerStateHashSink& f, const source::ShortSeedPlan& value) {
+    hash_native_handle(f, value.long_entry); hash_native_handle(f, value.materialize_long);
+    hash_native_handle(f, value.final_short); f.s(value.seed_id); f.s(value.long_entry_id);
+    f.s(value.final_short_id); f.s(value.materialize_label); f.d(value.seed_qty);
+    f.i(value.seed_cycle); f.b(value.active); f.b(value.report_swap_pending);
 }
 
 void hash_native_request(BrokerStateHashSink& f, const native_order::Request& request) {
@@ -119,7 +130,8 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
     hash_source_run_epoch(f, run_counter_);
-    f.u(source_sequence_); f.b(host_ != nullptr);
+    f.u(source_sequence_); f.u(command_ordinal_); f.u(broker_open_epoch_);
+    f.i(last_broker_open_ms_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
@@ -155,6 +167,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
             f.u(incarnation); f.d(cohort.live_units_by_origin.at(incarnation));
         }
     }
+    f.u(cohort_order_.size());
+    for (const auto& key : cohort_order_) f.s(key);
     std::vector<std::uint64_t> placement_keys;
     for (const auto& pair : placement_) placement_keys.push_back(pair.first);
     std::sort(placement_keys.begin(), placement_keys.end()); f.u(placement_keys.size());
@@ -200,6 +214,17 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
     hash_native_handle_vector(f, pending_view_handles_);
+    f.u(dropped_close_receipts_.size());
+    for (const auto& receipt : dropped_close_receipts_) {
+        f.s(receipt.source_id); f.s(receipt.comment); f.d(receipt.qty);
+        f.d(receipt.qty_percent); f.b(receipt.immediately); f.u(receipt.callsite_token);
+        f.u(receipt.command_ordinal);
+    }
+    f.u(open_entry_fees_.size());
+    for (const auto& fee : open_entry_fees_) {
+        hash_native_handle(f, fee.opening); f.s(fee.source_id); f.d(fee.units);
+        f.d(fee.nonpercent_fee);
+    }
     std::vector<std::uint64_t> current_debit_ordinals;
     current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
     for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);
@@ -266,12 +291,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);
     f.d(risk_.observed_peak_equity); f.d(risk_.observed_max_drawdown);
     f.i(risk_.intraday_block_day); f.b(risk_.intraday_cancel_pending);
-    hash_native_handle(f, short_seed_.long_entry); hash_native_handle(f, short_seed_.materialize_long);
-    hash_native_handle(f, short_seed_.final_short); f.b(short_seed_.active);
-    f.b(short_seed_.report_swap_pending);
-    hash_native_handle(f, short_seed_candidate_long_);
-    hash_native_handle(f, short_seed_candidate_materialize_);
-    hash_native_handle(f, short_seed_candidate_final_short_);
+    hash_short_seed_plan(f, short_seed_);
+    hash_short_seed_plan(f, pending_short_seed_.plan);
+    f.u(pending_short_seed_.expected_open_epoch); f.b(pending_short_seed_.ready);
+    hash_native_handle(f, short_seed_long_candidate_);
     f.i(last_bar_dual_entry_path_); f.b(pending_view_.owner_ != nullptr);
     f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);
     f.b(cap.configuration().skip_noop_market); f.b(cap.configuration().defer_pooc_close);
@@ -324,8 +347,6 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     hash_source_series(f, language_.coof_checkpoint_src_ohlc4_);
     hash_source_series(f, language_.coof_checkpoint_src_hlcc4_);
     f.d(language_.coof_checkpoint_prev_chart_close_); f.d(language_.coof_checkpoint_last_chart_close_);
-    f.u(coof_.size());
-    for (const auto& interval : coof_) { f.u(interval.applied_ordinal); f.i(interval.script_open_ms); f.b(interval.first_open); }
     f.i(current_script_open_ms_);
     f.d(current_script_bar_.open); f.d(current_script_bar_.high); f.d(current_script_bar_.low);
     f.d(current_script_bar_.close); f.d(current_script_bar_.volume); f.i(current_script_bar_.timestamp);

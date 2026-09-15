@@ -130,6 +130,24 @@ public:
         double default_stop_sizing_price = std::numeric_limits<double>::quiet_NaN();
         double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
         double frozen_market_transaction_units = std::numeric_limits<double>::quiet_NaN();
+        // These are immutable adapter placement facts, exposed only to test
+        // facades which formerly read the retired source PendingOrder owner.
+        std::string from_entry;
+        bool is_long = true;
+        double qty = std::numeric_limits<double>::quiet_NaN();
+        double qty_percent = std::numeric_limits<double>::quiet_NaN();
+        std::int64_t created_bar = -1;
+        std::int64_t created_seq = 0;
+        std::uint64_t incarnation = 0;
+        std::int64_t paired_flat_market_peer_seq = 0;
+        double paired_flat_market_transaction_qty = std::numeric_limits<double>::quiet_NaN();
+        double frozen_default_qty = std::numeric_limits<double>::quiet_NaN();
+        double default_stop_placement_equity = std::numeric_limits<double>::quiet_NaN();
+        double default_stop_placement_signal_close = std::numeric_limits<double>::quiet_NaN();
+        double affordability_placement_equity = std::numeric_limits<double>::quiet_NaN();
+        // The adapter currently has no pair-review receipt for this request;
+        // an empty Draft truthfully represents that absence to a fixture.
+        MarketAdmissionDraft market_admission{};
     };
 
 protected:

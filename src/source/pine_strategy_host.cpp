@@ -539,10 +539,35 @@ source::PineStrategyHost::source_pending_view() const {
         case PineOrderFamily::Entry:
             break;
         }
-        const std::string& id = snapshot.frozen_market_targeted_close ? label : snapshot.source_id;
-        source_pending_view_cache_.push_back({id, type,
-            snapshot.sizing.frozen_units, snapshot.sizing.price,
-            snapshot.frozen_market_own_units, snapshot.frozen_market_transaction_units});
+        FixtureIntentRow row;
+        row.id = snapshot.frozen_market_targeted_close ? label : snapshot.source_id;
+        row.type = type;
+        const bool default_stop = snapshot.family == PineOrderFamily::Entry
+            && !std::isfinite(snapshot.exit_levels.limit)
+            && std::isfinite(snapshot.exit_levels.stop)
+            && std::isnan(snapshot.requested_qty)
+            && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            && config_.default_qty_value <= 100.0;
+        const double absent = std::numeric_limits<double>::quiet_NaN();
+        row.default_stop_placement_qty = default_stop ? snapshot.sizing.frozen_units : absent;
+        row.default_stop_sizing_price = default_stop ? snapshot.sizing.price : absent;
+        row.frozen_market_own_units = snapshot.frozen_market_own_units;
+        row.frozen_market_transaction_units = snapshot.frozen_market_transaction_units;
+        row.from_entry = snapshot.from_entry;
+        row.is_long = snapshot.is_long;
+        row.qty = snapshot.requested_qty;
+        row.qty_percent = snapshot.qty_percent;
+        row.created_bar = snapshot.projection_created_bar;
+        row.created_seq = static_cast<std::int64_t>(snapshot.source_sequence);
+        row.paired_flat_market_peer_seq = 0;
+        row.paired_flat_market_transaction_qty = std::numeric_limits<double>::quiet_NaN();
+        row.frozen_default_qty = default_stop ? absent : snapshot.sizing.frozen_units;
+        row.default_stop_placement_equity = default_stop
+            ? snapshot.projection_default_stop_equity : absent;
+        row.default_stop_placement_signal_close = default_stop
+            ? snapshot.projection_default_stop_signal_close : absent;
+        row.affordability_placement_equity = snapshot.projection_affordability_equity;
+        source_pending_view_cache_.push_back(std::move(row));
     };
     for (const auto& command : adapter_.pending_same_bar_commands_)
         append(command.snapshot, command.request.label);
@@ -571,12 +596,12 @@ void source::PineStrategyHost::project_short_seed_report_rows(
         placement_snapshot = placement->second;
     }
     if (!placement_snapshot || placement_snapshot->family != PineOrderFamily::Close
-        || placement_snapshot->from_entry != "Short") {
+        || placement_snapshot->from_entry != plan.seed_id) {
         return;
     }
     for (auto& trade : trades_) {
         if (trade.entry_incarnation == plan.materialize_long.incarnation
-            && trade.entry_id == "__close__Short") {
+            && trade.entry_id == plan.materialize_label) {
             trade.entry_incarnation = plan.final_short.incarnation;
         }
     }
@@ -584,7 +609,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
     const std::size_t end = begin + event.closed_trade_count;
     for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
         if (trades_[index].entry_incarnation == plan.final_short.incarnation
-            && trades_[index].entry_id == "Short") {
+            && trades_[index].entry_id == plan.final_short_id) {
             trades_[index].entry_incarnation = plan.materialize_long.incarnation;
         }
     }

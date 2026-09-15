@@ -121,6 +121,12 @@ struct PlacementSnapshot {
     double frozen_market_transaction_units = std::numeric_limits<double>::quiet_NaN();
     bool frozen_market_targeted_close = false;
     bool frozen_market_target_was_long = false;
+    // Command-boundary facts read immutably by the fill-time terms and
+    // precommit policies.
+    bool direction_gate = false;
+    bool affordability_policy_active = false;
+    bool affordability_close_only = false;
+    bool affordability_keep_mc_close_surplus = false;
     bool reverse_to = false;
     bool replaced_opening = false;
     bool replacement_predecessor_market = false;
@@ -135,6 +141,8 @@ struct PlacementSnapshot {
     // then retire only its own deferred legs.
     native_order::RequestHandle bracket_origin{};
     std::uint64_t source_sequence = 0;
+    std::uint64_t command_ordinal = 0;
+    std::uint64_t placement_open_epoch = 0;
     std::int64_t placement_script_open_ms = 0;
     std::int64_t placement_sub_open_ms = 0;
     // Immutable C-row projection facts.  These are source placement facts,
@@ -171,12 +179,44 @@ struct ShortSeedPlan {
     native_order::RequestHandle long_entry{};
     native_order::RequestHandle materialize_long{};
     native_order::RequestHandle final_short{};
+    SourceId seed_id{};
+    SourceId long_entry_id{};
+    SourceId final_short_id{};
+    SourceId materialize_label{};
+    double seed_qty = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t seed_cycle = 0;
     bool active = false;
     // Generic matching must execute the artifact before the final source
     // short.  For variable-size source books their acceptance handles are
     // consequently opposite to their source report incarnations; retain the
     // pending source-report projection until the remnant is closed.
     bool report_swap_pending = false;
+};
+
+// The legacy three-object qualification is evaluated at the next broker open
+// (`created_bar + 1 == bar_index`), so the complete source candidate waits
+// here until that live fact is available.  It is not an executable order.
+struct PendingShortSeedPlan {
+    ShortSeedPlan plan{};
+    std::uint64_t expected_open_epoch = 0;
+    bool ready = false;
+};
+
+struct DroppedCloseReceipt {
+    SourceId source_id{};
+    std::string comment{};
+    double qty = std::numeric_limits<double>::quiet_NaN();
+    double qty_percent = std::numeric_limits<double>::quiet_NaN();
+    bool immediately = false;
+    std::uint64_t callsite_token = 0;
+    std::uint64_t command_ordinal = 0;
+};
+
+struct OpenEntryFeeFact {
+    native_order::RequestHandle opening{};
+    SourceId source_id{};
+    double units = 0.0;
+    double nonpercent_fee = 0.0;
 };
 
 struct SourceDayLedger {
@@ -427,12 +467,14 @@ private:
     void retire(native_order::RequestHandle) noexcept;
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
+    double percent_commission_live_equity(double) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
     double active_staged_fx(std::int64_t) const noexcept;
     void apply_fx_open_margin_slice(const Bar&, const NativeDecisionContext&);
     void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
                                        const NativeDecisionContext&);
-    void submit_fx_margin_slice(const Bar&, const NativeDecisionContext&, double rate);
+    void submit_fx_margin_slice(const Bar&, const NativeDecisionContext&, double rate,
+                                bool execute_at_current);
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
                                   bool execute_current);
@@ -456,6 +498,15 @@ private:
     void execute_cap_close_now(const compat::pine::CloseNow&);
     void execute_due_cap_close(const NativeDecisionContext&);
     void maybe_activate_short_seed_plan();
+    void activate_short_seed_plan_at_open(const NativeDecisionContext&);
+    bool qualify_short_seed_plan(const ShortSeedPlan&) const;
+    bool short_seed_context_is_live() const noexcept;
+    void record_dropped_close(const SourceId&, const std::string&, double, double,
+                              bool, std::uint64_t);
+    void record_opening_fee(const PlacementSnapshot&,
+                            const native_order::ExecutionAppliedEvent&);
+    void consume_opening_fees(const native_order::ExecutionAppliedEvent&,
+                              const SourceId*);
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
     void cancel_bracket_origin(native_order::RequestHandle);
@@ -481,7 +532,11 @@ private:
     StagedConfiguration staged_{};
     mutable std::uint64_t run_counter_ = 0;
     std::uint64_t source_sequence_ = 0;
+    std::uint64_t command_ordinal_ = 0;
+    std::uint64_t broker_open_epoch_ = 0;
+    std::int64_t last_broker_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
+    std::vector<SourceId> cohort_order_;
     std::unordered_map<std::uint64_t, PlacementSnapshot> placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
@@ -495,6 +550,8 @@ private:
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     std::vector<native_order::RequestHandle> pending_view_handles_;
+    std::vector<DroppedCloseReceipt> dropped_close_receipts_;
+    std::vector<OpenEntryFeeFact> open_entry_fees_;
     // Current executions settle synchronously, while their generic Applied
     // notification is delivered after the enclosing callback.  Record the
     // source-cohort debit so a second immediate command sees the new basis,
@@ -528,9 +585,8 @@ private:
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};
-    native_order::RequestHandle short_seed_candidate_long_{};
-    native_order::RequestHandle short_seed_candidate_materialize_{};
-    native_order::RequestHandle short_seed_candidate_final_short_{};
+    PendingShortSeedPlan pending_short_seed_{};
+    native_order::RequestHandle short_seed_long_candidate_{};
     int last_bar_dual_entry_path_ = 0;
     PendingIntentView pending_view_{};
     // @source-state end

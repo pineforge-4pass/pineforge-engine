@@ -35,7 +35,7 @@ public:
             strategy_entry("Long", true);
             strategy_entry("Short", false);
             strategy_close("Long");
-            strategy_close("Short", "", std::numeric_limits<double>::quiet_NaN(), 50.0);
+            strategy_close("Short");
         }
     }
 };

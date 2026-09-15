@@ -648,6 +648,41 @@ list(APPEND TEST_SOURCES
     test_strategy_commands_extra_l4d
     test_strategy_pyramiding_l4d
     test_taro_mc_close_residue_l4d
+# R4-D L4b public native-route policy witness.  Kept as an appended target so
+# the retired owner inventory above remains mechanically intact for merge.
+list(APPEND TEST_SOURCES test_l4b_policy_regressions)
+
+# R4-D L4b-fix restores every removed ShortSeed, affordability, sizing and
+# deferred-close oracle as an individually compiled native-route twin.  Keep
+# this list at the end of TEST_SOURCES: the retired-owner inventory above is
+# intentionally immutable for the parallel landing merge.
+list(APPEND TEST_SOURCES
+    test_cent_lot_decimal_scale_l4b
+    test_default_pct_stop_sizing_l4b
+    test_direct_short_reversal_affordability_l4b
+    test_dual_entry_placement_sizing_l4b
+    test_explicit_qty_fill_admission_l4b
+    test_famag_opening_money_l4b
+    test_integer_lot_percent_exit_min_step_l4b
+    test_magnifier_real_bars_l4b
+    test_market_admission_commission_l4b
+    test_market_entry_affordability_l4b
+    test_open_money_before_priced_exit_l4b
+    test_percent_equity_affordability_l4b
+    test_percent_equity_open_entry_fee_l4b
+    test_pooc_long_money_before_trail_l4b
+    test_pooc_money_admission_l4b
+    test_pooc_open_money_event_l4b
+    test_qty_step_epsilon_floor_l4b
+    test_short_seed_close_collision_l4b
+    test_sizing_basis_mintick_l4b
+    test_stop_entry_placement_open_qty_l4b
+    test_tv_money_band_l4b
+    test_tv_money_carried_pooc_l4b
+    test_tv_money_precision_l4b
+    test_short_seed_collision_percent_l4b
+    test_source_fifo_endpoints_l4b
+    test_native_p7d_l4b
 )
 
 find_package(Threads REQUIRED)
@@ -931,6 +966,32 @@ set(L4_PENDING_TESTS
     test_tv_money_long_margin_call_eth_l4a
 )
 set_tests_properties(${L4_PENDING_TESTS} PROPERTIES LABELS l4-pending)
+# These L4b CHECK-parity twins are registered and compiled on the switched
+# route.  Their remaining RED literals are owned by parallel L4a/L4c/L4d/L4f
+# policy landings, so the interim L4b verification excludes only this label.
+# The L4b report records ownership for every remaining CHECK line.
+set(L4B_PENDING_TESTS
+    test_direct_short_reversal_affordability_l4b
+    test_dual_entry_placement_sizing_l4b
+    test_explicit_qty_fill_admission_l4b
+    test_famag_opening_money_l4b
+    test_integer_lot_percent_exit_min_step_l4b
+    test_magnifier_real_bars_l4b
+    test_market_admission_commission_l4b
+    test_market_entry_affordability_l4b
+    test_open_money_before_priced_exit_l4b
+    test_percent_equity_open_entry_fee_l4b
+    test_pooc_long_money_before_trail_l4b
+    test_pooc_money_admission_l4b
+    test_pooc_open_money_event_l4b
+    test_qty_step_epsilon_floor_l4b
+    test_sizing_basis_mintick_l4b
+    test_stop_entry_placement_open_qty_l4b
+    test_tv_money_band_l4b
+    test_tv_money_carried_pooc_l4b
+    test_tv_money_precision_l4b
+)
+set_tests_properties(${L4B_PENDING_TESTS} PROPERTIES LABELS l4-pending)
 
 # R4-D L0 captures literal values from the ab9714be legacy source route in
 # dedicated translation units.  They intentionally live outside the ordinary

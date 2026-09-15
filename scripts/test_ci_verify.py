@@ -935,6 +935,14 @@ class DriverOrderingAndAggregation(unittest.TestCase):
         ctest_argv = next(argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
         self.assertNotIn('--output-junit', ctest_argv)
 
+    def test_ctest_label_exclusion_is_forwarded(self):
+        code, summary, scripted, _ = self.run_profile(extra=['--exclude-label', 'l4-pending'])
+        self.assertEqual(code, 0, summary['failures'])
+        ctest_argv = next(
+            argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
+        self.assertIn('-LE', ctest_argv)
+        self.assertEqual(ctest_argv[ctest_argv.index('-LE') + 1], 'l4-pending')
+
     def test_matching_base_is_reused_without_fetch_or_prepare(self):
         code, summary, scripted, _ = self.run_profile(preexisting_base='match')
         self.assertEqual(code, 0, summary['failures'])

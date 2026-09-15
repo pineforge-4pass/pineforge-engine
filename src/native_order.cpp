@@ -1252,7 +1252,12 @@ EligibilityFacts WorkingRequestCore::eligibility_facts(
     facts.waiting = std::holds_alternative<Wait>(live.authority);
     facts.needs_close_bind = std::holds_alternative<UnboundBookClose>(live.authority);
     facts.birth_ok = point_eligible(live.birth(), context.cursor.point.ordinal,
-                                    context.cursor.point.effective_time_ms);
+                                    context.cursor.point.effective_time_ms)
+        || (context.pre_open_birth_eligible
+            && std::holds_alternative<Market>(live.request().trigger)
+            && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
+            && context.cursor.point.path_phase == NativePathPhase::Open
+            && context.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
     if (facts.waiting) {
         facts.driver_ok = false;
         facts.ready_to_match = false;
@@ -2103,8 +2108,14 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
         || std::holds_alternative<UnboundBookClose>(live.authority)) {
         return NoChange{NoChangeReason::NotEligible};
     }
-    if (!point_eligible(live.birth(), proposal.cursor.point.ordinal,
-                        proposal.cursor.point.effective_time_ms)) {
+    const bool birth_ok = point_eligible(live.birth(), proposal.cursor.point.ordinal,
+                                         proposal.cursor.point.effective_time_ms)
+        || (proposal.pre_open_birth_eligible
+            && std::holds_alternative<Market>(live.request().trigger)
+            && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
+            && proposal.cursor.point.path_phase == NativePathPhase::Open
+            && proposal.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
+    if (!birth_ok) {
         return NoChange{NoChangeReason::NotEligible};
     }
     if (!fillable_state(live.trigger_state)) return NoChange{NoChangeReason::NotEligible};

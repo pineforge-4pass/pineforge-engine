@@ -967,6 +967,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(has_floor_);
     f.u(next_timeline_ordinal_);
     f.b(in_callback_);
+    f.u(static_cast<uint64_t>(callback_phase_));
     f.b(preparing_begin_);
     f.b(input_callback_context_.has_value());
     if (input_callback_context_) hash_input_context(f, *input_callback_context_);
@@ -993,6 +994,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         hash_current_point(f, current_frame_->point);
         f.u(current_frame_->acceptance_cutoff);
     }
+    f.u(pre_open_birth_point_ordinal_);
+    f.i(pre_open_birth_time_ms_);
+    f.u(pre_open_births_.size());
+    for (const auto& handle : pre_open_births_) hash_handle(f, handle);
     f.u(applied_notifications_.size() - notification_head_);
     for (std::size_t i = notification_head_; i < applied_notifications_.size(); ++i) {
         const auto& notification = applied_notifications_[i];
@@ -1384,6 +1389,10 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     has_floor_ = true;
     input_mode_ = InputMode::Unselected;
     current_frame_.reset();
+    callback_phase_ = CallbackPhase::None;
+    pre_open_birth_point_ordinal_ = 0;
+    pre_open_birth_time_ms_ = 0;
+    pre_open_births_.clear();
     applied_notifications_.clear();
     notification_head_ = 0;
     consuming_request_ = false;
@@ -1708,7 +1717,15 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
         const BacktestEngine& engine, const native_order::Request& request,
         native_order::CommandSurface surface) const {
     native_order::CommandContext ctx;
-    ctx.decision_time_ms = decision_floor();
+    // A request submitted by the generic pre-open provider is born at this
+    // open rather than at the prior decision floor.  Its one-point delivery
+    // authorization is carried separately and consumed by match_discrete.
+    const bool applied_point_is_current = callback_phase_ == CallbackPhase::Applied
+        && current_frame_
+        && current_frame_->point.decision.coordinate.effective_time_ms >= decision_floor();
+    ctx.decision_time_ms = (callback_phase_ == CallbackPhase::PreOpen || applied_point_is_current)
+            && current_frame_
+        ? current_frame_->point.decision.coordinate.effective_time_ms : decision_floor();
     if (const auto* spec = spec_ptr()) ctx.quantity_grid = spec->quantity_grid;
     ctx.surface = surface;
     if (const auto* bind = std::get_if<native_order::BindOpening>(&request.owner)) {
@@ -2063,6 +2080,38 @@ void NativeExecutionConsumer::match_point(BacktestEngine& engine, const NativeDr
 
 void NativeExecutionConsumer::match_discrete(BacktestEngine& engine, const NativeDriverPoint& point) {
     match_path(engine, point, false, point.raw_price, point.raw_price);
+    if (pre_open_birth_point_ordinal_ == point.coordinate.ordinal) {
+        pre_open_birth_point_ordinal_ = 0;
+        pre_open_birth_time_ms_ = 0;
+        pre_open_births_.clear();
+    }
+}
+
+bool NativeExecutionConsumer::pre_open_birth_eligible(
+        const native_order::RequestHandle& handle, const NativeDriverPoint& point) const noexcept {
+    if (pre_open_birth_point_ordinal_ != point.coordinate.ordinal
+        || pre_open_birth_time_ms_ != point.coordinate.effective_time_ms
+        || point.coordinate.path_phase != NativePathPhase::Open) {
+        return false;
+    }
+    return std::find(pre_open_births_.begin(), pre_open_births_.end(), handle)
+        != pre_open_births_.end();
+}
+
+void NativeExecutionConsumer::record_pre_open_birth(
+        const native_order::Request& request, const native_order::RequestHandle& handle) {
+    if (callback_phase_ != CallbackPhase::PreOpen || !current_frame_
+        || !std::holds_alternative<native_order::Market>(request.trigger)
+        || !std::holds_alternative<native_order::ImmediateRemaining>(request.capacity)
+        || current_frame_->point.decision.coordinate.path_phase != NativePathPhase::Open) {
+        return;
+    }
+    pre_open_birth_point_ordinal_ = current_frame_->point.decision.coordinate.ordinal;
+    pre_open_birth_time_ms_ = current_frame_->point.decision.coordinate.effective_time_ms;
+    if (std::find(pre_open_births_.begin(), pre_open_births_.end(), handle)
+        == pre_open_births_.end()) {
+        pre_open_births_.push_back(handle);
+    }
 }
 
 void NativeExecutionConsumer::match_segment(
@@ -2650,6 +2699,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
 
         native_order::ExecutionProposal proposal;
         proposal.cursor = evaluation.cursor;
+        proposal.pre_open_birth_eligible = evaluation.pre_open_birth_eligible;
         proposal.raw_price = raw_price;
         proposal.resolved_price = resolved_price;
         proposal.physical_action = candidate.physical;
@@ -2980,6 +3030,7 @@ void NativeExecutionConsumer::match_path(
             const auto* live = requests_.find_live(handle);
             if (!live) continue;
             native_order::EvaluationContext candidate_eval = eval;
+            candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point);
             candidate_eval.cohort_side = cohort_side(engine, *live);
             if (std::holds_alternative<native_order::CohortClose>(live->authority)
                 && !candidate_eval.cohort_side) {
@@ -3149,6 +3200,7 @@ void NativeExecutionConsumer::match_path(
         eval.cursor = path_cursor;
         const auto* live = requests_.find_live(winner->handle);
         if (!live) continue;
+        eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point);
         eval.cohort_side = cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
             && !eval.cohort_side) {
@@ -3306,6 +3358,11 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     if (!std::holds_alternative<NativeRunning>(state_)) return Refusal::NoExecutionContext;
     if (consuming_request_) return Refusal::Reentrant;
     if (!current_execution_point()) return Refusal::NoExecutionContext;
+    if (callback_phase_ != CallbackPhase::PreOpen
+        && callback_phase_ != CallbackPhase::Bar
+        && callback_phase_ != CallbackPhase::Applied) {
+        return Refusal::NoExecutionContext;
+    }
     if (!projection_ok(engine)) return Refusal::ConfigurationMismatch;
     if (command.target.incarnation == 0 || command.target.run != requests_.identity())
         return Refusal::InvalidHandle;
@@ -3366,10 +3423,16 @@ NativeCoordinate NativeExecutionConsumer::current_execution_coordinate(uint64_t 
     auto coordinate = current_frame_->point.decision.coordinate;
     coordinate.ordinal = ordinal;
     coordinate.provenance = NativePriceProvenance::CurrentExecution;
-    // A modeled-open/interior fill can be notified after confirmed input has
-    // advanced the decision floor. Keep its quote and interval as cause facts,
-    // but consume a newly born command at the current authorized time.
-    coordinate.effective_time_ms = std::max(coordinate.effective_time_ms, decision_floor());
+    // A31(b): an applied notification keeps its exact decision coordinate
+    // current. A newborn command in that callback must therefore both be born
+    // and execute there, even if input delivery has already raised the future
+    // decision floor. Other current-execution sites retain the floor rule.
+    const bool applied_point_is_current = callback_phase_ == CallbackPhase::Applied
+        && current_frame_
+        && current_frame_->point.decision.coordinate.effective_time_ms >= decision_floor();
+    if (!applied_point_is_current) {
+        coordinate.effective_time_ms = std::max(coordinate.effective_time_ms, decision_floor());
+    }
     return coordinate;
 }
 
@@ -3622,6 +3685,7 @@ void NativeExecutionConsumer::enqueue_applied_notification(AppliedNotification n
 
 void NativeExecutionConsumer::finish_callback(BacktestEngine& engine, uint64_t ordinal) {
     in_callback_ = false;
+    callback_phase_ = CallbackPhase::None;
     current_frame_.reset();
     if (check_abort_or_projection(engine, NativeFailureOperation::Callback, ordinal))
         drain_applied_notifications(engine);
@@ -3645,23 +3709,27 @@ void NativeExecutionConsumer::invoke_applied_callback(
         engine.current_bar_.timestamp = std::max(
             notification.point.decision.coordinate.effective_time_ms, decision_floor());
         in_callback_ = true;
+        callback_phase_ = CallbackPhase::Applied;
         const auto presented = callback_context_;
         host->on_native_applied(applied, presented);
         finish_callback(engine, notification.ordinal);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Callback,
                                    notification.ordinal});
         render(engine, e.what());
     } catch (const std::exception& e) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, notification.ordinal});
         render(engine, e.what());
     } catch (...) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) fail(engine, NativeFailure{NativeFailureCode::CallbackException,
             NativeFailureOperation::Callback, notification.ordinal});
@@ -3712,11 +3780,13 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     engine.current_bar_ = bar;
     engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
     in_callback_ = true;
+    callback_phase_ = CallbackPhase::PreOpen;
     try {
         const NativeDecisionContext presented = callback_context_;
         host->on_native_bar_open(bar, presented);
     } catch (const std::exception& e) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
@@ -3727,6 +3797,7 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
         return;
     } catch (...) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
@@ -3852,11 +3923,13 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
     point.price = bar.close;
     current_frame_ = CurrentExecutionFrame{point, next_timeline_ordinal_ - 1};
     in_callback_ = true;
+    callback_phase_ = CallbackPhase::Bar;
     try {
         const NativeDecisionContext presented = callback_context_;
         host->on_native_bar(bar, presented);
     } catch (const std::exception& e) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
@@ -3867,6 +3940,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         return;
     } catch (...) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         if (!failed()) {
             fail(engine, NativeFailure{NativeFailureCode::CallbackException,
@@ -4356,8 +4430,7 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
     const NativeBeginArgs args{bars, n, {}, {}, false, 4,
-        MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2, 64,
-        nullptr, nullptr, nullptr, false, 0};
+        MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
@@ -4387,8 +4460,7 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
     const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
-        magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2, 64,
-        nullptr, nullptr, nullptr, false, 0};
+        magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
@@ -4431,9 +4503,11 @@ void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
                                        const source::StrategyOverrides* overrides,
                                        bool bar_magnifier, int magnifier_samples,
                                        MagnifierDistribution magnifier_dist) {
-    const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
-        magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2, 64,
-        &inputs, &syminfo, overrides, false, 0};
+    NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
+        magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2};
+    args.inputs = &inputs;
+    args.syminfo = &syminfo;
+    args.overrides_opaque = overrides;
     if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
@@ -4465,9 +4539,10 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
-    const NativeBeginArgs args{warmup_bars, n_warmup, input_tf, script_tf, false, 4,
-        MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2, 64,
-        nullptr, nullptr, nullptr, true, n_warmup};
+    NativeBeginArgs args{warmup_bars, n_warmup, input_tf, script_tf, false, 4,
+        MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
+    args.is_stream = true;
+    args.warmup_n = n_warmup;
     if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
     engine.last_error_.clear();
@@ -4956,6 +5031,7 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
     catch_up_timeline();
     if (ok.result.status == native_order::SubmitStatus::Accepted) {
         ++engine.next_order_incarnation_;
+        if (ok.result.handle) record_pre_open_birth(request, *ok.result.handle);
     }
     return std::move(ok.result);
 }
@@ -4996,6 +5072,7 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
     catch_up_timeline();
     if (predicted_status == native_order::ReplaceStatus::Replaced) {
         ++engine.next_order_incarnation_;
+        if (ok.result.successor) record_pre_open_birth(request, *ok.result.successor);
         try {
             drain_parent_terminal(engine, predicted, target, NativeFailureOperation::Command);
         } catch (const std::exception& e) {
