@@ -15,8 +15,21 @@ void hash_source_series(BrokerStateHashSink& f, const Series<double>& series) {
 
 namespace {
 
+void hash_source_run_identity(BrokerStateHashSink& f,
+                              const native_order::RunIdentity& identity) {
+    f.s(identity.session_key);
+    // The monotonically increasing native generation protects stale handles;
+    // it does not change the source-visible state of a fresh run.
+    f.u(0);
+}
+void hash_source_run_epoch(BrokerStateHashSink& f, std::uint64_t run_counter) {
+    // Retain the anti-stale counter as an explicit projection input while
+    // keeping source broker fingerprints independent of handle reuse.
+    (void)run_counter;
+    f.u(0);
+}
 void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
-    f.s(handle.run.session_key); f.u(handle.run.run_number); f.u(handle.incarnation);
+    hash_source_run_identity(f, handle.run); f.u(handle.incarnation);
 }
 void hash_native_handle_vector(BrokerStateHashSink& f,
                                const std::vector<native_order::RequestHandle>& handles) {
@@ -34,8 +47,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.terms_priced_reverse);
     f.d(value.frozen_reversal_transaction);
     f.i(value.placement_cycle); f.u(value.sequential_group); f.u(value.sequential_rank);
-    f.b(value.has_full_entry_bracket); f.s(value.bracket_origin.run.session_key);
-    f.u(value.bracket_origin.run.run_number); f.u(value.bracket_origin.incarnation);
+    f.b(value.has_full_entry_bracket);
+    hash_source_run_identity(f, value.bracket_origin.run);
+    f.u(value.bracket_origin.incarnation);
     f.u(value.source_sequence);
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
@@ -102,7 +116,9 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
 } // namespace
 
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
-    f.s(kSourceAdapterDomain); f.u(run_counter_); f.u(source_sequence_); f.b(host_ != nullptr);
+    f.s(kSourceAdapterDomain);
+    hash_source_run_epoch(f, run_counter_);
+    f.u(source_sequence_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);

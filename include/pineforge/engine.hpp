@@ -423,6 +423,14 @@ using InputsMap = std::unordered_map<std::string, std::string>;
 // silently bind out-of-line members of this different object layout.
 inline namespace engine_script_run_v17 {
 class BrokerStateHashSink;
+// Optional frontend projection for a broker hash. A frontend can preserve a
+// stable public state model while its execution backend retains opaque
+// anti-stale generations.
+class BrokerStateHashProvider {
+public:
+    virtual ~BrokerStateHashProvider() = default;
+    virtual std::uint64_t broker_state_hash_projection() const = 0;
+};
 class BacktestEngine {
 protected:
     friend class NativeExecutionConsumer;
@@ -432,6 +440,7 @@ protected:
     IExecutionConsumer& execution_consumer();
     const IExecutionConsumer& execution_consumer() const;
     virtual void hash_source_extension(BrokerStateHashSink&) const;
+    std::uint64_t broker_state_hash_from_execution_hash(std::uint64_t) const;
     // --- Position state ---
     // @broker-state begin
     PositionSide position_side_ = PositionSide::FLAT;

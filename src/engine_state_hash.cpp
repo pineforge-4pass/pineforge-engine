@@ -10,9 +10,16 @@ void BacktestEngine::hash_source_extension(BrokerStateHashSink& sink) const {
 }
 
 uint64_t BacktestEngine::broker_state_hash() const {
+    if (const auto* provider = dynamic_cast<const BrokerStateHashProvider*>(this))
+        return provider->broker_state_hash_projection();
+    return broker_state_hash_from_execution_hash(execution_consumer().continuation_hash());
+}
+
+uint64_t BacktestEngine::broker_state_hash_from_execution_hash(
+        std::uint64_t execution_hash) const {
     BrokerStateHashSink f;
     f.s("pineforge-broker-state/v17");
-    f.u(execution_consumer().continuation_hash());
+    f.u(execution_hash);
 
     // --- Position core ---
     f.i(static_cast<int64_t>(position_side_));

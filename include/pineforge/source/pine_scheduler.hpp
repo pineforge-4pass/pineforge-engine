@@ -26,6 +26,7 @@ public:
     void applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&,
                  PineStrategyHost&);
 
+    PineLanguageState& language() noexcept { return language_; }
     bool is_first_tick() const noexcept { return language_.is_first_tick_; }
     bool is_last_tick() const noexcept { return language_.is_last_tick_; }
     bool bar_magnifier_enabled() const noexcept { return retained_.bar_magnifier; }

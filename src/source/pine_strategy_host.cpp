@@ -11,7 +11,53 @@ namespace pineforge {
 using namespace source;
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
-    : NativeStrategyHost(), adapter_(*this, cap) {}
+    : NativeStrategyHost(),
+      adapter_(*this, cap),
+      _src_series_active_(scheduler_.language()._src_series_active_),
+      _src_open_(scheduler_.language()._src_open_),
+      _src_high_(scheduler_.language()._src_high_),
+      _src_low_(scheduler_.language()._src_low_),
+      _src_close_(scheduler_.language()._src_close_),
+      _src_volume_(scheduler_.language()._src_volume_),
+      _src_hl2_(scheduler_.language()._src_hl2_),
+      _src_hlc3_(scheduler_.language()._src_hlc3_),
+      _src_ohlc4_(scheduler_.language()._src_ohlc4_),
+      _src_hlcc4_(scheduler_.language()._src_hlcc4_),
+      is_last_tick_(scheduler_.language().is_last_tick_) {}
+
+std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
+    // Native run generations reject stale native handles, but they were not
+    // part of the source broker state before lowering. The adapter hashes its
+    // current logical request state below with those generations canonicalized.
+    return broker_state_hash_from_execution_hash(0);
+}
+
+double source::PineStrategyHost::margin_liquidation_price() const {
+    return compute_liquidation_price();
+}
+
+double source::PineStrategyHost::compute_liquidation_price() const {
+    if (position_side_ == PositionSide::FLAT) return na<double>();
+    const double point_value = syminfo_.pointvalue;
+    const double quantity = position_qty_;
+    if (!(quantity > 0.0) || !(point_value > 0.0)) return na<double>();
+    const double direction = position_side_ == PositionSide::LONG ? 1.0 : -1.0;
+    const double margin_pct = position_side_ == PositionSide::LONG
+        ? config_.margin_long : config_.margin_short;
+    const double denominator = (margin_pct / 100.0) - direction;
+    if (std::abs(denominator) < 1e-12) return na<double>();
+    const double equity_basis =
+        (initial_capital_ + net_profit_sum_) / active_account_currency_fx();
+    double liquidation =
+        (equity_basis / (quantity * point_value) - direction * position_entry_price_)
+        / denominator;
+    if (syminfo_mintick_ > 0.0) {
+        liquidation = position_side_ == PositionSide::SHORT
+            ? std::ceil(liquidation / syminfo_mintick_) * syminfo_mintick_
+            : std::floor(liquidation / syminfo_mintick_) * syminfo_mintick_;
+    }
+    return liquidation;
+}
 
 PineStrategyConfig source::PineStrategyHost::apply_overrides(
         PineStrategyConfig config, const StrategyOverrides& overrides) {
@@ -605,6 +651,10 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         record_equity_point(bar.timestamp);
         prev_bar_timestamp_ = bar.timestamp;
     }
+}
+
+void source::PineStrategyHost::scheduler_record_broker_hash() {
+    if (broker_state_hash_recording_) broker_state_hashes_.push_back(broker_state_hash());
 }
 
 } // namespace pineforge

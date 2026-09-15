@@ -18,10 +18,12 @@
 
 namespace pineforge::source {
 
-class PineStrategyHost : public NativeStrategyHost {
+class PineStrategyHost : public NativeStrategyHost, public BrokerStateHashProvider {
 public:
     explicit PineStrategyHost(
         compat::pine::CapAttachment cap = compat::pine::CapAttachment::None);
+
+    std::uint64_t broker_state_hash_projection() const override;
 
     void prepare_native_begin(const NativeBeginArgs&) final;
     void on_native_run_begin() final;
@@ -218,6 +220,14 @@ protected:
     const Series<double>& source_series(const std::string&) const;
     const Series<double>& source_input_series(const std::string& key,
                                               const Series<double>& fallback) const;
+    // Generated input.source() calls retain this established surface spelling.
+    const Series<double>& get_input_source(const std::string& key,
+                                           const Series<double>& fallback) const {
+        return source_input_series(key, fallback);
+    }
+    // Generated strategy.margin_liquidation_price reads this Pine-specific
+    // projection over the inherited native position state.
+    double margin_liquidation_price() const;
     void fixture_publish_source_series(const Bar& bar, bool new_history_slot) {
         scheduler_.fixture_publish_source_series(bar, new_history_slot);
     }
@@ -253,8 +263,10 @@ private:
     void scheduler_feed_deferred_aux_security(int chart_index);
     void scheduler_finish_security_sequence();
     void scheduler_record_range_end(const Bar&);
+    void scheduler_record_broker_hash();
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);
+    double compute_liquidation_price() const;
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
@@ -271,6 +283,19 @@ protected:
     PineStrategyConfig config_{};
     StrategyOverrides override_{};
     PineScheduler scheduler_{};
+    // Generated strategies still use this source-series spelling directly.
+    // The state remains scheduler-owned and is hashed by PineScheduler.
+    bool& _src_series_active_;
+    Series<double>& _src_open_;
+    Series<double>& _src_high_;
+    Series<double>& _src_low_;
+    Series<double>& _src_close_;
+    Series<double>& _src_volume_;
+    Series<double>& _src_hl2_;
+    Series<double>& _src_hlc3_;
+    Series<double>& _src_ohlc4_;
+    Series<double>& _src_hlcc4_;
+    const bool& is_last_tick_;
     int source_bar_index_ = -1;
     int source_last_bar_index_ = -1;
     std::uint64_t source_callback_count_ = 0;

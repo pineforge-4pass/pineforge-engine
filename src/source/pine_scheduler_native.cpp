@@ -236,6 +236,19 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     language_.is_last_tick_ = context.is_terminal_sub_bar;
     language_.history_slot_is_new_ = context.is_terminal_sub_bar;
     if (!context.is_terminal_sub_bar) return;
+    // A LegacyTolerant native stream can emit a quiet carried callback for
+    // the calendar-aligned slot immediately preceding the last raw-label
+    // warmup bar. The retired source stream starts its realtime cadence from
+    // that warmup bar's next source slot, so it never published this stale
+    // callback to generated code.
+    if (retained_.is_stream && current_script_bar_valid_
+        && context.script_bar_open_ms <= current_script_bar_.timestamp) {
+        // The generic driver still dispatched a script point. Preserve the
+        // public one-hash-per-dispatch accounting without exposing it to the
+        // source callback cadence.
+        host.scheduler_record_broker_hash();
+        return;
+    }
     // A COOF recalc at this script bar is the source evaluation for that bar;
     // do not issue a second terminal callback with a new source-bar index.
     if (host.scheduler_coof_enabled() && coof_callback_script_open_ == context.script_bar_open_ms) {
@@ -281,6 +294,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         host.scheduler_record_range_end(current_script_bar_);
         if (!retained_.is_stream) host.scheduler_finish_security_sequence();
     }
+    host.scheduler_record_broker_hash();
 }
 
 void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
@@ -313,6 +327,7 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         throw std::overflow_error("Pine COOF first-open loop guard exhausted");
     for (const auto& handle : newborns)
         (void)host.execute_current({handle, NativeCurrentPriceRule::NearestTick});
+    host.scheduler_record_broker_hash();
 }
 
 } // namespace pineforge::source
