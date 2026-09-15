@@ -128,8 +128,9 @@ struct IntrabarPath {
 // One complete setup value, staged/copied by NativeStrategyHost before it is
 // applied at begin. This aggregate owns no host phase, consumed-run counter,
 // parsed-calendar authority, physical account, or C transport presence mask.
-// Empty required strings and zero financial defaults make an incomplete
-// value invalid; no timezone/timeframe/instrument facts are inferred.
+// Empty required strings and zero capital/value/FX defaults make an incomplete
+// value invalid; price_tick == 0 explicitly selects unquantized prices. No
+// timezone/timeframe/instrument facts are inferred.
 struct NativeRunSpec {
     native_order::RunIdentity identity;
     std::string input_tf;
@@ -158,7 +159,7 @@ struct NativeRunSpec {
     double initial_capital = 0.0;
     double point_value = 0.0;
     double account_fx = 0.0;    // One positive scalar, not a timestamped FX series.
-    double price_tick = 0.0;
+    double price_tick = 0.0;       // Finite, nonnegative; zero means unquantized prices.
     std::uint32_t slippage_ticks = 0; // <= INT_MAX; raw +/- ticks*tick, no snap.
     NativeFeeKind fee_kind = NativeFeeKind::Percent;
     double fee_value = 0.0;     // Percent/100 of absolute account notional, or
@@ -241,8 +242,9 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
 // Validate the WHOLE value first, then canonicalize its admitted numeric
 // negative zero (fee_value) to positive zero. Failure preserves every input
 // bit/string/optional. Positive-only fields cannot admit either zero sign;
-// absent optionals have no payload. Literal strings/positive numbers are
-// never rewritten. There is no second validated/live configuration wrapper.
+// price_tick admits and preserves both zero signs, and absent optionals have no
+// payload. Literal strings/numbers are never otherwise rewritten. There is no
+// second validated/live configuration wrapper.
 // Host usage: copy input into a candidate, normalize candidate, then stage
 // that same spec atomically; own copy-allocation/lifecycle failure handling.
 NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept;
