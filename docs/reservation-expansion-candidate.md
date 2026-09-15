@@ -1,13 +1,11 @@
 # Reservation expansion ownership
 
-Reservation expansion and typed Pine instructions change the internal order
-layout relative to ff54. This candidate's historical engine/PendingOrder
-namespace is `engine_script_run_v7`, with broker/stream fingerprint epoch7.
-In the current source-layer layout, `PendingOrder` is source-owned as
-`pineforge::source::PendingOrder`, not an engine-namespace type. Standalone capture,
-expansion and growth-source types establish `reservation_expansion_v1`.
-Public C ABI4, stream API1 and pending-mirror schema1 remain unchanged. The
-142-field shipped mirror prefix is preserved; seven reservation facts and six
+This historical candidate described reservation expansion and typed Pine
+instructions before adapter lowering. L3b removes the compatibility-order
+representation; equivalent live-request and adapter-placement facts provide
+the public projection. Public C ABI4, stream API1, and pending-mirror schema1
+remain unchanged. The frozen shipped mirror prefix is preserved; reservation
+and frozen-instruction facts are projected from
 Pine instruction facts append in the combined155-field mirror.
 
 The EXIT owns a capture of cycle and side plus its first later admitted

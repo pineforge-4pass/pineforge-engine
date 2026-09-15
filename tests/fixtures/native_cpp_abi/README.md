@@ -8,7 +8,7 @@ exact file contents, gzip-compressed with `mtime=0`. The archive is
 independent of Git history, shallow checkouts, network access, and later
 current-header changes.
 
-The `host-c3ed455`, `host-f736676`, and `host-e7cdf05` closures use `headers.tar`, authenticated
+The `host-c3ed455`, `host-f736676`, `host-e7cdf05`, and `host-ab9714b` closures use `headers.tar`, authenticated
 against their exact per-file manifests. They also supply the real historical
 libraries prepared by `scripts/prepare_settlement_cpp_abi_base.py`; the native
 checker imports that module's tar extraction/authentication helpers directly.
@@ -25,6 +25,7 @@ checker imports that module's tar extraction/authentication helpers directly.
 | `host-c3ed455` | commit `c3ed45516721d3185fcd2f50bb293793304bc6e6`, tree `bb80c4767dddc0e5c9ae172672edd955ad344890` | Engine/host epoch 13, order epoch 2, driver epoch 3. Full historical host/order/driver library pairing; no current-execution declarations. |
 | `host-f736676` | commit `f736676ea9a558dc664b18f099a488b3a2c0067f`, tree `c69421f0f86d23aa48eeb2c79bf7f475a4db0e83`, tar SHA `37e9340e0a985db118006e7e3b265e0191445285ce5e8fd8fc77f1578275e28e` | Frozen 55-header engine/host epoch 14, order epoch 3, driver epoch 4 closure. Historical current-execution controls remain authenticated against the current v16 matrix. |
 | `host-e7cdf05` | commit `e7cdf052fa44d4c98035804db7b8399d3a5a37b2`, tree `dea028ca5664f78c055b1588820a4f7cce5b137f`, tar SHA `189a0e99ff60f7c9284243117fe501ebf9a9fb6269c787dad35957d0ca7a6ed3` | Frozen 56-header v15 source-layer-base closure. It is the immutable old provider for required v15↔v16 rejection pairs. |
+| `host-ab9714b` | commit `ab9714beccb62b796c122cf68986ec9e7dbf4a67`, tree `8c75db9858e63e019a31dd90230eff7f16ce24eb`, tar SHA `1a1ab85239ce1bca9022f879ecc0e88c2ee0af719c74cdfe9d8e9d5aaada8d98` | Frozen 61-header v16 adapter-lowering-base closure: engine/host v16, native order v4, run spec v1, driver v4, consumer v6. L1's authenticated v16→v17 relocation manifest makes it the rejection-pair provider for live host v17, native order v5, run spec v2, driver v5 and consumer v7. |
 
 Sources were taken from the pairing-audit capture
 `tasks/native-abi-audit/snapshot-20260912T064119Z` and, where that capture
@@ -34,11 +35,12 @@ mismatched binaries. Layout sizes in each manifest were recorded by the
 pairing audit's LLVM `sizeof`/`offsetof` witness and are re-checked here
 with `static_assert` against the frozen headers.
 
-The full settlement matrix comprises e60, 0e, v13, v14, frozen v15 and live
-v16 archives. Host and order cross-epoch pairs reject, including mandatory
-v15↔v16 pairs; matching v16 callers/providers link. Driver v4 retains its
-historical same-owner positive controls. `native-abi-receipt.json` records the
-authenticated v14 and frozen-v15 compile controls. `CURRENT_TERMS_SURFACE_READY = True`:
-the complete v16 current-execution, FX and missing-Cancelled controls
+The full settlement matrix comprises e60, 0e, v13, v14, frozen v15, frozen
+v16 and live v17 archives. Host and order cross-epoch pairs reject, including
+the mandatory v16↔v17 pairs; same-epoch v17 callers/providers link in both
+directions. Driver v4 retains its historical same-owner positive controls.
+`native-abi-receipt.json` records the authenticated v14, frozen-v15, and
+frozen-v16 compile controls. `CURRENT_TERMS_SURFACE_READY = True`:
+the complete v17 current-execution, FX and missing-Cancelled controls
 are active.
 Existing order-v1 rejection pairs remain required.

@@ -30,7 +30,16 @@ V14_COMMIT = 'f736676ea9a558dc664b18f099a488b3a2c0067f'
 V14_TREE = 'c69421f0f86d23aa48eeb2c79bf7f475a4db0e83'
 V15_FROZEN_COMMIT = 'e7cdf052fa44d4c98035804db7b8399d3a5a37b2'
 V15_FROZEN_TREE = 'dea028ca5664f78c055b1588820a4f7cce5b137f'
+V16_FROZEN_COMMIT = 'ab9714beccb62b796c122cf68986ec9e7dbf4a67'
+V16_FROZEN_TREE = '8c75db9858e63e019a31dd90230eff7f16ce24eb'
 PROVIDERS = {
+    # L0 freezes the exact pre-v17 provider.  This is deliberately a
+    # same-epoch role: the matrix must prove both frozen/live v16 directions
+    # link before L1 changes any public version literal.
+    'v16-frozen': {'commit': V16_FROZEN_COMMIT, 'tree': V16_FROZEN_TREE,
+                   'engine_epoch': 'engine_script_run_v16',
+                   'manifest': ROOT / 'tests/fixtures/native_cpp_abi/host-ab9714b/manifest.json',
+                   'default_output': 'native-abi-v16-frozen', 'headers_name': 'headers.tar'},
     'v15-frozen': {'commit': V15_FROZEN_COMMIT, 'tree': V15_FROZEN_TREE,
                    'engine_epoch': 'engine_script_run_v15',
                    'manifest': ROOT / 'tests/fixtures/native_cpp_abi/host-e7cdf05/manifest.json',

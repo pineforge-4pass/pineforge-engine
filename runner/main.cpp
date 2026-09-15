@@ -349,8 +349,6 @@ class Strategy {
             if (!has_configure_native)
                 throw std::runtime_error(
                     "compiled strategy lacks native ABI symbol: strategy_configure_native_v1");
-        } else if (contract == 2) {
-            throw std::runtime_error("native strategy requires --native-config");
         }
     }
     void configure(const Config &c) {
@@ -639,16 +637,36 @@ int run(Config c) {
         throw std::runtime_error("strategy library changed during initialization");
     strategy.require_contract(c);
     auto warmup = history(original, c.native.present);
-    if (c.native.present)
-        require_native_warmup(c.native, warmup);
     std::string deployment =
         c.native.present
             ? native_identity(c.native, c.mode, c.name, c.webhook, original, library, parser_bytes,
                               parser_config)
             : identity(legacy_fields(c), original, library, parser_bytes, parser_config);
-    Ledger ledger(c.ledger, deployment);
     strategy.configure(c);
-    strategy.begin(c, warmup);
+    try {
+        // A switched PineStrategyHost is native-bound but owns its run spec
+        // through prepare_native_begin.  Let that provider admit the stream
+        // when the CLI uses ordinary source settings; strict native modules
+        // still refuse at begin if no external configuration was supplied.
+        strategy.begin(c, warmup);
+    } catch (const std::runtime_error& error) {
+        const std::string text = error.what();
+        if (!c.native.present
+            && text.find("native stream_begin requires Ready") != std::string::npos) {
+            throw std::runtime_error("native strategy requires --native-config");
+        }
+        if (c.native.present
+            && (text.find("Pine native adapter failed to configure projected run spec")
+                    != std::string::npos
+                || text.find("configure refused while ready") != std::string::npos
+                || text.find("native host already failed") != std::string::npos)) {
+            throw std::runtime_error("native-config requires NativeMarketV1");
+        }
+        throw;
+    }
+    if (c.native.present)
+        require_native_warmup(c.native, warmup);
+    Ledger ledger(c.ledger, deployment);
     Cursor cursor;
     auto recorded = ledger.input_count();
     for (std::uint64_t i = 0; i < recorded; ++i) {

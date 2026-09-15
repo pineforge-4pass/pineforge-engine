@@ -38,11 +38,11 @@ NATIVE_EXAMPLES = (
 )
 FORBIDDEN_DEPENDENCY_PARTS = ("/pineforge/source/", "/pineforge/compat/pine/")
 FORBIDDEN_SYMBOLS = ("pineforge::source", "compat::pine")
-# A21 keeps this one opaque pointer in the generic legacy wrapper signature.
+# The rich begin bridge keeps this one opaque pointer in its generic wrapper.
 # It is a forward declaration only: no native consumer can construct or name a
 # source host through it.  Keep the exception narrow so a real source symbol
 # (or a second source type) remains a failure.
-OPAQUE_LEGACY_SOURCE_SYMBOL = "pineforge::source::StrategyOverrides const*"
+OPAQUE_SOURCE_SYMBOL = "pineforge::source::StrategyOverrides const*"
 INCLUDE_VALUE_OPTIONS = {
     "-I", "-isystem", "-iquote", "-idirafter", "-include", "-imacros",
     "-isysroot", "-iframework", "-F",
@@ -185,16 +185,16 @@ def forbidden_dependency_entries(entries: list[str]) -> list[str]:
     return found
 
 
-def is_allowed_opaque_legacy_symbol(line: str) -> bool:
-    return ("BacktestEngine::legacy_run_rich(" in line
-            and OPAQUE_LEGACY_SOURCE_SYMBOL in line
+def is_allowed_opaque_source_symbol(line: str) -> bool:
+    return ("StrategyOverrides" in line
+            and OPAQUE_SOURCE_SYMBOL in line
             and line.count("pineforge::source::") == 1)
 
 
 def forbidden_symbol_lines(symbols: str) -> list[str]:
     return [line for line in symbols.splitlines()
             if any(token in line for token in FORBIDDEN_SYMBOLS)
-            and not is_allowed_opaque_legacy_symbol(line)]
+            and not is_allowed_opaque_source_symbol(line)]
 
 
 def independence_exit_code(findings: list[Finding], *, expect_fail: bool) -> int:

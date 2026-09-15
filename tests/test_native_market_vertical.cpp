@@ -299,7 +299,7 @@ int main() {
 
     {
         F1Host host;
-        auto spec = spec_for("R1-L2-source-command-refused", 1);
+        auto spec = spec_for("R1-L2-prebegin-input-staged", 1);
         CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
         bool threw = false;
         try {
@@ -307,15 +307,15 @@ int main() {
         } catch (...) {
             threw = true;
         }
-        CHECK(threw);
-        CHECK(host.native_state().kind == NativeLifecycleKind::Failed);
+        CHECK(!threw);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Ready);
         native_proof::Scenario s;
-        s.id = "R1-L2-source-command-refused";
+        s.id = "R1-L2-prebegin-input-staged";
         s.status = "passed";
         s.logical_inputs = "[]";
-        s.lifecycle_events = "[{\"kind\":\"Failed\",\"ordinal\":0}]";
+        s.lifecycle_events = "[]";
         s.physical_effects = "[]";
-        s.observations = "{\"kind\":\"Failed\"}";
+        s.observations = "{\"kind\":\"Ready\"}";
         scenarios.push_back(std::move(s));
     }
 

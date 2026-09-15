@@ -1,7 +1,0 @@
-# Members of struct PendingOrder (include/pineforge/engine.hpp) that
-# scripts/gen_pending_order_mirror.py deliberately does NOT mirror into
-# pf_pending_order_v1_t, one per line as `name  # reason`. Every PendingOrder
-# member must be either mirrored (a TYPE_MAP scalar/enum or a std::string) or
-# listed here, or generation fails -- the point is that PendingOrder cannot
-# grow a member nobody decided about. Blank lines and '#'-only lines are
-# ignored. Currently every member is mirrored.

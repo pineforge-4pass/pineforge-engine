@@ -3,7 +3,6 @@
  */
 
 #include "engine_internal.hpp"
-#include <pineforge/source/pine_pending_intent.hpp>
 
 #include <algorithm>
 #include <cctype>

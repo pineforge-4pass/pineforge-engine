@@ -618,7 +618,7 @@ PF_API void strategy_set_trade_start_time(pf_strategy_t s, int64_t timestamp_ms)
  *                      the incarnation of the lot they mark like any other
  *                      close.
  *  @return Non-zero physical-entry identity, or 0 for an invalid index or a
- *          legacy/synthetic trade without PendingOrder provenance. */
+ *          legacy/synthetic trade without request record provenance. */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
     pf_strategy_t s, int trade_index);
 
@@ -769,7 +769,7 @@ PF_API void strategy_set_realtime_tail(pf_strategy_t s, int on, int horizon_bars
  *  every subsequent run() runs only the broker's pre-`on_bar` steps and
  *  returns, in this order: intraday-cap deferred close, advancing native
  *  source-series history (`_push_source_series`), settling resting
- *  stop/limit orders against the bar (`process_pending_orders`), the
+ *  stop/limit orders against the bar (`request matching`), the
  *  max-intraday-loss path check (`evaluate_max_intraday_loss_over_path`),
  *  and updating per-trade extremes (`update_per_trade_extremes`).
  *  `on_bar` is never invoked for that bar, and nothing that ordinarily runs
@@ -850,7 +850,7 @@ PF_API void strategy_set_path_order(pf_strategy_t s, int mode);
  *  that TradingView's broker emulator arbitrated a real pair that bar. A
  *  caller therefore gets the right answer whether it reads this after a
  *  `strategy_set_probe_suppress_tail_logic` forming-bar probe (a single
- *  `process_pending_orders` pass) or after an ordinary
+ *  `request matching` pass) or after an ordinary
  *  `process_orders_on_close` run with no tail suppression (two passes, the
  *  winner already filled by the second).
  *  A live probe reads this after a forming-bar run to see which side the

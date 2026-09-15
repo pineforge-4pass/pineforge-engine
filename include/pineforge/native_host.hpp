@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v16 {
+inline namespace engine_script_run_v17 {
 
 enum class NativeLifecycleKind : std::uint8_t {
     Unconfigured = 0,
@@ -345,12 +345,57 @@ using NativeCurrentExecutionResult = std::variant<NativeCurrentRefusal,
     native_order::ExecutionAppliedEvent, native_order::NoEffectEvent,
     native_order::MatchRejectedEvent, native_order::CancelledEvent>;
 
+// Borrowed begin-call facts. The bar/input/syminfo/override pointers expire when
+// prepare_native_begin returns; retained configuration must copy them by
+// value (for example into NativeRunSpec::intrabar).
+struct NativeBeginArgs {
+    const Bar* bars = nullptr;
+    int n = 0;
+    std::string input_tf;
+    std::string script_tf;
+    bool bar_magnifier = false;
+    int magnifier_samples = 4;
+    MagnifierDistribution magnifier_distribution = MagnifierDistribution::ENDPOINTS;
+    bool magnifier_volume_weighted = false;
+    int magnifier_volume_weighted_min_samples = 2;
+    int magnifier_volume_weighted_max_samples = 64;
+    const InputsMap* inputs = nullptr;
+    // The rich run overload's symbol metadata is borrowed only for this
+    // callback.  A provider that uses it must copy the fields it needs into
+    // its retained NativeRunSpec/staged metadata before returning.
+    const SymInfo* syminfo = nullptr;
+    const void* overrides_opaque = nullptr;
+    bool is_stream = false;
+    int warmup_n = 0;
+};
+
+// Accepted input facts presented before the generic consumer aggregates the
+// bar into its script interval or evaluates any matching point. This is not a
+// source-language callback: native hosts may observe raw input cadence through
+// it without taking ownership of matching or aggregation.
+struct NativeInputContext {
+    native_calendar::NativeInterval input_interval{};
+    native_calendar::NativeInterval script_interval{};
+    int input_index = 0;
+    bool completes_script_interval = false;
+};
+
+// One accepted realtime print before native matching at its current decision
+// point. The Bar is a value presentation of that print (O=H=L=C=price,
+// volume=print quantity, timestamp=print timestamp); no source-language
+// policy is embedded here. Sequence zero retains the public TradeTick
+// sentinel meaning “provider did not supply a sequence”.
+struct NativeTickContext {
+    NativeDecisionContext decision{};
+    std::uint64_t sequence = 0;
+};
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
 // linkage cannot resolve an unversioned constructor against a different
 // base layout.
-#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V16 1
+#define PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17 1
 class NativeStrategyHost : public BacktestEngine {
 public:
     NativeStrategyHost();
@@ -362,7 +407,20 @@ public:
 
     void on_bar(const Bar& bar) final;
 
+    virtual void prepare_native_begin(const NativeBeginArgs&) {}
     virtual void on_native_run_begin() {}
+    // Called once for every accepted confirmed input bar, before that bar is
+    // aggregated or matched. It has no current execution point.
+    virtual void on_native_input(const Bar&, const NativeInputContext&) {}
+    // Called once for every accepted realtime print, before matching at that
+    // point. inspect_current_execution/execute_current are legal here.
+    virtual void on_native_tick(const Bar&, const NativeTickContext&) {}
+    // Precedes the matching pass at the script bar's open decision point.
+    // inspect_current_execution/execute_current are legal in this hook.
+    virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}
+    // The current decision point remains valid for the complete callback.
+    // A host may therefore execute a command after its own script-body work
+    // returns, before the consumer advances beyond this calculation point.
     virtual void on_native_bar(const Bar& bar, const NativeDecisionContext& context) = 0;
 
     virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
@@ -393,6 +451,9 @@ public:
     native_order::ReplaceResult replace_market(const native_order::RequestHandle& target,
                                                const native_order::Request& request);
     native_order::CancelResult cancel(const native_order::RequestHandle& target);
+    native_order::CohortHandle cohort_open();
+    void cohort_add(native_order::CohortHandle cohort, native_order::RequestHandle origin);
+    void cohort_remove(native_order::CohortHandle cohort, native_order::RequestHandle origin);
 
     NativePhysicalPosition physical_position() const;
     double native_marked_equity(double mark) const;
@@ -406,5 +467,5 @@ public:
     friend class NativeExecutionConsumer;
 };
 
-}  // inline namespace engine_script_run_v16
+}  // inline namespace engine_script_run_v17
 }  // namespace pineforge

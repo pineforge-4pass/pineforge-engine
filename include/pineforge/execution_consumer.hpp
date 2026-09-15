@@ -7,19 +7,19 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace pineforge {
 
 struct SymInfo;
 namespace source { struct StrategyOverrides; }
 
-inline namespace engine_script_run_v16 {
+inline namespace engine_script_run_v17 {
 
 class BacktestEngine;
 
-// Constructor-bound execution consumer. LegacyCompatibilityConsumer preserves
-// the existing Pine call order. NativeExecutionConsumer owns native lifecycle,
-// matching and the sole native timeline allocator. Neither is copyable.
+// Constructor-bound execution consumer. NativeExecutionConsumer owns lifecycle,
+// matching and the sole timeline allocator. It is not copyable.
 class IExecutionConsumer {
 public:
     IExecutionConsumer() = default;
@@ -31,6 +31,9 @@ public:
 
     virtual bool is_native() const noexcept = 0;
     virtual void refuse_source_mutation(const char* operation) = 0;
+    virtual bool stage_account_currency_fx_series(
+            const std::vector<std::int64_t>& timestamps,
+            const std::vector<double>& rates) = 0;
     virtual uint64_t continuation_hash() const noexcept = 0;
 
     virtual void run_simple(BacktestEngine& engine, const Bar* bars, int n) = 0;
@@ -63,8 +66,7 @@ public:
     virtual bool stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) = 0;
 };
 
-std::unique_ptr<IExecutionConsumer> make_legacy_execution_consumer();
 std::unique_ptr<IExecutionConsumer> make_native_execution_consumer();
 
-}  // inline namespace engine_script_run_v16
+}  // inline namespace engine_script_run_v17
 }  // namespace pineforge

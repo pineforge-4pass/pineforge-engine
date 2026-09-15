@@ -39,15 +39,6 @@ public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 };
 
-class LegacyEngine final : public BacktestEngine {
-public:
-    void on_bar(const Bar&) override {}
-
-    std::uint64_t continuation_hash_for_test() const {
-        return execution_consumer().continuation_hash();
-    }
-};
-
 class NativeButNotHost final : public BacktestEngine {
 public:
     NativeButNotHost() : BacktestEngine(NativeConsumerBindTag{}) {}
@@ -102,14 +93,6 @@ void c_entry_refusals_and_staging() {
     CHECK(strategy_configure_native_fx_curve_v1(
               reinterpret_cast<pf_strategy_t>(&unconfigured), nullptr) == -1);
     check_unchanged(unconfigured, NativeLifecycleKind::Unconfigured, unconfigured_hash);
-
-    LegacyEngine legacy;
-    CHECK(!legacy.native_bound());
-    const auto legacy_hash = legacy.continuation_hash_for_test();
-    CHECK(strategy_configure_native_fx_curve_v1(
-              reinterpret_cast<pf_strategy_t>(&legacy), &valid) == -1);
-    CHECK(!legacy.native_bound());
-    CHECK(legacy.continuation_hash_for_test() == legacy_hash);
 
     NativeButNotHost non_host_native;
     CHECK(non_host_native.native_bound());

@@ -28,6 +28,9 @@ ARTIFACTS = {
     "native-abi-v15-frozen/receipt.json": "native-abi-v15-frozen-receipt.json",
     "native-abi-v15-frozen/configure.log": "native-abi-v15-frozen-configure.log",
     "native-abi-v15-frozen/build.log": "native-abi-v15-frozen-build.log",
+    "native-abi-v16-frozen/receipt.json": "native-abi-v16-frozen-receipt.json",
+    "native-abi-v16-frozen/configure.log": "native-abi-v16-frozen-configure.log",
+    "native-abi-v16-frozen/build.log": "native-abi-v16-frozen-build.log",
     "settlement-abi-receipt.json": "settlement-abi-receipt.json",
     "native-abi-receipt.json": "native-abi-receipt.json",
 }

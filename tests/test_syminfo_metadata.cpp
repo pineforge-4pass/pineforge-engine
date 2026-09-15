@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -17,15 +18,32 @@ using namespace pineforge;
 namespace {
 
 struct MetaHarness : public pineforge::source::PineStrategyHost {
-    void on_source_bar(const Bar& /*bar*/) override {}
+    void on_source_bar(const Bar& /*bar*/) override {
+        if (callback_count_++ == 5) {
+            observed_bar_index_ = pine_bar_index();
+            observed_last_bar_index_ = pine_last_bar_index();
+        }
+    }
     double meta(const std::string& key) const { return get_syminfo_metadata(key); }
     const SymInfo& sym() const { return syminfo_; }
-    void set_internal_indices(int bar_idx, int last_idx) {
-        bar_index_ = bar_idx;
-        last_bar_index_ = last_idx;
+    bool observe_indices_on_native_route() {
+        std::vector<Bar> bars(100);
+        for (int i = 0; i < static_cast<int>(bars.size()); ++i) {
+            bars[static_cast<std::size_t>(i)] = {100.0, 100.0, 100.0, 100.0,
+                                                  1.0, static_cast<std::int64_t>(i) * 60000};
+        }
+        run(bars.data(), static_cast<int>(bars.size()), "1", "1");
+        return last_error().empty() && observed_bar_index_ != kUnset;
     }
-    int public_bar_index() const { return pine_bar_index(); }
-    int public_last_bar_index() const { return pine_last_bar_index(); }
+
+    int observed_bar_index() const { return observed_bar_index_; }
+    int observed_last_bar_index() const { return observed_last_bar_index_; }
+
+private:
+    static constexpr int kUnset = -1000000;
+    int callback_count_ = 0;
+    int observed_bar_index_ = kUnset;
+    int observed_last_bar_index_ = kUnset;
 };
 
 int tests_run = 0;
@@ -72,15 +90,23 @@ void test_tz_session_setters() {
 }
 
 void test_bar_index_offset_metadata() {
-    MetaHarness h;
-    h.set_internal_indices(5, 99);
-    CHECK(h.public_bar_index() == 5, "default public bar_index is internal index");
-    CHECK(h.public_last_bar_index() == 99, "default public last_bar_index is internal last index");
-    h.set_syminfo_metadata("bar_index_offset", 70.0);
-    CHECK(h.public_bar_index() == 75, "bar_index_offset shifts public bar_index");
-    CHECK(h.public_last_bar_index() == 169, "bar_index_offset shifts public last_bar_index");
-    h.set_syminfo_metadata("bar_index_offset", std::nan(""));
-    CHECK(h.public_bar_index() == 5, "non-finite bar_index_offset resets to zero");
+    MetaHarness baseline;
+    CHECK(baseline.observe_indices_on_native_route(), "native-route baseline run succeeds");
+    CHECK(baseline.observed_bar_index() == 5, "default public bar_index is internal index");
+    CHECK(baseline.observed_last_bar_index() == 99,
+          "default public last_bar_index is internal last index");
+
+    MetaHarness offset;
+    offset.set_syminfo_metadata("bar_index_offset", 70.0);
+    CHECK(offset.observe_indices_on_native_route(), "native-route offset run succeeds");
+    CHECK(offset.observed_bar_index() == 75, "bar_index_offset shifts public bar_index");
+    CHECK(offset.observed_last_bar_index() == 169,
+          "bar_index_offset shifts public last_bar_index");
+
+    MetaHarness reset;
+    reset.set_syminfo_metadata("bar_index_offset", std::nan(""));
+    CHECK(reset.observe_indices_on_native_route(), "native-route non-finite reset run succeeds");
+    CHECK(reset.observed_bar_index() == 5, "non-finite bar_index_offset resets to zero");
 }
 
 }  // namespace

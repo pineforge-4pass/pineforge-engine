@@ -17,7 +17,7 @@
 #include <variant>
 
 namespace pineforge {
-inline namespace engine_script_run_v16 {
+inline namespace engine_script_run_v17 {
 namespace {
 
 template<class T>
@@ -52,6 +52,9 @@ void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandl
 void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.s(spec.identity.session_key); f.u(spec.identity.run_number);
     f.s(spec.input_tf); f.s(spec.script_tf);
+    f.b(spec.timeframe_undetected);
+    f.u(static_cast<uint64_t>(spec.slot_label_policy));
+    f.u(static_cast<uint64_t>(spec.legacy_tolerance));
     f.s(spec.ticker); f.s(spec.tickerid); f.s(spec.type);
     f.s(spec.currency); f.s(spec.basecurrency); f.s(spec.description); f.s(spec.volumetype);
     f.s(spec.timezone); f.s(spec.session); f.s(spec.chart_timezone);
@@ -59,17 +62,23 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.u(spec.slippage_ticks); f.u(static_cast<uint64_t>(spec.fee_kind)); f.d(spec.fee_value);
     f.b(spec.quantity_grid.has_value()); if (spec.quantity_grid) f.d(*spec.quantity_grid);
     f.u(static_cast<uint64_t>(spec.close_execution));
+    f.u(static_cast<uint64_t>(spec.abort_reporting));
     f.b(spec.max_abs_units.has_value()); if (spec.max_abs_units) f.d(*spec.max_abs_units);
     f.b(spec.max_open_lots.has_value()); if (spec.max_open_lots) f.u(*spec.max_open_lots);
     f.u(static_cast<uint64_t>(spec.allowed_open_directions));
     f.b(spec.initial_margin_fraction.has_value());
     if (spec.initial_margin_fraction) f.d(*spec.initial_margin_fraction);
+    f.u(native_intrabar_path_digest(spec.intrabar));
 }
 
 void hash_handle(Fnv& f, const native_order::RequestHandle& handle) noexcept {
     f.s(handle.run.session_key);
     f.u(handle.run.run_number);
     f.u(handle.incarnation);
+}
+
+void hash_cohort_handle(Fnv& f, native_order::CohortHandle handle) noexcept {
+    f.u(handle.value);
 }
 
 void hash_event_id(Fnv& f, const native_order::EventId& id) noexcept {
@@ -199,17 +208,23 @@ void hash_capacity(Fnv& f, const native_order::Capacity& capacity) noexcept {
 
 void hash_owner(Fnv& f, const native_order::Owner& owner) noexcept {
     f.u(owner.index());
-    if (const auto* wait = std::get_if<native_order::WaitForApplied>(&owner)) {
-        hash_handle(f, wait->parent);
-    }
-    if (const auto* bind = std::get_if<native_order::BindOpening>(&owner)) {
-        hash_handle(f, bind->opening);
-        f.i(bind->cycle);
-    }
-    if (const auto* bind = std::get_if<native_order::BindOpenings>(&owner)) {
-        f.i(bind->cycle); f.u(bind->openings.size());
-        for (const auto& handle : bind->openings) hash_handle(f, handle);
-    }
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, native_order::Independent>) {
+        } else if constexpr (std::is_same_v<T, native_order::WaitForApplied>) {
+            hash_handle(f, value.parent);
+        } else if constexpr (std::is_same_v<T, native_order::BindOpening>) {
+            hash_handle(f, value.opening);
+            f.i(value.cycle);
+        } else if constexpr (std::is_same_v<T, native_order::BindOpenings>) {
+            f.i(value.cycle); f.u(value.openings.size());
+            for (const auto& handle : value.openings) hash_handle(f, handle);
+        } else if constexpr (std::is_same_v<T, native_order::BindCohort>) {
+            hash_cohort_handle(f, value.cohort);
+        } else {
+            static_assert(!sizeof(T), "unhashed native owner");
+        }
+    }, owner);
 }
 
 void hash_group(Fnv& f, const native_order::Group& group) noexcept {
@@ -245,39 +260,68 @@ void hash_remaining_projection(Fnv& f, const native_order::RemainingProjection& 
 
 void hash_authority(Fnv& f, const native_order::Authority& authority) noexcept {
     f.u(authority.index());
-    if (const auto* wait = std::get_if<native_order::Wait>(&authority)) {
-        hash_handle(f, wait->parent);
-    } else if (const auto* armed = std::get_if<native_order::ArmedTransaction>(&authority)) {
-        hash_handle(f, armed->parent);
-        hash_event_id(f, armed->cause);
-        hash_cursor(f, armed->cause_cursor);
-    } else if (const auto* close = std::get_if<native_order::BookClose>(&authority)) {
-        f.i(close->cycle);
-        f.u(static_cast<uint64_t>(close->side));
-        hash_event_id(f, close->binding_event);
-        hash_cursor(f, close->binding_cursor);
-    } else if (const auto* opening = std::get_if<native_order::OpeningClose>(&authority)) {
-        hash_handle(f, opening->opening);
-        f.i(opening->cycle);
-        f.u(static_cast<uint64_t>(opening->side));
-        f.u(opening->enrollment.index());
-        if (const auto* from_cmd = std::get_if<native_order::EnrollmentFromCommand>(&opening->enrollment)) {
-            hash_event_id(f, from_cmd->accepted);
+    const auto hash_enrollment = [&](const native_order::Enrollment& enrollment) {
+        f.u(enrollment.index());
+        std::visit([&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, native_order::EnrollmentFromCommand>) {
+                hash_event_id(f, value.accepted);
+            } else if constexpr (std::is_same_v<T, native_order::EnrollmentFromApplied>) {
+                hash_event_id(f, value.cause);
+                hash_cursor(f, value.cursor);
+            } else {
+                static_assert(!sizeof(T), "unhashed native enrollment");
+            }
+        }, enrollment);
+    };
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, native_order::BookTransaction>) {
+        } else if constexpr (std::is_same_v<T, native_order::Wait>) {
+            hash_handle(f, value.parent);
+        } else if constexpr (std::is_same_v<T, native_order::ArmedTransaction>) {
+            hash_handle(f, value.parent);
+            hash_event_id(f, value.cause);
+            hash_cursor(f, value.cause_cursor);
+        } else if constexpr (std::is_same_v<T, native_order::UnboundBookClose>) {
+        } else if constexpr (std::is_same_v<T, native_order::BookClose>) {
+            f.i(value.cycle);
+            f.u(static_cast<uint64_t>(value.side));
+            hash_event_id(f, value.binding_event);
+            hash_cursor(f, value.binding_cursor);
+        } else if constexpr (std::is_same_v<T, native_order::OpeningClose>) {
+            hash_handle(f, value.opening);
+            f.i(value.cycle);
+            f.u(static_cast<uint64_t>(value.side));
+            hash_enrollment(value.enrollment);
+        } else if constexpr (std::is_same_v<T, native_order::OpeningsClose>) {
+            f.i(value.cycle); f.u(static_cast<uint64_t>(value.side));
+            f.u(value.openings.size());
+            for (const auto& handle : value.openings) hash_handle(f, handle);
+            hash_enrollment(value.enrollment);
+        } else if constexpr (std::is_same_v<T, native_order::CohortClose>) {
+            hash_cohort_handle(f, value.cohort);
+        } else {
+            static_assert(!sizeof(T), "unhashed native authority");
         }
-        if (const auto* from_app = std::get_if<native_order::EnrollmentFromApplied>(&opening->enrollment)) {
-            hash_event_id(f, from_app->cause);
-            hash_cursor(f, from_app->cursor);
-        }
-    } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&authority)) {
-        f.i(openings->cycle); f.u(static_cast<uint64_t>(openings->side));
-        f.u(openings->openings.size());
-        for (const auto& handle : openings->openings) hash_handle(f, handle);
-        f.u(openings->enrollment.index());
-        if (const auto* cmd = std::get_if<native_order::EnrollmentFromCommand>(&openings->enrollment))
-            hash_event_id(f, cmd->accepted);
-        if (const auto* app = std::get_if<native_order::EnrollmentFromApplied>(&openings->enrollment)) {
-            hash_event_id(f, app->cause); hash_cursor(f, app->cursor);
-        }
+    }, authority);
+}
+
+void hash_cohorts(Fnv& f, const native_order::WorkingRequestCore& requests) noexcept {
+    const auto& cohorts = requests.cohorts();
+    f.u(cohorts.size());
+    for (const auto& roster : cohorts) {
+        hash_cohort_handle(f, roster.handle);
+        f.u(roster.origins.size());
+        for (const auto& origin : roster.origins) hash_handle(f, origin);
+    }
+    const auto& receipts = requests.cohort_receipts();
+    f.u(receipts.size());
+    for (const auto& receipt : receipts) {
+        f.u(static_cast<std::uint64_t>(receipt.operation));
+        f.u(static_cast<std::uint64_t>(receipt.status));
+        hash_cohort_handle(f, receipt.cohort);
+        hash_handle(f, receipt.origin);
     }
 }
 
@@ -384,14 +428,49 @@ void hash_interval(Fnv& f, const native_calendar::NativeInterval& interval) noex
     f.i(interval.next_input_open_ms);
 }
 
+void hash_driver_statistics(Fnv& f, const NativeDriverStatistics& statistics) noexcept {
+    f.b(statistics.intrabar_path_enabled);
+    f.i(statistics.sub_bars_per_script_bar);
+    f.i(statistics.samples_per_sub_bar);
+    f.u(statistics.sub_bars_processed);
+    f.u(statistics.sample_ticks_processed);
+}
+
 void hash_current_point(Fnv& f, const NativeCurrentPointView& point) noexcept {
     hash_coordinate(f, point.decision.coordinate);
     f.i(point.decision.decision_floor_ms);
     hash_interval(f, point.decision.input_interval);
     hash_interval(f, point.decision.script_interval);
+    f.i(point.decision.sub_index);
+    f.i(point.decision.sub_count);
+    f.b(point.decision.is_terminal_sub_bar);
+    f.i(point.decision.sub_bar_open_ms);
+    f.i(point.decision.script_bar_open_ms);
+    hash_driver_statistics(f, point.decision.driver_statistics);
     f.d(point.price);
     f.u(static_cast<uint64_t>(point.quote_kind));
     f.u(point.quote_origin_ordinal);
+}
+
+void hash_input_context(Fnv& f, const NativeInputContext& context) noexcept {
+    hash_interval(f, context.input_interval);
+    hash_interval(f, context.script_interval);
+    f.i(context.input_index);
+    f.b(context.completes_script_interval);
+}
+
+void hash_tick_context(Fnv& f, const NativeTickContext& context) noexcept {
+    hash_coordinate(f, context.decision.coordinate);
+    f.i(context.decision.decision_floor_ms);
+    hash_interval(f, context.decision.input_interval);
+    hash_interval(f, context.decision.script_interval);
+    f.i(context.decision.sub_index);
+    f.i(context.decision.sub_count);
+    f.b(context.decision.is_terminal_sub_bar);
+    f.i(context.decision.sub_bar_open_ms);
+    f.i(context.decision.script_bar_open_ms);
+    hash_driver_statistics(f, context.decision.driver_statistics);
+    f.u(context.sequence);
 }
 
 void hash_bar(Fnv& f, const Bar& bar) noexcept {
@@ -618,6 +697,11 @@ bool NativeExecutionConsumer::failed() const noexcept {
     return std::holds_alternative<NativeFailed>(state_);
 }
 
+bool NativeExecutionConsumer::recoverable_abort() const noexcept {
+    const auto* failed_state = std::get_if<NativeFailed>(&state_);
+    return failed_state != nullptr && failed_state->failure.code == NativeFailureCode::Aborted;
+}
+
 void NativeExecutionConsumer::latch_failure(NativeFailure failure) noexcept {
     if (std::holds_alternative<NativeFailed>(state_)) return;
     std::optional<NativeRunSpec> spec;
@@ -664,7 +748,7 @@ bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const c
     // v10 §4: begin outside Ready refuses without consuming identity/history.
     // Unconfigured/Completed stay put. A begin while Running is a contract
     // failure, including reentry from on_native_run_begin / on_native_bar.
-    if (in_callback_ || processing_input_
+    if (preparing_begin_ || in_callback_ || processing_input_
         || std::holds_alternative<NativeRunning>(state_)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "native begin is forbidden while running");
@@ -675,6 +759,60 @@ bool NativeExecutionConsumer::admit_public_begin(BacktestEngine& engine, const c
         return false;
     }
     return true;
+}
+
+bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
+    // BacktestEngine owns the copied C/C++ FX arrays while a host is not yet
+    // running.  Applying them here makes staging independent of whether the
+    // provider configured the host before or during this begin call.
+    // A provider may intentionally leave an unconfigured/completed host for
+    // admit_public_begin to diagnose.  Do not turn that ordinary lifecycle
+    // refusal into a mutation failure merely because old staged bytes exist.
+    if (!std::holds_alternative<NativeReady>(state_)
+        || (engine.account_currency_fx_timestamps_.empty()
+        && engine.account_currency_fx_rates_.empty())) {
+        return true;
+    }
+    NativeFxCurve curve;
+    curve.effective_from_ms = engine.account_currency_fx_timestamps_;
+    curve.account_per_quote = engine.account_currency_fx_rates_;
+    const auto result = configure_fx_curve(curve);
+    if (result.status == NativeSetupStatus::Applied) return true;
+    fail(engine, NativeFailure{NativeFailureCode::InvalidSpecification,
+                               NativeFailureOperation::Configure,
+                               0, static_cast<std::uint32_t>(result.validation.error)});
+    render(engine, "native staged account-currency FX was rejected");
+    return false;
+}
+
+bool NativeExecutionConsumer::prepare_public_begin(
+        BacktestEngine& engine, const NativeBeginArgs& args) {
+    if (preparing_begin_) {
+        fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
+        render(engine, "native prepare_native_begin cannot reenter");
+        return false;
+    }
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return true;
+    preparing_begin_ = true;
+    try {
+        host->prepare_native_begin(args);
+    } catch (const std::exception& e) {
+        preparing_begin_ = false;
+        // A provider's begin-time validation is a public-entry refusal.  It
+        // has not started a native run or consumed an identity, so preserve a
+        // reusable Unconfigured/Completed host just as other begin refusals
+        // do. Callback exceptions after begin_ready remain terminal.
+        present_refusal(engine, e.what());
+        return false;
+    } catch (...) {
+        preparing_begin_ = false;
+        present_refusal(engine, "native pre-begin provider exception");
+        return false;
+    }
+    preparing_begin_ = false;
+    if (failed() || !apply_staged_ingress(engine)) return false;
+    return validate_undetected_begin(engine, args);
 }
 
 bool NativeExecutionConsumer::admit_public_stream_input(BacktestEngine& engine,
@@ -701,7 +839,12 @@ bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
     if (failed()) return false;
     if (engine.abort_requested_.load(std::memory_order_relaxed)) {
         fail(engine, NativeFailure{NativeFailureCode::Aborted, operation, ordinal});
-        render(engine, "native run aborted");
+        const auto* spec = spec_ptr();
+        if (!spec || spec->abort_reporting == NativeAbortReporting::Error) {
+            render(engine, "native run aborted");
+        } else {
+            engine.last_error_.clear();
+        }
         return false;
     }
     if (!projection_ok(engine)) {
@@ -758,12 +901,49 @@ NativeStateView NativeExecutionConsumer::view() const {
 }
 
 void NativeExecutionConsumer::refuse_source_mutation(const char* operation) {
+    // Source-free ingress is staging while no run is active: before a first
+    // begin, between completed runs, and after a cooperative abort. The
+    // existing in-run refusal stays fail-closed.
+    if (recoverable_abort()
+        || (!failed() && (std::holds_alternative<NativeUnconfigured>(state_)
+                          || std::holds_alternative<NativeReady>(state_)
+                          || std::holds_alternative<NativeCompleted>(state_)
+                          || preparing_begin_))) {
+        return;
+    }
     NativeFailure failure;
     failure.code = NativeFailureCode::UnsupportedSource;
     failure.operation = NativeFailureOperation::Mutation;
     latch_failure(failure);
     throw std::runtime_error(std::string("native host refuses source mutation: ") +
                              (operation ? operation : ""));
+}
+
+bool NativeExecutionConsumer::stage_account_currency_fx_series(
+        const std::vector<std::int64_t>& timestamps, const std::vector<double>& rates) {
+    if (timestamps.size() != rates.size()) return false;
+    NativeFxCurve candidate;
+    try {
+        candidate.effective_from_ms = timestamps;
+        candidate.account_per_quote = rates;
+    } catch (...) {
+        return false;
+    }
+    if (validate_native_fx_curve(candidate).error != NativeFxCurveError::None) return false;
+    if (candidate.effective_from_ms.empty()) {
+        staged_fx_curve_.reset();
+        staged_ingress_fx_ = true;
+        return true;
+    }
+    try {
+        std::optional<NativeFxCurve> replacement;
+        replacement.emplace(std::move(candidate));
+        staged_fx_curve_.swap(replacement);
+        staged_ingress_fx_ = true;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
@@ -787,6 +967,25 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(has_floor_);
     f.u(next_timeline_ordinal_);
     f.b(in_callback_);
+    f.b(preparing_begin_);
+    f.b(input_callback_context_.has_value());
+    if (input_callback_context_) hash_input_context(f, *input_callback_context_);
+    f.b(input_callback_bar_.has_value());
+    if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
+    f.b(tick_callback_context_.has_value());
+    if (tick_callback_context_) hash_tick_context(f, *tick_callback_context_);
+    f.b(tick_callback_bar_.has_value());
+    if (tick_callback_bar_) hash_bar(f, *tick_callback_bar_);
+    hash_coordinate(f, callback_context_.coordinate);
+    f.i(callback_context_.decision_floor_ms);
+    hash_interval(f, callback_context_.input_interval);
+    hash_interval(f, callback_context_.script_interval);
+    f.i(callback_context_.sub_index);
+    f.i(callback_context_.sub_count);
+    f.b(callback_context_.is_terminal_sub_bar);
+    f.i(callback_context_.sub_bar_open_ms);
+    f.i(callback_context_.script_bar_open_ms);
+    hash_driver_statistics(f, callback_context_.driver_statistics);
     f.b(consuming_request_);
     f.b(draining_notifications_);
     f.b(current_frame_.has_value());
@@ -805,6 +1004,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(static_cast<uint64_t>(input_mode_));
     f.i(next_interval_index_);
     if (const auto* spec = spec_ptr()) hash_spec(f, *spec);
+    f.b(staged_ingress_fx_);
     f.b(staged_fx_curve_.has_value());
     if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
     hash_tz_identity(f, tz_identity_);
@@ -819,6 +1019,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
         hash_allowance(f, live.allowance);
         hash_pending(f, live.pending);
     }
+    // The host-maintained roster is durable matching authority.  Fold it
+    // immediately after the request table so a membership-only change cannot
+    // share a continuation identity with an otherwise identical run.
+    hash_cohorts(f, requests_);
     sync_history_digest();
     if (driver_digest_.count != driver_log_.size()) {
         driver_digest_.reset();
@@ -860,6 +1064,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.b(has_last_price_);
     f.d(last_price_);
     f.i(last_print_time_ms_);
+    hash_driver_statistics(f, driver_statistics_);
     f.u(static_cast<uint64_t>(pairing_.pairing));
     f.i(pairing_.group_factor);
     f.u(driver_digest_.count);
@@ -873,8 +1078,66 @@ bool NativeExecutionConsumer::timeframe_args_ok(const std::string& input_tf,
                                                 const std::string& script_tf) const {
     const auto* spec = spec_ptr();
     if (!spec) return false;
+    if (spec->timeframe_undetected) return input_tf.empty() && script_tf.empty();
     if (!input_tf.empty() && input_tf != spec->input_tf) return false;
     if (!script_tf.empty() && script_tf != spec->script_tf) return false;
+    return true;
+}
+
+bool NativeExecutionConsumer::has_undetected_timeframe() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec && spec->timeframe_undetected;
+}
+
+bool NativeExecutionConsumer::legacy_tolerant_slot_labels() const noexcept {
+    const auto* spec = spec_ptr();
+    return spec && spec->slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant;
+}
+
+bool NativeExecutionConsumer::uses_raw_label_partition() const noexcept {
+    return has_undetected_timeframe()
+        || (legacy_tolerant_slot_labels()
+            && pairing_.pairing == native_calendar::TimeframePairing::Passthrough);
+}
+
+native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
+        std::int64_t timestamp) noexcept {
+    // No duration is available in this state. Each boundary is the current
+    // bar timestamp, so no inferred aggregation or clock grid is introduced.
+    return {timestamp, timestamp, timestamp, timestamp, timestamp};
+}
+
+std::optional<native_calendar::NativeInterval>
+NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
+    if (uses_raw_label_partition()) return timestamp_partition(timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp);
+    if (!interval && legacy_tolerant_slot_labels()) return timestamp_partition(timestamp);
+    return interval;
+}
+
+std::optional<native_calendar::NativeInterval>
+NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
+    if (uses_raw_label_partition()) return timestamp_partition(timestamp);
+    auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp);
+    if (!interval && legacy_tolerant_slot_labels()) return timestamp_partition(timestamp);
+    return interval;
+}
+
+bool NativeExecutionConsumer::validate_undetected_begin(
+        BacktestEngine& engine, const NativeBeginArgs& args) {
+    if (!has_undetected_timeframe()) return true;
+    if (!args.input_tf.empty() || !args.script_tf.empty()) {
+        present_refusal(engine, "native undetected timeframe requires empty timeframe arguments");
+        return false;
+    }
+    if (args.n >= 2) {
+        present_refusal(engine, "native undetected timeframe requires fewer than two bars");
+        return false;
+    }
+    if (args.is_stream) {
+        present_refusal(engine, "native stream requires a detected timeframe");
+        return false;
+    }
     return true;
 }
 
@@ -904,17 +1167,28 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     engine.syminfo_.session = spec.session;
     engine.chart_timezone_ = spec.chart_timezone;
     engine.slippage_ = 0;
-    engine.process_orders_on_close_ = false;
-    engine.calc_on_order_fills_ = false;
     applied_ = spec;
-    auto parsed_input = native_calendar::parse_timeframe(spec.input_tf);
-    auto parsed_script = native_calendar::parse_timeframe(spec.script_tf);
     auto parsed_session = native_calendar::parse_session(spec.session, spec.timezone);
-    if (!parsed_input || !parsed_script || !parsed_session) return false;
-    input_tf_ = std::move(*parsed_input);
-    script_tf_ = std::move(*parsed_script);
+    if (!parsed_session) return false;
+    intrabar_tf_.reset();
+    if (!spec.timeframe_undetected) {
+        auto parsed_input = native_calendar::parse_timeframe(spec.input_tf);
+        auto parsed_script = native_calendar::parse_timeframe(spec.script_tf);
+        if (!parsed_input || !parsed_script) return false;
+        input_tf_ = std::move(*parsed_input);
+        script_tf_ = std::move(*parsed_script);
+    } else {
+        input_tf_ = native_calendar::Timeframe{};
+        script_tf_ = native_calendar::Timeframe{};
+    }
+    if (const auto* lower = spec.intrabar.lower()) {
+        auto parsed_intrabar = native_calendar::parse_timeframe(lower->tf);
+        if (!parsed_intrabar) return false;
+        intrabar_tf_ = std::move(*parsed_intrabar);
+    }
     calendar_ = std::move(*parsed_session);
-    pairing_ = native_calendar::compatibility(input_tf_, script_tf_);
+    pairing_ = spec.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
+                                         : native_calendar::compatibility(input_tf_, script_tf_);
     tz_identity_ = native_calendar::timezone_identity_descriptor(spec.timezone);
     return true;
 }
@@ -953,10 +1227,20 @@ bool NativeExecutionConsumer::projection_ok(const BacktestEngine& engine) const 
 NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
                                                      const NativeRunSpec& spec) {
     NativeSetupResult result;
-    if (failed()) {
+    const NativeRunSpec* prior_spec = nullptr;
+    if (failed() && !recoverable_abort()) {
         result.validation.error = NativeRunSpecError::CalendarFailure;
         render(engine, "native host already failed");
         return result;
+    }
+    if (recoverable_abort()) {
+        const auto* aborted = std::get_if<NativeFailed>(&state_);
+        if (!aborted || !aborted->spec) {
+            result.validation.error = NativeRunSpecError::CalendarFailure;
+            render(engine, "native aborted host has no reusable run spec");
+            return result;
+        }
+        prior_spec = &*aborted->spec;
     }
     if (std::holds_alternative<NativeRunning>(state_)) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
@@ -977,8 +1261,11 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
         render(engine, "native run spec rejected");
         return result;
     }
-    if (auto* completed = std::get_if<NativeCompleted>(&state_)) {
-        if (candidate.identity.session_key != completed->spec.identity.session_key
+    if (const auto* completed = std::get_if<NativeCompleted>(&state_)) {
+        prior_spec = &completed->spec;
+    }
+    if (prior_spec) {
+        if (candidate.identity.session_key != prior_spec->identity.session_key
             && candidate.identity.session_key != bound_session_key_) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Configure});
             render(engine, "native session key cannot change on a reused host");
@@ -990,19 +1277,43 @@ NativeSetupResult NativeExecutionConsumer::configure(BacktestEngine& engine,
             return result;
         }
     }
-    auto parsed_input = native_calendar::parse_timeframe(candidate.input_tf);
-    auto parsed_script = native_calendar::parse_timeframe(candidate.script_tf);
     auto parsed_session = native_calendar::parse_session(candidate.session, candidate.timezone);
-    if (!parsed_input || !parsed_script || !parsed_session) {
+    if (!parsed_session) {
         fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
         render(engine, "native calendar parse failed at configure");
         return result;
     }
-    input_tf_ = std::move(*parsed_input);
-    script_tf_ = std::move(*parsed_script);
+    if (!candidate.timeframe_undetected) {
+        auto parsed_input = native_calendar::parse_timeframe(candidate.input_tf);
+        auto parsed_script = native_calendar::parse_timeframe(candidate.script_tf);
+        if (!parsed_input || !parsed_script) {
+            fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
+            render(engine, "native calendar parse failed at configure");
+            return result;
+        }
+        input_tf_ = std::move(*parsed_input);
+        script_tf_ = std::move(*parsed_script);
+    } else {
+        input_tf_ = native_calendar::Timeframe{};
+        script_tf_ = native_calendar::Timeframe{};
+    }
+    intrabar_tf_.reset();
+    if (const auto* lower = candidate.intrabar.lower()) {
+        auto parsed_intrabar = native_calendar::parse_timeframe(lower->tf);
+        if (!parsed_intrabar) {
+            fail(engine, NativeFailure{NativeFailureCode::Calendar, NativeFailureOperation::Configure});
+            render(engine, "native intrabar timeframe parse failed at configure");
+            return result;
+        }
+        intrabar_tf_ = std::move(*parsed_intrabar);
+    }
     calendar_ = std::move(*parsed_session);
-    pairing_ = native_calendar::compatibility(input_tf_, script_tf_);
-    staged_fx_curve_.reset();
+    pairing_ = candidate.timeframe_undetected ? native_calendar::TimeframeCompatibility{}
+                                              : native_calendar::compatibility(input_tf_, script_tf_);
+    // Direct native FX setup is per-ready-spec as before. C/C++ staged ingress
+    // persists across a completed/aborted handle and is reapplied by the next
+    // provider begin, so it must survive that provider's configure call.
+    if (!staged_ingress_fx_) staged_fx_curve_.reset();
     state_ = NativeReady{std::move(candidate)};
     result.status = NativeSetupStatus::Applied;
     engine.last_error_.clear();
@@ -1065,6 +1376,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     engine.reset_run_state();
+    engine.diag_input_bars_processed_ = 0;
+    engine.diag_script_bars_processed_ = 0;
     requests_.reset(spec.identity);
     next_timeline_ordinal_ = 1;
     decision_floor_ms_ = initial_floor_ms;
@@ -1092,6 +1405,14 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     history_digest_.reset();
     driver_digest_.reset();
     account_digest_.reset();
+    driver_statistics_ = NativeDriverStatistics{};
+    driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
+    callback_context_ = NativeDecisionContext{};
+    callback_context_.driver_statistics = driver_statistics_;
+    input_callback_context_.reset();
+    input_callback_bar_.reset();
+    tick_callback_context_.reset();
+    tick_callback_bar_.reset();
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
@@ -1156,9 +1477,31 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
     case NativeInputPreflightError::CalendarFailure:
         present_refusal(engine, "native calendar parse failed during input preflight");
         break;
+    case NativeInputPreflightError::TimestampDeltaOverflow:
+        present_refusal(engine, "native timestamp delta exceeds int64 range");
+        break;
     case NativeInputPreflightError::None:
         break;
     }
+    return false;
+}
+
+bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
+    const auto* spec = spec_ptr();
+    if (!spec || spec->intrabar.is_none() || spec->intrabar.synthesized_path()) return true;
+    const auto& lower = *spec->intrabar.lower();
+    if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        present_refusal(engine, "native intrabar path timeframe or bar count is invalid");
+        return false;
+    }
+    NativeRunSpec path_spec = *spec;
+    path_spec.input_tf = lower.tf;
+    path_spec.script_tf = lower.tf;
+    const auto result = preflight_native_inputs(
+        path_spec, lower.bars.empty() ? nullptr : lower.bars.data(),
+        static_cast<int>(lower.bars.size()), NativeInputPolicy::Batch);
+    if (result) return true;
+    present_refusal(engine, "native intrabar path failed validation");
     return false;
 }
 
@@ -1316,12 +1659,49 @@ native_order::TargetObservation NativeExecutionConsumer::read_target(
         out.opening = read_opening(engine, opening->opening, opening->cycle);
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live->authority)) {
         out.openings = read_openings(engine, openings->openings, openings->cycle);
+    } else if (const auto* cohort = std::get_if<native_order::CohortClose>(&live->authority)) {
+        const auto* position = std::get_if<native_order::PositionNonflat>(&out.current_position);
+        if (!position) return out;
+        std::vector<native_order::RequestHandle> handles;
+        handles.reserve(engine.pyramid_entries_.size());
+        for (const auto& lot : engine.pyramid_entries_) {
+            native_order::RequestHandle handle{requests_.identity(), lot.entry_incarnation};
+            if (requests_.cohort_contains(cohort->cohort, handle)) {
+                handles.push_back(std::move(handle));
+            }
+        }
+        out.openings = read_openings(engine, handles, position->cycle);
     } else if (const auto* bind = std::get_if<native_order::BindOpenings>(&live->request().owner)) {
         out.openings = read_openings(engine, bind->openings, bind->cycle);
     } else if (const auto* bind = std::get_if<native_order::BindOpening>(&live->request().owner)) {
         out.opening = read_opening(engine, bind->opening, bind->cycle);
     }
     return out;
+}
+
+std::optional<native_order::Side> NativeExecutionConsumer::cohort_side(
+        const BacktestEngine& engine, const native_order::LiveRequest& live) const {
+    if (!std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        return std::nullopt;
+    }
+    const auto target = read_target(engine, &live);
+    for (const auto& opening : target.openings) {
+        if (!opening.has_live_matching_lot) continue;
+        if (const auto* position = std::get_if<native_order::PositionNonflat>(
+                &opening.current_position)) {
+            return position->side;
+        }
+    }
+    return std::nullopt;
+}
+
+bool NativeExecutionConsumer::request_is_buy(
+        const BacktestEngine& engine, const native_order::LiveRequest& live) const {
+    if (std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        const auto side = cohort_side(engine, live);
+        return side && *side == native_order::Side::Short;
+    }
+    return requests_.working_is_buy(live);
 }
 
 native_order::CommandContext NativeExecutionConsumer::make_command_context(
@@ -1642,16 +2022,21 @@ void NativeExecutionConsumer::observe_trails(
         if (failed()) return;
         const auto* live = requests_.find_live(handle);
         if (!live) continue;
+        evaluation.cohort_side = cohort_side(engine, *live);
+        if (std::holds_alternative<native_order::CohortClose>(live->authority)
+            && !evaluation.cohort_side) {
+            continue;
+        }
         if (!requests_.evaluation_eligible(*live, evaluation)) continue;
         const auto* track = std::get_if<native_order::TrailTrack>(&live->trigger_state);
         if (!track) continue;
-        const bool buy = requests_.working_is_buy(*live);
+        const bool buy = request_is_buy(engine, *live);
         if (!native_matching::trail_best_improves(track->best, price, buy)) continue;
         native_order::Preparation<native_order::PreparedMutation> prep;
         try {
             prep = requests_.prepare_trigger(
                 handle, native_order::ObserveTrailExtremum{cursor, price},
-                evaluation.driver_class, next_timeline_ordinal_);
+                evaluation.driver_class, next_timeline_ordinal_, evaluation.cohort_side);
         } catch (const std::exception& e) {
             fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                        NativeFailureOperation::Settlement, cursor.point.ordinal});
@@ -1758,7 +2143,7 @@ NativeExecutionTermsFacts NativeExecutionConsumer::build_terms_facts(
         : live.allowance;
     out.position = position(engine);
     out.is_buy = std::holds_alternative<native_order::UnboundBookClose>(live.authority)
-        ? engine.position_side_ == PositionSide::SHORT : requests_.working_is_buy(live);
+        ? engine.position_side_ == PositionSide::SHORT : request_is_buy(engine, live);
     out.price_kind = price_kind;
     out.shared_cursor_collision = shared_cursor_collision;
     out.raw_price = raw_price;
@@ -1796,6 +2181,22 @@ NativeExecutionTermsFacts NativeExecutionConsumer::build_terms_facts(
     } else if (const auto* openings = std::get_if<native_order::OpeningsClose>(&live.authority)) {
         native_order::SelectedExposure scope;
         scope.cycle = openings->cycle;
+        for (const auto& row : target.openings) {
+            if (row.has_live_matching_lot) scope.incarnations.push_back(row.queried_opening.incarnation);
+        }
+        out.scope = scope;
+        for (const auto& lot : engine.pyramid_entries_) {
+            if (std::find(scope.incarnations.begin(), scope.incarnations.end(),
+                          lot.entry_incarnation) != scope.incarnations.end()) {
+                out.scope_exposure_units += lot.qty;
+            }
+        }
+    } else if (std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        native_order::SelectedExposure scope;
+        if (const auto* position = std::get_if<native_order::PositionNonflat>(
+                &target.current_position)) {
+            scope.cycle = position->cycle;
+        }
         for (const auto& row : target.openings) {
             if (row.has_live_matching_lot) scope.incarnations.push_back(row.queried_opening.incarnation);
         }
@@ -1885,6 +2286,22 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
         }
         candidate.selected = execution::SelectedOpeningSet{scope.cycle, scope.incarnations};
         candidate.scope = std::move(scope);
+    } else if (std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        const auto* position = std::get_if<native_order::PositionNonflat>(
+            &candidate.target.current_position);
+        if (!position) throw std::logic_error("native cohort selection is flat");
+        native_order::SelectedExposure scope;
+        scope.cycle = position->cycle;
+        scope.incarnations.reserve(candidate.target.openings.size());
+        for (const auto& row : candidate.target.openings) {
+            if (row.queried_opening.run != requests_.identity()) {
+                throw std::logic_error("native cohort scope identity mismatch");
+            }
+            if (row.has_live_matching_lot) scope.incarnations.push_back(row.queried_opening.incarnation);
+        }
+        if (scope.incarnations.empty()) throw std::logic_error("native cohort selection is empty");
+        candidate.selected = execution::SelectedOpeningSet{scope.cycle, scope.incarnations};
+        candidate.scope = std::move(scope);
     } else if (!std::holds_alternative<native_order::BookTransaction>(live.authority)
                && !std::holds_alternative<native_order::ArmedTransaction>(live.authority)
                && !std::holds_alternative<native_order::BookClose>(live.authority)
@@ -1902,7 +2319,7 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
             if (allowance->point_ordinal == cursor.point.ordinal) qty = std::min(qty, allowance->left);
         }
         if (std::holds_alternative<native_order::Transact>(live.request().intent))
-            candidate.physical = native_order::Transact{requests_.working_is_buy(live) ? qty : -qty};
+            candidate.physical = native_order::Transact{request_is_buy(engine, live) ? qty : -qty};
         else if (const auto* reverse = std::get_if<native_order::ReverseTo>(&live.request().intent))
             candidate.physical = execution::ReverseTo{reverse->signed_units};
         else
@@ -1928,10 +2345,15 @@ NativeCurrentPointView NativeExecutionConsumer::execution_anchor(
     NativeCurrentPointView out;
     out.decision.coordinate = cursor.point;
     out.decision.decision_floor_ms = std::max(decision_floor(), cursor.point.effective_time_ms);
-    if (auto input = native_calendar::interval_containing(calendar_, input_tf_, cursor.point.open_ms))
+    if (auto input = input_interval_at(cursor.point.open_ms))
         out.decision.input_interval = *input;
-    if (auto script = native_calendar::interval_containing(calendar_, script_tf_, cursor.point.open_ms))
+    if (auto script = script_interval_at(cursor.point.open_ms))
         out.decision.script_interval = *script;
+    out.decision.sub_index = callback_context_.sub_index;
+    out.decision.sub_count = callback_context_.sub_count;
+    out.decision.is_terminal_sub_bar = callback_context_.is_terminal_sub_bar;
+    out.decision.sub_bar_open_ms = callback_context_.sub_bar_open_ms;
+    out.decision.script_bar_open_ms = callback_context_.script_bar_open_ms;
     out.price = resolved;
     out.quote_kind = NativeCurrentQuoteKind::ExecutionAnchor;
     return out;
@@ -1994,7 +2416,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
 
         const auto* host_sized = host_sized_intent(*live);
         const bool unresolved = host_sized
-            && std::holds_alternative<native_order::RemainingDeferred>(live->remaining);
+            && (std::holds_alternative<native_order::RemainingDeferred>(live->remaining)
+                || std::holds_alternative<native_order::NoTarget>(live->remaining));
         // This is the lone terms pre-resolver shortcut. The ordinary queued
         // evaluation path already owns the equivalent terminal.
         if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
@@ -2492,7 +2915,7 @@ void NativeExecutionConsumer::match_path(
     auto provenance_still_matches = [&](const CandidateProvenance& row) {
         const auto* live = requests_.find_live(row.handle);
         if (!live) return false;
-        const bool buy = requests_.working_is_buy(*live);
+        const bool buy = request_is_buy(engine, *live);
         return row.is_buy == buy
             && row.trigger_state_index == live->trigger_state.index()
             && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
@@ -2556,7 +2979,14 @@ void NativeExecutionConsumer::match_path(
         for (const auto& handle : snapshot) {
             const auto* live = requests_.find_live(handle);
             if (!live) continue;
-            const auto facts = requests_.eligibility_facts(*live, eval);
+            native_order::EvaluationContext candidate_eval = eval;
+            candidate_eval.cohort_side = cohort_side(engine, *live);
+            if (std::holds_alternative<native_order::CohortClose>(live->authority)
+                && !candidate_eval.cohort_side) {
+                erase_provenance_for(handle);
+                continue;
+            }
+            const auto facts = requests_.eligibility_facts(*live, candidate_eval);
             if (!facts.birth_ok || facts.waiting || !facts.driver_ok) {
                 erase_provenance_for(handle);
                 continue;
@@ -2578,7 +3008,7 @@ void NativeExecutionConsumer::match_path(
                 row.price = start.price;
                 row.kind = Kind::Evaluate;
             } else {
-                const bool buy = requests_.working_is_buy(*live);
+                const bool buy = request_is_buy(engine, *live);
                 const auto& trigger = live->request().trigger;
                 const auto& state = live->trigger_state;
                 std::optional<native_matching::GeometricHit> hit;
@@ -2674,7 +3104,7 @@ void NativeExecutionConsumer::match_path(
                 continue;
             }
             if (row.kind != Kind::Evaluate) {
-                const bool buy = requests_.working_is_buy(*live);
+                const bool buy = request_is_buy(engine, *live);
                 if (!row.trigger_level) row.trigger_level = level_for(*live, row.kind, buy);
                 if (!row.at_level) {
                     if (const auto* retained = retained_origin(
@@ -2719,6 +3149,12 @@ void NativeExecutionConsumer::match_path(
         eval.cursor = path_cursor;
         const auto* live = requests_.find_live(winner->handle);
         if (!live) continue;
+        eval.cohort_side = cohort_side(engine, *live);
+        if (std::holds_alternative<native_order::CohortClose>(live->authority)
+            && !eval.cohort_side) {
+            skipped.insert(skip_key(winner->incarnation, winner->kind));
+            continue;
+        }
         if (winner->kind == Kind::Evaluate) {
             native_order::Preparation<native_order::PreparedMutation> prep;
             try {
@@ -2773,7 +3209,7 @@ void NativeExecutionConsumer::match_path(
             native_order::Preparation<native_order::PreparedMutation> prep;
             try {
                 prep = requests_.prepare_trigger(winner->handle, transition,
-                                                driver_class, next_timeline_ordinal_);
+                                                driver_class, next_timeline_ordinal_, eval.cohort_side);
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -2796,7 +3232,7 @@ void NativeExecutionConsumer::match_path(
             if (winner->kind == Kind::ActivateStop || winner->kind == Kind::ActivateTrail) {
                 const auto* activated = requests_.find_live(winner->handle);
                 if (activated) {
-                    const bool buy = requests_.working_is_buy(*activated);
+                    const bool buy = request_is_buy(engine, *activated);
                     CandidateProvenance transfer;
                     transfer.handle = winner->handle;
                     transfer.point_ordinal = P;
@@ -2815,7 +3251,7 @@ void NativeExecutionConsumer::match_path(
 
         live = requests_.find_live(winner->handle);
         if (!live) continue;
-        const bool buy = requests_.working_is_buy(*live);
+        const bool buy = request_is_buy(engine, *live);
         const double slip = static_cast<double>(spec->slippage_ticks) * spec->price_tick;
         double resolved = native_matching::apply_slippage(winner->price, slip, buy);
         const auto& trigger = live->request().trigger;
@@ -2907,13 +3343,18 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     }
     if (!std::holds_alternative<native_order::Independent>(request.owner)
         && !std::holds_alternative<native_order::BindOpening>(request.owner)
-        && !std::holds_alternative<native_order::BindOpenings>(request.owner))
+        && !std::holds_alternative<native_order::BindOpenings>(request.owner)
+        && !std::holds_alternative<native_order::BindCohort>(request.owner))
         return Refusal::UnsupportedRequest;
     const auto target = read_target(engine, live);
     if (std::holds_alternative<native_order::OpeningClose>(live->authority)) {
         if (!target.opening || !target.opening->has_live_matching_lot) return Refusal::UnreadyOwner;
     } else if (std::holds_alternative<native_order::OpeningsClose>(live->authority)) {
         if (target.openings.empty()) return Refusal::InvalidSelection;
+        bool any_live = false;
+        for (const auto& row : target.openings) any_live |= row.has_live_matching_lot;
+        if (!any_live) return Refusal::UnreadyOwner;
+    } else if (std::holds_alternative<native_order::CohortClose>(live->authority)) {
         bool any_live = false;
         for (const auto& row : target.openings) any_live |= row.has_live_matching_lot;
         if (!any_live) return Refusal::UnreadyOwner;
@@ -2938,7 +3379,7 @@ double NativeExecutionConsumer::current_price(const BacktestEngine& engine,
         ? engine.bar_fill_price(current_frame_->point.price) : current_frame_->point.price;
     // An Independent close has not yet been bound during read-only preview.
     const bool buy = std::holds_alternative<native_order::UnboundBookClose>(live.authority)
-        ? engine.position_side_ == PositionSide::SHORT : requests_.working_is_buy(live);
+        ? engine.position_side_ == PositionSide::SHORT : request_is_buy(engine, live);
     const auto* spec = spec_ptr();
     return native_matching::apply_slippage(basis,
         static_cast<double>(spec->slippage_ticks) * spec->price_tick, buy);
@@ -2956,9 +3397,11 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
     evaluation.cursor = cursor;
     evaluation.driver_class = native_order::DriverEligibilityClass::CurrentExecution;
     evaluation.existing_matching_bit = true;
+    evaluation.cohort_side = cohort_side(engine, *live);
     const auto* host_sized = host_sized_intent(*live);
     const bool unresolved = host_sized
-        && std::holds_alternative<native_order::RemainingDeferred>(live->remaining);
+        && (std::holds_alternative<native_order::RemainingDeferred>(live->remaining)
+            || std::holds_alternative<native_order::NoTarget>(live->remaining));
     if (unresolved && host_sized->kind == native_order::HostSizedKind::Close
         && std::holds_alternative<native_order::UnboundBookClose>(live->authority)
         && engine.position_side_ == PositionSide::FLAT) {
@@ -3115,6 +3558,7 @@ NativeCurrentExecutionResult NativeExecutionConsumer::execute_current(
         evaluation.driver_class = native_order::DriverEligibilityClass::CurrentExecution;
         evaluation.existing_matching_bit = true;
         const auto* live = requests_.find_live(command.target);
+        evaluation.cohort_side = live ? cohort_side(engine, *live) : std::nullopt;
         const auto history_before = requests_.history().size();
         auto prep = requests_.prepare_evaluation(command.target, evaluation,
             read_target(engine, live), next_timeline_ordinal_);
@@ -3239,16 +3683,170 @@ void NativeExecutionConsumer::drain_applied_notifications(BacktestEngine& engine
     }
 }
 
+void NativeExecutionConsumer::invoke_bar_open_callback(
+        BacktestEngine& engine, const Bar& bar, const NativeDriverPoint& point) {
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return;
+    callback_context_.coordinate = point.coordinate;
+    callback_context_.decision_floor_ms = decision_floor();
+    if (auto input = input_interval_at(point.coordinate.open_ms)) {
+        callback_context_.input_interval = *input;
+    }
+    if (auto script = script_interval_at(point.coordinate.open_ms)) {
+        callback_context_.script_interval = *script;
+    }
+    if (callback_context_.sub_count <= 0) callback_context_.sub_count = 1;
+    if (callback_context_.sub_index < 0) callback_context_.sub_index = 0;
+    if (callback_context_.sub_bar_open_ms == 0) {
+        callback_context_.sub_bar_open_ms = point.coordinate.open_ms;
+    }
+    if (callback_context_.script_bar_open_ms == 0) {
+        callback_context_.script_bar_open_ms = point.coordinate.open_ms;
+    }
+    NativeCurrentPointView current;
+    current.decision = callback_context_;
+    current.price = point.raw_price;
+    current.quote_kind = NativeCurrentQuoteKind::MarketDecision;
+    current.quote_origin_ordinal = point.coordinate.ordinal;
+    current_frame_ = CurrentExecutionFrame{current, next_timeline_ordinal_ - 1};
+    engine.current_bar_ = bar;
+    engine.current_bar_.timestamp = point.coordinate.effective_time_ms;
+    in_callback_ = true;
+    try {
+        const NativeDecisionContext presented = callback_context_;
+        host->on_native_bar_open(bar, presented);
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        current_frame_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Callback,
+                                       point.coordinate.ordinal});
+            render(engine, e.what());
+        }
+        return;
+    } catch (...) {
+        in_callback_ = false;
+        current_frame_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Callback,
+                                       point.coordinate.ordinal});
+            render(engine, "native bar-open callback exception");
+        }
+        return;
+    }
+    finish_callback(engine, point.coordinate.ordinal);
+}
+
+bool NativeExecutionConsumer::invoke_input_callback(
+        BacktestEngine& engine, const Bar& bar, const NativeInputContext& context) {
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return true;
+    input_callback_context_ = context;
+    input_callback_bar_ = bar;
+    in_callback_ = true;
+    try {
+        host->on_native_input(bar, context);
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        input_callback_context_.reset();
+        input_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input});
+            render(engine, e.what());
+        }
+        return false;
+    } catch (...) {
+        in_callback_ = false;
+        input_callback_context_.reset();
+        input_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input});
+            render(engine, "native input callback exception");
+        }
+        return false;
+    }
+    in_callback_ = false;
+    input_callback_context_.reset();
+    input_callback_bar_.reset();
+    return !failed();
+}
+
+bool NativeExecutionConsumer::invoke_tick_callback(
+        BacktestEngine& engine, const Bar& bar, const NativeTickContext& context) {
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return true;
+    NativeTickContext presented = context;
+    presented.decision.decision_floor_ms = decision_floor();
+    tick_callback_context_ = presented;
+    tick_callback_bar_ = bar;
+    callback_context_ = presented.decision;
+    NativeCurrentPointView current;
+    current.decision = callback_context_;
+    current.price = bar.close;
+    current.quote_kind = NativeCurrentQuoteKind::MarketDecision;
+    current.quote_origin_ordinal = callback_context_.coordinate.ordinal;
+    current_frame_ = CurrentExecutionFrame{current, next_timeline_ordinal_ - 1};
+    in_callback_ = true;
+    try {
+        host->on_native_tick(bar, presented);
+    } catch (const std::bad_alloc& e) {
+        in_callback_ = false;
+        current_frame_.reset();
+        tick_callback_context_.reset();
+        tick_callback_bar_.reset();
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Input,
+                                   context.decision.coordinate.ordinal});
+        render(engine, e.what());
+        return false;
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        current_frame_.reset();
+        tick_callback_context_.reset();
+        tick_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input,
+                                       context.decision.coordinate.ordinal});
+            render(engine, e.what());
+        }
+        return false;
+    } catch (...) {
+        in_callback_ = false;
+        current_frame_.reset();
+        tick_callback_context_.reset();
+        tick_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input,
+                                       context.decision.coordinate.ordinal});
+            render(engine, "native tick callback exception");
+        }
+        return false;
+    }
+    finish_callback(engine, context.decision.coordinate.ordinal);
+    tick_callback_context_.reset();
+    tick_callback_bar_.reset();
+    return !failed();
+}
+
 void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar& bar,
                                               const NativeCoordinate& coordinate) {
     auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
     if (!host) return;
     callback_context_.coordinate = coordinate;
     callback_context_.decision_floor_ms = decision_floor_ms_;
-    auto input = native_calendar::interval_containing(calendar_, input_tf_, bar.timestamp);
-    auto script = native_calendar::interval_containing(calendar_, script_tf_, bar.timestamp);
+    auto input = input_interval_at(bar.timestamp);
+    auto script = script_interval_at(bar.timestamp);
     if (input) callback_context_.input_interval = *input;
     if (script) callback_context_.script_interval = *script;
+    if (callback_context_.sub_count <= 0) callback_context_.sub_count = 1;
+    if (callback_context_.sub_index < 0) callback_context_.sub_index = 0;
+    if (callback_context_.sub_bar_open_ms == 0) callback_context_.sub_bar_open_ms = coordinate.open_ms;
+    if (callback_context_.script_bar_open_ms == 0) callback_context_.script_bar_open_ms = coordinate.open_ms;
     NativeCurrentPointView point;
     point.decision = callback_context_;
     point.price = bar.close;
@@ -3278,6 +3876,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         }
         return;
     }
+    ++engine.diag_script_bars_processed_;
     finish_callback(engine, coordinate.ordinal);
 }
 
@@ -3286,6 +3885,15 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     // Native AUTO is local to this input; another legacy host may have a
     // thread-local forced path installed around a nested native run.
     const bool high_first = std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
+    callback_context_ = NativeDecisionContext{};
+    callback_context_.sub_index = 0;
+    callback_context_.sub_count = 1;
+    callback_context_.is_terminal_sub_bar = true;
+    callback_context_.sub_bar_open_ms = base.open_ms;
+    callback_context_.script_bar_open_ms = base.open_ms;
+    driver_statistics_.sub_bars_per_script_bar = 1;
+    driver_statistics_.samples_per_sub_bar = 0;
+    callback_context_.driver_statistics = driver_statistics_;
     auto emit_discrete = [&](double price, int64_t time, NativePriceProvenance provenance,
                              NativePathPhase phase, bool matching) {
         NativeDriverPoint point;
@@ -3298,6 +3906,10 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
         point.raw_price = price;
         point.matching = matching;
         record_driver(point);
+        if (phase == NativePathPhase::Open) {
+            invoke_bar_open_callback(engine, bar, point);
+            if (failed()) return;
+        }
         match_discrete(engine, point);
         raise_floor(time);
     };
@@ -3358,6 +3970,173 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     }
 }
 
+void NativeExecutionConsumer::deliver_intrabar_script(
+        BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base) {
+    const auto* spec = spec_ptr();
+    const auto* lower = spec ? spec->intrabar.lower() : nullptr;
+    const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;
+    if (!lower && !synthesized) {
+        deliver_confirmed_script(engine, bar, base);
+        return;
+    }
+
+    std::vector<const Bar*> sub_bars;
+    if (lower) {
+        const int64_t begin = base.open_ms;
+        const int64_t end = script_.interval.next_input_open_ms;
+        for (const auto& candidate : lower->bars) {
+            if (candidate.timestamp >= begin && candidate.timestamp < end) {
+                sub_bars.push_back(&candidate);
+            }
+        }
+        // The generic lower-feed path follows the legacy pump's fallback: a
+        // script bar with no assigned lower bars walks its own OHLC path.
+        if (sub_bars.empty()) {
+            deliver_confirmed_script(engine, bar, base);
+            return;
+        }
+    } else {
+        // synthesized is intentionally independent of [begin, end): raw
+        // caller labels have a zero-width partition but still carry their
+        // own complete OHLC path.
+        sub_bars.push_back(&bar);
+    }
+
+    Bar script_bar = bar;
+    script_bar.timestamp = base.open_ms;
+    const int sample_count = lower ? lower->samples : synthesized->samples;
+    const auto distribution = lower ? lower->distribution : synthesized->distribution;
+    const bool volume_weighted = lower ? lower->volume_weighted : synthesized->volume_weighted;
+    const int volume_weighted_min_samples = lower
+        ? lower->volume_weighted_min_samples : synthesized->volume_weighted_min_samples;
+    const int volume_weighted_max_samples = lower
+        ? lower->volume_weighted_max_samples : synthesized->volume_weighted_max_samples;
+    double mean_volume = 0.0;
+    if (volume_weighted) {
+        for (const Bar* sub : sub_bars) mean_volume += sub->volume;
+        mean_volume /= static_cast<double>(sub_bars.size());
+    }
+    std::vector<double> samples;
+    callback_context_ = NativeDecisionContext{};
+    callback_context_.sub_count = static_cast<int>(sub_bars.size());
+    callback_context_.script_bar_open_ms = base.open_ms;
+    driver_statistics_.intrabar_path_enabled = true;
+    driver_statistics_.sub_bars_per_script_bar = static_cast<int>(sub_bars.size());
+    driver_statistics_.samples_per_sub_bar = 0;
+    callback_context_.driver_statistics = driver_statistics_;
+    const bool direct_sub_bar_corners = lower && sub_bars.size() > 1;
+    const bool distribution_samples = synthesized || lower->sample_eligibility
+        == IntrabarPath::SampleEligibility::DistributionSamples;
+
+    for (std::size_t sub_index = 0; sub_index < sub_bars.size(); ++sub_index) {
+        const Bar& sub = *sub_bars[sub_index];
+        callback_context_.sub_index = static_cast<int>(sub_index);
+        callback_context_.is_terminal_sub_bar = sub_index + 1 == sub_bars.size();
+        callback_context_.sub_bar_open_ms = sub.timestamp;
+        // DistributionSamples and synthesized paths consume the generic
+        // sampler from include/pineforge/magnifier.hpp as ordered point
+        // decisions. This reproduces the read-only consumption ordering at
+        // src/source/pine_scheduler.cpp:806-960 without source policy here.
+        if (!distribution_samples || direct_sub_bar_corners) {
+            // A retained lower bar already supplies its four exact turning
+            // points. Continuous eligibility traverses those segments directly;
+            // likewise, a path containing several retained lower bars has no
+            // missing intrabar detail for a synthetic sampler to recover.
+            sample_price_path(sub, 4, MagnifierDistribution::ENDPOINTS, samples);
+        } else if (volume_weighted) {
+            sample_price_path_volume_weighted(
+                sub, sample_count, mean_volume, volume_weighted_min_samples,
+                volume_weighted_max_samples, distribution, samples);
+        } else {
+            sample_price_path(sub, sample_count, distribution, samples);
+        }
+        if (samples.empty()) {
+            fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});
+            render(engine, "native intrabar path produced no samples");
+            return;
+        }
+        ++driver_statistics_.sub_bars_processed;
+        driver_statistics_.samples_per_sub_bar = static_cast<int>(samples.size());
+        callback_context_.driver_statistics = driver_statistics_;
+        double previous = samples.front();
+        for (std::size_t sample_index = 0; sample_index < samples.size(); ++sample_index) {
+            const double price = samples[sample_index];
+            ++driver_statistics_.sample_ticks_processed;
+            callback_context_.driver_statistics = driver_statistics_;
+            NativeDriverPoint point;
+            point.coordinate = base;
+            point.coordinate.ordinal = take_ordinal(engine);
+            point.coordinate.effective_time_ms = sub.timestamp;
+            point.coordinate.source_price_time_ms = sub.timestamp;
+            if (distribution_samples) {
+                // A sampled value is a one-price decision bar, not an
+                // interpolated leg of its containing OHLC bar. Giving every
+                // one its open coordinate makes O=H=L=C=price: a reached
+                // resting level fills at the level, while a gap through the
+                // level keeps this sample's quote. Its driver ordinal still
+                // orders it strictly after the preceding sample.
+                point.coordinate.path_phase = NativePathPhase::Open;
+                point.coordinate.provenance = NativePriceProvenance::ModeledOHLCOpen;
+            } else {
+                point.coordinate.path_phase = sample_index == 0 ? NativePathPhase::Open
+                    : (sample_index + 1 == samples.size() ? NativePathPhase::Close
+                       : (price == sub.high ? NativePathPhase::High
+                          : (price == sub.low ? NativePathPhase::Low : NativePathPhase::None)));
+                point.coordinate.provenance = sample_index == 0
+                    ? NativePriceProvenance::ModeledOHLCOpen
+                    : (sample_index + 1 == samples.size()
+                        ? NativePriceProvenance::ModeledOHLCClose
+                        : NativePriceProvenance::Confirmed);
+            }
+            point.raw_price = price;
+            point.matching = distribution_samples || sample_index == 0;
+            point.excursion = sample_index != 0;
+            record_driver(point);
+            if (sub_index == 0 && sample_index == 0) {
+                invoke_bar_open_callback(engine, script_bar, point);
+                if (failed()) return;
+            }
+            if (distribution_samples || sample_index == 0) {
+                match_discrete(engine, point);
+                if (!failed()) apply_excursion(engine, price);
+            } else {
+                match_segment(engine, point, previous);
+            }
+            if (failed()) return;
+            raise_floor(sub.timestamp);
+            previous = price;
+        }
+    }
+
+    NativeCoordinate calculation = base;
+    calculation.ordinal = take_ordinal(engine);
+    calculation.effective_time_ms = calculation_time(base);
+    calculation.source_price_time_ms = sub_bars.back()->timestamp;
+    calculation.provenance = NativePriceProvenance::Calculation;
+    calculation.path_phase = NativePathPhase::None;
+    callback_context_.sub_index = static_cast<int>(sub_bars.size() - 1);
+    callback_context_.is_terminal_sub_bar = true;
+    callback_context_.sub_bar_open_ms = sub_bars.back()->timestamp;
+    callback_context_.script_bar_open_ms = base.open_ms;
+    raise_floor(calculation.effective_time_ms);
+    engine.current_bar_ = script_bar;
+    engine.bar_index_ = calculation.interval_index;
+    engine.current_bar_.timestamp = calculation.effective_time_ms;
+    invoke_callback(engine, script_bar, calculation);
+    if (failed()) return;
+    if (spec->close_execution == NativeCloseExecution::AfterCalculation) {
+        NativeDriverPoint point;
+        point.coordinate = calculation;
+        point.coordinate.ordinal = take_ordinal(engine);
+        point.coordinate.provenance = NativePriceProvenance::AfterCalculationClose;
+        point.coordinate.path_phase = NativePathPhase::Close;
+        point.raw_price = script_bar.close;
+        point.matching = true;
+        record_driver(point);
+        match_point(engine, point);
+    }
+}
+
 int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) const noexcept {
     int64_t t = base.last_traded_close_ms;
     if (base.next_period_open_ms > t) t = base.next_period_open_ms;
@@ -3367,6 +4146,12 @@ int64_t NativeExecutionConsumer::calculation_time(const NativeCoordinate& base) 
 
 void NativeExecutionConsumer::deliver_aggregate_calculation(
         BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base) {
+    callback_context_ = NativeDecisionContext{};
+    callback_context_.sub_index = 0;
+    callback_context_.sub_count = 1;
+    callback_context_.is_terminal_sub_bar = true;
+    callback_context_.sub_bar_open_ms = base.open_ms;
+    callback_context_.script_bar_open_ms = base.open_ms;
     const int64_t close_time = calculation_time(base);
     NativeCoordinate calc = base;
     calc.ordinal = take_ordinal(engine);
@@ -3407,7 +4192,11 @@ void NativeExecutionConsumer::seal_script(BacktestEngine& engine, NativeCompleti
     base.next_input_open_ms = script_.interval.next_input_open_ms;
     base.completion = kind;
     if (script_.modeled_ohlc) {
-        deliver_confirmed_script(engine, script_.agg, base);
+        if (const auto* spec = spec_ptr(); spec && !spec->intrabar.is_none()) {
+            deliver_intrabar_script(engine, script_.agg, base);
+        } else {
+            deliver_confirmed_script(engine, script_.agg, base);
+        }
     } else {
         deliver_aggregate_calculation(engine, script_.agg, base);
     }
@@ -3419,8 +4208,7 @@ bool NativeExecutionConsumer::contribute_input(
         BacktestEngine& engine, const Bar& bar,
         const native_calendar::NativeInterval& interval,
         int index, InputContribution kind) {
-    auto script_interval = native_calendar::interval_containing(
-        calendar_, script_tf_, interval.open_ms);
+    auto script_interval = script_interval_at(interval.open_ms);
     if (!script_interval) {
         render(engine, "native script interval lookup failed");
         return false;
@@ -3463,7 +4251,16 @@ bool NativeExecutionConsumer::contribute_input(
     current_input_open_ = interval.open_ms;
     observed_input_cursor_ = interval.open_ms;
     last_accepted_input_ = interval;
-    raise_floor(native_canonical_input_completion(interval));
+    const auto* spec = spec_ptr();
+    // A modeled intrabar path supplies its own decision points during seal.
+    // Raising to the input/script completion here would fence requests born
+    // at an earlier sub-bar out of its remaining points. No-path and stream
+    // aggregation retain the historical script-bar floor exactly.
+    const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar
+        && spec && !spec->intrabar.is_none();
+    if (!intrabar_points_drive_floor) {
+        raise_floor(native_canonical_input_completion(interval));
+    }
     const bool exhausted =
         interval.next_period_open_ms >= script_.interval.next_period_open_ms;
     if (exhausted) {
@@ -3474,6 +4271,8 @@ bool NativeExecutionConsumer::contribute_input(
     engine.current_bar_ = bar;
     engine.bar_index_ = index;
     next_interval_index_ = index + 1;
+    if (!failed() && kind != InputContribution::QuietCarried)
+        ++engine.diag_input_bars_processed_;
     return !failed();
 }
 
@@ -3481,25 +4280,28 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                                                       int index, bool last) {
     (void)last;
     processing_input_ = true;
-    auto interval = native_calendar::interval_containing(calendar_, input_tf_, bar.timestamp);
+    auto interval = input_interval_at(bar.timestamp);
     if (!interval) {
         processing_input_ = false;
         present_refusal(engine, "native input is not aligned");
         return false;
     }
-    if (!native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
+    if (!legacy_tolerant_slot_labels()
+        && !native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
         processing_input_ = false;
         present_refusal(engine, "native confirmed bar timestamp is not a canonical slot label");
         return false;
     }
     if (last_accepted_input_) {
-        if (interval->open_ms <= last_accepted_input_->open_ms) {
+        if (!legacy_tolerant_slot_labels()
+            && interval->open_ms <= last_accepted_input_->open_ms) {
             processing_input_ = false;
             present_refusal(engine, "native duplicate overlapping input slot");
             return false;
         }
         const auto* running = std::get_if<NativeRunning>(&state_);
-        if (running && running->phase != NativeRunPhase::Batch) {
+        if (!legacy_tolerant_slot_labels()
+            && running && running->phase != NativeRunPhase::Batch) {
             auto expected = native_calendar::interval_containing(
                 calendar_, input_tf_, last_accepted_input_->next_input_open_ms);
             if (!expected || expected->open_ms != interval->open_ms) {
@@ -3508,6 +4310,22 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                 return false;
             }
         }
+    }
+    const auto script_interval = script_interval_at(interval->open_ms);
+    if (!script_interval) {
+        processing_input_ = false;
+        present_refusal(engine, "native script interval lookup failed");
+        return false;
+    }
+    NativeInputContext input_context;
+    input_context.input_interval = *interval;
+    input_context.script_interval = *script_interval;
+    input_context.input_index = index;
+    input_context.completes_script_interval =
+        interval->next_period_open_ms >= script_interval->next_period_open_ms;
+    if (!invoke_input_callback(engine, bar, input_context)) {
+        processing_input_ = false;
+        return false;
     }
     last_accepted_input_ = *interval;
     last_observed_slot_open_ = interval->open_ms;
@@ -3537,12 +4355,16 @@ void NativeExecutionConsumer::pump_batch(BacktestEngine& engine, const Bar* bars
 }
 
 void NativeExecutionConsumer::run_simple(BacktestEngine& engine, const Bar* bars, int n) {
+    const NativeBeginArgs args{bars, n, {}, {}, false, 4,
+        MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2, 64,
+        nullptr, nullptr, nullptr, false, 0};
+    if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
     engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
-        if (!preflight_bars(engine, bars, n, false)) return;
+        if (!preflight_bars(engine, bars, n, false) || !preflight_intrabar_path(engine)) return;
         const int64_t initial = n > 0 ? bars[0].timestamp
                                       : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
@@ -3564,6 +4386,10 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
                                      const std::string& script_tf,
                                      bool bar_magnifier, int magnifier_samples,
                                      MagnifierDistribution magnifier_dist) {
+    const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
+        magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2, 64,
+        nullptr, nullptr, nullptr, false, 0};
+    if (!prepare_public_begin(engine, args)) return;
     if (!admit_public_begin(engine, "native run requires configure_native")) return;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
@@ -3573,12 +4399,15 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
             present_refusal(engine, "native timeframe arguments must be empty or match the spec");
             return;
         }
-        if (bar_magnifier || magnifier_samples != 4
-            || magnifier_dist != MagnifierDistribution::ENDPOINTS) {
-            present_refusal(engine, "native run refuses unsupported magnifier arguments");
+        const auto* configured = spec_ptr();
+        if ((bar_magnifier || magnifier_samples != 4
+             || magnifier_dist != MagnifierDistribution::ENDPOINTS)
+            && (!configured || configured->intrabar.is_none())) {
+            present_refusal(engine, "native magnifier arguments require an intrabar path");
             return;
         }
-        if (!preflight_bars(engine, input_bars, n_input, false)) return;
+        if (!preflight_bars(engine, input_bars, n_input, false)
+            || !preflight_intrabar_path(engine)) return;
         const int64_t initial = n_input > 0 ? input_bars[0].timestamp
                                             : std::numeric_limits<int64_t>::min();
         if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
@@ -3595,16 +4424,40 @@ void NativeExecutionConsumer::run_tf(BacktestEngine& engine,
 }
 
 void NativeExecutionConsumer::run_rich(BacktestEngine& engine,
-                                       const Bar*, int,
-                                       const std::string&, const std::string&,
-                                       const std::unordered_map<std::string, std::string>&,
-                                       const SymInfo&, const source::StrategyOverrides*,
-                                       bool, int, MagnifierDistribution) {
+                                       const Bar* input_bars, int n_input,
+                                       const std::string& input_tf, const std::string& script_tf,
+                                       const std::unordered_map<std::string, std::string>& inputs,
+                                       const SymInfo& syminfo,
+                                       const source::StrategyOverrides* overrides,
+                                       bool bar_magnifier, int magnifier_samples,
+                                       MagnifierDistribution magnifier_dist) {
+    const NativeBeginArgs args{input_bars, n_input, input_tf, script_tf, bar_magnifier,
+        magnifier_samples, magnifier_dist, engine.magnifier_volume_weighted_, 2, 64,
+        &inputs, &syminfo, overrides, false, 0};
+    if (!prepare_public_begin(engine, args)) return;
+    if (!admit_public_begin(engine, "native run requires configure_native")) return;
+    engine.last_error_.clear();
+    engine.last_run_status_ = 0;
+    engine.abort_requested_.store(false, std::memory_order_relaxed);
     try {
-        refuse_source_mutation("run(inputs,syminfo,overrides)");
+        if (!timeframe_args_ok(input_tf, script_tf)) {
+            present_refusal(engine, "native timeframe arguments must be empty or match the spec");
+            return;
+        }
+        if (!preflight_bars(engine, input_bars, n_input, false)
+            || !preflight_intrabar_path(engine)) return;
+        const int64_t initial = n_input > 0 ? input_bars[0].timestamp
+                                            : std::numeric_limits<int64_t>::min();
+        if (!begin_ready(engine, NativeRunPhase::Batch, initial)) return;
+        pump_batch(engine, input_bars, n_input);
+        if (failed()) return;
+        auto* running = std::get_if<NativeRunning>(&state_);
+        if (!running) return;
+        NativeRunSpec spec = running->spec;
+        state_ = NativeCompleted{std::move(spec), NativeCompletion::BatchComplete};
     } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Unexpected, NativeFailureOperation::Input});
         render(engine, e.what());
-        engine.last_run_status_ = 1;
     }
 }
 
@@ -3612,6 +4465,10 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
+    const NativeBeginArgs args{warmup_bars, n_warmup, input_tf, script_tf, false, 4,
+        MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2, 64,
+        nullptr, nullptr, nullptr, true, n_warmup};
+    if (!prepare_public_begin(engine, args)) return false;
     if (!admit_public_begin(engine, "native stream_begin requires Ready")) return false;
     engine.last_error_.clear();
     engine.last_run_status_ = 0;
@@ -3642,7 +4499,8 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
             present_refusal(engine, "native stream warmup requires at least one bar");
             return false;
         }
-        if (!preflight_bars(engine, warmup_bars, n_warmup, true)) return false;
+        if (!preflight_bars(engine, warmup_bars, n_warmup, true)
+            || !preflight_intrabar_path(engine)) return false;
         if (!begin_ready(engine, NativeRunPhase::Warmup, warmup_bars[0].timestamp)) return false;
         pump_batch(engine, warmup_bars, n_warmup);
         if (failed()) return false;
@@ -3905,6 +4763,27 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     point.matching = true;
     point.excursion = true;
     record_driver(point);
+    NativeTickContext tick_context;
+    tick_context.decision.coordinate = point.coordinate;
+    tick_context.decision.input_interval = *interval;
+    if (const auto script_interval = script_interval_at(tick.timestamp)) {
+        tick_context.decision.script_interval = *script_interval;
+        tick_context.decision.script_bar_open_ms = script_interval->open_ms;
+    } else {
+        tick_context.decision.script_bar_open_ms = point.coordinate.open_ms;
+    }
+    tick_context.decision.sub_index = 0;
+    tick_context.decision.sub_count = 1;
+    tick_context.decision.is_terminal_sub_bar = true;
+    tick_context.decision.sub_bar_open_ms = tick.timestamp;
+    tick_context.decision.driver_statistics = driver_statistics_;
+    tick_context.sequence = tick.sequence;
+    const Bar tick_bar{tick.price, tick.price, tick.price, tick.price,
+                       tick.quantity, tick.timestamp};
+    if (!invoke_tick_callback(engine, tick_bar, tick_context)) {
+        processing_input_ = false;
+        return false;
+    }
     match_point(engine, point);
     apply_excursion(engine, tick.price);
     raise_floor(tick.timestamp);
@@ -4202,6 +5081,49 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
     return std::move(ok.result);
 }
 
+native_order::CohortHandle NativeExecutionConsumer::cohort_open(BacktestEngine& engine) {
+    if (!commands_allowed()) {
+        throw std::runtime_error("native cohort_open refused outside allowed phase");
+    }
+    try {
+        return requests_.cohort_open();
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render(engine, e.what());
+        throw;
+    }
+}
+
+void NativeExecutionConsumer::cohort_add(
+        BacktestEngine& engine, native_order::CohortHandle cohort,
+        native_order::RequestHandle origin) {
+    if (!commands_allowed()) {
+        throw std::runtime_error("native cohort_add refused outside allowed phase");
+    }
+    try {
+        requests_.cohort_add(cohort, std::move(origin));
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render(engine, e.what());
+        throw;
+    }
+}
+
+void NativeExecutionConsumer::cohort_remove(
+        BacktestEngine& engine, native_order::CohortHandle cohort,
+        native_order::RequestHandle origin) {
+    if (!commands_allowed()) {
+        throw std::runtime_error("native cohort_remove refused outside allowed phase");
+    }
+    try {
+        requests_.cohort_remove(cohort, std::move(origin));
+    } catch (const std::exception& e) {
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
+        render(engine, e.what());
+        throw;
+    }
+}
+
 NativePhysicalPosition NativeExecutionConsumer::position(const BacktestEngine& engine) const {
     NativePhysicalPosition out;
     out.lot_count = engine.pyramid_entries_.size();
@@ -4320,6 +5242,20 @@ native_order::CancelResult NativeStrategyHost::cancel(const native_order::Reques
     return as_native_consumer(execution_consumer()).cancel(*this, target);
 }
 
+native_order::CohortHandle NativeStrategyHost::cohort_open() {
+    return as_native_consumer(execution_consumer()).cohort_open(*this);
+}
+
+void NativeStrategyHost::cohort_add(
+        native_order::CohortHandle cohort, native_order::RequestHandle origin) {
+    as_native_consumer(execution_consumer()).cohort_add(*this, cohort, std::move(origin));
+}
+
+void NativeStrategyHost::cohort_remove(
+        native_order::CohortHandle cohort, native_order::RequestHandle origin) {
+    as_native_consumer(execution_consumer()).cohort_remove(*this, cohort, std::move(origin));
+}
+
 std::optional<NativeCurrentPointView> NativeStrategyHost::current_execution_point() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
         .current_execution_point();
@@ -4361,5 +5297,5 @@ uint64_t NativeStrategyHost::native_continuation_hash() const {
         .continuation_hash();
 }
 
-}  // inline namespace engine_script_run_v16
+}  // inline namespace engine_script_run_v17
 }  // namespace pineforge

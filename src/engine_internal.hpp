@@ -8,7 +8,7 @@
  *
  *   engine_path_resolve.cpp  - definitions of path::* helpers
  *   engine_lower_tf.cpp      - definitions of lower-TF helpers
- *   engine_fills.cpp         - process_pending_orders (uses path helpers)
+ *   engine_fills.cpp         - request matching (uses path helpers)
  *   engine_orders.cpp        - execute_market_* (uses path helpers)
  *   engine_security.cpp      - uses lower-TF helpers
  *   engine_run.cpp           - uses lower-TF helpers

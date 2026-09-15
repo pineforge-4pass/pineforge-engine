@@ -256,8 +256,8 @@ lifecycle exceptions abort the owning run; callers must discard that failed
 run rather than retry a partially committed execution in place. Strong
 rollback on allocation failure is not promised.
 
-The work retains `ShortSeedCollisionRole` while its source-policy consumers
-remain. Source quota, TV-money/day-loss policy and complete Pine lowering remain
-separate refactor work. Source-day observation ownership is separated from the
+L3b replaces the legacy ShortSeed role storage with a plan-derived public
+projection over live native handles. Source quota, TV-money/day-loss policy,
+and source-day observation remain adapter responsibilities, separated from the
 native financial owner; existing executable state remains represented in ABI
 projections and fingerprints.

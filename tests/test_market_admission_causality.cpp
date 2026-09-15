@@ -1,7 +1,5 @@
 // Literal API/allocator tests. No feed, generated strategy or grader is run.
-#include "admission_literal_book.hpp"
 #include <pineforge/market_admission.hpp>
-#include <pineforge/compat/pine/market_admission.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -244,107 +242,10 @@ void named_batch_review() {
     CHECK(caught == 72 && completed == 1 && outstanding(journal) == 0);
 }
 
-class ReflectedBook : public admission_test::Book {
-public:
-    Journal& journal() { return market_admission_journal(); }
-};
-Configuration default_scope() {
-    Configuration c;
-    c.pyramiding=1;
-    c.default_quantity_type=1;
-    c.default_quantity_value=100;
-    c.long_margin=100;
-    c.short_margin=100;
-    c.risk_direction=0;
-    return c;
-}
-std::shared_ptr<CommandObservation> observed(uint64_t command, int bar,
-                                                    Configuration configuration = {}) {
-    auto value=std::make_shared<CommandObservation>();
-    value->command=command;value->bar=bar;value->configuration=configuration;
-    value->prices={};value->requested_quantity=absent;value->oca_name.clear();
-    return value;
-}
-BookObservation book_row(uint64_t incarnation, int bar,
-                         std::shared_ptr<const CommandObservation> observation,
-                         int placement_side=0) {
-    BookObservation value;value.incarnation=incarnation;value.bar=bar;
-    value.type=0;value.placement_side=placement_side;value.draft.bind(std::move(observation));
-    return value;
-}
-void cross_bar_empty_review_retention(Checkpoint checkpoint, bool default_cause) {
-    Journal journal;
-    const auto live_command=journal.next_sequence();
-    auto live_observation=observed(live_command,0,default_cause?default_scope():Configuration{});
-    if(default_cause) {
-        live_observation->original_sizing=SizingObservation{1,1000,100,100,1};
-    }
-    CommandEvent admitted;admitted.observation=live_observation;
-    admitted.outcome=Outcome::Admitted;admitted.admitted_incarnation=7;
-    journal.append(std::move(admitted));
-
-    const auto cause_command=journal.next_sequence();
-    auto cause_observation=observed(cause_command,1,default_cause?default_scope():Configuration{});
-    cause_observation->requested_quantity=default_cause?absent:1;
-    CommandEvent cause;cause.observation=cause_observation;
-    cause.before.push_back(book_row(7,0,live_observation,default_cause?1:0));
-    auto victim=observed(99,0,default_cause?default_scope():Configuration{});
-    if(default_cause)victim->original_sizing=SizingObservation{1,1000,100,100,1};
-    cause.before.push_back(book_row(8,0,victim,default_cause?1:0));
-    cause.removed.push_back(8);
-    journal.append(std::move(cause));
-
-    uint64_t review_sequence=0;
-    int completed=0;
-    {
-        // An empty review is still an actual checkpoint.  Exercise the
-        // production RAII path rather than appending a synthetic event: its
-        // destructor must commit the event before retention evaluates it.
-        auto allocation=journal.reserve();
-        review_sequence=allocation.sequence();
-        ReviewEvent empty_review;empty_review.receipt={review_sequence,checkpoint,2};
-        ReviewCapture capture(std::move(allocation),std::move(empty_review),
-            [&](ReviewEvent event){++completed;journal.append(std::move(event));});
-    }
-    CHECK(completed==1 && journal.events().size()==3);
-
-    const auto history=pineforge::compat::pine::admission_history(journal);
-    if(default_cause) CHECK(history.default_causes.empty());
-    else CHECK(history.pair_causes.empty());
-    const auto retained=pineforge::compat::pine::admission_retention(journal,{7});
-    CHECK(std::find(retained.begin(),retained.end(),cause_command)!=retained.end());
-    CHECK(std::find(retained.begin(),retained.end(),review_sequence)!=retained.end());
-    journal.retain(retained);
-    // The producer survives as evidence, while the empty checkpoint still
-    // clears the consumed domain. Keeping the review prevents resurrection.
-    const auto after=pineforge::compat::pine::admission_history(journal);
-    if(default_cause) CHECK(after.default_causes.empty());
-    else CHECK(after.pair_causes.empty());
-}
-void empty_review_preserves_live_cross_bar_causes() {
-    cross_bar_empty_review_retention(Checkpoint::DefaultGross,true);
-    cross_bar_empty_review_retention(Checkpoint::TerminalGross,false);
-}
-
-void allocation_state_hash_and_values() {
-    ReflectedBook book;
-    const auto before = book.broker_state_hash();
-    auto allocation = book.journal().reserve();
-    const auto after = book.broker_state_hash();
-    CHECK(before != after && outstanding(book.journal()) == 1);
-    bool found = false;
-    for (const auto& field : book.market_admission_fields())
-        if (field.path == "journal.outstanding_sequences[0].sequence") {
-            CHECK(std::get<uint64_t>(field.value) == allocation.sequence()); found = true;
-        }
-    CHECK(found);
-    book.journal().abandon(allocation.sequence());
-    CHECK(book.broker_state_hash() != after && outstanding(book.journal()) == 0);
-}
 }
 int main() {
     sequence_ownership(); allocation_failure_and_retry(); capture_lifetimes();
-    receipt_identity_and_chronology(); named_batch_review(); empty_review_preserves_live_cross_bar_causes(); allocation_state_hash_and_values();
+    receipt_identity_and_chronology(); named_batch_review();
     std::printf("admission causality: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

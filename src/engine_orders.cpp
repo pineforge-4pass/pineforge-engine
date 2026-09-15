@@ -1,11 +1,9 @@
-#include <pineforge/compat/pine/exit_lifecycle.hpp>
 /*
  * engine_orders.cpp — execute_market_* and partial-exit fill mechanics
  */
 
 #include "engine_internal.hpp"
 #include <pineforge/order_action.hpp>
-#include <pineforge/source/pine_pending_intent.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -18,7 +16,6 @@
 #include <vector>
 
 namespace pineforge {
-using source::PendingOrder;
 using namespace internal;
 
 namespace {
@@ -254,7 +251,6 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
     trail_best_price_ = lot.price;
     pyramid_entries_.push_back(std::move(lot));
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
-    on_source_append_quoted_lot_after_book(pyramid_entries_.back());
 }
 
 
@@ -267,7 +263,7 @@ void BacktestEngine::append_quoted_lot(PyramidEntry lot, double total_qty,
 
 // Internal helper: close an exact quantity only from entries matching
 // from_entry. Live-position strategy.exit calls freeze their percent-derived
-// reservations into PendingOrder::qty; when layered siblings fill on one bar,
+// reservations into request record::qty; when layered siblings fill on one bar,
 // that absolute reservation must survive earlier reductions of the position.
 
 
@@ -364,7 +360,7 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
     // a stop-out's adverse excursion is at least the loss at the SL fill and
     // a take-profit's favorable excursion includes the move to the TP fill.
     // The per-bar sampler (update_per_trade_extremes) cannot see this: exit
-    // fills happen inside process_pending_orders and the pyramid entry is
+    // fills happen inside request matching and the pyramid entry is
     // removed before the next sample, so same-bar entry+exit trades would
     // otherwise report 0/0. Fold the fill price in here. The carried
     // per-entry extreme is scaled to the closed slice (close_qty/pe.qty) so
@@ -506,7 +502,6 @@ void BacktestEngine::validate_close_trade_counters(const Trade* rows, size_t cou
 // every full-close path (execute_market_exit) and by partial-exit settlement
 // when the FIFO loop drained the position.
 void BacktestEngine::reset_position_state_to_flat() {
-    reset_source_exit_activations_before_flatten();
     position_side_ = PositionSide::FLAT;
     position_cycle_seq_ = 0;
     position_entry_price_ = 0.0;
@@ -516,9 +511,7 @@ void BacktestEngine::reset_position_state_to_flat() {
     position_entry_count_ = 0;
     position_open_bar_ = -1;
     trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
-    trail_close_restart_bar_ = -1;
     pyramid_entries_.clear();
-    reset_source_position_ledgers_after_book_clear();
 }
 
 
@@ -594,10 +587,8 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
     position_open_bar_ = lot.entry_bar_index;
     trail_best_price_ = lot.price;
     pyramid_entries_.clear();
-    reset_source_open_position_ledgers_before_book(lot);
     pyramid_entries_.push_back(std::move(lot));
     if (stream_observe_actions_) stream_observe_entry(pyramid_entries_.back());
-    on_source_open_position_booked(pyramid_entries_.back());
 }
 
 
@@ -644,7 +635,7 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
 // (``strategy.close_all``) closes the long at chart 12:15 and the SE stop
 // fires hours later at 21:30, still applying the carry. So this helper
 // reads ``tv_carry_qty`` from the pending order itself (snapshotted at
-// placement, see PendingOrder struct in engine.hpp) rather than a per-bar
+// placement, see request record struct in engine.hpp) rather than a per-bar
 // transient state.
 //
 // Conditions:
@@ -712,11 +703,11 @@ void BacktestEngine::open_quoted_position(PositionSide requested, PyramidEntry l
 // ``enter_market_from_flat``; this branch keeps the standard
 // ``new_size = qty`` contract.
 //
-// We deliberately do NOT purge exit orders here. Mutating pending_orders_
-// mid-iteration of process_pending_orders shifts indices and corrupts the
+// We deliberately do NOT purge exit orders here. Mutating request_roster
+// mid-iteration of request matching shifts indices and corrupts the
 // filled_indices accounting. Stale exits targeting the old entry id get
 // cleaned up on the next bar by the "from_entry doesn't match any pyramid
-// entry" check in process_pending_orders. Newly-placed exits that target
+// entry" check in request matching. Newly-placed exits that target
 // the incoming entry id stay and evaluate correctly on the current bar's
 // remaining iterations.
 

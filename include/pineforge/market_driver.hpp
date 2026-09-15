@@ -8,12 +8,12 @@
 #include <string>
 
 namespace pineforge {
-inline namespace native_run_spec_v1 { struct NativeRunSpec; }
-inline namespace native_driver_v4 {
+inline namespace native_run_spec_v2 { struct NativeRunSpec; }
+inline namespace native_driver_v5 {
 
 // Semantic versions hashed into native continuation identity.
-inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v4";
-inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v6";
+inline constexpr const char* kNativeDriverSemanticVersion = "native-driver/v5";
+inline constexpr const char* kNativeConsumerSemanticVersion = "native-consumer/v7";
 inline constexpr const char* kNativeCalendarSemanticVersion = "native-calendar/v1";
 
 enum class NativePriceProvenance : std::uint8_t {
@@ -66,6 +66,18 @@ struct NativeDriverPoint {
     bool excursion = false;
 };
 
+// Generic facts about the retained intrabar driver.  They let a host project
+// run diagnostics without consulting a source scheduler or borrowing driver
+// state. Counts are cumulative for the run except the two current-script-bar
+// shape fields.
+struct NativeDriverStatistics {
+    bool intrabar_path_enabled = false;
+    int sub_bars_per_script_bar = 1;
+    int samples_per_sub_bar = 0;
+    uint64_t sub_bars_processed = 0;
+    uint64_t sample_ticks_processed = 0;
+};
+
 // Presentation snapshot copied onto the callback stack. Mutating these
 // fields cannot change the consumer's decision floor, matching time, or
 // after-calculation coordinate.
@@ -74,6 +86,15 @@ struct NativeDecisionContext {
     int64_t decision_floor_ms = 0;
     native_calendar::NativeInterval input_interval{};
     native_calendar::NativeInterval script_interval{};
+    // A non-magnified run is the one-element intrabar path.  The sub-bar
+    // timestamp is deliberately separate from the script label: execution
+    // ledgers use the former while script-time policy uses the latter.
+    int sub_index = 0;
+    int sub_count = 1;
+    bool is_terminal_sub_bar = true;
+    int64_t sub_bar_open_ms = 0;
+    int64_t script_bar_open_ms = 0;
+    NativeDriverStatistics driver_statistics{};
 };
 
 // Pump-produced events obtain ordinals from the consumer allocator.
@@ -137,6 +158,7 @@ enum class NativeInputPreflightError : std::uint16_t {
     OverlappingSlot = 7,
     InSessionGap = 8,
     CalendarFailure = 9,
+    TimestampDeltaOverflow = 10,
 };
 
 struct NativeInputPreflightResult {
@@ -155,5 +177,5 @@ NativeInputPreflightResult preflight_native_inputs(
         int n,
         NativeInputPolicy policy);
 
-}  // inline namespace native_driver_v4
+}  // inline namespace native_driver_v5
 }  // namespace pineforge

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check the complete append-only PendingOrder v1 prefix.
+"""Check the complete append-only intent row v1 prefix.
 
 This is a source-only ABI control. It authenticates the frozen header closure
 from 79921099, then compares every one of its 396 C fields with the current

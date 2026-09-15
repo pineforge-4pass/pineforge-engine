@@ -45,39 +45,44 @@ public:
     ta::Crossover _ta_crossover;
     ta::Crossunder _ta_crossunder;
     bool _ta_initialized_ = false;
+    source::PineStrategyConfig _config{};
 
     explicit GeneratedStrategy()
         : _sec0_sma(20),
           _ta_macd(12, 26, 9) {
-        initial_capital_ = 1000000.0;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1.0;
-        pyramiding_ = 1;
-        commission_type_ = CommissionType::PERCENT;
-        commission_value_ = 0.0;
-        slippage_ = 0;
+        _config.initial_capital = 1000000.0;
+        _config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        _config.default_qty_value = 1.0;
+        _config.pyramiding = 1;
+        _config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        _config.commission_value = 0.0;
+        _config.slippage = 0;
+        configure_pine_strategy(_config);
     }
 
     void set_strategy_override(const std::string& key, const std::string& value) {
-        if (key == "initial_capital") { initial_capital_ = std::stod(value); return; }
-        if (key == "commission_value") { commission_value_ = std::stod(value); return; }
-        if (key == "default_qty_value") { default_qty_value_ = std::stod(value); return; }
-        if (key == "pyramiding") { pyramiding_ = std::stoi(value); return; }
-        if (key == "slippage") { slippage_ = std::stoi(value); return; }
-        if (key == "process_orders_on_close") { process_orders_on_close_ = (value == "true" || value == "1"); return; }
-        if (key == "close_entries_rule") { close_entries_rule_any_ = (value == "ANY" || value == "any" || value == "1"); return; }
+        if (key == "initial_capital") _config.initial_capital = std::stod(value);
+        else if (key == "commission_value") _config.commission_value = std::stod(value);
+        else if (key == "default_qty_value") _config.default_qty_value = std::stod(value);
+        else if (key == "pyramiding") _config.pyramiding = std::stoi(value);
+        else if (key == "slippage") _config.slippage = std::stoi(value);
+        else if (key == "process_orders_on_close") _config.process_orders_on_close = (value == "true" || value == "1");
+        else if (key == "close_entries_rule") _config.close_entries_rule_any = (value == "ANY" || value == "any" || value == "1");
         if (key == "default_qty_type") {
-            if (value == "fixed" || value == "strategy.fixed" || value == "0") default_qty_type_ = QtyType::FIXED;
-            else if (value == "percent_of_equity" || value == "strategy.percent_of_equity" || value == "1") default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
-            else if (value == "cash" || value == "strategy.cash" || value == "2") default_qty_type_ = QtyType::CASH;
-            return;
-        }
-        if (key == "commission_type") {
-            if (value == "percent" || value == "strategy.commission.percent" || value == "0") commission_type_ = CommissionType::PERCENT;
-            else if (value == "cash_per_order" || value == "strategy.commission.cash_per_order" || value == "1") commission_type_ = CommissionType::CASH_PER_ORDER;
-            else if (value == "cash_per_contract" || value == "strategy.commission.cash_per_contract" || value == "2") commission_type_ = CommissionType::CASH_PER_CONTRACT;
-            return;
-        }
+            if (value == "fixed" || value == "strategy.fixed" || value == "0") _config.default_qty_type = static_cast<int>(QtyType::FIXED);
+            else if (value == "percent_of_equity" || value == "strategy.percent_of_equity" || value == "1") _config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+            else if (value == "cash" || value == "strategy.cash" || value == "2") _config.default_qty_type = static_cast<int>(QtyType::CASH);
+            else return;
+        } else if (key == "commission_type") {
+            if (value == "percent" || value == "strategy.commission.percent" || value == "0") _config.commission_type = static_cast<int>(CommissionType::PERCENT);
+            else if (value == "cash_per_order" || value == "strategy.commission.cash_per_order" || value == "1") _config.commission_type = static_cast<int>(CommissionType::CASH_PER_ORDER);
+            else if (value == "cash_per_contract" || value == "strategy.commission.cash_per_contract" || value == "2") _config.commission_type = static_cast<int>(CommissionType::CASH_PER_CONTRACT);
+            else return;
+        } else if (key != "initial_capital" && key != "commission_value"
+                   && key != "default_qty_value" && key != "pyramiding"
+                   && key != "slippage" && key != "process_orders_on_close"
+                   && key != "close_entries_rule") return;
+        configure_pine_strategy(_config);
     }
 
     void configure_security_evaluators() override {
@@ -100,11 +105,11 @@ public:
         htfSma.push(_req_sec_0);
         htfClose.push(_req_sec_1);
 
-        auto m = (is_first_tick_ ? _ta_macd.compute(bar.close)
+        auto m = (is_first_tick() ? _ta_macd.compute(bar.close)
                                  : _ta_macd.recompute(bar.close));
-        bool xup = (is_first_tick_ ? _ta_crossover.compute(m.macd_line, m.signal_line)
+        bool xup = (is_first_tick() ? _ta_crossover.compute(m.macd_line, m.signal_line)
                                    : _ta_crossover.recompute(m.macd_line, m.signal_line));
-        bool xdn = (is_first_tick_ ? _ta_crossunder.compute(m.macd_line, m.signal_line)
+        bool xdn = (is_first_tick() ? _ta_crossunder.compute(m.macd_line, m.signal_line)
                                    : _ta_crossunder.recompute(m.macd_line, m.signal_line));
 
         bool trendUp = !std::isnan(htfClose[0]) && !std::isnan(htfSma[0])

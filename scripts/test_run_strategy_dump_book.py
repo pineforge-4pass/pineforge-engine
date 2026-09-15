@@ -54,7 +54,7 @@ LAYOUT = _layout_from_ctypes(FIELDS)
 class BuildStruct(unittest.TestCase):
     def test_builds_struct_matching_every_offset_and_size(self):
         cls = build_pending_order_struct(LAYOUT)
-        self.assertEqual(cls.__name__, "PendingOrderV1")
+        self.assertEqual(cls.__name__, "IntentRowV1")
         for name, _t, off, size in LAYOUT:
             self.assertEqual(getattr(cls, name).offset, off, name)
             self.assertEqual(getattr(cls, name).size, size, name)
@@ -144,7 +144,7 @@ class ToDict(unittest.TestCase):
 
 
 class _StubLib:
-    """Stand-in for the loaded .so: serves `records` (prepared PendingOrderV1
+    """Stand-in for the loaded .so: serves `records` (prepared IntentRowV1
     instances) through the two book accessors exactly as c_abi.cpp does --
     min(size_in, sizeof) prefix copy, -1 on a bad index -- so
     Strategy.read_pending_orders' real loop (rc / struct_version / size
@@ -168,13 +168,13 @@ class _StubLib:
 
 def _stub_strategy(records, cls):
     strat = run_strategy.Strategy.__new__(run_strategy.Strategy)
-    strat.PendingOrderV1 = cls
+    strat.IntentRowV1 = cls
     strat.pending_order_layout = LAYOUT
     strat.lib = _StubLib(records)
     return strat
 
 
-class ReadPendingOrders(unittest.TestCase):
+class ReadIntentRows(unittest.TestCase):
     """Strategy.read_pending_orders against a stub lib (Important 1)."""
 
     def _record(self, cls, **kw):
@@ -247,10 +247,10 @@ class ReadPendingOrders(unittest.TestCase):
 class StrategyGuard(unittest.TestCase):
     def test_read_pending_orders_without_exports_is_empty(self):
         # A .so predating strategy_pending_order_layout: Strategy leaves
-        # PendingOrderV1 None and read_pending_orders returns [] rather
+        # IntentRowV1 None and read_pending_orders returns [] rather
         # than touching the missing symbols.
         strat = run_strategy.Strategy.__new__(run_strategy.Strategy)
-        strat.PendingOrderV1 = None
+        strat.IntentRowV1 = None
         strat.pending_order_layout = None
         strat.lib = object()
         self.assertEqual(strat.read_pending_orders(object()), [])
@@ -362,7 +362,7 @@ class ReadOrderDerived(unittest.TestCase):
                          {"avg_price": None, "cycle_seq": 0, "trail_best_price": None})
 
     def test_older_so_without_task8_exports(self):
-        # PendingOrderV1 present (task 7) but no task-8 accessors: the book
+        # IntentRowV1 present (task 7) but no task-8 accessors: the book
         # is read without a 'derived' key and the scalars are None.
         cls = build_pending_order_struct(LAYOUT)
         rec = cls(); rec.struct_version = PENDING_ORDER_STRUCT_VERSION; rec.size = ctypes.sizeof(cls)

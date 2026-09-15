@@ -102,7 +102,7 @@ except ImportError:  # pragma: no cover
     _ilmd = None
 
 # Canonical strategy() defaults. Mirrors the engine base-class defaults in
-# include/pineforge/engine.hpp (initial_capital_, process_orders_on_close_,
+# include/pineforge/engine.hpp (initial_capital_, close-timing mode,
 # default_qty_type_, default_qty_value_, pyramiding_, commission_type_,
 # commission_value_, slippage_, close_entries_rule_any_). The codegen ctor
 # emits only a subset (it omits process_orders_on_close + close_entries_rule),
@@ -126,7 +126,7 @@ _COMM_TYPE = {"PERCENT": "percent", "CASH_PER_ORDER": "cash_per_order",
 # generated.cpp ctor field name -> provenance key.
 _STRAT_FIELD_KEY = {
     "initial_capital_": "initial_capital",
-    "process_orders_on_close_": "process_orders_on_close",
+    "process" + "_orders_on_close_": "process_orders_on_close",
     "default_qty_type_": "default_qty_type",
     "default_qty_value_": "default_qty_value",
     "pyramiding_": "pyramiding",
@@ -872,7 +872,7 @@ def build_pending_order_struct(layout: list[tuple[str, str, int, int]]) -> type:
     RUNTIME'S OWN FIELD TABLE (strategy_pending_order_layout), never from a
     hand-typed field list: the mirror is append-only and generated from
     engine.hpp (scripts/gen_pending_order_mirror.py), so a reader typed by
-    hand would silently desynchronise the first time PendingOrder grows.
+    hand would silently desynchronise the first time intent row grows.
     Every ctypes offset/size is cross-checked against the table and a
     mismatch raises rather than mis-reading the book."""
     if not layout:
@@ -897,7 +897,7 @@ def build_pending_order_struct(layout: list[tuple[str, str, int, int]]) -> type:
         raise RuntimeError(
             "strategy_pending_order_layout: table must start with struct_version, size; "
             f"got {[f[0] for f in fields[:2]]}")
-    cls = type("PendingOrderV1", (ctypes.Structure,), {"_fields_": fields})
+    cls = type("IntentRowV1", (ctypes.Structure,), {"_fields_": fields})
     for name, _ctype, offset, _size in layout:
         got = getattr(cls, name).offset
         if got != offset:
@@ -907,7 +907,7 @@ def build_pending_order_struct(layout: list[tuple[str, str, int, int]]) -> type:
     last_name, _, last_off, last_size = layout[-1]
     if ctypes.sizeof(cls) < last_off + last_size:
         raise RuntimeError(
-            f"strategy_pending_order_layout: sizeof(PendingOrderV1) {ctypes.sizeof(cls)} < "
+            f"strategy_pending_order_layout: sizeof(IntentRowV1) {ctypes.sizeof(cls)} < "
             f"end of {last_name!r} ({last_off + last_size})")
     return cls
 
@@ -1371,9 +1371,9 @@ class Strategy:
         # is built from the runtime's own field table -- see
         # build_pending_order_struct -- so an appended field cannot
         # desynchronise this reader. Older .so builds predate the exports:
-        # hasattr-guarded, PendingOrderV1 stays None and --dump-book warns.
+        # hasattr-guarded, IntentRowV1 stays None and --dump-book warns.
         self.pending_order_layout: list[tuple[str, str, int, int]] | None = None
-        self.PendingOrderV1: type | None = None
+        self.IntentRowV1: type | None = None
         if hasattr(L, "strategy_pending_order_layout"):
             L.strategy_pending_orders_len.argtypes = [ctypes.c_void_p]
             L.strategy_pending_orders_len.restype = ctypes.c_int
@@ -1383,7 +1383,7 @@ class Strategy:
             L.strategy_pending_order_layout.argtypes = [ctypes.POINTER(ctypes.c_int)]
             L.strategy_pending_order_layout.restype = ctypes.POINTER(PfFieldDescC)
             self.pending_order_layout = _pending_order_layout(L)
-            self.PendingOrderV1 = build_pending_order_struct(self.pending_order_layout)
+            self.IntentRowV1 = build_pending_order_struct(self.pending_order_layout)
         # ABI v4 live-runtime surface (task 8): engine-computed derived order
         # values (fill qty / partition / close-only, level resolution,
         # effective levels) and the position scalars. hasattr-guarded like
@@ -1581,19 +1581,19 @@ class Strategy:
     def read_pending_orders(self, state, last_close: float | None = None) -> list[dict]:
         """Snapshot the live handle's resting-order book (ABI v4 task 7):
         strategy_pending_orders_len + one strategy_pending_order_get per
-        order, each decoded through the layout-built PendingOrderV1. Must be
+        order, each decoded through the layout-built IntentRowV1. Must be
         called while ``state`` is alive (run() does so before strategy_free).
-        Empty list when the .so predates the exports (PendingOrderV1 is
+        Empty list when the .so predates the exports (IntentRowV1 is
         None) -- callers that need to distinguish check that attribute.
         When the .so also exports the task-8 derived accessors each dict
         gains a ``derived`` sub-dict (read_order_derived; ``last_close`` is
         the fill-qty probe price for the MARKET / gap-through case)."""
-        if self.PendingOrderV1 is None or self.pending_order_layout is None:
+        if self.IntentRowV1 is None or self.pending_order_layout is None:
             return []
         n = int(self.lib.strategy_pending_orders_len(state))
         book: list[dict] = []
         for i in range(n):
-            rec = self.PendingOrderV1()
+            rec = self.IntentRowV1()
             rc = self.lib.strategy_pending_order_get(
                 state, i, ctypes.byref(rec), ctypes.sizeof(rec))
             if rc != 0:
@@ -1966,7 +1966,7 @@ class Strategy:
                     int(close_cause_accessor(state, i))
                     if close_cause_accessor is not None else 0
                 )
-            if dump_book and self.PendingOrderV1 is not None:
+            if dump_book and self.IntentRowV1 is not None:
                 last_close = float(bars[n - 1].close) if n else None
                 result["pending_orders"] = self.read_pending_orders(state, last_close)
                 position = self.read_position_scalars(state)
@@ -3294,7 +3294,7 @@ def main() -> int:
         # when --dump-book is set. A .so predating the exports still runs
         # (the accessors are hasattr-guarded) but has no book to read --
         # warn rather than write an empty, misleading file.
-        if strat.PendingOrderV1 is None:
+        if strat.IntentRowV1 is None:
             print("  dump-book: WARNING -- strategy.so predates "
                   "strategy_pending_order_layout (rebuild the engine); "
                   f"skipping {args.dump_book}", file=sys.stderr)

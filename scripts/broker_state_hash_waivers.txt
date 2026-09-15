@@ -1,104 +1,40 @@
-# Members declared between // @broker-state begin / end in engine.hpp that
-# scripts/check_broker_state_hash_coverage.py finds but broker_state_hash()
-# (src/engine_state_hash.cpp) does not hash, with the reason each is not a
-# broker fact that decides a future fill. One name per line; text after '#'
-# is a comment and ignored by the parser (blank lines and comment-only lines
-# are skipped too).
-
-# --- Engine configuration: set once from strategy()/metadata before any bar
-# runs, never mutated by broker/fill logic during a run. Two recomputes of
-# the same configured engine agree on these by construction.
-calc_on_order_fills_          # config: strategy(calc_on_order_fills=...)
-chart_ema_na_warmup_          # config: opt-in chart-TF ta.ema warmup selector
-commission_type_              # config: strategy(commission_type=...)
-commission_value_             # config: strategy(commission_value=...)
-historical_security_lookahead_projection_  # config: opt-in request.security selector
-initial_capital_              # config: strategy(initial_capital=...)
-margin_call_enabled_          # config: set_margin_call_enabled toggle
-path_order_mode_              # config: set_path_order(), persistent op-set selector
-probe_suppress_tail_logic_    # config: set_probe_suppress_tail_logic(), persistent selector
-process_orders_on_close_      # config: strategy(process_orders_on_close=...)
-qty_step_                     # config: injected per-instrument lot step
-realtime_tail_                # config: set_realtime_tail(), persistent live-runtime selector
-realtime_tail_horizon_bars_   # config: companion horizon for realtime_tail_
-security_range_start_na_warmup_  # config: opt-in HTF warmup selector
-security_range_start_ms_      # config: injected HTF warmup range-start epoch
-slippage_                     # config: strategy(slippage=...)
-syminfo_mintick_              # config: injected syminfo.mintick tick size
-syminfo_metadata_             # config: injected syminfo.* metadata map
-trade_start_time_             # config: strategy_set_trade_start_time
-account_currency_fx_          # config: injected scalar FX fallback (the broker CLOCK that consumes it is hashed)
-account_currency_fx_rates_    # config: injected timestamped FX provider series
-account_currency_fx_timestamps_  # config: injected timestamped FX provider series
-
-# --- syminfo/chart/input injection: config surface for the script, not
-# broker decision state.
-syminfo_                      # config: injected SymInfo (ticker/currency/mintick/...)
-chart_timezone_               # config: set_chart_timezone
-inputs_                       # config: injected input.* values
-
-# --- Feed/input.source backing series and chart-close tracking: script or
-# indicator computation context (ta.*, request.security bucketing), never
-# read by broker/fill logic.
-security_first_chart_bar_ms_  # run-start constant (first chart bar epoch), fixed once a run begins
-security_next_input_ms_       # feed/dispatch context: next input bar's timestamp, recomputed every bar from feed position
-security_calling_close_ms_    # feed/dispatch context: calling chart bar's nominal close
-historical_security_lookahead_projection_active_  # request.security bucketing context, not a broker decision
-
-# --- Run-loop / dispatch bookkeeping: recomputed from the feed position on
-# every dispatch; not accumulated broker decision state. Two recomputes
-# being compared are, by construction, at the same feed position.
-bar_index_                    # current array index being dispatched
-current_bar_                  # current input bar's OHLCV, overwritten every dispatch
-is_tail_bar_                  # true while dispatching the array's last bar; recomputed from array position
-last_bar_index_               # feed metadata: total bar count (script-visible last_bar_index)
-last_bar_time_                # feed metadata: last bar's timestamp (script-visible time == last_bar_time)
-
-# --- Explicitly-documented transient/scratch: the source comments say so
-# directly, and each is always resolved (cleared) within the same call that
-# set it, before any other code -- let alone a later bar's dispatch -- reads
-# it again.
-
-# --- Per-source-bar same-bar strategy.close batching scratch: the code's
-# own comment on the sibling cross-bar maps ("Per-source-bar only") applies
-# to these; the only thing ever read back is "== bar_index_", which is false
-# for every later bar regardless of the stale payload -- the decision logic
-# takes the identical fresh-batch branch either way. The cross-bar
-# reservation/provenance ledgers these feed (close_reserved_qty_,
-# close_two_call_first_qty_, callsite_close_reserved_qty_,
-# callsite_close_two_call_first_qty_) ARE hashed.
-
-# --- Report/diagnostic accumulators that are NOT reachable through any
-# strategy.* script accessor -- pure internal report plumbing (verified by
-# grep: no read site outside the write-and-reset pair and the report
-# assembly in engine_report.cpp / engine_metrics.cpp). The sibling
-# accumulators that ARE script-visible (strategy.grossprofit/grossloss/
-# wintrades/losstrades/eventrades/max_runup/max_contracts_held_*,
-# strategy.closedtrades.*) are hashed instead -- see the controller ruling in
-# task-5-review.md fix round 1: a script can branch on those and place a
-# different order, so G1 must cover them too.
-bars_in_market_               # report-only accumulator; no strategy.* accessor
-first_bar_open_                # report-only (buy&hold basis); no strategy.* accessor
-equity_curve_                 # report-only per-bar equity history; the range-end finalizer re-derives max_equity_/min_equity_/max_drawdown_ from it, but those are hashed directly -- redundant, unbounded-size, and never read during in-run fill decisions
-range_end_trades_             # doc: "Report-only -- ... never enter trades_, the realized sums, or the live position"
-broker_state_hash_recording_  # recording switch, not broker state -- never read by fill/order logic
-broker_state_hashes_          # report-only recording of the hash itself; hashing it would break array[last] == broker_state_hash()
-
-# --- Per-pass dual-entry-stop working state (task brief instruction: waive
-# this one, hash the per-bar snapshot instead).
-
-# --- struct PendingOrder (task 7): every scalar/string member must be hashed
-# as o.<name> inside broker_state_hash()'s pending_orders_ loop or waived
-# here as pending_order.<name>. The member list is reflected from engine.hpp
-# by scripts/gen_pending_order_mirror.py, so a new member fails the check
-# until it is decided about.
-pending_order.comment         # trade-report label only: copied into the Trade row's entry/exit comment at fill and never read by any fill, admission, sizing or eligibility path -- it cannot change a future fill
-
-# --- struct PyramidEntry: every field is explicitly folded, zero waivers.
-# entry_comment/max_runup/max_drawdown are exposed through Pine open/closed
-# trade accessors. Entry-bar masks/path/add provenance can affect a later
-# event in the same broker bar and the excursions Pine reads afterward.
-# Commission, slot shadow and opening origin select financial transitions.
-# Do not waive a field merely because it is not a direct fill-price input.
-# Any future exception must be named pyramid_entry.<member> with its lifetime
-# or report-only proof; the recursive checker rejects missing/stale waivers.
+# Generic configuration, feed cursor, and report projections are not durable
+# broker decisions. Source-adapter and scheduler state have no waivers.
+account_currency_fx_ # configured scalar fallback
+account_currency_fx_rates_ # configured provider values
+account_currency_fx_timestamps_ # configured provider instants
+bar_index_ # feed cursor
+bars_in_market_ # report accumulator
+broker_state_hash_recording_ # recording switch
+broker_state_hashes_ # recorded output history
+chart_ema_na_warmup_ # script configuration
+chart_timezone_ # script configuration
+commission_type_ # projected fee configuration
+commission_value_ # projected fee configuration
+current_bar_ # feed cursor value
+equity_curve_ # report history
+first_bar_open_ # report basis
+historical_security_lookahead_projection_ # script configuration
+historical_security_lookahead_projection_active_ # security publication cursor
+initial_capital_ # projected run configuration
+inputs_ # script input map
+is_tail_bar_ # feed cursor flag
+last_bar_index_ # feed metadata
+last_bar_time_ # feed metadata
+margin_call_enabled_ # source provider configuration
+path_order_mode_ # configured path selector
+probe_suppress_tail_logic_ # configured reporting selector
+qty_step_ # symbol metadata
+range_end_trades_ # report-only projection
+realtime_tail_ # configured run mode
+realtime_tail_horizon_bars_ # configured run horizon
+security_calling_close_ms_ # security feed cursor
+security_first_chart_bar_ms_ # run-start feed metadata
+security_next_input_ms_ # security feed cursor
+security_range_start_ms_ # security configuration
+security_range_start_na_warmup_ # security configuration
+slippage_ # projected fee configuration
+syminfo_ # symbol metadata
+syminfo_metadata_ # symbol metadata transport
+syminfo_mintick_ # symbol metadata
+trade_start_time_ # configured execution window

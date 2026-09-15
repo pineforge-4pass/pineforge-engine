@@ -1,8 +1,8 @@
 # Pending-order placement and replacement facts
 
-`PendingOrder::replaced_order_incarnation` identifies the immediate live
-predecessor whose priority slot the newly accepted order retains. Zero means
-fresh construction. The new order still receives its own fresh `incarnation`;
+The adapter placement snapshot records the immediate live predecessor whose
+priority slot the newly accepted native request retains. Zero means fresh
+construction. The new request still receives its own fresh `incarnation`;
 `created_seq` remains its scheduling priority, not identity.
 
 The receipt is populated by high-level MARKET/ENTRY, RAW, and primary EXIT
@@ -43,11 +43,8 @@ The generator emits these projections explicitly without native storage or a
 readback path. Native hashing includes the predecessor once and placement side
 once; removed redundant fields need no independent hash state.
 
-This removes two of the 32 direct PendingOrder Boolean members, leaving 30 in
-this component. It replaces one bit with factual identity and removes one
-duplicate placement value; it is not a Boolean wrapper or a renamed policy
-mask. Existing Pine priority/admission/close policies still read these facts
-and retain their existing qualification rules. Public C ABI version 4 and
-pending mirror version 1 remain unchanged. Final aggregate internal C++/hash
-versioning and stale-object pairing are owned by the integrated refactor;
-this component must not be published separately without that boundary.
+The retired compatibility-order Boolean census is no longer a runtime design
+surface. Native request definitions, adapter placement snapshots, and terminal
+receipts carry the corresponding causal facts. Existing Pine
+priority/admission/close policies retain their qualification rules. Public C
+ABI version 4 and pending mirror version 1 remain unchanged.

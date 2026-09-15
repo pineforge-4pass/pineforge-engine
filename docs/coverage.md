@@ -203,7 +203,7 @@ density can be flipped to volume-weighted via
 | `strategy_cancel(id)` / `strategy_cancel_all()`                                                             | Drops pending orders by id or globally.                                                                                                                                                                               |
 
 
-Pending orders are resolved on every `process_pending_orders(bar)` call,
+Native resting requests are resolved at each native driver decision point,
 which walks a 4-waypoint OHLC path (`O → H → L → C` or `O → L → H → C`
 depending on open proximity to high vs low). The runtime resolves stop
 / limit priority, gap fills, opposing-stop arbitration, OCA siblings,

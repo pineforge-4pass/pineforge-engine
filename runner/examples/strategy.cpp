@@ -6,8 +6,10 @@
 class NativeExample final : public pineforge::source::PineStrategyHost {
   public:
     NativeExample() {
-        initial_capital_ = 100000;
-        default_qty_value_ = 1;
+        pineforge::source::PineStrategyConfig config;
+        config.initial_capital = 100000;
+        config.default_qty_value = 1;
+        configure_pine_strategy(config);
     }
     void on_source_bar(const pineforge::Bar &) override {
         // Alternating market entry/close gives a small deterministic test.

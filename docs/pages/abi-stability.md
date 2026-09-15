@@ -116,28 +116,32 @@ notice:
 - The shape of internal log lines (use them for humans, not parsers).
 
 Rebuild generated and native C++ objects against matching engine headers and
-runtime. R4-C advances `BacktestEngine`, `NativeStrategyHost`, and the private
-consumer to `engine_script_run_v16`; the host capability macro is
-`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V16`. `PendingOrder` is no longer an engine
-epoch type: it is `pineforge::source::PendingOrder`, with the explicit
-`pineforge-source-adapter/v1` source-hash domain. Native request/core/event
-values remain `native_order_v4`, the private consumer identity remains
-`native-consumer/v6`, and driver types remain `native_driver_v4`.
+runtime. R4-D L1 advances `BacktestEngine`, `NativeStrategyHost`, and the
+private consumer to `engine_script_run_v17`; the host capability macro is
+`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17`. L3b removes the source compatibility
+order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
+instead. Native request/core/event values are `native_order_v5`, the private
+consumer identity is
+`native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
+`native_run_spec_v2`.
 
 | Matrix role | Internal identity |
 | --- | --- |
-| Live engine/host library | `engine_script_run_v16` |
+| Live engine/host library | `engine_script_run_v17` |
 | `host-e7cdf05` immutable provider | `engine_script_run_v15` |
-| Source extension | `pineforge-source-adapter/v1` |
+| `host-ab9714b` immutable provider | `engine_script_run_v16` |
+| Source extension | `pineforge-source-adapter/v2` |
 
-The current v16 archive is checked with five archived provider inputs: the real
+The current v16 archive is checked with six archived provider inputs: the real
 e60 R2 and 0e R3 providers, authenticated c3ed455 v13 and f736676 v14 host
-closures, and the immutable e7cdf05 v15 source-layer-base closure. The verifier
+closures, the immutable e7cdf05 v15 source-layer-base closure, and the
+immutable ab9714b v16 adapter-lowering-base closure. The verifier
 prepares real archives from immutable sources with the current profile's
 compiler and settings. Constructor/vtable, return-only `native_events()`, host
 observation, core request, driver and current-execution callers compile before
 links are interpreted. The v15↔v16 host/source pair is a required rejection in
-both directions; v16↔v16 succeeds. Existing historical v13/v14/v15 verdicts,
+both directions; the frozen ab9714b v16 ↔ live v16 pair is a required positive
+pairing in both directions. Existing historical v13/v14/v15 verdicts,
 including the unchanged driver-v4 positive links where applicable, remain
 required. No ABI caller executable is run.
 
@@ -149,9 +153,9 @@ guarantee remains in force.
 
 The historical transitions retain their full comparisons. The reviewed v15→v16
 transition additionally consumes the authenticated relocation manifest: it
-allows exactly the listed relocated source storage and source seams, measures
-`sizeof(source::PendingOrder)` in the source-layer row, and rejects every other
-storage, vtable, layout, header, compile, or link difference. Against the older
+allows exactly the listed retired source storage and source seams, verifies the
+frozen public pending-row POD separately, and rejects every other storage,
+vtable, layout, header, compile, or link difference. Against the older
 providers the checker still compares, in full and unconditionally:
 
 * every engine named data declaration in source order (252 declarations, 251
@@ -160,7 +164,7 @@ providers the checker still compares, in full and unconditionally:
   vtable;
 * every compiler-emitted layout word — all 789 against e60 R2 and all 793
   against 0e R3, covering `sizeof`/`alignof` of `BacktestEngine`,
-  `PendingOrder`, the native aggregates and the selected/projection types, plus
+  the native aggregates and the selected/projection types, plus
   the offset/size/alignment triple of each of the 251 engine data members, not
   only the leading financial `Result`/`SettlementInspection`, status and
   Action/CloseScope words. The receipt's `layout.comparedWords` and

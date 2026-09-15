@@ -631,8 +631,8 @@ void permutations_and_immutable_receipts() {
 }  // namespace
 
 int main() {
-    static_assert(std::variant_size_v<Owner> == 4);
-    static_assert(std::variant_size_v<Authority> == 7);
+    static_assert(std::variant_size_v<Owner> == 5);
+    static_assert(std::variant_size_v<Authority> == 8);
     static_assert(std::variant_size_v<ExecutionScope> == 3);
     static_assert(std::variant_size_v<ex::Action> == 3);
     static_assert(std::variant_size_v<ex::CloseScope> == 2);

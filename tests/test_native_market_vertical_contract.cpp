@@ -173,7 +173,7 @@ public:
     int source_last_loss_day = -1;
     int source_intraday_day = -1;
 
-    void invoke_source_entry() { throw_native_only_route("strategy_entry"); }
+    void invoke_source_entry() { guard_native_mutation("strategy_entry"); }
     void poison_source_observation() {
         source_intraday_pnl = kNaN;
         source_cons_loss_days = std::numeric_limits<int>::max();
@@ -1647,9 +1647,8 @@ int main() {
         } catch (...) {
             set_input_threw = true;
         }
-        CHECK(set_input_threw);
-        CHECK(ready_guard.native_state().kind == NativeLifecycleKind::Failed);
-        CHECK(ready_guard.native_state().failure.code == NativeFailureCode::UnsupportedSource);
+        CHECK(!set_input_threw);
+        CHECK(ready_guard.native_state().kind == NativeLifecycleKind::Ready);
         arts.push_back(make_art("R1-native-contract-L1-forbidden-source", spec, host,
                                 fed_two, kOpen100, before));
     }

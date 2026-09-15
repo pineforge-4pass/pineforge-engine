@@ -11,12 +11,14 @@
 #include <vector>
 
 namespace pineforge {
-inline namespace engine_script_run_v16 {
+inline namespace engine_script_run_v17 {
 
 class NativeExecutionConsumer final : public IExecutionConsumer {
 public:
     bool is_native() const noexcept override { return true; }
     void refuse_source_mutation(const char* operation) override;
+    bool stage_account_currency_fx_series(const std::vector<std::int64_t>& timestamps,
+                                          const std::vector<double>& rates) override;
     uint64_t continuation_hash() const noexcept override;
 
     void run_simple(BacktestEngine& engine, const Bar* bars, int n) override;
@@ -62,6 +64,11 @@ public:
                                                const native_order::Request& request);
     native_order::CancelResult cancel(BacktestEngine& engine,
                                       const native_order::RequestHandle& target);
+    native_order::CohortHandle cohort_open(BacktestEngine& engine);
+    void cohort_add(BacktestEngine& engine, native_order::CohortHandle cohort,
+                    native_order::RequestHandle origin);
+    void cohort_remove(BacktestEngine& engine, native_order::CohortHandle cohort,
+                       native_order::RequestHandle origin);
     std::optional<NativeCurrentPointView> current_execution_point() const;
     NativeCurrentExecutionPreview inspect_current_execution(
         const BacktestEngine& engine, const NativeCurrentExecution& command) const;
@@ -173,20 +180,31 @@ private:
     };
 
     bool failed() const noexcept;
+    bool recoverable_abort() const noexcept;
     void latch_failure(NativeFailure failure) noexcept;
     void fail(BacktestEngine& engine, NativeFailure failure) noexcept;
     void render(BacktestEngine& engine, const char* text) const;
     const NativeRunSpec* spec_ptr() const;
     bool commands_allowed() const;
     bool timeframe_args_ok(const std::string& input_tf, const std::string& script_tf) const;
+    bool has_undetected_timeframe() const noexcept;
+    bool legacy_tolerant_slot_labels() const noexcept;
+    bool uses_raw_label_partition() const noexcept;
+    static native_calendar::NativeInterval timestamp_partition(std::int64_t timestamp) noexcept;
+    std::optional<native_calendar::NativeInterval> input_interval_at(std::int64_t timestamp) const;
+    std::optional<native_calendar::NativeInterval> script_interval_at(std::int64_t timestamp) const;
+    bool validate_undetected_begin(BacktestEngine& engine, const NativeBeginArgs& args);
     bool apply_spec(BacktestEngine& engine, const NativeRunSpec& spec);
     bool projection_ok(const BacktestEngine& engine) const;
     bool begin_ready(BacktestEngine& engine, NativeRunPhase phase, int64_t initial_floor_ms);
+    bool prepare_public_begin(BacktestEngine& engine, const NativeBeginArgs& args);
+    bool apply_staged_ingress(BacktestEngine& engine);
     bool refuse_mixed_input_mode(BacktestEngine& engine, InputMode requested);
     void select_input_mode(InputMode requested);
     bool admit_public_begin(BacktestEngine& engine, const char* not_ready_text);
     bool admit_public_stream_input(BacktestEngine& engine, NativeFailureOperation operation);
     bool preflight_bars(BacktestEngine& engine, const Bar* bars, int n, bool stream);
+    bool preflight_intrabar_path(BacktestEngine& engine);
     void pump_batch(BacktestEngine& engine, const Bar* bars, int n);
     bool consume_confirmed_input(BacktestEngine& engine, const Bar& bar, int index, bool last);
     bool contribute_input(BacktestEngine& engine, const Bar& bar,
@@ -194,6 +212,8 @@ private:
                           int index, InputContribution kind);
     void seal_script(BacktestEngine& engine, NativeCompletionKind kind);
     void deliver_confirmed_script(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base);
+    void deliver_intrabar_script(BacktestEngine& engine, const Bar& bar,
+                                 const NativeCoordinate& base);
     void deliver_aggregate_calculation(BacktestEngine& engine, const Bar& bar,
                                        const NativeCoordinate& base);
     int64_t calculation_time(const NativeCoordinate& base) const noexcept;
@@ -203,6 +223,12 @@ private:
     void match_path(BacktestEngine& engine, const NativeDriverPoint& point,
                     bool continuous, double from_price, double to_price);
     void apply_excursion(BacktestEngine& engine, double price);
+    void invoke_bar_open_callback(BacktestEngine& engine, const Bar& bar,
+                                  const NativeDriverPoint& point);
+    bool invoke_input_callback(BacktestEngine& engine, const Bar& bar,
+                               const NativeInputContext& context);
+    bool invoke_tick_callback(BacktestEngine& engine, const Bar& bar,
+                              const NativeTickContext& context);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
     uint64_t take_ordinal(BacktestEngine& engine);
     void raise_floor(int64_t t);
@@ -220,6 +246,10 @@ private:
             native_order::CommandSurface surface) const;
     void refresh_target_scalars(const BacktestEngine& engine,
                                 native_order::TargetObservation& target) const noexcept;
+    std::optional<native_order::Side> cohort_side(
+        const BacktestEngine& engine, const native_order::LiveRequest& live) const;
+    bool request_is_buy(const BacktestEngine& engine,
+                        const native_order::LiveRequest& live) const;
     bool admit_opening_inspect(const BacktestEngine& engine, double resolved_price,
                                const execution::SettlementInspection& inspect,
                                native_order::MatchRejectReason* reason) const;
@@ -279,10 +309,13 @@ private:
     native_calendar::SessionCalendar calendar_{};
     native_calendar::Timeframe input_tf_{};
     native_calendar::Timeframe script_tf_{};
+    std::optional<native_calendar::Timeframe> intrabar_tf_;
     native_calendar::TimeframeCompatibility pairing_{};
     NativeRunSpec applied_{};
     std::optional<NativeFxCurve> staged_fx_curve_;
+    bool staged_ingress_fx_ = false;
     bool in_callback_ = false;
+    bool preparing_begin_ = false;
     mutable bool consuming_request_ = false;
     bool draining_notifications_ = false;
     std::optional<CurrentExecutionFrame> current_frame_;
@@ -308,6 +341,11 @@ private:
     std::vector<NativeDriverPoint> driver_log_;
     std::vector<NativeAccountObservation> account_log_;
     NativeDecisionContext callback_context_{};
+    std::optional<NativeInputContext> input_callback_context_;
+    std::optional<Bar> input_callback_bar_;
+    std::optional<NativeTickContext> tick_callback_context_;
+    std::optional<Bar> tick_callback_bar_;
+    NativeDriverStatistics driver_statistics_{};
     std::optional<native_calendar::TimezoneIdentityDescriptor> tz_identity_{};
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};
@@ -318,5 +356,5 @@ inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer)
     return static_cast<NativeExecutionConsumer&>(consumer);
 }
 
-}  // inline namespace engine_script_run_v16
+}  // inline namespace engine_script_run_v17
 }  // namespace pineforge

@@ -19,6 +19,8 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 using namespace pineforge;
 
 namespace {

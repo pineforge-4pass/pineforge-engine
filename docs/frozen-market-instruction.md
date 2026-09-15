@@ -1,8 +1,8 @@
 # Frozen Pine market instruction
 
 This is a bounded representation migration of an existing Pine compatibility
-policy. `compat::pine::FrozenMarketInstruction` replaces six independent
-PendingOrder sidecars with one exclusive source operation. It does not make
+policy. The adapter placement snapshot represents a frozen market instruction
+as one exclusive source operation. It does not make
 the existing cohort selector a generic native execution contract.
 
 ## Source operation and state ownership
@@ -57,9 +57,9 @@ and a matching entry remains pending later in the source execution order. That
 path remains intact. Lowering this source operation into separate generic
 native transaction/reduction instructions remains future adapter work.
 
-This migration removes three direct PendingOrder booleans, rather than claiming
-that an entire engine has reached a four-flag goal. The Pine cohort selector and
-source-operation discriminator survive and must remain in compatibility audits.
+L3b removes the retired compatibility-order booleans. The Pine cohort selector
+and source-operation discriminator remain adapter facts and must remain in
+compatibility audits.
 No Pine selection predicate has been moved into the native contract by renaming.
 
 ## Observation and compatibility
@@ -75,9 +75,8 @@ truncation indicator and full string hash). The broker hash folds the kind and
 only its live payload; QuantityRequest and placement facts are already folded
 at their owning order. Metadata mutation checks refuse hidden nested fields,
 changed variant/enum alternatives, removed or conditional folds, and waivers.
-The aggregate representation uses internal engine/PendingOrder ABI v7 and
-broker/stream fingerprint epoch7. The complete mirror has155 fields: the142
-shipped fields, seven reservation facts and these six Pine instruction facts.
+The representation is now adapter-owned over native requests. The frozen public
+mirror layout remains append-only and is projected from those facts.
 Public C ABI4 and stream API1 are unchanged.
 
 `test_frozen_market_instruction` uses literal price-100 fixtures and direct

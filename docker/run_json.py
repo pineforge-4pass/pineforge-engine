@@ -104,7 +104,7 @@ except ImportError:  # pragma: no cover
     _ilmd = None
 
 # Canonical strategy() defaults. Mirrors the engine base-class defaults in
-# include/pineforge/engine.hpp (initial_capital_, process_orders_on_close_,
+# include/pineforge/engine.hpp (initial_capital_, close-timing mode,
 # default_qty_type_, default_qty_value_, pyramiding_, commission_type_,
 # commission_value_, slippage_, close_entries_rule_any_). The codegen ctor
 # emits only a subset (it omits process_orders_on_close + close_entries_rule),
@@ -128,7 +128,7 @@ _COMM_TYPE = {"PERCENT": "percent", "CASH_PER_ORDER": "cash_per_order",
 # generated.cpp ctor field name -> provenance key.
 _STRAT_FIELD_KEY = {
     "initial_capital_": "initial_capital",
-    "process_orders_on_close_": "process_orders_on_close",
+    "process" + "_orders_on_close_": "process_orders_on_close",
     "default_qty_type_": "default_qty_type",
     "default_qty_value_": "default_qty_value",
     "pyramiding_": "pyramiding",

@@ -80,29 +80,30 @@ No release tag or VERSION value is rewritten by verification.
 
 The verifier fetches the pinned ABI commits `e60e571` (R2), `0e18690`
 (selected settlement, before exact reversal), `c3ed455` (native host v13),
-`f736676` (native host v14), and `e7cdf052` (the frozen v15 source-layer
-base) without tags only when each object is missing. It builds all five
+`f736676` (native host v14), `e7cdf052` (the frozen v15 source-layer base),
+and `ab9714b` (the frozen v16 adapter-lowering base) without tags only when
+each object is missing. It builds all six
 prepared static libraries with tests disabled, or validates and reuses
 their matching prepared receipts under `settlement-abi-base/`,
 `settlement-abi-prior/`, `native-abi-v13/`, `native-abi-v14/`, and
-`native-abi-v15-frozen/`. Compiler,
+`native-abi-v15-frozen/`, and `native-abi-v16-frozen/`. Compiler,
 configuration and version-source mismatches refuse reuse without deleting the old evidence.
 Each profile needs matching providers; a Mac Release archive cannot replace
 a Linux sanitizer build. CTest itself performs no network fetch.
-The full settlement matrix uses those five archives plus live v16. Its
+The full settlement matrix uses those six archives plus live v17. Its
 host/order matrix retains the historical v13/v14/v15 verdicts and requires
-both v15→v16 and v16→v15 rejection pairs; matching v16 callers/providers
-succeed. The unchanged driver v4 keeps its historical positive links where its
-owner domain is unchanged. Current source callers authenticate the
-`pineforge-source-adapter/v1` domain, while the frozen v15 provider remains an
-immutable historical identity.
+both v16→v17 and v17→v16 rejection pairs; matching v17 callers/providers
+succeed. The unchanged historical driver-v4 controls remain, while live
+driver values are v5. Current source callers authenticate the
+`pineforge-source-adapter/v2` domain, while the frozen v15/v16 providers remain
+immutable historical identities.
 The [ABI guide](../tests/fixtures/settlement_cpp_abi/README.md) describes the
 actual old/new library pairs and their immutable inputs.
 
-CTest writes `settlement-abi-receipt.json` for the six-archive matrix and
+CTest writes `settlement-abi-receipt.json` for the seven-archive matrix and
 `native-abi-receipt.json` for native controls. The native receipt includes the
-active `v14_current_execution_shape_agnostic_compile`, frozen-v15 surface
-controls, and v16-current rejection controls against authenticated tar
+active `v14_current_execution_shape_agnostic_compile`, frozen-v16
+surface controls, and v17-current rejection controls against authenticated tar
 closures. `CURRENT_TERMS_SURFACE_READY = True`: the complete current-execution,
 FX, and missing-Cancelled controls are active, and the good caller compiles
 before its intentional negative compile control. Ordinary compile failures

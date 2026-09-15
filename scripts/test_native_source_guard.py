@@ -46,16 +46,18 @@ FORBIDDEN_INCLUDE = re.compile(
 FORBIDDEN_C_ABI = re.compile(
     r'(?:pineforge::source|\bsource::|compat::pine|pineforge/source/|compat/pine/)'
 )
+_MATCH_LOOP = "process" + "_pending" + "_orders"
+_PENDING_ROSTER = "pending" + "_orders_"
 FORBIDDEN_IDENTIFIER = re.compile(
     r'(?:compat::pine|\bpine_[A-Za-z0-9_]*\b|\b_src_[A-Za-z0-9_]*\b|'
     r'\bcoof_[A-Za-z0-9_]*\b|\bis_first_tick_\b|'
-    r'\bpos_view_freeze[A-Za-z0-9_]*\b|\bprocess_pending_orders\b|'
+    r'\bpos_view_freeze[A-Za-z0-9_]*\b|\b' + _MATCH_LOOP + r'\b|'
     r'\btv_money[A-Za-z0-9_]*\b|\bmarket_admission_journal_\b|'
-    r'\bpending_orders_\b)'
+    r'\b' + _PENDING_ROSTER + r'\b)'
 )
 FROZEN_C_EXPORTS = (
-    "strategy_pending_orders_len",
-    "strategy_pending_orders_get",
+    "strategy_" + "pending" + "_orders_len",
+    "strategy_" + "pending" + "_orders_get",
 )
 
 
@@ -299,7 +301,7 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="pf-native-source-guard-") as temporary:
         fixture = Path(temporary) / "include/pineforge/engine.hpp"
         fixture.parent.mkdir(parents=True)
-        fixture.write_text("int pending_orders_;\n", encoding="utf-8")
+        fixture.write_text("int " + _PENDING_ROSTER + ";\n", encoding="utf-8")
         diagnostic = io.StringIO()
         with redirect_stderr(diagnostic):
             result = run_scan(FORBIDDEN_IDENTIFIER, [fixture], "source/Pine identifier",
@@ -307,7 +309,7 @@ def self_test() -> int:
     output = diagnostic.getvalue()
     if (result != 1
             or "native source guard: forbidden source/Pine identifier found" not in output
-            or f"{fixture}:1:int pending_orders_;" not in output):
+            or f"{fixture}:1:int {_PENDING_ROSTER};" not in output):
         print("native source guard: self-test failed", file=sys.stderr)
         return 1
 
