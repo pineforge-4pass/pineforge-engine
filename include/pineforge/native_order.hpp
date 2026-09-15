@@ -797,9 +797,10 @@ struct EvaluationContext {
     MatchCursor cursor{};
     DriverEligibilityClass driver_class = DriverEligibilityClass::ObservedPrint;
     bool existing_matching_bit = false;
-    // Generic pre-open delivery: the consumer sets this only for a market,
-    // immediate request born by the pre-open provider immediately before the
-    // current open match. It is transient and never retained in a request.
+    // Generic current-point delivery. At Open, the consumer sets this only for
+    // a market/immediate request born by the pre-open provider. On a continuous
+    // OHLC segment, it also admits a request born by an applied callback onto
+    // the unconsumed suffix. It is transient and never retained in a request.
     bool pre_open_birth_eligible = false;
     // Set only while resolving a CohortClose candidate.  It carries the
     // physical side of the currently live selected roster and is not retained

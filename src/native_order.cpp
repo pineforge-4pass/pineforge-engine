@@ -1349,12 +1349,31 @@ EligibilityFacts WorkingRequestCore::eligibility_facts(
     facts.authority = &live.authority;
     facts.waiting = std::holds_alternative<Wait>(live.authority);
     facts.needs_close_bind = std::holds_alternative<UnboundBookClose>(live.authority);
+    const uint64_t point = context.cursor.point.ordinal;
+    const bool evaluated_at_point = [&] {
+        if (const auto* units = std::get_if<AllowanceUnits>(&live.allowance)) {
+            return units->point_ordinal == point;
+        }
+        if (const auto* all = std::get_if<AllowanceAllScope>(&live.allowance)) {
+            return all->point_ordinal == point;
+        }
+        if (const auto* deferred = std::get_if<AllowanceDeferred>(&live.allowance)) {
+            return deferred->point_ordinal == point;
+        }
+        return false;
+    }();
+    const bool pre_open_delivery = context.pre_open_birth_eligible
+        && std::holds_alternative<Market>(live.request().trigger)
+        && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
+        && context.cursor.point.path_phase == NativePathPhase::Open;
+    const bool remaining_path_delivery = context.pre_open_birth_eligible
+        && context.cursor.point.path_phase != NativePathPhase::None
+        && context.cursor.point.path_phase != NativePathPhase::Open;
     facts.birth_ok = point_eligible(live.birth(), context.cursor.point.ordinal,
                                     context.cursor.point.effective_time_ms)
-        || (context.pre_open_birth_eligible
-            && std::holds_alternative<Market>(live.request().trigger)
-            && std::holds_alternative<ImmediateRemaining>(live.request().capacity)
-            && context.cursor.point.path_phase == NativePathPhase::Open
+        || (evaluated_at_point
+            && context.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound)
+        || ((pre_open_delivery || remaining_path_delivery)
             && context.cursor.point.effective_time_ms >= live.birth().decision_time_lower_bound);
     if (facts.waiting) {
         facts.driver_ok = false;
@@ -1905,7 +1924,8 @@ Preparation<PreparedMutation> WorkingRequestCore::prepare_trigger(
         return NoChange{NoChangeReason::NotEligible};
     }
     const MatchCursor& cursor = transition_cursor(transition);
-    if (!trigger_cursor_eligible(updated, cursor)) {
+    if (!trigger_cursor_eligible(updated, cursor)
+        && !same_point_allowance(updated.allowance, cursor.point.ordinal)) {
         return NoChange{NoChangeReason::NotEligible};
     }
     if (!driver_class_matches_cursor(driver_class, cursor)
@@ -2240,6 +2260,9 @@ Preparation<PreparedExecution> WorkingRequestCore::prepare_execution(
     }
     const bool birth_ok = point_eligible(live.birth(), proposal.cursor.point.ordinal,
                                          proposal.cursor.point.effective_time_ms)
+        || (same_point_allowance(live.allowance, proposal.cursor.point.ordinal)
+            && proposal.cursor.point.effective_time_ms
+                >= live.birth().decision_time_lower_bound)
         || (proposal.pre_open_birth_eligible
             && std::holds_alternative<Market>(live.request().trigger)
             && std::holds_alternative<ImmediateRemaining>(live.request().capacity)

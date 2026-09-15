@@ -62,6 +62,8 @@ set(TEST_SOURCES
     test_native_market_vertical_contract
     test_native_calendar_driver_contract
     test_native_host_repairs
+    test_native_remaining_path_l5k
+    test_native_trail_state_l5k
     test_native_adapter_lowering_l1
     test_native_adapter_lowering_l2
     test_native_c_abi_stream_l3a

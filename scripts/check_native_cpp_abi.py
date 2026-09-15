@@ -250,6 +250,23 @@ int main() {
     return int(host.native_state().kind);
 }
 '''
+NATIVE_TRAIL_STATE_CALLER = '''#include <pineforge/native_host.hpp>
+#include <cstdint>
+#include <optional>
+#include <type_traits>
+using H = pineforge::engine_script_run_v17::NativeStrategyHost;
+using S = pineforge::engine_script_run_v17::NativeTrailState;
+static_assert(std::is_same_v<decltype(S::activated), bool>);
+static_assert(std::is_same_v<decltype(S::best_price), double>);
+static_assert(std::is_same_v<decltype(S::current_level), double>);
+static_assert(std::is_same_v<decltype(S::activation_ordinal), std::uint64_t>);
+static_assert(std::is_trivially_copyable_v<S>);
+int main(int argc, char** argv) {
+    auto* host = reinterpret_cast<H*>(argv);
+    auto state = host->trail_state(pineforge::native_order::RequestHandle{});
+    return int(state.has_value()) + argc;
+}
+'''
 HOST_CONSTRUCTOR_CALLER = '''#include <pineforge/native_host.hpp>
 struct Host final : pineforge::NativeStrategyHost {
     void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {}
@@ -320,12 +337,16 @@ def control_applicability(ready: bool | None = None) -> list[dict]:
          "NATIVE_FX_CURVE_CALLER", "engine_script_run_v17"),
         ("v17_native_tick_surface_compile", "compile", ready,
          "NATIVE_TICK_CALLER", "engine_script_run_v17"),
+        ("v17_native_trail_state_surface_compile", "compile", ready,
+         "NATIVE_TRAIL_STATE_CALLER", "engine_script_run_v17"),
         ("v17_to_v16_frozen_current_execution_compile_reject", "compile_rejection", ready,
          "CURRENT_EXECUTION_V15_CALLER", V16_FROZEN_ENGINE_EPOCH),
         ("v17_to_v16_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
          "NATIVE_FX_CURVE_CALLER", V16_FROZEN_ENGINE_EPOCH),
         ("v17_to_v16_frozen_native_tick_compile_reject", "compile_rejection", ready,
          "NATIVE_TICK_CALLER", V16_FROZEN_ENGINE_EPOCH),
+        ("v17_to_v16_frozen_native_trail_state_compile_reject", "compile_rejection", ready,
+         "NATIVE_TRAIL_STATE_CALLER", V16_FROZEN_ENGINE_EPOCH),
     )
     return [{"name": name, "kind": kind, "applicable": bool(applicable),
              "status": "required" if applicable else "pending_surface",
@@ -862,7 +883,7 @@ def main() -> int:
                        render_current_execution_caller("engine_script_run_v16"), v16_frozen_include)
         compile_object("v14_current_execution_shape_agnostic_compile",
                        render_current_execution_caller(V14_ENGINE_EPOCH), v14_include)
-        current_surface = current_fx_curve = current_tick = None
+        current_surface = current_fx_curve = current_tick = current_trail_state = None
         if CURRENT_TERMS_SURFACE_READY:
             current_surface = compile_object("v17_current_execution_surface_compile",
                                              CURRENT_EXECUTION_V15_CALLER, include)
@@ -870,6 +891,8 @@ def main() -> int:
                                               NATIVE_FX_CURVE_CALLER, include)
             current_tick = compile_object("v17_native_tick_surface_compile",
                                           NATIVE_TICK_CALLER, include)
+            current_trail_state = compile_object("v17_native_trail_state_surface_compile",
+                                                 NATIVE_TRAIL_STATE_CALLER, include)
             for name, source in (
                 ("v17_to_v16_frozen_current_execution_compile_reject",
                  CURRENT_EXECUTION_V15_CALLER),
@@ -877,6 +900,8 @@ def main() -> int:
                  NATIVE_FX_CURVE_CALLER),
                 ("v17_to_v16_frozen_native_tick_compile_reject",
                  NATIVE_TICK_CALLER),
+                ("v17_to_v16_frozen_native_trail_state_compile_reject",
+                 NATIVE_TRAIL_STATE_CALLER),
             ):
                 path = root / (name + ".cpp")
                 path.write_text(source)
@@ -1004,6 +1029,7 @@ def main() -> int:
         if CURRENT_TERMS_SURFACE_READY:
             link("v17_current_execution_surface_to_current_library", [current_surface], library)
             link("v17_native_fx_curve_to_current_library", [current_fx_curve], library)
+            link("v17_native_trail_state_to_current_library", [current_trail_state], library)
         link("current_coordinate_to_current_provider",
              [current_coordinate], current_coordinate_provider)
 

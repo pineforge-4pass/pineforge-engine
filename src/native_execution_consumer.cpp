@@ -144,6 +144,14 @@ bool identity_terms(const native_order::ExecutionTerms& terms, double default_pr
         && terms.shape == native_order::OpeningShape::Transact;
 }
 
+bool remaining_path_coordinate(const NativeCoordinate& coordinate) noexcept {
+    const bool continuous_provenance = coordinate.provenance == NativePriceProvenance::Confirmed
+        || coordinate.provenance == NativePriceProvenance::ModeledOHLCClose;
+    return continuous_provenance
+        && coordinate.path_phase != NativePathPhase::None
+        && coordinate.path_phase != NativePathPhase::Open;
+}
+
 double allowance_left_at(const native_order::Allowance& allowance, uint64_t point) noexcept {
     if (const auto* units = std::get_if<native_order::AllowanceUnits>(&allowance)) {
         return units->point_ordinal == point ? units->left : 0.0;
@@ -1766,7 +1774,9 @@ native_order::CommandContext NativeExecutionConsumer::make_command_context(
     // authorization is carried separately and consumed by match_discrete.
     const bool applied_point_is_current = callback_phase_ == CallbackPhase::Applied
         && current_frame_
-        && current_frame_->point.decision.coordinate.effective_time_ms >= decision_floor();
+        && (current_frame_->point.decision.coordinate.effective_time_ms >= decision_floor()
+            || (remaining_path_coordinate(current_frame_->point.decision.coordinate)
+                && !std::holds_alternative<native_order::Market>(request.trigger)));
     ctx.decision_time_ms = (callback_phase_ == CallbackPhase::PreOpen || applied_point_is_current)
             && current_frame_
         ? current_frame_->point.decision.coordinate.effective_time_ms : decision_floor();
@@ -3047,6 +3057,17 @@ void NativeExecutionConsumer::match_path(
         return t_min;
     };
 
+    // The driver point is allocated before matching this monotonic segment.
+    // Therefore an acceptance ordinal after P can only have been created by a
+    // callback at the current path cursor. Admit that birth at t_cursor; the
+    // ordinary geometric search then sees only the unconsumed suffix. Requests
+    // accepted before this segment and discrete points retain the existing gate.
+    auto born_on_remaining_path = [&](const native_order::LiveRequest& live) {
+        return continuous && live.birth().acceptance_ordinal > P
+            && remaining_path_coordinate(point.coordinate)
+            && point.coordinate.effective_time_ms >= live.birth().decision_time_lower_bound;
+    };
+
     auto needs_evaluation = [&](const native_order::LiveRequest& live,
                                 const native_order::EligibilityFacts& facts) {
         if (facts.needs_close_bind) return true;
@@ -3131,7 +3152,8 @@ void NativeExecutionConsumer::match_path(
             if (!live) continue;
             const auto& handle = live->handle();
             native_order::EvaluationContext candidate_eval = eval;
-            candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point);
+            candidate_eval.pre_open_birth_eligible = pre_open_birth_eligible(handle, point)
+                || born_on_remaining_path(*live);
             const native_order::TargetObservation* candidate_target = nullptr;
             std::optional<native_order::TargetObservation> uncached_target;
             if (std::holds_alternative<native_order::CohortClose>(live->authority)) {
@@ -3175,6 +3197,11 @@ void NativeExecutionConsumer::match_path(
                 const bool buy = std::holds_alternative<native_order::CohortClose>(live->authority)
                     ? requests_.working_is_buy(*live, candidate_eval.cohort_side)
                     : request_is_buy(engine, *live);
+                // A callback-born priced request begins immediately after the
+                // birth print. It may cross a later level on this suffix, but
+                // it does not inherit an already-consumed/equal crossing from
+                // the request that produced the callback.
+                const bool include_current = !born_on_remaining_path(*live);
                 const auto& trigger = live->request().trigger;
                 const auto& state = live->trigger_state;
                 std::optional<native_matching::GeometricHit> hit;
@@ -3183,13 +3210,13 @@ void NativeExecutionConsumer::match_path(
                     const auto* stop = std::get_if<native_order::Stop>(&trigger);
                     if (!stop) continue;
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, start, stop->price, !buy, true);
+                        from_price, to_price, start, stop->price, !buy, include_current);
                     kind = Kind::ActivateStop;
                 } else if (std::holds_alternative<native_order::StopLimitPending>(state)) {
                     const auto* sl = std::get_if<native_order::StopLimit>(&trigger);
                     if (!sl) continue;
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, start, sl->stop, !buy, true);
+                        from_price, to_price, start, sl->stop, !buy, include_current);
                     kind = Kind::ActivateStopLimit;
                 } else if (std::holds_alternative<native_order::TrailWaitArm>(state)) {
                     const auto* trail = std::get_if<native_order::Trail>(&trigger);
@@ -3198,7 +3225,8 @@ void NativeExecutionConsumer::match_path(
                         hit = start;
                     } else {
                         hit = native_matching::first_region_entry(
-                            from_price, to_price, start, *trail->arm_price, buy, true);
+                            from_price, to_price, start, *trail->arm_price, buy,
+                            include_current);
                     }
                     kind = Kind::BeginTrail;
                 } else if (const auto* track = std::get_if<native_order::TrailTrack>(&state)) {
@@ -3225,7 +3253,7 @@ void NativeExecutionConsumer::match_path(
                         continue;
                     }
                     hit = native_matching::first_region_entry(
-                        from_price, to_price, start, level, buy, true);
+                        from_price, to_price, start, level, buy, include_current);
                     kind = Kind::Fill;
                 } else if (std::holds_alternative<native_order::MarketReady>(state)
                            || std::holds_alternative<native_order::StopActive>(state)
@@ -3317,7 +3345,8 @@ void NativeExecutionConsumer::match_path(
         eval.cursor = path_cursor;
         const auto* live = requests_.find_live(winner->handle);
         if (!live) continue;
-        eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point);
+        eval.pre_open_birth_eligible = pre_open_birth_eligible(winner->handle, point)
+            || born_on_remaining_path(*live);
         const auto* winner_target = cached_cohort_target(engine, *live);
         eval.cohort_side = winner_target ? side_from_target(*winner_target)
                                          : cohort_side(engine, *live);
@@ -3487,6 +3516,46 @@ std::optional<NativeCurrentPointView> NativeExecutionConsumer::current_execution
     if (!in_callback_ || !current_frame_ || !std::holds_alternative<NativeRunning>(state_))
         return std::nullopt;
     return current_frame_->point;
+}
+
+std::optional<NativeTrailState> NativeExecutionConsumer::trail_state(
+        const BacktestEngine& engine, const native_order::RequestHandle& target) const {
+    const auto* live = requests_.find_live(target);
+    if (!live || !std::holds_alternative<native_order::Trail>(live->request().trigger)) {
+        return std::nullopt;
+    }
+
+    NativeTrailState state;
+    if (std::holds_alternative<native_order::TrailWaitArm>(live->trigger_state)) {
+        return state;
+    }
+
+    if (const auto* tracking = std::get_if<native_order::TrailTrack>(&live->trigger_state)) {
+        state.best_price = tracking->best;
+    } else if (const auto* active = std::get_if<native_order::TrailActive>(
+                   &live->trigger_state)) {
+        state.best_price = active->best_at_trigger;
+    } else {
+        return std::nullopt;
+    }
+    state.activated = true;
+
+    const auto& trail = std::get<native_order::Trail>(live->request().trigger);
+    if (!native_matching::checked_trail_stop(
+            state.best_price, trail.offset, request_is_buy(engine, *live),
+            &state.current_level)) {
+        return std::nullopt;
+    }
+    for (auto it = requests_.history().rbegin(); it != requests_.history().rend(); ++it) {
+        const auto* activated = std::get_if<native_order::ActivatedEvent>(&*it);
+        if (activated && activated->definition
+            && activated->definition->handle == target
+            && activated->kind == native_order::ActivationKind::TrailArm) {
+            state.activation_ordinal = activated->ordinal;
+            break;
+        }
+    }
+    return state;
 }
 
 std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_execution(
@@ -5525,6 +5594,12 @@ void NativeStrategyHost::cohort_remove(
 std::optional<NativeCurrentPointView> NativeStrategyHost::current_execution_point() const {
     return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
         .current_execution_point();
+}
+
+std::optional<NativeTrailState> NativeStrategyHost::trail_state(
+        const native_order::RequestHandle& target) const {
+    return as_native_consumer(const_cast<IExecutionConsumer&>(execution_consumer()))
+        .trail_state(*this, target);
 }
 
 NativeCurrentExecutionPreview NativeStrategyHost::inspect_current_execution(
