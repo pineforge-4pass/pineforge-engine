@@ -187,11 +187,20 @@ void source::PineStrategyHost::on_native_bar(
     adapter_.observe_terminal_receipts();
     scheduler_.bar(bar, context, *this);
     adapter_.on_bar_close(bar, context);
+    if (context.is_terminal_sub_bar
+        && context.coordinate.interval_index == source_last_bar_index_) {
+        scheduler_record_range_end(bar);
+    }
 }
 
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
+    // The legacy source observer counted one broker fill for every committed
+    // execution event.  The native consumer owns those events now; mirror the
+    // count at its notification boundary so restored source tests and public
+    // source-side policy reads see the same monotone value.
+    ++broker_fill_event_seq_;
     adapter_.on_applied(event, context);
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
@@ -203,7 +212,7 @@ void source::PineStrategyHost::on_native_applied(
     }
     project_short_seed_report_rows(event);
     scheduler_.applied(event, context, *this);
-    if (scheduler_.terminal_source_bar()) {
+    if (scheduler_.terminal_source_bar() || barstate_islast_) {
         const Bar terminal = scheduler_.current_script_bar()
             ? *scheduler_.current_script_bar() : current_bar_;
         scheduler_record_range_end(terminal);
@@ -520,6 +529,8 @@ const std::vector<source::PineStrategyHost::FixtureIntentRow>&
 source::PineStrategyHost::source_pending_view() const {
     source_pending_view_cache_.clear();
     source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
+        + adapter_.pending_entries_.size() + adapter_.pending_bracket_legs_.size()
+        + adapter_.pending_coof_requests_.size()
         + adapter_.source_shadow_pending_.size() + adapter_.live_handles_.size());
     const auto append = [&](const PlacementSnapshot& snapshot, const std::string& label) {
         FixtureIntentKind type = FixtureIntentKind::MARKET;
@@ -555,7 +566,10 @@ source::PineStrategyHost::source_pending_view() const {
         row.frozen_market_transaction_units = snapshot.frozen_market_transaction_units;
         row.from_entry = snapshot.from_entry;
         row.is_long = snapshot.is_long;
-        row.qty = snapshot.requested_qty;
+        row.qty = snapshot.family == PineOrderFamily::Close
+            ? snapshot.requested_qty
+            : (std::isfinite(snapshot.projection_remaining_qty)
+                ? snapshot.projection_remaining_qty : snapshot.requested_qty);
         row.qty_percent = snapshot.qty_percent;
         row.created_bar = snapshot.projection_created_bar;
         row.created_seq = static_cast<std::int64_t>(snapshot.source_sequence);
@@ -567,10 +581,63 @@ source::PineStrategyHost::source_pending_view() const {
         row.default_stop_placement_signal_close = default_stop
             ? snapshot.projection_default_stop_signal_close : absent;
         row.affordability_placement_equity = snapshot.projection_affordability_equity;
+        if (snapshot.family == PineOrderFamily::Entry
+            && snapshot.frozen_market_instruction
+            && std::isfinite(snapshot.requested_qty)) {
+            auto observation = std::make_shared<admission::CommandObservation>();
+            observation->command = snapshot.command_ordinal;
+            observation->kind = admission::CommandKind::Entry;
+            observation->birth = snapshot.birth.cause() == OrderBirthCause::Unattributed
+                ? OrderBirth::chart_evaluation(source_bar_index_, current_bar_.timestamp)
+                : snapshot.birth;
+            observation->id = snapshot.source_id;
+            observation->requested_quantity = snapshot.requested_qty;
+            observation->quantity_type = snapshot.qty_type;
+            observation->buy = snapshot.is_long;
+            observation->prices = {snapshot.exit_levels.limit, snapshot.exit_levels.stop};
+            observation->oca_name = snapshot.oca_name;
+            observation->oca_type = snapshot.oca_type;
+            auto& configuration = observation->configuration;
+            configuration.process_on_close = config_.process_orders_on_close;
+            configuration.calc_on_fills = config_.calc_on_order_fills;
+            configuration.slippage = config_.slippage;
+            configuration.pyramiding = config_.pyramiding;
+            configuration.default_quantity_type = config_.default_qty_type;
+            configuration.default_quantity_value = config_.default_qty_value;
+            configuration.long_margin = config_.margin_long;
+            configuration.short_margin = config_.margin_short;
+            configuration.commission_value = config_.commission_value;
+            configuration.commission_type = config_.commission_type;
+            configuration.pointvalue = staged_configuration().syminfo.pointvalue;
+            configuration.fx = snapshot.sizing.fx;
+            configuration.quantity_step = staged_configuration().quantity_grid
+                ? *staged_configuration().quantity_grid : 0.0;
+            configuration.mintick = staged_configuration().syminfo.mintick;
+            observation->bar = source_bar_index_;
+            observation->placement_side = static_cast<int>(PositionSide::FLAT);
+            observation->placement_cycle = snapshot.placement_cycle;
+            observation->held_quantity = 0.0;
+            observation->held_entries = 0;
+            observation->realized_equity = snapshot.sizing.equity;
+            observation->placement_equity = snapshot.sizing.equity;
+            observation->signal_close = snapshot.sizing.price;
+            observation->quantized_fixed_quantity =
+                snapshot.frozen_market_own_units;
+            observation->original_sizing = admission::SizingObservation{
+                snapshot.requested_qty, snapshot.sizing.equity,
+                snapshot.sizing.price, snapshot.sizing.mark, snapshot.sizing.fx};
+            row.market_admission.bind(std::move(observation));
+        }
         source_pending_view_cache_.push_back(std::move(row));
     };
     for (const auto& command : adapter_.pending_same_bar_commands_)
         append(command.snapshot, command.request.label);
+    for (const auto& entry : adapter_.pending_entries_)
+        append(entry.snapshot, entry.request.label);
+    for (const auto& leg : adapter_.pending_bracket_legs_)
+        append(leg.snapshot, leg.request.label);
+    for (const auto& pending : adapter_.pending_coof_requests_)
+        append(pending.snapshot, pending.request.label);
     for (const auto& shadow : adapter_.source_shadow_pending_)
         append(shadow.snapshot, shadow.label);
     for (const auto& handle : adapter_.live_handles_) {
@@ -772,7 +839,14 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     // Publish terminal and group-adjustment receipts before the source body
     // reads its public pending projection at this decision boundary.
     adapter_.observe_terminal_receipts();
+    position_entry_count_ = physical_position().signed_units == 0.0
+        ? 0 : adapter_.source_entry_slot_count();
     on_source_bar(bar);
+    // Handwritten/source-generated callbacks historically read and could
+    // update the live Pine configuration fields directly.  Keep the adapter's
+    // source policy view synchronized at the callback boundary; the generic
+    // NativeRunSpec remains immutable for the run.
+    adapter_.set_configuration(config_);
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
     if (advance_source_index) {

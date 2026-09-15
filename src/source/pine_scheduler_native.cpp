@@ -312,8 +312,15 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     language_.is_first_tick_ = true; language_.is_last_tick_ = false;
     language_.history_slot_is_new_ = false;
     host.adapter_.begin_coof_recalc(context, first_open);
+    const bool drain_risk_recalc = host.adapter_.risk_.max_intraday_loss > 0.0;
     try {
         host.scheduler_publish_source_bar(callback_bar, true, first_open);
+        // Low/high/close recalculations stage source requests until the
+        // callback has finished so their statement order is complete.  Drain
+        // that source queue while the fill coordinate is still current; the
+        // accepted MARKET newborns below then execute at this same broker
+        // point, matching calc_on_order_fills chronology.
+        if (drain_risk_recalc) host.adapter_.flush_coof_tail();
     } catch (...) {
         host.adapter_.end_coof_recalc();
         throw;
@@ -321,7 +328,13 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     host.adapter_.end_coof_recalc();
     coof_callback_script_open_ = context.script_bar_open_ms;
     if (first_open) ++source_bar_count_;
-    if (!first_open) return;
+    if (!first_open) {
+        auto newborns = host.adapter_.take_first_open_newborns();
+        for (const auto& handle : newborns) {
+            (void)host.execute_current({handle, NativeCurrentPriceRule::NearestTick});
+        }
+        return;
+    }
     constexpr std::uint64_t kNoFillEventBudget = std::numeric_limits<std::uint64_t>::max();
     constexpr std::size_t kCoofLoopGuard = 1U << 20;
     std::uint64_t budget = kNoFillEventBudget;

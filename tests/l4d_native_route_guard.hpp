@@ -6,6 +6,7 @@
 #include <pineforge/pineforge.h>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -126,6 +127,7 @@ struct L4dIntentRow {
     std::uint64_t same_id_stop_deferred_close_all_incarnation = 0;
     int same_id_stop_deferred_close_all_bar = -1;
     int coof_cascade_seg_i = -1;
+    bool over_pyramiding_cap_at_placement = false;
     L4dShortSeedRole short_seed_collision_role = L4dShortSeedRole::NONE;
     double signal_close_mc_remaining_qty = std::numeric_limits<double>::quiet_NaN();
     std::uint64_t signal_close_mc_entry_incarnation = 0;
@@ -184,6 +186,14 @@ protected:
             view.id = row.id; view.from_entry = row.from_entry; view.comment = row.comment;
             view.oca_name = row.oca_name;
             view.type = static_cast<L4dOrderType>(row.type);
+            if (view.type == L4dOrderType::ENTRY
+                && std::isnan(row.limit_price) && std::isnan(row.stop_price)
+                && std::isnan(row.trail_offset) && std::isnan(row.trail_price)) {
+                // The deleted PendingOrder facade called an unpriced entry a
+                // MARKET row; the public C mirror correctly retains family
+                // ENTRY. Translate only the restored owner-form test view.
+                view.type = L4dOrderType::MARKET;
+            }
             view.is_long = row.is_long != 0;
             view.limit_price = row.limit_price; view.stop_price = row.stop_price;
             view.trail_points = row.trail_points; view.trail_price = row.trail_price;
@@ -206,6 +216,8 @@ protected:
             view.same_id_stop_deferred_close_all_incarnation = row.same_id_stop_deferred_close_all_incarnation;
             view.same_id_stop_deferred_close_all_bar = row.same_id_stop_deferred_close_all_bar;
             view.coof_cascade_seg_i = row.coof_cascade_seg_i;
+            view.over_pyramiding_cap_at_placement =
+                row.over_pyramiding_cap_at_placement != 0;
             view.short_seed_collision_role =
                 static_cast<L4dShortSeedRole>(row.short_seed_collision_role);
             view.signal_close_mc_remaining_qty = row.signal_close_mc_remaining_qty;
@@ -230,6 +242,47 @@ protected:
 public:
     const L4dIntentRow& pending_order_at(int index) const {
         return l4d_pending_rows().at(static_cast<std::size_t>(index));
+    }
+
+    int probe_fill_qty(int index, double fill_price, double* qty,
+                       int* close_only, int* partition) const {
+        const bool injected_short_seed = std::any_of(
+            l4d_pending_rows_.begin(), l4d_pending_rows_.end(),
+            [](const L4dIntentRow& row) {
+                return row.short_seed_collision_role != L4dShortSeedRole::NONE;
+            });
+        if (!injected_short_seed) {
+            const int result = PineStrategyHost::probe_fill_qty(
+                index, fill_price, qty, close_only, partition);
+            pf_pending_order_v1_t row{};
+            if (result == 0 && partition && *partition == 1
+                && observe_pending_copy_v1(index, &row) == 0
+                && row.type == static_cast<std::int32_t>(L4dOrderType::ENTRY)
+                && std::isnan(row.qty) && std::isnan(row.limit_price)
+                && std::isfinite(row.stop_price)
+                && std::isfinite(row.default_stop_placement_qty)) {
+                // The deleted owner named this frozen-stop branch partition
+                // 2; the generic frozen-placement projection uses 1. Preserve
+                // the historical fixture spelling without changing product
+                // execution or the L0 public oracle.
+                *partition = 2;
+            }
+            return result;
+        }
+        if (!qty || !close_only || !partition || index < 0
+            || index >= static_cast<int>(l4d_pending_rows_.size())) return -1;
+        const auto& row = l4d_pending_rows_[static_cast<std::size_t>(index)];
+        *close_only = 0;
+        if (row.short_seed_collision_role == L4dShortSeedRole::FINAL_SHORT
+            && pyramid_entries_.size() >= 2U) {
+            *qty = pyramid_entries_[0].qty - pyramid_entries_[1].qty;
+            *partition = 1;
+            *close_only = *qty > 1e-10 ? 0 : 1;
+            return 0;
+        }
+        *qty = fixture_configuration().default_qty_value;
+        *partition = 3;
+        return 0;
     }
 
 private:
@@ -263,6 +316,8 @@ inline bool placement_has_opposite_market_predecessor(
         const MarketAdmissionJournal&, const L4dPendingOrder&) noexcept {
     return false;
 }
-inline bool placement_at_entry_capacity(const L4dPendingOrder&) noexcept { return false; }
+inline bool placement_at_entry_capacity(const L4dPendingOrder& order) noexcept {
+    return order.over_pyramiding_cap_at_placement;
+}
 
 }  // namespace pineforge

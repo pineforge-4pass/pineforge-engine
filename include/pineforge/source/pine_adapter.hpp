@@ -27,6 +27,7 @@ namespace pineforge::source {
 using SourceId = std::string;
 
 class PineStrategyHost;
+class PineScheduler;
 
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v2";
 
@@ -145,6 +146,7 @@ struct PlacementSnapshot {
     bool immediately = false;
     bool opening = false;
     bool deferred_cohort = false;
+    bool reservation_deferred_to_pending_entry = false;
     bool frozen_market_instruction = false;
     double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
     double frozen_market_transaction_units = std::numeric_limits<double>::quiet_NaN();
@@ -414,6 +416,7 @@ public:
     double source_unclosed_qty_for(const SourceId& id) const noexcept {
         return cohort_exposure_for(id);
     }
+    int source_entry_slot_count() const noexcept;
 
     void set_risk_direction(int direction) noexcept;
     void set_risk_max_cons_loss_days(int value) noexcept;
@@ -439,7 +442,11 @@ public:
     bool fixture_coof_cursor_is_bar_close() const noexcept {
         return coof_recalc_active_ && coof_context_.coordinate.path_phase == NativePathPhase::Close;
     }
-    void begin_source_evaluation() noexcept { named_entry_cancel_tokens_.clear(); }
+    void begin_source_evaluation() noexcept {
+        named_entry_cancel_tokens_.clear();
+        pending_same_bar_close_qty_ = 0.0;
+        source_batch_mutated_ = false;
+    }
     bool fixture_named_entry_cancel_active(const SourceId& id) const noexcept {
         return named_entry_cancel_tokens_.find(id) != named_entry_cancel_tokens_.end();
     }
@@ -470,6 +477,7 @@ public:
 private:
     friend class PendingIntentView;
     friend class PineStrategyHost;
+    friend class PineScheduler;
     struct CohortFacts {
         native_order::CohortHandle handle{};
         std::vector<native_order::RequestHandle> origins;
@@ -555,6 +563,16 @@ private:
     double cohort_exposure_for(const SourceId&) const noexcept;
     double percent_commission_live_equity(double) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
+    double quantize_percent_exit_units(double requested,
+                                       double available) const noexcept;
+    bool compute_exit_reservation(const SourceId& exit_id,
+                                  const SourceId& from_entry,
+                                  double requested_qty,
+                                  double& qty_percent,
+                                  double live_basis,
+                                  double& reserved_qty) const;
+    void reconcile_deferred_exit_reservations(const SourceId& from_entry,
+                                               double live_basis);
     double active_staged_fx(std::int64_t) const noexcept;
     void apply_fx_open_margin_slice(const Bar&, const NativeDecisionContext&);
     void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
@@ -567,7 +585,12 @@ private:
     bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
                                   double units);
     bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&);
-    void schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
+    bool defer_rounded_pooc_short_margin_until_close(const Bar&) const;
+    bool declined_reversal_at_open(const Bar&) const;
+    bool schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
+    void defer_declined_reversal_exits_at_adverse(const Bar&,
+                                                  const NativeDecisionContext&,
+                                                  bool margin_scheduled);
     bool intraday_loss_breached(double mark_price) const noexcept;
     bool submit_intraday_loss_close(double mark_price, const NativeDecisionContext&,
                                     bool execute_current);
@@ -594,9 +617,12 @@ private:
     void consume_opening_fees(const native_order::ExecutionAppliedEvent&,
                               const SourceId*);
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
+    void consume_closed_trade_rows(const native_order::ExecutionAppliedEvent&,
+                                   const PlacementSnapshot*);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
     void cancel_bracket_origin(native_order::RequestHandle);
     void cancel_bracket_siblings(native_order::RequestHandle);
+    void cancel_exit_orders_for_full_close(const SourceId& from_entry);
     void materialize_relative_exits(PlacementSnapshot,
                                    const native_order::ExecutionAppliedEvent&);
     bool defer_coof_tail() const noexcept;
@@ -616,6 +642,14 @@ private:
     void update_l4c_priority();
     void update_l4c_lifecycle(const native_order::ExecutionAppliedEvent&,
                               const NativeDecisionContext&);
+    int projected_pending_size() const noexcept;
+    bool projected_pending_at(int index, const PlacementSnapshot*& snapshot,
+                              native_order::RequestHandle& handle) const noexcept;
+    int projected_raw_pending_size() const noexcept;
+    bool projected_raw_pending_at(int index, const PlacementSnapshot*& snapshot,
+                                  native_order::RequestHandle& handle) const noexcept;
+    static bool same_projected_order(const PlacementSnapshot& left,
+                                     const PlacementSnapshot& right) noexcept;
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
@@ -651,6 +685,7 @@ private:
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
     std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
+    std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     std::uint64_t receipt_cursor_ = 0;
     std::uint64_t last_applied_ordinal_ = 0;
@@ -658,6 +693,7 @@ private:
     std::int64_t current_position_cycle_ = 0;
     int current_position_sign_ = 0;
     std::uint64_t next_sequential_group_ = 0;
+    bool source_batch_mutated_ = false;
     bool coof_recalc_active_ = false;
     bool coof_first_open_ = false;
     NativeDecisionContext coof_context_{};
@@ -672,6 +708,7 @@ private:
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int64_t risk_coof_direct_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t cap_latest_fill_ = 0;
     bool source_margin_call_enabled_ = true;
     Bar policy_script_bar_{};

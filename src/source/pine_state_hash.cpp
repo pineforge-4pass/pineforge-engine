@@ -41,7 +41,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
     f.d(value.requested_qty); f.d(value.projection_remaining_qty);
     f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
-    f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
+    f.b(value.opening); f.b(value.deferred_cohort);
+    f.b(value.reservation_deferred_to_pending_entry);
+    f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);
     f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
     f.b(value.direction_gate); f.b(value.affordability_policy_active);
@@ -301,6 +303,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& key : consumed_partial_keys) {
         f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
     }
+    std::vector<std::uint64_t> shadowed_openings(
+        bracket_shadowed_openings_.begin(), bracket_shadowed_openings_.end());
+    std::sort(shadowed_openings.begin(), shadowed_openings.end());
+    f.u(shadowed_openings.size());
+    for (const auto opening : shadowed_openings) f.u(opening);
     std::vector<std::string> named_cancel_keys;
     named_cancel_keys.reserve(named_entry_cancel_tokens_.size());
     for (const auto& row : named_entry_cancel_tokens_) named_cancel_keys.push_back(row.first);
@@ -316,6 +323,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(current_position_cycle_);
     f.i(current_position_sign_);
     f.u(next_sequential_group_);
+    f.b(source_batch_mutated_);
     f.b(coof_recalc_active_); f.b(coof_first_open_);
     const auto& coof_coord = coof_context_.coordinate;
     f.u(coof_coord.ordinal); f.i(coof_coord.interval_index); f.i(coof_coord.open_ms);
@@ -350,7 +358,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.d(last_fx_rate_); f.i(position_open_script_bar_);
     f.u(static_cast<std::uint64_t>(position_open_phase_));
     f.b(position_open_priced_);
-    f.i(last_margin_call_script_bar_); f.u(cap_latest_fill_);
+    f.i(last_margin_call_script_bar_); f.i(risk_coof_direct_script_bar_);
+    f.u(cap_latest_fill_);
     f.b(source_margin_call_enabled_);
     f.d(policy_script_bar_.open); f.d(policy_script_bar_.high);
     f.d(policy_script_bar_.low); f.d(policy_script_bar_.close);
