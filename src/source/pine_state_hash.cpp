@@ -3,6 +3,8 @@
 
 #include "../broker_state_hash_internal.hpp"
 
+#include <algorithm>
+
 namespace pineforge {
 namespace {
 
@@ -43,6 +45,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort);
     f.b(value.reservation_deferred_to_pending_entry);
+    f.b(value.fixed_exit_reservation);
     f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);
     f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
@@ -54,6 +57,11 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.frozen_reversal_transaction);
     f.i(value.placement_cycle); f.u(value.sequential_group); f.u(value.sequential_rank);
     f.b(value.has_full_entry_bracket);
+    hash_source_run_identity(f, value.paired_reversal_parent.run);
+    f.u(value.paired_reversal_parent.incarnation);
+    hash_source_run_identity(f, value.preserved_by_close_all.run);
+    f.u(value.preserved_by_close_all.incarnation);
+    f.i(value.preserved_close_all_bar);
     hash_source_run_identity(f, value.bracket_origin.run);
     f.u(value.bracket_origin.incarnation);
     f.u(value.source_sequence);
@@ -62,7 +70,9 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
-    f.b(value.projection_over_pyramiding); f.u(value.projection_predecessor);
+    f.b(value.projection_over_pyramiding);
+    f.b(value.projection_opposite_market_predecessor);
+    f.u(value.projection_predecessor);
     f.u(value.recreated_after_named_cancelled_entry_incarnation);
     f.u(value.named_cancel_surviving_exit_incarnation);
     f.b(value.retained_parent_topology);
@@ -84,6 +94,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
     f.d(value.trail_activation_level);
+    admission::reflect(value.market_admission, "placement.market_admission",
+        [&](const admission::Field& field) { hash_admission_field(f, field); });
     f.i(static_cast<std::int64_t>(value.birth.cause())); f.i(value.birth.bar());
     f.i(value.birth.timestamp()); f.i(static_cast<std::int64_t>(value.birth.cursor().domain()));
     f.i(static_cast<std::int64_t>(value.birth.cursor().position()));
@@ -251,6 +263,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         hash_native_request(f, entry.request); hash_placement(f, entry.snapshot);
         f.s(entry.replacement_key);
     }
+    f.u(delayed_market_orders_.size());
+    for (const auto& order : delayed_market_orders_) {
+        hash_native_request(f, order.request); hash_placement(f, order.snapshot);
+        f.s(order.replacement_key); f.u(order.release_open_epoch);
+    }
     f.u(pending_same_bar_commands_.size());
     for (const auto& command : pending_same_bar_commands_) {
         hash_native_request(f, command.request); hash_placement(f, command.snapshot);
@@ -271,6 +288,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& pending : pending_coof_requests_) {
         hash_native_request(f, pending.request); hash_placement(f, pending.snapshot);
         f.s(pending.replacement_key); f.b(pending.opening); f.u(pending.family_key);
+    }
+    f.u(pending_margin_revivals_.size());
+    for (const auto& pending : pending_margin_revivals_) {
+        hash_placement(f, pending.snapshot); f.i(pending.decline_bar);
     }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
     // PendingIntentView is a derived read-only alias of live_handles_. Keep
@@ -325,6 +346,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     }
     f.u(receipt_cursor_);
     f.u(last_applied_ordinal_);
+    f.i(entry_attempt_bar_); f.u(entry_attempts_on_bar_);
     f.b(materializing_relative_);
     f.i(current_position_cycle_);
     f.i(current_position_sign_);
@@ -407,8 +429,14 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
 }
 
 void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
-    f.s("pineforge-pine-scheduler/v2"); f.u(retained_.bars.size());
-    for (const auto& bar : retained_.bars) {
+    // ab9714be test_live_state_hash_recording: a shorter run is a hash prefix
+    // of the same longer feed.  Retained future input is provider transport,
+    // not broker continuation state, so fold only the consumed source prefix.
+    const std::size_t consumed = std::min(
+        retained_.bars.size(), static_cast<std::size_t>(std::max(source_bar_count_, 0)));
+    f.s("pineforge-pine-scheduler/v2"); f.u(consumed);
+    for (std::size_t index = 0; index < consumed; ++index) {
+        const auto& bar = retained_.bars[index];
         f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume); f.i(bar.timestamp);
     }
     f.s(retained_.input_tf); f.s(retained_.script_tf); f.b(retained_.bar_magnifier);
@@ -439,14 +467,19 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.d(current_script_bar_.open); f.d(current_script_bar_.high); f.d(current_script_bar_.low);
     f.d(current_script_bar_.close); f.d(current_script_bar_.volume); f.i(current_script_bar_.timestamp);
     f.b(current_script_bar_valid_); f.b(saw_open_fill_); f.i(source_bar_count_);
-    f.i(expected_source_bars_); f.u(applied_cursor_); f.i(coof_callback_script_open_);
+    f.b(expected_source_bars_ >= source_bar_count_);
+    f.u(applied_cursor_); f.i(coof_callback_script_open_);
     f.i(prior_input_script_open_ms_);
     f.i(awaiting_legacy_script_open_ms_);
     f.i(last_stream_input_open_ms_);
-    f.u(input_script_completes_.size());
-    for (const auto value : input_script_completes_) f.u(value);
-    f.u(input_script_boundary_completes_.size());
-    for (const auto value : input_script_boundary_completes_) f.u(value);
+    const std::size_t completion_prefix = std::min(input_script_completes_.size(), consumed);
+    f.u(completion_prefix);
+    for (std::size_t index = 0; index < completion_prefix; ++index)
+        f.u(input_script_completes_[index]);
+    const std::size_t boundary_prefix = std::min(input_script_boundary_completes_.size(), consumed);
+    f.u(boundary_prefix);
+    for (std::size_t index = 0; index < boundary_prefix; ++index)
+        f.u(input_script_boundary_completes_[index]);
     f.b(uses_aux_security_feed_);
     f.d(deferred_boundary_input_.bar.open); f.d(deferred_boundary_input_.bar.high);
     f.d(deferred_boundary_input_.bar.low); f.d(deferred_boundary_input_.bar.close);

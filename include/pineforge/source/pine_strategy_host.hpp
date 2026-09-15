@@ -145,6 +145,7 @@ public:
         std::int64_t created_bar = -1;
         std::int64_t created_seq = 0;
         std::uint64_t incarnation = 0;
+        bool over_pyramiding_cap_at_placement = false;
         std::int64_t paired_flat_market_peer_seq = 0;
         double paired_flat_market_transaction_qty = std::numeric_limits<double>::quiet_NaN();
         double frozen_default_qty = std::numeric_limits<double>::quiet_NaN();
@@ -273,12 +274,32 @@ protected:
         return pine_time_close(current_bar_.timestamp, script_tf_, syminfo_.session,
                                syminfo_.timezone, script_tf_);
     }
+    // ab9714be pine_strategy_host.hpp:348-358: generated three-argument
+    // session predicates are class-scope calls whose chart timeframe changes
+    // the D/W/M meaning.  Keep that Pine policy in the source host; the
+    // namespace-level overload remains the raw intraday time-of-day query.
+    bool pine_session_ismarket(const std::string& session,
+                               const std::string& timezone,
+                               std::int64_t bar_ms) const {
+        return pineforge::pine_session_ismarket(session, timezone, bar_ms, script_tf_);
+    }
+    bool pine_session_ispremarket(const std::string& session,
+                                  const std::string& timezone,
+                                  std::int64_t bar_ms) const {
+        return pineforge::pine_session_ispremarket(session, timezone, bar_ms, script_tf_);
+    }
+    bool pine_session_ispostmarket(const std::string& session,
+                                   const std::string& timezone,
+                                   std::int64_t bar_ms) const {
+        return pineforge::pine_session_ispostmarket(session, timezone, bar_ms, script_tf_);
+    }
     const std::vector<FixtureIntentRow>& source_pending_view() const;
     void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
     void hash_source_extension(BrokerStateHashSink&) const override;
 
 private:
     friend class PineScheduler;
+    friend class PineExecutionAdapter;
 
     StagedConfiguration staged_configuration() const;
     static PineStrategyConfig apply_overrides(PineStrategyConfig,
@@ -307,8 +328,17 @@ private:
     void scheduler_record_broker_hash();
     void scheduler_update_session_state(
         const Bar&, std::optional<std::int64_t> next_script_open_ms);
+    void scheduler_set_session_bar_state(bool in_session,
+                                         bool intraday_is_last_bar);
+    execution::AccountEffectProjection adapter_project_flatten(
+        double price, const std::string& id, const std::string& comment,
+        std::uint64_t incarnation) const;
+    void adapter_label_bracket_trades(
+        const native_order::ExecutionAppliedEvent&, bool from_bracket);
+    bool adapter_has_open_entry_id(const std::string&) const;
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);
+    void scheduler_publish_suppressed_tail(const Bar&);
     double compute_liquidation_price() const;
     void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }

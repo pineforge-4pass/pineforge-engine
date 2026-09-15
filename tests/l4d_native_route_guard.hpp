@@ -110,6 +110,7 @@ struct L4dIntentRow {
     int created_bar = -1;
     std::int64_t created_seq = 0;
     std::uint64_t incarnation = 0;
+    bool over_pyramiding_cap_at_placement = false;
     PositionSide created_position_side = PositionSide::FLAT;
     std::int64_t created_position_cycle_seq = 0;
     double tv_carry_qty = std::numeric_limits<double>::quiet_NaN();
@@ -189,15 +190,11 @@ protected:
             L4dIntentRow view;
             view.id = row.id; view.from_entry = row.from_entry; view.comment = row.comment;
             view.oca_name = row.oca_name;
-            view.type = static_cast<L4dOrderType>(row.type);
-            if (view.type == L4dOrderType::ENTRY
-                && std::isnan(row.limit_price) && std::isnan(row.stop_price)
-                && std::isnan(row.trail_offset) && std::isnan(row.trail_price)) {
-                // The deleted PendingOrder facade called an unpriced entry a
-                // MARKET row; the public C mirror correctly retains family
-                // ENTRY. Translate only the restored owner-form test view.
-                view.type = L4dOrderType::MARKET;
-            }
+            view.type = row.type == static_cast<int>(L4dOrderType::ENTRY)
+                    && !std::isfinite(row.limit_price) && !std::isfinite(row.stop_price)
+                    && !std::isfinite(row.trail_points) && !std::isfinite(row.trail_price)
+                    && !std::isfinite(row.trail_offset)
+                ? L4dOrderType::MARKET : static_cast<L4dOrderType>(row.type);
             view.is_long = row.is_long != 0;
             view.limit_price = row.limit_price; view.stop_price = row.stop_price;
             view.trail_points = row.trail_points; view.trail_price = row.trail_price;
@@ -206,6 +203,8 @@ protected:
             view.qty_percent = row.qty_percent; view.oca_type = row.oca_type;
             view.created_bar = row.created_bar; view.created_seq = row.created_seq;
             view.incarnation = row.incarnation;
+            view.over_pyramiding_cap_at_placement =
+                row.over_pyramiding_cap_at_placement != 0;
             view.created_position_side = static_cast<PositionSide>(row.created_position_side);
             view.created_position_cycle_seq = row.created_position_cycle_seq;
             view.tv_carry_qty = row.tv_carry_qty; view.frozen_default_qty = row.frozen_default_qty;
@@ -227,6 +226,99 @@ protected:
             view.signal_close_mc_remaining_qty = row.signal_close_mc_remaining_qty;
             view.signal_close_mc_entry_incarnation = row.signal_close_mc_entry_incarnation;
             view.signal_close_mc_bar = row.signal_close_mc_bar;
+            if (row.market_admission_observation_present != 0) {
+                auto observation = std::make_shared<admission::CommandObservation>();
+                observation->command = row.market_admission_observation_command;
+                observation->kind = static_cast<admission::CommandKind>(
+                    row.market_admission_observation_kind);
+                observation->birth = OrderBirth::direct_command(
+                    static_cast<int>(row.market_admission_observation_birth_bar),
+                    row.market_admission_observation_birth_timestamp);
+                observation->id = row.market_admission_observation_id;
+                observation->requested_quantity =
+                    row.market_admission_observation_requested_quantity;
+                observation->quantity_type = static_cast<int>(
+                    row.market_admission_observation_quantity_type);
+                observation->buy = row.market_admission_observation_buy != 0;
+                observation->prices = {row.market_admission_observation_prices_limit,
+                                       row.market_admission_observation_prices_stop};
+                observation->oca_name = row.market_admission_observation_oca_name;
+                observation->oca_type = static_cast<int>(row.market_admission_observation_oca_type);
+                auto& configuration = observation->configuration;
+                configuration.process_on_close =
+                    row.market_admission_observation_configuration_process_on_close != 0;
+                configuration.calc_on_fills =
+                    row.market_admission_observation_configuration_calc_on_fills != 0;
+                configuration.magnifier =
+                    row.market_admission_observation_configuration_magnifier != 0;
+                configuration.fill_recalculation =
+                    row.market_admission_observation_configuration_fill_recalculation != 0;
+                configuration.scheduler =
+                    row.market_admission_observation_configuration_scheduler != 0;
+                configuration.slippage = static_cast<int>(
+                    row.market_admission_observation_configuration_slippage);
+                configuration.pyramiding = static_cast<int>(
+                    row.market_admission_observation_configuration_pyramiding);
+                configuration.default_quantity_type = static_cast<int>(
+                    row.market_admission_observation_configuration_default_quantity_type);
+                configuration.default_quantity_value =
+                    row.market_admission_observation_configuration_default_quantity_value;
+                configuration.long_margin =
+                    row.market_admission_observation_configuration_long_margin;
+                configuration.short_margin =
+                    row.market_admission_observation_configuration_short_margin;
+                configuration.commission_value =
+                    row.market_admission_observation_configuration_commission_value;
+                configuration.commission_type = static_cast<int>(
+                    row.market_admission_observation_configuration_commission_type);
+                configuration.pointvalue =
+                    row.market_admission_observation_configuration_pointvalue;
+                configuration.fx = row.market_admission_observation_configuration_fx;
+                configuration.quantity_step =
+                    row.market_admission_observation_configuration_quantity_step;
+                configuration.mintick =
+                    row.market_admission_observation_configuration_mintick;
+                configuration.risk_direction = static_cast<int>(
+                    row.market_admission_observation_configuration_risk_direction);
+                configuration.loss_days_limit = static_cast<int>(
+                    row.market_admission_observation_configuration_loss_days_limit);
+                configuration.drawdown_limit =
+                    row.market_admission_observation_configuration_drawdown_limit;
+                configuration.intraday_loss_limit =
+                    row.market_admission_observation_configuration_intraday_loss_limit;
+                configuration.position_limit =
+                    row.market_admission_observation_configuration_position_limit;
+                configuration.fill_cap_active =
+                    row.market_admission_observation_configuration_fill_cap_active != 0;
+                configuration.risk_halted =
+                    row.market_admission_observation_configuration_risk_halted != 0;
+                observation->bar = static_cast<int>(row.market_admission_observation_bar);
+                observation->placement_side = static_cast<int>(
+                    row.market_admission_observation_placement_side);
+                observation->placement_cycle = row.market_admission_observation_placement_cycle;
+                observation->prior_close_quantity =
+                    row.market_admission_observation_prior_close_quantity;
+                observation->held_quantity = row.market_admission_observation_held_quantity;
+                observation->held_entries = static_cast<int>(
+                    row.market_admission_observation_held_entries);
+                observation->realized_equity = row.market_admission_observation_realized_equity;
+                observation->placement_equity = row.market_admission_observation_placement_equity;
+                observation->signal_close = row.market_admission_observation_signal_close;
+                observation->quantized_fixed_quantity =
+                    row.market_admission_observation_quantized_fixed_quantity;
+                if (row.market_admission_observation_original_sizing_present != 0) {
+                    observation->original_sizing = admission::SizingObservation{
+                        row.market_admission_observation_original_sizing_quantity,
+                        row.market_admission_observation_original_sizing_equity,
+                        row.market_admission_observation_original_sizing_price,
+                        row.market_admission_observation_original_sizing_mark,
+                        row.market_admission_observation_original_sizing_fx};
+                }
+                observation->explicit_equity =
+                    row.market_admission_observation_explicit_equity;
+                observation->explicit_price = row.market_admission_observation_explicit_price;
+                view.market_admission.bind(std::move(observation));
+            }
             view.legs.set_limit_price(row.limit_price);
             view.legs.set_stop_price(row.stop_price);
             view.legs.set_trail_points(row.trail_points);
@@ -238,6 +330,35 @@ protected:
                 row.pine_frozen_market_instruction_own_units;
             view.pine_frozen_market_instruction.transaction_.transaction_units =
                 row.pine_frozen_market_instruction_transaction_units;
+            l4d_pending_rows_.push_back(std::move(view));
+        }
+        for (const auto& fixture : source_pending_view()) {
+            const bool present = std::any_of(
+                l4d_pending_rows_.begin(), l4d_pending_rows_.end(),
+                [&](const L4dIntentRow& row) { return row.id == fixture.id; });
+            if (present) continue;
+            L4dIntentRow view;
+            view.id = fixture.id;
+            view.from_entry = fixture.from_entry;
+            switch (fixture.type) {
+            case FixtureIntentKind::MARKET: view.type = L4dOrderType::MARKET; break;
+            case FixtureIntentKind::ENTRY: view.type = L4dOrderType::ENTRY; break;
+            case FixtureIntentKind::EXIT: view.type = L4dOrderType::EXIT; break;
+            case FixtureIntentKind::RAW_ORDER: view.type = L4dOrderType::RAW_ORDER; break;
+            }
+            view.is_long = fixture.is_long;
+            view.qty = fixture.qty;
+            view.qty_percent = fixture.qty_percent;
+            view.created_bar = static_cast<int>(fixture.created_bar);
+            view.created_seq = fixture.created_seq;
+            view.incarnation = fixture.incarnation;
+            view.over_pyramiding_cap_at_placement =
+                fixture.over_pyramiding_cap_at_placement;
+            view.frozen_default_qty = fixture.frozen_default_qty;
+            view.default_stop_placement_qty = fixture.default_stop_placement_qty;
+            view.default_stop_sizing_price = fixture.default_stop_sizing_price;
+            view.sizing_equity = fixture.default_stop_placement_equity;
+            view.market_admission = fixture.market_admission;
             l4d_pending_rows_.push_back(std::move(view));
         }
         return l4d_pending_rows_;

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,16 @@ public:
     const Series<double>& source_series(const std::string&) const;
     void fixture_publish_source_series(const Bar&, bool new_history_slot);
     int source_bar_count() const noexcept { return source_bar_count_; }
+    std::optional<Bar> next_source_bar(int interval_index) const {
+        if (retained_.is_stream || retained_.bar_magnifier
+            || (!retained_.input_tf.empty() && !retained_.script_tf.empty()
+                && retained_.input_tf != retained_.script_tf)
+            || interval_index < 0
+            || interval_index + 1 >= static_cast<int>(retained_.bars.size())) {
+            return std::nullopt;
+        }
+        return retained_.bars[static_cast<std::size_t>(interval_index + 1)];
+    }
     bool terminal_source_bar() const noexcept {
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
     }
@@ -74,6 +85,9 @@ private:
 
     void publish_series(const Bar&, PineStrategyHost&);
     void update_source_series(const Bar&);
+    void snapshot_coof_state(PineStrategyHost&);
+    void restore_coof_state(PineStrategyHost&);
+    void commit_coof_state(PineStrategyHost&);
     void reset_language();
     void snapshot_coof_script_state(PineStrategyHost&);
     void restore_coof_script_state(PineStrategyHost&);

@@ -103,6 +103,14 @@ std::uint64_t source::PineStrategyHost::adapter_terminal_receipt_high_water(
 }
 
 std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
+    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()
+        && native_state().kind == NativeLifecycleKind::Completed) {
+        // ab9714be test_live_state_hash_recording: after a batch completes,
+        // the scalar is the final per-script-bar fingerprint.  Native batch
+        // teardown may still advance input-transport cursors after that last
+        // source callback; those are not a later broker decision.
+        return broker_state_hashes_.back();
+    }
     // Native run generations reject stale native handles, but they were not
     // part of the source broker state before lowering. The adapter hashes its
     // current logical request state below with those generations canonicalized.
@@ -317,6 +325,13 @@ void source::PineStrategyHost::on_native_bar(
         && context.coordinate.interval_index == source_last_bar_index_) {
         scheduler_record_range_end(bar);
     }
+    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
+        // ab9714be pine_scheduler.cpp:1753/:1875 records after dispatch_bar,
+        // including the terminal source policy updates.  The native hook
+        // returns through adapter_.on_bar_close after the scheduler callback,
+        // so refresh the just-appended row at that equivalent boundary.
+        broker_state_hashes_.back() = broker_state_hash();
+    }
 }
 
 void source::PineStrategyHost::on_native_applied(
@@ -340,6 +355,12 @@ void source::PineStrategyHost::on_native_applied(
     // execution event.  The native consumer owns those events now; mirror the
     // count at its notification boundary so restored source tests and public
     // source-side policy reads see the same monotone value.
+    // ab9714be pine_fills.cpp:5954/:6300 and the margin/FX sites: one source
+    // broker fill sequence is consumed per applied broker instruction, not
+    // per closed trade row. Native ordinals remain the execution authority;
+    // this is the generated/source-visible diagnostic projection.
+    if (broker_fill_event_seq_ == std::numeric_limits<std::uint64_t>::max())
+        throw std::overflow_error("source broker fill sequence exhausted");
     ++broker_fill_event_seq_;
     adapter_.on_applied(event, context);
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
@@ -673,12 +694,30 @@ double source::PineStrategyHost::observe_trail_best_price_v1() const {
     return adapter_.pending_intent_view().trail_best_price();
 }
 
+void source::PineStrategyHost::adapter_label_bracket_trades(
+        const native_order::ExecutionAppliedEvent& event, bool from_bracket) {
+    // ab9714be pine_fills.cpp:6232-6252: every trade row emitted by a real
+    // strategy.exit leg carries the bracket cause; strategy.close and
+    // close_all requests remain script closes.
+    for (std::size_t offset = 0; offset < event.closed_trade_count; ++offset) {
+        const std::size_t index = event.first_trade_index + offset;
+        if (index < trades_.size()) trades_[index].exit_from_bracket = from_bracket;
+    }
+}
+
+bool source::PineStrategyHost::adapter_has_open_entry_id(
+        const std::string& id) const {
+    return std::any_of(pyramid_entries_.begin(), pyramid_entries_.end(),
+        [&](const PyramidEntry& row) { return row.entry_id == id && row.qty > 0.0; });
+}
+
 const std::vector<source::PineStrategyHost::FixtureIntentRow>&
 source::PineStrategyHost::source_pending_view() const {
     source_pending_view_cache_.clear();
     source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
         + adapter_.pending_entries_.size() + adapter_.pending_bracket_legs_.size()
         + adapter_.pending_coof_requests_.size()
+        + adapter_.delayed_market_orders_.size()
         + adapter_.source_shadow_pending_.size() + adapter_.live_handles_.size());
     const auto append = [&](const PlacementSnapshot& snapshot, const std::string& label) {
         FixtureIntentKind type = FixtureIntentKind::MARKET;
@@ -721,6 +760,8 @@ source::PineStrategyHost::source_pending_view() const {
         row.qty_percent = snapshot.qty_percent;
         row.created_bar = snapshot.projection_created_bar;
         row.created_seq = static_cast<std::int64_t>(snapshot.source_sequence);
+        row.incarnation = snapshot.source_sequence;
+        row.over_pyramiding_cap_at_placement = snapshot.projection_over_pyramiding;
         row.paired_flat_market_peer_seq = 0;
         row.paired_flat_market_transaction_qty = std::numeric_limits<double>::quiet_NaN();
         row.frozen_default_qty = default_stop ? absent : snapshot.sizing.frozen_units;
@@ -729,7 +770,9 @@ source::PineStrategyHost::source_pending_view() const {
         row.default_stop_placement_signal_close = default_stop
             ? snapshot.projection_default_stop_signal_close : absent;
         row.affordability_placement_equity = snapshot.projection_affordability_equity;
-        if (snapshot.family == PineOrderFamily::Entry
+        row.market_admission = snapshot.market_admission;
+        if (!row.market_admission.observation()
+            && snapshot.family == PineOrderFamily::Entry
             && snapshot.frozen_market_instruction
             && std::isfinite(snapshot.requested_qty)) {
             auto observation = std::make_shared<admission::CommandObservation>();
@@ -778,10 +821,21 @@ source::PineStrategyHost::source_pending_view() const {
         }
         source_pending_view_cache_.push_back(std::move(row));
     };
-    for (const auto& command : adapter_.pending_same_bar_commands_)
+    for (const auto& command : adapter_.pending_same_bar_commands_) {
+        // ab9714be strategy.close under process_orders_on_close is held in the
+        // same-bar close accumulator until the callback returns; the legacy
+        // pending_orders_ observer therefore sees the two entry commands but
+        // not that staged close during the source body.
+        if (config_.process_orders_on_close
+            && command.snapshot.family == PineOrderFamily::Close) {
+            continue;
+        }
         append(command.snapshot, command.request.label);
-    for (const auto& entry : adapter_.pending_entries_)
-        append(entry.snapshot, entry.request.label);
+    }
+    for (const auto& pending : adapter_.pending_entries_)
+        append(pending.snapshot, pending.request.label);
+    for (const auto& delayed : adapter_.delayed_market_orders_)
+        append(delayed.snapshot, delayed.request.label);
     for (const auto& leg : adapter_.pending_bracket_legs_)
         append(leg.snapshot, leg.request.label);
     for (const auto& pending : adapter_.pending_coof_requests_)
@@ -790,7 +844,13 @@ source::PineStrategyHost::source_pending_view() const {
         append(shadow.snapshot, shadow.label);
     for (const auto& handle : adapter_.live_handles_) {
         const auto found = adapter_.placement_.find(handle.incarnation);
-        if (found != adapter_.placement_.end()) append(found->second, found->second.source_id);
+        if (found == adapter_.placement_.end()) continue;
+        if (config_.process_orders_on_close
+            && found->second.family == PineOrderFamily::Close
+            && found->second.projection_created_bar == source_bar_index_) {
+            continue;
+        }
+        append(found->second, found->second.source_id);
     }
     return source_pending_view_cache_;
 }
@@ -811,7 +871,8 @@ void source::PineStrategyHost::project_short_seed_report_rows(
         placement_snapshot = placement->second;
     }
     if (!placement_snapshot || placement_snapshot->family != PineOrderFamily::Close
-        || placement_snapshot->from_entry != plan.seed_id) {
+        || (placement_snapshot->from_entry != plan.seed_id
+            && placement_snapshot->source_id != plan.seed_id)) {
         return;
     }
     for (auto& trade : trades_) {
@@ -1064,8 +1125,47 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     }
 }
 
+void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar) {
+    // ab9714be pine_scheduler.cpp:222-231: the forming probe tail advances
+    // source history and settles the already-matched broker book, but does
+    // not invoke generated code or synthesize a range-end close.
+    current_bar_ = bar;
+    ++source_bar_index_;
+    bar_index_ = source_bar_index_;
+    barstate_islast_ = false;
+    NativeDayPartitionScope chart_day_partition(
+        chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
+    adapter_.begin_source_evaluation();
+    adapter_.observe_terminal_receipts();
+    update_equity_extremes();
+    record_equity_point(bar.timestamp);
+    prev_bar_timestamp_ = bar.timestamp;
+}
+
 void source::PineStrategyHost::scheduler_record_broker_hash() {
     if (broker_state_hash_recording_) broker_state_hashes_.push_back(broker_state_hash());
+}
+
+void source::PineStrategyHost::scheduler_set_session_bar_state(
+        bool in_session, bool intraday_is_last_bar) {
+    // ab9714be pine_scheduler.cpp:1661-1675.  These generated Pine facts are
+    // sourced by the scheduler immediately before the source callback; they
+    // are not generic native-calendar policy.
+    session_ismarket_ = in_session;
+    if (tf_is_daily_or_higher(script_tf_)) {
+        session_isfirstbar_ = in_session;
+        session_islastbar_ = in_session;
+        return;
+    }
+    session_isfirstbar_ = in_session && !prev_in_session_;
+    session_islastbar_ = intraday_is_last_bar;
+}
+
+execution::AccountEffectProjection source::PineStrategyHost::adapter_project_flatten(
+        double price, const std::string& id, const std::string& comment,
+        std::uint64_t incarnation) const {
+    return project_native_settlement_v1(
+        execution::Flatten{}, execution::Fill{price, id, comment, incarnation});
 }
 
 } // namespace pineforge

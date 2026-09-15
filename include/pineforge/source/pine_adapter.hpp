@@ -148,6 +148,7 @@ struct PlacementSnapshot {
     bool opening = false;
     bool deferred_cohort = false;
     bool reservation_deferred_to_pending_entry = false;
+    bool fixed_exit_reservation = false;
     bool frozen_market_instruction = false;
     double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
     double frozen_market_transaction_units = std::numeric_limits<double>::quiet_NaN();
@@ -168,6 +169,9 @@ struct PlacementSnapshot {
     std::uint64_t sequential_group = 0;
     std::uint8_t sequential_rank = 0;
     bool has_full_entry_bracket = false;
+    native_order::RequestHandle paired_reversal_parent{};
+    native_order::RequestHandle preserved_by_close_all{};
+    std::int32_t preserved_close_all_bar = -1;
     // Explicit bracket legs retain the source opening provenance that caused
     // their submission.  A pending parent rejected at a later candidate can
     // then retire only its own deferred legs.
@@ -187,6 +191,7 @@ struct PlacementSnapshot {
     std::int32_t projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
     bool projection_after_close = false;
     bool projection_over_pyramiding = false;
+    bool projection_opposite_market_predecessor = false;
     std::uint64_t projection_predecessor = 0;
     std::uint64_t recreated_after_named_cancelled_entry_incarnation = 0;
     std::uint64_t named_cancel_surviving_exit_incarnation = 0;
@@ -219,6 +224,9 @@ struct PlacementSnapshot {
     // Resolved absolute trail activation used by the source fill policy when
     // trail_points is lowered after its parent opening becomes live.
     double trail_activation_level = std::numeric_limits<double>::quiet_NaN();
+    // Immutable source command observation used by the public admission
+    // journal/mirror. It never owns or drives matching.
+    MarketAdmissionDraft market_admission{};
     // L4c policy receipts. They are immutable placement/live facts owned by
     // the adapter, never a second executable pending-order representation.
     OrderBirth birth{};
@@ -578,6 +586,7 @@ public:
     // closes, so a later close_all in that same evaluation settles first and
     // the add opens the next source position at the same close point.
     void flush_pending_entries();
+    void release_delayed_orders(bool explicit_brackets_only = false);
     void begin_coof_recalc(const NativeDecisionContext&, bool first_open);
     void end_coof_recalc() noexcept;
 
@@ -617,6 +626,13 @@ private:
         native_order::Request request;
         PlacementSnapshot snapshot;
         SourceId replacement_key;
+    };
+
+    struct DelayedMarketOrder {
+        native_order::Request request;
+        PlacementSnapshot snapshot;
+        SourceId replacement_key;
+        std::uint64_t release_open_epoch = 0;
     };
 
     // The legacy same-bar MARKET transaction is a source-side command batch:
@@ -660,6 +676,11 @@ private:
         SourceId replacement_key;
         bool opening = false;
         std::uint64_t family_key = 0;
+    };
+
+    struct PendingMarginRevival {
+        PlacementSnapshot snapshot;
+        std::int32_t decline_bar = -1;
     };
 
     struct NamedEntryCancelToken {
@@ -806,6 +827,10 @@ private:
                                   native_order::RequestHandle& handle) const noexcept;
     static bool same_projected_order(const PlacementSnapshot& left,
                                      const PlacementSnapshot& right) noexcept;
+    void apply_open_market_admission(const NativeDecisionContext&);
+    void apply_reversal_gap_bracket_policy(
+        const Bar&, const NativeDecisionContext&, bool defer_trails = false);
+    void apply_terminal_explicit_market_policy(const NativeDecisionContext&);
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
@@ -817,6 +842,8 @@ private:
     std::uint64_t broker_open_epoch_ = 0;
     std::int64_t last_broker_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t source_command_sequence_ = 0;
+    std::int32_t entry_attempt_bar_ = -1;
+    std::uint32_t entry_attempts_on_bar_ = 0;
     std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
     std::vector<SourceId> cohort_order_;
     PlacementTable placement_;
@@ -824,11 +851,13 @@ private:
     std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
+    std::vector<DelayedMarketOrder> delayed_market_orders_;
     std::vector<PendingSameBarCommand> pending_same_bar_commands_;
     std::vector<SourceShadowPending> source_shadow_pending_;
     double pending_same_bar_close_qty_ = 0.0;
     std::vector<PendingRelativeExit> pending_relative_exits_;
     std::vector<PendingCoofRequest> pending_coof_requests_;
+    std::vector<PendingMarginRevival> pending_margin_revivals_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
     std::vector<DroppedCloseReceipt> dropped_close_receipts_;

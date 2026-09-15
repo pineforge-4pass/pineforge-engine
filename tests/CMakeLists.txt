@@ -1295,3 +1295,47 @@ set_tests_properties(
     test_tv_money_carried_pooc_l4b
     test_tv_money_precision_l4b
     PROPERTIES LABELS "")
+
+# R4-D L5b: these restored sizing, money, admission, deferred-close and
+# source-projection twins now pass on the switched native route. Keep the
+# independently stopped COOF-path and zero-mintick rows under l4-pending until
+# their recorded generic-kernel blockers are merged/resolved.
+set_tests_properties(
+    test_declined_reversal_close_leg_l4c
+    test_famae_declined_reversal_trail_gap_l4c
+    test_famx_declined_reversal_trail_leg_l4c
+    test_multi_tier_exit_precedence_l4c
+    test_placement_rejection_bracket_ownership_l4c
+    test_pooc_coof_reversal_gross_admission_l4c
+    test_prearmed_market_parent_gap_exit_l4c
+    test_reversal_admission_float_guard_l4c
+    test_native_source_fifo_endpoints_l4d
+    test_native_market_admission_projection_l4d
+    test_native_oracle_reversal_f8_l4d
+    test_live_state_hash_recording_l4d
+    test_taro_price_gap_admission_l4d
+    test_famag_close_survives_l4d
+    test_frozen_flat_gap_reject_l4d
+    test_integer_flat_budget_tie_l4d
+    test_integer_opening_budget_l4d
+    test_level_grid_snap_l4d
+    test_limit_exact_touch_level_residue_l4d
+    test_limit_fill_slippage_l4d
+    test_session_predicates_daily_chart_l4d
+    test_tv_fill_rounding_l4d
+    test_default_flat_market_gross_admission_l4d
+    test_explicit_market_price_admission_l4d
+    test_famag_close_first_admission_l4d
+    test_high_value_price_admission_l4d
+    test_live_position_market_gross_admission_l4d
+    test_live_probe_suppress_tail_l4d
+    test_live_trade_accessors_l4d
+    test_stop_entry_admission_l4d
+    test_close_all_coqueued_entry_l4d
+    test_dual_stop_transactions_l4d
+    test_high_value_signal_cost_l4d
+    test_pooc_flat_signal_cost_l4d
+    test_default_pct_stop_sizing_l4b
+    test_percent_equity_open_entry_fee_l4b
+    test_source_fifo_endpoints
+    PROPERTIES LABELS "")
