@@ -419,6 +419,47 @@ void intrabar_sample_eligibility_contract() {
           "intrabar sample-eligibility refusal preserves the supplied value");
 }
 
+void synthesized_intrabar_contract() {
+    auto spec = complete_spec();
+    IntrabarPath::synthesized synthesized;
+    synthesized.samples = 4;
+    synthesized.distribution = MagnifierDistribution::UNIFORM;
+    spec.intrabar.value = synthesized;
+    expect_acceptance(spec);
+
+    spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+    expect_acceptance(spec);
+
+    synthesized.samples = 1;
+    spec.intrabar.value = synthesized;
+    expect_refusal(spec, Error::InvalidIntrabarPath, Field::IntrabarSamples);
+
+    synthesized.samples = 4;
+    synthesized.distribution = static_cast<MagnifierDistribution>(99u);
+    spec.intrabar.value = synthesized;
+    expect_refusal(spec, Error::InvalidIntrabarPath, Field::IntrabarDistribution);
+
+    synthesized.distribution = MagnifierDistribution::ENDPOINTS;
+    synthesized.volume_weighted_min_samples = 1;
+    spec.intrabar.value = synthesized;
+    expect_refusal(spec, Error::InvalidIntrabarPath, Field::IntrabarVolumeSamples);
+
+    spec = complete_spec();
+    spec.input_tf.clear();
+    spec.script_tf.clear();
+    spec.timeframe_undetected = true;
+    synthesized = IntrabarPath::synthesized{};
+    spec.intrabar.value = synthesized;
+    expect_acceptance(spec);
+
+    const auto first_digest = native_intrabar_path_digest(spec.intrabar);
+    synthesized.samples = 5;
+    spec.intrabar.value = synthesized;
+    const auto second_digest = native_intrabar_path_digest(spec.intrabar);
+    check(first_digest != second_digest,
+          "synthesized intrabar sampling parameters are content-hashed");
+}
+
 void legacy_tolerant_policy_contract() {
     auto spec = complete_spec();
     check(spec.slot_label_policy == NativeSlotLabelPolicy::Canonical,
@@ -476,6 +517,7 @@ int main() {
     complete_clock_contract();
     undetected_timeframe_contract();
     intrabar_sample_eligibility_contract();
+    synthesized_intrabar_contract();
     legacy_tolerant_policy_contract();
     failure_atomicity();
     std::cout << (checks - failures) << '/' << checks << " checks passed; "

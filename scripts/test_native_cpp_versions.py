@@ -101,6 +101,26 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'if (failed() && !recoverable_abort())',
                     'if (failed() && !removed_recoverable_abort())')
 
+    def test_synthesized_intrabar_path_is_explicit_and_hashed(self):
+        for before, after in (
+            ('struct synthesized {', 'struct removed_synthesized {'),
+            ('using value_type = std::variant<none, lower_tf, synthesized>;',
+             'using value_type = std::variant<none, lower_tf>;'),
+            ('synthesized_path() const noexcept', 'removed_synthesized_path() const noexcept'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'i(synthesized->samples);',
+                    'i(synthesized->removed_samples);')
+        self.reject(FILES[5], 'u(static_cast<std::uint64_t>(synthesized->distribution));',
+                    'u(static_cast<std::uint64_t>(synthesized->removed_distribution));')
+        self.reject(FILES[10],
+                    'const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;',
+                    'const auto* synthesized = nullptr;')
+        self.reject(FILES[10],
+                    'const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar',
+                    'const bool removed_intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar')
+
     def test_current(self):
         check_texts(DATA)
 

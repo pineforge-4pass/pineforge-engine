@@ -1371,7 +1371,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     driver_digest_.reset();
     account_digest_.reset();
     driver_statistics_ = NativeDriverStatistics{};
-    driver_statistics_.intrabar_path_enabled = spec.intrabar.lower() != nullptr;
+    driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
     callback_context_ = NativeDecisionContext{};
     callback_context_.driver_statistics = driver_statistics_;
     state_ = NativeRunning{std::move(spec), phase};
@@ -1449,7 +1449,7 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
 
 bool NativeExecutionConsumer::preflight_intrabar_path(BacktestEngine& engine) {
     const auto* spec = spec_ptr();
-    if (!spec || !spec->intrabar.lower()) return true;
+    if (!spec || spec->intrabar.is_none() || spec->intrabar.synthesized_path()) return true;
     const auto& lower = *spec->intrabar.lower();
     if (!intrabar_tf_ || lower.bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         present_refusal(engine, "native intrabar path timeframe or bar count is invalid");
@@ -3840,30 +3840,45 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         BacktestEngine& engine, const Bar& bar, const NativeCoordinate& base) {
     const auto* spec = spec_ptr();
     const auto* lower = spec ? spec->intrabar.lower() : nullptr;
-    if (!lower) {
+    const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;
+    if (!lower && !synthesized) {
         deliver_confirmed_script(engine, bar, base);
         return;
     }
 
     std::vector<const Bar*> sub_bars;
-    const int64_t begin = base.open_ms;
-    const int64_t end = script_.interval.next_input_open_ms;
-    for (const auto& candidate : lower->bars) {
-        if (candidate.timestamp >= begin && candidate.timestamp < end) {
-            sub_bars.push_back(&candidate);
+    if (lower) {
+        const int64_t begin = base.open_ms;
+        const int64_t end = script_.interval.next_input_open_ms;
+        for (const auto& candidate : lower->bars) {
+            if (candidate.timestamp >= begin && candidate.timestamp < end) {
+                sub_bars.push_back(&candidate);
+            }
         }
-    }
-    // The generic path follows the legacy pump's fallback: a script bar with
-    // no assigned lower bars walks its own OHLC path.
-    if (sub_bars.empty()) {
-        deliver_confirmed_script(engine, bar, base);
-        return;
+        // The generic lower-feed path follows the legacy pump's fallback: a
+        // script bar with no assigned lower bars walks its own OHLC path.
+        if (sub_bars.empty()) {
+            deliver_confirmed_script(engine, bar, base);
+            return;
+        }
+    } else {
+        // synthesized is intentionally independent of [begin, end): raw
+        // caller labels have a zero-width partition but still carry their
+        // own complete OHLC path.
+        sub_bars.push_back(&bar);
     }
 
     Bar script_bar = bar;
     script_bar.timestamp = base.open_ms;
+    const int sample_count = lower ? lower->samples : synthesized->samples;
+    const auto distribution = lower ? lower->distribution : synthesized->distribution;
+    const bool volume_weighted = lower ? lower->volume_weighted : synthesized->volume_weighted;
+    const int volume_weighted_min_samples = lower
+        ? lower->volume_weighted_min_samples : synthesized->volume_weighted_min_samples;
+    const int volume_weighted_max_samples = lower
+        ? lower->volume_weighted_max_samples : synthesized->volume_weighted_max_samples;
     double mean_volume = 0.0;
-    if (lower->volume_weighted) {
+    if (volume_weighted) {
         for (const Bar* sub : sub_bars) mean_volume += sub->volume;
         mean_volume /= static_cast<double>(sub_bars.size());
     }
@@ -3875,8 +3890,8 @@ void NativeExecutionConsumer::deliver_intrabar_script(
     driver_statistics_.sub_bars_per_script_bar = static_cast<int>(sub_bars.size());
     driver_statistics_.samples_per_sub_bar = 0;
     callback_context_.driver_statistics = driver_statistics_;
-    const bool direct_sub_bar_corners = sub_bars.size() > 1;
-    const bool distribution_samples = lower->sample_eligibility
+    const bool direct_sub_bar_corners = lower && sub_bars.size() > 1;
+    const bool distribution_samples = synthesized || lower->sample_eligibility
         == IntrabarPath::SampleEligibility::DistributionSamples;
 
     for (std::size_t sub_index = 0; sub_index < sub_bars.size(); ++sub_index) {
@@ -3884,22 +3899,22 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         callback_context_.sub_index = static_cast<int>(sub_index);
         callback_context_.is_terminal_sub_bar = sub_index + 1 == sub_bars.size();
         callback_context_.sub_bar_open_ms = sub.timestamp;
-        // DistributionSamples consumes the magnifier generator's ordered
-        // prices as point decisions, matching the read-only reference at
-        // src/source/pine_scheduler.cpp:806-960 without importing source
-        // policy into this generic driver.
+        // DistributionSamples and synthesized paths consume the generic
+        // sampler from include/pineforge/magnifier.hpp as ordered point
+        // decisions. This reproduces the read-only consumption ordering at
+        // src/source/pine_scheduler.cpp:806-960 without source policy here.
         if (!distribution_samples || direct_sub_bar_corners) {
             // A retained lower bar already supplies its four exact turning
             // points. Continuous eligibility traverses those segments directly;
             // likewise, a path containing several retained lower bars has no
             // missing intrabar detail for a synthetic sampler to recover.
             sample_price_path(sub, 4, MagnifierDistribution::ENDPOINTS, samples);
-        } else if (lower->volume_weighted) {
+        } else if (volume_weighted) {
             sample_price_path_volume_weighted(
-                sub, lower->samples, mean_volume, lower->volume_weighted_min_samples,
-                lower->volume_weighted_max_samples, lower->distribution, samples);
+                sub, sample_count, mean_volume, volume_weighted_min_samples,
+                volume_weighted_max_samples, distribution, samples);
         } else {
-            sample_price_path(sub, lower->samples, lower->distribution, samples);
+            sample_price_path(sub, sample_count, distribution, samples);
         }
         if (samples.empty()) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});
@@ -4091,7 +4106,16 @@ bool NativeExecutionConsumer::contribute_input(
     current_input_open_ = interval.open_ms;
     observed_input_cursor_ = interval.open_ms;
     last_accepted_input_ = interval;
-    raise_floor(native_canonical_input_completion(interval));
+    const auto* spec = spec_ptr();
+    // A modeled intrabar path supplies its own decision points during seal.
+    // Raising to the input/script completion here would fence requests born
+    // at an earlier sub-bar out of its remaining points. No-path and stream
+    // aggregation retain the historical script-bar floor exactly.
+    const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar
+        && spec && !spec->intrabar.is_none();
+    if (!intrabar_points_drive_floor) {
+        raise_floor(native_canonical_input_completion(interval));
+    }
     const bool exhausted =
         interval.next_period_open_ms >= script_.interval.next_period_open_ms;
     if (exhausted) {

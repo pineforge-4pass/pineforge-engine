@@ -61,6 +61,7 @@ def relocation_manifest(transition, manifests=RELOCATION_MANIFESTS) -> dict | No
                 "NativeRunSpec::slot_label_policy",
                 "NativeRunSpec::legacy_tolerance",
                 "IntrabarPath::lower_tf::sample_eligibility",
+                "IntrabarPath::synthesized",
                 "NativeDecisionContext::driver_statistics"]:
             raise RuntimeError(
                 "v16/v17 relocation manifest must record all reviewed value members")
@@ -171,7 +172,7 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
 EXEMPTED_HEADER_SHA256 = {
     'native_order.hpp': '9d9900d0d859678f20278cfa607d47631c18a8eb2d308e89849b86dbba80a15c',
     'native_host.hpp': '4493556ac72a243d926753fbbe129bf3414132293350b04634d6cbb72e5ff83f',
-    'native_run_spec.hpp': '01dc170b6dd77c807e265cd090122d287601a68f0d009d35de2185f7daad7f8b',
+    'native_run_spec.hpp': '7b1f618b3a1306ccb96151331691a2ff137bcd379b4cb66e8ef199aa1d15340a',
     'market_driver.hpp': '4dc693e5481c21dcbf712521af5c76e26cc9e9d4c7ee624dca5ad8c48d52dc61',
     'execution_consumer.hpp': '156acf02c8268b38eb7ba70d96b34c53025bd66ce9a960222a27a50be348b9d7',
 }

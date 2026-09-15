@@ -47,6 +47,7 @@ class AbiToolingTests(unittest.TestCase):
             'NativeRunSpec::slot_label_policy',
             'NativeRunSpec::legacy_tolerance',
             'IntrabarPath::lower_tf::sample_eligibility',
+            'IntrabarPath::synthesized',
             'NativeDecisionContext::driver_statistics',
         ])
         self.assertEqual(manifest['rejectionPairs'], [

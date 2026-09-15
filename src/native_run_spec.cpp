@@ -123,7 +123,7 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         if (!result) return result;
     }
     if (spec.timeframe_undetected
-        && (!spec.input_tf.empty() || !spec.script_tf.empty() || !spec.intrabar.is_none())) {
+        && (!spec.input_tf.empty() || !spec.script_tf.empty() || spec.intrabar.lower())) {
         return {Error::InvalidUndetectedTimeframe, Field::TimeframeUndetected};
     }
     if (!valid_slot_label_policy(spec.slot_label_policy)) {
@@ -178,7 +178,7 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     }
     if (spec.initial_margin_fraction && !positive(*spec.initial_margin_fraction))
         return {Error::NotFinitePositive, Field::InitialMarginFraction};
-    if (spec.intrabar.value.index() > 1) {
+    if (spec.intrabar.value.index() > 2) {
         return {Error::InvalidIntrabarPath, Field::IntrabarTimeframe};
     }
     if (const auto* lower = spec.intrabar.lower()) {
@@ -197,6 +197,20 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         if (lower->volume_weighted_min_samples < 2
             || lower->volume_weighted_max_samples < lower->volume_weighted_min_samples
             || lower->volume_weighted_max_samples > (1 << 20)) {
+            return {Error::InvalidIntrabarPath, Field::IntrabarVolumeSamples};
+        }
+    }
+    if (const auto* synthesized = spec.intrabar.synthesized_path()) {
+        if (synthesized->samples < 2 || synthesized->samples > (1 << 20)) {
+            return {Error::InvalidIntrabarPath, Field::IntrabarSamples};
+        }
+        if (!valid_distribution(synthesized->distribution)) {
+            return {Error::InvalidIntrabarPath, Field::IntrabarDistribution};
+        }
+        if (synthesized->volume_weighted_min_samples < 2
+            || synthesized->volume_weighted_max_samples
+                < synthesized->volume_weighted_min_samples
+            || synthesized->volume_weighted_max_samples > (1 << 20)) {
             return {Error::InvalidIntrabarPath, Field::IntrabarVolumeSamples};
         }
     }
@@ -289,18 +303,24 @@ std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept {
         bytes(value.data(), value.size());
     };
     u(path.value.index());
-    const auto* lower = path.lower();
-    if (!lower) return state;
-    s(lower->tf);
-    i(lower->samples);
-    u(static_cast<std::uint64_t>(lower->distribution));
-    u(lower->volume_weighted ? 1u : 0u);
-    i(lower->volume_weighted_min_samples);
-    i(lower->volume_weighted_max_samples);
-    u(static_cast<std::uint64_t>(lower->sample_eligibility));
-    u(lower->bars.size());
-    for (const auto& bar : lower->bars) {
-        d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume); i(bar.timestamp);
+    if (const auto* lower = path.lower()) {
+        s(lower->tf);
+        i(lower->samples);
+        u(static_cast<std::uint64_t>(lower->distribution));
+        u(lower->volume_weighted ? 1u : 0u);
+        i(lower->volume_weighted_min_samples);
+        i(lower->volume_weighted_max_samples);
+        u(static_cast<std::uint64_t>(lower->sample_eligibility));
+        u(lower->bars.size());
+        for (const auto& bar : lower->bars) {
+            d(bar.open); d(bar.high); d(bar.low); d(bar.close); d(bar.volume); i(bar.timestamp);
+        }
+    } else if (const auto* synthesized = path.synthesized_path()) {
+        i(synthesized->samples);
+        u(static_cast<std::uint64_t>(synthesized->distribution));
+        u(synthesized->volume_weighted ? 1u : 0u);
+        i(synthesized->volume_weighted_min_samples);
+        i(synthesized->volume_weighted_max_samples);
     }
     return state;
 }

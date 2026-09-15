@@ -289,7 +289,7 @@ def check_texts(files):
 
     spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v2")
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
-                   "NativeRunSpecField", "IntrabarPath", "SampleEligibility",
+                   "NativeRunSpecField", "IntrabarPath", "SampleEligibility", "synthesized",
                    "NativeSlotLabelPolicy",
                    "NativeLegacyTolerance"),
             "native_run_spec_v2",
@@ -338,6 +338,31 @@ def check_texts(files):
         raise ValueError('native run-spec field tags omit intrabar sample eligibility')
     if 'u(static_cast<std::uint64_t>(lower->sample_eligibility));' not in spec_src:
         raise ValueError('native intrabar path digest omits sample eligibility')
+    synthesized = body(intrabar, r'struct\s+synthesized\s*\{', 'synthesized intrabar path')
+    compact_synthesized = re.sub(r'\s+', '', synthesized)
+    for member in ('intsamples=4;', 'MagnifierDistributiondistribution='
+                   'MagnifierDistribution::ENDPOINTS;',
+                   'boolvolume_weighted=false;',
+                   'intvolume_weighted_min_samples=2;',
+                   'intvolume_weighted_max_samples=64;'):
+        if member not in compact_synthesized:
+            raise ValueError('synthesized intrabar path omits sampling member: ' + member)
+    if ('std::variant<none,lower_tf,synthesized>' not in re.sub(r'\s+', '', intrabar)
+            or 'const synthesized* synthesized_path() const noexcept' not in intrabar):
+        raise ValueError('native intrabar path omits its synthesized variant')
+    for token in ('synthesized->samples', 'synthesized->distribution',
+                  'synthesized->volume_weighted',
+                  'synthesized->volume_weighted_min_samples',
+                  'synthesized->volume_weighted_max_samples'):
+        if token not in spec_src:
+            raise ValueError('native synthesized intrabar digest/validation omits: ' + token)
+    for fold in ('i(synthesized->samples);',
+                 'u(static_cast<std::uint64_t>(synthesized->distribution));',
+                 'u(synthesized->volume_weighted ? 1u : 0u);',
+                 'i(synthesized->volume_weighted_min_samples);',
+                 'i(synthesized->volume_weighted_max_samples);'):
+        if fold not in spec_src:
+            raise ValueError('native synthesized intrabar digest omits: ' + fold)
 
     driver_text = files[FILES[6]]
     if driver_text.count(DRIVER_FORWARD) != 1:
@@ -394,8 +419,10 @@ def check_texts(files):
             raise ValueError('native continuation hash omits compatibility policy: ' + fold)
     for token in ('lower->sample_eligibility',
                   'IntrabarPath::SampleEligibility::DistributionSamples',
+                  'const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;',
                   'if (distribution_samples || sample_index == 0)',
                   'driver_statistics_.sample_ticks_processed',
+                  'const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar',
                   'staged_ingress_fx_', 'if (failed() && !recoverable_abort())'):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)

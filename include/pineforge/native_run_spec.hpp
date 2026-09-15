@@ -81,13 +81,28 @@ struct IntrabarPath {
         int volume_weighted_max_samples = 64;
         SampleEligibility sample_eligibility = SampleEligibility::ContinuousSegments;
     };
-    using value_type = std::variant<none, lower_tf>;
+    // A synthesized path has no retained lower feed. The driver samples each
+    // script bar's own OHLC path through the generic sampler declared in
+    // include/pineforge/magnifier.hpp. Its point-only eligibility is inherent
+    // to this mode, so there is no separate SampleEligibility member.
+    struct synthesized {
+        int samples = 4;
+        MagnifierDistribution distribution = MagnifierDistribution::ENDPOINTS;
+        bool volume_weighted = false;
+        int volume_weighted_min_samples = 2;
+        int volume_weighted_max_samples = 64;
+    };
+    using value_type = std::variant<none, lower_tf, synthesized>;
 
     value_type value = none{};
 
     bool is_none() const noexcept { return std::holds_alternative<none>(value); }
     const lower_tf* lower() const noexcept { return std::get_if<lower_tf>(&value); }
     lower_tf* lower() noexcept { return std::get_if<lower_tf>(&value); }
+    const synthesized* synthesized_path() const noexcept {
+        return std::get_if<synthesized>(&value);
+    }
+    synthesized* synthesized_path() noexcept { return std::get_if<synthesized>(&value); }
 };
 
 // One complete setup value, staged/copied by NativeStrategyHost before it is
@@ -207,9 +222,9 @@ NativeRunSpecValidation validate_native_run_spec(const NativeRunSpec& spec) noex
 // that same spec atomically; own copy-allocation/lifecycle failure handling.
 NativeRunSpecValidation normalize_native_run_spec(NativeRunSpec& spec) noexcept;
 
-// Exact FNV-1a content digest for a retained intrabar path.  It includes the
-// lower bars in caller order and every sampling parameter, so continuation
-// identity cannot silently reuse a path from another begin call.
+// Exact FNV-1a content digest for a retained intrabar path. It includes the
+// mode, lower bars in caller order when present, and every sampling parameter,
+// so continuation identity cannot silently reuse a path from another begin.
 std::uint64_t native_intrabar_path_digest(const IntrabarPath& path) noexcept;
 
 static_assert(std::is_trivially_copyable_v<NativeRunSpecValidation>);

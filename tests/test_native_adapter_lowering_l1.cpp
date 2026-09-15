@@ -289,6 +289,8 @@ public:
     std::string last_tickerid;
     std::string callback_tickerid;
     std::vector<double> active_fx;
+    bool synthesize_intrabar = false;
+    bool legacy_tolerant_intrabar = false;
     IntrabarPath::SampleEligibility sample_eligibility =
         IntrabarPath::SampleEligibility::ContinuousSegments;
 
@@ -329,17 +331,30 @@ public:
             configured.script_tf.clear();
             configured.timeframe_undetected = true;
         }
+        if (legacy_tolerant_intrabar) {
+            configured.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
+        }
         if (copy_intrabar && args.bar_magnifier) {
-            IntrabarPath::lower_tf lower;
-            lower.tf = input;
-            lower.samples = args.magnifier_samples;
-            lower.distribution = args.magnifier_distribution;
-            lower.volume_weighted = args.magnifier_volume_weighted;
-            lower.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
-            lower.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
-            lower.sample_eligibility = sample_eligibility;
-            if (args.bars && args.n > 0) lower.bars.assign(args.bars, args.bars + args.n);
-            configured.intrabar.value = std::move(lower);
+            if (synthesize_intrabar) {
+                IntrabarPath::synthesized synthesized;
+                synthesized.samples = args.magnifier_samples;
+                synthesized.distribution = args.magnifier_distribution;
+                synthesized.volume_weighted = args.magnifier_volume_weighted;
+                synthesized.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
+                synthesized.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
+                configured.intrabar.value = std::move(synthesized);
+            } else {
+                IntrabarPath::lower_tf lower;
+                lower.tf = input;
+                lower.samples = args.magnifier_samples;
+                lower.distribution = args.magnifier_distribution;
+                lower.volume_weighted = args.magnifier_volume_weighted;
+                lower.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
+                lower.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
+                lower.sample_eligibility = sample_eligibility;
+                if (args.bars && args.n > 0) lower.bars.assign(args.bars, args.bars + args.n);
+                configured.intrabar.value = std::move(lower);
+            }
         }
         CHECK(configure_native(configured).status == NativeSetupStatus::Applied);
     }
@@ -389,6 +404,35 @@ public:
     void on_native_applied(const no::ExecutionAppliedEvent& event,
                            const NativeDecisionContext& context) override {
         if (event.request().label == "distribution-coarse-stop") applied = event;
+    }
+};
+
+class IntrabarFloorHost final : public ProviderHost {
+public:
+    std::optional<no::ExecutionAppliedEvent> opening;
+    std::optional<no::ExecutionAppliedEvent> stop;
+
+    void on_native_run_begin() override {
+        no::Request entry = market(1.0, "floor-entry-at-sub-bar");
+        entry.trigger = no::Limit{99.0};
+        const auto result = submit(entry);
+        CHECK(result.status == no::SubmitStatus::Accepted);
+    }
+
+    void on_native_applied(const no::ExecutionAppliedEvent& event,
+                           const NativeDecisionContext& context) override {
+        if (event.request().label == "floor-entry-at-sub-bar") {
+            opening = event;
+            CHECK(context.sub_bar_open_ms == kT + 120000);
+            no::Request exit;
+            exit.intent = no::Reduce{no::ExplicitUnits{1.0}};
+            exit.trigger = no::Stop{99.0};
+            exit.label = "floor-stop-after-sub-bar";
+            const auto result = submit(exit);
+            CHECK(result.status == no::SubmitStatus::Accepted);
+        } else if (event.request().label == "floor-stop-after-sub-bar") {
+            stop = event;
+        }
     }
 };
 
@@ -666,6 +710,94 @@ void distribution_samples_witness() {
     const auto sampled_digest = native_intrabar_path_digest(
         IntrabarPath{IntrabarPath::value_type{lower}});
     CHECK(continuous_digest != sampled_digest);
+}
+
+bool coarse_stop_fills_synthesized(MagnifierDistribution distribution,
+                                   NativeDecisionContext* final_context) {
+    DistributionHost host;
+    host.copy_intrabar = true;
+    host.synthesize_intrabar = true;
+    host.legacy_tolerant_intrabar = true;
+    const Bar bars[] = {
+        bar(kT, 100.0, 101.0, 99.0, 100.0),
+        bar(kT + 60000, 100.0, 100.5, 94.5, 96.0),
+    };
+    host.run(bars, 2, "1", "1", true, 4, distribution);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.contexts.size() == 2);
+    if (!host.contexts.empty() && final_context) *final_context = host.contexts.back();
+    return host.applied.has_value();
+}
+
+void synthesized_distribution_samples_witness() {
+    struct Expected {
+        MagnifierDistribution distribution;
+        bool fills;
+    };
+    const Expected expected[] = {
+        {MagnifierDistribution::UNIFORM, false},
+        {MagnifierDistribution::COSINE, true},
+        {MagnifierDistribution::TRIANGLE, false},
+        {MagnifierDistribution::ENDPOINTS, true},
+        {MagnifierDistribution::FRONT_LOADED, false},
+        {MagnifierDistribution::BACK_LOADED, false},
+    };
+    for (const auto& row : expected) {
+        NativeDecisionContext context{};
+        CHECK(coarse_stop_fills_synthesized(row.distribution, &context) == row.fills);
+        CHECK(context.driver_statistics.intrabar_path_enabled);
+        CHECK(context.driver_statistics.sub_bars_per_script_bar == 1);
+        CHECK(context.driver_statistics.samples_per_sub_bar == 4);
+        CHECK(context.driver_statistics.sub_bars_processed == 2);
+        CHECK(context.driver_statistics.sample_ticks_processed == 8);
+        CHECK(context.sub_index == 0);
+        CHECK(context.sub_count == 1);
+        CHECK(context.is_terminal_sub_bar);
+        CHECK(context.sub_bar_open_ms == kT + 60000);
+        CHECK(context.script_bar_open_ms == kT + 60000);
+    }
+
+    // The retained lower-timeframe path remains the distinct input-feed mode.
+    NativeDecisionContext lower_context{};
+    CHECK(!coarse_stop_fills_with(
+        IntrabarPath::SampleEligibility::DistributionSamples,
+        MagnifierDistribution::UNIFORM, &lower_context));
+    CHECK(lower_context.driver_statistics.sub_bars_processed == 2);
+    CHECK(lower_context.driver_statistics.sample_ticks_processed == 8);
+
+    IntrabarPath::synthesized synthesized;
+    synthesized.samples = 4;
+    synthesized.distribution = MagnifierDistribution::UNIFORM;
+    const auto first_digest = native_intrabar_path_digest(
+        IntrabarPath{IntrabarPath::value_type{synthesized}});
+    synthesized.samples = 5;
+    const auto second_digest = native_intrabar_path_digest(
+        IntrabarPath{IntrabarPath::value_type{synthesized}});
+    CHECK(first_digest != second_digest);
+}
+
+void intrabar_decision_floor_witness() {
+    IntrabarFloorHost host;
+    host.copy_intrabar = true;
+    const Bar bars[] = {
+        bar(kT, 100.0, 101.0, 100.0, 100.0),
+        bar(kT + 60000, 100.0, 101.0, 100.0, 100.0),
+        bar(kT + 120000, 100.0, 101.0, 99.0, 100.0),
+        bar(kT + 180000, 100.0, 101.0, 98.0, 100.0),
+    };
+    host.run(bars, 4, "1", "4", true, 4, MagnifierDistribution::ENDPOINTS);
+    CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+    CHECK(host.opening.has_value());
+    CHECK(host.stop.has_value());
+    if (host.opening) {
+        CHECK(host.opening->effective_time_ms() == kT + 120000);
+        near(host.opening->resolved_price, 99.0);
+    }
+    if (host.stop) {
+        CHECK(host.stop->birth().decision_time_lower_bound == kT + 120000);
+        CHECK(host.stop->effective_time_ms() == kT + 120000);
+        near(host.stop->resolved_price, 99.0);
+    }
 }
 
 void provider_and_staged_fx_witness() {
@@ -961,6 +1093,8 @@ int main() {
     pre_open_witness();
     intrabar_path_witness();
     distribution_samples_witness();
+    synthesized_distribution_samples_witness();
+    intrabar_decision_floor_witness();
     provider_and_staged_fx_witness();
     aborted_run_fx_restage_witness();
     during_run_fx_staging_refusal_witness();
