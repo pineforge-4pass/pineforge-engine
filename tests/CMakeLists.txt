@@ -41,6 +41,10 @@ set(TEST_SOURCES
     test_native_oracle_deferred_any_witnesses_l2
     test_native_oracle_more_than_64_fills_l2
     test_native_oracle_magnifier_barstate_l2
+    test_native_oracle_magnifier_distribution_l2
+    test_native_oracle_coof_l2
+    test_native_sampled_point_activation_l1g
+    test_native_sampled_point_ordinal_l1g
     test_native_oracle_pooc_immediate_l2
     test_native_oracle_reversal_l2
     test_native_oracle_frozen_size_l2

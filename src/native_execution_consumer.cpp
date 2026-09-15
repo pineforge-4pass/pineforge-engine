@@ -3934,15 +3934,26 @@ void NativeExecutionConsumer::deliver_intrabar_script(
             point.coordinate.ordinal = take_ordinal(engine);
             point.coordinate.effective_time_ms = sub.timestamp;
             point.coordinate.source_price_time_ms = sub.timestamp;
-            point.coordinate.path_phase = sample_index == 0 ? NativePathPhase::Open
-                : (sample_index + 1 == samples.size() ? NativePathPhase::Close
-                   : (price == sub.high ? NativePathPhase::High
-                      : (price == sub.low ? NativePathPhase::Low : NativePathPhase::None)));
-            point.coordinate.provenance = sample_index == 0
-                ? NativePriceProvenance::ModeledOHLCOpen
-                : (sample_index + 1 == samples.size()
-                    ? NativePriceProvenance::ModeledOHLCClose
-                    : NativePriceProvenance::Confirmed);
+            if (distribution_samples) {
+                // A sampled value is a one-price decision bar, not an
+                // interpolated leg of its containing OHLC bar. Giving every
+                // one its open coordinate makes O=H=L=C=price: a reached
+                // resting level fills at the level, while a gap through the
+                // level keeps this sample's quote. Its driver ordinal still
+                // orders it strictly after the preceding sample.
+                point.coordinate.path_phase = NativePathPhase::Open;
+                point.coordinate.provenance = NativePriceProvenance::ModeledOHLCOpen;
+            } else {
+                point.coordinate.path_phase = sample_index == 0 ? NativePathPhase::Open
+                    : (sample_index + 1 == samples.size() ? NativePathPhase::Close
+                       : (price == sub.high ? NativePathPhase::High
+                          : (price == sub.low ? NativePathPhase::Low : NativePathPhase::None)));
+                point.coordinate.provenance = sample_index == 0
+                    ? NativePriceProvenance::ModeledOHLCOpen
+                    : (sample_index + 1 == samples.size()
+                        ? NativePriceProvenance::ModeledOHLCClose
+                        : NativePriceProvenance::Confirmed);
+            }
             point.raw_price = price;
             point.matching = distribution_samples || sample_index == 0;
             point.excursion = sample_index != 0;
