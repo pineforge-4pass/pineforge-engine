@@ -81,6 +81,14 @@ double directional_tick(double value, double tick, bool upward) noexcept {
     return (upward ? std::ceil(scaled - 1e-12) : std::floor(scaled + 1e-12)) * tick;
 }
 
+int legacy_volume_weighted_max_samples(int samples) noexcept {
+    constexpr int kMaxSamples = 1 << 20;
+    const int nonnegative = std::max(samples, 0);
+    const int scaled = nonnegative > kMaxSamples / 4
+        ? kMaxSamples : nonnegative * 4;
+    return std::max(scaled, 8);
+}
+
 double floor_quantity_grid(double units, const std::optional<double>& grid) noexcept {
     if (!std::isfinite(units) || units <= 0.0) return 0.0;
     if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
@@ -527,7 +535,8 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
         // pine_scheduler.cpp:894-899/:1035-1041 supplied the legacy
         // volume-weighted bound.  The native API's generic default remains
         // 64; the source provider owns this policy projection.
-        const int volume_weighted_cap = std::max(args.magnifier_samples * 4, 8);
+        const int volume_weighted_cap =
+            legacy_volume_weighted_max_samples(args.magnifier_samples);
         const bool synthesized = spec.timeframe_undetected || spec.input_tf == spec.script_tf;
         if (synthesized) {
             IntrabarPath::synthesized path;
@@ -3186,9 +3195,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if (snapshot == placement_.end()) return result;
     const auto& source = snapshot->second;
     // Explicit native intents already carry their canonical trigger/fill
-    // price. Re-rounding a binary64 limit here can move it one representable
-    // value beyond its immutable level and turn an otherwise valid limit fill
-    // into InvalidTerms (the 65-resting-order oracle exposes exactly that).
+    // price. Limits retain their immutable generic value. The generic consumer
+    // has already applied the one market slippage step; source projection only
+    // rounds that resulting quote to the ordinary chart tick.
     if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
         if (std::holds_alternative<native_order::Market>(facts.definition->request.trigger)) {
             result.resolved_price = nearest_tick(result.resolved_price, staged_.syminfo.mintick);
@@ -3221,13 +3230,15 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         return result;
     }
-    double resolved = facts.default_resolved_price;
     const bool market_like = std::holds_alternative<native_order::Market>(facts.definition->request.trigger);
     // NativeRunSpec carries the generic slippage ticks, so its candidate
     // default is already the one-slippage source fill. The adapter only owns
     // the frozen source sizing basis; applying it again here would double-slip
     // a market order after the on-tick calculation.
-    if (market_like) result.resolved_price = nearest_tick(resolved, staged_.syminfo.mintick);
+    if (market_like) {
+        result.resolved_price = nearest_tick(
+            facts.default_resolved_price, staged_.syminfo.mintick);
+    }
     if (finite_positive(source.forced_execution_price)) {
         result.resolved_price = nearest_tick(source.forced_execution_price,
                                              staged_.syminfo.mintick);
@@ -3239,7 +3250,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if ((source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
          || source.family == PineOrderFamily::Margin)
         && facts.trigger_level && facts.cursor.point.path_phase != NativePathPhase::Open) {
-        result.resolved_price = nearest_tick(*facts.trigger_level, staged_.syminfo.mintick);
+        result.resolved_price = directional_tick(
+            facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
     }
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
