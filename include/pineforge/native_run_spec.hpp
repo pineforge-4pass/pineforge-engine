@@ -51,6 +51,15 @@ enum class NativeSlotLabelPolicy : std::uint32_t {
     LegacyTolerant = 1,
 };
 
+// Generic ordering for a modeled OHLC path. Auto retains the open-proximity
+// rule; the forced modes make the first excursion explicit for replay/live
+// hosts without relying on process-global or source-language state.
+enum class NativePathOrder : std::uint32_t {
+    Auto = 0,
+    HighFirst = 1,
+    LowFirst = 2,
+};
+
 // Explicit, opt-in compatibility exceptions for legacy batch input shape.
 // They are separate from slot labels because a host may need legacy price/
 // unavailable-volume admission while retaining canonical calendar labels.
@@ -129,6 +138,7 @@ struct NativeRunSpec {
     // source provider may opt into raw, strictly-increasing caller labels.
     NativeSlotLabelPolicy slot_label_policy = NativeSlotLabelPolicy::Canonical;
     NativeLegacyTolerance legacy_tolerance = NativeLegacyTolerance::None;
+    NativePathOrder path_order = NativePathOrder::Auto;
 
     std::string ticker;
     std::string tickerid;
@@ -173,6 +183,7 @@ enum class NativeRunSpecField : std::uint8_t {
     IntrabarSampleEligibility,
     TimeframeUndetected,
     SlotLabelPolicy, LegacyTolerance,
+    PathOrder,
 };
 
 enum class NativeRunSpecError : std::uint8_t {
@@ -200,6 +211,7 @@ enum class NativeRunSpecError : std::uint8_t {
     InvalidUndetectedTimeframe,
     UnknownSlotLabelPolicy,
     UnknownLegacyTolerance,
+    UnknownPathOrder,
 };
 
 // Allocation-free facts suitable for the host's durable failure variant.

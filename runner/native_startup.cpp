@@ -84,6 +84,8 @@ const char* spec_error(pineforge::NativeRunSpecError error) {
         return "native spec requires a finite nonnegative number";
     case pineforge::NativeRunSpecError::UnknownCloseExecution:
         return "unknown native close_execution";
+    case pineforge::NativeRunSpecError::UnknownPathOrder:
+        return "unknown native path_order";
     case pineforge::NativeRunSpecError::UnknownOpenDirections:
         return "unknown native allowed_open_directions";
     case pineforge::NativeRunSpecError::ZeroLotLimit:

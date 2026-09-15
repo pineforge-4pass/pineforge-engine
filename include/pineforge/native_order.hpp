@@ -435,10 +435,20 @@ enum class OpeningShape : std::uint8_t {
     CloseOpposite = 2,
 };
 
+// Resolved host sizing normally remains subject to the run's quantity grid.
+// A host may instead authenticate literal units for a pure reduction; the
+// consumer still proves that the positive quantity is representable within
+// the selected exposure before it can reach settlement.
+enum class ExecutionGridPolicy : std::uint8_t {
+    SnapToGrid = 0,
+    ExplicitUnits = 1,
+};
+
 struct ExecutionTerms {
     double resolved_price = 0.0;
     std::optional<double> units;
     OpeningShape shape = OpeningShape::Transact;
+    ExecutionGridPolicy grid_policy = ExecutionGridPolicy::SnapToGrid;
 };
 
 using ExecutionPlan = std::variant<execution::Flatten, order_action::Reduce,

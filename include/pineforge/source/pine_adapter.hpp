@@ -463,7 +463,8 @@ public:
     void set_begin_mode(bool is_stream) noexcept;
 
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
-                          const NativeBeginArgs&) const;
+                          const NativeBeginArgs&,
+                          NativePathOrder path_order = NativePathOrder::Auto) const;
 
     void entry(const SourceId& id, bool is_long,
                double limit_price = std::numeric_limits<double>::quiet_NaN(),

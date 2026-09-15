@@ -479,7 +479,8 @@ void PineExecutionAdapter::set_receipt_high_water_readers(
 
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
-                                             const NativeBeginArgs& args) const {
+                                             const NativeBeginArgs& args,
+                                             NativePathOrder path_order) const {
     NativeRunSpec spec;
     if (run_counter_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Pine native run counter exhausted");
@@ -531,6 +532,7 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // Native-only hosts retain the strict Canonical/None defaults.
     spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
     spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+    spec.path_order = path_order;
     spec.close_execution = config.process_orders_on_close
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
     // Pine's request_abort surface reports a cooperative cancellation through
@@ -3710,6 +3712,13 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
         || source.family == PineOrderFamily::Margin) {
+        const bool explicit_source_exit = finite_positive(source.requested_qty)
+            && (source.family == PineOrderFamily::ExitLimit
+                || source.family == PineOrderFamily::ExitStop
+                || source.family == PineOrderFamily::ExitTrail);
+        if (explicit_source_exit) {
+            result.grid_policy = native_order::ExecutionGridPolicy::ExplicitUnits;
+        }
         if ((source.family == PineOrderFamily::ExitLimit
              || source.family == PineOrderFamily::ExitStop
              || source.family == PineOrderFamily::ExitTrail)

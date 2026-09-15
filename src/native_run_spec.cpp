@@ -90,6 +90,16 @@ bool valid_slot_label_policy(NativeSlotLabelPolicy policy) noexcept {
     return false;
 }
 
+bool valid_path_order(NativePathOrder order) noexcept {
+    switch (order) {
+    case NativePathOrder::Auto:
+    case NativePathOrder::HighFirst:
+    case NativePathOrder::LowFirst:
+        return true;
+    }
+    return false;
+}
+
 bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
         static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars);
@@ -131,6 +141,9 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     }
     if (!valid_legacy_tolerance(spec.legacy_tolerance)) {
         return {Error::UnknownLegacyTolerance, Field::LegacyTolerance};
+    }
+    if (!valid_path_order(spec.path_order)) {
+        return {Error::UnknownPathOrder, Field::PathOrder};
     }
     if (spec.identity.run_number == 0) return {Error::ZeroRunNumber, Field::RunNumber};
     const struct { double value; Field field; } financial[] = {

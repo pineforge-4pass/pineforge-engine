@@ -87,6 +87,7 @@ std::string snapshot(const NativeRunSpec& s) {
     append(out, s.input_tf); append(out, s.script_tf);
     append(out, s.timeframe_undetected);
     append(out, s.slot_label_policy); append(out, s.legacy_tolerance);
+    append(out, s.path_order);
     append(out, s.ticker); append(out, s.tickerid); append(out, s.type);
     append(out, s.currency); append(out, s.basecurrency);
     append(out, s.description); append(out, s.volumetype);
@@ -497,6 +498,21 @@ void abort_reporting_contract() {
     expect_refusal(spec, Error::UnknownAbortReporting, Field::AbortReporting);
 }
 
+void path_order_contract() {
+    auto spec = complete_spec();
+    check(spec.path_order == NativePathOrder::Auto,
+          "native path ordering defaults to AUTO");
+    for (const auto order : {NativePathOrder::Auto, NativePathOrder::HighFirst,
+                             NativePathOrder::LowFirst}) {
+        spec = complete_spec();
+        spec.path_order = order;
+        expect_acceptance(spec);
+    }
+    spec = complete_spec();
+    spec.path_order = static_cast<NativePathOrder>(3u);
+    expect_refusal(spec, Error::UnknownPathOrder, Field::PathOrder);
+}
+
 void failure_atomicity() {
     auto spec = complete_spec();
     spec.fee_value = -0.0;
@@ -531,6 +547,7 @@ int main() {
     synthesized_intrabar_contract();
     legacy_tolerant_policy_contract();
     abort_reporting_contract();
+    path_order_contract();
     failure_atomicity();
     std::cout << (checks - failures) << '/' << checks << " checks passed; "
               << failures << " failed\n";

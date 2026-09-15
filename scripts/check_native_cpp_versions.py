@@ -217,7 +217,7 @@ def check_texts(files):
                     "RemainingDeferred", "RemainingProjectionDeferred", "NoTarget",
                     "RemainingProjectionNoTarget", "CohortHandle", "BindCohort", "CohortClose",
                     "CohortRoster", "CohortReceipt", "AllowanceDeferred",
-                    "OpeningShape", "ExecutionTerms", "TermsResolvedInput",
+                    "OpeningShape", "ExecutionGridPolicy", "ExecutionTerms", "TermsResolvedInput",
                     "TermsResolvedEvent", "NativeCandidatePriceKind"),
             "native_order_v5", r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     require(order, ("CommandEvent", "ExecutionPlan", "OrderIntent", "Remaining",
@@ -246,6 +246,10 @@ def check_texts(files):
         order, "ExecutionPlan",
         "std::variant<execution::Flatten,order_action::Reduce,order_action::Transact,"
         "execution::ReverseTo>", "native_order_v5")
+    execution_terms = body(order, r'struct\s+ExecutionTerms\s*\{', 'execution terms')
+    if ('ExecutionGridPolicygrid_policy=ExecutionGridPolicy::SnapToGrid;'
+            not in re.sub(r'\s+', '', execution_terms)):
+        raise ValueError('ExecutionTerms omits its default grid policy')
     require_namespace_functions(order, ("to_execution_plan",), "native_order_v5")
     required_order_members = (
         (r'\bPreparation<PreparedMutation>\s+prepare_terms\s*\(', "prepare_terms"),
@@ -290,7 +294,7 @@ def check_texts(files):
     spec = versioned(files[FILES[4]], "pineforge", "native_run_spec_v2")
     require(spec, ("NativeRunSpec", "NativeRunSpecValidation", "NativeRunSpecError",
                    "NativeRunSpecField", "IntrabarPath", "SampleEligibility", "synthesized",
-                   "NativeSlotLabelPolicy",
+                   "NativeSlotLabelPolicy", "NativePathOrder",
                    "NativeLegacyTolerance"),
             "native_run_spec_v2",
             r'\b(?:enum\s+class|struct)\s+NAME\s*(?::[^;{]+)?\{')
@@ -311,25 +315,28 @@ def check_texts(files):
     for member in (
             'NativeSlotLabelPolicyslot_label_policy=NativeSlotLabelPolicy::Canonical;',
             'NativeLegacyTolerancelegacy_tolerance=NativeLegacyTolerance::None;',
+            'NativePathOrderpath_order=NativePathOrder::Auto;',
             'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;'):
         if member not in compact_spec:
             raise ValueError('native_run_spec_v2 omits required policy member: ' + member)
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
-    for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting'):
+    for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting',
+                  'PathOrder'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v2 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
                   'native run spec errors')
     for error in ('InvalidUndetectedTimeframe', 'UnknownSlotLabelPolicy',
                   'UnknownLegacyTolerance', 'UnknownAbortReporting',
-                  'UnknownIntrabarSampleEligibility'):
+                  'UnknownIntrabarSampleEligibility', 'UnknownPathOrder'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v2 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
             or 'InvalidUndetectedTimeframe' not in spec_src
             or 'spec.slot_label_policy' not in spec_src
             or 'spec.legacy_tolerance' not in spec_src
+            or 'spec.path_order' not in spec_src
             or 'spec.abort_reporting' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
@@ -420,7 +427,9 @@ def check_texts(files):
     consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v17")
     for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
                  'f.u(static_cast<uint64_t>(spec.legacy_tolerance));',
-                 'f.u(static_cast<uint64_t>(spec.abort_reporting));'):
+                 'f.u(static_cast<uint64_t>(spec.abort_reporting));',
+                 'f.u(static_cast<uint64_t>(spec.path_order));',
+                 'f.u(static_cast<uint64_t>(terms.grid_policy));'):
         if fold not in consumer_src:
             raise ValueError('native continuation hash omits compatibility policy: ' + fold)
     for token in ('lower->sample_eligibility',
@@ -428,6 +437,8 @@ def check_texts(files):
                   'const auto* synthesized = spec ? spec->intrabar.synthesized_path() : nullptr;',
                   'if (distribution_samples || sample_index == 0)',
                   'driver_statistics_.sample_ticks_processed',
+                  'bool execution_terms_grid_representable(',
+                  'bool path_uses_high_first(', 'class NativePathOrderScope {',
                   'const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar',
                   'input_callback_context_', 'hash_input_context',
                   'tick_callback_context_', 'hash_tick_context',

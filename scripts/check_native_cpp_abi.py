@@ -99,6 +99,17 @@ int main() {
     return int(v.error) + int(n.error);
 }
 '''
+CURRENT_SPEC_CALLER = '''#include <pineforge/native_run_spec.hpp>
+#include <type_traits>
+static_assert(std::is_same_v<decltype(pineforge::NativeRunSpec::path_order),
+    pineforge::NativePathOrder>);
+int main() {
+    pineforge::NativeRunSpec spec;
+    auto v = pineforge::validate_native_run_spec(spec);
+    auto n = pineforge::normalize_native_run_spec(spec);
+    return int(v.error) + int(n.error);
+}
+'''
 BAR_CALLER = '''#include <pineforge/market_driver.hpp>
 int main() {
     pineforge::Bar bar{};
@@ -183,6 +194,7 @@ using H = pineforge::engine_script_run_v17::NativeStrategyHost;
 using C = pineforge::engine_script_run_v17::NativeCurrentExecution;
 using P = pineforge::engine_script_run_v17::NativeCurrentExecutionPreview;
 using R = pineforge::engine_script_run_v17::NativeCurrentExecutionResult;
+using T = pineforge::native_order::ExecutionTerms;
 static_assert(std::variant_size_v<R> == 5, "R4B_CURRENT_RESULT_ALTERNATIVES");
 static_assert(std::is_same_v<std::variant_alternative_t<4, R>,
     pineforge::native_order::CancelledEvent>);
@@ -190,6 +202,8 @@ static_assert(std::is_same_v<decltype(P::terms_rejection),
     std::optional<pineforge::native_order::MatchRejectReason>>);
 static_assert(std::is_same_v<decltype(P::terms_cancellation),
     std::optional<pineforge::native_order::CancelReason>>);
+static_assert(std::is_same_v<decltype(T::grid_policy),
+    pineforge::native_order::ExecutionGridPolicy>);
 struct TermsHost final : H {
     void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {}
     pineforge::native_order::ExecutionTerms resolve_execution_terms(
@@ -861,7 +875,7 @@ def main() -> int:
         current_calendar = compile_object("current_calendar_caller", CALENDAR_CALLER, include)
         current_parse = compile_object("current_parse_timeframe_caller", PARSE_TIMEFRAME_CALLER, include)
         current_descriptor = compile_object("current_descriptor_caller", DESCRIPTOR_CALLER, include)
-        current_spec = compile_object("current_spec_caller", SPEC_CALLER, include)
+        current_spec = compile_object("current_spec_caller", CURRENT_SPEC_CALLER, include)
         current_bar = compile_object("current_bar_caller", BAR_CALLER, include)
         current_preflight = compile_object("current_preflight_caller", PREFLIGHT_CALLER, include)
         current_coordinate = compile_object("current_coordinate_caller", COORDINATE_CALLER, include)

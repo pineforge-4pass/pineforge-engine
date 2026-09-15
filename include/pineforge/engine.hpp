@@ -592,11 +592,9 @@ protected:
     // set_path_order() -- this member is always one of {0,1,2}. Persistent
     // configuration, like realtime_tail_ / probe_suppress_tail_logic_ above
     // -- reset_run_state() does not touch it. See set_path_order() and the
-    // PathOrderScope guard in engine_run.cpp that installs it as
-    // internal::set_path_order_override for exactly the duration of one
-    // run(). Applies to run() only: streaming ticks dispatched after
-    // strategy_stream_begin (engine_stream.cpp) never go through a
-    // PathOrderScope and always see AUTO regardless of this setting.
+    // legacy PathOrderScope guard in engine_run.cpp. Native-bound source
+    // hosts project it into NativeRunSpec::path_order at begin, so the native
+    // driver owns the active batch/stream path order.
     int path_order_mode_ = 0;
     // True while dispatching the last array bar (the three run loops set
     // this right after bar_index_ = i). Read by dispatch_bar() to decide
@@ -3342,9 +3340,9 @@ public:
     // engine_run.cpp that installs/clears it for exactly the duration of
     // this run's own dispatch.
     // Persistent configuration, like set_realtime_tail -- stays set until a
-    // caller passes mode=0. Applies to run() only: a stream continued via
-    // strategy_stream_begin dispatches its realtime ticks outside any
-    // PathOrderScope and always sees AUTO, regardless of this setting.
+    // caller passes mode=0. The legacy route installs it through
+    // PathOrderScope; a native-bound source provider projects the same value
+    // into NativeRunSpec::path_order.
     // Default AUTO (mode=0): every historical run stays byte-identical to
     // before this flag existed.
     void set_path_order(int mode) {
