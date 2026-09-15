@@ -225,6 +225,8 @@ private:
     void apply_excursion(BacktestEngine& engine, double price);
     void invoke_bar_open_callback(BacktestEngine& engine, const Bar& bar,
                                   const NativeDriverPoint& point);
+    bool invoke_input_callback(BacktestEngine& engine, const Bar& bar,
+                               const NativeInputContext& context);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
     uint64_t take_ordinal(BacktestEngine& engine);
     void raise_floor(int64_t t);
@@ -337,6 +339,8 @@ private:
     std::vector<NativeDriverPoint> driver_log_;
     std::vector<NativeAccountObservation> account_log_;
     NativeDecisionContext callback_context_{};
+    std::optional<NativeInputContext> input_callback_context_;
+    std::optional<Bar> input_callback_bar_;
     NativeDriverStatistics driver_statistics_{};
     std::optional<native_calendar::TimezoneIdentityDescriptor> tz_identity_{};
     mutable AppendDigest history_digest_{};

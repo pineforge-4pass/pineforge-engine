@@ -78,6 +78,25 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[7], 'NativeLegacyTolerance::BatchStructuralBars',
                     'NativeLegacyTolerance::RemovedBatchStructuralBars')
 
+    def test_abort_reporting_policy_and_input_hook_are_explicit_and_hashed(self):
+        for before, after in (
+            ('enum class NativeAbortReporting : std::uint32_t {',
+             'enum class MissingAbortReporting : std::uint32_t {'),
+            ('NativeAbortReporting abort_reporting = NativeAbortReporting::Error;', ''),
+            ('AbortReporting,', 'MissingAbortReporting,'),
+            ('UnknownAbortReporting,', 'MissingAbortReporting,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'spec.abort_reporting', 'spec.removed_abort_reporting')
+        self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.abort_reporting));', '')
+        self.reject(FILES[8], 'struct NativeInputContext {', 'struct MissingNativeInputContext {')
+        self.reject(FILES[8],
+                    'on_native_input(const Bar&, const NativeInputContext&)',
+                    'on_native_input_missing(const Bar&, const NativeInputContext&)')
+        self.reject(FILES[10], 'input_callback_context_', 'removed_input_context_')
+        self.reject(FILES[10], 'input_callback_bar_', 'removed_input_bar_')
+
     def test_distribution_sample_eligibility_is_explicit_and_hashed(self):
         for before, after in (
             ('enum class SampleEligibility : std::uint32_t {',
@@ -342,6 +361,7 @@ class NativeVersions(unittest.TestCase):
             (FILES[8], "enum class NativePrecommitVerdict", "enum class MissingNativePrecommitVerdict"),
             (FILES[8], "struct NativeFxCurveSetupResult {", "struct MissingNativeFxCurveSetupResult {"),
             (FILES[8], "struct NativeBeginArgs {", "struct MissingNativeBeginArgs {"),
+            (FILES[8], "struct NativeInputContext {", "struct MissingNativeInputContext {"),
             (FILES[8], "const SymInfo* syminfo = nullptr;", "const SymInfo* missing_syminfo = nullptr;"),
             (FILES[8], "resolve_execution_terms(\n", "resolve_execution_terms_missing(\n"),
             (FILES[8], "validate_execution_precommit(\n", "validate_execution_precommit_missing(\n"),
@@ -349,6 +369,8 @@ class NativeVersions(unittest.TestCase):
              "configure_native_fx_curve_missing(const NativeFxCurve& curve)"),
             (FILES[8], "prepare_native_begin(const NativeBeginArgs&)",
              "prepare_native_begin_missing(const NativeBeginArgs&)"),
+            (FILES[8], "on_native_input(const Bar&, const NativeInputContext&)",
+             "on_native_input_missing(const Bar&, const NativeInputContext&)"),
             (FILES[8], "on_native_bar_open(const Bar&, const NativeDecisionContext&)",
              "on_native_bar_open_missing(const Bar&, const NativeDecisionContext&)"),
         ):

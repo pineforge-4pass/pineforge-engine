@@ -120,6 +120,21 @@ public:
     void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++callbacks; }
 };
 
+class InputTraceHost final : public NativeStrategyHost {
+public:
+    std::vector<Bar> inputs;
+    std::vector<NativeInputContext> contexts;
+    std::vector<std::uint64_t> callback_hashes;
+    int callbacks = 0;
+
+    void on_native_input(const Bar& bar, const NativeInputContext& context) override {
+        inputs.push_back(bar);
+        contexts.push_back(context);
+        callback_hashes.push_back(native_continuation_hash());
+    }
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override { ++callbacks; }
+};
+
 class SubmitRealtimeHost final : public NativeStrategyHost {
 public:
     native_order::RequestHandle live{};
@@ -313,6 +328,55 @@ int main() {
         const auto off = preflight_native_inputs(spec, &mid, 1, NativeInputPolicy::Batch);
         CHECK(off.error == NativeInputPreflightError::OffGridLabel);
         CHECK(off.index == 0);
+    }
+
+    // A25: a generic host observes every accepted input before the consumer
+    // folds the input_tf=1 feed into its script_tf=5 interval. The context is
+    // live in the continuation hash during the callback and vanishes after it.
+    {
+        InputTraceHost host;
+        auto spec = spec_for("accepted-input-hook", 1);
+        spec.script_tf = "5";
+        const Bar bars[] = {
+            bar_at(60000, 100, 101, 99, 100),
+            bar_at(120000, 101, 102, 100, 101),
+            bar_at(180000, 102, 103, 101, 102),
+            bar_at(240000, 103, 104, 102, 103),
+        };
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        host.run(bars, 4);
+        CHECK(host.native_state().kind == NativeLifecycleKind::Completed);
+        CHECK(host.inputs.size() == 4 && host.contexts.size() == 4
+              && host.callback_hashes.size() == 4);
+        for (std::size_t i = 0; i < host.inputs.size() && i < host.contexts.size(); ++i) {
+            CHECK(host.inputs[i].timestamp == bars[i].timestamp);
+            CHECK(host.contexts[i].input_index == static_cast<int>(i));
+            CHECK(host.contexts[i].input_interval.open_ms == bars[i].timestamp);
+            CHECK(host.contexts[i].script_interval.open_ms == 0);
+            CHECK(host.callback_hashes[i] != 0);
+        }
+        if (host.contexts.size() == 4) {
+            CHECK(!host.contexts[0].completes_script_interval);
+            CHECK(!host.contexts[1].completes_script_interval);
+            CHECK(!host.contexts[2].completes_script_interval);
+            CHECK(host.contexts[3].completes_script_interval);
+        }
+
+        // The raw Bar itself is part of the in-callback continuation state,
+        // not merely its calendar coordinate.
+        InputTraceHost first;
+        InputTraceHost second;
+        auto bits_spec = spec_for("accepted-input-hook-bits", 1);
+        CHECK(first.configure_native(bits_spec).status == NativeSetupStatus::Applied);
+        CHECK(second.configure_native(bits_spec).status == NativeSetupStatus::Applied);
+        const Bar first_bar = bar_at(60000, 100, 100, 100, 100);
+        const Bar second_bar = bar_at(60000, 101, 101, 101, 101);
+        first.run(&first_bar, 1);
+        second.run(&second_bar, 1);
+        CHECK(first.callback_hashes.size() == 1 && second.callback_hashes.size() == 1);
+        if (first.callback_hashes.size() == 1 && second.callback_hashes.size() == 1) {
+            CHECK(first.callback_hashes.front() != second.callback_hashes.front());
+        }
     }
 
     // A13: source-compatible batch labels retain the caller's timestamp as

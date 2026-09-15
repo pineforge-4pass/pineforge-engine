@@ -11,13 +11,16 @@
     "NativeBeginArgs::syminfo",
     "NativeRunSpec::slot_label_policy",
     "NativeRunSpec::legacy_tolerance",
+    "NativeRunSpec::abort_reporting",
     "IntrabarPath::lower_tf::sample_eligibility",
     "IntrabarPath::synthesized",
-    "NativeDecisionContext::driver_statistics"
+    "NativeDecisionContext::driver_statistics",
+    "NativeInputContext"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
-    "on_native_bar_open"
+    "on_native_bar_open",
+    "on_native_input"
   ],
   "removedVirtuals": [],
   "rejectionPairs": [

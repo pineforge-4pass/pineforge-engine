@@ -38,32 +38,107 @@ void PineScheduler::reset_language() {
     current_script_bar_ = {}; current_script_bar_valid_ = false;
     source_bar_count_ = 0; expected_source_bars_ = 0; applied_cursor_ = 0;
     coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
+    prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    input_script_completes_.clear();
+    input_script_boundary_completes_.clear();
+    uses_aux_security_feed_ = false;
+    deferred_boundary_input_ = {};
 }
 
 void PineScheduler::run_begin(PineStrategyHost& host) {
     reset_language();
     const bool static_eligible = !retained_.is_stream && !retained_.bar_magnifier
         && retained_.input_tf.empty() && retained_.script_tf.empty();
-    expected_source_bars_ = static_cast<int>(retained_.bars.size());
-    const int ratio = tf_ratio(retained_.input_tf, retained_.script_tf);
-    if (ratio > 1 && expected_source_bars_ > 0) {
-        expected_source_bars_ = (expected_source_bars_ + ratio - 1) / ratio;
+    const auto state = host.native_state();
+    const bool undetected = state.spec && state.spec->timeframe_undetected;
+    const int ratio = undetected || !state.spec ? 1
+        : tf_ratio(state.spec->input_tf, state.spec->script_tf);
+    const bool needs_aggregation = ratio > 1 || ratio == -1;
+    input_script_completes_.assign(retained_.bars.size(), 1U);
+    input_script_boundary_completes_.assign(retained_.bars.size(), 0U);
+    if (needs_aggregation && state.spec) {
+        TimeframeAggregator preview(state.spec->script_tf, state.spec->input_tf,
+                                    state.spec->timezone, state.spec->session);
+        for (std::size_t i = 0; i < retained_.bars.size(); ++i) {
+            const AggregatedBar aggregate = preview.feed(retained_.bars[i]);
+            input_script_completes_[i] = aggregate.is_complete ? 1U : 0U;
+            input_script_boundary_completes_[i] = aggregate.is_complete
+                && tf_change(aggregate.bar.timestamp, retained_.bars[i].timestamp,
+                             state.spec->script_tf, state.spec->timezone,
+                             state.spec->session) ? 1U : 0U;
+        }
+    }
+    expected_source_bars_ = 0;
+    for (const auto complete : input_script_completes_) {
+        expected_source_bars_ += complete != 0U ? 1 : 0;
     }
     host.scheduler_prepare_script_run(retained_.bars, static_eligible, expected_source_bars_);
     host.scheduler_configure_security_evaluators();
-    host.scheduler_prepare_chart_day_partition(retained_.bars);
+    uses_aux_security_feed_ = host.scheduler_uses_aux_security_feed();
+    host.scheduler_prepare_security_sequence(retained_.bars);
 }
 
-void PineScheduler::publish_series(const Bar& bar) {
+void PineScheduler::publish_series(const Bar& bar, PineStrategyHost& host) {
     if (language_.history_slot_is_new_) language_.prev_chart_close_ = language_.last_chart_close_;
     language_.last_chart_close_ = bar.close;
-    if (!language_._src_series_active_) return;
-    language_._src_open_.push(bar.open); language_._src_high_.push(bar.high);
-    language_._src_low_.push(bar.low); language_._src_close_.push(bar.close);
-    language_._src_volume_.push(bar.volume); language_._src_hl2_.push((bar.high + bar.low) / 2.0);
-    language_._src_hlc3_.push((bar.high + bar.low + bar.close) / 3.0);
-    language_._src_ohlc4_.push((bar.open + bar.high + bar.low + bar.close) / 4.0);
-    language_._src_hlcc4_.push((bar.high + bar.low + bar.close + bar.close) / 4.0);
+    host.scheduler_push_source_series(bar);
+}
+
+void PineScheduler::input(
+        const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
+    if (uses_aux_security_feed_) {
+        prior_input_script_open_ms_ = context.script_interval.open_ms;
+        return;
+    }
+    std::int64_t next_input_ms = 0;
+    if (context.input_index >= 0
+        && context.input_index + 1 < static_cast<int>(retained_.bars.size())) {
+        next_input_ms = retained_.bars[static_cast<std::size_t>(context.input_index + 1)].timestamp;
+    }
+    // The generic calendar may wait for a later tradable opening before it
+    // seals a script interval.  The source chart aggregator can have already
+    // completed that interval on the prior raw bar.  Keep the new raw input
+    // out of request.security until the pending script callback observes the
+    // same legacy point; then feed it immediately after that callback.
+    if (awaiting_legacy_script_open_ms_
+        != std::numeric_limits<std::int64_t>::min()) {
+        deferred_boundary_input_.bar = bar;
+        deferred_boundary_input_.next_input_ms = next_input_ms;
+        deferred_boundary_input_.prior_script_open_ms = awaiting_legacy_script_open_ms_;
+        deferred_boundary_input_.calling_bar_complete = false;
+        deferred_boundary_input_.all_security_states = true;
+        deferred_boundary_input_.active = true;
+        prior_input_script_open_ms_ = context.script_interval.open_ms;
+        return;
+    }
+
+    bool calling_bar_complete = context.completes_script_interval;
+    bool boundary = prior_input_script_open_ms_
+        != std::numeric_limits<std::int64_t>::min()
+        && prior_input_script_open_ms_ != context.script_interval.open_ms;
+    if (context.input_index >= 0
+        && context.input_index < static_cast<int>(input_script_completes_.size())) {
+        calling_bar_complete = input_script_completes_[
+            static_cast<std::size_t>(context.input_index)] != 0U;
+        boundary = input_script_boundary_completes_[
+            static_cast<std::size_t>(context.input_index)] != 0U;
+    }
+    const bool deferred_gate = host.scheduler_feed_security_input(
+        bar, next_input_ms, calling_bar_complete, boundary);
+    if (deferred_gate) {
+        deferred_boundary_input_.bar = bar;
+        deferred_boundary_input_.next_input_ms = next_input_ms;
+        deferred_boundary_input_.prior_script_open_ms = prior_input_script_open_ms_;
+        deferred_boundary_input_.calling_bar_complete = false;
+        deferred_boundary_input_.all_security_states = false;
+        deferred_boundary_input_.active = true;
+    }
+    if (calling_bar_complete) {
+        awaiting_legacy_script_open_ms_ = boundary
+            ? prior_input_script_open_ms_ : context.script_interval.open_ms;
+    }
+    prior_input_script_open_ms_ = context.script_interval.open_ms;
 }
 
 void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, PineStrategyHost&) {
@@ -80,6 +155,9 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     language_.is_first_tick_ = context.is_terminal_sub_bar;
     language_.is_last_tick_ = context.is_terminal_sub_bar;
     language_.history_slot_is_new_ = context.is_terminal_sub_bar;
+    host.is_first_tick_ = language_.is_first_tick_;
+    host.is_last_tick_ = language_.is_last_tick_;
+    host.history_slot_is_new_ = language_.history_slot_is_new_;
     if (!context.is_terminal_sub_bar) return;
     // A COOF recalc at this script bar is the source evaluation for that bar;
     // do not issue a second terminal callback with a new source-bar index.
@@ -91,10 +169,41 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     script_bar.timestamp = context.script_bar_open_ms;
     current_script_bar_ = script_bar;
     current_script_bar_valid_ = true;
-    publish_series(script_bar);
+    const bool completes_awaiting_legacy_script = awaiting_legacy_script_open_ms_
+        == context.script_bar_open_ms;
+    if (deferred_boundary_input_.active
+        && !deferred_boundary_input_.all_security_states
+        && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
+        host.scheduler_publish_security_boundary();
+    }
+    if (uses_aux_security_feed_) {
+        host.scheduler_feed_aux_security(source_bar_count_);
+    }
+    publish_series(script_bar, host);
     host.scheduler_publish_source_bar(script_bar, true);
+    if (uses_aux_security_feed_) {
+        host.scheduler_feed_deferred_aux_security(source_bar_count_);
+    }
+    if (deferred_boundary_input_.active
+        && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
+        if (deferred_boundary_input_.all_security_states) {
+            (void)host.scheduler_feed_security_input(
+                deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms,
+                deferred_boundary_input_.calling_bar_complete, false);
+        } else {
+            host.scheduler_feed_deferred_security_input(
+                deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms);
+        }
+        deferred_boundary_input_ = {};
+    }
+    if (completes_awaiting_legacy_script) {
+        awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    }
     ++source_bar_count_;
-    if (terminal_source_bar()) host.scheduler_record_range_end(current_script_bar_);
+    if (terminal_source_bar()) {
+        host.scheduler_record_range_end(current_script_bar_);
+        if (!retained_.is_stream) host.scheduler_finish_security_sequence();
+    }
 }
 
 void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
@@ -110,6 +219,9 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
                     event.resolved_price, 0.0, context.script_bar_open_ms};
     language_.is_first_tick_ = true; language_.is_last_tick_ = false;
     language_.history_slot_is_new_ = false;
+    host.is_first_tick_ = language_.is_first_tick_;
+    host.is_last_tick_ = language_.is_last_tick_;
+    host.history_slot_is_new_ = language_.history_slot_is_new_;
     host.adapter_.begin_coof_recalc(context, first_open);
     try {
         host.scheduler_publish_source_bar(point, true, first_open);

@@ -369,6 +369,17 @@ struct NativeBeginArgs {
     int warmup_n = 0;
 };
 
+// Accepted input facts presented before the generic consumer aggregates the
+// bar into its script interval or evaluates any matching point. This is not a
+// source-language callback: native hosts may observe raw input cadence through
+// it without taking ownership of matching or aggregation.
+struct NativeInputContext {
+    native_calendar::NativeInterval input_interval{};
+    native_calendar::NativeInterval script_interval{};
+    int input_index = 0;
+    bool completes_script_interval = false;
+};
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
@@ -388,6 +399,9 @@ public:
 
     virtual void prepare_native_begin(const NativeBeginArgs&) {}
     virtual void on_native_run_begin() {}
+    // Called once for every accepted confirmed input bar, before that bar is
+    // aggregated or matched. It has no current execution point.
+    virtual void on_native_input(const Bar&, const NativeInputContext&) {}
     // Precedes the matching pass at the script bar's open decision point.
     // inspect_current_execution/execute_current are legal in this hook.
     virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}

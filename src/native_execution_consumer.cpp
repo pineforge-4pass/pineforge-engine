@@ -62,6 +62,7 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.u(spec.slippage_ticks); f.u(static_cast<uint64_t>(spec.fee_kind)); f.d(spec.fee_value);
     f.b(spec.quantity_grid.has_value()); if (spec.quantity_grid) f.d(*spec.quantity_grid);
     f.u(static_cast<uint64_t>(spec.close_execution));
+    f.u(static_cast<uint64_t>(spec.abort_reporting));
     f.b(spec.max_abs_units.has_value()); if (spec.max_abs_units) f.d(*spec.max_abs_units);
     f.b(spec.max_open_lots.has_value()); if (spec.max_open_lots) f.u(*spec.max_open_lots);
     f.u(static_cast<uint64_t>(spec.allowed_open_directions));
@@ -451,6 +452,13 @@ void hash_current_point(Fnv& f, const NativeCurrentPointView& point) noexcept {
     f.u(point.quote_origin_ordinal);
 }
 
+void hash_input_context(Fnv& f, const NativeInputContext& context) noexcept {
+    hash_interval(f, context.input_interval);
+    hash_interval(f, context.script_interval);
+    f.i(context.input_index);
+    f.b(context.completes_script_interval);
+}
+
 void hash_bar(Fnv& f, const Bar& bar) noexcept {
     f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
     f.i(bar.timestamp);
@@ -777,15 +785,15 @@ bool NativeExecutionConsumer::prepare_public_begin(
         host->prepare_native_begin(args);
     } catch (const std::exception& e) {
         preparing_begin_ = false;
-        fail(engine, NativeFailure{NativeFailureCode::CallbackException,
-                                   NativeFailureOperation::Configure});
-        render(engine, e.what());
+        // A provider's begin-time validation is a public-entry refusal.  It
+        // has not started a native run or consumed an identity, so preserve a
+        // reusable Unconfigured/Completed host just as other begin refusals
+        // do. Callback exceptions after begin_ready remain terminal.
+        present_refusal(engine, e.what());
         return false;
     } catch (...) {
         preparing_begin_ = false;
-        fail(engine, NativeFailure{NativeFailureCode::CallbackException,
-                                   NativeFailureOperation::Configure});
-        render(engine, "native pre-begin provider exception");
+        present_refusal(engine, "native pre-begin provider exception");
         return false;
     }
     preparing_begin_ = false;
@@ -817,7 +825,12 @@ bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
     if (failed()) return false;
     if (engine.abort_requested_.load(std::memory_order_relaxed)) {
         fail(engine, NativeFailure{NativeFailureCode::Aborted, operation, ordinal});
-        render(engine, "native run aborted");
+        const auto* spec = spec_ptr();
+        if (!spec || spec->abort_reporting == NativeAbortReporting::Error) {
+            render(engine, "native run aborted");
+        } else {
+            engine.last_error_.clear();
+        }
         return false;
     }
     if (!projection_ok(engine)) {
@@ -941,6 +954,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(next_timeline_ordinal_);
     f.b(in_callback_);
     f.b(preparing_begin_);
+    f.b(input_callback_context_.has_value());
+    if (input_callback_context_) hash_input_context(f, *input_callback_context_);
+    f.b(input_callback_bar_.has_value());
+    if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
     hash_coordinate(f, callback_context_.coordinate);
     f.i(callback_context_.decision_floor_ms);
     hash_interval(f, callback_context_.input_interval);
@@ -1376,6 +1393,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
     callback_context_ = NativeDecisionContext{};
     callback_context_.driver_statistics = driver_statistics_;
+    input_callback_context_.reset();
+    input_callback_bar_.reset();
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
@@ -3702,6 +3721,42 @@ void NativeExecutionConsumer::invoke_bar_open_callback(
     finish_callback(engine, point.coordinate.ordinal);
 }
 
+bool NativeExecutionConsumer::invoke_input_callback(
+        BacktestEngine& engine, const Bar& bar, const NativeInputContext& context) {
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return true;
+    input_callback_context_ = context;
+    input_callback_bar_ = bar;
+    in_callback_ = true;
+    try {
+        host->on_native_input(bar, context);
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        input_callback_context_.reset();
+        input_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input});
+            render(engine, e.what());
+        }
+        return false;
+    } catch (...) {
+        in_callback_ = false;
+        input_callback_context_.reset();
+        input_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input});
+            render(engine, "native input callback exception");
+        }
+        return false;
+    }
+    in_callback_ = false;
+    input_callback_context_.reset();
+    input_callback_bar_.reset();
+    return !failed();
+}
+
 void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar& bar,
                                               const NativeCoordinate& coordinate) {
     auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
@@ -4179,6 +4234,22 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                 return false;
             }
         }
+    }
+    const auto script_interval = script_interval_at(interval->open_ms);
+    if (!script_interval) {
+        processing_input_ = false;
+        present_refusal(engine, "native script interval lookup failed");
+        return false;
+    }
+    NativeInputContext input_context;
+    input_context.input_interval = *interval;
+    input_context.script_interval = *script_interval;
+    input_context.input_index = index;
+    input_context.completes_script_interval =
+        interval->next_period_open_ms >= script_interval->next_period_open_ms;
+    if (!invoke_input_callback(engine, bar, input_context)) {
+        processing_input_ = false;
+        return false;
     }
     last_accepted_input_ = *interval;
     last_observed_slot_open_ = interval->open_ms;

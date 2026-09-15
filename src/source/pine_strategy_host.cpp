@@ -52,6 +52,32 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     }
     if (args.inputs) inputs_ = *args.inputs;
 
+    // Preserve the source route's public rejection before native spec
+    // formation. The generic validator rejects incompatible scheduling too,
+    // but the Pine surface owns this established diagnostic.
+    if (!(args.n < 2 && !args.is_stream)) {
+        std::string effective_input = args.input_tf;
+        if (effective_input.empty() && args.n >= 2 && args.bars != nullptr) {
+            effective_input = detect_timeframe(args.bars, args.n);
+        }
+        const std::string effective_script = args.script_tf.empty()
+            ? effective_input : args.script_tf;
+        try {
+            if (!effective_input.empty() && !effective_script.empty()
+                && tf_ratio(effective_input, effective_script) == -2) {
+                throw std::runtime_error(
+                    "script timeframe must be coarser than or equal to input timeframe: requested script_tf "
+                    + effective_script + " from input timeframe " + effective_input);
+            }
+        } catch (const std::runtime_error&) {
+            throw;
+        } catch (...) {
+            // NativeRunSpec validation remains the owner of malformed TF
+            // literals; only the legacy finer-script diagnostic is projected
+            // here.
+        }
+    }
+
     PineStrategyConfig effective = config_;
     if (!source_configuration_captured_) {
         effective.process_orders_on_close = process_orders_on_close_;
@@ -103,24 +129,29 @@ void source::PineStrategyHost::on_native_run_begin() {
     scheduler_.run_begin(*this);
 }
 
+void source::PineStrategyHost::on_native_input(
+        const Bar& bar, const NativeInputContext& context) {
+    scheduler_.input(bar, context, *this);
+}
+
 void source::PineStrategyHost::on_native_bar_open(
         const Bar& bar, const NativeDecisionContext& context) {
-    bar_magnifier_enabled_ = context.driver_statistics.intrabar_path_enabled;
-    diag_magnifier_sub_bars_processed_ = static_cast<std::int64_t>(
-        context.driver_statistics.sub_bars_processed);
-    diag_magnifier_sample_ticks_processed_ = static_cast<std::int64_t>(
-        context.driver_statistics.sample_ticks_processed);
+    bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
+    diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
+        ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
+    diag_magnifier_sample_ticks_processed_ = bar_magnifier_enabled_
+        ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
     adapter_.on_bar_open(bar, context);
     scheduler_.bar_open(bar, context, *this);
 }
 
 void source::PineStrategyHost::on_native_bar(
         const Bar& bar, const NativeDecisionContext& context) {
-    bar_magnifier_enabled_ = context.driver_statistics.intrabar_path_enabled;
-    diag_magnifier_sub_bars_processed_ = static_cast<std::int64_t>(
-        context.driver_statistics.sub_bars_processed);
-    diag_magnifier_sample_ticks_processed_ = static_cast<std::int64_t>(
-        context.driver_statistics.sample_ticks_processed);
+    bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
+    diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
+        ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
+    diag_magnifier_sample_ticks_processed_ = bar_magnifier_enabled_
+        ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
     adapter_.observe_terminal_receipts();
     scheduler_.bar(bar, context, *this);
 }
@@ -215,18 +246,22 @@ void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
     adapter_.set_risk_max_position_size(value);
 }
 
-int source::PineStrategyHost::pine_bar_index() const { return source_bar_index_; }
-int source::PineStrategyHost::pine_last_bar_index() const { return source_last_bar_index_; }
-bool source::PineStrategyHost::is_first_tick() const noexcept { return scheduler_.is_first_tick(); }
-bool source::PineStrategyHost::is_last_tick() const noexcept { return scheduler_.is_last_tick(); }
+int source::PineStrategyHost::pine_bar_index() const {
+    return source_bar_index_ + bar_index_offset_;
+}
+int source::PineStrategyHost::pine_last_bar_index() const {
+    return source_last_bar_index_ + bar_index_offset_;
+}
+bool source::PineStrategyHost::is_first_tick() const noexcept { return is_first_tick_; }
+bool source::PineStrategyHost::is_last_tick() const noexcept { return is_last_tick_; }
 bool source::PineStrategyHost::history_advances_new_bar() const noexcept {
-    return scheduler_.history_advances_new_bar();
+    return is_first_tick_ && history_slot_is_new_;
 }
 bool source::PineStrategyHost::security_series_slot_is_new(int slot) const noexcept {
-    return scheduler_.security_series_slot_is_new(slot);
+    return BacktestEngine::security_series_slot_is_new(slot);
 }
 double source::PineStrategyHost::prev_chart_close() const {
-    return scheduler_.previous_chart_close();
+    return prev_chart_close_;
 }
 int source::PineStrategyHost::last_bar_dual_entry_path() const {
     return adapter_.pending_intent_view().last_bar_dual_entry_path();
@@ -541,7 +576,8 @@ source::PineStrategyHost::source_pending_view() const {
         }
         const std::string& id = snapshot.frozen_market_targeted_close ? label : snapshot.source_id;
         source_pending_view_cache_.push_back({id, type,
-            snapshot.sizing.frozen_units, snapshot.sizing.price});
+            snapshot.sizing.frozen_units, snapshot.sizing.price,
+            snapshot.frozen_market_own_units, snapshot.frozen_market_transaction_units});
     };
     for (const auto& command : adapter_.pending_same_bar_commands_)
         append(command.snapshot, command.request.label);
@@ -591,9 +627,9 @@ void source::PineStrategyHost::project_short_seed_report_rows(
 
 void source::PineStrategyHost::scheduler_prepare_script_run(
         const std::vector<Bar>& bars, bool static_eligible, int expected_script_bars) {
-    if (const auto state = native_state(); state.spec && !state.spec->timeframe_undetected) {
-        input_tf_ = state.spec->input_tf;
-        script_tf_ = state.spec->script_tf;
+    if (const auto state = native_state(); state.spec) {
+        input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
+        script_tf_ = state.spec->timeframe_undetected ? "" : state.spec->script_tf;
         script_tf_seconds_ = tf_to_seconds(script_tf_);
     }
     prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
@@ -605,10 +641,98 @@ void source::PineStrategyHost::scheduler_configure_security_evaluators() {
     configure_security_evaluators();
 }
 
-void source::PineStrategyHost::scheduler_prepare_chart_day_partition(
+bool source::PineStrategyHost::scheduler_uses_aux_security_feed() const noexcept {
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    return aux_security_feed_enabled();
+#else
+    return false;
+#endif
+}
+
+void source::PineStrategyHost::scheduler_prepare_security_sequence(
         const std::vector<Bar>& bars) {
-    prepare_chart_day_partition(bars.empty() ? nullptr : bars.data(),
-                                static_cast<int>(bars.size()));
+    security_input_tf_ = input_tf_;
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) security_input_tf_ = aux_security_input_tf_;
+#endif
+    validate_security_timeframes(security_input_tf_);
+    security_first_chart_bar_ms_ = bars.empty() ? 0 : bars.front().timestamp;
+    init_security_eval_states_for_run(security_input_tf_);
+    prepare_native_security_feeds(
+        bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) {
+        prepare_aux_security_chart_ranges(
+            bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()), script_tf_);
+    }
+#endif
+    prepare_historical_security_lookahead_projections(
+        bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()), input_tf_);
+    prepare_chart_day_partition(
+        bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()));
+}
+
+bool source::PineStrategyHost::scheduler_feed_security_input(
+        const Bar& bar, std::int64_t next_input_ms, bool calling_bar_complete,
+        bool defer_boundary_gate) {
+    security_next_input_ms_ = next_input_ms;
+    security_calling_close_ms_ = 0;
+    bool deferred = false;
+    for (auto& state : security_eval_states_) {
+        if (defer_boundary_gate && state.publish_gate_tf_seconds > 0) {
+            deferred = true;
+            continue;
+        }
+        feed_security_eval_state(state, bar, calling_bar_complete);
+    }
+    return deferred;
+}
+
+void source::PineStrategyHost::scheduler_publish_security_boundary() {
+    for (auto& state : security_eval_states_) {
+        if (state.publish_gate_tf_seconds > 0) {
+            publish_security_eval_state_at_calling_boundary(state);
+        }
+    }
+}
+
+void source::PineStrategyHost::scheduler_feed_deferred_security_input(
+        const Bar& bar, std::int64_t next_input_ms) {
+    security_next_input_ms_ = next_input_ms;
+    security_calling_close_ms_ = 0;
+    for (auto& state : security_eval_states_) {
+        if (state.publish_gate_tf_seconds > 0) {
+            feed_security_eval_state(state, bar, false);
+        }
+    }
+}
+
+void source::PineStrategyHost::scheduler_feed_aux_security(int chart_index) {
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) feed_aux_security_for_chart_bar(chart_index);
+#else
+    (void)chart_index;
+#endif
+}
+
+void source::PineStrategyHost::scheduler_feed_deferred_aux_security(int chart_index) {
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    if (aux_security_feed_enabled()) feed_deferred_aux_security_for_chart_bar(chart_index);
+#else
+    (void)chart_index;
+#endif
+}
+
+void source::PineStrategyHost::scheduler_push_source_series(const Bar& bar) {
+    current_bar_ = bar;
+    _push_source_series();
+}
+
+void source::PineStrategyHost::scheduler_finish_security_sequence() {
+    clear_historical_security_lookahead_projections();
+#ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
+    clear_aux_security_chart_ranges();
+#endif
 }
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {

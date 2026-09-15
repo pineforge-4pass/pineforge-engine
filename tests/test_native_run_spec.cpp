@@ -94,7 +94,7 @@ std::string snapshot(const NativeRunSpec& s) {
     append(out, s.initial_capital); append(out, s.point_value);
     append(out, s.account_fx); append(out, s.price_tick);
     append(out, s.slippage_ticks); append(out, s.fee_kind); append(out, s.fee_value);
-    append(out, s.quantity_grid); append(out, s.close_execution);
+    append(out, s.quantity_grid); append(out, s.close_execution); append(out, s.abort_reporting);
     append(out, s.max_abs_units); append(out, s.max_open_lots);
     append(out, s.allowed_open_directions); append(out, s.initial_margin_fraction);
     return out;
@@ -486,6 +486,17 @@ void legacy_tolerant_policy_contract() {
     expect_refusal(spec, Error::UnknownLegacyTolerance, Field::LegacyTolerance);
 }
 
+void abort_reporting_contract() {
+    auto spec = complete_spec();
+    check(spec.abort_reporting == NativeAbortReporting::Error,
+          "native abort reporting defaults to an error diagnostic");
+    expect_acceptance(spec);
+    spec.abort_reporting = NativeAbortReporting::Quiet;
+    expect_acceptance(spec);
+    spec.abort_reporting = static_cast<NativeAbortReporting>(2u);
+    expect_refusal(spec, Error::UnknownAbortReporting, Field::AbortReporting);
+}
+
 void failure_atomicity() {
     auto spec = complete_spec();
     spec.fee_value = -0.0;
@@ -519,6 +530,7 @@ int main() {
     intrabar_sample_eligibility_contract();
     synthesized_intrabar_contract();
     legacy_tolerant_policy_contract();
+    abort_reporting_contract();
     failure_atomicity();
     std::cout << (checks - failures) << '/' << checks << " checks passed; "
               << failures << " failed\n";

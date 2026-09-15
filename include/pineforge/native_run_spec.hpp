@@ -27,6 +27,14 @@ enum class NativeCloseExecution : std::uint32_t {
     AfterCalculation = 1,
 };
 
+// Abort presentation is a run-level policy rather than an exception-path
+// convention. Generic hosts retain an error diagnostic by default; a host
+// that models cooperative cancellation can opt into a quiet status result.
+enum class NativeAbortReporting : std::uint32_t {
+    Error = 0,
+    Quiet = 1,
+};
+
 enum class NativeOpenDirections : std::uint32_t {
     None = 0,
     Long = 1,
@@ -144,6 +152,7 @@ struct NativeRunSpec {
                                // account-currency cash per unit/execution.
     std::optional<double> quantity_grid; // Positive; admission only, no resize.
     NativeCloseExecution close_execution = NativeCloseExecution::NextEligiblePoint;
+    NativeAbortReporting abort_reporting = NativeAbortReporting::Error;
     std::optional<double> max_abs_units; // Positive resulting-book opening cap.
     std::optional<std::uint64_t> max_open_lots; // Positive surviving+new lot cap.
     NativeOpenDirections allowed_open_directions = NativeOpenDirections::Both;
@@ -158,7 +167,7 @@ enum class NativeRunSpecField : std::uint8_t {
     Ticker, TickerId, Type, Currency, BaseCurrency, Description, VolumeType,
     Timezone, Session, ChartTimezone,
     InitialCapital, PointValue, AccountFx, PriceTick, SlippageTicks,
-    FeeKind, FeeValue, QuantityGrid, CloseExecution, MaxAbsUnits, MaxOpenLots,
+    FeeKind, FeeValue, QuantityGrid, CloseExecution, AbortReporting, MaxAbsUnits, MaxOpenLots,
     AllowedOpenDirections, InitialMarginFraction,
     IntrabarTimeframe, IntrabarSamples, IntrabarDistribution, IntrabarVolumeSamples,
     IntrabarSampleEligibility,
@@ -181,6 +190,7 @@ enum class NativeRunSpecError : std::uint8_t {
     UnknownFeeKind,
     NotFiniteNonnegative,
     UnknownCloseExecution,
+    UnknownAbortReporting,
     UnknownOpenDirections,
     ZeroLotLimit,
     AllocationFailure,

@@ -20,6 +20,7 @@ class PineScheduler {
 public:
     void capture_begin(const NativeBeginArgs&);
     void run_begin(PineStrategyHost&);
+    void input(const Bar&, const NativeInputContext&, PineStrategyHost&);
     void bar_open(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
     void bar(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
     void applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&,
@@ -27,6 +28,7 @@ public:
 
     bool is_first_tick() const noexcept { return language_.is_first_tick_; }
     bool is_last_tick() const noexcept { return language_.is_last_tick_; }
+    bool bar_magnifier_enabled() const noexcept { return retained_.bar_magnifier; }
     bool history_advances_new_bar() const noexcept {
         return language_.is_first_tick_ && language_.history_slot_is_new_;
     }
@@ -65,8 +67,17 @@ private:
         bool first_open = false;
     };
 
-    void publish_series(const Bar&);
+    void publish_series(const Bar&, PineStrategyHost&);
     void reset_language();
+
+    struct DeferredBoundaryInput {
+        Bar bar{};
+        std::int64_t next_input_ms = 0;
+        std::int64_t prior_script_open_ms = 0;
+        bool calling_bar_complete = false;
+        bool all_security_states = false;
+        bool active = false;
+    };
 
     // @source-state begin
     PineLanguageState language_;
@@ -80,6 +91,12 @@ private:
     int expected_source_bars_ = 0;
     std::uint64_t applied_cursor_ = 0;
     std::int64_t coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
+    std::int64_t prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    std::int64_t awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    std::vector<unsigned char> input_script_completes_;
+    std::vector<unsigned char> input_script_boundary_completes_;
+    bool uses_aux_security_feed_ = false;
+    DeferredBoundaryInput deferred_boundary_input_{};
     // @source-state end
 };
 

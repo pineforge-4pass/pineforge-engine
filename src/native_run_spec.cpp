@@ -163,6 +163,13 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
     default:
         return {Error::UnknownCloseExecution, Field::CloseExecution};
     }
+    switch (spec.abort_reporting) {
+    case NativeAbortReporting::Error:
+    case NativeAbortReporting::Quiet:
+        break;
+    default:
+        return {Error::UnknownAbortReporting, Field::AbortReporting};
+    }
     if (spec.max_abs_units && !positive(*spec.max_abs_units))
         return {Error::NotFinitePositive, Field::MaxAbsUnits};
     if (spec.max_open_lots && *spec.max_open_lots == 0)

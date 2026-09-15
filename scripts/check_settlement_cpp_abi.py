@@ -60,9 +60,11 @@ def relocation_manifest(transition, manifests=RELOCATION_MANIFESTS) -> dict | No
                 "NativeBeginArgs::syminfo",
                 "NativeRunSpec::slot_label_policy",
                 "NativeRunSpec::legacy_tolerance",
+                "NativeRunSpec::abort_reporting",
                 "IntrabarPath::lower_tf::sample_eligibility",
                 "IntrabarPath::synthesized",
-                "NativeDecisionContext::driver_statistics"]:
+                "NativeDecisionContext::driver_statistics",
+                "NativeInputContext"]:
             raise RuntimeError(
                 "v16/v17 relocation manifest must record all reviewed value members")
     if data.get("sourcePendingOrder") != "pineforge::source::PendingOrder":
@@ -171,8 +173,8 @@ EPOCH_TRANSITION_HEADER_EXEMPTIONS = {
 # never permits unpinned bytes or another epoch transition.
 EXEMPTED_HEADER_SHA256 = {
     'native_order.hpp': '9d9900d0d859678f20278cfa607d47631c18a8eb2d308e89849b86dbba80a15c',
-    'native_host.hpp': '4493556ac72a243d926753fbbe129bf3414132293350b04634d6cbb72e5ff83f',
-    'native_run_spec.hpp': '7b1f618b3a1306ccb96151331691a2ff137bcd379b4cb66e8ef199aa1d15340a',
+    'native_host.hpp': 'cd258cb25981d363dcc0af5fcf519d9865cff2560d77e112b88d63c9f6c2de64',
+    'native_run_spec.hpp': '37f11dc5cf6c81053fc3fba1e6ef1a7bd7521e8ef52dad85179f6ef840263190',
     'market_driver.hpp': '4dc693e5481c21dcbf712521af5c76e26cc9e9d4c7ee624dca5ad8c48d52dc61',
     'execution_consumer.hpp': '156acf02c8268b38eb7ba70d96b34c53025bd66ce9a960222a27a50be348b9d7',
 }

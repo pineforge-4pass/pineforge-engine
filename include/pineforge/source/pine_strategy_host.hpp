@@ -41,6 +41,7 @@ public:
 
     void prepare_native_begin(const NativeBeginArgs&) final;
     void on_native_run_begin() final;
+    void on_native_input(const Bar&, const NativeInputContext&) final;
     void on_native_bar_open(const Bar&, const NativeDecisionContext&) final;
     void on_native_bar(const Bar&, const NativeDecisionContext&) final;
     void on_native_applied(const native_order::ExecutionAppliedEvent&,
@@ -149,6 +150,8 @@ public:
         FixturePendingOrderType type = FixturePendingOrderType::MARKET;
         double default_stop_placement_qty = std::numeric_limits<double>::quiet_NaN();
         double default_stop_sizing_price = std::numeric_limits<double>::quiet_NaN();
+        double frozen_market_own_units = std::numeric_limits<double>::quiet_NaN();
+        double frozen_market_transaction_units = std::numeric_limits<double>::quiet_NaN();
     };
 
 protected:
@@ -351,7 +354,17 @@ private:
                                       bool static_eligible,
                                       int expected_script_bars);
     void scheduler_configure_security_evaluators();
-    void scheduler_prepare_chart_day_partition(const std::vector<Bar>& bars);
+    bool scheduler_uses_aux_security_feed() const noexcept;
+    void scheduler_prepare_security_sequence(const std::vector<Bar>& bars);
+    bool scheduler_feed_security_input(const Bar&, std::int64_t next_input_ms,
+                                       bool calling_bar_complete,
+                                       bool defer_boundary_gate);
+    void scheduler_publish_security_boundary();
+    void scheduler_feed_deferred_security_input(const Bar&, std::int64_t next_input_ms);
+    void scheduler_feed_aux_security(int chart_index);
+    void scheduler_feed_deferred_aux_security(int chart_index);
+    void scheduler_push_source_series(const Bar&);
+    void scheduler_finish_security_sequence();
     void scheduler_record_range_end(const Bar&);
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);

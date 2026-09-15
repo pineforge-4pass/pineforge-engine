@@ -46,9 +46,11 @@ class AbiToolingTests(unittest.TestCase):
             'NativeBeginArgs::syminfo',
             'NativeRunSpec::slot_label_policy',
             'NativeRunSpec::legacy_tolerance',
+            'NativeRunSpec::abort_reporting',
             'IntrabarPath::lower_tf::sample_eligibility',
             'IntrabarPath::synthesized',
             'NativeDecisionContext::driver_statistics',
+            'NativeInputContext',
         ])
         self.assertEqual(manifest['rejectionPairs'], [
             ['v16-frozen', 'v17-current'], ['v17-current', 'v16-frozen']])

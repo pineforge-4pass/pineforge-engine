@@ -306,26 +306,31 @@ def check_texts(files):
             not in re.sub(r'\s+', '', run_spec)):
         raise ValueError('native_run_spec_v2 requires its explicit undetected-timeframe field')
     compact_spec = re.sub(r'\s+', '', run_spec)
+    if not re.search(r'\benum\s+class\s+NativeAbortReporting\s*:', spec):
+        raise ValueError('native_run_spec_v2 omits NativeAbortReporting')
     for member in (
             'NativeSlotLabelPolicyslot_label_policy=NativeSlotLabelPolicy::Canonical;',
-            'NativeLegacyTolerancelegacy_tolerance=NativeLegacyTolerance::None;'):
+            'NativeLegacyTolerancelegacy_tolerance=NativeLegacyTolerance::None;',
+            'NativeAbortReportingabort_reporting=NativeAbortReporting::Error;'):
         if member not in compact_spec:
-            raise ValueError('native_run_spec_v2 omits legacy-tolerance policy member: ' + member)
+            raise ValueError('native_run_spec_v2 omits required policy member: ' + member)
     fields = body(spec, r'enum\s+class\s+NativeRunSpecField\s*:\s*std::uint8_t\s*\{',
                   'native run spec fields')
-    for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance'):
+    for field in ('TimeframeUndetected', 'SlotLabelPolicy', 'LegacyTolerance', 'AbortReporting'):
         if not re.search(r'\b' + field + r'\b', fields):
             raise ValueError('native_run_spec_v2 omits the field tag: ' + field)
     errors = body(spec, r'enum\s+class\s+NativeRunSpecError\s*:\s*std::uint8_t\s*\{',
                   'native run spec errors')
     for error in ('InvalidUndetectedTimeframe', 'UnknownSlotLabelPolicy',
-                  'UnknownLegacyTolerance', 'UnknownIntrabarSampleEligibility'):
+                  'UnknownLegacyTolerance', 'UnknownAbortReporting',
+                  'UnknownIntrabarSampleEligibility'):
         if not re.search(r'\b' + error + r'\b', errors):
             raise ValueError('native_run_spec_v2 omits the validation error: ' + error)
     if ('spec.timeframe_undetected' not in spec_src
             or 'InvalidUndetectedTimeframe' not in spec_src
             or 'spec.slot_label_policy' not in spec_src
             or 'spec.legacy_tolerance' not in spec_src
+            or 'spec.abort_reporting' not in spec_src
             or 'lower->sample_eligibility' not in spec_src):
         raise ValueError('native run-spec validation omits an explicit compatibility rule')
     intrabar = body(spec, r'struct\s+IntrabarPath\s*\{', 'intrabar path')
@@ -414,7 +419,8 @@ def check_texts(files):
 
     consumer_src = versioned(files[FILES[10]], "pineforge", "engine_script_run_v17")
     for fold in ('f.u(static_cast<uint64_t>(spec.slot_label_policy));',
-                 'f.u(static_cast<uint64_t>(spec.legacy_tolerance));'):
+                 'f.u(static_cast<uint64_t>(spec.legacy_tolerance));',
+                 'f.u(static_cast<uint64_t>(spec.abort_reporting));'):
         if fold not in consumer_src:
             raise ValueError('native continuation hash omits compatibility policy: ' + fold)
     for token in ('lower->sample_eligibility',
@@ -423,6 +429,7 @@ def check_texts(files):
                   'if (distribution_samples || sample_index == 0)',
                   'driver_statistics_.sample_ticks_processed',
                   'const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar',
+                  'input_callback_context_', 'hash_input_context',
                   'staged_ingress_fx_', 'if (failed() && !recoverable_abort())'):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
@@ -435,7 +442,8 @@ def check_texts(files):
                    "NativeCurrentPriceRule", "NativeCurrentQuoteKind", "NativeCurrentPointView",
                    "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
                    "NativeExecutionTermsFacts", "NativePrecommitView",
-                   "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs"),
+                   "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
+                   "NativeInputContext"),
             "engine_script_run_v17",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
@@ -468,6 +476,13 @@ def check_texts(files):
         positions.append(matches[0].start())
     if positions != sorted(positions):
         raise ValueError('NativeBeginArgs public begin fields changed order')
+    input_context = body(host, r'struct\s+NativeInputContext\s*\{', 'native input context')
+    compact_input_context = re.sub(r'\s+', '', input_context)
+    for member in ('native_calendar::NativeIntervalinput_interval{};',
+                   'native_calendar::NativeIntervalscript_interval{};',
+                   'intinput_index=0;', 'boolcompletes_script_interval=false;'):
+        if member not in compact_input_context:
+            raise ValueError('NativeInputContext omits accepted-input fact: ' + member)
     require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v17",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
@@ -496,6 +511,8 @@ def check_texts(files):
          r'\s*const\s+NativeFxCurve\s*&', "configure_native_fx_curve"),
         (r'\bvirtual\s+void\s+prepare_native_begin\s*\('
          r'\s*const\s+NativeBeginArgs\s*&', "prepare_native_begin"),
+        (r'\bvirtual\s+void\s+on_native_input\s*\('
+         r'\s*const\s+Bar\s*&\s*,\s*const\s+NativeInputContext\s*&', "on_native_input"),
         (r'\bvirtual\s+void\s+on_native_bar_open\s*\('
          r'\s*const\s+Bar\s*&', "on_native_bar_open"),
     )
@@ -560,6 +577,8 @@ def check_texts(files):
                  'notification.ordinal', 'notification.point', 'consuming_request_', 'draining_notifications_',
                  'preparing_begin_', 'callback_context_.sub_index',
                  'callback_context_.script_bar_open_ms', 'callback_context_.driver_statistics',
+                 'input_callback_context_.has_value()', 'hash_input_context(f, *input_callback_context_)',
+                 'input_callback_bar_.has_value()', 'hash_bar(f, *input_callback_bar_)',
                  'staged_ingress_fx_', 'driver_statistics_', 'hash_cohorts(f, requests_)'):
         if fact not in continuation:
             raise ValueError('native continuation omits current frame/queue fact: ' + fact)
@@ -567,6 +586,8 @@ def check_texts(files):
                      'native spec hash')
     if 'f.b(spec.timeframe_undetected);' not in spec_hash:
         raise ValueError('native continuation omits the undetected-timeframe spec fact')
+    if 'f.u(static_cast<uint64_t>(spec.abort_reporting));' not in spec_hash:
+        raise ValueError('native continuation omits abort-reporting policy')
     begin_guard = body(consumer_src,
                        r'bool\s+NativeExecutionConsumer::validate_undetected_begin\s*\([^)]*\)\s*\{',
                        'undetected-timeframe begin guard')

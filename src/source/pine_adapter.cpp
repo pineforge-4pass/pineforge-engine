@@ -202,7 +202,11 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // begin carries an explicit provider timeframe even when its warmup has
     // only one bar.  Preserve that public stream contract rather than
     // erasing the caller's labels into the undetected batch shape.
-    spec.timeframe_undetected = args.n < 2 && !args.is_stream;
+    // The simple begin has no timeframe argument to preserve when fewer than
+    // two bars cannot establish one. A TF-aware public begin is explicit even
+    // for one historical bar, and follows the legacy run_tf_impl path.
+    spec.timeframe_undetected = args.n < 2 && !args.is_stream
+        && args.input_tf.empty() && args.script_tf.empty();
     if (!spec.timeframe_undetected) {
         std::string effective_input = args.input_tf;
         if (effective_input.empty() && args.n >= 2 && args.bars != nullptr) {
@@ -235,6 +239,9 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
     spec.close_execution = config.process_orders_on_close
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
+    // Pine's request_abort surface reports a cooperative cancellation through
+    // status, not through last_error(). Native-only hosts retain Error.
+    spec.abort_reporting = NativeAbortReporting::Quiet;
     // Pine's pyramiding gate is source-command policy (including its
     // same-bar frozen-market exception), so leave one generic lot of headroom
     // for the source-side transaction batch and enforce ordinary additions in
@@ -278,6 +285,22 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             path.sample_eligibility = IntrabarPath::SampleEligibility::DistributionSamples;
             spec.intrabar.value = std::move(path);
         }
+    } else if (!spec.timeframe_undetected
+               && (args.magnifier_samples != 4
+                   || args.magnifier_distribution != MagnifierDistribution::ENDPOINTS)) {
+        // Legacy TF-aware callers accept inactive sampler arguments. Preserve
+        // that source-surface shape without relaxing the strict native public
+        // API: an empty lower path is already defined to fall back to the
+        // caller's confirmed script-bar path at delivery.
+        IntrabarPath::lower_tf inert;
+        inert.tf = spec.input_tf;
+        inert.samples = 4;
+        inert.distribution = MagnifierDistribution::ENDPOINTS;
+        inert.volume_weighted = false;
+        inert.volume_weighted_min_samples = 2;
+        inert.volume_weighted_max_samples = 64;
+        inert.sample_eligibility = IntrabarPath::SampleEligibility::ContinuousSegments;
+        spec.intrabar.value = std::move(inert);
     }
     const auto validation = validate_native_run_spec(spec);
     if (!validation) {
@@ -363,8 +386,15 @@ bool PineExecutionAdapter::same_bar_market_tx_scope() const {
         return false;
     }
     const auto state = require_host().native_state();
+    const auto* inert = state.spec ? state.spec->intrabar.lower() : nullptr;
+    const bool inactive_sampler_path = inert != nullptr && inert->bars.empty()
+        && inert->tf == state.spec->input_tf && inert->samples == 4
+        && inert->distribution == MagnifierDistribution::ENDPOINTS
+        && !inert->volume_weighted && inert->volume_weighted_min_samples == 2
+        && inert->volume_weighted_max_samples == 64
+        && inert->sample_eligibility == IntrabarPath::SampleEligibility::ContinuousSegments;
     return state.phase == NativeRunPhase::Batch && state.spec != nullptr
-        && state.spec->intrabar.is_none();
+        && (state.spec->intrabar.is_none() || inactive_sampler_path);
 }
 
 native_order::Trigger PineExecutionAdapter::trigger_for(double limit_price, double stop_price,

@@ -579,6 +579,21 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.d(current_script_bar_.close); f.d(current_script_bar_.volume); f.i(current_script_bar_.timestamp);
     f.b(current_script_bar_valid_); f.b(saw_open_fill_); f.i(source_bar_count_);
     f.i(expected_source_bars_); f.u(applied_cursor_); f.i(coof_callback_script_open_);
+    f.i(prior_input_script_open_ms_);
+    f.i(awaiting_legacy_script_open_ms_);
+    f.u(input_script_completes_.size());
+    for (const auto value : input_script_completes_) f.u(value);
+    f.u(input_script_boundary_completes_.size());
+    for (const auto value : input_script_boundary_completes_) f.u(value);
+    f.b(uses_aux_security_feed_);
+    f.d(deferred_boundary_input_.bar.open); f.d(deferred_boundary_input_.bar.high);
+    f.d(deferred_boundary_input_.bar.low); f.d(deferred_boundary_input_.bar.close);
+    f.d(deferred_boundary_input_.bar.volume); f.i(deferred_boundary_input_.bar.timestamp);
+    f.i(deferred_boundary_input_.next_input_ms);
+    f.i(deferred_boundary_input_.prior_script_open_ms);
+    f.b(deferred_boundary_input_.calling_bar_complete);
+    f.b(deferred_boundary_input_.all_security_states);
+    f.b(deferred_boundary_input_.active);
 }
 
 void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) const {
