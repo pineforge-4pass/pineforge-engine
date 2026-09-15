@@ -85,6 +85,19 @@ def main(root: Path = ROOT) -> int:
             raise ValueError("source extension does not fold adapter state")
         if "scheduler_.hash_state(f);" not in source_hash:
             raise ValueError("source extension does not fold scheduler state")
+        # L4c restores durable adapter policy receipts.  The generic core
+        # remains source-blind, so their complete fold must be visible in the
+        # source placement traversal rather than waived as retired book state.
+        for fold in (
+            "value.legs.visit(f);",
+            "value.reservation_expansion.capture()",
+            "value.reservation_growth_source.reservation_owner()",
+            "value.stop_limit_activated",
+            "value.cancellation.cause",
+            "last_applied_ordinal_",
+        ):
+            if fold not in source_hash:
+                raise ValueError("L4c adapter policy hash fold is missing: " + fold)
 
         generic = durable_members(root, GENERIC_HEADERS)
         source = durable_members(root, SOURCE_HEADERS)

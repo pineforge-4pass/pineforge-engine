@@ -4,8 +4,12 @@
 // native-host surface: no native kernel type learns a Pine source identifier,
 // sizing convention, or lifecycle vocabulary from it.
 #include <pineforge/native_host.hpp>
+#include <pineforge/compat/pine/exit_activation.hpp>
+#include <pineforge/compat/pine/exit_lifecycle.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
+#include <pineforge/compat/pine/order_birth.hpp>
 #include <pineforge/compat/pine/order_priority.hpp>
+#include <pineforge/compat/pine/reservation_expansion.hpp>
 
 #include <cstdint>
 #include <limits>
@@ -89,6 +93,27 @@ struct PineExitLevels {
     double loss_ticks = std::numeric_limits<double>::quiet_NaN();
 };
 
+enum class PineCancellationCause : std::int32_t {
+    None = 0,
+    Replacement = 1,
+    Dependency = 2,
+    Admission = 3,
+    Explicit = 4,
+};
+
+struct PineCancellationReceipt {
+    PineCancellationCause cause = PineCancellationCause::None;
+    std::int32_t state = 0;
+    std::int32_t close_claim_release = 0;
+    std::uint64_t source_incarnation = 0;
+    std::int64_t source_sequence = 0;
+    std::uint64_t target_incarnation = 0;
+    std::int64_t target_owner = 0;
+    std::uint64_t target_revision = 0;
+    double close_claim_consumed = std::numeric_limits<double>::quiet_NaN();
+    double close_claim_retired = std::numeric_limits<double>::quiet_NaN();
+};
+
 struct PineSizingSnapshot {
     double equity = std::numeric_limits<double>::quiet_NaN();
     double price = std::numeric_limits<double>::quiet_NaN();
@@ -144,6 +169,8 @@ struct PlacementSnapshot {
     bool projection_after_close = false;
     bool projection_over_pyramiding = false;
     std::uint64_t projection_predecessor = 0;
+    std::uint64_t recreated_after_named_cancelled_entry_incarnation = 0;
+    std::uint64_t named_cancel_surviving_exit_incarnation = 0;
     bool projection_predecessor_market = false;
     bool projection_predecessor_exit = false;
     bool projection_created_during_coof = false;
@@ -159,6 +186,36 @@ struct PlacementSnapshot {
     double projection_affordability_held_qty = std::numeric_limits<double>::quiet_NaN();
     PineSizingSnapshot sizing{};
     PineExitLevels exit_levels{};
+    // L4c policy receipts. They are immutable placement/live facts owned by
+    // the adapter, never a second executable pending-order representation.
+    OrderBirth birth{};
+    compat::pine::HistoricalBirthReach birth_reach =
+        compat::pine::HistoricalBirthReach::Standard;
+    ExitLegActivation leg_activation{};
+    compat::pine::ExitActivationPolicy exit_activation{};
+    exit_legs::Lifecycle legs{};
+    ReservationExpansion reservation_expansion{};
+    ReservationGrowthSource reservation_growth_source{};
+    bool stop_limit_activated = false;
+    std::int32_t coof_cascade_seg_i = -1;
+    bool coof_cascade_inflight_fires = false;
+    bool paired_flat_market_candidate = false;
+    double paired_flat_market_own_qty = std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_close = std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_equity = std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_margin_pct = std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_pointvalue = std::numeric_limits<double>::quiet_NaN();
+    double paired_flat_market_signal_fx = std::numeric_limits<double>::quiet_NaN();
+    std::int64_t paired_flat_market_peer_seq = 0;
+    double paired_flat_market_transaction_qty = std::numeric_limits<double>::quiet_NaN();
+    std::int32_t signal_close_mc_bar = -1;
+    std::uint64_t signal_close_mc_entry_incarnation = 0;
+    std::uint64_t signal_close_mc_fill_seq = 0;
+    double signal_close_mc_remaining_qty = std::numeric_limits<double>::quiet_NaN();
+    bool pooc_global_full_exit_dynamic_qty = false;
+    bool pooc_global_full_exit_tracks_bound_adds = false;
+    bool pooc_global_full_exit_bound_add = false;
+    PineCancellationReceipt cancellation{};
 };
 
 struct ShortSeedPlan {
@@ -427,6 +484,11 @@ private:
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;
     static std::int64_t day_key(std::int64_t timestamp_ms) noexcept;
     void refresh_pending_view() noexcept;
+    OrderBirth capture_order_birth() const;
+    void initialize_l4c_policy(PlacementSnapshot&, native_order::RequestHandle);
+    void update_l4c_priority();
+    void update_l4c_lifecycle(const native_order::ExecutionAppliedEvent&,
+                              const NativeDecisionContext&);
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
@@ -454,6 +516,7 @@ private:
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
     std::uint64_t receipt_cursor_ = 0;
+    std::uint64_t last_applied_ordinal_ = 0;
     bool materializing_relative_ = false;
     std::int64_t current_position_cycle_ = 0;
     int current_position_sign_ = 0;

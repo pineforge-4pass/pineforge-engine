@@ -55,6 +55,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
     f.b(value.projection_over_pyramiding); f.u(value.projection_predecessor);
+    f.u(value.recreated_after_named_cancelled_entry_incarnation);
+    f.u(value.named_cancel_surviving_exit_incarnation);
     f.b(value.projection_predecessor_market); f.b(value.projection_predecessor_exit);
     f.b(value.projection_created_during_coof); f.b(value.projection_coof_at_terminal);
     f.b(value.projection_coof_mid_bar); f.d(value.projection_tv_carry_qty);
@@ -70,6 +72,57 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
+    f.i(static_cast<std::int64_t>(value.birth.cause())); f.i(value.birth.bar());
+    f.i(value.birth.timestamp()); f.i(static_cast<std::int64_t>(value.birth.cursor().domain()));
+    f.i(static_cast<std::int64_t>(value.birth.cursor().position()));
+    f.i(value.birth.cursor().index()); f.i(value.birth.cursor().count());
+    f.d(value.birth.cursor_price()); f.u(value.birth.first_fill()); f.u(value.birth.last_fill());
+    f.u(value.birth.evaluation_ordinal()); f.i(static_cast<std::int64_t>(value.birth_reach));
+    f.b(value.leg_activation.bounds().has_value());
+    if (value.leg_activation.bounds()) {
+        f.i(value.leg_activation.bounds()->position_cycle);
+        f.i(value.leg_activation.bounds()->stop_first_bar);
+        f.i(value.leg_activation.bounds()->limit_first_bar);
+    }
+    f.b(value.exit_activation.evidence().has_value());
+    if (value.exit_activation.evidence()) {
+        const auto& evidence = *value.exit_activation.evidence();
+        f.i(evidence.position_cycle); f.i(evidence.entry_bar); f.i(evidence.direction);
+        f.d(evidence.cursor_price); f.d(evidence.stop_level); f.d(evidence.limit_level);
+        f.b(evidence.limit_continuation.has_value());
+        if (evidence.limit_continuation) {
+            f.i(static_cast<std::int64_t>(evidence.limit_continuation->cause));
+            f.u(evidence.limit_continuation->observed_fill_sequence);
+        }
+    }
+    value.legs.visit(f);
+    f.b(value.reservation_expansion.capture().has_value());
+    if (value.reservation_expansion.capture()) {
+        const auto& capture = *value.reservation_expansion.capture();
+        f.i(capture.position_cycle); f.i(static_cast<std::int64_t>(capture.side));
+        f.b(capture.first_later_admission.has_value());
+        if (capture.first_later_admission) f.u(*capture.first_later_admission);
+    }
+    f.b(value.reservation_growth_source.reservation_owner().has_value());
+    if (value.reservation_growth_source.reservation_owner())
+        f.u(*value.reservation_growth_source.reservation_owner());
+    f.b(value.stop_limit_activated); f.i(value.coof_cascade_seg_i);
+    f.b(value.coof_cascade_inflight_fires); f.b(value.paired_flat_market_candidate);
+    f.d(value.paired_flat_market_own_qty); f.d(value.paired_flat_market_signal_close);
+    f.d(value.paired_flat_market_signal_equity);
+    f.d(value.paired_flat_market_signal_margin_pct);
+    f.d(value.paired_flat_market_signal_pointvalue); f.d(value.paired_flat_market_signal_fx);
+    f.i(value.paired_flat_market_peer_seq); f.d(value.paired_flat_market_transaction_qty);
+    f.i(value.signal_close_mc_bar); f.u(value.signal_close_mc_entry_incarnation);
+    f.u(value.signal_close_mc_fill_seq); f.d(value.signal_close_mc_remaining_qty);
+    f.b(value.pooc_global_full_exit_dynamic_qty);
+    f.b(value.pooc_global_full_exit_tracks_bound_adds);
+    f.b(value.pooc_global_full_exit_bound_add);
+    f.i(static_cast<std::int32_t>(value.cancellation.cause)); f.i(value.cancellation.state);
+    f.i(value.cancellation.close_claim_release); f.u(value.cancellation.source_incarnation);
+    f.i(value.cancellation.source_sequence); f.u(value.cancellation.target_incarnation);
+    f.i(value.cancellation.target_owner); f.u(value.cancellation.target_revision);
+    f.d(value.cancellation.close_claim_consumed); f.d(value.cancellation.close_claim_retired);
 }
 
 void hash_native_request(BrokerStateHashSink& f, const native_order::Request& request) {
@@ -206,6 +259,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(current_debit_ordinals.size());
     for (const auto ordinal : current_debit_ordinals) f.u(ordinal);
     f.u(receipt_cursor_);
+    f.u(last_applied_ordinal_);
     f.b(materializing_relative_);
     f.i(current_position_cycle_);
     f.i(current_position_sign_);

@@ -328,6 +328,13 @@ set(TEST_SOURCES
     test_live_trade_accessors
     test_live_flags_off_identity
     test_live_flags_lane_positive
+    test_native_l4c_policy_modules
+    test_native_l4c_coof_literals
+    test_native_l4c_pending_mirror
+    test_native_l4c_oracle_reversal_literals
+    test_live_pending_order_mirror
+    test_oracle_coof_first_open
+    test_oracle_reversal
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly
