@@ -323,6 +323,20 @@ private:
 protected:
     // @source-state begin
     PineExecutionAdapter adapter_;
+    class SourceCloseObligationView {
+    public:
+        explicit SourceCloseObligationView(const PineExecutionAdapter& adapter) noexcept
+            : adapter_(&adapter) {}
+        bool pending() const noexcept {
+            return adapter_ && adapter_->cap.due_cause().has_value();
+        }
+    private:
+        const PineExecutionAdapter* adapter_ = nullptr;
+    };
+    // Retained protected spelling for source fixtures/generated code.  The
+    // authoritative due request lives in IntradayCap; this read-only facade
+    // prevents a second mutable close-obligation owner.
+    SourceCloseObligationView position_close_obligation_{adapter_};
     PineStrategyConfig config_{};
     StrategyOverrides override_{};
     PineScheduler scheduler_{};

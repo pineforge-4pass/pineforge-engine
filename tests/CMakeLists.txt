@@ -1160,6 +1160,40 @@ add_test(NAME test_oracle_short_seed
 add_test(NAME test_oracle_stop_snapshot
          COMMAND test_native_oracle_stop_snapshot_full_l2)
 set_tests_properties(test_oracle_stop_snapshot PROPERTIES LABELS l4-pending)
+
+# R4-D L5c: these assigned twins now reproduce their legacy source-policy
+# literals on the switched native route. Keep only the five root-visible STOP
+# rows under l4-pending (live path, cancellation projection, integration
+# scratchpad, contradictory reversal restoration, and off-grid reduction).
+set_tests_properties(
+    test_aapl15_margin_brackets_l4a
+    test_carried_pooc_short_margin_state_l4a
+    test_integer_short_margin_state_l4a
+    test_intraday_cap_auto_close_l4a
+    test_margin_call_intrabar_chronology_l4a
+    test_margin_call_trail_exit_chronology_l4a
+    test_pine_cap_boundary_l4a
+    test_risk_max_intraday_loss_tv_l4a
+    test_short_margin_script_state_l4a
+    test_stop_open_margin_script_state_l4a
+    test_tv_money_long_margin_call_eth_l4a
+    test_native_oracle_stop_snapshot_full_l2
+    test_native_live_order_derived_l4d
+    test_live_order_derived
+    test_pending_order_mirror_no_alloc_l4d
+    test_full_close_while_pyramiding_l4d
+    test_pooc_short_close_tick_l4d
+    test_pyramiding_count_partial_drain_l4d
+    test_live_order_derived_l4d
+    test_fills_edge_l4d
+    test_strategy_commands_extra_l4d
+    test_strategy_pyramiding_l4d
+    test_dual_entry_placement_sizing_l4b
+    test_market_entry_affordability_l4b
+    test_qty_step_epsilon_floor_l4b
+    test_stop_entry_placement_open_qty_l4b
+    test_oracle_stop_snapshot
+    PROPERTIES LABELS "")
 add_test(NAME test_oracle_twin_census
          COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_twin_census.py)
 add_test(NAME test_oracle_sha256_pin
