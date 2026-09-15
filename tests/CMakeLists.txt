@@ -400,6 +400,9 @@ set(TEST_SOURCES
     test_trail_open_arm_subtick_offset_l4c
     test_trail_ref_entry_bar_extreme_l4c
     test_zero_offset_trail_rides_l4c
+    test_l4e_trade_export_provenance
+    test_l4e_native_settlement_h07
+    test_l4e_native_install_h08
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly

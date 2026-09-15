@@ -3244,11 +3244,27 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
         || source.family == PineOrderFamily::Margin) {
-        if (source.from_entry.empty()
-            && std::isfinite(source.projection_remaining_qty)) {
+        const bool has_projected_remaining = source.from_entry.empty()
+            && std::isfinite(source.projection_remaining_qty);
+        if (has_projected_remaining) {
             result.units = std::max(0.0, source.projection_remaining_qty);
+        }
+        // A source full close is an all-live-cohort operation, not a stale
+        // placement-sized reduction.  The generic selected scope is the
+        // authoritative physical sum at this candidate.  Reusing the source
+        // snapshot can differ by one binary64 rounding step after a previous
+        // percentage close; that leaves a positive dust lot which the next
+        // percent entry cannot represent alongside its new units.  The fixed
+        // quantity source transaction retains its captured own/transaction
+        // facts, so it must not use this percent-sizing projection.
+        if (source.family == PineOrderFamily::Close && source.deferred_cohort
+            && !source.frozen_market_instruction
+            && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+             && (std::isnan(source.qty_percent) || source.qty_percent >= 100.0)) {
+             result.units = facts.scope_exposure_units;
             return result;
         }
+        if (has_projected_remaining) return result;
         if (finite_positive(source.requested_qty)) {
             result.units = source.requested_qty;
             return result;
