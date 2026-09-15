@@ -46,8 +46,8 @@ FORBIDDEN_INCLUDE = re.compile(
 FORBIDDEN_C_ABI = re.compile(
     r'(?:pineforge::source|\bsource::|compat::pine|pineforge/source/|compat/pine/)'
 )
-_MATCH_LOOP = "process" + "_pending" + "_orders"
-_PENDING_ROSTER = "pending" + "_orders_"
+_MATCH_LOOP = "process_pending_orders"
+_PENDING_ROSTER = "pending_orders_"
 FORBIDDEN_IDENTIFIER = re.compile(
     r'(?:compat::pine|\bpine_[A-Za-z0-9_]*\b|\b_src_[A-Za-z0-9_]*\b|'
     r'\bcoof_[A-Za-z0-9_]*\b|\bis_first_tick_\b|'
@@ -56,8 +56,8 @@ FORBIDDEN_IDENTIFIER = re.compile(
     r'\b' + _PENDING_ROSTER + r'\b)'
 )
 FROZEN_C_EXPORTS = (
-    "strategy_" + "pending" + "_orders_len",
-    "strategy_" + "pending" + "_orders_get",
+    "strategy_pending_orders_len",
+    "strategy_pending_order_get",
 )
 
 

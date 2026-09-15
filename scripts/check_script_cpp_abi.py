@@ -1,33 +1,55 @@
 #!/usr/bin/env python3
-"""Check the v17 source-host C++ boundary after adapter lowering."""
+"""Compile/link the generated source-host ABI against frozen v16 and live v17."""
 from __future__ import annotations
 
-import re
 import argparse
+import json
 from pathlib import Path
+import re
 
-ROOT = Path(__file__).resolve().parents[1]
+from cpp_abi_pairing import PairingError, execute_v16_v17_pair
+
+
+def verify_source_shape(include: Path) -> None:
+    engine = (include / "pineforge" / "engine.hpp").read_text()
+    host = (include / "pineforge" / "source" / "pine_strategy_host.hpp").read_text()
+    if "class PineStrategyHost : public NativeStrategyHost" not in host:
+        raise PairingError("source host is not native-bound")
+    if re.search(r"(?<!~)\bBacktestEngine\s*\(\s*\)\s*;", engine):
+        raise PairingError("legacy default execution-owner constructor remains")
+    if "NativeConsumerBindTag" not in engine:
+        raise PairingError("explicit native construction tag is missing")
+    if (include / "pineforge" / "source" / "pine_pending_intent.hpp").exists():
+        raise PairingError("retired source order header remains installed")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--compiler")
-    parser.add_argument("--library")
-    parser.add_argument("--include")
-    parser.add_argument("--generated-include")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--compiler", required=True)
+    parser.add_argument("--library", type=Path, required=True)
+    parser.add_argument("--include", type=Path, required=True)
+    parser.add_argument("--generated-include", type=Path, required=True)
+    parser.add_argument("--v16-frozen-receipt", type=Path, required=True)
     parser.add_argument("--extra-flag", action="append", default=[])
-    parser.parse_args()
-    engine = (ROOT / "include/pineforge/engine.hpp").read_text()
-    host = (ROOT / "include/pineforge/source/pine_strategy_host.hpp").read_text()
-    if "class PineStrategyHost : public NativeStrategyHost" not in host:
-        raise SystemExit("script ABI: source host is not native-bound")
-    if re.search(r"(?<!~)\bBacktestEngine\s*\(\s*\)\s*;", engine):
-        raise SystemExit("script ABI: default execution-owner constructor remains")
-    if "NativeConsumerBindTag" not in engine:
-        raise SystemExit("script ABI: explicit native construction tag is missing")
-    if (ROOT / "include/pineforge/source/pine_pending_intent.hpp").exists():
-        raise SystemExit("script ABI: retired source order header remains")
-    print("script C++ ABI: v17 native-bound source host verified")
+    parser.add_argument("--receipt", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        verify_source_shape(args.include)
+        result = execute_v16_v17_pair(
+            compiler=args.compiler,
+            extra_flags=args.extra_flag,
+            current_library=args.library,
+            current_include=args.include,
+            generated_include=args.generated_include,
+            v16_receipt=args.v16_frozen_receipt,
+            kind="script",
+            artifact_directory=args.receipt.parent,
+        )
+    except PairingError as error:
+        raise SystemExit("script C++ ABI: " + str(error))
+    args.receipt.parent.mkdir(parents=True, exist_ok=True)
+    args.receipt.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print("script C++ ABI: source-host v16/v17 acceptance and bidirectional rejection pairs passed")
     return 0
 
 

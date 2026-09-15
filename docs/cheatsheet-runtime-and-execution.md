@@ -171,11 +171,11 @@ mintick directionally (buys ceil, sells floor).
 
 ## 2.3 Market-order timing (critical)
 
-- POOC **off**: market from `on_bar` → `pending_orders_`, fills **next bar
-  open**.
-- POOC **on**: market from `on_bar` (no stop/limit) → `execute_market_entry`
-  **immediately at this bar's close** (never queued). `strategy.close` likewise
-  closes immediately at close.
+- POOC **off**: a market request lowered from `on_source_bar` remains live and
+  fills at the **next eligible bar open**.
+- POOC **on**: a market request lowered from `on_source_bar` is eligible at
+  the configured close-execution decision point. `strategy.close` follows the
+  same native request path.
 - Priced order from `on_bar`: queued, evaluated from **next bar** at step 2.
 
 ## 2.4 Intrabar price path
@@ -348,10 +348,8 @@ Audited gaps a forward/real-time executor must know (beyond per-order fills).
   for NaN-qty siblings.
 - **Trail caveats:** `trail_price` **is read by the fill path**, not ignored:
   when `trail_points` is unset it is used verbatim as the trail-activation
-  level (`compute_exit_trail_state`, `engine_path_resolve.cpp:683-707`,
-  called by `resolve_exit_path_fill` from the exit fill path
-  `engine_fills.cpp:8628-8635`; and the dormant-bracket trail check
-  `engine_fills.cpp:8006-8019` — `has_trail` tests
+  level (the native path resolver and source adapter trail projection); the
+  dormant-bracket trail check tests
   `!std::isnan(o.trail_price)` alongside `trail_points`, and the activation
   defaults to `trail_price` before `trail_points`, when set, overrides it);
   `trail_points` wins over `trail_price` when both are set.

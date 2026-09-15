@@ -148,8 +148,8 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 //      exit_id), so it is identified by its synthesized exit_comment
 //      instead (engine_run.cpp / engine_risk.cpp).
 //   5. exit_from_bracket -- set only at the shared exit-fill site
-//      (engine_fills.cpp apply_filled_order_to_state) when the filling
-//      order was OrderType::EXIT, i.e. a real strategy.exit leg.
+//      (the native execution application path) when the filling request was
+//      an EXIT leg, i.e. a real strategy.exit leg.
 //   6. Otherwise: a strategy.close/close_all market close or a
 //      reversal-driven close -- SCRIPT.
 int BacktestEngine::closed_trade_close_cause(int i) const {

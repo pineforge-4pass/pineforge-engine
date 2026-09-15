@@ -16,6 +16,11 @@
 #define calc_on_order_fills_ fixture_configuration().calc_on_order_fills
 #define close_entries_rule_any_ fixture_configuration().close_entries_rule_any
 
+// The legacy oracle's enum used SHORT_ONLY == 2. The adapter's direction
+// convention is a signed gate (positive = long, negative = short), so the
+// fixture deliberately maps that spelling to -1 before FixtureRiskDirectionSlot
+// passes it to PineExecutionAdapter::set_risk_direction(int). This is a
+// fixture translation only; no product enum value is renumbered.
 struct FixtureRiskDirection {
     enum Value { BOTH = 0, LONG_ONLY = 1, SHORT_ONLY = -1 };
 };

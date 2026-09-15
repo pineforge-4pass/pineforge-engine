@@ -1,0 +1,26 @@
+{
+  "files": {
+    "README.md": "36b94c5f566702ca6de6b0a3a9ccdaf44e2218786d4306e489f17b10b827468b",
+    "test_oracle_coof.cpp": "a175d4449f45a23a850217996cc528515ec6f673bb4951ffc3ab9b8583bbe681",
+    "test_oracle_day_key.cpp": "14d3a55499d5cd951d34fca121b8ca2574f44ebd12691968612132d91a243ea0",
+    "test_oracle_deferred_any_witnesses.cpp": "c7fc11a952d45971eb42a602bf5a37328b6527aabb1c1948e197383ff7727ab3",
+    "test_oracle_deferred_birth.cpp": "1532354df0ffafacb892072d2721f29fb185bce3a53f52ed975f6e0cd5173774",
+    "test_oracle_frozen_size.cpp": "305ce4eae79c7529311bdec7eda6d10b830bb7e025d4c63c2aa0c3193df9eb5c",
+    "test_oracle_fx.cpp": "028ba8a38d016a22d68e6a38b764c070d6a997355c54de63eb854d59f72c251b",
+    "test_oracle_magnifier_barstate.cpp": "fbcee8e3395d361745ca5585900af7fdc45f30257b29ba43b7f90e4858af1f61",
+    "test_oracle_magnifier_distribution.cpp": "3ee60f78f8f15085e1cfb19e483f63cc43bafa047db9a55d49aaa6660c88af8e",
+    "test_oracle_more_than_64_fills.cpp": "ff19519d679b794423ac32a0da4f4d93537bc6b183f397f626025ba98c12e24c",
+    "test_oracle_pooc_freeze.cpp": "ade0602dd3c4237c87e7a57cd593e768d798625da0cbde7dcc3853442da7ea28",
+    "test_oracle_pooc_immediate.cpp": "abdf7d6f6693653d29bb36c92cb69bb6acb78a10c4e8754d85bce90a166932a8",
+    "test_oracle_relative_exit.cpp": "67c28772bfd2b422bef440689b26b08df08a39d1d9a54bfd45f5331f8cbef3a6",
+    "test_oracle_reversal_close_only.cpp": "1c36918ed0caa6e678ec373f8117c1f832570f0bc7aa48d0a732e8c0db83cce9",
+    "test_oracle_reversal_later_tick.cpp": "ca45d16f8823a2d88cfc398408f71897dcbc26e140459b5f81860896474bd774",
+    "test_oracle_reversal_replaced_percent.cpp": "5f083ab82f7a2f427b756763d3e71a8b6e2c5de8419ea71a442c8c413e23739d",
+    "test_oracle_reversal_same_bar_tx.cpp": "775150f02e5a3ad7fd3c46cc7786a4d03857a2a66aaf3a627743a08831d3161b",
+    "test_oracle_short_seed.cpp": "d28e163cb7d33af85478f084d8020476b1063f27f2b67c632c193e80a2a9112b",
+    "test_oracle_short_seed_percent.cpp": "ba24c10847dc5b2364243274b09f488f75f0737951c754a6a809f8ab280ec591",
+    "test_oracle_stop_snapshot.cpp": "d3a14a771538873144c8f03a9d8cf391256e9967ad31a03e29e1ed46359daf1d"
+  },
+  "schema": "pineforge-r4-d-oracle-tree/v1",
+  "treeSha256": "460287f370edd247005ee67feb624dc3f285c49a5d2b2236265892a5ddf882dd"
+}

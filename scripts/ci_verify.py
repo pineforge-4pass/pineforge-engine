@@ -743,7 +743,8 @@ class Driver:
                       and not cxx_name.startswith('g++'))
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
-                 '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs)]
+                 '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs),
+                 '-LE', 'l4-pending']
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
         self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)

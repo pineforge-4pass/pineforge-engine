@@ -94,7 +94,7 @@ struct StreamOrderAction {
 //      DROPPED iff the exact sizing equity is below the ROUNDED cost,
 //      E_s < tv_money_round(Q x tick(close_S)); for a reversal only the
 //      entry leg is dropped and the closing leg still fills (the fill-time
-//      gate in engine_fills.cpp, ahead of the exact fill-price check).
+//      gate in the source adapter, ahead of the exact fill-price check).
 //      Bare account: L06..L17 / FL00..02 (C = 1000000.0015396 ..
 //      1000000.0019980) rejected, L18 (1000000.0020196) admitted against
 //      round(1000000.0018862) = 1000000.002, flat p0000 (C == cost) admitted;
@@ -266,21 +266,10 @@ struct Trade {
     // bracket leg (stop/limit/trail/profit/loss), as opposed to a
     // strategy.close/close_all market close, a reversal-driven close, a
     // margin-call slice, or an intraday-cap close. Set at two sites:
-    //   1. The shared exit-fill site (apply_filled_order_to_state,
-    //      engine_fills.cpp) from the filling order: OrderType::EXIT AND
-    //      its id does NOT carry the internal kClosePrefix ("__close__")
-    //      marker (engine_internal.hpp) -- queue_deferred_close_order
-    //      (engine_strategy_commands.cpp) also materializes a deferred
-    //      strategy.close as an OrderType::EXIT request record (it reuses the
-    //      same exit-fill qty/level machinery), tagged with that prefix
-    //      precisely so this flag can tell the two apart.
-    //   2. revive_position_brackets_after_margin_call_partial
-    //      (engine_fills.cpp) -- a whole-position strategy.exit leg that
-    //      fires at the margin-call event price bypasses the shared site
-    //      (it calls execute_market_exit directly) but is still a genuine
-    //      bracket fill (its own candidate loop already requires
-    //      OrderType::EXIT and excludes kClosePrefix ids), so it sets this
-    //      unconditionally true.
+    //   1. The native applied-event projection classifies a live EXIT request
+    //      whose id is not the adapter's internal "__close__" close command.
+    //   2. Adapter receipt reconciliation preserves the classification for a
+    //      bracket that survives a margin reduction.
     // ABI v4 task 9: closed_trade_close_cause() reads this to distinguish
     // BRACKET (2) from SCRIPT (1); it is never set on a margin-call /
     // intraday-cap row (those stay false and are classified from exit_id /
@@ -724,8 +713,8 @@ protected:
     bool historical_security_lookahead_projection_active_ = false;
     uint64_t next_order_incarnation_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
-    // multiple request matching calls (bar magnifier) and dual-pass
-    // opposing-stop resolution (see engine_fills.cpp).
+    // multiple native matching calls (bar magnifier) and dual-pass
+    // opposing-stop resolution (see NativeExecutionConsumer).
 
     // Transient: true only while applying a priced (stop/limit/trail) fill
     // (apply_filled_order_to_state). emit_close_trade reads it to fold the
@@ -799,7 +788,7 @@ protected:
     // magnifier (which never reaches dispatch_bar), where bar_index_
     // advances for each emitted script bar in run_aggregation_bar_loop --
     // and written ONLY alongside dual_entry_path_'s own arbitration write
-    // (engine_fills.cpp), never at the declined-admission release. ABI v4
+    // (the native applied-event projection), never at the declined-admission release. ABI v4
     // live-runtime surface (task 4): this is what last_bar_dual_entry_path()
     // returns, so a live probe (or an ordinary POOC run, tail-suppressed or
     // not) reads the bar's real arbitration even if the winning order later
@@ -819,7 +808,7 @@ protected:
     // high / low were folded in (update_trail_best_for_bar_open), and the
     // bar it was captured on: a trail leg killed by a declined reversal on
     // this bar restarts from it (round 10 family AE,
-    // request record::dormant_trail_best).
+    // adapter placement fact `dormant_trail_best`).
     // The ordinary POOC close scan may revisit a retained trail with that
     // same pre-bar extreme only while the carried position is unchanged.
     // A new cycle, add, reduction or close-time trail restart keeps its own
@@ -1437,8 +1426,8 @@ protected:
     // exchange, not just forced liquidations — verified row-for-row: a
     // computed DCA/safety-order quantity (e.g. baseOrderSize/close) is
     // floored, not rounded, before it ever contributes to cost basis or a
-    // fill (see src/engine_fills.cpp's margin-call path, which already does
-    // this for liquidation lots). qty_step_ == 0 (corpus default) leaves qty
+    // fill (the source adapter applies the same rule to liquidation lots).
+    // qty_step_ == 0 (corpus default) leaves qty
     // untouched. A quotient that is only binary64 residue below an integer is
     // treated as that integer, using the same 1e-6-of-a-step tolerance as
     // percent-derived exits below. This keeps an on-grid request such as
@@ -1595,7 +1584,7 @@ protected:
     // order armed one or more bars before its fill is not empirically
     // established, so they conservatively keep the legacy fill-time sizing.
     // The sizing price of the frozen rule above, exposed separately so the
-    // placement sites can persist it on the order (request record::sizing_price)
+    // placement sites can retain it as an adapter placement fact (`sizing_price`)
     // for the fill-time margin-admission re-check.
     //
     // The basis is the mintick-ROUNDED signal close. Rounding happens BEFORE
@@ -1878,8 +1867,8 @@ protected:
     // @broker-state begin
     // Monotonic cross-bar fill sequence counter; compared against
     // trail_best_before_bar_fill_seq_ (hashed above) and against
-    // request record::signal_close_mc_fill_seq (hashed per-order) by fill-time
-    // gates that cross the bar boundary (engine_fills.cpp).
+    // adapter placement fact `signal_close_mc_fill_seq` by fill-time gates
+    // that cross the bar boundary.
     uint64_t broker_fill_event_seq_ = 0;
     // @broker-state end
 
@@ -2648,9 +2637,8 @@ protected:
 
 
 
-    // request matching helpers (defined in engine_fills.cpp).
-    // Decomposed during the function-decomposition refactor so the
-    // bar-pump fill loop is reviewable rather than a 600-line monolith.
+    // Native request matching is owned by NativeExecutionConsumer; source
+    // policy reaches it through the adapter rather than a second fill loop.
 
 
 
@@ -2673,7 +2661,7 @@ protected:
 
 
 
-    // round 8 family S (source::request record::pine_frozen_market_instruction): the same-bar MARKET
+    // round 8 family S (adapter placement snapshot frozen-market facts): the same-bar MARKET
     // transaction's scope, the close-artifact predicate (rule 4) and the
     // frozen-transaction reversal kernel (rules 1/2).
 
@@ -2706,7 +2694,7 @@ protected:
 
 
     // True iff `order` is a default percent_of_equity <= 100 pure STOP that
-    // carries its placement snapshot (source::request record::default_stop_placement_qty)
+    // carries its adapter placement snapshot default-stop quantity
     // and the fill price is a usable positive print: the fill-time admission
     // and dispatch then consume the placement quantity instead of re-sizing
     // at the fill.
@@ -2717,12 +2705,12 @@ protected:
     // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
     // site with the just-declined MARKET reversal entry. Flags every pending
     // FULL close that was co-queued after it on the same bar against the held
-    // side (see source::request record::cancellation), releasing each close claim
+    // side (see the adapter cancellation receipt), releasing each close claim
     // exactly once.
 
     // round 8 family R / round 10 family AB: the 10-significant-digit
     // margin-call trigger on a margin-100 LONG (process_margin_call; rule
-    // and pins on tv_money_long_margin_call in engine_fills.cpp).
+    // and pins on tv_money_long_margin_call in the source adapter policy).
     // The POOC extension is called only before the close-time script or at
     // the specifically scoped positive-slip opening point, normally with no
     // pending broker orders. End-of-bar callers keep it disabled so a
@@ -2817,7 +2805,7 @@ protected:
     // replaced_dormant_out / replaced_dormant_stop_out (optional): whether a
     // cleared leg was a dormant bracket (finding-311) and the stop it was
     // last armed with — the re-issue inherits both (round 7 family M
-    // mechanism 2a, request record::dormant_reissue_pending).
+    // mechanism 2a, adapter fact `dormant_reissue_pending`).
 
 
 
@@ -3398,8 +3386,8 @@ public:
     // resting-order book after the most recent run() -- the book in force
     // for the next bar, in the vector's own (insertion) order; fill
     // priority is decided at fill time from created_seq. The C ABI
-    // (strategy_request_rosterlen / strategy_pending_order_get) copies
-    // each order out through the generated POD mirror
+    // (strategy_pending_orders_len / strategy_pending_order_get) copies
+    // each live request out through PendingIntentView's POD projection
     // (pf_pending_order_v1_t, include/pineforge/pending_order_mirror.hpp),
     // never by pointer. `i` must be in [0, pending_order_count()).
 
@@ -3408,8 +3396,8 @@ public:
     // runtime would otherwise have to re-derive. Pure const reads of the
     // engine's own sizing / admission / level-resolution predicates; none
     // of them mutates the engine, so a historical run is byte-identical
-    // whether or not a caller reads them. Implemented in engine_fills.cpp
-    // next to use_default_stop_placement_qty, the rules they mirror.
+    // whether or not a caller reads them. The source adapter derives the
+    // projection from native requests, live state, and placement facts.
     //
     // probe_fill_qty: the quantity the entry kernel would open if the
     // order at `index` filled at `fill_price`, and which sizing partition

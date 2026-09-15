@@ -540,6 +540,19 @@ list(REMOVE_ITEM TEST_SOURCES
     test_intraday_rollover_chart_tz
 )
 
+# L4d switched-route restoration twins. Keep the original L3A inventory
+# immutable: each restored witness has a separately named native-route TU.
+list(APPEND TEST_SOURCES
+    test_native_live_order_derived_l4d
+    test_native_live_pending_order_mirror_l4d
+    test_native_pending_order_v1_canary_l4d
+    test_native_source_fifo_endpoints_l4d
+    test_native_session_key_derivation_l4d
+    test_native_market_admission_projection_l4d
+    test_native_live_state_hash_l4d
+    test_native_oracle_reversal_f8_l4d
+)
+
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -575,7 +588,14 @@ add_test(
             --library $<TARGET_FILE:pineforge>
             --include ${PROJECT_SOURCE_DIR}/include
             --generated-include ${PROJECT_BINARY_DIR}/include
+            --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
+            --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
             ${_pf_script_cpp_abi_flags}
+)
+set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300)
+add_test(
+    NAME test_script_cpp_abi_tooling
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_script_cpp_abi.py
 )
 
 add_test(
@@ -642,6 +662,16 @@ add_test(NAME test_settlement_cpp_abi
 set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
+add_test(NAME test_aggregate_cpp_versions_runtime
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
+        --compiler ${CMAKE_CXX_COMPILER}
+        --library $<TARGET_FILE:pineforge>
+        --include ${PROJECT_SOURCE_DIR}/include
+        --generated-include ${PROJECT_BINARY_DIR}/include
+        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+        --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
+        ${_pf_script_cpp_abi_flags})
+set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300)
 
 add_test(
     NAME test_derive_corpus_feeds
@@ -783,31 +813,26 @@ foreach(test_name ${TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
-# R4-D L0 captures literal values from the ab9714be legacy source route in
-# dedicated translation units.  They intentionally live outside the ordinary
-# `tests/test_*.cpp` inventory so later lowering work cannot silently rewrite
-# a characterization test while porting a legacy fixture.
-set(ORACLE_TEST_SOURCES
-    test_oracle_deferred_birth
-    test_oracle_relative_exit
-    test_oracle_reversal_close_only
-    test_oracle_reversal_same_bar_tx
-    test_oracle_reversal_replaced_percent
-    test_oracle_reversal_later_tick
-    test_oracle_short_seed_percent
-    test_oracle_fx
-    test_oracle_coof
-    test_oracle_pooc_freeze
-    test_oracle_pooc_immediate
-    test_oracle_magnifier_distribution
-    test_oracle_day_key
-    test_oracle_frozen_size
-    test_oracle_deferred_any_witnesses
-    test_oracle_magnifier_barstate
-    test_oracle_more_than_64_fills
-)
-# The switched-route fixture twins include the frozen oracle source unchanged
-# and expose only adapter/native projections at its former owner-private seams.
+# Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
+# names while their executable twins make the switched route explicit.
+add_test(NAME test_live_order_derived COMMAND test_native_live_order_derived_l4d)
+add_test(NAME test_live_pending_order_mirror COMMAND test_native_live_pending_order_mirror_l4d)
+add_test(NAME test_pending_order_v1_canary COMMAND test_native_pending_order_v1_canary_l4d)
+add_test(NAME test_source_fifo_endpoints COMMAND test_native_source_fifo_endpoints_l4d)
+set_tests_properties(
+    test_native_live_order_derived_l4d
+    test_live_order_derived
+    test_native_live_pending_order_mirror_l4d
+    test_live_pending_order_mirror
+    test_native_source_fifo_endpoints_l4d
+    test_source_fifo_endpoints
+    test_native_market_admission_projection_l4d
+    test_native_oracle_reversal_f8_l4d
+    PROPERTIES LABELS l4-pending)
+
+# R4-D L0 carriers are included verbatim by their switched-route twin targets.
+# There is deliberately no ORACLE_TEST_SOURCES list: a source list that does
+# not build targets is not executable oracle coverage.
 add_test(NAME test_oracle_deferred_birth COMMAND test_native_oracle_deferred_birth_l2)
 add_test(NAME test_oracle_relative_exit COMMAND test_native_oracle_relative_exit_l2)
 add_test(NAME test_oracle_reversal_close_only COMMAND test_native_oracle_reversal_close_only_l2)
@@ -832,6 +857,10 @@ add_test(NAME test_oracle_short_seed
          COMMAND test_native_oracle_short_seed_full_l2)
 add_test(NAME test_oracle_stop_snapshot
          COMMAND test_native_oracle_stop_snapshot_full_l2)
+add_test(NAME test_oracle_twin_census
+         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_twin_census.py)
+add_test(NAME test_oracle_sha256_pin
+         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_sha256.py)
 
 target_compile_definitions(test_native_market_vertical PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")

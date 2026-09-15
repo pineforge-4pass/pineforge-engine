@@ -229,16 +229,12 @@ and must supply a literal operation payload. They are not stored, hashed, or
 reusable execution authority. Empty effects leave other settlement callers
 unchanged.
 
-Authorized pre-close events run first, then close observations and the existing
-flat unbind, then the listed pending removals, then `open_quoted_position`,
-which still binds only remaining exits. False removal lists do not replace or
-reallocate `pending_orders_`. Native settlement does not recognize source
-cases, rewrite supplied window/barrier facts, or install a callback/plan.
-Migrated frozen transactions and the
-final short-seed crossing settle their close/open effects in one native call.
-Production fill paths no longer use the old per-row close loops as a separate
-accounting owner. Historical private helpers remain for source compatibility and
-tests; they are not an alternate production execution path.
+Native requests settle through one owner. Source-specific placement and
+receipt facts remain in the adapter; they do not reintroduce a second pending
+book or a source-conditioned settlement path. Native settlement does not
+rewrite supplied window/barrier facts or install a callback/plan. Migrated
+frozen transactions and the final short-seed crossing settle their close/open
+effects in one native call.
 
 The shared close builder now consumes historical entry costs. This changes
 the former reconstruction that converted both commission legs at exit-time

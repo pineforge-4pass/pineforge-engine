@@ -1,23 +1,41 @@
-# R4-D L0 legacy-route oracles
+# R4-D L0 legacy-route oracle carriers
 
-Every `test_oracle_*.cpp` in this directory is a self-contained capture from
-engine `ab9714beccb62b796c122cf68986ec9e7dbf4a67`. Its header marks the
-capture SHA and its expected rows/quantities/bit values are literal source
-route facts. These are intentionally separate translation units: later
-adapter work must make them pass, never change the captured expectations.
+Every `test_oracle_*.cpp` here is the immutable literal capture from engine
+`ab9714beccb62b796c122cf68986ec9e7dbf4a67`. They are source files, not
+standalone CTest targets: each is included verbatim by the switched-route twin
+listed below. The CTest aliases named `test_oracle_*` execute those twins.
+`ORACLE_TEST_SOURCES` is intentionally absent from `tests/CMakeLists.txt` so a
+dead source list cannot be mistaken for executable coverage.
 
-| Oracle | Legacy fact frozen |
+| Frozen carrier | Executing native-route twin |
 |---|---|
-| `deferred_any`, `deferred_any_witnesses`, `fifo_cohort`, `deferred_birth`, `relative_exit` | Deferred ANY P-DA1…P-DA9, replacement growth, re-entry cohorts, no target, FIFO distinction, birth timing. |
-| `reversal`, `reversal_close_only`, `reversal_same_bar_tx`, `reversal_replaced_percent`, `reversal_later_tick` | Contract §3.3's ReverseTo, Flatten, Transact, Reduce, F7/F8 bit patterns, and reversal selector families. |
-| `short_seed`, `short_seed_percent` | Contract §3.4 ShortSeed books, codes, C-mirror observations and percentages. |
-| `fx` | G4–G6, 1x/4x/floor/leveraged FX/open-margin ordering. |
-| `coof`, `coof_first_open`, `more_than_64_fills` | First-open versus later cascade behavior, `UINT64_MAX` fill budget and a literal 65-fill sweep. |
-| `pooc_freeze`, `pooc_immediate`, `frozen_size`, `stop_snapshot` | POOC freeze versus `immediately=true`, frozen sizing and stop-placement predicates. |
-| `magnifier_distribution`, `magnifier_barstate` | `bar_magnifier=1` endpoint and volume-weighted corpus lanes, terminal-sub-bar barstate/history cadence. |
-| `day_key` | Script-bar/day-key and chart-timezone literal values. |
+| `coof` | `test_native_oracle_coof_l2` |
+| `day_key` | `test_native_oracle_day_key_l2` |
+| `deferred_any_witnesses` | `test_native_oracle_deferred_any_witnesses_l2` |
+| `deferred_birth` | `test_native_oracle_deferred_birth_l2` |
+| `frozen_size` | `test_native_oracle_frozen_size_full_l2` |
+| `fx` | `test_native_oracle_fx_l2` |
+| `magnifier_barstate` | `test_native_oracle_magnifier_barstate_l2` |
+| `magnifier_distribution` | `test_native_oracle_magnifier_distribution_l2` |
+| `more_than_64_fills` | `test_native_oracle_more_than_64_fills_l2` |
+| `pooc_freeze` | `test_native_oracle_pooc_freeze_l2` |
+| `pooc_immediate` | `test_native_oracle_pooc_immediate_l2` |
+| `relative_exit` | `test_native_oracle_relative_exit_l2` |
+| `reversal_close_only` | `test_native_oracle_reversal_close_only_l2` |
+| `reversal_later_tick` | `test_native_oracle_reversal_later_tick_l2` |
+| `reversal_replaced_percent` | `test_native_oracle_reversal_replaced_percent_l2` |
+| `reversal_same_bar_tx` | `test_native_oracle_reversal_same_bar_tx_l2` |
+| `short_seed` | `test_native_oracle_short_seed_full_l2` |
+| `short_seed_percent` | `test_native_oracle_short_seed_percent_full_l2` |
+| `stop_snapshot` | `test_native_oracle_stop_snapshot_full_l2` |
 
-The native-only precommit-cycle-overflow witness has no legacy-route analogue:
-the legacy route has no `NativePrecommitView`/candidate precommit boundary.
-It is recorded as an L1 native witness in the L0 report rather than invented
-as a source oracle.
+`scripts/check_oracle_twin_census.py` uses Python `re` to require one direct
+include per carrier and to pin the explicit `CHECK` census. It rejects a
+hand-copied twin body. `scripts/check_oracle_sha256.py` authenticates the
+complete `tests/oracle/` tree against `tests/oracle.sha256`; changing a frozen
+literal therefore requires an intentional pin update and review.
+
+The four owner-internal carriers deleted with the old book (`deferred_any`,
+`fifo_cohort`, `reversal`, and `coof_first_open`) have per-file coverage rows
+in the R4-D deletion ledger. Their public observable literals are carried by
+the executing twins above; no legacy owner is retained just to compile them.
