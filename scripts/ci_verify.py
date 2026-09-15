@@ -99,6 +99,7 @@ class VerifyConfig:
     require_websocket: bool
     runner: Runner
     stream_output: bool = True
+    exclude_label: str | None = None
 
 
 class Parser(argparse.ArgumentParser):
@@ -198,6 +199,8 @@ def parse_args(argv: list[str] | None, *, source: Path = ROOT) -> argparse.Names
                         help='require installed ccache and bind CMAKE_*_COMPILER_LAUNCHER')
     parser.add_argument('--require-websocket', action='store_true',
                         help='native only: execute test_native_live_websocket and refuse skip (77)')
+    parser.add_argument('--exclude-label', default=None,
+                        help='exclude one CTest label from this local verification run')
     args = parser.parse_args(argv)
     if args.build_dir is None:
         args.build_dir = default_build_dir(source, args.profile)
@@ -210,6 +213,11 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         raise ConfigError(f'--jobs must be {JOBS_MIN}..{JOBS_MAX}')
     if args.require_websocket and args.profile != 'native':
         raise ConfigError('--require-websocket is only valid with the native profile')
+    if args.exclude_label is not None:
+        label = args.exclude_label.strip()
+        if not label or any(not (char.isalnum() or char in '_.-') for char in label):
+            raise ConfigError('--exclude-label must be a simple CTest label')
+        args.exclude_label = label
     if args.curl_dir is not None and not args.curl_dir.is_dir():
         raise ConfigError(f'--curl-dir is not a directory: {args.curl_dir}')
     ccache_path = None
@@ -236,6 +244,7 @@ def validate_config(args: argparse.Namespace, *, source: Path = ROOT,
         ccache_path=ccache_path,
         require_websocket=bool(args.require_websocket),
         runner=default_runner,
+        exclude_label=args.exclude_label,
     )
 
 
@@ -744,6 +753,8 @@ class Driver:
         ctest_jobs = 1 if apple_asan else self.cfg.jobs
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
                  '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs)]
+        if self.cfg.exclude_label:
+            ctest += ['-LE', self.cfg.exclude_label]
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
         self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)

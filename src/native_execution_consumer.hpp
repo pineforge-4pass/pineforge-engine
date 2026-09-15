@@ -170,6 +170,13 @@ private:
         ObservedTicks = 2,
     };
 
+    enum class CallbackPhase : std::uint8_t {
+        None = 0,
+        PreOpen = 1,
+        Bar = 2,
+        Applied = 3,
+    };
+
     struct AppendDigest {
         uint64_t h = 1469598103934665603ULL;
         uint64_t count = 0;
@@ -296,6 +303,9 @@ private:
     void sync_history_digest() const noexcept;
     void fold_driver_digest(const NativeDriverPoint& point) const noexcept;
     void fold_account_digest(const NativeAccountObservation& row) const noexcept;
+    bool pre_open_birth_eligible(const native_order::RequestHandle&,
+                                 const NativeDriverPoint&) const noexcept;
+    void record_pre_open_birth(const native_order::Request&, const native_order::RequestHandle&);
 
     NativeLifecycle state_{NativeUnconfigured{}};
     uint64_t consumed_high_water_ = 0;
@@ -313,10 +323,14 @@ private:
     std::optional<NativeFxCurve> staged_fx_curve_;
     bool staged_ingress_fx_ = false;
     bool in_callback_ = false;
+    CallbackPhase callback_phase_ = CallbackPhase::None;
     bool preparing_begin_ = false;
     mutable bool consuming_request_ = false;
     bool draining_notifications_ = false;
     std::optional<CurrentExecutionFrame> current_frame_;
+    uint64_t pre_open_birth_point_ordinal_ = 0;
+    int64_t pre_open_birth_time_ms_ = 0;
+    std::vector<native_order::RequestHandle> pre_open_births_;
     std::vector<AppliedNotification> applied_notifications_;
     std::size_t notification_head_ = 0;
     bool processing_input_ = false;

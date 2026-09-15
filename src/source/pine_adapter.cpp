@@ -339,9 +339,12 @@ PineSizingSnapshot PineExecutionAdapter::sizing_snapshot() const {
     PineSizingSnapshot snapshot;
     const auto& host = require_host();
     if (const auto point = host.current_execution_point()) {
-        snapshot.price = point->price;
-        snapshot.mark = point->price;
-        snapshot.equity = percent_commission_live_equity(point->price);
+        // The source broker captures its signal tuple at the tick-built close,
+        // never at the raw sub-tick callback print.  Preserve that one basis
+        // for frozen sizing, money-band admission and the paired FX fact.
+        snapshot.mark = nearest_tick(point->price, staged_.syminfo.mintick);
+        snapshot.price = snapshot.mark;
+        snapshot.equity = percent_commission_live_equity(snapshot.mark);
     }
     snapshot.fx = staged_.account_fx;
     if (const auto point = host.current_execution_point())
@@ -621,9 +624,15 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         ? snapshot.sizing.equity : kNaN;
     snapshot.projection_explicit_signal_close = std::isfinite(snapshot.requested_qty)
         ? snapshot.sizing.price : kNaN;
-    snapshot.projection_affordability_equity = snapshot.sizing.equity;
-    snapshot.projection_affordability_signal_price = snapshot.sizing.price;
-    snapshot.projection_affordability_held_qty = std::abs(physical.signed_units);
+    if (snapshot.affordability_policy_active) {
+        snapshot.projection_affordability_equity = snapshot.sizing.equity;
+        snapshot.projection_affordability_signal_price = snapshot.sizing.price;
+        snapshot.projection_affordability_held_qty = std::abs(physical.signed_units);
+    } else {
+        snapshot.projection_affordability_equity = kNaN;
+        snapshot.projection_affordability_signal_price = kNaN;
+        snapshot.projection_affordability_held_qty = kNaN;
+    }
     if (const auto point = host.current_execution_point()) {
         snapshot.projection_created_bar = point->decision.coordinate.interval_index;
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
@@ -908,10 +917,9 @@ void PineExecutionAdapter::apply_fx_opening_margin_slice(
     opening.low = event.resolved_price;
     opening.close = event.resolved_price;
     opening.timestamp = context.sub_bar_open_ms;
-    // This opening-rate correction is a second P1-9 amendment item.  The
-    // native candidate path cannot observe the just-applied opening before the
-    // next bar; retain the legacy current point pending the requested generic
-    // P7d relocation (documented with its unchanged FX oracle below).
+    // A31(b): the generic applied callback keeps the same current coordinate
+    // live, so this just-observed opening correction settles before the next
+    // candidate without a source-specific execution path.
     submit_fx_margin_slice(opening, context, rate, true);
 }
 
@@ -1150,21 +1158,10 @@ void PineExecutionAdapter::flush_coof_tail() {
     auto queued = std::move(pending_coof_requests_);
     pending_coof_requests_.clear();
     for (auto& pending : queued) {
-        const bool execute_at_open = pending.opening
-            && std::holds_alternative<native_order::Market>(pending.request.trigger)
-            && std::holds_alternative<native_order::ImmediateRemaining>(pending.request.capacity)
-            && require_host().current_execution_point().has_value();
         const auto accepted = submit_or_replace(std::move(pending.request), std::move(pending.snapshot),
                                                 pending.opening, pending.replacement_key);
         if (accepted && pending.family_key != 0)
             bracket_families_[pending.family_key].push_back(*accepted);
-        // The generic next-open candidate retains the request's prior decision
-        // floor and refuses it as not-yet-born.  Preserve the legacy R2 open
-        // fill through the current point until the attached L4b amendment
-        // request can relocate this exact path into a generic P7d hook.
-        if (accepted && execute_at_open) {
-            (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
-        }
     }
 }
 
@@ -1237,7 +1234,16 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     // fill-time close-only shape without changing explicit F7/F8 transaction
     // intent.  Explicit affordability variants keep their established native
     // request shape unless a separately-qualified source family lowers them.
-    const bool affordability_reversal_candidate = reverses && !priced && default_sized;
+    const bool affordability_reversal_candidate = reverses && !priced
+        && (default_sized
+            ? (config_.default_qty_type == static_cast<int>(QtyType::FIXED)
+               || config_.default_qty_type == static_cast<int>(QtyType::CASH)
+               || (config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+                   && config_.default_qty_value > 100.0))
+            // The public explicit-affordability family is the fixed-default
+            // broker shape. Per-call explicit quantity under a percent
+            // default remains the replaced-percent transaction family.
+            : config_.default_qty_type == static_cast<int>(QtyType::FIXED));
     const bool direction_blocked = (risk_.direction > 0 && !is_long)
         || (risk_.direction < 0 && is_long);
     if (default_sized && reverses && current_point) {
@@ -1335,6 +1341,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     snapshot.exit_levels.limit = limit_price;
     snapshot.exit_levels.stop = stop_price;
     snapshot.reverse_to = reverses || paired_all_in_reentry; snapshot.sizing = sizing_snapshot();
+    if (default_sized && !priced && finite_positive(snapshot.sizing.mark)) {
+        const double slipped = snapshot.sizing.mark
+            + (is_long ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+        snapshot.sizing.price = nearest_tick(slipped, staged_.syminfo.mintick);
+        snapshot.sizing.equity = percent_commission_live_equity(snapshot.sizing.mark);
+    }
     const auto predecessor = live_by_source_key_.find(key_for(id));
     snapshot.replaced_opening = predecessor != live_by_source_key_.end();
     if (snapshot.replaced_opening) {
@@ -1416,6 +1428,37 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
         snapshot.sizing.at_fill = config_.calc_on_order_fills;
     }
+    // The TV money band is a source policy, not a generic margin rule.  Its
+    // all-in source tuple is judged at placement on ten-significant-digit
+    // money: a true-flat order is dropped, while a real reversal retains only
+    // its closing leg.  A later price-scale failure drops the whole command.
+    // This is the direct lowering of pine_fills.cpp:5054-5139 at ab9714be.
+    const double entry_margin = is_long ? config_.margin_long : config_.margin_short;
+    const bool tv_money_scope = default_sized && !priced
+        && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+        && std::abs(config_.default_qty_value - 100.0) < 1e-12
+        && std::abs(entry_margin - 100.0) < 1e-12
+        && staged_.quantity_grid && *staged_.quantity_grid > 0.0
+        && finite_positive(snapshot.sizing.frozen_units)
+        && finite_positive(snapshot.sizing.price)
+        && finite_positive(snapshot.sizing.equity)
+        && finite_positive(snapshot.sizing.fx)
+        && finite_positive(staged_.syminfo.pointvalue)
+        && (*staged_.quantity_grid * snapshot.sizing.price * staged_.syminfo.pointvalue
+            * snapshot.sizing.fx < 1.0);
+    if (tv_money_scope) {
+        const double notional_per_price = snapshot.sizing.frozen_units
+            * staged_.syminfo.pointvalue * snapshot.sizing.fx;
+        const double rounded_cost = source_money_round(notional_per_price * snapshot.sizing.price);
+        if (snapshot.sizing.equity + 1e-9 < rounded_cost) {
+            if (reverses) snapshot.affordability_close_only = true;
+            else return;
+        } else {
+            const double affordable_price = source_money_round(
+                source_money_round(snapshot.sizing.equity) / notional_per_price);
+            if (std::isfinite(affordable_price) && affordable_price < snapshot.sizing.price) return;
+        }
+    }
     // pine_strategy_commands.cpp:284-426 placement half.  A reversal whose
     // proposed opening cannot be funded retains a close-only source request;
     // flat/same-side rejection remains owned by their ordinary admission path.
@@ -1453,6 +1496,12 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             && std::isfinite(snapshot.sizing.equity)
             && required > snapshot.sizing.equity + epsilon) {
             snapshot.affordability_close_only = true;
+        } else if (!reverses && margin > 0.0
+                   && (!std::isfinite(required) || !std::isfinite(snapshot.sizing.equity)
+                       || required > snapshot.sizing.equity + epsilon)) {
+            // The same placement-time rule drops an unaffordable flat or
+            // same-side entry before it reaches the native request core.
+            return;
         }
     }
     if (default_stop_scope && finite_positive(snapshot.sizing.frozen_units)
@@ -2409,10 +2458,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     }
     double resolved = facts.default_resolved_price;
     const bool market_like = std::holds_alternative<native_order::Market>(facts.definition->request.trigger);
-    if (market_like && config_.slippage != 0 && finite_positive(staged_.syminfo.mintick)) {
-        resolved += facts.is_buy ? config_.slippage * staged_.syminfo.mintick
-                                 : -config_.slippage * staged_.syminfo.mintick;
-    }
+    // NativeRunSpec carries the generic slippage ticks, so its candidate
+    // default is already the one-slippage source fill. The adapter only owns
+    // the frozen source sizing basis; applying it again here would double-slip
+    // a market order after the on-tick calculation.
     if (market_like) result.resolved_price = nearest_tick(resolved, staged_.syminfo.mintick);
     // Source stop/trail exits crossed inside a modeled path settle at their
     // armed level, whereas an open gap retains the presented open quote.  The
@@ -2454,7 +2503,22 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         return result;
     }
-    if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill) {
+    if (source.family == PineOrderFamily::Entry && finite_positive(source.requested_qty)) {
+        if (source.qty_type == static_cast<int>(QtyType::CASH)) {
+            result.units = finite_positive(result.resolved_price)
+                ? source.requested_qty / (result.resolved_price * staged_.syminfo.pointvalue
+                                          * facts.active_fx) : 0.0;
+        } else if (source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
+            const double equity = require_host().native_marked_equity(result.resolved_price);
+            const double denominator = result.resolved_price * staged_.syminfo.pointvalue
+                * facts.active_fx;
+            result.units = finite_positive(equity) && finite_positive(denominator)
+                ? floor_quantity_grid(equity * source.requested_qty / 100.0 / denominator,
+                                      staged_.quantity_grid) : 0.0;
+        } else {
+            result.units = source.requested_qty;
+        }
+    } else if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill) {
         result.units = source.sizing.frozen_units;
     } else if (config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
         result.units = config_.default_qty_value;
@@ -2478,19 +2542,21 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const bool opposite = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
         bool affordability_close_only = source.affordability_close_only;
-        if (!affordability_close_only && source.affordability_policy_active && opposite
-            && finite_positive(source.projection_affordability_equity)
-            && finite_positive(source.projection_affordability_signal_price)) {
+        if (!affordability_close_only && source.affordability_policy_active && opposite) {
             const double margin = source.is_long ? config_.margin_long : config_.margin_short;
             const double own = result.units ? *result.units : 0.0;
             const double fill = nearest_tick(result.resolved_price, staged_.syminfo.mintick);
-            const double admit = std::max(source.projection_affordability_signal_price, fill);
-            const double required = (source.projection_affordability_held_qty + own) * admit
-                * staged_.syminfo.pointvalue * facts.active_fx * margin / 100.0;
+            const double required = own * fill * staged_.syminfo.pointvalue * facts.active_fx
+                * margin / 100.0;
+            // The source affordability tuple freezes its MTM equity at the
+            // signal. The entry's later gap changes the cost, not the
+            // carried-position mark; this is the NQ/rampatel close-only rule.
+            const double equity = finite_positive(source.sizing.equity)
+                ? source.sizing.equity : require_host().native_marked_equity(fill);
             const double epsilon = std::max(
-                1e-9, std::abs(source.projection_affordability_equity) * 1e-12);
+                1e-9, std::abs(equity) * 1e-12);
             affordability_close_only = margin > 0.0 && std::isfinite(required)
-                && required > source.projection_affordability_equity + epsilon;
+                && (!std::isfinite(equity) || required > equity + epsilon);
         }
         if (affordability_close_only) {
             if (!opposite) {
@@ -2571,6 +2637,32 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot == placement_.end()) return NativePrecommitVerdict::Refuse;
     const auto& source = snapshot->second;
+    if (source.family == PineOrderFamily::Entry && source.affordability_policy_active) {
+        const double margin_pct = source.is_long ? config_.margin_long : config_.margin_short;
+        const double fx = active_staged_fx(view.cursor.point.effective_time_ms);
+        const auto physical = require_host().physical_position();
+        const bool same_side = physical.signed_units != 0.0
+            && ((physical.signed_units > 0.0) == source.is_long);
+        const double units = same_side
+            ? std::abs(view.account.resulting_abs_notional)
+                / (view.resolved_price * staged_.syminfo.pointvalue * fx)
+            : std::abs(view.inspected_opened_units);
+        const double required = units * view.resolved_price * staged_.syminfo.pointvalue * fx
+            * margin_pct / 100.0;
+        // The placement tuple deliberately excludes the prospective opening
+        // commission. Use its source-time MTM equity for fixed/cash/explicit
+        // affordability instead of the native post-open projection.
+        const double equity = finite_positive(source.sizing.equity)
+            ? source.sizing.equity : view.account.marked_equity;
+        const double epsilon = std::max(1e-9, std::abs(equity) * 1e-12);
+        if (!(margin_pct > 0.0) || !std::isfinite(margin_pct)) {
+            return NativePrecommitVerdict::Proceed;
+        }
+        if (!std::isfinite(required) || !std::isfinite(equity) || required > equity + epsilon) {
+            return NativePrecommitVerdict::Refuse;
+        }
+        return NativePrecommitVerdict::Proceed;
+    }
     const bool variable_default = config_.default_qty_type != static_cast<int>(QtyType::FIXED);
     if (variable_default && !source.frozen_market_instruction && config_.pyramiding > 0
         && view.inspected_closed_units == 0.0
