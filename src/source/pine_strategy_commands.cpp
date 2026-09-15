@@ -99,6 +99,14 @@ void source::PineStrategyHost::strategy_entry(const std::string& id, bool is_lon
                                      const std::string& comment,
                                      const std::string& oca_name, int oca_type,
                                      int qty_type) {
+    adapter_.set_risk_direction(risk_direction_ == RiskDirection::LONG_ONLY ? 1
+        : risk_direction_ == RiskDirection::SHORT_ONLY ? -1 : 0);
+    adapter_.entry(id, is_long, limit_price, stop_price, qty, comment, oca_name,
+                   oca_type, qty_type);
+    return;
+
+    // L3a legacy body: compiled while no public begin can reach it. L3b
+    // removes this PendingOrder route after the switched-route sweep.
     guard_native_mutation("strategy_entry");
     auto command=begin_market_command(admission::CommandKind::Entry,id,is_long,qty,qty_type,
                                       limit_price,stop_price,oca_name,oca_type);
@@ -678,6 +686,9 @@ void source::PineStrategyHost::strategy_close(const std::string& id,
                                     const std::string& comment,
                                     double qty, double qty_percent,
                                     bool immediately) {
+    adapter_.close(id, comment, qty, qty_percent, immediately);
+    return;
+
     guard_native_mutation("strategy_close");
     strategy_close(id, comment, qty, qty_percent, immediately,
                    /*callsite_token=*/0);
@@ -688,6 +699,9 @@ void source::PineStrategyHost::strategy_close(const std::string& id,
                                     double qty, double qty_percent,
                                     bool immediately,
                                     uint64_t callsite_token) {
+    adapter_.close(id, comment, qty, qty_percent, immediately, callsite_token);
+    return;
+
     guard_native_mutation("strategy_close");
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
@@ -881,6 +895,9 @@ void source::PineStrategyHost::strategy_close(const std::string& id,
 }
 
 void source::PineStrategyHost::strategy_close_all() {
+    adapter_.close_all();
+    return;
+
     guard_native_mutation("strategy_close_all");
     strategy_close("");
 }
@@ -1632,6 +1649,11 @@ void source::PineStrategyHost::strategy_exit(const std::string& id, const std::s
                                     const std::string& comment,
                                     double qty, const std::string& oca_name,
                                     double profit_ticks, double loss_ticks) {
+    adapter_.exit(id, from_entry, limit_price, stop_price, trail_points, trail_offset,
+                  trail_price, qty_percent, comment, qty, oca_name, profit_ticks,
+                  loss_ticks);
+    return;
+
     guard_native_mutation("strategy_exit");
     if (!trading_is_active(current_bar_.timestamp, trade_start_time_, script_tf_seconds_)) return;
     if (intraday_loss_orders_blocked()) return;  // strategy.risk.max_intraday_loss fired today
@@ -2077,7 +2099,16 @@ void source::PineStrategyHost::strategy_exit(const std::string& id, const std::s
     }
 }
 
+void source::PineStrategyHost::strategy_exit_cancel_bracket(
+        const std::string& exit_id, const std::string& from_entry,
+        const std::string& comment) {
+    adapter_.exit_cancel_bracket(exit_id, from_entry, comment);
+}
+
 void source::PineStrategyHost::strategy_cancel(const std::string& id) {
+    adapter_.cancel(id);
+    return;
+
     guard_native_mutation("strategy_cancel");
     auto command=begin_market_command(admission::CommandKind::Cancel,id,false,
         std::numeric_limits<double>::quiet_NaN(),-1,
@@ -2100,6 +2131,9 @@ void source::PineStrategyHost::strategy_cancel(const std::string& id) {
 }
 
 void source::PineStrategyHost::strategy_cancel_all() {
+    adapter_.cancel_all();
+    return;
+
     guard_native_mutation("strategy_cancel_all");
     auto command=begin_market_command(admission::CommandKind::CancelAll,"",false,
         std::numeric_limits<double>::quiet_NaN(),-1,
@@ -2111,6 +2145,9 @@ void source::PineStrategyHost::strategy_cancel_all() {
 void source::PineStrategyHost::strategy_order(const std::string& id, bool is_long, double qty,
                                      double limit_price, double stop_price,
                                      const std::string& oca_name, int oca_type) {
+    adapter_.order(id, is_long, qty, limit_price, stop_price, oca_name, oca_type);
+    return;
+
     guard_native_mutation("strategy_order");
     auto command=begin_market_command(admission::CommandKind::Raw,id,is_long,qty,-1,
                                       limit_price,stop_price,oca_name,oca_type);

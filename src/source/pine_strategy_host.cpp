@@ -1,18 +1,157 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/timeframe.hpp>
 #include "../engine_internal.hpp"
+
+#include <cmath>
+#include <stdexcept>
+#include <utility>
 
 namespace pineforge {
 using namespace source;
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
-    : BacktestEngine(), adapter_(cap) {}
+    : NativeStrategyHost(), adapter_(*this, cap) {}
 
-void source::PineStrategyHost::on_bar(const Bar& bar) {
-    on_source_bar(bar);
+PineStrategyConfig source::PineStrategyHost::apply_overrides(
+        PineStrategyConfig config, const StrategyOverrides& overrides) {
+    if (!std::isnan(overrides.initial_capital)) config.initial_capital = overrides.initial_capital;
+    if (!std::isnan(overrides.commission_value)) config.commission_value = overrides.commission_value;
+    if (!std::isnan(overrides.default_qty_value)) config.default_qty_value = overrides.default_qty_value;
+    if (overrides.pyramiding >= 0) config.pyramiding = overrides.pyramiding;
+    if (overrides.slippage >= 0) config.slippage = overrides.slippage;
+    if (overrides.commission_type >= 0) config.commission_type = overrides.commission_type;
+    if (overrides.default_qty_type >= 0) config.default_qty_type = overrides.default_qty_type;
+    if (overrides.process_orders_on_close >= 0)
+        config.process_orders_on_close = overrides.process_orders_on_close != 0;
+    if (overrides.calc_on_order_fills >= 0)
+        config.calc_on_order_fills = overrides.calc_on_order_fills != 0;
+    if (overrides.close_entries_rule >= 0)
+        config.close_entries_rule_any = overrides.close_entries_rule != 0;
+    return config;
+}
+
+StagedConfiguration source::PineStrategyHost::staged_configuration() const {
+    StagedConfiguration staged;
+    staged.syminfo = syminfo_;
+    staged.syminfo.mintick = syminfo_mintick_;
+    staged.inputs = inputs_;
+    staged.chart_timezone = chart_timezone_;
+    staged.account_fx = account_currency_fx_;
+    staged.account_fx_effective_from_ms = account_currency_fx_timestamps_;
+    staged.account_fx_per_quote = account_currency_fx_rates_;
+    if (std::isfinite(qty_step_) && qty_step_ > 0.0) staged.quantity_grid = qty_step_;
+    return staged;
+}
+
+void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args) {
+    if (args.syminfo) {
+        syminfo_ = *args.syminfo;
+        syminfo_mintick_ = syminfo_.mintick;
+        if (std::isfinite(syminfo_.qty_step) && syminfo_.qty_step > 0.0)
+            qty_step_ = syminfo_.qty_step;
+    }
+    if (args.inputs) inputs_ = *args.inputs;
+
+    PineStrategyConfig effective = config_;
+    if (!source_configuration_captured_) {
+        effective.process_orders_on_close = process_orders_on_close_;
+        effective.calc_on_order_fills = calc_on_order_fills_;
+        effective.initial_capital = initial_capital_;
+        effective.default_qty_type = static_cast<int>(default_qty_type_);
+        effective.default_qty_value = default_qty_value_;
+        effective.pyramiding = pyramiding_;
+        effective.commission_value = commission_value_;
+        effective.commission_type = static_cast<int>(commission_type_);
+        effective.slippage = slippage_;
+        effective.margin_long = margin_long_;
+        effective.margin_short = margin_short_;
+        effective.close_entries_rule_any = close_entries_rule_any_;
+        effective.src_series_active = _src_series_active_;
+    }
+    if (args.overrides_opaque) {
+        const auto* overrides = static_cast<const StrategyOverrides*>(args.overrides_opaque);
+        effective = apply_overrides(effective, *overrides);
+    }
+    const StagedConfiguration staged = staged_configuration();
+    if (!staged.account_fx_effective_from_ms.empty() && effective.calc_on_order_fills)
+        throw std::logic_error(
+            "timestamped account-currency FX is not supported with calc_on_order_fills");
+    if (!staged.account_fx_effective_from_ms.empty() && args.bar_magnifier)
+        throw std::logic_error(
+            "timestamped account-currency FX is not supported with bar magnifier");
+
+    adapter_.reset_for_run();
+    adapter_.set_configuration(effective);
+    adapter_.set_staged_configuration(staged);
+    adapter_.set_margin_call_enabled(margin_call_enabled_);
+    scheduler_.capture_begin(args);
+    bar_magnifier_enabled_ = args.bar_magnifier;
+    diag_magnifier_sub_bars_processed_ = 0;
+    diag_magnifier_sample_ticks_processed_ = 0;
+    const NativeRunSpec spec = adapter_.project(effective, staged, args);
+    const auto setup = configure_native(spec);
+    if (setup.status != NativeSetupStatus::Applied)
+        throw std::logic_error("Pine native adapter failed to configure projected run spec");
+    config_ = effective;
+    source_configuration_captured_ = true;
+}
+
+void source::PineStrategyHost::on_native_run_begin() {
+    source_bar_index_ = -1;
+    source_last_bar_index_ = -1;
+    source_callback_count_ = 0;
+    scheduler_.run_begin(*this);
+}
+
+void source::PineStrategyHost::on_native_bar_open(
+        const Bar& bar, const NativeDecisionContext& context) {
+    bar_magnifier_enabled_ = context.driver_statistics.intrabar_path_enabled;
+    diag_magnifier_sub_bars_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sub_bars_processed);
+    diag_magnifier_sample_ticks_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sample_ticks_processed);
+    adapter_.on_bar_open(bar, context);
+    scheduler_.bar_open(bar, context, *this);
+}
+
+void source::PineStrategyHost::on_native_bar(
+        const Bar& bar, const NativeDecisionContext& context) {
+    bar_magnifier_enabled_ = context.driver_statistics.intrabar_path_enabled;
+    diag_magnifier_sub_bars_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sub_bars_processed);
+    diag_magnifier_sample_ticks_processed_ = static_cast<std::int64_t>(
+        context.driver_statistics.sample_ticks_processed);
+    adapter_.observe_terminal_receipts();
+    scheduler_.bar(bar, context, *this);
+}
+
+void source::PineStrategyHost::on_native_applied(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    adapter_.on_applied(event, context);
+    project_short_seed_report_rows(event);
+    scheduler_.applied(event, context, *this);
+    if (scheduler_.terminal_source_bar()) {
+        const Bar terminal = scheduler_.current_script_bar()
+            ? *scheduler_.current_script_bar() : current_bar_;
+        scheduler_record_range_end(terminal);
+    }
+}
+
+native_order::ExecutionTerms source::PineStrategyHost::resolve_execution_terms(
+        const NativeExecutionTermsFacts& facts) const {
+    return adapter_.resolve_terms(facts);
+}
+
+NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
+        const NativePrecommitView& view) const {
+    return adapter_.validate_precommit(view);
 }
 
 void source::PineStrategyHost::configure_pine_strategy(
         const PineStrategyConfig& config) {
+    guard_native_mutation("configure_pine_strategy");
+    config_ = config;
     process_orders_on_close_ = config.process_orders_on_close;
     calc_on_order_fills_ = config.calc_on_order_fills;
     initial_capital_ = config.initial_capital;
@@ -26,76 +165,71 @@ void source::PineStrategyHost::configure_pine_strategy(
     margin_short_ = config.margin_short;
     close_entries_rule_any_ = config.close_entries_rule_any;
     _src_series_active_ = config.src_series_active;
+    adapter_.set_configuration(config_);
+    source_configuration_captured_ = true;
 }
 
 void source::PineStrategyHost::set_strategy_override(
         const StrategyOverrides& overrides) {
-    if (!std::isnan(overrides.initial_capital)) initial_capital_ = overrides.initial_capital;
-    if (overrides.pyramiding >= 0) pyramiding_ = overrides.pyramiding;
-    if (overrides.slippage >= 0) slippage_ = overrides.slippage;
-    if (!std::isnan(overrides.commission_value)) commission_value_ = overrides.commission_value;
-    if (overrides.commission_type >= 0)
-        commission_type_ = static_cast<CommissionType>(overrides.commission_type);
-    if (!std::isnan(overrides.default_qty_value))
-        default_qty_value_ = overrides.default_qty_value;
-    if (overrides.default_qty_type >= 0)
-        default_qty_type_ = static_cast<QtyType>(overrides.default_qty_type);
-    if (overrides.process_orders_on_close >= 0)
-        process_orders_on_close_ = overrides.process_orders_on_close != 0;
-    if (overrides.calc_on_order_fills >= 0)
-        calc_on_order_fills_ = overrides.calc_on_order_fills != 0;
-    if (overrides.close_entries_rule >= 0)
-        close_entries_rule_any_ = overrides.close_entries_rule != 0;
+    guard_native_mutation("set_strategy_override");
+    override_ = overrides;
+    config_ = apply_overrides(config_, override_);
+    process_orders_on_close_ = config_.process_orders_on_close;
+    calc_on_order_fills_ = config_.calc_on_order_fills;
+    initial_capital_ = config_.initial_capital;
+    default_qty_type_ = static_cast<QtyType>(config_.default_qty_type);
+    default_qty_value_ = config_.default_qty_value;
+    pyramiding_ = config_.pyramiding;
+    commission_value_ = config_.commission_value;
+    commission_type_ = static_cast<CommissionType>(config_.commission_type);
+    slippage_ = config_.slippage;
+    close_entries_rule_any_ = config_.close_entries_rule_any;
+    adapter_.set_configuration(config_);
+    source_configuration_captured_ = true;
 }
 
 void source::PineStrategyHost::set_pine_risk_direction(int direction) {
-    risk_direction_ = direction > 0
-        ? RiskDirection::LONG_ONLY
-        : (direction < 0 ? RiskDirection::SHORT_ONLY : RiskDirection::BOTH);
+    risk_direction_ = direction > 0 ? RiskDirection::LONG_ONLY
+        : direction < 0 ? RiskDirection::SHORT_ONLY : RiskDirection::BOTH;
+    adapter_.set_risk_direction(direction);
 }
-
 void source::PineStrategyHost::set_pine_risk_max_cons_loss_days(int value) {
     risk_max_cons_loss_days_ = value;
+    adapter_.set_risk_max_cons_loss_days(value);
 }
-
-void source::PineStrategyHost::set_pine_risk_max_drawdown(
-        double value, bool percent) {
+void source::PineStrategyHost::set_pine_risk_max_drawdown(double value, bool percent) {
     risk_max_drawdown_ = value;
     if (percent) risk_max_drawdown_is_pct_ = true;
+    adapter_.set_risk_max_drawdown(value, percent);
 }
-
-void source::PineStrategyHost::set_pine_risk_max_intraday_loss(
-        double value, bool percent) {
+void source::PineStrategyHost::set_pine_risk_max_intraday_loss(double value, bool percent) {
     risk_max_intraday_loss_ = value;
     if (percent) risk_max_intraday_loss_is_pct_ = true;
+    adapter_.set_risk_max_intraday_loss(value, percent);
 }
-
 void source::PineStrategyHost::set_pine_risk_max_intraday_filled_orders(int limit) {
     adapter_.cap = limit;
 }
-
 void source::PineStrategyHost::set_pine_risk_max_position_size(double value) {
     risk_max_position_size_ = value;
+    adapter_.set_risk_max_position_size(value);
 }
 
-int source::PineStrategyHost::pine_bar_index() const {
-    return bar_index_ + bar_index_offset_;
+int source::PineStrategyHost::pine_bar_index() const { return source_bar_index_; }
+int source::PineStrategyHost::pine_last_bar_index() const { return source_last_bar_index_; }
+bool source::PineStrategyHost::is_first_tick() const noexcept { return scheduler_.is_first_tick(); }
+bool source::PineStrategyHost::is_last_tick() const noexcept { return scheduler_.is_last_tick(); }
+bool source::PineStrategyHost::history_advances_new_bar() const noexcept {
+    return scheduler_.history_advances_new_bar();
 }
-
-int source::PineStrategyHost::pine_last_bar_index() const {
-    return last_bar_index_ + bar_index_offset_;
+bool source::PineStrategyHost::security_series_slot_is_new(int slot) const noexcept {
+    return scheduler_.security_series_slot_is_new(slot);
 }
-
-bool source::PineStrategyHost::history_advances_new_bar() const {
-    return is_first_tick_ && history_slot_is_new_;
-}
-
 double source::PineStrategyHost::prev_chart_close() const {
-    return prev_chart_close_;
+    return scheduler_.previous_chart_close();
 }
-
 int source::PineStrategyHost::last_bar_dual_entry_path() const {
-    return static_cast<int>(last_bar_dual_entry_decision_);
+    return adapter_.pending_intent_view().last_bar_dual_entry_path();
 }
 
 void source::PineStrategyHost::_push_source_series() {
@@ -275,11 +409,11 @@ void source::PineStrategyHost::on_source_open_position_booked(
 }
 
 double source::PineStrategyHost::live_position_size() const {
-    return signed_position_size();
+    return physical_position().signed_units;
 }
 
 int source::PineStrategyHost::pending_order_count() const {
-    return static_cast<int>(pending_orders_.size());
+    return pending_intent_view().size();
 }
 
 const MarketAdmissionJournal& source::PineStrategyHost::market_admission_journal() const {
@@ -295,14 +429,11 @@ const source::PendingOrder& source::PineStrategyHost::pending_order_at(int i) co
 }
 
 void source::PineStrategyHost::enable_pine_intraday_cap() {
-    guard_native_mutation("enable_pine_intraday_cap");
-    adapter_.cap.attach();
+    adapter_.enable_intraday_cap();
 }
 
 void source::PineStrategyHost::attach_pine_execution_adapter() {
-    guard_native_mutation("attach_pine_execution_adapter");
-    adapter_.cap.attach();
-    adapter_.priority.attach();
+    adapter_.attach_execution_adapter();
 }
 
 void source::PineStrategyHost::set_syminfo_metadata(
@@ -344,38 +475,192 @@ void source::PineStrategyHost::set_syminfo_metadata(
 }
 
 int source::PineStrategyHost::observe_last_bar_dual_entry_path_v1() const {
-    return static_cast<int>(last_bar_dual_entry_decision_);
+    return pending_intent_view().last_bar_dual_entry_path();
 }
 
 int source::PineStrategyHost::observe_pending_count_v1() const {
-    return static_cast<int>(pending_orders_.size());
+    return pending_intent_view().size();
 }
 
 int source::PineStrategyHost::observe_pending_copy_v1(
         int index, pf_pending_order_v1_t* out) const {
-    if (!out || index < 0 || index >= static_cast<int>(pending_orders_.size())) return -1;
-    fill_pending_order_mirror(pending_orders_[static_cast<size_t>(index)],
-                              &adapter_.admission_journal, out);
-    return 0;
+    return pending_intent_view().copy_v1(index, out);
 }
 
 int source::PineStrategyHost::observe_probe_fill_qty(
         int index, double fill_price, double* qty, int* close_only,
         int* partition) const {
-    return probe_fill_qty(index, fill_price, qty, close_only, partition);
+    return pending_intent_view().probe_fill_qty(index, fill_price, qty, close_only,
+                                                partition);
 }
 
 int source::PineStrategyHost::observe_pending_level_resolved(int index) const {
-    return pending_order_level_resolved(index);
+    return pending_intent_view().level_resolved(index);
 }
 
 int source::PineStrategyHost::observe_pending_effective_levels(
         int index, double* stop, double* limit, double* trail_activation) const {
-    return pending_order_effective_levels(index, stop, limit, trail_activation);
+    return pending_intent_view().effective_levels(index, stop, limit, trail_activation);
 }
 
 double source::PineStrategyHost::observe_trail_best_price_v1() const {
-    return trail_best_price_;
+    return adapter_.pending_intent_view().trail_best_price();
+}
+
+const PendingIntentView& source::PineStrategyHost::pending_intent_view() const noexcept {
+    return adapter_.pending_intent_view();
+}
+
+int source::PineStrategyHost::short_seed_collision_role_v1(
+        native_order::RequestHandle handle) const noexcept {
+    return adapter_.short_seed_collision_role_v1(std::move(handle));
+}
+
+const std::vector<source::PineStrategyHost::FixturePendingOrder>&
+source::PineStrategyHost::source_pending_view() const {
+    source_pending_view_cache_.clear();
+    source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
+        + adapter_.source_shadow_pending_.size() + adapter_.live_handles_.size());
+    const auto append = [&](const PlacementSnapshot& snapshot, const std::string& label) {
+        FixturePendingOrderType type = FixturePendingOrderType::MARKET;
+        switch (snapshot.family) {
+        case PineOrderFamily::Close:
+        case PineOrderFamily::CloseAll:
+        case PineOrderFamily::ExitLimit:
+        case PineOrderFamily::ExitStop:
+        case PineOrderFamily::ExitTrail:
+        case PineOrderFamily::Margin:
+            type = FixturePendingOrderType::EXIT;
+            break;
+        case PineOrderFamily::Order:
+            type = FixturePendingOrderType::RAW_ORDER;
+            break;
+        case PineOrderFamily::Entry:
+            type = FixturePendingOrderType::MARKET;
+            break;
+        }
+        const std::string& id = snapshot.frozen_market_targeted_close ? label : snapshot.source_id;
+        source_pending_view_cache_.push_back({id, type,
+            snapshot.sizing.frozen_units, snapshot.sizing.price});
+    };
+    for (const auto& command : adapter_.pending_same_bar_commands_)
+        append(command.snapshot, command.request.label);
+    for (const auto& shadow : adapter_.source_shadow_pending_)
+        append(shadow.snapshot, shadow.label);
+    for (const auto& handle : adapter_.live_handles_) {
+        const auto found = adapter_.placement_.find(handle.incarnation);
+        if (found != adapter_.placement_.end()) append(found->second, found->second.source_id);
+    }
+    return source_pending_view_cache_;
+}
+
+void source::PineStrategyHost::project_short_seed_report_rows(
+        const native_order::ExecutionAppliedEvent& event) {
+    auto& plan = adapter_.short_seed_;
+    if (!plan.report_swap_pending || event.closed_trade_count == 0
+        || event.handle() == plan.final_short) {
+        return;
+    }
+    const auto placement = adapter_.placement_.find(event.handle().incarnation);
+    if (placement == adapter_.placement_.end()
+        || placement->second.family != PineOrderFamily::Close
+        || placement->second.from_entry != "Short") {
+        return;
+    }
+    for (auto& trade : trades_) {
+        if (trade.entry_incarnation == plan.materialize_long.incarnation
+            && trade.entry_id == "__close__Short") {
+            trade.entry_incarnation = plan.final_short.incarnation;
+        }
+    }
+    const std::size_t begin = event.first_trade_index;
+    const std::size_t end = begin + event.closed_trade_count;
+    for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
+        if (trades_[index].entry_incarnation == plan.final_short.incarnation
+            && trades_[index].entry_id == "Short") {
+            trades_[index].entry_incarnation = plan.materialize_long.incarnation;
+        }
+    }
+    plan.report_swap_pending = false;
+}
+
+void source::PineStrategyHost::scheduler_prepare_script_run(
+        const std::vector<Bar>& bars, bool static_eligible, int expected_script_bars) {
+    if (const auto state = native_state(); state.spec && !state.spec->timeframe_undetected) {
+        input_tf_ = state.spec->input_tf;
+        script_tf_ = state.spec->script_tf;
+        script_tf_seconds_ = tf_to_seconds(script_tf_);
+    }
+    prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
+                       static_eligible);
+    source_last_bar_index_ = expected_script_bars - 1;
+}
+
+void source::PineStrategyHost::scheduler_configure_security_evaluators() {
+    configure_security_evaluators();
+}
+
+void source::PineStrategyHost::scheduler_prepare_chart_day_partition(
+        const std::vector<Bar>& bars) {
+    prepare_chart_day_partition(bars.empty() ? nullptr : bars.data(),
+                                static_cast<int>(bars.size()));
+}
+
+void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
+    range_end_trades_.clear();
+    if (stream_warmup_mode_ || position_side_ == PositionSide::FLAT || equity_curve_.empty()
+        || !std::isfinite(terminal_bar.close)) return;
+    const Bar saved = current_bar_;
+    current_bar_ = terminal_bar;
+    const bool was_long = position_side_ == PositionSide::LONG;
+    const double fill_price = bar_fill_price(current_bar_.close);
+    const auto saved_timestamp = current_bar_.timestamp;
+    current_bar_.timestamp = equity_curve_.back().time_ms;
+    double range_end_pnl = 0.0;
+    for (const auto& lot : pyramid_entries_) {
+        execution::PhysicalExecutionContext context;
+        context.effective_time_ms = current_bar_.timestamp;
+        context.interval_index = bar_index_;
+        context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+        if (!std::isnan(fold_exit_trail_peak_))
+            context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+        Trade row = build_close_trade_with_costs(
+            lot, lot.qty, fill_price, was_long,
+            allocated_entry_commission(lot, lot.qty), calc_commission(fill_price, lot.qty),
+            context);
+        row.open_at_end = true;
+        range_end_pnl += row.pnl;
+        range_end_trades_.push_back(std::move(row));
+    }
+    current_bar_.timestamp = saved_timestamp;
+    auto& last = equity_curve_.back();
+    last.open_profit = 0.0;
+    last.equity = initial_capital_ + net_profit_sum_ + range_end_pnl;
+    max_equity_ = initial_capital_;
+    min_equity_ = initial_capital_;
+    max_drawdown_ = 0.0;
+    max_runup_ = 0.0;
+    for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+    current_bar_ = saved;
+}
+
+void source::PineStrategyHost::scheduler_publish_source_bar(
+        const Bar& bar, bool, bool advance_source_index) {
+    current_bar_ = bar;
+    if (advance_source_index) ++source_bar_index_;
+    ++source_callback_count_;
+    bar_index_ = source_bar_index_;
+    barstate_islast_ = source_bar_index_ == source_last_bar_index_;
+    NativeDayPartitionScope chart_day_partition(
+        chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
+    on_source_bar(bar);
+    adapter_.flush_pending_entries();
+    adapter_.flush_pending_bracket_legs();
+    if (advance_source_index) {
+        update_equity_extremes();
+        record_equity_point(bar.timestamp);
+        prev_bar_timestamp_ = bar.timestamp;
+    }
 }
 
 } // namespace pineforge

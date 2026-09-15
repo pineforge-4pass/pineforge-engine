@@ -1343,6 +1343,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     engine.reset_run_state();
+    engine.diag_input_bars_processed_ = 0;
+    engine.diag_script_bars_processed_ = 0;
     requests_.reset(spec.identity);
     next_timeline_ordinal_ = 1;
     decision_floor_ms_ = initial_floor_ms;
@@ -3743,6 +3745,7 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
         }
         return;
     }
+    ++engine.diag_script_bars_processed_;
     finish_callback(engine, coordinate.ordinal);
 }
 
@@ -4137,6 +4140,8 @@ bool NativeExecutionConsumer::contribute_input(
     engine.current_bar_ = bar;
     engine.bar_index_ = index;
     next_interval_index_ = index + 1;
+    if (!failed() && kind != InputContribution::QuietCarried)
+        ++engine.diag_input_bars_processed_;
     return !failed();
 }
 

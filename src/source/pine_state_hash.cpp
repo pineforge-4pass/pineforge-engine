@@ -13,7 +13,11 @@ void hash_source_series(BrokerStateHashSink& f, const Series<double>& series) {
 
 } // namespace
 
-void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) const {
+// L3a keeps the legacy owner bodies compiled for the L3b deletion pass, but
+// no switched host may fold their stale PendingOrder state into a broker hash.
+// The v2 adapter+scheduler hash below is the live source extension.
+#if 0
+void source::PineStrategyHost::hash_legacy_source_extension_unused(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
 
     f.u(cycle_filled_entry_ids_.size());
@@ -316,6 +320,7 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.d(coof_checkpoint_prev_chart_close_);
     f.d(coof_checkpoint_last_chart_close_);
 }
+#endif
 
 namespace {
 
@@ -576,8 +581,8 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(expected_source_bars_); f.u(applied_cursor_); f.i(coof_callback_script_open_);
 }
 
-void source::PineNativeHost::hash_source_extension(BrokerStateHashSink& f) const {
-    f.s("pineforge-source-native-fixture/v2");
+void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) const {
+    f.s(kSourceAdapterDomain);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);

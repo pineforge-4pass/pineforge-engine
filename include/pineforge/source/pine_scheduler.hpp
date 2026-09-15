@@ -11,7 +11,7 @@
 
 namespace pineforge::source {
 
-class PineNativeHost;
+class PineStrategyHost;
 
 // Source cadence over generic native callbacks. The driver remains the sole
 // owner of matching; this class owns only language publication, retained begin
@@ -19,11 +19,11 @@ class PineNativeHost;
 class PineScheduler {
 public:
     void capture_begin(const NativeBeginArgs&);
-    void run_begin(PineNativeHost&);
-    void bar_open(const Bar&, const NativeDecisionContext&, PineNativeHost&);
-    void bar(const Bar&, const NativeDecisionContext&, PineNativeHost&);
+    void run_begin(PineStrategyHost&);
+    void bar_open(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
+    void bar(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
     void applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&,
-                 PineNativeHost&);
+                 PineStrategyHost&);
 
     bool is_first_tick() const noexcept { return language_.is_first_tick_; }
     bool is_last_tick() const noexcept { return language_.is_last_tick_; }

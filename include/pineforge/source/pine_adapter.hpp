@@ -22,7 +22,7 @@ namespace pineforge::source {
 // kernel-owned identifier type.
 using SourceId = std::string;
 
-class PineNativeHost;
+class PineStrategyHost;
 
 inline constexpr char kSourceAdapterDomain[] = "pineforge-source-adapter/v2";
 
@@ -55,7 +55,7 @@ struct StrategyOverrides {
     int close_entries_rule = -1;
 };
 
-// Value snapshot supplied by PineNativeHost at the begin boundary. It owns
+// Value snapshot supplied by PineStrategyHost at the begin boundary. It owns
 // every source-side value the adapter needs to form a run spec; none of these
 // values are retained by generic native code.
 struct StagedConfiguration {
@@ -186,6 +186,7 @@ public:
     int level_resolved(int index) const noexcept;
     int effective_levels(int index, double* stop, double* limit,
                          double* trail_activation) const noexcept;
+    int copy_v1(int index, pf_pending_order_v1_t* out) const noexcept;
     int short_seed_collision_role(int index) const noexcept;
     int last_bar_dual_entry_path() const noexcept;
     double trail_best_price() const noexcept;
@@ -292,7 +293,7 @@ public:
 
 private:
     friend class PendingIntentView;
-    friend class PineNativeHost;
+    friend class PineStrategyHost;
     struct CohortFacts {
         native_order::CohortHandle handle{};
         std::vector<native_order::RequestHandle> origins;

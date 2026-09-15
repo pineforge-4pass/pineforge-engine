@@ -1,10 +1,11 @@
 #pragma once
 
-#include <pineforge/engine.hpp>
+#include <pineforge/native_host.hpp>
 #include <pineforge/session_time.hpp>
 #include <pineforge/source/pine_language_state.hpp>
 #include <pineforge/source/pine_pending_intent.hpp>
 #include <pineforge/source/pine_adapter.hpp>
+#include <pineforge/source/pine_scheduler.hpp>
 #include <pineforge/source/pine_policy_support.hpp>
 #include <pineforge/compat/pine/intraday_cap.hpp>
 
@@ -13,6 +14,9 @@
 // surface; the generic engine header remains source-free.
 #define PINEFORGE_HAS_EXPLICIT_PINE_CAP_V1 1
 #define PINEFORGE_HAS_EXPLICIT_PINE_EXECUTION_ADAPTER_V1 1
+// W5-generated strategy translation units require the switched native
+// lowering surface.  There is intentionally no legacy fallback.
+#define PINEFORGE_HAS_NATIVE_LOWERING_V1 1
 
 namespace pineforge {
 
@@ -26,14 +30,26 @@ void fill_pending_order_mirror(const source::PendingOrder& src,
 
 namespace pineforge::source {
 
-// Intermediate source-layer host. The remaining source ownership surface is
-// filled in by the R4-C L2 transfer (contract sections 3.1 and 7).
-class PineStrategyHost : public BacktestEngine, protected PineLanguageState {
+// Live source host after L3a.  The source language layer owns lowering and
+// callback cadence, while NativeExecutionConsumer remains the only matching
+// and settlement owner.  The legacy declarations retained below are compiled
+// solely for the L3b deletion landing; no public begin can select their route.
+class PineStrategyHost : public NativeStrategyHost, protected PineLanguageState {
 public:
     explicit PineStrategyHost(
             compat::pine::CapAttachment cap = compat::pine::CapAttachment::None);
 
-    void on_bar(const Bar& bar) final;
+    void prepare_native_begin(const NativeBeginArgs&) final;
+    void on_native_run_begin() final;
+    void on_native_bar_open(const Bar&, const NativeDecisionContext&) final;
+    void on_native_bar(const Bar&, const NativeDecisionContext&) final;
+    void on_native_applied(const native_order::ExecutionAppliedEvent&,
+                           const NativeDecisionContext&) final;
+    native_order::ExecutionTerms resolve_execution_terms(
+        const NativeExecutionTermsFacts&) const final;
+    NativePrecommitVerdict validate_execution_precommit(
+        const NativePrecommitView&) const final;
+
     virtual void on_source_bar(const Bar& bar) = 0;
     void configure_pine_strategy(const PineStrategyConfig& config);
     void set_strategy_override(const StrategyOverrides& overrides);
@@ -71,6 +87,9 @@ public:
                        const std::string& oca_name = "",
                        double profit_ticks = std::numeric_limits<double>::quiet_NaN(),
                        double loss_ticks = std::numeric_limits<double>::quiet_NaN());
+    void strategy_exit_cancel_bracket(const std::string& exit_id,
+                                      const std::string& from_entry,
+                                      const std::string& comment = "");
     void strategy_cancel(const std::string& id);
     void strategy_cancel_all();
     void strategy_order(const std::string& id, bool is_long, double qty,
@@ -82,6 +101,10 @@ public:
     int pine_bar_index() const;
     int pine_last_bar_index() const;
     double prev_chart_close() const;
+    bool is_first_tick() const noexcept;
+    bool is_last_tick() const noexcept;
+    bool history_advances_new_bar() const noexcept;
+    bool security_series_slot_is_new(int slot) const noexcept;
     int last_bar_dual_entry_path() const;
     double live_position_size() const override;
     int pending_order_count() const;
@@ -95,6 +118,8 @@ public:
     int pending_order_effective_levels(int index, double* stop,
                                        double* limit,
                                        double* trail_activation) const;
+    const PendingIntentView& pending_intent_view() const noexcept;
+    int short_seed_collision_role_v1(native_order::RequestHandle handle) const noexcept;
     void enable_pine_intraday_cap();
     void attach_pine_execution_adapter();
     void set_syminfo_metadata(const std::string& key, double value) override;
@@ -114,7 +139,58 @@ public:
                                          double* trail_activation) const override;
     double observe_trail_best_price_v1() const override;
 
+public:
+    // @fixture-facade begin
+    // These read-only shapes keep the exact L2 oracle twins buildable.  They
+    // derive from adapter facts and are never consulted by product lowering.
+    enum class FixturePendingOrderType { MARKET, EXIT, ENTRY, RAW_ORDER };
+    struct FixturePendingOrder {
+        std::string id;
+        FixturePendingOrderType type = FixturePendingOrderType::MARKET;
+        double default_stop_placement_qty = std::numeric_limits<double>::quiet_NaN();
+        double default_stop_sizing_price = std::numeric_limits<double>::quiet_NaN();
+    };
+
 protected:
+    class SourceIdLedgerView {
+    public:
+        struct value_type { double second = 0.0; };
+        class const_iterator {
+        public:
+            const value_type* operator->() const noexcept { return &value_; }
+            bool operator==(const const_iterator& other) const noexcept {
+                return present_ == other.present_;
+            }
+            bool operator!=(const const_iterator& other) const noexcept {
+                return !(*this == other);
+            }
+        private:
+            friend class SourceIdLedgerView;
+            bool present_ = false;
+            value_type value_{};
+        };
+
+        const_iterator find(const std::string& id) const noexcept {
+            const double units = host_ ? host_->adapter_.source_unclosed_qty_for(id) : 0.0;
+            const_iterator result;
+            result.present_ = units > 0.0;
+            result.value_.second = units;
+            return result;
+        }
+        const_iterator end() const noexcept { return {}; }
+
+    private:
+        friend class PineStrategyHost;
+        explicit SourceIdLedgerView(const PineStrategyHost* host) noexcept : host_(host) {}
+        const PineStrategyHost* host_ = nullptr;
+    };
+
+    SourceIdLedgerView source_id_ledger_view() const noexcept {
+        return SourceIdLedgerView(this);
+    }
+    const std::vector<FixturePendingOrder>& source_pending_view() const;
+    // @fixture-facade end
+
     // @source-state begin
     PineExecutionAdapter adapter_;
     using PineLanguageState::pos_view_freeze_bar_;
@@ -255,7 +331,38 @@ protected:
 #endif
     // @source-state end
 
-    bool history_advances_new_bar() const;
+    // @native-lowering-state begin
+    PineStrategyConfig config_{};
+    StrategyOverrides override_{};
+    PineScheduler scheduler_{};
+    int source_bar_index_ = -1;
+    int source_last_bar_index_ = -1;
+    std::uint64_t source_callback_count_ = 0;
+    bool source_configuration_captured_ = false;
+    // @native-lowering-state end
+
+private:
+    friend class PineScheduler;
+
+    StagedConfiguration staged_configuration() const;
+    static PineStrategyConfig apply_overrides(PineStrategyConfig,
+                                              const StrategyOverrides&);
+    void scheduler_prepare_script_run(const std::vector<Bar>& bars,
+                                      bool static_eligible,
+                                      int expected_script_bars);
+    void scheduler_configure_security_evaluators();
+    void scheduler_prepare_chart_day_partition(const std::vector<Bar>& bars);
+    void scheduler_record_range_end(const Bar&);
+    void scheduler_publish_source_bar(const Bar&, bool first_tick,
+                                      bool advance_source_index = true);
+    void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
+    bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
+
+    // @fixture-facade begin
+    mutable std::vector<FixturePendingOrder> source_pending_view_cache_;
+    // @fixture-facade end
+
+protected:
     void hash_source_extension(BrokerStateHashSink&) const override;
     void _push_source_series();
     Bar broker_trigger_bar(const Bar& bar) const;
@@ -267,25 +374,25 @@ protected:
     double signed_position_size() const;
     void freeze_script_position_view();
     void clear_script_position_view();
-    void reset_source_pending_book();
-    void reset_source_order_and_close_state();
-    void reset_source_risk_and_cap();
-    void reset_source_margin_and_coof();
-    void reset_source_bar_projections();
-    void reset_source_language_series();
+    void reset_source_pending_book() override;
+    void reset_source_order_and_close_state() override;
+    void reset_source_risk_and_cap() override;
+    void reset_source_margin_and_coof() override;
+    void reset_source_bar_projections() override;
+    void reset_source_language_series() override;
     std::optional<execution::Status> validate_source_lifecycle(
-        const execution::LifecycleEffects& lifecycle) const;
+        const execution::LifecycleEffects& lifecycle) const override;
     std::optional<execution::Status> preflight_source_lifecycle(
         const execution::LifecycleEffects& lifecycle,
-        bool will_reset_to_flat, bool will_open_quoted);
-    void apply_source_pre_close_lifecycle(const execution::LifecycleBatch& batch);
+        bool will_reset_to_flat, bool will_open_quoted) override;
+    void apply_source_pre_close_lifecycle(const execution::LifecycleBatch& batch) override;
     void apply_source_pending_removals(
-        const std::vector<execution::PendingRemoval>& removals);
-    void reset_source_exit_activations_before_flatten();
-    void reset_source_position_ledgers_after_book_clear();
-    void on_source_append_quoted_lot_after_book(const PyramidEntry& lot);
-    void reset_source_open_position_ledgers_before_book(const PyramidEntry& lot);
-    void on_source_open_position_booked(const PyramidEntry& lot);
+        const std::vector<execution::PendingRemoval>& removals) override;
+    void reset_source_exit_activations_before_flatten() override;
+    void reset_source_position_ledgers_after_book_clear() override;
+    void on_source_append_quoted_lot_after_book(const PyramidEntry& lot) override;
+    void reset_source_open_position_ledgers_before_book(const PyramidEntry& lot) override;
+    void on_source_open_position_booked(const PyramidEntry& lot) override;
     enum class ExitLegTransitionResult {
         Applied, Replay, StaleIdentity, BindRefused, ActionRefused, Exhausted,
         RevisionExhausted
@@ -315,7 +422,7 @@ protected:
             bool grouped_stop_recalc = false, uint64_t market_entry_incarnation = 0,
             bool opening_money_prefix = false);
     void dispatch_bar_calc_on_order_fills();
-    void legacy_run_simple(const Bar* bars, int n);
+    void legacy_run_simple(const Bar* bars, int n) override;
     void run_magnified_bar(
             const std::vector<Bar>& sub_bars, int64_t script_bar_ts,
             bool caller_completed_on_boundary);
@@ -328,7 +435,7 @@ protected:
                               const std::string& script_tf,
                               bool bar_magnifier,
                               int magnifier_samples,
-                              MagnifierDistribution magnifier_dist);
+                              MagnifierDistribution magnifier_dist) override;
     void run_tf_impl(const Bar* input_bars, int n_input,
                               const std::string& input_tf,
                               const std::string& script_tf,
@@ -375,16 +482,16 @@ protected:
                               const StrategyOverrides* overrides,
                               bool bar_magnifier,
                               int magnifier_samples,
-                              MagnifierDistribution magnifier_dist);
+                              MagnifierDistribution magnifier_dist) override;
     bool legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
                                       const std::string& input_tf,
-                                      const std::string& script_tf);
-    bool legacy_stream_push_bar(const Bar& bar);
-    bool legacy_stream_push_tick(const TradeTick& tick);
-    bool legacy_stream_push_ticks(const TradeTick* ticks, int n);
-    bool legacy_stream_advance_time(int64_t timestamp_ms);
-    bool legacy_stream_end(bool finalize_partial_input_bar);
-    void dispatch_source_stream_script_bar(const Bar& bar, bool had_tick);
+                                      const std::string& script_tf) override;
+    bool legacy_stream_push_bar(const Bar& bar) override;
+    bool legacy_stream_push_tick(const TradeTick& tick) override;
+    bool legacy_stream_push_ticks(const TradeTick* ticks, int n) override;
+    bool legacy_stream_advance_time(int64_t timestamp_ms) override;
+    bool legacy_stream_end(bool finalize_partial_input_bar) override;
+    void dispatch_source_stream_script_bar(const Bar& bar, bool had_tick) override;
     void source_stream_entry_comment(const PyramidEntry&, std::string&) const override;
     void clear_aux_security_chart_ranges();
     void prepare_aux_security_chart_ranges(
@@ -727,9 +834,9 @@ protected:
                                                    double& reserved_qty_out);
     BacktestEngine::BarTime _decompose_bar_time_chart_tz() const;
     execution::Status on_source_close_preflight(
-            const Trade* rows, size_t count, std::optional<int>& loss_day) const;
+            const Trade* rows, size_t count, std::optional<int>& loss_day) const override;
     void on_source_close_observed(
-            const Trade* rows, size_t count, std::optional<int> loss_day);
+            const Trade* rows, size_t count, std::optional<int> loss_day) override;
     bool check_risk_allow_entry(bool is_long) const;
     void update_risk_state();
     int intraday_loss_day_key() const;
@@ -775,5 +882,11 @@ protected:
     // END L2 POLICY MEMBERS
     // END L2 SOURCE DECLARATIONS
 };
+
+// L2 fixture twins name the pre-switch host.  After L3a they exercise the
+// same live host and route as generated strategies.
+using PineNativeHost = PineStrategyHost;
+using FixturePendingOrder = PineStrategyHost::FixturePendingOrder;
+using FixturePendingOrderType = PineStrategyHost::FixturePendingOrderType;
 
 } // namespace pineforge::source

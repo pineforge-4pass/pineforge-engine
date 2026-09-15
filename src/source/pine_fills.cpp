@@ -4379,6 +4379,8 @@ bool source::PineStrategyHost::use_default_stop_placement_qty(
 
 int source::PineStrategyHost::probe_fill_qty(int index, double fill_price, double* qty,
                                    int* close_only, int* partition) const {
+    return pending_intent_view().probe_fill_qty(index, fill_price, qty, close_only, partition);
+
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())
         || !qty || !close_only || !partition) {
         return -1;
@@ -4558,6 +4560,8 @@ int source::PineStrategyHost::probe_fill_qty(int index, double fill_price, doubl
 }
 
 int source::PineStrategyHost::pending_order_level_resolved(int index) const {
+    return pending_intent_view().level_resolved(index);
+
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())) return -1;
     const source::PendingOrder& o = pending_orders_[static_cast<size_t>(index)];
     if (o.type != OrderType::EXIT || o.from_entry.empty()) return 1;
@@ -4567,6 +4571,8 @@ int source::PineStrategyHost::pending_order_level_resolved(int index) const {
 int source::PineStrategyHost::pending_order_effective_levels(int index, double* stop,
                                                    double* limit,
                                                    double* trail_activation) const {
+    return pending_intent_view().effective_levels(index, stop, limit, trail_activation);
+
     if (index < 0 || index >= static_cast<int>(pending_orders_.size())
         || !stop || !limit || !trail_activation) {
         return -1;

@@ -1,10 +1,13 @@
 #include <pineforge/source/pine_adapter.hpp>
 
+#include <pineforge/pending_order_mirror.hpp>
+
 #include <pineforge/timeframe.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
@@ -31,6 +34,29 @@ std::uint64_t fnv_append(std::uint64_t value, const void* bytes, std::size_t siz
 
 std::uint64_t fnv_string(std::string_view value) noexcept {
     return fnv_append(1469598103934665603ULL, value.data(), value.size());
+}
+
+void copy_pending_string(std::string_view value, char* out, std::uint8_t* truncated,
+                         std::uint64_t* hash) noexcept {
+    *hash = fnv_string(value);
+    const std::size_t size = std::min<std::size_t>(value.size(), 63U);
+    if (size != 0) std::memcpy(out, value.data(), size);
+    out[size] = '\0';
+    *truncated = value.size() > size ? 1U : 0U;
+}
+
+int mirror_order_type(PineOrderFamily family) noexcept {
+    switch (family) {
+    case PineOrderFamily::Entry: return static_cast<int>(OrderType::ENTRY);
+    case PineOrderFamily::Order: return static_cast<int>(OrderType::RAW_ORDER);
+    case PineOrderFamily::ExitLimit:
+    case PineOrderFamily::ExitStop:
+    case PineOrderFamily::ExitTrail: return static_cast<int>(OrderType::EXIT);
+    case PineOrderFamily::Close:
+    case PineOrderFamily::CloseAll:
+    case PineOrderFamily::Margin: return static_cast<int>(OrderType::MARKET);
+    }
+    return static_cast<int>(OrderType::MARKET);
 }
 
 std::uint64_t source_key(const SourceId& left, const SourceId& right) noexcept {
@@ -172,7 +198,11 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
 
     // A11: sub-two-bar public starts retain the explicit undetected state and
     // intentionally leave both string fields empty.
-    spec.timeframe_undetected = args.n < 2;
+    // A historical one-bar run has no detectable timeframe, but a stream
+    // begin carries an explicit provider timeframe even when its warmup has
+    // only one bar.  Preserve that public stream contract rather than
+    // erasing the caller's labels into the undetected batch shape.
+    spec.timeframe_undetected = args.n < 2 && !args.is_stream;
     if (!spec.timeframe_undetected) {
         std::string effective_input = args.input_tf;
         if (effective_input.empty() && args.n >= 2 && args.bars != nullptr) {
@@ -2232,6 +2262,65 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
     *limit = it->second.exit_levels.limit;
     *trail_activation = it->second.exit_levels.trail_price;
     return level_resolved(index);
+}
+
+int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noexcept {
+    if (!owner_ || !out || index < 0
+        || index >= static_cast<int>(owner_->pending_view_handles_.size())) {
+        return -1;
+    }
+    const auto handle = owner_->pending_view_handles_[static_cast<std::size_t>(index)];
+    const auto it = owner_->placement_.find(handle.incarnation);
+    if (it == owner_->placement_.end()) return -1;
+    const PlacementSnapshot& snapshot = it->second;
+
+    std::memset(out, 0, sizeof(*out));
+    out->struct_version = 1;
+    out->size = static_cast<std::uint32_t>(sizeof(*out));
+    copy_pending_string(snapshot.source_id, out->id, &out->id_truncated, &out->id_hash64);
+    copy_pending_string(snapshot.from_entry, out->from_entry, &out->from_entry_truncated,
+                        &out->from_entry_hash64);
+    copy_pending_string(snapshot.oca_name, out->oca_name, &out->oca_name_truncated,
+                        &out->oca_name_hash64);
+    copy_pending_string(snapshot.comment, out->comment, &out->comment_truncated,
+                        &out->comment_hash64);
+    out->type = mirror_order_type(snapshot.family);
+    out->is_long = snapshot.is_long ? 1U : 0U;
+    out->limit_price = snapshot.exit_levels.limit;
+    out->stop_price = snapshot.exit_levels.stop;
+    out->trail_points = snapshot.exit_levels.trail_points;
+    out->trail_price = snapshot.exit_levels.trail_price;
+    out->trail_offset = snapshot.exit_levels.trail_offset;
+    out->profit_ticks = snapshot.exit_levels.profit_ticks;
+    out->loss_ticks = snapshot.exit_levels.loss_ticks;
+    out->qty = snapshot.requested_qty;
+    out->qty_type = snapshot.qty_type;
+    out->qty_percent = snapshot.qty_percent;
+    out->oca_type = snapshot.oca_type;
+    out->created_seq = static_cast<std::int64_t>(snapshot.source_sequence);
+    out->incarnation = handle.incarnation;
+    out->replaced_order_incarnation = snapshot.replaced_opening
+        ? snapshot.bracket_origin.incarnation : 0;
+    out->created_position_cycle_seq = snapshot.placement_cycle;
+    out->default_stop_placement_qty = snapshot.sizing.frozen_units;
+    out->default_stop_sizing_price = snapshot.sizing.price;
+    out->sizing_equity = snapshot.sizing.equity;
+    out->sizing_price = snapshot.sizing.price;
+    out->sizing_fx = snapshot.sizing.fx;
+    out->sizing_mark = snapshot.sizing.mark;
+    out->affordability_close_only = snapshot.frozen_market_targeted_close ? 1U : 0U;
+    out->short_seed_collision_role = short_seed_collision_role(index);
+    out->birth_timestamp = snapshot.placement_sub_open_ms;
+    out->birth_bar = static_cast<std::int32_t>(snapshot.placement_cycle);
+    out->pine_frozen_market_instruction_kind = snapshot.frozen_market_instruction ? 1U : 0U;
+    out->pine_frozen_market_instruction_own_units = snapshot.frozen_market_own_units;
+    out->pine_frozen_market_instruction_transaction_units =
+        snapshot.frozen_market_transaction_units;
+    copy_pending_string(snapshot.frozen_market_targeted_close ? snapshot.source_id : std::string{},
+                        out->pine_frozen_market_instruction_target_id,
+                        &out->pine_frozen_market_instruction_target_id_truncated,
+                        &out->pine_frozen_market_instruction_target_id_hash64);
+    return 0;
 }
 
 int PendingIntentView::short_seed_collision_role(int index) const noexcept {

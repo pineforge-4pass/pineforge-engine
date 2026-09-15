@@ -1,6 +1,6 @@
 #include <pineforge/source/pine_scheduler.hpp>
 
-#include <pineforge/source/pine_native_host.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/timeframe.hpp>
 
 #include <stdexcept>
@@ -40,7 +40,7 @@ void PineScheduler::reset_language() {
     coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
 }
 
-void PineScheduler::run_begin(PineNativeHost& host) {
+void PineScheduler::run_begin(PineStrategyHost& host) {
     reset_language();
     const bool static_eligible = !retained_.is_stream && !retained_.bar_magnifier
         && retained_.input_tf.empty() && retained_.script_tf.empty();
@@ -66,7 +66,7 @@ void PineScheduler::publish_series(const Bar& bar) {
     language_._src_hlcc4_.push((bar.high + bar.low + bar.close + bar.close) / 4.0);
 }
 
-void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, PineNativeHost&) {
+void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, PineStrategyHost&) {
     if (context.script_bar_open_ms != current_script_open_ms_) {
         current_script_open_ms_ = context.script_bar_open_ms;
         saw_open_fill_ = false;
@@ -74,7 +74,7 @@ void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, P
     }
 }
 
-void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, PineNativeHost& host) {
+void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, PineStrategyHost& host) {
     // P7c: matching advances over every sub-bar; the language callback occurs
     // only at the terminal sub-bar with the script bar timestamp restored.
     language_.is_first_tick_ = context.is_terminal_sub_bar;
@@ -98,7 +98,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
 }
 
 void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
-                            const NativeDecisionContext& context, PineNativeHost& host) {
+                            const NativeDecisionContext& context, PineStrategyHost& host) {
     if (event.ordinal <= applied_cursor_) return;
     applied_cursor_ = event.ordinal;
     if (!host.scheduler_coof_enabled()) return;

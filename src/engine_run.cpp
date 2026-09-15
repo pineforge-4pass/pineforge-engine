@@ -94,13 +94,15 @@ struct PathOrderScope {
 
 bool BacktestEngine::set_account_currency_fx_series(
         const int64_t* timestamps_ms, const double* rates, int n) {
-    guard_native_mutation("set_account_currency_fx_series");
     // Timestamped FX is not route-complete for the realtime scheduler. Reject
     // late installation as well as stream_begin-with-series so callers cannot
     // bypass fail-closed behavior by changing configuration after warmup.
+    // This is an ordinary API refusal, not a fatal mutation of an already
+    // executing stream; preserve the stream that rejected it.
     if (stream_phase_ == StreamPhase::REALTIME || stream_warmup_mode_) {
         return false;
     }
+    guard_native_mutation("set_account_currency_fx_series");
     if (n < 0 || (n > 0 && (!timestamps_ms || !rates))) return false;
     std::vector<int64_t> next_timestamps;
     std::vector<double> next_rates;
