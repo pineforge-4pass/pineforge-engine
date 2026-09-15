@@ -177,7 +177,11 @@ public:
             L4cPendingOrder projection;
             projection.id = row.id;
             projection.from_entry = row.from_entry;
-            projection.type = static_cast<L4cOrderType>(row.type);
+            projection.type = row.type == static_cast<int>(L4cOrderType::ENTRY)
+                    && !std::isfinite(row.limit_price) && !std::isfinite(row.stop_price)
+                    && !std::isfinite(row.trail_points) && !std::isfinite(row.trail_price)
+                    && !std::isfinite(row.trail_offset)
+                ? L4cOrderType::MARKET : static_cast<L4cOrderType>(row.type);
             projection.is_long = row.is_long != 0U;
             projection.limit_price = row.limit_price;
             projection.stop_price = row.stop_price;

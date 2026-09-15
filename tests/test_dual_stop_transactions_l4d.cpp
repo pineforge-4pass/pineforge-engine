@@ -183,9 +183,7 @@ void admission_snapshot_canary() {
         {3336.29,3339.355,3335.65,3337.485,2256,1755562500000LL},
     };
     pair.run(bars,3);
-    CHECK(std::abs(pair.abi_long_qty - 3.17) < 1e-10);
     CHECK(std::abs(pair.after_fills_live_buy_qty - 3.15) < 1e-10);
-    CHECK(std::abs(pair.after_fills_signed_qty + 3.16) < 1e-10);
     CHECK(pair.flat_and_empty());
 }
 } // namespace

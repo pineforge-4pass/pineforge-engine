@@ -87,6 +87,16 @@ public:
     double margin_pct = 100.0;
     int slip_ticks = 0;
 
+    void run(const Bar* bars, int count) {
+        calc_on_order_fills_ = coof;
+        process_orders_on_close_ = pooc;
+        commission_value_ = commission_pct;
+        margin_long_ = margin_pct;
+        margin_short_ = margin_pct;
+        slippage_ = slip_ticks;
+        pineforge::source::PineNativeHost::run(bars, count);
+    }
+
     void on_source_bar(const Bar&) override {
         calc_on_order_fills_ = coof;
         process_orders_on_close_ = pooc;
