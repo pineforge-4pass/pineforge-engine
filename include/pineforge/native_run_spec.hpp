@@ -59,6 +59,9 @@ enum class NativeLegacyTolerance : std::uint32_t {
     // Match engine_run.cpp's legacy batch structural check: finite OHLC values
     // need not be positive, and NaN volume means unavailable activity.
     BatchStructuralBars = 1u << 0,
+    // Source-compatible stream warmups admit finite, non-negative interim
+    // OHLC values.  The final warmup close remains strictly positive.
+    WarmupNonNegativeOHLC = 1u << 1,
 };
 
 constexpr bool native_legacy_tolerance_enabled(

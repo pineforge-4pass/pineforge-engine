@@ -531,6 +531,13 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
     // Native-only hosts retain the strict Canonical/None defaults.
     spec.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
     spec.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
+    if (args.is_stream) {
+        // A36: legacy stream warmups permit zero-valued interim OHLC bars;
+        // the final close is checked by the stream preflight boundary.
+        spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(
+            static_cast<std::uint32_t>(spec.legacy_tolerance)
+            | static_cast<std::uint32_t>(NativeLegacyTolerance::WarmupNonNegativeOHLC));
+    }
     spec.close_execution = config.process_orders_on_close
         ? NativeCloseExecution::AfterCalculation : NativeCloseExecution::NextEligiblePoint;
     // Pine's request_abort surface reports a cooperative cancellation through
@@ -3654,7 +3661,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         return NativePrecommitVerdict::Refuse;
     if (risk_.max_cons_loss_days > 0 && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days)
         return NativePrecommitVerdict::Refuse;
-    if (!view.account.would_open) return NativePrecommitVerdict::Proceed;
+    if (!view.account.would_open) return NativePrecommitVerdict::Admit;
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot == placement_.end()) return NativePrecommitVerdict::Refuse;
     const auto& source = snapshot->second;
@@ -3677,12 +3684,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             ? source.sizing.equity : view.account.marked_equity;
         const double epsilon = std::max(1e-9, std::abs(equity) * 1e-12);
         if (!(margin_pct > 0.0) || !std::isfinite(margin_pct)) {
-            return NativePrecommitVerdict::Proceed;
+            return NativePrecommitVerdict::AdmitWithHostMargin;
         }
         if (!std::isfinite(required) || !std::isfinite(equity) || required > equity + epsilon) {
             return NativePrecommitVerdict::Refuse;
         }
-        return NativePrecommitVerdict::Proceed;
+        return NativePrecommitVerdict::AdmitWithHostMargin;
     }
     const bool exit = source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail;
@@ -3713,7 +3720,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     const double margin_pct = view.account.incoming_short
         ? config_.margin_short : config_.margin_long;
     if (!(margin_pct > 0.0) || !std::isfinite(margin_pct))
-        return NativePrecommitVerdict::Proceed;
+        return NativePrecommitVerdict::AdmitWithHostMargin;
     const double fraction = margin_pct / 100.0;
     if (finite_positive(source.sizing.frozen_units) && !source.sizing.at_fill) {
         const double frozen_required = std::abs(source.sizing.frozen_units)
@@ -3746,7 +3753,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 return NativePrecommitVerdict::Refuse;
             }
         }
-        return NativePrecommitVerdict::Proceed;
+        return NativePrecommitVerdict::AdmitWithHostMargin;
     }
     const double required = view.account.resulting_abs_notional * fraction;
     // A 1x LONG opening may be admitted against its pre-entry realized
@@ -3760,12 +3767,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         && finite_positive(source.requested_qty)
         && std::isfinite(view.account.realized_balance)
         && required <= view.account.realized_balance;
-    if (opening_margin_checkpoint) return NativePrecommitVerdict::Proceed;
+    if (opening_margin_checkpoint) return NativePrecommitVerdict::AdmitWithHostMargin;
     if (!std::isfinite(required) || !std::isfinite(view.account.marked_equity)
         || required > view.account.marked_equity) {
         return NativePrecommitVerdict::Refuse;
     }
-    return NativePrecommitVerdict::Proceed;
+    return NativePrecommitVerdict::AdmitWithHostMargin;
 }
 
 std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const noexcept {

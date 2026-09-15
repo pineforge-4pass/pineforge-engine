@@ -309,7 +309,16 @@ struct NativePrecommitView {
     bool current = false;
 };
 
-enum class NativePrecommitVerdict : std::uint8_t { Proceed = 0, Refuse = 1 };
+// The host is consulted before generic opening-margin admission.  Admit keeps
+// the native default gate; AdmitWithHostMargin lets a host that owns the
+// source-compatible margin rule take responsibility for that one check.
+// Proceed remains an alias for the v7 spelling used by existing C++ callers.
+enum class NativePrecommitVerdict : std::uint8_t {
+    Admit = 0,
+    Proceed = Admit,
+    Refuse = 1,
+    AdmitWithHostMargin = 2,
+};
 
 struct NativeCurrentPointView {
     NativeDecisionContext decision;
@@ -433,7 +442,7 @@ public:
     }
     virtual NativePrecommitVerdict validate_execution_precommit(
             const NativePrecommitView&) const {
-        return NativePrecommitVerdict::Proceed;
+        return NativePrecommitVerdict::Admit;
     }
 
     std::optional<NativeCurrentPointView> current_execution_point() const;
