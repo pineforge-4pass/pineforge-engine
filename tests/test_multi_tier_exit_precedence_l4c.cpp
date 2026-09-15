@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_multi_tier_exit_precedence.cpp — pin fill behaviour for multiple
  * partial strategy.exit(..., qty_percent=...) siblings sharing a from_entry

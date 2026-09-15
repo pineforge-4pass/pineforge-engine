@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * A valid strategy.exit bracket can be armed before its from_entry MARKET
  * parent fills. When the parent opens at the next bar's open and that open has

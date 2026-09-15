@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 // Round15 JOAT: five covered TradingView panels from r14-joat-audit.
 // F carry/fresh CSV 5eff7824, high control 2308af1a; EUR carry f0cce2d5,
 // high control 69197a4b. Six synthetic bars retain the two relevant OHLC

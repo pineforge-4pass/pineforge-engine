@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * Round 14 JOAT: an older plain exit may touch the chart's outward-rounded
  * H/L tick even though the raw COOF segment did not reach its level.

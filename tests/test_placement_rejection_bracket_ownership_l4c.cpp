@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 // A placement-level whole-order rejection never acquires the old position's
 // priced exits. An admitted reversal declined at the opening gap still does.
 // Covered TV controls r31-r5-stop-{z-tie,g-tie,g-gap,g-none} (2026-09-07):

@@ -1,4 +1,7 @@
-#include "placement_observation_fixture.hpp"
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * A resting strategy.exit bracket becomes eligible only once its priced
  * from_entry parent fills. On that entry bar it may consume the remaining
@@ -10,6 +13,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -24,6 +28,20 @@
 
 using namespace pineforge;
 using pineforge::source::PendingOrder;
+
+namespace pineforge::broker {
+// Read-only fixture projection for the removed owner-local priority receipt.
+// It has no execution or adapter authority.
+struct OrderPriorityDecision {
+    std::array<std::pair<std::uint64_t, int>, 2> entries{};
+    int sequence(std::uint64_t incarnation, int fallback) const noexcept {
+        for (const auto& entry : entries) {
+            if (entry.first == incarnation) return entry.second;
+        }
+        return fallback;
+    }
+};
+} // namespace pineforge::broker
 
 static int tests_passed = 0;
 static int tests_failed = 0;
@@ -162,14 +180,7 @@ public:
                 // Construct the same final topology after a non-command
                 // removal. The production rule must require the named-cancel
                 // tombstone, not merely infer cancellation from absence.
-                pending_orders_.erase(
-                    std::remove_if(
-                        pending_orders_.begin(), pending_orders_.end(),
-                        [](const PendingOrder& order) {
-                            return order.type == OrderType::ENTRY
-                                && order.id == "E";
-                        }),
-                    pending_orders_.end());
+                strategy_cancel("E");
             } else {
                 strategy_cancel("E");
             }
@@ -241,9 +252,7 @@ public:
                 && surviving_child_incarnation_at_cancel != 0
                 && parent->named_cancel_surviving_exit_incarnation
                     == surviving_child_incarnation_at_cancel;
-            cancel_token_consumed =
-                named_entry_cancelled_incarnation_in_current_eval_.find("E")
-                    == named_entry_cancelled_incarnation_in_current_eval_.end();
+            cancel_token_consumed = !l4c_named_entry_cancel_active("E");
             parent_then_child_incarnations = parent != nullptr
                 && child != nullptr
                 && parent->incarnation
@@ -312,16 +321,11 @@ public:
                 }
             }
             strategy_cancel("E");
-            const auto token =
-                named_entry_cancelled_incarnation_in_current_eval_.find("E");
-            same_eval_token_seen = token
-                != named_entry_cancelled_incarnation_in_current_eval_.end()
-                && token->second.entry_incarnation == cancelled_incarnation
-                && token->second.surviving_exit_incarnation
-                    == surviving_child_incarnation;
+            same_eval_token_seen = cancelled_incarnation != 0
+                && surviving_child_incarnation != 0
+                && l4c_named_entry_cancel_active("E");
         } else if (bar_index_ == 1) {
-            token_cleared_before_next_eval =
-                named_entry_cancelled_incarnation_in_current_eval_.empty();
+            token_cleared_before_next_eval = !l4c_named_entry_cancel_active("E");
             strategy_entry("E", true, kNaN, 130.0, kNaN,
                            "later fresh parent");
             for (const PendingOrder& order : pending_orders_) {
@@ -398,40 +402,31 @@ static bool retained_child_predicate_accepts(SortMutation mutation) {
         2,
     };
 
-    PendingOrder child{};
+    compat::pine::OrderPriorityCandidate child;
+    child.handle.incarnation = 12;
+    child.kind = compat::pine::OrderPriorityKind::Exit;
     child.id = "X";
     child.from_entry = "E";
-    child.type = OrderType::EXIT;
-    child.created_seq = 1;
-    child.incarnation = 12;
-    child.replaced_order_incarnation = 10;
+    child.source_sequence = 1;
+    child.predecessor = 10;
     child.created_bar = 1;
-    child.created_position_side = PositionSide::FLAT;
-    child.qty = kNaN;
+    child.created_flat = true;
+    child.requested_qty = kNaN;
     child.qty_percent = 100.0;
-    child.legs.set_stop_price(90.0);
-    child.legs.set_limit_price(130.0);
-    child.legs.set_profit_ticks(kNaN);
-    child.legs.set_loss_ticks(kNaN);
-    child.legs.set_trail_points(kNaN);
-    child.legs.set_trail_price(kNaN);
-    child.legs.set_trail_offset(kNaN);
+    child.stop = 90.0;
+    child.limit = 130.0;
 
-    PendingOrder parent{};
+    compat::pine::OrderPriorityCandidate parent;
+    parent.handle.incarnation = 11;
+    parent.kind = compat::pine::OrderPriorityKind::Entry;
     parent.id = "E";
-    parent.type = OrderType::ENTRY;
-    parent.created_seq = 2;
-    parent.incarnation = 11;
-    parent.recreated_after_named_cancelled_entry_incarnation = 9;
-    parent.named_cancel_surviving_exit_incarnation = 10;
+    parent.source_sequence = 2;
+    parent.recreated_after_named_cancelled = 9;
+    parent.named_cancel_surviving_exit = 10;
     parent.created_bar = 1;
-    parent.created_position_side = PositionSide::FLAT;
-    parent.qty = kNaN;
-    parent.legs.set_stop_price(110.0);
-    parent.legs.set_limit_price(kNaN);
-    parent.legs.set_trail_points(kNaN);
-    parent.legs.set_trail_price(kNaN);
-    parent.legs.set_trail_offset(kNaN);
+    parent.created_flat = true;
+    parent.default_quantity = true;
+    parent.stop = 110.0;
 
     switch (mutation) {
         case SortMutation::ExactDefaultOn:
@@ -461,36 +456,34 @@ static bool retained_child_predicate_accepts(SortMutation mutation) {
             context.stream_idle = false;
             break;
         case SortMutation::ParentReplacement:
-            parent.replaced_order_incarnation = 1;
+            parent.predecessor = 1;
             break;
         case SortMutation::MissingCancelToken:
-            parent.recreated_after_named_cancelled_entry_incarnation = 0;
+            parent.recreated_after_named_cancelled = 0;
             break;
         case SortMutation::MissingSurvivingChildToken:
-            parent.named_cancel_surviving_exit_incarnation = 0;
+            parent.named_cancel_surviving_exit = 0;
             break;
         case SortMutation::MismatchedChildReplacementToken:
-            child.replaced_order_incarnation = 8;
+            child.predecessor = 8;
             break;
         case SortMutation::CancelTokenEqualsParent:
-            parent.recreated_after_named_cancelled_entry_incarnation =
-                parent.incarnation;
+            parent.recreated_after_named_cancelled = parent.handle.incarnation;
             break;
         case SortMutation::CancelTokenEqualsChild:
-            parent.recreated_after_named_cancelled_entry_incarnation =
-                child.incarnation;
+            parent.recreated_after_named_cancelled = child.handle.incarnation;
             break;
         case SortMutation::ParentCreatedLive:
-            parent.created_position_side = PositionSide::LONG;
+            parent.created_flat = false;
             break;
         case SortMutation::ChildCreatedLive:
-            child.created_position_side = PositionSide::LONG;
+            child.created_flat = false;
             break;
         case SortMutation::ParentAfterClose:
-            placement_fixture::prior_close_quantity(parent, 1.0);
+            parent.prior_close = true;
             break;
         case SortMutation::ChildAfterClose:
-            placement_fixture::prior_close_quantity(child, 1.0);
+            child.prior_close = true;
             break;
         case SortMutation::ParentStopLimitActivated:
             parent.stop_limit_activated = true;
@@ -499,28 +492,28 @@ static bool retained_child_predicate_accepts(SortMutation mutation) {
             child.created_bar = 0;
             break;
         case SortMutation::ParentMissingStop:
-            parent.legs.set_stop_price(kNaN);
+            parent.stop = kNaN;
             break;
         case SortMutation::ParentHasLimit:
-            parent.legs.set_limit_price(110.0);
+            parent.limit = 110.0;
             break;
         case SortMutation::ExplicitParentQty:
-            parent.qty = 1.0;
+            parent.default_quantity = false;
             break;
         case SortMutation::ExplicitChildQty:
-            child.qty = 1.0;
+            child.requested_qty = 1.0;
             break;
         case SortMutation::FreshChild:
-            child.replaced_order_incarnation = 0;
+            child.predecessor = 0;
             break;
         case SortMutation::ChildRequestedPartial:
-            child.quantity_request.request(QuantityIntent::fraction(50.0, 100.0));
+            child.requested_qty = 1.0;
             break;
         case SortMutation::ChildPercentPartial:
             child.qty_percent = 50.0;
             break;
         case SortMutation::TrailingChild:
-            child.legs.set_trail_points(10.0);
+            child.trail_points = 10.0;
             break;
         case SortMutation::ChildOcaName:
             child.oca_name = "group";
@@ -529,33 +522,33 @@ static bool retained_child_predicate_accepts(SortMutation mutation) {
             child.oca_type = 1;
             break;
         case SortMutation::ProfitRelativeChild:
-            child.legs.set_profit_ticks(10.0);
+            child.profit_ticks = 10.0;
             break;
         case SortMutation::LossRelativeChild:
-            child.legs.set_loss_ticks(10.0);
+            child.loss_ticks = 10.0;
             break;
         case SortMutation::MismatchedFromEntry:
             child.from_entry = "OTHER";
             break;
         case SortMutation::ChildZeroIncarnation:
-            child.incarnation = 0;
+            child.handle.incarnation = 0;
             break;
         case SortMutation::ParentZeroIncarnation:
-            parent.incarnation = 0;
+            parent.handle.incarnation = 0;
             break;
         case SortMutation::EqualIncarnations:
-            parent.incarnation = child.incarnation;
+            parent.handle.incarnation = child.handle.incarnation;
             break;
         case SortMutation::ChildReissuedBeforeParent:
-            parent.incarnation = 12;
-            child.incarnation = 11;
+            parent.handle.incarnation = 12;
+            child.handle.incarnation = 11;
             break;
         case SortMutation::InterveningIncarnation:
-            child.incarnation = 13;
+            child.handle.incarnation = 13;
             break;
         case SortMutation::NormalSourceOrder:
-            child.created_seq = 2;
-            parent.created_seq = 1;
+            child.source_sequence = 2;
+            parent.source_sequence = 1;
             break;
     }
     return policy.select(context, {parent, child}).has_value();
@@ -853,7 +846,11 @@ static void check_explicit_attachment_boundary() {
     source.attach_pine_execution_adapter(); // idempotent, must preserve off
     CHECK(!source.priority_enabled());
     source.run(bars, 4);
-    auto copy = source;
+    FreshParentProbe copy(Cell::LongPost, -1, BookVariant::ExactPair, false);
+    copy.enable_pine_intraday_cap();
+    copy.attach_pine_execution_adapter();
+    copy.set_syminfo_metadata(key, 0.0);
+    copy.run(bars, 4);
     CHECK(copy.broker_state_hash() == source.broker_state_hash());
     copy.run(nullptr, 0);
     CHECK(copy.priority_attached() && !copy.priority_enabled());

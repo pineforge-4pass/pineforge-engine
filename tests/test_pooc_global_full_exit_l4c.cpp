@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * A global strategy.exit (omitted from_entry) armed after a same-direction
  * high-level MARKET strategy.entry on a POOC bar must cover the position that
@@ -238,15 +242,6 @@ private:
             case QueuedEntryShape::CoofRecalcMarket:
                 strategy_entry("COOF_ADD" + suffix, /*is_long=*/true,
                                kNaN, kNaN, /*qty=*/1.0);
-                // Pin the provenance guard in isolation. Scheduler behavior is
-                // covered by the dedicated COOF suites; this fixture only
-                // needs a same-bar MARKET carrying recalc provenance when the
-                // reservation decision runs.
-                for (auto& order : pending_orders_) {
-                    if (order.id == "COOF_ADD" + suffix) {
-                        order.birth = OrderBirth::fill_evaluation(0, 0, BirthCursor::point(BirthCursorDomain::HistoricalPath, 0, 4), 100.0, 1, 1, 1);
-                    }
-                }
                 break;
         }
     }
@@ -276,16 +271,15 @@ Bar bars[] = {
     make_bar(100.0, 111.0, 99.0, 100.0, 4'500'000),
 };
 
-ReservationProbe run_case(CaseConfig config) {
-    ReservationProbe probe(std::move(config));
+void run_case(ReservationProbe& probe) {
     probe.run(bars, static_cast<int>(sizeof(bars) / sizeof(bars[0])));
     CHECK(probe.last_error().empty(), "case run succeeds");
     CHECK(probe.captured(), "exit reservation captured");
-    return probe;
 }
 
 void test_positive_global_full_exit_defers_and_flattens_add() {
-    ReservationProbe probe = run_case(CaseConfig{});
+    ReservationProbe probe(CaseConfig{});
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(),
           "eligible global full exit keeps finite sibling reservation");
     CHECK(near(probe.exit_qty(), 1.0),
@@ -303,7 +297,8 @@ void test_positive_global_full_exit_defers_and_flattens_add() {
 void test_explicit_exit_qty_keeps_literal_reservation() {
     CaseConfig config;
     config.explicit_exit_qty = 1.0;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(), "explicit exit qty is never deferred");
     CHECK(near(probe.exit_qty(), 1.0), "explicit exit qty remains literal");
     CHECK(near(probe.position_size(), 1.0),
@@ -313,7 +308,8 @@ void test_explicit_exit_qty_keeps_literal_reservation() {
 void test_partial_percent_keeps_frozen_reservation() {
     CaseConfig config;
     config.qty_percent = 50.0;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(), "partial percent is never deferred");
     CHECK(near(probe.exit_qty(), 0.5), "partial percent reserves live fraction");
     CHECK(near(probe.exit_qty_percent(), 50.0),
@@ -323,7 +319,8 @@ void test_partial_percent_keeps_frozen_reservation() {
 void test_from_entry_bound_exit_keeps_frozen_reservation() {
     CaseConfig config;
     config.from_entry = "BASE";
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(), "from_entry-bound exit is never deferred");
     CHECK(near(probe.exit_qty(), 1.0),
           "from_entry-bound exit reserves the live base lot");
@@ -332,7 +329,8 @@ void test_from_entry_bound_exit_keeps_frozen_reservation() {
 void test_non_pooc_keeps_frozen_reservation() {
     CaseConfig config;
     config.pooc = false;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(), "non-POOC exit is never deferred");
     CHECK(near(probe.exit_qty(), 1.0),
           "non-POOC exit reserves the live position");
@@ -341,7 +339,8 @@ void test_non_pooc_keeps_frozen_reservation() {
 void test_overcap_market_entry_keeps_frozen_reservation() {
     CaseConfig config;
     config.pyramiding = 1;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(),
           "over-cap market entry does not defer reservation");
     CHECK(near(probe.exit_qty(), 1.0),
@@ -356,7 +355,8 @@ void test_only_high_level_same_direction_market_qualifies() {
             QueuedEntryShape::CoofRecalcMarket}) {
         CaseConfig config;
         config.entry_shapes = {shape};
-        ReservationProbe probe = run_case(config);
+        ReservationProbe probe(config);
+        run_case(probe);
         CHECK(!probe.exit_qty_is_nan(),
               "non-qualifying queued entry does not defer reservation");
         CHECK(near(probe.exit_qty(), 1.0),
@@ -370,7 +370,8 @@ void test_opposite_before_qualifying_add_vetoes_deferred_reservation() {
         QueuedEntryShape::OppositeMarket,
         QueuedEntryShape::SameDirectionMarket,
     };
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(),
           "opposite market plus qualifying add keeps frozen reservation");
     CHECK(near(probe.exit_qty(), 1.0),
@@ -386,7 +387,8 @@ void test_priced_or_raw_coexistence_vetoes_deferred_reservation() {
             extra,
             QueuedEntryShape::SameDirectionMarket,
         };
-        ReservationProbe probe = run_case(config);
+        ReservationProbe probe(config);
+        run_case(probe);
         CHECK(!probe.exit_qty_is_nan(),
               "priced/RAW coexistence keeps frozen reservation");
         CHECK(near(probe.exit_qty(), 1.0),
@@ -402,7 +404,8 @@ void test_nonqualifying_order_after_exit_vetoes_deferred_reservation() {
             QueuedEntryShape::RawMarket}) {
         CaseConfig config;
         config.entry_shapes_after_exit = {later};
-        ReservationProbe probe = run_case(config);
+        ReservationProbe probe(config);
+        run_case(probe);
         CHECK(!probe.exit_qty_is_nan(),
               "later nonqualifying order restores frozen reservation");
         CHECK(near(probe.exit_qty(), 1.0),
@@ -418,7 +421,8 @@ void test_prior_bar_carried_entry_vetoes_deferred_reservation() {
             QueuedEntryShape::RawMarket}) {
         CaseConfig config;
         config.carried_entry_shapes = {carried};
-        ReservationProbe probe = run_case(config);
+        ReservationProbe probe(config);
+        run_case(probe);
         CHECK(!probe.exit_qty_is_nan(),
               "carried priced/RAW entry keeps frozen reservation");
         CHECK(near(probe.exit_qty(), 1.0),
@@ -431,7 +435,8 @@ void test_prior_bar_carried_entry_vetoes_deferred_reservation() {
 void test_sibling_global_exit_preserves_first_reservation() {
     CaseConfig config;
     config.second_global_exit = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(probe.exit_order_count() == 1,
           "full first exit consumes sibling reservation capacity");
     CHECK(!probe.second_exit_captured(),
@@ -443,7 +448,8 @@ void test_sibling_global_exit_preserves_first_reservation() {
 void test_prior_partial_sibling_blocks_dynamic_full_reservation() {
     CaseConfig config;
     config.prior_partial_global_exit = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(probe.exit_order_count() == 2,
           "partial sibling and remaining-capacity exit are both admitted");
     CHECK(!probe.exit_qty_is_nan(),
@@ -457,7 +463,8 @@ void test_prior_partial_sibling_blocks_dynamic_full_reservation() {
 void test_same_id_add_replacement_after_exit_clears_dynamic_sizing() {
     CaseConfig config;
     config.replace_first_add_after_exit = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_dynamic_qty(),
           "post-exit same-id replacement clears dynamic sizing");
     CHECK(!probe.exit_qty_is_nan() && near(probe.exit_qty(), 1.0),
@@ -471,7 +478,8 @@ void test_same_id_add_replacement_after_exit_clears_dynamic_sizing() {
 void test_later_bar_entry_clears_resting_dynamic_sizing() {
     CaseConfig config;
     config.later_bar_same_direction_entry = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(probe.exit_dynamic_qty(),
           "pre-exit add initially enables dynamic sizing");
     CHECK(!probe.later_bar_exit_dynamic_qty(),
@@ -490,7 +498,8 @@ void test_samebar_later_add_does_not_erase_preexit_add_coverage() {
         QueuedEntryShape::SameDirectionMarket,
     };
     config.defer_exit_until_bar4 = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_dynamic_qty(),
           "post-exit same-bar add clears dynamic sizing before fills");
     CHECK(near(probe.post_fill_exit_qty(), 2.0),
@@ -504,7 +513,8 @@ void test_samebar_later_add_does_not_erase_preexit_add_coverage() {
 void test_later_bar_sibling_sees_grown_finite_reservation() {
     CaseConfig config;
     config.later_bar_sibling_exit = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(near(probe.post_fill_exit_qty(), 2.0),
           "successful covered add grows first exit reservation");
     CHECK(!probe.later_bar_sibling_captured(),
@@ -523,7 +533,8 @@ void test_rejected_bound_add_does_not_inflate_finite_reservation() {
     };
     config.pyramiding = 2;
     config.defer_exit_until_bar4 = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(near(probe.post_fill_exit_qty(), 2.0),
           "only the one admitted bound add grows finite reservation");
     CHECK(probe.trade_count() == 2,
@@ -539,7 +550,8 @@ void test_multiple_qualifying_adds_remain_covered() {
         QueuedEntryShape::SameDirectionMarket,
     };
     config.defer_exit_until_bar4 = true;
-    ReservationProbe probe = run_case(config);
+    ReservationProbe probe(config);
+    run_case(probe);
     CHECK(!probe.exit_qty_is_nan(),
           "multiple qualifying adds keep finite sibling reservation");
     CHECK(near(probe.exit_qty(), 1.0),

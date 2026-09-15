@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_famx_declined_reversal_trail_leg.cpp — round 9 family X
  * (stevenygabbyperez-fast-scalper-with-stops on AAPL/XAUUSD/F/NIFTY@15):

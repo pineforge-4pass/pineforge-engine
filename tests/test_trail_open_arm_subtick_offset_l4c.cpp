@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_trail_open_arm_subtick_offset.cpp — two trailing-exit rules pinned
  * from TradingView tapes (winthetrade-ema-9-vwap-strategy-with-atr-trailing-

@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_zero_offset_trail_rides.cpp — round 10 family AC: the EXPLICIT
  * trail_offset = 0 (or sub-tick) trailing exit is a zero-distance trailing

@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_bracket_lifecycle_declined_reversal.cpp — finding-311: exit-bracket
  * LIFECYCLE across declined in-position reversal signals.
@@ -136,9 +140,7 @@ public:
     int x_bar(int i) const { return closed_trade_exit_bar_index(i); }
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
-    using BacktestEngine::calc_on_order_fills_;
     using BacktestEngine::margin_call_enabled_;
-    using BacktestEngine::margin_short_;
 };
 
 // Canonical LONG-then-declined-reversal bars. LONG fills 100 @100 (bar1),

@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_exit_bracket_position_cycle_lifetime.cpp — finding-347. A from_entry
  * bracket leg lives for the POSITION cycle, not for its own entry bucket.

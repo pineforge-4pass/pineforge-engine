@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 // Literal command fixtures pinned by independent TradingView controls. Synthetic
 // timestamps avoid any strategy/date routing; no historical feed is loaded.
 #include <pineforge/engine.hpp>

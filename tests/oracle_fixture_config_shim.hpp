@@ -22,3 +22,16 @@ struct FixtureRiskDirection {
 #define RiskDirection FixtureRiskDirection
 #define risk_direction_ fixture_risk_direction_slot()
 #define id_unclosed_qty_ source_id_ledger_view()
+
+#ifdef PINEFORGE_L4C_NATIVE_ROUTE_TWIN
+#undef PineStrategyHost
+#define PineStrategyHost L4cFixtureHost
+#define PendingOrder L4cPendingOrder
+#define OrderType L4cOrderType
+#define pending_orders_ l4c_pending_orders()
+#define coof_fill_recalc_active_ l4c_coof_recalc_active()
+#define coof_cursor_is_bar_close_ l4c_coof_cursor_is_bar_close()
+#define callsite_close_callsites_ l4c_callsite_close_callsites()
+#define exit_leg_event_seq_ l4c_exit_leg_event_seq()
+#define is_first_tick_ is_first_tick()
+#endif

@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_famae_declined_reversal_trail_gap.cpp — round 10 family AE
  * (stevenygabbyperez-fast-scalper-with-stops on NASDAQ:AAPL@15): what a

@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_same_bar_add_exit_coverage.cpp — KI-62 keep-vs-scratch (probe-pinned).
  *

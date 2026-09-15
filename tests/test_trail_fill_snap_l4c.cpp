@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_trail_fill_snap.cpp — trailing-exit fill rules pinned from TradingView
  * tapes in round 7 (family G, stevenygabbyperez-fast-scalper-with-stops:

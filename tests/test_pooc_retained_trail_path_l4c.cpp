@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * A retained POOC trail must start each scan of the bar with the same
  * pre-bar best. Activating at the second extreme does not make the earlier

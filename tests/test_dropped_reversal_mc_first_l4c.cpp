@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_dropped_reversal_mc_first.cpp — round 7 family M, mechanism 2a: on a
  * bar whose OPEN carries a MARKET reversal that admission DROPS (its same-bar
@@ -427,8 +431,7 @@ std::vector<Row> rows_exited_at(const std::vector<Row>& rows, int64_t ts) {
 //   if time == 2025-07-24 21:00Z: strategy.close_all()
 // with_limit adds the rhyme17 probe's TP leg on the same bracket (a limit far
 // below the market, never touched in the window).
-Probe run_tape(bool with_reversal, bool with_limit) {
-    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+void run_tape(Probe& p, bool with_reversal, bool with_limit) {
     p.script = [&](Probe& e, const Bar& bar, int) {
         if (bar.timestamp == kT0623) e.entry_default("Short", false);
         const double avg = e.avg_price();
@@ -445,7 +448,6 @@ Probe run_tape(bool with_reversal, bool with_limit) {
     };
     const std::vector<Bar> bars = xau_tape_bars();
     p.run(bars.data(), (int)bars.size());
-    return p;
 }
 
 // The pinned 07-14 pair: "Margin call" 1.0 @3375.085 THEN "Short Exit" 1.92
@@ -487,7 +489,8 @@ void check_pinned_pair(const std::vector<Row>& got) {
 // ---------------------------------------------------------------------------
 void test_rev_tape() {
     std::printf("A. m1d-mcbar-stop-rev: dropped reversal -> margin call at the high, stop at the high\n");
-    Probe p = run_tape(/*with_reversal=*/true, /*with_limit=*/false);
+    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_tape(p, /*with_reversal=*/true, /*with_limit=*/false);
     const std::vector<Row> got = p.rows();
     for (const Row& r : got) print_row("engine", r);
     check_rows_match("m1d-mcbar-stop-rev", got, kRevTape);
@@ -501,7 +504,8 @@ void test_rev_tape() {
 // ---------------------------------------------------------------------------
 void test_norev_tape() {
     std::printf("B. m1d-mcbar-stop-norev: no reversal -> stop at its level, no margin call\n");
-    Probe p = run_tape(/*with_reversal=*/false, /*with_limit=*/false);
+    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_tape(p, /*with_reversal=*/false, /*with_limit=*/false);
     const std::vector<Row> got = p.rows();
     for (const Row& r : got) print_row("engine", r);
     check_rows_match("m1d-mcbar-stop-norev", got, kNorevTape);
@@ -524,7 +528,8 @@ void test_norev_tape() {
 // ---------------------------------------------------------------------------
 void test_rev_probe_shape_limit_and_stop() {
     std::printf("C. rhyme17 shape (limit + stop bracket, re-issued every bar): the same 07-14 pair\n");
-    Probe p = run_tape(/*with_reversal=*/true, /*with_limit=*/true);
+    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_tape(p, /*with_reversal=*/true, /*with_limit=*/true);
     const std::vector<Row> got = p.rows();
     for (const Row& r : got) print_row("engine", r);
     check_rows_match("rev, limit+stop bracket", got, kRevTape);
@@ -840,12 +845,10 @@ static const Row kEthPrevbarAdmittedTape[] = {
 
 // The ETH tapes' broker: 10,000 USDT, mintick 0.01, lot 0.0001, 100% of
 // equity, zero commission, 1x margin, margin calls on.
-Probe run_eth(std::function<void(Probe&, const Bar&)> script) {
-    Probe p(10000.0, 0.01, 0.0001, QtyType::PERCENT_OF_EQUITY, 100.0);
+void run_eth(Probe& p, std::function<void(Probe&, const Bar&)> script) {
     p.script = [&](Probe& e, const Bar& bar, int) { script(e, bar); };
     const std::vector<Bar> bars = to_bars(kEth0407);
     p.run(bars.data(), (int)bars.size());
-    return p;
 }
 
 // The 13:45Z pair: the slice at the high, then the short closed at the 14:00Z
@@ -870,7 +873,8 @@ void check_eth_pair_rows(const std::vector<Row>& got) {
 
 void test_famv_eth_pair_mcbar_reissue() {
     std::printf("F1. famV-eth-pair-mcbar-reissue: the close-time pair leaves the bar's slice alone; 'Long' closes the rest at the next open\n");
-    Probe p = run_eth([](Probe& e, const Bar& bar) {
+    Probe p(10000.0, 0.01, 0.0001, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_eth(p, [](Probe& e, const Bar& bar) {
         if (bar.timestamp == kE1330) e.entry_default("Short", false);
         if (bar.timestamp == kE1345) e.entry_default("Long", true);
         e.exit_stop("Short Exit", "Short", e.avg_price() + 30.0);
@@ -887,7 +891,8 @@ void test_famv_eth_pair_mcbar_reissue() {
 
 void test_famv_eth_pair_mcbar_once() {
     std::printf("F2. famV-eth-pair-mcbar-once: the stop issued once, with the pair — same rows\n");
-    Probe p = run_eth([](Probe& e, const Bar& bar) {
+    Probe p(10000.0, 0.01, 0.0001, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_eth(p, [](Probe& e, const Bar& bar) {
         if (bar.timestamp == kE1330) e.entry_default("Short", false);
         if (bar.timestamp == kE1345) {
             e.entry_default("Long", true);
@@ -905,7 +910,8 @@ void test_famv_eth_pair_mcbar_once() {
 
 void test_famv_eth_mcbar_norev() {
     std::printf("F3. famV-eth-pair-mcbar-norev: no pair — the close-born stop fills at the next open, not at the extreme\n");
-    Probe p = run_eth([](Probe& e, const Bar& bar) {
+    Probe p(10000.0, 0.01, 0.0001, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_eth(p, [](Probe& e, const Bar& bar) {
         if (bar.timestamp == kE1330) e.entry_default("Short", false);
         e.exit_stop("Short Exit", "Short", e.avg_price() + 30.0);
         if (bar.timestamp == kE1415) e.close_all();
@@ -919,7 +925,8 @@ void test_famv_eth_mcbar_norev() {
 
 void test_famv_eth_prevbar_admitted() {
     std::printf("F4. famV-eth-pair-prevbar-admitted: the pair admitted at the next open purges the resting stop\n");
-    Probe p = run_eth([](Probe& e, const Bar& bar) {
+    Probe p(10000.0, 0.01, 0.0001, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_eth(p, [](Probe& e, const Bar& bar) {
         if (bar.timestamp == kE1300) e.entry_default("Short", false);
         if (bar.timestamp == kE1315) e.exit_stop("Short Exit", "Short", 1530.0);
         if (bar.timestamp == kE1330) {
@@ -953,8 +960,7 @@ static const Row kNoMcNorevTape[] = {
     {kT0624, 3322.825, 3.0, kT0713, 3370.325, kExitClose, -142.5, false, "Short Exit"},
 };
 
-Probe run_tape_no_mc(bool with_reversal) {
-    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+void run_tape_no_mc(Probe& p, bool with_reversal) {
     p.set_margin_short(50.0);
     p.script = [&](Probe& e, const Bar& bar, int) {
         if (bar.timestamp == kT0623) e.entry_default("Short", false);
@@ -967,12 +973,12 @@ Probe run_tape_no_mc(bool with_reversal) {
     };
     const std::vector<Bar> bars = xau_tape_bars();
     p.run(bars.data(), (int)bars.size());
-    return p;
 }
 
 void test_famv_xau1d_no_mc_rev() {
     std::printf("G1. famV-xau1d-noMC-rev: declined reversal, no cascade — the dormant stop skips the 07-13 breach and the re-issue fills 07-15 at its level\n");
-    Probe p = run_tape_no_mc(/*with_reversal=*/true);
+    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_tape_no_mc(p, /*with_reversal=*/true);
     const std::vector<Row> got = p.rows();
     for (const Row& r : got) print_row("engine", r);
     check_rows_match("famV-xau1d-noMC-rev", got, kNoMcRevTape);
@@ -984,7 +990,8 @@ void test_famv_xau1d_no_mc_rev() {
 
 void test_famv_xau1d_no_mc_norev() {
     std::printf("G2. famV-xau1d-noMC-norev: no reversal — the stop fills on the 07-13 bar at its level\n");
-    Probe p = run_tape_no_mc(/*with_reversal=*/false);
+    Probe p(10000.0, 0.001, 0.01, QtyType::PERCENT_OF_EQUITY, 100.0);
+    run_tape_no_mc(p, /*with_reversal=*/false);
     const std::vector<Row> got = p.rows();
     for (const Row& r : got) print_row("engine", r);
     check_rows_match("famV-xau1d-noMC-norev", got, kNoMcNorevTape);

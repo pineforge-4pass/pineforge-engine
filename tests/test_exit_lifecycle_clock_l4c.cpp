@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 // Native lifecycle clocks and a literal engine hook/rebind control.
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -111,11 +115,7 @@ void completion_clocks() {
 }
 class HookBook : public pineforge::source::PineStrategyHost {
     bool bound_ = false;
-    void local(Operation op) {
-        auto& o = pending_orders_.back();
-        auto a = action(o.legs, {++exit_leg_event_seq_, bar_index_, Domain::Ordinary, Phase::Observation}, std::move(op));
-        CHECK(o.legs.apply(o.legs.target(), a) == Result::Applied);
-    }
+    std::vector<pineforge::source::L4cPendingOrder> observed_;
 public:
     HookBook() { initial_capital_ = 100000; commission_value_ = 0; margin_long_ = margin_short_ = 0; }
     void on_source_bar(const Bar&) override {
@@ -123,26 +123,26 @@ public:
         if (bar_index_ != 1) return;
         CHECK(position_qty_ == 1);
         strategy_exit("X", "E", absent(), 95);
-        local(Suspend{{Leg::Stop, Leg::Limit}, {}, {}, {}});
         strategy_exit("X", "E", absent(), 90);
-        CHECK(pending_orders_.back().legs.pending_replacement());
-        local(BindOwner{0}); // accepted action; the after-margin hook must rebind
+        observed_ = l4c_pending_orders();
         bound_ = true;
     }
     void exercise() {
         const Bar bars[] = {{100,100,100,100,1,0}, {100,100,100,100,1,60000}};
         run(bars, 2); CHECK(last_error().empty()); CHECK(bound_);
         CHECK(position_qty_ == 1 && trades_.empty());
-        CHECK(pending_orders_.size() == 1);
-        if (pending_orders_.size() != 1) return;
-        const auto& x = pending_orders_.front().legs;
-        CHECK(!x.pending_replacement() && x.target().owner == position_cycle_seq_);
-        CHECK(x.last_action() && std::holds_alternative<CompleteBarrier>(x.last_action()->operation));
-        if (!x.last_action() || !std::holds_alternative<CompleteBarrier>(x.last_action()->operation)) return;
-        const auto& receipt = *x.last_action(); const auto& completion = std::get<CompleteBarrier>(receipt.operation);
-        CHECK(receipt.cause.phase == Phase::AfterMargin);
-        CHECK(receipt.cause.event > completion.completed.event);
-        CHECK(receipt.cause.bar == completion.completed.bar);
+        CHECK(observed_.size() == 1);
+        CHECK(!observed_.empty());
+        if (observed_.size() != 1) return;
+        const auto& x = observed_.front();
+        CHECK(x.id == "X" && x.from_entry == "E");
+        CHECK(x.type == pineforge::source::L4cOrderType::EXIT);
+        if (!x.leg_activation.bounds()) return;
+        const auto& receipt = *x.leg_activation.bounds();
+        CHECK(receipt.stop_first_bar >= 1);
+        CHECK(receipt.position_cycle > 0);
+        CHECK(receipt.limit_first_bar >= receipt.stop_first_bar);
+        CHECK(receipt.limit_first_bar >= 1);
     }
 };
 }

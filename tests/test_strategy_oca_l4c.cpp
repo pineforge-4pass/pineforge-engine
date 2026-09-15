@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_strategy_oca.cpp — verify Pine v6 OCA group semantics on
  * BacktestEngine. Specifically pins down strategy.oca.reduce: when one

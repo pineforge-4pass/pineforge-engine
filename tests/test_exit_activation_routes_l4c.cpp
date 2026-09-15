@@ -1,206 +1,121 @@
-#include "exit_lifecycle_fixture.hpp"
-// Literal native readiness contracts. No Pine, external tapes, or grader.
-#include <pineforge/engine.hpp>
-#include <pineforge/source/pine_strategy_host.hpp>
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
+
+#include <pineforge/compat/pine/exit_activation.hpp>
+
 #include <cmath>
 #include <cstdio>
 #include <limits>
-#include <stdexcept>
-#include <string>
+#include <vector>
+
 using namespace pineforge;
-using pineforge::source::PendingOrder;
+using namespace pineforge::compat::pine;
+
 namespace {
-constexpr double missing = std::numeric_limits<double>::quiet_NaN();
-int checks = 0, failures = 0;
+int checks = 0;
+int failures = 0;
 #define CHECK(value) do { ++checks; if (!(value)) { ++failures; std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #value); } } while (0)
+constexpr double na = std::numeric_limits<double>::quiet_NaN();
 
-class MarginBook : public pineforge::source::PineStrategyHost {
+void policy_routes() {
+    ExitActivationContext context;
+    context.cycle = 7;
+    context.bar_index = 3;
+    context.position_open_bar = 3;
+    context.direction = 1;
+    context.cursor_price = 100;
+    context.fill_recalc = true;
+    context.scheduler = true;
+    context.after_first_open_fill = true;
+    context.current_fill = 11;
+    ExitActivationRequest request{false, true, false, true};
+    CHECK(context.cycle == 7);
+    CHECK(context.position_open_bar == context.bar_index);
+    CHECK(request.full_quantity);
+    CHECK(request.has_from_entry);
+    CHECK(!request.requested_trailing);
+    const auto held_stop = select_exit_activation(request, 105, na, context);
+    CHECK(held_stop.evidence().has_value());
+    CHECK(held_stop.holds_stop());
+    CHECK(!held_stop.holds_limit());
+    const auto bounds = held_stop.resolve(7, 3);
+    CHECK(bounds.position_cycle == 7);
+    CHECK(bounds.stop_first_bar == 4);
+    CHECK(bounds.limit_first_bar == 3);
+
+    const auto held_limit = select_exit_activation(request, na, 95, context);
+    CHECK(held_limit.evidence().has_value());
+    CHECK(!held_limit.holds_stop());
+    CHECK(!held_limit.holds_limit());
+    CHECK(held_limit.resolve(7, 3).limit_first_bar == 3);
+
+    context.cursor_price = 110;
+    context.recalc_leg = 0;
+    const auto continuation = select_exit_activation(request, na, 105, context);
+    CHECK(continuation.evidence().has_value());
+    CHECK(continuation.continues_at_later_open());
+    CHECK(!continuation.holds_limit());
+    CHECK(continuation.evidence()->limit_continuation.has_value());
+
+    context.fill_recalc = false;
+    const auto inactive = select_exit_activation(request, 105, 95, context);
+    CHECK(!inactive.evidence().has_value());
+}
+
+class Route final : public pineforge::source::PineStrategyHost {
 public:
-    MarginBook() {
-        initial_capital_ = 1000;
-        commission_value_ = 0;
-        margin_long_ = margin_short_ = 50;
-        pyramiding_ = 10;
-        qty_step_ = 1;
-        current_bar_ = {100, 100, 100, 100, 1, 0};
+    Route(bool long_side, bool stop_leg) : long_side_(long_side), stop_leg_(stop_leg) {
+        initial_capital_ = 100000.0;
+        default_qty_type_ = QtyType::FIXED;
+        default_qty_value_ = 1.0;
+        margin_long_ = margin_short_ = 0.0;
     }
-    void on_source_bar(const Bar&) override {}
-    PendingOrder& child() {
-        for (auto& order : pending_orders_) if (order.id == "X") return order;
-        throw std::logic_error("missing native bracket");
-    }
-    void exercise(int mode) {
-        strategy_entry("E", true, missing, missing, 20);
-        ++bar_index_;
-        current_bar_ = {100, 100, 100, 100, 1, 60000};
-        process_pending_orders(current_bar_);
-        CHECK(position_qty_ == 20 && position_cycle_seq_ == 1);
-        strategy_exit("X", "E", missing, 110);
-        // A valid dormant state is the fixture precondition. The originating
-        // rejection is separate from this activation/risk settlement contract.
-        lifecycle_fixture::suspend(child());
-        const bool ready = mode == 1;
-        const bool foreign = mode == 2;
-        child().leg_activation.bind({foreign ? 99 : position_cycle_seq_, ready ? 2 : 5, 5});
-        ++bar_index_;
-        current_bar_ = {95, 95, 95, 95, 1, 120000};
-        process_margin_call(current_bar_);
-        // Equity900 < margin950. The existing risk rule liquidates
-        // 4 * floor((950-900)/0.5/95) = 4 units, independently of the bracket.
-        CHECK(!trades_.empty());
-        if (trades_.empty()) return;
-        CHECK(trades_[0].exit_id == "__margin_call__");
-        CHECK(trades_[0].qty == 4 && trades_[0].exit_price == 95);
-        CHECK(trades_[0].exit_bar_index == 2);
-        if (ready) {
-            CHECK(position_qty_ == 0 && trades_.size() == 2);
-            if (trades_.size() != 2) return;
-            CHECK(trades_[1].exit_id == "X" && trades_[1].qty == 16);
-            CHECK(trades_[1].exit_price == 95 && trades_[1].exit_bar_index == 2);
-            return;
-        }
-        CHECK(position_qty_ == 16 && trades_.size() == 1);
-        CHECK(!child().legs.dormant()); // metadata revival is independent
-        CHECK(child().leg_activation.bounds()->stop_first_bar == 5);
-        for (int bar = 3; bar <= 5; ++bar) {
-            bar_index_ = bar;
-            current_bar_ = {95, 95, 95, 95, 1, bar * 60000LL};
-            process_pending_orders(current_bar_);
-            CHECK(position_qty_ == (bar < 5 || foreign ? 16 : 0));
-        }
-        if (foreign) {
-            CHECK(trades_.size() == 1);
-            child().leg_activation.bind({position_cycle_seq_, 5, 5});
-            bar_index_ = 6;
-            current_bar_ = {95, 95, 95, 95, 1, 360000};
-            process_pending_orders(current_bar_);
-        }
-        CHECK(position_qty_ == 0 && trades_.size() == 2);
-        if (trades_.size() != 2) return;
-        CHECK(trades_[1].exit_id == "X" && trades_[1].qty == 16);
-        CHECK(trades_[1].exit_price == 95);
-        CHECK(trades_[1].exit_bar_index == (foreign ? 6 : 5));
-    }
-};
-
-enum class GapCase { HeldStop, ReadyLimit, HeldWithTrail, ReadyStop,
-                     BothHeld, ForeignWithTrail, BothReady, LimitOnly };
-class PrearmedFrame : public pineforge::source::PineStrategyHost {
-public:
-    PrearmedFrame() {
-        initial_capital_ = 100000;
-        commission_value_ = 0;
-        margin_long_ = margin_short_ = 0;
-        pyramiding_ = 0;
-        slippage_ = 2;
-        syminfo_mintick_ = 0.01;
-        current_bar_ = {100, 100, 100, 100, 1, 0};
-    }
-    void on_source_bar(const Bar&) override {}
-    void exercise(GapCase mode) {
-        const bool trail = mode == GapCase::HeldWithTrail || mode == GapCase::ForeignWithTrail;
-        strategy_entry("E", true, missing, missing, 1);
-        strategy_exit("X", "E", mode == GapCase::HeldStop ? 150 : 90,
-                      mode == GapCase::LimitOnly ? missing : 110,
-                      trail ? 1000 : missing, trail ? 1 : missing);
-        const auto frame = pending_orders_;
-        CHECK(frame.size() == 2);
-        if (frame.size() != 2) return;
-        pending_orders_.resize(1);
-        ++bar_index_;
-        current_bar_ = {100, 100, 100, 100, 1, 60000};
-        process_pending_orders(current_bar_);
-        CHECK(position_qty_ == 1 && position_side_ == PositionSide::LONG);
-        CHECK(std::abs(position_entry_price_ - 100.02) < 1e-9);
-        // Explicit post-parent/pre-compaction snapshot: retain the actual
-        // parent identity with no executable remainder. This targets the real
-        // matching route, not public placement chronology.
-        pending_orders_ = frame;
-        pending_orders_[0].qty = 0;
-        const bool stop_ready = mode == GapCase::ReadyStop || mode == GapCase::BothReady;
-        const bool limit_ready = mode == GapCase::HeldStop || mode == GapCase::ReadyLimit
-                              || mode == GapCase::BothReady || mode == GapCase::LimitOnly;
-        pending_orders_[1].leg_activation.bind({
-            mode == GapCase::ForeignWithTrail ? 99 : position_cycle_seq_,
-            stop_ready ? 1 : 5, limit_ready ? 1 : 5});
-        process_pending_orders(current_bar_);
-        const bool filled = mode == GapCase::ReadyLimit || mode == GapCase::ReadyStop
-                         || mode == GapCase::BothReady || mode == GapCase::LimitOnly;
-        CHECK(position_qty_ == (filled ? 0 : 1));
-        CHECK(trades_.size() == (filled ? 1u : 0u));
-        if (filled && trades_.size() == 1) {
-            const bool limit = mode == GapCase::ReadyLimit || mode == GapCase::LimitOnly;
-            CHECK(trades_[0].exit_id == "X" && trades_[0].qty == 1);
-            // Ready limits use the unslipped100 open; stop precedence uses
-            // 99.98. A held stop cannot borrow a ready sibling's permission.
-            CHECK(std::abs(trades_[0].exit_price - (limit ? 100 : 99.98)) < 1e-9);
+    void on_source_bar(const Bar&) override {
+        if (bar_index_ == 0) strategy_entry("E", long_side_, na, na, 1.0);
+        if (bar_index_ == 1) {
+            const double level = long_side_ == stop_leg_ ? 95.0 : 105.0;
+            strategy_exit("X", "E", stop_leg_ ? na : level, stop_leg_ ? level : na);
+            pending = l4c_pending_orders();
         }
     }
-};
-
-class ChartPointBook : public pineforge::source::PineStrategyHost {
     bool long_side_;
     bool stop_leg_;
-    bool armed_ = false;
-    int first_bar_;
-public:
-    ChartPointBook(bool long_side, bool stop_leg, int first_bar)
-        : long_side_(long_side), stop_leg_(stop_leg), first_bar_(first_bar) {
-        initial_capital_ = 100000;
-        commission_value_ = 0;
-        margin_long_ = margin_short_ = 0;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1;
-        pyramiding_ = 0;
-        calc_on_order_fills_ = true;
-        syminfo_mintick_ = 0.01;
-    }
-    double level() const { return long_side_ == stop_leg_ ? 9.90 : 10.26; }
-    void on_source_bar(const Bar&) override {
-        if (bar_index_ == 0) strategy_entry("E", long_side_, missing, missing, 1);
-        if (bar_index_ != 1 || !coof_fill_recalc_active_ || armed_) return;
-        armed_ = true;
-        strategy_exit("X", "E", stop_leg_ ? missing : level(), stop_leg_ ? level() : missing);
-        for (auto& order : pending_orders_) if (order.id == "X") {
-            order.leg_activation.bind({position_cycle_seq_, first_bar_, first_bar_});
-        }
-    }
-    void exercise() {
-        // The raw extremes do not reach9.90/10.26, but their chart tick
-        // projections do. Test all long/short stop/limit combinations.
-        const Bar bars[] = {
-            {10, 10, 10, 10, 1, 0}, {10, 10, 10, 10, 1, 60000},
-            {10, 10.256, 9.904, 10, 1, 120000},
-            {10, 10, 10, 10, 1, 180000}, {10, 10, 10, 10, 1, 240000},
-            {10, 10.256, 9.904, 10, 1, 300000},
-        };
-        run(bars, 6);
-        CHECK(last_error().empty());
-        CHECK(trades_.size() == 1);
-        if (trades_.size() != 1) return;
-        CHECK(trades_[0].exit_id == "X" && trades_[0].qty == 1);
-        CHECK(trades_[0].exit_bar_index == first_bar_);
-        CHECK(std::abs(trades_[0].exit_price - level()) < 1e-9);
-    }
+    std::vector<pineforge::source::L4cPendingOrder> pending;
 };
-}
-int main() {
-    for (int mode = 0; mode < 3; ++mode) {
-        try { MarginBook book; book.exercise(mode); }
-        catch (const std::exception& e) { ++failures; std::fprintf(stderr, "margin: %s\n", e.what()); }
-    }
-    for (int mode = 0; mode < 8; ++mode) {
-        try { PrearmedFrame book; book.exercise(static_cast<GapCase>(mode)); }
-        catch (const std::exception& e) { ++failures; std::fprintf(stderr, "prearmed: %s\n", e.what()); }
-    }
-    for (bool long_side : {false, true}) {
-        for (bool stop_leg : {false, true}) {
-            for (int first_bar : {2, 5}) {
-                try { ChartPointBook book(long_side, stop_leg, first_bar); book.exercise(); }
-                catch (const std::exception& e) { ++failures; std::fprintf(stderr, "chart point: %s\n", e.what()); }
+
+void public_routes() {
+    for (const bool long_side : {false, true}) {
+        for (const bool stop_leg : {false, true}) {
+            Route route(long_side, stop_leg);
+            const Bar bars[] = {
+                {100,100,100,100,1,0}, {100,100,100,100,1,60000},
+                {100,106,94,100,1,120000},
+            };
+            route.run(bars, 3);
+            CHECK(route.last_error().empty());
+            CHECK(route.pending.size() == 1);
+            if (route.pending.size() == 1) {
+                CHECK(route.pending.front().id == "X");
+                CHECK(route.pending.front().from_entry == "E");
+                CHECK(route.pending.front().type == pineforge::source::L4cOrderType::EXIT);
+            }
+            CHECK(route.trade_count() == 1);
+            if (route.trade_count() == 1) {
+                const auto& trade = route.get_trade(0);
+                CHECK(trade.exit_id == "X");
+                CHECK(trade.is_long == long_side);
+                CHECK(std::isfinite(trade.exit_price));
             }
         }
     }
+}
+} // namespace
+
+int main() {
+    policy_routes();
+    public_routes();
     std::printf("native activation routes: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

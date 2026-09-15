@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_coof_open_recalc_context.cpp — what a calc_on_order_fills FILL RECALC
  * sees, and how a default-sized market order it places is sized (round 7

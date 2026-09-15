@@ -135,6 +135,10 @@ struct PlacementSnapshot {
     int oca_type = 0;
     int qty_type = -1;
     double requested_qty = std::numeric_limits<double>::quiet_NaN();
+    // Live projection of a generic OCA reduction.  The original source
+    // operand above remains immutable; this receipt-backed value is only for
+    // the public pending projection.
+    double projection_remaining_qty = std::numeric_limits<double>::quiet_NaN();
     double qty_percent = std::numeric_limits<double>::quiet_NaN();
     bool is_long = true;
     bool immediately = false;
@@ -159,6 +163,9 @@ struct PlacementSnapshot {
     // then retire only its own deferred legs.
     native_order::RequestHandle bracket_origin{};
     std::uint64_t source_sequence = 0;
+    // Command-boundary order is retained separately from native submission
+    // order: deferred source commands may materialize after a later command.
+    std::uint64_t command_sequence = 0;
     std::int64_t placement_script_open_ms = 0;
     std::int64_t placement_sub_open_ms = 0;
     // Immutable C-row projection facts.  These are source placement facts,
@@ -276,6 +283,10 @@ private:
 
 class PineExecutionAdapter {
 public:
+    struct FixturePendingSnapshot {
+        std::uint64_t incarnation = 0;
+        PlacementSnapshot snapshot{};
+    };
     // Keep the legacy host's construction surface valid until L3a. A null
     // host means this compatibility carrier has no lowering authority.
     explicit PineExecutionAdapter(
@@ -328,6 +339,9 @@ public:
 
     int short_seed_collision_role_v1(native_order::RequestHandle) const noexcept;
     const PendingIntentView& pending_intent_view() const noexcept { return pending_view_; }
+    // Read-only fixture facade for command-boundary rows that have not yet
+    // become live native requests.  It never participates in matching.
+    std::vector<FixturePendingSnapshot> fixture_pending_snapshots() const;
     // Fixture-only read of the source cohort's currently live quantity. It
     // projects the adapter's truthful opening facts; it does not recreate the
     // deleted executable id ledger.
@@ -352,6 +366,16 @@ public:
     void attach_execution_adapter() noexcept;
     bool calc_on_order_fills() const noexcept { return config_.calc_on_order_fills; }
     bool process_orders_on_close() const noexcept { return config_.process_orders_on_close; }
+    // Read-only L4c fixture observations.  They expose callback coordinates
+    // already owned by the adapter; no test path can mutate the native book.
+    bool fixture_coof_recalc_active() const noexcept { return coof_recalc_active_; }
+    bool fixture_coof_cursor_is_bar_close() const noexcept {
+        return coof_recalc_active_ && coof_context_.coordinate.path_phase == NativePathPhase::Close;
+    }
+    void begin_source_evaluation() noexcept { named_entry_cancel_tokens_.clear(); }
+    bool fixture_named_entry_cancel_active(const SourceId& id) const noexcept {
+        return named_entry_cancel_tokens_.find(id) != named_entry_cancel_tokens_.end();
+    }
     std::vector<native_order::RequestHandle> take_first_open_newborns();
     // Pull terminal generic receipts before a source callback observes the
     // next command boundary.  This retires group-cancelled bracket siblings
@@ -448,6 +472,11 @@ private:
         std::uint64_t family_key = 0;
     };
 
+    struct NamedEntryCancelToken {
+        std::uint64_t entry_incarnation = 0;
+        std::uint64_t surviving_exit_incarnation = 0;
+    };
+
     NativeStrategyHost& require_host() const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
@@ -496,6 +525,7 @@ private:
     StagedConfiguration staged_{};
     mutable std::uint64_t run_counter_ = 0;
     std::uint64_t source_sequence_ = 0;
+    std::uint64_t source_command_sequence_ = 0;
     std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
     std::unordered_map<std::uint64_t, PlacementSnapshot> placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
@@ -515,6 +545,8 @@ private:
     // source-cohort debit so a second immediate command sees the new basis,
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
+    std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
+    std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
     std::uint64_t receipt_cursor_ = 0;
     std::uint64_t last_applied_ordinal_ = 0;
     bool materializing_relative_ = false;

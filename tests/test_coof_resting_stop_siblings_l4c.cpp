@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 // TV-derived synthetic ES daily controls. An already-resting group of exit
 // stops reaches the adverse path leg before its fill recalculation can
 // replace/cancel the still-filled siblings. Newly created stops/market exits

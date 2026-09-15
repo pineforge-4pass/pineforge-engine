@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_declined_reversal_close_leg.cpp — declined-reversal close-leg
  * suppression (design-declined-reversal-close-leg.md).
@@ -122,9 +126,6 @@ public:
     double pos() const { return signed_position_size(); }
     using BacktestEngine::position_qty_;
     using BacktestEngine::position_side_;
-    using BacktestEngine::calc_on_order_fills_;
-    using BacktestEngine::process_orders_on_close_;
-    using pineforge::source::PineStrategyHost::id_unclosed_qty_;
 };
 
 // Canonical LONG-then-reversal bars. The LONG opens at 100 all-in (qty 100),

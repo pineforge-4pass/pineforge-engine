@@ -1,3 +1,7 @@
+#include "l4c_native_route_guard.hpp"
+#define PineStrategyHost PineNativeHost
+#define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 /*
  * test_trail_ref_entry_bar_extreme.cpp — round 9 family Z: a trailing exit's
  * running extreme is the position's, from its entry fill on, and a re-issued

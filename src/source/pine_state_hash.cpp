@@ -39,7 +39,8 @@ void hash_native_handle_vector(BrokerStateHashSink& f,
 void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& value) {
     f.i(static_cast<std::int64_t>(value.family)); f.s(value.source_id); f.s(value.from_entry);
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
-    f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
+    f.d(value.requested_qty); f.d(value.projection_remaining_qty);
+    f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);
     f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
@@ -51,6 +52,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     hash_source_run_identity(f, value.bracket_origin.run);
     f.u(value.bracket_origin.incarnation);
     f.u(value.source_sequence);
+    f.u(value.command_sequence);
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
@@ -171,7 +173,7 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
     hash_source_run_epoch(f, run_counter_);
-    f.u(source_sequence_); f.b(host_ != nullptr);
+    f.u(source_sequence_); f.u(source_command_sequence_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
@@ -258,6 +260,23 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(current_debit_ordinals.begin(), current_debit_ordinals.end());
     f.u(current_debit_ordinals.size());
     for (const auto ordinal : current_debit_ordinals) f.u(ordinal);
+    std::vector<std::string> consumed_partial_keys;
+    consumed_partial_keys.reserve(consumed_partial_exit_cycles_.size());
+    for (const auto& row : consumed_partial_exit_cycles_) consumed_partial_keys.push_back(row.first);
+    std::sort(consumed_partial_keys.begin(), consumed_partial_keys.end());
+    f.u(consumed_partial_keys.size());
+    for (const auto& key : consumed_partial_keys) {
+        f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
+    }
+    std::vector<std::string> named_cancel_keys;
+    named_cancel_keys.reserve(named_entry_cancel_tokens_.size());
+    for (const auto& row : named_entry_cancel_tokens_) named_cancel_keys.push_back(row.first);
+    std::sort(named_cancel_keys.begin(), named_cancel_keys.end());
+    f.u(named_cancel_keys.size());
+    for (const auto& key : named_cancel_keys) {
+        const auto& token = named_entry_cancel_tokens_.at(key);
+        f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
+    }
     f.u(receipt_cursor_);
     f.u(last_applied_ordinal_);
     f.b(materializing_relative_);
