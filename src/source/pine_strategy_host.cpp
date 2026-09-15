@@ -6,13 +6,72 @@
 #include "../timezone.hpp"
 #include "../native_execution_consumer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <ctime>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace pineforge {
 using namespace source;
+
+namespace {
+
+[[noreturn]] void reject_begin_bar(int index, const char* field, const char* detail) {
+    throw std::invalid_argument(
+        "bar[" + std::to_string(index) + "]." + field + (detail ? detail : ""));
+}
+
+// Validate the borrowed public begin array before the source provider stages
+// syminfo, inputs, adapter state, or a native run spec.  This mirrors the
+// legacy chart/stream shape checks and deliberately does not impose native
+// calendar or slot-label policy; those remain the generic preflight's job.
+void validate_source_begin_bars(const NativeBeginArgs& args) {
+    if (args.n < 0) throw std::invalid_argument("bar count must be non-negative");
+    if (args.n > 0 && args.bars == nullptr)
+        throw std::invalid_argument("bars must be non-null for a nonempty array");
+    for (int i = 0; i < args.n; ++i) {
+        const Bar& bar = args.bars[i];
+        if (!std::isfinite(bar.open)) reject_begin_bar(i, "open", " must be finite");
+        if (!std::isfinite(bar.high)) reject_begin_bar(i, "high", " must be finite");
+        if (!std::isfinite(bar.low)) reject_begin_bar(i, "low", " must be finite");
+        if (!std::isfinite(bar.close)) reject_begin_bar(i, "close", " must be finite");
+        if (args.is_stream) {
+            if (bar.timestamp < 0)
+                reject_begin_bar(i, "timestamp", " must be non-negative");
+            if (bar.open < 0.0) reject_begin_bar(i, "open", " must be non-negative");
+            if (bar.high < 0.0) reject_begin_bar(i, "high", " must be non-negative");
+            if (bar.low < 0.0) reject_begin_bar(i, "low", " must be non-negative");
+            if (bar.close < 0.0) reject_begin_bar(i, "close", " must be non-negative");
+            if (!std::isfinite(bar.volume) || bar.volume < 0.0)
+                reject_begin_bar(i, "volume", " must be non-negative finite");
+        } else if (!std::isnan(bar.volume)
+                   && (!std::isfinite(bar.volume) || bar.volume < 0.0)) {
+            reject_begin_bar(i, "volume", " must be non-negative finite or NaN (unavailable)");
+        }
+        if (bar.low > std::min(bar.open, bar.close))
+            reject_begin_bar(i, "low", " must not exceed open or close");
+        if (bar.high < std::max(bar.open, bar.close))
+            reject_begin_bar(i, "high", " must not be below open or close");
+        if (i > 0) {
+            const std::int64_t previous = args.bars[i - 1].timestamp;
+            if (bar.timestamp <= previous)
+                reject_begin_bar(i, "timestamp", " must be strictly increasing");
+            if (previous < 0
+                && bar.timestamp > std::numeric_limits<std::int64_t>::max() + previous) {
+                reject_begin_bar(i, "timestamp", " delta exceeds int64 range");
+            }
+        }
+    }
+    if (args.is_stream && args.n > 0
+        && (!std::isfinite(args.bars[args.n - 1].close)
+            || args.bars[args.n - 1].close <= 0.0)) {
+        throw std::invalid_argument("stream warmup final close must be finite and positive");
+    }
+}
+
+}  // namespace
 
 source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
     : NativeStrategyHost(),
@@ -109,6 +168,11 @@ StagedConfiguration source::PineStrategyHost::staged_configuration() const {
 }
 
 void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args) {
+    // Idle abort requests are consumed by the public begin entry even when
+    // input validation refuses before a run starts.  Crucially, validation
+    // runs before any provider-owned state is changed.
+    abort_requested_.store(false, std::memory_order_relaxed);
+    validate_source_begin_bars(args);
     if (args.syminfo) {
         syminfo_ = *args.syminfo;
         syminfo_mintick_ = syminfo_.mintick;
@@ -142,6 +206,13 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         }
     }
 
+    if (args.is_stream && config_.calc_on_order_fills) {
+        throw std::runtime_error(
+            "native stream requires close-only calculation; calc_on_order_fills is unsupported");
+    }
+    if (args.is_stream && (realtime_tail_ || probe_suppress_tail_logic_)) {
+        throw std::runtime_error("native stream cannot use historical probe/tail overrides");
+    }
     PineStrategyConfig effective = config_;
     if (args.overrides_opaque) {
         const auto* overrides = static_cast<const StrategyOverrides*>(args.overrides_opaque);

@@ -812,11 +812,11 @@ bool NativeExecutionConsumer::prepare_public_begin(
         // has not started a native run or consumed an identity, so preserve a
         // reusable Unconfigured/Completed host just as other begin refusals
         // do. Callback exceptions after begin_ready remain terminal.
-        present_refusal(engine, e.what());
+        render(engine, e.what());
         return false;
     } catch (...) {
         preparing_begin_ = false;
-        present_refusal(engine, "native pre-begin provider exception");
+        render(engine, "native pre-begin provider exception");
         return false;
     }
     preparing_begin_ = false;
@@ -1085,6 +1085,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     f.u(driver_digest_.h);
     f.u(account_digest_.count);
     f.u(account_digest_.h);
+    if (precommit_digest_.count != 0) {
+        f.u(precommit_digest_.count);
+        f.u(precommit_digest_.h);
+    }
     return f.h;
 }
 
@@ -1425,6 +1429,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     history_digest_.reset();
     driver_digest_.reset();
     account_digest_.reset();
+    precommit_digest_.reset();
     driver_statistics_ = NativeDriverStatistics{};
     driver_statistics_.intrabar_path_enabled = !spec.intrabar.is_none();
     callback_context_ = NativeDecisionContext{};
@@ -1459,7 +1464,7 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
 }
 
 bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* bars, int n,
-                                             bool stream) {
+                                             bool stream, bool preserve_status) {
     const auto* spec = spec_ptr();
     if (!spec) {
         present_refusal(engine, "native preflight requires a staged spec");
@@ -1469,36 +1474,81 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
         *spec, bars, n,
         stream ? NativeInputPolicy::StreamWarmup : NativeInputPolicy::Batch);
     if (result) return true;
+    const int status_before = engine.last_run_status_;
+    const auto refuse = [&](const char* text) {
+        present_refusal(engine, text);
+        if (preserve_status) engine.last_run_status_ = status_before;
+    };
+    const auto indexed = [&](const char* field, const char* detail) {
+        std::string message = "bar[" + std::to_string(result.index) + "]." + field;
+        if (detail) message += detail;
+        refuse(message.c_str());
+    };
+    const auto timestamped = [&](const char* detail) {
+        indexed("timestamp", detail);
+    };
     switch (result.error) {
     case NativeInputPreflightError::NullArray:
-        present_refusal(engine, "native bars require a non-null array");
+        refuse("native bars require a non-null array");
         break;
     case NativeInputPreflightError::InvalidCount:
-        present_refusal(engine, "native bar count is invalid");
+        refuse("native bar count is invalid");
         break;
     case NativeInputPreflightError::StructuralInvalid:
-        present_refusal(engine, "native bar failed structural validation");
+        if (bars != nullptr && result.index >= 0 && result.index < n) {
+            const Bar& bar = bars[result.index];
+            if (!std::isfinite(bar.open)) {
+                indexed("open", " must be finite");
+            } else if (!std::isfinite(bar.high)) {
+                indexed("high", " must be finite");
+            } else if (!std::isfinite(bar.low)) {
+                indexed("low", " must be finite");
+            } else if (!std::isfinite(bar.close)) {
+                indexed("close", " must be finite");
+            } else if (bar.open < 0.0 && stream) {
+                indexed("open", " must be non-negative");
+            } else if (bar.high < 0.0 && stream) {
+                indexed("high", " must be non-negative");
+            } else if (bar.low < 0.0 && stream) {
+                indexed("low", " must be non-negative");
+            } else if (bar.close < 0.0 && stream) {
+                indexed("close", " must be non-negative");
+            } else if (bar.low > std::min(bar.open, bar.close)) {
+                indexed("low", " must not exceed open or close");
+            } else if (bar.high < std::max(bar.open, bar.close)) {
+                indexed("high", " must not be below open or close");
+            } else {
+                indexed("volume", " must be non-negative finite or NaN (unavailable)");
+            }
+        } else {
+            refuse("native bar failed structural validation");
+        }
         break;
     case NativeInputPreflightError::Unaligned:
-        present_refusal(engine, "native bar is not aligned to the configured calendar");
+        timestamped(" is not aligned to the configured calendar");
         break;
     case NativeInputPreflightError::OffGridLabel:
-        present_refusal(engine, "native confirmed bar timestamp is not a canonical slot label");
+        if (spec->slot_label_policy == NativeSlotLabelPolicy::Canonical) {
+            refuse(
+                "native confirmed bar timestamp is not a canonical slot label");
+        } else {
+            timestamped(" is not a canonical slot label");
+        }
         break;
     case NativeInputPreflightError::NotStrictlyIncreasing:
-        present_refusal(engine, "native timestamps must be strictly increasing");
+        timestamped(" must be strictly increasing");
         break;
     case NativeInputPreflightError::OverlappingSlot:
-        present_refusal(engine, "native input intervals overlap");
+        timestamped(" overlaps the previous input slot");
         break;
     case NativeInputPreflightError::InSessionGap:
-        present_refusal(engine, "native stream has an in-session gap");
+        timestamped(" follows an in-session gap");
         break;
     case NativeInputPreflightError::CalendarFailure:
-        present_refusal(engine, "native calendar parse failed during input preflight");
+        refuse("native calendar parse failed during input preflight");
         break;
     case NativeInputPreflightError::TimestampDeltaOverflow:
-        present_refusal(engine, "native timestamp delta exceeds int64 range");
+        timestamped(" delta exceeds int64 range");
         break;
     case NativeInputPreflightError::None:
         break;
@@ -1815,6 +1865,7 @@ void NativeExecutionConsumer::refresh_target_scalars(
 bool NativeExecutionConsumer::admit_opening_inspect(
         const BacktestEngine& engine, double resolved_price,
         const execution::SettlementInspection& inspect,
+        bool skip_initial_margin,
         native_order::MatchRejectReason* reason) const {
     const auto* spec = spec_ptr();
     if (!spec || !inspect.would_open) return true;
@@ -1835,7 +1886,7 @@ bool NativeExecutionConsumer::admit_opening_inspect(
         if (reason) *reason = native_order::MatchRejectReason::MaxOpenLots;
         return false;
     }
-    if (spec->initial_margin_fraction) {
+    if (!skip_initial_margin && spec->initial_margin_fraction) {
         const double equity = engine.marked_equity(resolved_price) - inspect.current_ticket;
         const double required = inspect.resulting_abs_notional * *spec->initial_margin_fraction;
         if (!std::isfinite(equity) || !std::isfinite(required) || required > equity) {
@@ -2768,9 +2819,6 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         }
         if (inspect.would_open && resolved_price <= 0.0)
             return terminal(native_order::MatchRejectReason::NonpositivePrice, nonidentity_attempt);
-        native_order::MatchRejectReason reason{};
-        if (inspect.would_open && !admit_opening_inspect(engine, resolved_price, inspect, &reason))
-            return terminal(reason, nonidentity_attempt);
 
         native_order::ExecutionProposal proposal;
         proposal.cursor = evaluation.cursor;
@@ -2825,8 +2873,8 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                 candidate.selected ? &*candidate.selected : nullptr,
                 view.account, view.closed_row_pnl);
         }
+        NativePrecommitVerdict verdict = NativePrecommitVerdict::Admit;
         if (view.settlement_readiness == execution::Status::Applied) {
-            NativePrecommitVerdict verdict = NativePrecommitVerdict::Proceed;
             try {
                 auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
                 if (!host) throw std::logic_error("native precommit requires a native host");
@@ -2845,10 +2893,29 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
             if (!check_abort_or_projection(engine, NativeFailureOperation::Settlement, P)) {
                 return std::nullopt;
             }
+            if (verdict == NativePrecommitVerdict::AdmitWithHostMargin) {
+                const auto* admitted_spec = spec_ptr();
+                if (admitted_spec && admitted_spec->initial_margin_fraction) {
+                    Fnv digest;
+                    digest.h = precommit_digest_.h;
+                    digest.u(P);
+                    digest.u(static_cast<std::uint64_t>(verdict));
+                    hash_handle(digest, handle);
+                    precommit_digest_.h = digest.h;
+                    ++precommit_digest_.count;
+                }
+            }
             if (verdict == NativePrecommitVerdict::Refuse) {
                 return terminal(native_order::MatchRejectReason::HostPrecommit,
                                 nonidentity_attempt);
             }
+        }
+        native_order::MatchRejectReason reason{};
+        if (inspect.would_open
+            && !admit_opening_inspect(
+                engine, resolved_price, inspect,
+                verdict == NativePrecommitVerdict::AdmitWithHostMargin, &reason)) {
+            return terminal(reason, nonidentity_attempt);
         }
         // Allocate before financial effects, with geometric growth rather than
         // recopying the complete observation/notification prefix on each fill.
@@ -4745,6 +4812,29 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
                                            const Bar* warmup_bars, int n_warmup,
                                            const std::string& input_tf,
                                            const std::string& script_tf) {
+    // Preserve the live stream before asking the provider to stage/configure a
+    // new run.  The legacy route diagnoses this state first; in particular,
+    // no warmup copy, adapter reset, or broker/spec mutation may occur.
+    if (engine.stream_phase_ == BacktestEngine::StreamPhase::REALTIME) {
+        render(engine, "stream is already realtime");
+        return false;
+    }
+    if (const auto* running = std::get_if<NativeRunning>(&state_);
+        running && running->phase == NativeRunPhase::Realtime) {
+        render(engine, "stream is already realtime");
+        return false;
+    }
+    // Native hosts that already have a strict staged spec can be rejected
+    // before the provider is entered.  Source providers deliberately use the
+    // legacy-tolerant policy and perform their equivalent borrowed-array check
+    // in prepare_native_begin, where the warmup flag is formed.
+    if (!failed()) {
+        const auto* staged = spec_ptr();
+        if (staged && staged->slot_label_policy == NativeSlotLabelPolicy::Canonical
+            && !preflight_bars(engine, warmup_bars, n_warmup, true, true)) {
+            return false;
+        }
+    }
     NativeBeginArgs args{warmup_bars, n_warmup, input_tf, script_tf, false, 4,
         MagnifierDistribution::ENDPOINTS, engine.magnifier_volume_weighted_, 2};
     args.is_stream = true;
@@ -4782,6 +4872,16 @@ bool NativeExecutionConsumer::stream_begin(BacktestEngine& engine,
         }
         if (!preflight_bars(engine, warmup_bars, n_warmup, true)
             || !preflight_intrabar_path(engine)) return false;
+        const auto* preflight_spec = spec_ptr();
+        if (preflight_spec && n_warmup > 0
+            && (!std::isfinite(warmup_bars[n_warmup - 1].close)
+                || warmup_bars[n_warmup - 1].close <= 0.0)
+            && native_legacy_tolerance_enabled(
+                preflight_spec->legacy_tolerance,
+                NativeLegacyTolerance::WarmupNonNegativeOHLC)) {
+            present_refusal(engine, "stream warmup final close must be finite and positive");
+            return false;
+        }
         if (!begin_ready(engine, NativeRunPhase::Warmup, warmup_bars[0].timestamp)) return false;
         pump_batch(engine, warmup_bars, n_warmup);
         if (failed()) return false;
@@ -4864,11 +4964,11 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
             return false;
         }
         if (has_floor_ && tick.timestamp < decision_floor_ms_) {
-            present_refusal(engine, "native tick timestamp regresses the decision floor");
+            present_refusal(engine, "native tick timestamp is backwards or regresses the decision floor");
             return false;
         }
         if (has_array_prev && tick.timestamp < prev_array_ts) {
-            present_refusal(engine, "native tick timestamps must be nondecreasing");
+            present_refusal(engine, "native tick timestamp is backwards or out of order");
             return false;
         }
         prev_array_ts = tick.timestamp;
@@ -4898,7 +4998,7 @@ bool NativeExecutionConsumer::preflight_ticks(BacktestEngine& engine, const Trad
         }
         volume += tick.quantity;
         if (!std::isfinite(volume)) {
-            present_refusal(engine, "native tick volume is unrepresentable");
+            present_refusal(engine, "native tick volume overflow");
             return false;
         }
         if (ordinals == 0 || ordinals == std::numeric_limits<uint64_t>::max()) {
