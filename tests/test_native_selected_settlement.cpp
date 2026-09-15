@@ -23,7 +23,7 @@ void near(double a,double b) {
     if(!ok)std::printf(" actual=%.17g expected=%.17g\n",a,b);CHECK(ok);
 }
 struct Book final : BacktestEngine {
-    Book(){initial_capital_=1000;commission_type_=CommissionType::CASH_PER_ORDER;commission_value_=6;
+    Book() : BacktestEngine(NativeConsumerBindTag{}) {initial_capital_=1000;commission_type_=CommissionType::CASH_PER_ORDER;commission_value_=6;
         syminfo_.pointvalue=1;account_currency_fx_=1;stream_observe_actions_=true;
         current_bar_={100,100,100,100,1,1736121600000LL};bar_index_=7;}
     void on_bar(const Bar&) override {}

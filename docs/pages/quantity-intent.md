@@ -1,6 +1,6 @@
-`PendingOrder::quantity_request` separates an exit's original requested amount
-from the numeric reservation made for that request. It replaces two stored
-booleans that mixed those lifetimes.
+The adapter placement snapshot separates an exit's original requested amount
+from the native working reservation made for that request. It replaces the
+retired compatibility booleans that mixed those lifetimes.
 
 `QuantityIntent` contains exactly one of `Units(amount)`,
 `Fraction(numerator, denominator)` or `All`. Fractional requests retain their

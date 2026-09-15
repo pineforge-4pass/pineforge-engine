@@ -28,7 +28,6 @@ public:
         stream_observe_actions_ = true;
         slippage_ = 9;
         qty_step_ = 10;
-        pyramiding_ = 1;
     }
     void on_source_bar(const Bar&) override {}
     execution::Result settle(execution::Action action, double price = 120,
@@ -48,7 +47,6 @@ public:
         if (kind == 0) win_trades_count_ = value;
         if (kind == 1) loss_trades_count_ = value;
         if (kind == 2) eventrades_count_ = value;
-        if (kind == 3) { cons_loss_day_count_ = value; last_loss_day_ = -1; }
     }
     void exhaust_entries() { position_entry_count_ = std::numeric_limits<int>::max(); }
     void stale_projection() { position_qty_ = 10; position_entry_price_ = 999; }
@@ -69,8 +67,6 @@ public:
             pyramid_entries_.push_back(lot);
             position_qty_ += lot.qty;
             weighted += lot.qty*lot.price;
-            id_unclosed_qty_[lot.entry_id] = lot.qty;
-            cycle_filled_entry_ids_.insert(lot.entry_id);
         }
         position_entry_price_ = weighted/position_qty_;
     }
@@ -642,7 +638,7 @@ void exhausted_counters_throw_before_effects() {
     CHECK(stream_open.fingerprint()==open_before && stream_open.position()==0);
     CHECK(stream_open.lots().empty() && stream_open.actions().empty());
 
-    for (int kind = 0; kind < 4; ++kind) {
+    for (int kind = 0; kind < 3; ++kind) {
         Book counts;
         counts.seed({1});
         counts.exhaust_close_counter(kind);

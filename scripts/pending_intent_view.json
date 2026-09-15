@@ -2,7 +2,7 @@
   "schema": "pineforge-r4-d-pending-intent-view/v1",
   "captured_at": {
     "engine_commit": "ab9714beccb62b796c122cf68986ec9e7dbf4a67",
-    "route": "LegacyCompatibilityConsumer / source::PineStrategyHost",
+    "route": "retired execution owner / source::PineStrategyHost",
     "pending_order_members": 65,
     "prefix_members": 98
   },
@@ -16,7 +16,7 @@
     "booleans": "Boolean C fields are 0/1 derived from the named fact only.",
     "strings": "id/from_entry/oca_name/comment use the existing 63-byte NUL copy plus full-string FNV-1a hash convention."
   },
-  "request_handle_order": "PendingIntentView enumerates current live request handles in native WorkingRequestCore roster order; no source PendingOrder container is rebuilt.",
+  "request_handle_order": "PendingIntentView enumerates current live request handles in native WorkingRequestCore roster order; no source retired request row container is rebuilt.",
   "source_pending_order_inventory": [
     {
       "member": "id",
@@ -471,7 +471,7 @@
     },
     {
       "member": "short_seed_collision_role",
-      "cpp_type": "ShortSeedCollisionRole",
+      "cpp_type": "int32_t",
       "kind": "receipt fact",
       "source": "source::PineExecutionAdapter::ShortSeedPlan",
       "no_write": true
@@ -1206,7 +1206,7 @@
     },
     {
       "field": "short_seed_collision_role",
-      "cpp_type": "ShortSeedCollisionRole",
+      "cpp_type": "int32_t",
       "kind": "receipt fact",
       "source": "source::PineExecutionAdapter::ShortSeedPlan",
       "no_write": true

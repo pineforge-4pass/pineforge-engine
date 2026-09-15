@@ -118,10 +118,10 @@ notice:
 Rebuild generated and native C++ objects against matching engine headers and
 runtime. R4-D L1 advances `BacktestEngine`, `NativeStrategyHost`, and the
 private consumer to `engine_script_run_v17`; the host capability macro is
-`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17`. `PendingOrder` remains a source
-epoch type (`pineforge::source::PendingOrder`) with the explicit
-`pineforge-source-adapter/v2` source-hash domain. Native request/core/event
-values are `native_order_v5`, the private consumer identity is
+`PINEFORGE_HAS_NATIVE_STRATEGY_HOST_V17`. L3b removes the source compatibility
+order type; `pineforge-source-adapter/v2` hashes adapter and scheduler state
+instead. Native request/core/event values are `native_order_v5`, the private
+consumer identity is
 `native-consumer/v7`, driver types are `native_driver_v5`, and run specs are
 `native_run_spec_v2`.
 
@@ -153,9 +153,9 @@ guarantee remains in force.
 
 The historical transitions retain their full comparisons. The reviewed v15→v16
 transition additionally consumes the authenticated relocation manifest: it
-allows exactly the listed relocated source storage and source seams, measures
-`sizeof(source::PendingOrder)` in the source-layer row, and rejects every other
-storage, vtable, layout, header, compile, or link difference. Against the older
+allows exactly the listed retired source storage and source seams, verifies the
+frozen public pending-row POD separately, and rejects every other storage,
+vtable, layout, header, compile, or link difference. Against the older
 providers the checker still compares, in full and unconditionally:
 
 * every engine named data declaration in source order (252 declarations, 251
@@ -164,7 +164,7 @@ providers the checker still compares, in full and unconditionally:
   vtable;
 * every compiler-emitted layout word — all 789 against e60 R2 and all 793
   against 0e R3, covering `sizeof`/`alignof` of `BacktestEngine`,
-  `PendingOrder`, the native aggregates and the selected/projection types, plus
+  the native aggregates and the selected/projection types, plus
   the offset/size/alignment triple of each of the 251 engine data members, not
   only the leading financial `Result`/`SettlementInspection`, status and
   Action/CloseScope words. The receipt's `layout.comparedWords` and

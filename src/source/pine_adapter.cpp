@@ -47,16 +47,16 @@ void copy_pending_string(std::string_view value, char* out, std::uint8_t* trunca
 
 int mirror_order_type(PineOrderFamily family) noexcept {
     switch (family) {
-    case PineOrderFamily::Entry: return static_cast<int>(OrderType::ENTRY);
-    case PineOrderFamily::Order: return static_cast<int>(OrderType::RAW_ORDER);
+    case PineOrderFamily::Entry: return 1;
+    case PineOrderFamily::Order: return 3;
     case PineOrderFamily::ExitLimit:
     case PineOrderFamily::ExitStop:
-    case PineOrderFamily::ExitTrail: return static_cast<int>(OrderType::EXIT);
+    case PineOrderFamily::ExitTrail: return 2;
     case PineOrderFamily::Close:
     case PineOrderFamily::CloseAll:
-    case PineOrderFamily::Margin: return static_cast<int>(OrderType::MARKET);
+    case PineOrderFamily::Margin: return 0;
     }
-    return static_cast<int>(OrderType::MARKET);
+    return 0;
 }
 
 std::uint64_t source_key(const SourceId& left, const SourceId& right) noexcept {
@@ -460,6 +460,36 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key) {
     auto& host = require_host();
+    const NativePhysicalPosition physical = host.physical_position();
+    snapshot.projection_position_side = physical.signed_units > 0.0
+        ? static_cast<std::int32_t>(PositionSide::LONG)
+        : (physical.signed_units < 0.0 ? static_cast<std::int32_t>(PositionSide::SHORT)
+                                       : static_cast<std::int32_t>(PositionSide::FLAT));
+    snapshot.projection_after_close = pending_same_bar_close_qty_ > 0.0;
+    snapshot.projection_over_pyramiding = opening && config_.pyramiding > 0
+        && ((physical.signed_units > 0.0) == snapshot.is_long)
+        && physical.signed_units != 0.0
+        && physical.lot_count >= static_cast<std::size_t>(config_.pyramiding);
+    snapshot.projection_created_during_coof = coof_recalc_active_;
+    snapshot.projection_coof_at_terminal = coof_recalc_active_
+        && coof_context_.is_terminal_sub_bar;
+    snapshot.projection_coof_mid_bar = coof_recalc_active_
+        && !coof_context_.is_terminal_sub_bar;
+    snapshot.projection_tv_carry_qty = std::abs(physical.signed_units);
+    snapshot.projection_default_stop_equity = snapshot.sizing.equity;
+    snapshot.projection_default_stop_signal_close = snapshot.sizing.mark;
+    snapshot.projection_explicit_equity = std::isfinite(snapshot.requested_qty)
+        ? snapshot.sizing.equity : kNaN;
+    snapshot.projection_explicit_signal_close = std::isfinite(snapshot.requested_qty)
+        ? snapshot.sizing.price : kNaN;
+    snapshot.projection_affordability_equity = snapshot.sizing.equity;
+    snapshot.projection_affordability_signal_price = snapshot.sizing.price;
+    snapshot.projection_affordability_held_qty = std::abs(physical.signed_units);
+    if (const auto point = host.current_execution_point()) {
+        snapshot.projection_created_bar = point->decision.coordinate.interval_index;
+        snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
+        snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
+    }
     if (auto* member = std::get_if<native_order::Member>(&request.group)) {
         if (source_sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
             throw std::overflow_error("Pine OCA member sequence exhausted");
@@ -471,6 +501,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     const auto key = replacement_key.empty() ? 0 : key_for(replacement_key);
     std::optional<native_order::RequestHandle> accepted;
+    std::optional<PlacementSnapshot> predecessor_snapshot;
     if (key != 0) {
         std::optional<native_order::RequestHandle> existing_handle;
         if (const auto existing = live_by_source_key_.find(key);
@@ -478,10 +509,24 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             // `retire` removes this key from live_by_source_key_. Keep the
             // handle independent of the map node before either operation.
             existing_handle = existing->second;
+            if (const auto previous = placement_.find(existing_handle->incarnation);
+                previous != placement_.end()) {
+                predecessor_snapshot = previous->second;
+            }
         }
         if (existing_handle) {
             const auto result = host.replace(*existing_handle, request);
             if (result.status == native_order::ReplaceStatus::Replaced && result.successor) {
+                snapshot.projection_predecessor = existing_handle->incarnation;
+                if (predecessor_snapshot) {
+                    const auto family = predecessor_snapshot->family;
+                    snapshot.projection_predecessor_exit = family == PineOrderFamily::ExitLimit
+                        || family == PineOrderFamily::ExitStop || family == PineOrderFamily::ExitTrail;
+                    snapshot.projection_predecessor_market = family == PineOrderFamily::Entry
+                        && !std::isfinite(predecessor_snapshot->exit_levels.limit)
+                        && !std::isfinite(predecessor_snapshot->exit_levels.stop)
+                        && !std::isfinite(predecessor_snapshot->exit_levels.trail_offset);
+                }
                 retire(*existing_handle);
                 accepted = *result.successor;
             }
@@ -2276,8 +2321,14 @@ int PineExecutionAdapter::short_seed_collision_role_v1(native_order::RequestHand
 
 void PineExecutionAdapter::set_risk_direction(int direction) noexcept { risk_.direction = direction; }
 void PineExecutionAdapter::set_risk_max_cons_loss_days(int value) noexcept { risk_.max_cons_loss_days = value; }
-void PineExecutionAdapter::set_risk_max_drawdown(double value, bool percent) noexcept { risk_.max_drawdown = value; risk_.max_drawdown_percent = percent; }
-void PineExecutionAdapter::set_risk_max_intraday_loss(double value, bool percent) noexcept { risk_.max_intraday_loss = value; risk_.max_intraday_loss_percent = percent; }
+void PineExecutionAdapter::set_risk_max_drawdown(double value, bool percent) noexcept {
+    risk_.max_drawdown = value;
+    if (percent) risk_.max_drawdown_percent = true;
+}
+void PineExecutionAdapter::set_risk_max_intraday_loss(double value, bool percent) noexcept {
+    risk_.max_intraday_loss = value;
+    if (percent) risk_.max_intraday_loss_percent = true;
+}
 void PineExecutionAdapter::set_risk_max_position_size(double value) noexcept { risk_.max_position_size = value; }
 void PineExecutionAdapter::set_margin_call_enabled(bool enabled) noexcept {
     source_margin_call_enabled_ = enabled;
@@ -2369,21 +2420,106 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
     out->qty_type = snapshot.qty_type;
     out->qty_percent = snapshot.qty_percent;
     out->oca_type = snapshot.oca_type;
+    out->created_bar = snapshot.projection_created_bar;
     out->created_seq = static_cast<std::int64_t>(snapshot.source_sequence);
     out->incarnation = handle.incarnation;
-    out->replaced_order_incarnation = snapshot.replaced_opening
-        ? snapshot.bracket_origin.incarnation : 0;
+    out->created_by_same_id_replacement = snapshot.projection_predecessor != 0
+        && snapshot.family != PineOrderFamily::Order ? 1U : 0U;
+    out->replaced_default_market_incarnation = snapshot.projection_predecessor_market
+        ? snapshot.projection_predecessor : 0;
+    // A live row has no terminal cancellation receipt.  Its false/zero receipt
+    // projections are therefore an absence fact, not a compatibility default.
+    out->declined_by_replaced_short_market = 0U;
+    out->replaced_exit_order_incarnation = snapshot.projection_predecessor_exit
+        ? snapshot.projection_predecessor : 0;
+    out->recreated_after_named_cancelled_entry_incarnation = 0;
+    out->named_cancel_surviving_exit_incarnation = 0;
+    out->stop_limit_activated = 0U;
+    out->coof_suppress_stop_on_entry_bar = 0U;
+    out->coof_suppress_limit_on_entry_bar = 0U;
+    out->created_during_coof_recalc = snapshot.projection_created_during_coof ? 1U : 0U;
+    out->coof_born_at_close_recalc = snapshot.projection_coof_at_terminal ? 1U : 0U;
+    out->coof_born_mid_bar = snapshot.projection_coof_mid_bar ? 1U : 0U;
+    out->coof_cascade_seg_i = -1;
+    out->coof_cascade_inflight_fires = 0U;
+    out->created_position_side = snapshot.projection_position_side;
     out->created_position_cycle_seq = snapshot.placement_cycle;
+    out->created_after_position_close_in_bar = snapshot.projection_after_close ? 1U : 0U;
+    out->over_pyramiding_cap_at_placement = snapshot.projection_over_pyramiding ? 1U : 0U;
+    out->same_id_stop_deferred_close_all_bar = -1;
+    out->same_id_stop_deferred_close_all_incarnation = 0;
+    out->reverses_same_bar_market_from_flat = 0U;
+    out->paired_flat_market_candidate = 0U;
+    out->paired_flat_market_own_qty = kNaN;
+    out->paired_flat_market_signal_close = kNaN;
+    out->paired_flat_market_signal_equity = kNaN;
+    out->paired_flat_market_signal_margin_pct = kNaN;
+    out->paired_flat_market_signal_pointvalue = kNaN;
+    out->paired_flat_market_signal_fx = kNaN;
+    out->paired_flat_market_peer_seq = 0;
+    out->paired_flat_market_transaction_qty = kNaN;
+    out->default_flat_market_gross_candidate = 0U;
+    out->tv_carry_qty = snapshot.projection_tv_carry_qty;
+    out->frozen_default_qty = snapshot.sizing.frozen_units;
     out->default_stop_placement_qty = snapshot.sizing.frozen_units;
+    out->default_stop_placement_equity = snapshot.projection_default_stop_equity;
+    out->default_stop_placement_signal_close = snapshot.projection_default_stop_signal_close;
     out->default_stop_sizing_price = snapshot.sizing.price;
     out->sizing_equity = snapshot.sizing.equity;
     out->sizing_price = snapshot.sizing.price;
     out->sizing_fx = snapshot.sizing.fx;
     out->sizing_mark = snapshot.sizing.mark;
+    out->opening_affordability_exemption_candidate = 0U;
+    out->explicit_flat_admission_candidate = 0U;
+    out->explicit_placement_equity = snapshot.projection_explicit_equity;
+    out->explicit_slipped_signal_close = snapshot.projection_explicit_signal_close;
+    out->affordability_placement_equity = snapshot.projection_affordability_equity;
+    out->affordability_signal_price = snapshot.projection_affordability_signal_price;
+    out->affordability_held_qty = snapshot.projection_affordability_held_qty;
     out->affordability_close_only = snapshot.frozen_market_targeted_close ? 1U : 0U;
+    out->rounded_signal_cost_close_only = 0U;
+    out->signal_close_mc_bar = -1;
+    out->signal_close_mc_entry_incarnation = 0;
+    out->signal_close_mc_fill_seq = 0;
+    out->signal_close_mc_remaining_qty = kNaN;
+    out->requested_partial = (!snapshot.opening && std::isfinite(snapshot.qty_percent)
+        && snapshot.qty_percent < 100.0) || (!snapshot.opening
+        && std::isfinite(snapshot.requested_qty)) ? 1U : 0U;
+    out->full_percent_exit_request = !snapshot.opening && !std::isfinite(snapshot.requested_qty)
+        && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent == 100.0) ? 1U : 0U;
+    out->pooc_global_full_exit_dynamic_qty = 0U;
+    out->pooc_global_full_exit_tracks_bound_adds = 0U;
+    out->pooc_global_full_exit_bound_add = 0U;
+    out->created_while_in_position = !snapshot.opening
+        && snapshot.projection_position_side != static_cast<std::int32_t>(PositionSide::FLAT)
+        ? 1U : 0U;
+    out->sbmt_member = snapshot.frozen_market_instruction ? 1U : 0U;
+    out->sbmt_own_qty = snapshot.frozen_market_instruction
+        ? snapshot.frozen_market_own_units : kNaN;
+    out->sbmt_tx_qty = snapshot.frozen_market_instruction
+        ? snapshot.frozen_market_transaction_units : kNaN;
+    out->sbmt_kept_over_cap = snapshot.frozen_market_instruction
+        && snapshot.projection_over_pyramiding ? 1U : 0U;
+    out->sbmt_close_qty = snapshot.frozen_market_targeted_close
+        ? snapshot.requested_qty : kNaN;
+    out->sbmt_close_buy = snapshot.frozen_market_targeted_close
+        && snapshot.projection_position_side == static_cast<std::int32_t>(PositionSide::SHORT)
+        ? 1U : 0U;
+    out->suppress_as_declined_reversal_close = 0U;
+    out->dormant_bracket = 0U;
+    out->dormant_reissue_pending = 0U;
+    out->dormant_original_stop_price = kNaN;
+    out->dormant_hold_bar = -1;
+    out->dormant_reversal_kill_bar = -1;
+    out->dormant_trail_best = kNaN;
+    out->dormant_trail_best_start = kNaN;
+    out->dormant_trail_leg_dead = 0U;
+    out->suppressed_close_consumed_ledger_qty = kNaN;
+    out->suppressed_close_retired_ledger_qty = kNaN;
     out->short_seed_collision_role = short_seed_collision_role(index);
+    out->replaced_order_incarnation = snapshot.projection_predecessor;
     out->birth_timestamp = snapshot.placement_sub_open_ms;
-    out->birth_bar = static_cast<std::int32_t>(snapshot.placement_cycle);
+    out->birth_bar = snapshot.projection_created_bar;
     out->pine_frozen_market_instruction_kind = snapshot.frozen_market_instruction ? 1U : 0U;
     out->pine_frozen_market_instruction_own_units = snapshot.frozen_market_own_units;
     out->pine_frozen_market_instruction_transaction_units =

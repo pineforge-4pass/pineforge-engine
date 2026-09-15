@@ -1,24 +1,15 @@
 #!/usr/bin/env python3
-"""Source-level one-to-one coverage for the cancellation receipt leaves."""
+"""Check that cancellation-capable native receipts remain in adapter state."""
 from pathlib import Path
-import re
 
 ROOT = Path(__file__).resolve().parents[1]
+adapter = (ROOT / "include/pineforge/source/pine_adapter.hpp").read_text()
 hash_source = (ROOT / "src/source/pine_state_hash.cpp").read_text()
-mirror_source = (ROOT / "src/source/pine_pending_mirror.cpp").read_text()
-leaves = [
-    "cause", "state", "close_claim_release", "source_incarnation",
-    "source_sequence", "target_incarnation", "target_owner", "target_revision",
-    "close_claim_consumed", "close_claim_retired",
-]
-for leaf in leaves:
-    hash_count = len(re.findall(rf"o\.cancellation\.{re.escape(leaf)}\(\)", hash_source))
-    mirror_count = len(re.findall(
-        rf"out->cancellation_{re.escape(leaf)}\s*=.*?src\.cancellation\.{re.escape(leaf)}\(\)",
-        mirror_source,
-    ))
-    if hash_count != 1:
-        raise SystemExit(f"cancellation hash leaf {leaf}: expected one fold, got {hash_count}")
-    if mirror_count != 1:
-        raise SystemExit(f"cancellation mirror leaf {leaf}: expected one projection, got {mirror_count}")
-print(f"cancellation hash/mirror coverage: {len(leaves)} leaves each folded and projected once")
+projection = (ROOT / "src/source/pine_adapter.cpp").read_text()
+
+for value in ("receipt_cursor_", "live_by_source_key_", "bracket_families_"):
+    if value not in adapter or value not in hash_source:
+        raise SystemExit("adapter receipt hash coverage missing: " + value)
+if "int PendingIntentView::copy_v1(" not in projection:
+    raise SystemExit("intent-view C projection is missing")
+print("adapter cancellation receipt and projection coverage: OK")

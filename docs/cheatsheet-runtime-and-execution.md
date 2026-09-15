@@ -125,7 +125,7 @@ exact sequence, fill math, and the subtleties that bite on real-time replay.
 > *before* `dispatch_bar()` — `dispatch_bar()` itself does not reset it.
 ```
 1. pending_close_qty_in_bar_ = 0          # reset (outer loop, pre-dispatch_bar)
-2. process_pending_orders(bar)            # OLD stop/limit/market from prior bars
+2. native driver matches carried requests at the broker-open decision point
      a. update_risk_state()               # may latch risk_halted_
      b. update_trail_best_for_bar_open(bar)
      c. sort_exit_siblings_by_path_fill(bar)
@@ -138,12 +138,12 @@ exact sequence, fill math, and the subtleties that bite on real-time replay.
    # NEW market orders wait for NEXT bar's open
 ```
 
-**`process_orders_on_close = true`:** identical 1–4, then a **step 4b
-`process_pending_orders(bar)`** so NEW market orders fill at **this bar's
-close**. New *priced* (stop/limit/trail) orders created this bar are always
-skipped from that second pass (they wait for next bar).
+**`process_orders_on_close = true`:** the adapter projects close timing into
+the native run specification, then the native driver evaluates eligible new
+market requests at this bar's close. New *priced* (stop/limit/trail) requests
+created this bar wait for the next eligible decision point.
 
-**Magnifier:** per sub-bar, per sample tick → `process_pending_orders` +
+**Magnifier:** per sub-bar, per sample tick → native request matching +
 `update_per_trade_extremes`; `on_bar` runs **once**, on the last tick of the
 last sub-bar (`is_first_tick_` forced true there).
 
@@ -263,8 +263,9 @@ deferred-flip entry fires. Reset to 0 at bar start.
 
 ## 2.11 Risk gates — when & what
 
-- `update_risk_state()` at **start of `process_pending_orders`** (not
-  placement): drawdown halt, intraday-loss halt, cons-loss-day halt. Once
+- The adapter evaluates source risk at native precommit/applied boundaries
+  (not through a second pending loop): drawdown halt, intraday-loss halt,
+  cons-loss-day halt. Once
   `risk_halted_`, blocks all entries.
 - `check_risk_allow_entry` at fill (and in `execute_market_entry`): halt,
   direction lock, max_position_size.

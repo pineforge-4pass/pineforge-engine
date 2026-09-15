@@ -166,7 +166,7 @@ double BacktestEngine::active_account_currency_fx() const {
 //   2. Update per-trade extremes so on_bar reads current values
 //   3. Strategy logic runs at bar close (creates new orders)
 //   4. New market orders fill at bar.close; new stop/limit wait for next bar
-// When process_orders_on_close_ is false, only steps 1-3 run.
+// When close-timing mode is false, only steps 1-3 run.
 
 
 
@@ -200,19 +200,15 @@ void BacktestEngine::reset_run_state() {
     loss_trades_count_ = 0;
     eventrades_count_ = 0;
 
-    // Open position + pending orders.
+    // Open position and request identities.
     reset_position_state_to_flat();   // position_side_/qty/price/time/count,
                                       // pyramid_entries_, trail, partial ids
     // Cycle ownership is scoped to this run, like order incarnations below.
     // A flat transition within a run must keep advancing it; only a new run
     // returns the allocator to its constructor value.
     next_position_cycle_seq_ = 1;
-    reset_source_pending_book();
-    // PendingOrder incarnations are report provenance scoped to one run.
-    // Resetting keeps a reused handle byte/identity-equivalent to a fresh
-    // handle while preserving the invariant that zero means unavailable.
+    // Request incarnations are report provenance scoped to one run.
     next_order_incarnation_ = 1;
-    reset_source_order_and_close_state();
     fold_exit_path_extremes_ = false;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
 
@@ -229,20 +225,12 @@ void BacktestEngine::reset_run_state() {
     first_bar_open_ = std::numeric_limits<double>::quiet_NaN();
     broker_state_hashes_.clear();    // ABI v4 task 6: retain capacity like equity_curve_
 
-    // Risk halt latch + day trackers (one-way halt must not survive a rerun).
-    reset_source_risk_and_cap();
+    // Generic risk-adjacent lifecycle state.
     position_close_obligation_ = {};
     broker_fill_event_seq_ = 0;
-    reset_source_margin_and_coof();
 
     // Per-bar cursor + session-predicate state.
     bar_index_ = 0;
-    // ABI v4 task 4 fix (final review F6): a run that dispatches zero
-    // script bars never reaches dispatch_bar()'s own per-bar reset (top of
-    // dispatch_bar(), engine_run.cpp), which would otherwise leave a reused
-    // handle's last_bar_dual_entry_decision_ (also hashed by
-    // engine_state_hash.cpp) reading the PREVIOUS run's value.
-    reset_source_bar_projections();
     prev_bar_timestamp_ = 0;
     // The chart's native daily partition is rebuilt per run by the
     // multi-timeframe run() (prepare_chart_day_partition); a run that never
@@ -277,8 +265,6 @@ void BacktestEngine::reset_run_state() {
     stream_observe_actions_ = false;
     stream_action_sequence_ = 0;
     stream_order_actions_.clear();
-
-    reset_source_language_series();
 
     // Per-bar trace/diagnostic buffers (trace_enabled_ is config — preserved).
     if (trace_enabled_) {

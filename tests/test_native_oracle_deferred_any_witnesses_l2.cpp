@@ -25,11 +25,13 @@ class WitnessHost final : public source::PineNativeHost {
 public:
     enum class Case { ReplacementGrowth, Reentry, DeferredPercent, NoTarget };
     explicit WitnessHost(Case which) : which_(which) {
-        initial_capital_ = 100000.0;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1.0;
-        commission_value_ = 0.0;
-        pyramiding_ = 10;
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.commission_value = 0.0;
+        config.pyramiding = 10;
+        configure_pine_strategy(config);
         margin_call_enabled_ = false;
     }
     void on_source_bar(const Bar&) override {

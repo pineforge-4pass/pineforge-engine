@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""Validate R4-D Appendix-C PendingIntentView coverage without changing ABI."""
+"""Validate the approved intent-view schema without changing the C ABI."""
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-import gen_pending_order_mirror as mirror  # noqa: E402
-
 SCHEMA = ROOT / "scripts" / "pending_intent_view.json"
 PREFIX = ROOT / "scripts" / "pending_order_v1_prefix.json"
 KINDS = {
@@ -25,26 +21,24 @@ def die(message: str) -> None:
     raise SystemExit("pending_intent_view: " + message)
 
 
-def by_name(rows: list[dict], key: str) -> dict[str, dict]:
-    found: dict[str, dict] = {}
+def named(rows: list[dict], key: str) -> dict[str, dict]:
+    result: dict[str, dict] = {}
     for row in rows:
         name = row.get(key)
-        if not isinstance(name, str) or not name:
-            die(f"row has no {key}: {row!r}")
-        if name in found:
-            die(f"duplicate {key}: {name}")
-        found[name] = row
-    return found
+        if not isinstance(name, str) or not name or name in result:
+            die(f"invalid or duplicate {key}: {row!r}")
+        result[name] = row
+    return result
 
 
 def check_row(row: dict, name: str) -> None:
     if row.get("kind") not in KINDS:
-        die(f"{name} has invalid kind {row.get('kind')!r}")
+        die(f"{name} has invalid kind")
     source = row.get("source")
     if not isinstance(source, str) or not source or source.strip().lower() == "constant":
         die(f"{name} lacks a truthful source")
     if row.get("no_write") is not True:
-        die(f"{name} must declare no_write=true")
+        die(f"{name} must be read-only")
     if row["kind"] == "derived" and not isinstance(row.get("derivation"), str):
         die(f"derived {name} lacks its derivation")
 
@@ -54,41 +48,46 @@ def main() -> int:
     if schema.get("schema") != "pineforge-r4-d-pending-intent-view/v1":
         die("unknown schema")
     if schema.get("open") != []:
-        die("OPEN fields require root disposition before L2")
-    source = by_name(schema.get("source_pending_order_inventory", []), "member")
-    expected_source = {name: typ for typ, name in mirror.members()}
-    if set(source) != set(expected_source):
-        die("source PendingOrder inventory does not cover exactly the current 65 members")
-    for name, typ in expected_source.items():
-        if source[name].get("cpp_type") != typ:
-            die(f"source member type drift: {name}")
-        check_row(source[name], name)
+        die("OPEN fields require a root disposition")
+    inventory = named(schema.get("source_pending_order_inventory", []), "member")
+    if len(inventory) != 65:
+        die("source inventory must retain the approved 65-member capture")
+    for name, row in inventory.items():
+        check_row(row, name)
 
-    prefix = by_name(schema.get("prefix_fields", []), "field")
+    prefix = named(schema.get("prefix_fields", []), "field")
     expected_prefix = {name: typ for typ, name in json.loads(PREFIX.read_text())["members"]}
     if set(prefix) != set(expected_prefix):
-        die("pf_pending_order_v1_t prefix is not covered exactly")
+        die("public prefix coverage is incomplete")
     for name, typ in expected_prefix.items():
         if prefix[name].get("cpp_type") != typ:
-            die(f"prefix field type drift: {name}")
+            die(f"public field type drift: {name}")
         check_row(prefix[name], name)
 
-    probes = by_name(schema.get("probes", []), "name")
-    expected_probes = {
+    # The schema is not documentation-only: every frozen public prefix field
+    # must have an explicit projection write in copy_v1.  Padding may be
+    # zeroed for ABI determinism, but it must never become the value source for
+    # an omitted compatibility field.
+    for name in expected_prefix:
+        if f"out->{name}" not in (ROOT / "src/source/pine_adapter.cpp").read_text():
+            die(f"public prefix field lacks an explicit PendingIntentView projection: {name}")
+
+    probes = named(schema.get("probes", []), "name")
+    expected = {
         "probe_fill_qty",
         "pending_order_level_resolved",
         "pending_order_effective_levels",
         "last_bar_dual_entry_path",
         "trail_best_price",
     }
-    if set(probes) != expected_probes:
+    if set(probes) != expected:
         die("probe coverage is incomplete")
     for name, row in probes.items():
         if row.get("kind") not in KINDS or not isinstance(row.get("source"), str):
             die(f"probe {name} lacks a truthful source")
         if not isinstance(row.get("derivation"), str) or not isinstance(row.get("failure"), str):
             die(f"probe {name} lacks derivation/failure convention")
-    print("pending_intent_view: 65 source members, 98 prefix fields, 5 probes, 0 OPEN")
+    print("pending_intent_view: 65 captured members, 98 prefix fields, 5 probes, 0 OPEN")
     return 0
 
 

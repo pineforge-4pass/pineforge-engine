@@ -1149,8 +1149,6 @@ bool NativeExecutionConsumer::apply_spec(BacktestEngine& engine, const NativeRun
     engine.syminfo_.session = spec.session;
     engine.chart_timezone_ = spec.chart_timezone;
     engine.slippage_ = 0;
-    engine.process_orders_on_close_ = false;
-    engine.calc_on_order_fills_ = false;
     applied_ = spec;
     auto parsed_session = native_calendar::parse_session(spec.session, spec.timezone);
     if (!parsed_session) return false;

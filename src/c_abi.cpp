@@ -16,7 +16,7 @@
  *     strategy_set_probe_suppress_tail_logic, strategy_set_path_order,
  *     strategy_last_bar_dual_entry_path,
  *     strategy_set_broker_state_hash_recording, strategy_broker_state_hash,
- *     strategy_pending_orders_len, strategy_pending_order_get,
+ *     strategy_request_rosterlen, strategy_pending_order_get,
  *     strategy_pending_order_layout, strategy_pending_order_fill_qty,
  *     strategy_pending_order_level_resolved,
  *     strategy_pending_order_effective_levels, strategy_trail_best_price,

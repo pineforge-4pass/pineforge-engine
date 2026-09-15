@@ -1,6 +1,8 @@
 // Native-route literals from the A/B/E cells of tests/oracle/test_oracle_frozen_size.cpp.
 #include <pineforge/source/pine_native_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <limits>

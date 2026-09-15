@@ -3,6 +3,8 @@
 // sequence through PineNativeHost and checks all four projected role codes.
 #include <pineforge/source/pine_native_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 #include <cstdio>
 #include <optional>
 #include <string>

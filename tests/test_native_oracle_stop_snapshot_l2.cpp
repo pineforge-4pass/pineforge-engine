@@ -3,6 +3,8 @@
 // or a later gap-through quote.  The 858 quantity is from the L0 F@15 cells.
 #include <pineforge/source/pine_native_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <limits>

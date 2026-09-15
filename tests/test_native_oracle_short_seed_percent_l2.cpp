@@ -3,6 +3,8 @@
 // same live-plan role codes without consulting a legacy PendingOrder book.
 #include <pineforge/source/pine_native_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 #include <cstdio>
 #include <optional>
 #include <string>

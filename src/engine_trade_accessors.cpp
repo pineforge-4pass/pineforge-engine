@@ -144,7 +144,7 @@ double BacktestEngine::open_trade_max_runup_percent(int idx) const {
 //      partial close of the same physical lot.
 //   2. exit_id == "__margin_call__" -- the sentinel every process_margin_call
 //      / tv_money_long_margin_call forced-liquidation site writes.
-//   3/4. An intraday-cap close never fills through a PendingOrder (no
+//   3/4. An intraday-cap close never fills through a request record (no
 //      exit_id), so it is identified by its synthesized exit_comment
 //      instead (engine_run.cpp / engine_risk.cpp).
 //   5. exit_from_bracket -- set only at the shared exit-fill site

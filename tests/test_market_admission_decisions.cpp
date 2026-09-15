@@ -57,7 +57,7 @@ public:
         set_margin_call_enabled(false);
     }
 
-    std::vector<FixturePendingOrder> signal_rows;
+    std::vector<FixtureIntentRow> signal_rows;
     double position_on_second_bar = std::numeric_limits<double>::quiet_NaN();
     int trades_on_second_bar = -1;
 
@@ -90,7 +90,7 @@ void paired_committed_peer_and_settlement() {
     host.run(bars, 3, "1", "1");
     CHECK(host.last_error().empty());
     CHECK(host.signal_rows.size() == 2);
-    const auto find_fixture = [&](const char* id) -> const source::PineStrategyHost::FixturePendingOrder* {
+    const auto find_fixture = [&](const char* id) -> const source::PineStrategyHost::FixtureIntentRow* {
         for (const auto& row : host.signal_rows) {
             if (row.id == id) return &row;
         }

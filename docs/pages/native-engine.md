@@ -616,14 +616,13 @@ existing whole-book Flatten path when it must close an absorbed roster.
 
 ### Source-layer boundary (R4-C)
 
-Pine/generated hosts now derive from `pineforge::source::PineStrategyHost`,
-which derives from the v16 `BacktestEngine`; handwritten native hosts continue
-to derive from `NativeStrategyHost`. `source::PendingOrder` and the
-`pineforge-source-adapter/v1` hash domain belong to the source layer, while the
-public C ABI remains version 4.
+Pine/generated hosts derive from `pineforge::source::PineStrategyHost`, which
+derives from `NativeStrategyHost`; handwritten native hosts also derive from
+`NativeStrategyHost`. The source adapter/scheduler hash domain is
+`pineforge-source-adapter/v2`, while the public C ABI remains version 4.
 
-This is an ownership boundary, not completion of Pine lowering: the source host
-still uses the moved legacy compatibility loop (`LegacyCompatibilityConsumer`).
+L3b completes the local ownership switch: the compatibility loop and source
+pending-order type are gone, and source commands lower into native requests.
 The installed-header check removes `source/` and `compat/pine/`, then compiles
 the declared native roots and native examples; its dependency files and `nm`
 output are the evidence for this include boundary. It does not establish a

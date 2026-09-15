@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile-only proof of the complete public PendingOrder mirror prefix.
+"""Compile-only proof of the complete public intent row mirror prefix.
 
 The source parser supplies the frozen v9 field table; the generated TU then
 asks the actual compiler to compare every field's offset and size with that

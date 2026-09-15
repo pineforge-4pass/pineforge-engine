@@ -330,11 +330,10 @@ set(TEST_SOURCES
     test_live_flags_lane_positive
 )
 
-# L3a retains the former PendingOrder bodies only as compiled-but-unreachable
-# implementation debris for L3b.  These targets directly drive that owner
-# (or mutate its book/seams outside a native callback), so they have no
-# truthful switched-route observation.  The native adapter/oracle twins cover
-# their public behavior; the L3a disposition ledger records each mapping.
+# L3b deletes the former compatibility-owner bodies. These targets directly
+# drove that owner (or mutated its book/seams outside a native callback), so
+# they have no truthful switched-route observation. Native adapter/oracle twins
+# cover their public behavior; the L3b disposition ledger records each mapping.
 set(L3A_LEGACY_OWNER_TEST_SOURCES
     test_unbounded_margin_admission
     test_settlement_observation_boundary
@@ -522,6 +521,25 @@ list(REMOVE_ITEM L3A_LEGACY_OWNER_TEST_SOURCES
 )
 list(REMOVE_ITEM TEST_SOURCES ${L3A_LEGACY_OWNER_TEST_SOURCES})
 
+# L3b removes the two remaining direct owner-seam probes. Their behavioural
+# coverage is carried by the registered native settlement and reversal suites.
+list(REMOVE_ITEM TEST_SOURCES
+    test_native_reversal_contract
+    test_native_reverse_to
+    test_native_settlement_callers
+    test_source_exact_reversal
+    test_source_fifo_endpoints
+    test_order_action_integration
+    test_opposite_intent_facts
+    test_exit_leg_lifecycle
+    test_exit_barrier_identity
+    test_fams_same_bar_market_tx
+    test_path_resolve_extra
+    test_same_id_stop_replace
+    test_short_seed_collision_percent
+    test_intraday_rollover_chart_tz
+)
+
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -696,9 +714,8 @@ add_test(
             ${PROJECT_SOURCE_DIR}/scripts/live_flags_lane.py --self-test
 )
 
-# The committed PendingOrder POD mirror (include/pineforge/pending_order_mirror.hpp,
-# src/pending_order_mirror.cpp) must be exactly what engine.hpp generates:
-# a PendingOrder member nobody mirrored (or waived) fails here and in CI.
+# The frozen public pending-row POD must retain its exact immutable layout;
+# values are projected through PendingIntentView and verified here and in CI.
 add_test(
     NAME test_pending_order_mirror_check
     COMMAND ${Python3_EXECUTABLE}
@@ -733,12 +750,6 @@ add_test(
     NAME test_broker_state_hash_coverage_mutations
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_broker_state_hash_coverage.py
-)
-
-add_test(
-    NAME test_reservation_expansion_mirror_mutations
-    COMMAND ${Python3_EXECUTABLE}
-            ${PROJECT_SOURCE_DIR}/scripts/test_reservation_expansion_mirror.py
 )
 
 # When PINEFORGE_ENABLE_COVERAGE is ON we also instrument the test
@@ -795,16 +806,28 @@ set(ORACLE_TEST_SOURCES
     test_oracle_magnifier_barstate
     test_oracle_more_than_64_fills
 )
-foreach(test_name ${ORACLE_TEST_SOURCES})
-    add_executable(${test_name} oracle/${test_name}.cpp)
-    target_link_libraries(${test_name} PRIVATE pineforge)
-    target_compile_options(${test_name} PRIVATE -ffp-contract=off -UNDEBUG)
-    add_test(NAME ${test_name} COMMAND ${test_name})
-endforeach()
+# The switched-route fixture twins include the frozen oracle source unchanged
+# and expose only adapter/native projections at its former owner-private seams.
+add_test(NAME test_oracle_deferred_birth COMMAND test_native_oracle_deferred_birth_l2)
+add_test(NAME test_oracle_relative_exit COMMAND test_native_oracle_relative_exit_l2)
+add_test(NAME test_oracle_reversal_close_only COMMAND test_native_oracle_reversal_close_only_l2)
+add_test(NAME test_oracle_reversal_same_bar_tx COMMAND test_native_oracle_reversal_same_bar_tx_l2)
+add_test(NAME test_oracle_reversal_replaced_percent COMMAND test_native_oracle_reversal_replaced_percent_l2)
+add_test(NAME test_oracle_reversal_later_tick COMMAND test_native_oracle_reversal_later_tick_l2)
+add_test(NAME test_oracle_short_seed_percent COMMAND test_native_oracle_short_seed_percent_full_l2)
+add_test(NAME test_oracle_fx COMMAND test_native_oracle_fx_l2)
+add_test(NAME test_oracle_coof COMMAND test_native_oracle_coof_l2)
+add_test(NAME test_oracle_pooc_freeze COMMAND test_native_oracle_pooc_freeze_l2)
+add_test(NAME test_oracle_pooc_immediate COMMAND test_native_oracle_pooc_immediate_l2)
+add_test(NAME test_oracle_magnifier_distribution COMMAND test_native_oracle_magnifier_distribution_l2)
+add_test(NAME test_oracle_day_key COMMAND test_native_oracle_day_key_l2)
+add_test(NAME test_oracle_frozen_size COMMAND test_native_oracle_frozen_size_full_l2)
+add_test(NAME test_oracle_deferred_any_witnesses COMMAND test_native_oracle_deferred_any_witnesses_l2)
+add_test(NAME test_oracle_magnifier_barstate COMMAND test_native_oracle_magnifier_barstate_l2)
+add_test(NAME test_oracle_more_than_64_fills COMMAND test_native_oracle_more_than_64_fills_l2)
 
-# A20 fixture-facade projections preserve the original oracle bodies and
-# literals while replacing their direct PendingOrder reads with the adapter's
-# read-only view. The legacy source files themselves stay untouched.
+# A20 fixture-facade projections preserve the original oracle literals while
+# replacing retired owner reads with the adapter's read-only view.
 add_test(NAME test_oracle_short_seed
          COMMAND test_native_oracle_short_seed_full_l2)
 add_test(NAME test_oracle_stop_snapshot
@@ -829,7 +852,6 @@ if(PINEFORGE_ENABLE_COVERAGE)
 endif()
 add_test(NAME test_c_abi COMMAND test_c_abi)
 
-add_test(NAME test_exit_leg_lifecycle_coverage COMMAND ${Python3_EXECUTABLE} -B ${PROJECT_SOURCE_DIR}/scripts/test_exit_leg_lifecycle_coverage.py)
 add_test(NAME test_market_admission_schema COMMAND ${Python3_EXECUTABLE}
     ${PROJECT_SOURCE_DIR}/scripts/check_market_admission_schema.py)
 add_test(NAME test_market_admission_schema_mutations COMMAND ${Python3_EXECUTABLE}

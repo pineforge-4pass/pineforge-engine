@@ -82,8 +82,12 @@ if(PINEFORGE_BUILD_TESTS)
             # interpreter is not. Preload the compiler's ASan runtime so its
             # interceptors initialize before ctypes loads the strategy.
             if(APPLE)
-                set(_pf_asan_runtime_name
-                    "libclang_rt.asan_osx_dynamic.dylib")
+                if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                    set(_pf_asan_runtime_name "libasan.dylib")
+                else()
+                    set(_pf_asan_runtime_name
+                        "libclang_rt.asan_osx_dynamic.dylib")
+                endif()
                 set(_pf_asan_preload_var "DYLD_INSERT_LIBRARIES")
             else()
                 set(_pf_asan_runtime_name "libasan.so")

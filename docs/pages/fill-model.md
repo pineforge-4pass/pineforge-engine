@@ -69,10 +69,10 @@ that the new object owns the old object's claims. `replaced_order_incarnation`
 records the exact predecessor. A position cycle similarly distinguishes two
 positions that happen to have the same direction.
 
-`QuantityRequest` retains the original Units, Fraction or All request and its
-reservation basis. The executable `PendingOrder::qty` can change through OCA
-reduction or committed reserved growth. That does not rewrite the original
-request, reclassify its historical partial/full meaning, or create another
+The adapter placement snapshot retains the original Units, Fraction, or All
+request basis. Native working quantity can change through group reduction or
+committed reserved growth. That does not rewrite the original request,
+reclassify its historical partial/full meaning, or create another
 quantity ledger.
 
 An expansion capture belongs to an exact EXIT object and exposure cycle. Selected
@@ -108,10 +108,10 @@ The native [resolved settlement extension](../native-settlement.md) applies
 `Flatten`, `Reduce` and `Transact` to the existing physical FIFO book, including
 paid entry costs, current execution charges and ordered observations. Full
 market exits and selected frozen-transaction/materialization paths use it.
-Callers still own matching, admission, slippage and source scheduling; other
-legacy settlement paths remain to be migrated. `ShortSeedCollisionRole` and
-its compatibility projection remain until ordered actions replace all of
-their consumers. This step does not reduce the pending-order flag count or
+The native request core owns matching; the source adapter owns source policy,
+admission, slippage, and scheduling. Short-seed readback is now a
+plan-derived `0/1/2/3` projection rather than a compatibility enum or stored
+role. This step does not reduce the public pending-row ABI or
 provide broker-account reconciliation.
 
 ## Opening checkpoint

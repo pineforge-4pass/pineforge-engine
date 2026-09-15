@@ -17,12 +17,14 @@ int failures = 0;
 class DenseRestingBook final : public source::PineNativeHost {
 public:
     DenseRestingBook() {
-        calc_on_order_fills_ = true;
-        initial_capital_ = 100000.0;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1.0;
-        pyramiding_ = 100;
-        commission_value_ = 0.0;
+        source::PineStrategyConfig config;
+        config.calc_on_order_fills = true;
+        config.initial_capital = 100000.0;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.pyramiding = 100;
+        config.commission_value = 0.0;
+        configure_pine_strategy(config);
         margin_call_enabled_ = false;
     }
     void on_source_bar(const Bar&) override {

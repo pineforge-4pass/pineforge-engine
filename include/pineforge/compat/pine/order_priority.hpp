@@ -1,27 +1,9 @@
 #pragma once
-#include "../../order_priority.hpp"
 #include <cmath>
-#include <optional>
 #include <string>
-#include <vector>
 
-namespace pineforge::source { struct PendingOrder; }
 namespace pineforge::compat::pine {
 
-struct OrderPriorityContext {
-    bool broker_flat;
-    bool process_orders_on_close;
-    bool calc_on_order_fills;
-    bool coof_scheduler_active;
-    bool bar_magnifier_enabled;
-    bool stream_warmup_mode;
-    bool stream_idle;
-    int bar_index;
-};
-
-// Pine's bounded retained-child/recreated-parent exception. The complete
-// source-shape rule lives in this component; this is an ownership transfer,
-// not a generic native activation/dependency scheduler.
 class OrderPriority {
 public:
     static constexpr uint64_t schema_version = 1;
@@ -34,9 +16,6 @@ public:
         if (key == "flat_retained_child_fresh_parent_order")
             retained_parent_first_ = std::isfinite(value) && value > 0.0;
     }
-    std::optional<broker::OrderPriorityDecision> select(
-        const OrderPriorityContext& ctx,
-        const std::vector<source::PendingOrder>& book) const;
 private:
     bool attached_ = false;
     bool retained_parent_first_ = true;

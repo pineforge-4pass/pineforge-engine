@@ -6,6 +6,7 @@
 #define PineStrategyHost PineNativeHost
 #define signed_position_size live_position_size
 #define id_unclosed_qty_ source_id_ledger_view()
+#include "oracle_fixture_config_shim.hpp"
 #include "oracle/test_oracle_frozen_size.cpp"
 #undef id_unclosed_qty_
 #undef signed_position_size

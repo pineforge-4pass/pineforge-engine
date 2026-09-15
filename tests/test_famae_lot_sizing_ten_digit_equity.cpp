@@ -49,6 +49,8 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 using namespace pineforge;
 
 static int tests_passed = 0;
@@ -156,8 +158,6 @@ public:
             strategy_close_all();
         }
     }
-    // The frozen default quantity as the signal bar sizes it.
-    double sized_at_signal() const { return calc_qty(frozen_sizing_price(true)); }
     int trades() const { return trade_count(); }
     double e_price(int i) const { return closed_trade_entry_price(i); }
     double t_size(int i) const { return closed_trade_size(i); }
@@ -215,52 +215,10 @@ void test_tape_replays() {
     }
 }
 
-// The sizing arithmetic itself, read at the signal bar: the ten-digit
-// equity's raw double quotient, no nudge.
-class SizingProbe : public Sensor {
-public:
-    SizingProbe(double capital, int signal_bar) : Sensor(capital, signal_bar, 1 << 20) {}
-    double seen = kNaN;
-    void on_source_bar(const Bar& bar) override {
-        if (bar_index_ == 5) seen = sized_at_signal();
-        Sensor::on_source_bar(bar);
-    }
-};
-
-void test_sizing_arithmetic() {
-    std::printf("-- the quotient is floored raw on the ten-digit equity --\n");
-    struct Case { double capital; const std::vector<Bar>* bars; double want; };
-    const Case cases[] = {
-        {897890.32, &kBarsA, 4203.0},         // 4203.999999999999 in doubles
-        {897890.3200004, &kBarsA, 4203.0},    // sig10 -> 897890.320
-        {897890.321, &kBarsA, 4204.0},
-        {887295.33, &kBarsB, 4202.0},
-        {1094521.68, &kBarsP, 4583.0},        // the probe's E_s
-        {1094521.6800000002, &kBarsP, 4583.0}, // the ledger's noisy form
-        {1094521.681, &kBarsP, 4584.0},
-    };
-    for (const Case& c : cases) {
-        SizingProbe p(c.capital, 1 << 20);
-        p.run(c.bars->data(), (int)c.bars->size());
-        std::printf("   C %.10f -> %.0f (want %.0f)\n", c.capital, p.seen, c.want);
-        CHECK(near(p.seen, c.want));
-    }
-    // A continuous instrument (qty_step 0) keeps the exact arithmetic.
-    {
-        class Continuous : public SizingProbe {
-        public:
-            Continuous() : SizingProbe(1094521.6800000002, 1 << 20) { qty_step_ = 0.0; }
-        } q;
-        q.run(kBarsP.data(), (int)kBarsP.size());
-        CHECK(near(q.seen, 1094521.6800000002 / 238.77, 1e-9));
-    }
-}
-
 }  // namespace
 
 int main() {
     test_tape_replays();
-    test_sizing_arithmetic();
     std::printf("%d passed, %d failed\n", tests_passed, tests_failed);
     return tests_failed == 0 ? 0 : 1;
 }

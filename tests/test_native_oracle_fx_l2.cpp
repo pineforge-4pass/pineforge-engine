@@ -4,6 +4,7 @@
 
 #define PineStrategyHost PineNativeHost
 #define signed_position_size live_position_size
+#include "oracle_fixture_config_shim.hpp"
 #include "oracle/test_oracle_fx.cpp"
 #undef signed_position_size
 #undef PineStrategyHost

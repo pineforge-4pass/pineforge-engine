@@ -26,7 +26,6 @@
 #include "execution_reverse_to.hpp"
 #include "position_close_obligation.hpp"
 #include "market_admission.hpp"
-#include "reservation_expansion.hpp"
 #include "order_cancellation.hpp"
 #include "leg_activation.hpp"
 #include "exit_leg_lifecycle.hpp"
@@ -225,12 +224,12 @@ struct PyramidEntry {
     // synthetic injection; every production entry path captures a real quote.
     double entry_commission_account =
         std::numeric_limits<double>::quiet_NaN();
-    // Monotonic per-run identity of the PendingOrder object whose broker fill
+    // Monotonic per-run identity of the request record object whose broker fill
     // created this physical lot. Unlike Pine's user-visible entry_id, an
     // incarnation is never reused by same-id replacements or later calls.
     // Every partial-close fragment copied from this lot therefore retains the
     // same physical-entry provenance. Zero is reserved for legacy/test-only
-    // synthetic lots that were not created by a PendingOrder.
+    // synthetic lots that were not created by a request record.
     uint64_t entry_incarnation = 0;
     // A foreign/global or ambiguous same-ID bracket consumed part of this
     // physical lot by FIFO. Its logical slot cannot later be released merely
@@ -272,7 +271,7 @@ struct Trade {
     //      its id does NOT carry the internal kClosePrefix ("__close__")
     //      marker (engine_internal.hpp) -- queue_deferred_close_order
     //      (engine_strategy_commands.cpp) also materializes a deferred
-    //      strategy.close as an OrderType::EXIT PendingOrder (it reuses the
+    //      strategy.close as an OrderType::EXIT request record (it reuses the
     //      same exit-fill qty/level machinery), tagged with that prefix
     //      precisely so this flag can tell the two apart.
     //   2. revive_position_brackets_after_margin_call_partial
@@ -379,22 +378,8 @@ struct ReportC {
     int64_t   broker_state_hash_len;
 };
 
-enum class OrderType { MARKET, ENTRY, EXIT, RAW_ORDER };
-
-// Order-local provenance for the one empirically pinned default-FIFO
-// SHORT-seed collision. The broker book remains in its ordinary fill order;
-// these roles only change the two transaction kernels after the complete
-// prior-bar three-object shape has been proven.
-enum class ShortSeedCollisionRole : uint8_t {
-    NONE = 0,
-    LONG_ENTRY,
-    MATERIALIZE_LONG,
-    FINAL_SHORT,
-};
-
 using ExitLegLifecycle = exit_legs::Lifecycle;
 namespace source {
-struct PendingOrder;
 struct StrategyOverrides;
 } // namespace source
 
@@ -440,7 +425,6 @@ inline namespace engine_script_run_v17 {
 class BrokerStateHashSink;
 class BacktestEngine {
 protected:
-    friend class LegacyCompatibilityConsumer;
     friend class NativeExecutionConsumer;
     friend class NativeStrategyHost;
     struct NativeConsumerBindTag { explicit NativeConsumerBindTag() = default; };
@@ -542,10 +526,6 @@ protected:
 
     // --- Strategy parameters (set from strategy() declaration) ---
     double initial_capital_ = 1000000.0;
-    bool process_orders_on_close_ = false;
-    // Historical fill-triggered recalculation is strictly opt-in. The false
-    // branch in dispatch_bar remains the legacy control path.
-    bool calc_on_order_fills_ = false;
     // Detached on bare native construction. Only the explicit Pine frontend
     // attachment can select its source-shape priority interpretation.
     CommissionType commission_type_ = CommissionType::PERCENT;
@@ -558,29 +538,6 @@ protected:
     // process_margin_call floors each liquidation lot DOWN to a multiple of
     // this, matching TradingView's per-instrument margin-call lot sizing.
     double qty_step_ = 0.0;
-    // Opt-in oracle candidate for the ambiguous finite-price margin case where
-    // the documented minimum restore quantity floors to zero.  The established
-    // default makes progress by one quantity step; selected historical exports
-    // instead close the whole residual.  Keep that alternative default-off so
-    // it cannot rewrite otherwise matching trade tapes.
-    // Temporary Pine source facade: this value IS the sole compatibility
-    // owner, not a mirrored limit/proxy. Existing generated statement-time
-    // assignments explicitly opt in; generated constructors attach before
-    // host metadata. Bare native construction leaves this policy unselected.
-    // Percentage of margin required to open a long/short position. Default
-    // 100 = 1x leverage (no leverage). TradingView's strategy() takes these
-    // as ``margin_long`` / ``margin_short``; when the implied position value
-    // (qty * fill_price * margin_pct / 100) exceeds the strategy's available
-    // equity, TV silently rejects the fill — the entry simply does not appear
-    // in the trade list. The PineForge engine mirrors that rejection in
-    // execute_market_entry's FLAT and pyramid-add branches; without it, a
-    // dynamic-qty strategy like community/IES, community/VCP, or
-    // ies-probe-08 over-leverages on low-ATR bars and produces ~5x more
-    // trades than TV. Validated by the matched-trade qty ratio in probe 08
-    // exactly equalling engine_equity / TV_equity.
-    double margin_long_ = 100.0;
-    double margin_short_ = 100.0;
-
     // Account-currency FX multiplier for every quote->account money path. When a
     // strategy declares ``currency=currency.XXX`` differing from the symbol's
     // quote currency (e.g. currency.INR on a USDT-quoted perp), TradingView
@@ -613,44 +570,7 @@ protected:
     // callers that want the legacy hold-to-infinity behaviour.
     bool margin_call_enabled_ = true;
 
-    // finding-308 margin-call intrabar chronology state. TV places the
-    // forced-liquidation event chronologically on the synthesized intrabar
-    // path, so a priced exit that fills strictly AFTER the bar's adverse
-    // extreme (on the engine's own OHLC path) must let a pre-fill deficit
-    // slice first. ``last_margin_call_event_bar_`` records the last
-    // bar_index_ on which ANY margin-call trade row was booked (FX broker-
-    // open rollover, pre-script/end-of-bar cascade, or the pre-exit slice); the
-    // pre-exit hook consults it so at most one forced-liquidation event
-    // fires per bar. ``intrabar_exit_margin_call_bar_`` is set by a pre-exit
-    // slice or the scoped pre-script checkpoint and tells the later call that this
-    // bar's adverse-extreme event was already consumed chronologically (the
-    // surviving remainder is re-checked from the next bar on, preserving
-    // TV's one-nibble-per-bar cascade).
-    int last_margin_call_event_bar_ = -1;
-    int intrabar_exit_margin_call_bar_ = -1;
-    // Round 7 family N mechanism 2: the bar_index_ on which the finding-430
-    // OPEN slice booked a partial that left a survivor. A same-bar declined
-    // reversal (finding-311 KILL) then nets to LIVE brackets — TradingView's
-    // sequence is decline -> dormant -> slice -> REVIVE-B, while the engine's
-    // open slice runs at the broker-open boundary BEFORE the order loop
-    // declines the reversal, so the revive would otherwise precede the kill.
-    int open_margin_slice_bar_ = -1;
-
     int64_t trade_start_time_ = std::numeric_limits<int64_t>::min();
-
-    // Cumulative qty of ``strategy.close`` / ``strategy.close_all`` calls
-    // issued during the CURRENT on_bar. Reset at the start of every bar
-    // before strategy logic runs. Subtracted from ``position_qty_`` when
-    // computing ``tv_carry_qty`` for a subsequent ``strategy.entry`` in
-    // the same on_bar — TradingView evaluates calls in source order, so
-    // a ``strategy.close`` call ahead of a ``strategy.entry`` in the
-    // same block makes the entry capture the POST-CLOSE position size
-    // for its carry. Verified by probe 93 cycle B: when the strategy
-    // calls ``strategy.close("L2")`` before ``strategy.entry("S2",
-    // stop=...)``, TV's S2 fires from flat at qty=1 (no growth);
-    // cycle A reverses the order and the entry captures the still-open
-    // position size, firing later with qty=2 (growth).
-    double pending_close_qty_in_bar_ = 0.0;
 
 
     // --- SymInfo + Input injection ---
@@ -795,7 +715,7 @@ protected:
     bool historical_security_lookahead_projection_active_ = false;
     uint64_t next_order_incarnation_ = 1;
     // TV: at most one priced ENTRY "open" event per bar; persists across
-    // multiple process_pending_orders calls (bar magnifier) and dual-pass
+    // multiple request matching calls (bar magnifier) and dual-pass
     // opposing-stop resolution (see engine_fills.cpp).
 
     // Transient: true only while applying a priced (stop/limit/trail) fill
@@ -814,14 +734,6 @@ protected:
     // Set by evaluate_fill_price: the just-evaluated exit fill fired on the
     // TRAIL leg (vs stop/limit/gap). Consumed by apply_filled_order_to_state
     // to reconstruct the trail peak above.
-    // Transient: true only while dispatching a LIMIT-triggered fill
-    // (apply_filled_order_to_state). apply_fill_slippage reads it to route
-    // limit fills onto the unslipped limit-or-better path (apply_limit_fill)
-    // while market/stop/trail fills keep apply_slippage. Always false
-    // outside the dispatch window, so strategy.close / end-of-run /
-    // intraday-cap synthetic closes stay on the market (slipped) path.
-    bool current_fill_is_limit_ = false;
-
     std::vector<Trade> trades_;
     // TradingView's range-end accounting (record_range_end_close_trades,
     // engine_orders.cpp): the rows that close a position still open after
@@ -829,7 +741,7 @@ protected:
     // merged behind trades_ by fill_trades_section and never enter trades_,
     // the realized sums, or the live position (a stream continues it).
     std::vector<Trade> range_end_trades_;
-    // A rejected strategy.entry call leaves no PendingOrder behind. The exact
+    // A rejected strategy.entry call leaves no request record behind. The exact
     // collision gate can consume only the immediately preceding source bar, so
     // one scalar tombstone is sufficient and cannot grow with feed length.
 
@@ -842,13 +754,13 @@ protected:
     // strategy.exit partial orders are one-shot per open position for a given id
 
     // Reusable scratchpad for the per-call opposing-stop deferral set in
-    // process_pending_orders. Holds the ids of flat-issued entry stops that
+    // request matching. Holds the ids of flat-issued entry stops that
     // lost the intra-bar path race in pass 0 and are reconsidered in pass 1.
-    // Cleared at the start of each process_pending_orders call; the retained
+    // Cleared at the start of each request matching call; the retained
     // capacity avoids a fresh heap allocation 2-4x per bar. Typically tiny
     // (0-1 entries). Not state — must be empty across calls.
 
-    // Reusable scratch for process_pending_orders (capacity persists across
+    // Reusable scratch for request matching (capacity persists across
     // calls, mirroring scratch_skip_ids_). Incarnations survive OCA erasure;
     // vector indices and retained replacement priorities do not identify an
     // object. Always cleared before use; never persistent cancellation state.
@@ -856,8 +768,8 @@ protected:
     // Per-PASS dual-entry-stop arbitration winner (a flat position resting
     // one long stop-only ENTRY + one short stop-only ENTRY, both touched
     // this bar -- dual_entry_stop_path_winner, engine_path_resolve.cpp).
-    // Reset to None at the top of every process_pending_orders CALL (a
-    // process_orders_on_close_ script bar calls it twice per bar -- old-
+    // Reset to None at the top of every request matching CALL (a
+    // close-timing mode script bar calls it twice per bar -- old-
     // order settlement, then new-order fills -- and each pass re-derives
     // its own flat-position winner) and written where that arbitration is
     // decided. This is working state, NOT the public accessor's value --
@@ -873,7 +785,7 @@ protected:
     // Per-BAR snapshot of the above: the last non-None value
     // dual_entry_path_ took during this bar, surviving whatever
     // dual_entry_path_ itself does afterward (a fill, a declined admission
-    // release, or the next process_pending_orders call's reset). Reset to
+    // release, or the next request matching call's reset). Reset to
     // None once per bar -- at the top of dispatch_bar() and, for the bar
     // magnifier (which never reaches dispatch_bar), where bar_index_
     // advances for each emitted script bar in run_aggregation_bar_loop --
@@ -883,7 +795,7 @@ protected:
     // returns, so a live probe (or an ordinary POOC run, tail-suppressed or
     // not) reads the bar's real arbitration even if the winning order later
     // filled, was declined, or the working state otherwise moved on. Same
-    // calc_on_order_fills_ caveat as dual_entry_path_ above.
+    // fill-recalculation mode caveat as dual_entry_path_ above.
 
     // --- Trailing stop state ---
     // Best favorable price since position entry (for trailing stop computation)
@@ -892,13 +804,13 @@ protected:
     // (round 9 family Z's restart rule, round 10 family Y's bar rule). The
     // restarted extreme is the NEW order's, and that order's path starts at
     // the next bar's open: the same bar's high/low must not be folded into
-    // it by the close-time process_pending_orders that follows the script
+    // it by the close-time request matching that follows the script
     // body (update_trail_best_for_bar_open skips this bar). -1 = none.
     // The position's running extreme as it stood BEFORE the current bar's
     // high / low were folded in (update_trail_best_for_bar_open), and the
     // bar it was captured on: a trail leg killed by a declined reversal on
     // this bar restarts from it (round 10 family AE,
-    // PendingOrder::dormant_trail_best).
+    // request record::dormant_trail_best).
     // The ordinary POOC close scan may revisit a retained trail with that
     // same pre-bar extreme only while the carried position is unchanged.
     // A new cycle, add, reduction or close-time trail restart keeps its own
@@ -908,7 +820,6 @@ protected:
     // every host. Source policy may consume the same value through
     // inheritance, while the public C observer uses the virtual projection.
     double trail_best_price_ = std::numeric_limits<double>::quiet_NaN();
-    int trail_close_restart_bar_ = -1;
 
     // Generic synchronous close obligation. Pine quota/cause/beneficiary
     // state remains exclusively in the compatibility facade above.
@@ -1115,7 +1026,7 @@ protected:
     // resting order filled earlier on this bar.
 
     // finding-308: chronological pre-exit forced-liquidation slice. Called
-    // from the process_pending_orders fill loop immediately BEFORE a priced
+    // from the request matching fill loop immediately BEFORE a priced
     // exit of the live position is applied. Fires only when (a) no margin
     // call was booked on this bar yet, (b) the bar's adverse extreme comes
     // STRICTLY earlier on the synthesized intrabar path than the exit's
@@ -1335,7 +1246,7 @@ protected:
     // F@15 lane (masayanfx-scalping 102, latibonit 17, jos-protrader 8,
     // vasudevshenoy 6, lukeborgerding, drakkhon, rhyme17, hariss369,
     // colasbreugnon, fast-scalper, JOAT aureate). Applied where a level is
-    // stored on a PendingOrder (strategy.entry / exit / order, and the
+    // stored on a request record (strategy.entry / exit / order, and the
     // profit / loss tick conversion), so every trigger test, gap test,
     // marketable-at-placement test and fill snap reads the grid value —
     // materialized as k / pricescale, the double the decimal literal
@@ -1460,15 +1371,6 @@ protected:
         return round_to_mintick_directional(price, /*is_long_stop=*/!is_buy);
     }
 
-    // Fill-time dispatcher: LIMIT-triggered fills take the unslipped
-    // limit-or-better path, everything else (market/stop/trail) takes
-    // apply_slippage. current_fill_is_limit_ is the transient set around
-    // the per-order fill dispatch in apply_filled_order_to_state.
-    double apply_fill_slippage(double price, bool is_buy) const {
-        return current_fill_is_limit_ ? apply_limit_fill(price, is_buy)
-                                      : apply_slippage(price, is_buy);
-    }
-
     // --- Commission helper ---
     // PERCENT commission is a % of the order's notional value. The notional
     // (fill_price × qty × pointvalue) is in the symbol's QUOTE currency; the
@@ -1511,16 +1413,6 @@ protected:
     void snapshot_entry_commission(PyramidEntry& pe) const {
         pe.entry_commission_account = calc_commission(pe.price, pe.qty);
     }
-
-    // Sum the already-paid percent entry commission attributable to the
-    // still-open pyramid slices. FIFO partial exits scale each surviving
-    // snapshot. Cash commission types remain outside this TV-pinned rule.
-    double surviving_open_percent_commission_account() const;
-
-    // TradingView debits percent entry commission at fill, while PineForge
-    // realizes both commission legs in net_profit_sum_ when the lot closes.
-    // Use this fee-net ledger for percent-of-equity sizing and broker margin.
-    double percent_commission_live_equity(double mark_price) const;
 
     // --- Position sizing helper ---
     // PERCENT_OF_EQUITY / CASH size a budget that is denominated in ACCOUNT
@@ -1694,7 +1586,7 @@ protected:
     // order armed one or more bars before its fill is not empirically
     // established, so they conservatively keep the legacy fill-time sizing.
     // The sizing price of the frozen rule above, exposed separately so the
-    // placement sites can persist it on the order (PendingOrder::sizing_price)
+    // placement sites can persist it on the order (request record::sizing_price)
     // for the fill-time margin-admission re-check.
     //
     // The basis is the mintick-ROUNDED signal close. Rounding happens BEFORE
@@ -1768,7 +1660,7 @@ protected:
     // KI-64: freeze the pre-close position for the script-visible position
     // accessor before an ordinary POOC strategy.close/close_all fills in-line
     // this bar. Capture-once per on_bar (a second same-bar close keeps the
-    // FIRST pre-close snapshot). Caller guards process_orders_on_close_ &&
+    // FIRST pre-close snapshot). Caller guards close-timing mode &&
     // !immediately; this reads position_side_/position_qty_ while they still
     // hold the pre-close values (execute_immediate_close has not run yet).
 
@@ -1825,54 +1717,6 @@ protected:
             if (t.pnl < 0.0) { s += t.pnl_pct; ++c; }
         }
         return (c > 0) ? (s / (double)c) : 0.0;
-    }
-    // strategy.margin_liquidation_price — the price at which TradingView's
-    // broker emulator force-liquidates the current open position. Returns na
-    // when flat, when the instrument has no valid size/point-value, or when
-    // ``margin/100 - direction == 0`` (a 1x long has no leverage-derived
-    // liquidation price; process_margin_call separately handles an eligible
-    // one-shot post-fill affordability trim). See compute_liquidation_price
-    // for the derivation.
-    double margin_liquidation_price() const { return compute_liquidation_price(); }
-
-    // Shared liquidation-price formula (TradingView docs, validated against the
-    // p2 margin-call probe and the leverage-margin-call-perp-5x corpus probe):
-    //
-    //   liqPrice = ((initial_capital + net_profit) / (pointvalue * |size|)
-    //               - direction * entry) / (margin_pct/100 - direction)
-    //
-    //   direction = +1 long / -1 short; net_profit = realized closed-trade PnL;
-    //   entry = current average entry price; size = open position size.
-    //
-    // Rounded UP to mintick for shorts, DOWN for longs (TV convention).
-    double compute_liquidation_price() const {
-        if (position_side_ == PositionSide::FLAT) return na<double>();
-        const double pv = syminfo_.pointvalue;
-        const double qty = position_qty_;
-        if (!(qty > 0.0) || !(pv > 0.0)) return na<double>();
-        const double direction = (position_side_ == PositionSide::LONG) ? 1.0 : -1.0;
-        const double margin_pct = (position_side_ == PositionSide::LONG)
-                                      ? margin_long_ : margin_short_;
-        const double denom = (margin_pct / 100.0) - direction;
-        // A long at 100% margin (denom == 0) has no liquidation PRICE.
-        // Its separate post-fill affordability trim is handled by
-        // process_margin_call without fabricating a later adverse threshold.
-        if (std::abs(denom) < 1e-12) return na<double>();
-        // equity_basis is account-currency (initial_capital_ is account-
-        // currency-native; net_profit_sum_ is account-currency post-FX —
-        // see emit_close_trade). liq must come out in QUOTE currency (it's
-        // compared against bar.high/low), so convert back via the same
-        // account_currency_fx_ inverse used in calc_qty; default 1.0 is a
-        // no-op for the corpus.
-        const double equity_basis = (initial_capital_ + net_profit_sum_) / active_account_currency_fx();
-        double liq = (equity_basis / (qty * pv) - direction * position_entry_price_)
-                     / denom;
-        if (syminfo_mintick_ > 0.0) {
-            liq = (position_side_ == PositionSide::SHORT)
-                      ? std::ceil(liq / syminfo_mintick_) * syminfo_mintick_
-                      : std::floor(liq / syminfo_mintick_) * syminfo_mintick_;
-        }
-        return liq;
     }
     double open_trades_capital_held() const {
         if (position_side_ == PositionSide::FLAT) return 0.0;
@@ -2025,7 +1869,7 @@ protected:
     // @broker-state begin
     // Monotonic cross-bar fill sequence counter; compared against
     // trail_best_before_bar_fill_seq_ (hashed above) and against
-    // PendingOrder::signal_close_mc_fill_seq (hashed per-order) by fill-time
+    // request record::signal_close_mc_fill_seq (hashed per-order) by fill-time
     // gates that cross the bar boundary (engine_fills.cpp).
     uint64_t broker_fill_event_seq_ = 0;
     // @broker-state end
@@ -2766,7 +2610,7 @@ protected:
     void append_same_side_fill(PyramidEntry lot);
     void append_quoted_lot(PyramidEntry lot, double total_qty, double average_price);
     // Allocates the new position cycle, lots and observations, then binds
-    // exits that still remain in pending_orders_. Settlement that authorized
+    // exits that still remain in request_roster. Settlement that authorized
     // pending removals applies those erasures after old-cycle unbind and
     // before this opening bind.
     void open_quoted_position(PositionSide requested, PyramidEntry lot);
@@ -2795,7 +2639,7 @@ protected:
 
 
 
-    // process_pending_orders helpers (defined in engine_fills.cpp).
+    // request matching helpers (defined in engine_fills.cpp).
     // Decomposed during the function-decomposition refactor so the
     // bar-pump fill loop is reviewable rather than a 600-line monolith.
 
@@ -2820,7 +2664,7 @@ protected:
 
 
 
-    // round 8 family S (source::PendingOrder::pine_frozen_market_instruction): the same-bar MARKET
+    // round 8 family S (source::request record::pine_frozen_market_instruction): the same-bar MARKET
     // transaction's scope, the close-artifact predicate (rule 4) and the
     // frozen-transaction reversal kernel (rules 1/2).
 
@@ -2853,7 +2697,7 @@ protected:
 
 
     // True iff `order` is a default percent_of_equity <= 100 pure STOP that
-    // carries its placement snapshot (source::PendingOrder::default_stop_placement_qty)
+    // carries its placement snapshot (source::request record::default_stop_placement_qty)
     // and the fill price is a usable positive print: the fill-time admission
     // and dispatch then consume the placement quantity instead of re-sizing
     // at the fill.
@@ -2864,7 +2708,7 @@ protected:
     // design-declined-reversal-close-leg: called at the KI-54 reversal-decline
     // site with the just-declined MARKET reversal entry. Flags every pending
     // FULL close that was co-queued after it on the same bar against the held
-    // side (see source::PendingOrder::cancellation), releasing each close claim
+    // side (see source::request record::cancellation), releasing each close claim
     // exactly once.
 
     // round 8 family R / round 10 family AB: the 10-significant-digit
@@ -2900,15 +2744,6 @@ protected:
     // close-time re-issue takes effect once the bar's broker events are
     // done). Called right after every process_margin_call dispatch site.
 
-    virtual std::optional<execution::Status> validate_source_lifecycle(
-        const execution::LifecycleEffects& lifecycle) const;
-    virtual std::optional<execution::Status> preflight_source_lifecycle(
-        const execution::LifecycleEffects& lifecycle,
-        bool will_reset_to_flat, bool will_open_quoted);
-    virtual void apply_source_pre_close_lifecycle(
-        const execution::LifecycleBatch& batch);
-    virtual void apply_source_pending_removals(
-        const std::vector<execution::PendingRemoval>& removals);
     // Per-OrderType fill kernels. Called only after risk + intraday
     // gates pass; each updates the engine's position/trade state and
     // any per-type out-parameters the post-fill bookkeeping needs.
@@ -2929,8 +2764,8 @@ protected:
 
 
 
-    // Inner-loop phase split for process_pending_orders.
-    // The inner loop iterates `pending_orders_` and processes each via
+    // Inner-loop phase split for request matching.
+    // The inner loop iterates `request_roster` and processes each via
     // 3 phases: eligibility (should we even consider this order?),
     // fill-price (if eligible, what price would it fill at?), and
     // apply (mutate engine state with the fill — see apply_*_order_fill
@@ -2973,7 +2808,7 @@ protected:
     // replaced_dormant_out / replaced_dormant_stop_out (optional): whether a
     // cleared leg was a dormant bracket (finding-311) and the stop it was
     // last armed with — the re-issue inherits both (round 7 family M
-    // mechanism 2a, PendingOrder::dormant_reissue_pending).
+    // mechanism 2a, request record::dormant_reissue_pending).
 
 
 
@@ -2983,10 +2818,6 @@ protected:
 
     void record_close_trade(Trade trade);
     void validate_close_trade_counters(const Trade* rows, size_t count) const;
-    virtual execution::Status on_source_close_preflight(
-        const Trade* rows, size_t count, std::optional<int>& loss_day) const;
-    virtual void on_source_close_observed(
-        const Trade* rows, size_t count, std::optional<int> loss_day);
     // Quote one resolved execution's current charges. Entry costs on the
     // closed rows are historical allocations. Returns close shares in FIFO
     // order followed by the opening share (zero when there is no opening).
@@ -3022,12 +2853,6 @@ protected:
     // are set before run() and must survive it. Called at the top of every
     // run() loop entrypoint. See tests/test_handle_reuse_reset.cpp.
     void reset_run_state();
-    virtual void reset_source_pending_book();
-    virtual void reset_source_order_and_close_state();
-    virtual void reset_source_risk_and_cap();
-    virtual void reset_source_margin_and_coof();
-    virtual void reset_source_bar_projections();
-    virtual void reset_source_language_series();
     double account_currency_fx_at(int64_t timestamp_ms) const;
     double active_account_currency_fx() const;
     void settle_position_after_partial_exit(
@@ -3040,18 +2865,12 @@ protected:
     // `fill_price` is already resolved. Source sizing, direction and dust
     // selection stay here; purge_pending_exits is translated into exact
     // pending removals for the settlement coordinator. False does not
-    // touch pending_orders_ storage.
+    // touch request_roster storage.
 
 
 
 
 
-    virtual void reset_source_exit_activations_before_flatten();
-    virtual void reset_source_position_ledgers_after_book_clear();
-    virtual void on_source_append_quoted_lot_after_book(const PyramidEntry& lot);
-    virtual void reset_source_open_position_ledgers_before_book(
-        const PyramidEntry& lot);
-    virtual void on_source_open_position_booked(const PyramidEntry& lot);
 
 
 
@@ -3105,8 +2924,8 @@ protected:
 
 #endif
     // Runs the standard per-script-bar order/strategy sequence on current_bar_:
-    //   process_pending_orders -> update_per_trade_extremes -> on_bar,
-    // plus a second process_pending_orders when process_orders_on_close_ is set
+    //   request matching -> update_per_trade_extremes -> on_bar,
+    // plus a second request matching when close-timing mode is set
     // (TV process_orders_on_close: new market orders fill at this bar's close).
     // Shared by run(), run_simple_bar_loop, and the no-magnifier aggregation
     // path. The magnifier tick loop does NOT use this — it gates the sequence
@@ -3162,31 +2981,6 @@ protected:
     void fill_trace_section(ReportC* out) const;
 
     void guard_native_mutation(const char* operation);
-    [[noreturn]] void throw_native_only_route(const char* seam);
-    virtual void legacy_run_simple(const Bar* bars, int n);
-    virtual void legacy_run_tf(const Bar* input_bars, int n_input,
-                       const std::string& input_tf,
-                       const std::string& script_tf,
-                       bool bar_magnifier,
-                       int magnifier_samples,
-                       MagnifierDistribution magnifier_dist);
-    virtual void legacy_run_rich(const Bar* input_bars, int n_input,
-                         const std::string& input_tf,
-                         const std::string& script_tf,
-                         const std::unordered_map<std::string, std::string>& inputs,
-                         const SymInfo& syminfo,
-                         const source::StrategyOverrides* overrides,
-                         bool bar_magnifier,
-                         int magnifier_samples,
-                         MagnifierDistribution magnifier_dist);
-    virtual bool legacy_stream_begin(const Bar* warmup_bars, int n_warmup,
-                             const std::string& input_tf,
-                             const std::string& script_tf);
-    virtual bool legacy_stream_push_bar(const Bar& bar);
-    virtual bool legacy_stream_push_tick(const TradeTick& tick);
-    virtual bool legacy_stream_push_ticks(const TradeTick* ticks, int n);
-    virtual bool legacy_stream_advance_time(int64_t timestamp_ms);
-    virtual bool legacy_stream_end(bool finalize_partial_input_bar);
 
     struct ExecutionConsumerSlot {
         bool native = false;
@@ -3216,7 +3010,6 @@ protected:
     ExecutionConsumerSlot execution_consumer_slot_;
 
 public:
-    explicit BacktestEngine();
     virtual ~BacktestEngine();
     int execution_contract() const;
     bool native_bound() const;
@@ -3517,7 +3310,7 @@ public:
     // Live probe tail suppression (spec §3.2, ABI v4): when `on`, the LAST
     // bar of every subsequent run() runs only dispatch_bar()'s pre-on_bar
     // broker steps (intraday-cap deferred close, _push_source_series,
-    // process_pending_orders, evaluate_max_intraday_loss_over_path,
+    // request matching, evaluate_max_intraday_loss_over_path,
     // update_per_trade_extremes) and returns — on_bar is never invoked for
     // that bar, and nothing after it runs (no flush_same_bar_close, no POOC
     // second pass, no process_margin_call, no settle_dormant_bracket_
@@ -3573,7 +3366,7 @@ public:
     // per-bar snapshot of the arbitration that survives whatever the
     // working state (dual_entry_path_) does afterward this same bar -- a
     // fill, a declined stop-entry admission, or (under
-    // process_orders_on_close) the bar's second process_pending_orders
+    // process_orders_on_close) the bar's second request matching
     // pass, all of which reset dual_entry_path_ to None without undoing the
     // fact that an arbitration happened. Only the standard
     // (non-calc_on_order_fills) dispatch path updates it; this is a silent
@@ -3596,7 +3389,7 @@ public:
     // resting-order book after the most recent run() -- the book in force
     // for the next bar, in the vector's own (insertion) order; fill
     // priority is decided at fill time from created_seq. The C ABI
-    // (strategy_pending_orders_len / strategy_pending_order_get) copies
+    // (strategy_request_rosterlen / strategy_pending_order_get) copies
     // each order out through the generated POD mirror
     // (pf_pending_order_v1_t, include/pineforge/pending_order_mirror.hpp),
     // never by pointer. `i` must be in [0, pending_order_count()).

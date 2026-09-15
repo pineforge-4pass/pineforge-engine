@@ -35,6 +35,8 @@
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 using namespace pineforge;
 
 static int tests_passed = 0;
@@ -107,7 +109,6 @@ public:
     using BacktestEngine::position_side_;
     using BacktestEngine::position_qty_;
     using BacktestEngine::net_profit_sum_;
-    using BacktestEngine::initial_capital_;
 };
 
 // A1. NEGATIVE-EQUITY REVERSAL declined cleanly — no corrupt rows. A short rides

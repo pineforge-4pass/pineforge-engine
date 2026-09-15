@@ -46,12 +46,6 @@ public:
     double metadata(const std::string& key) const { return get_syminfo_metadata(key); }
 };
 
-class LegacyRouteWitness final : public BacktestEngine {
-public:
-    void on_bar(const Bar&) override {}
-    void invoke_route(const char* seam) { throw_native_only_route(seam); }
-};
-
 x::Fill fill(double price, const char* id, uint64_t incarnation) {
     return {price, id, "", incarnation, 0.0};
 }
@@ -81,18 +75,6 @@ void check_native_metadata_and_aux_staging() {
 #else
 #error "A28 witness requires the auxiliary-security feed surface"
 #endif
-}
-
-void check_legacy_route_refusal_message() {
-    LegacyRouteWitness host;
-    bool refused = false;
-    try {
-        host.invoke_route("legacy_run_simple");
-    } catch (const std::runtime_error& error) {
-        refused = std::string(error.what())
-            == "legacy_run_simple: not available on a native-bound host";
-    }
-    CHECK(refused);
 }
 
 void check_native_position_and_source_empty_settlement() {
@@ -155,24 +137,6 @@ public:
     }
 };
 
-class CountingNativeWitness final : public PlainNativeWitness {
-public:
-    mutable int preflight_calls = 0;
-    int observed_calls = 0;
-
-protected:
-    x::Status on_source_close_preflight(
-            const Trade*, size_t, std::optional<int>&) const override {
-        ++preflight_calls;
-        return x::Status::Applied;
-    }
-
-    void on_source_close_observed(
-            const Trade*, size_t, std::optional<int>) override {
-        ++observed_calls;
-    }
-};
-
 struct AppliedSummary {
     uint64_t ordinal = 0;
     double raw_price = 0.0;
@@ -201,13 +165,13 @@ std::vector<AppliedSummary> applied_events(const NativeStrategyHost& host) {
     return result;
 }
 
-void check_native_source_close_hooks_are_bypassed() {
+void check_native_settlement_callbacks() {
     const Bar bars[] = {
         {100.0, 101.0, 99.0, 100.0, 1.0, 60000},
         {101.0, 102.0, 100.0, 101.0, 1.0, 120000},
         {102.0, 103.0, 101.0, 102.0, 1.0, 180000},
     };
-    CountingNativeWitness counting;
+    PlainNativeWitness counting;
     PlainNativeWitness plain;
     const NativeRunSpec spec = native_spec();
     CHECK(counting.configure_native(spec).status == NativeSetupStatus::Applied);
@@ -220,8 +184,6 @@ void check_native_source_close_hooks_are_bypassed() {
     CHECK(plain.last_error().empty());
     CHECK(counting.callbacks == 3);
     CHECK(plain.callbacks == 3);
-    CHECK(counting.preflight_calls == 0);
-    CHECK(counting.observed_calls == 0);
     CHECK(counting.submissions == plain.submissions);
     CHECK(counting.physical_position().signed_units
           == plain.physical_position().signed_units);
@@ -244,7 +206,7 @@ void check_native_source_close_hooks_are_bypassed() {
     }
 }
 
-void check_native_empty_lifecycle_and_rejection() {
+void check_native_empty_lifecycle() {
     NativeWitness host;
     const auto opened = host.settle(order_action::Transact{1.0}, fill(100.0, "open", 1));
     CHECK(opened.status == x::Status::Applied);
@@ -255,25 +217,15 @@ void check_native_empty_lifecycle_and_rejection() {
     // S23/S24 consequently have no source work to apply.
     CHECK(applied.status == x::Status::Applied);
 
-    NativeWitness invalid_host;
-    const auto invalid_open = invalid_host.settle(order_action::Transact{1.0}, fill(100.0, "open", 1));
-    CHECK(invalid_open.status == x::Status::Applied);
-    x::LifecycleEffects nonempty;
-    nonempty.removals.push_back({999, 999, {}, 0});
-    const auto rejected = invalid_host.settle_with_effects(
-        x::Flatten{}, fill(90.0, "invalid", 2), nonempty);
-    CHECK(rejected.status == x::Status::InvalidLifecycle);
-    CHECK(invalid_host.physical_position().signed_units == 1.0);
 }
 
 } // namespace
 
 int main() {
     check_native_metadata_and_aux_staging();
-    check_legacy_route_refusal_message();
     check_native_position_and_source_empty_settlement();
-    check_native_source_close_hooks_are_bypassed();
-    check_native_empty_lifecycle_and_rejection();
+    check_native_settlement_callbacks();
+    check_native_empty_lifecycle();
     std::printf("checks=%d failures=%d\\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

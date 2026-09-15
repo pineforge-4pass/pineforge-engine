@@ -270,7 +270,7 @@ class TradePair:
     # rows are independent entries and must not be fragment-consolidated.
     entry_signal: str = ""
     # Engine-only physical-entry provenance. New PineForge runners export the
-    # unique PendingOrder incarnation that created the lot; every partial-close
+    # unique intent row incarnation that created the lot; every partial-close
     # fragment of that lot retains the same value. This must not reuse Signal:
     # TradingView's Signal column can contain a user-visible comment rather
     # than the Pine entry ID. Empty means the engine artifact cannot prove

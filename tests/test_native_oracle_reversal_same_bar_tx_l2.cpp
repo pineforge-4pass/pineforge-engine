@@ -4,6 +4,9 @@
 
 #define PineStrategyHost PineNativeHost
 #define signed_position_size live_position_size
+#define PendingOrder FixtureIntentRow
+#include "oracle_fixture_config_shim.hpp"
 #include "oracle/test_oracle_reversal_same_bar_tx.cpp"
+#undef PendingOrder
 #undef signed_position_size
 #undef PineStrategyHost

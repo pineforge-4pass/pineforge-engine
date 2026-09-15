@@ -136,6 +136,27 @@ struct PlacementSnapshot {
     std::uint64_t source_sequence = 0;
     std::int64_t placement_script_open_ms = 0;
     std::int64_t placement_sub_open_ms = 0;
+    // Immutable C-row projection facts.  These are source placement facts,
+    // not a second executable order: the native request remains the sole
+    // owner of matching, trigger state, and terminal receipts.
+    std::int32_t projection_created_bar = -1;
+    std::int32_t projection_position_side = static_cast<std::int32_t>(PositionSide::FLAT);
+    bool projection_after_close = false;
+    bool projection_over_pyramiding = false;
+    std::uint64_t projection_predecessor = 0;
+    bool projection_predecessor_market = false;
+    bool projection_predecessor_exit = false;
+    bool projection_created_during_coof = false;
+    bool projection_coof_at_terminal = false;
+    bool projection_coof_mid_bar = false;
+    double projection_tv_carry_qty = 0.0;
+    double projection_default_stop_equity = std::numeric_limits<double>::quiet_NaN();
+    double projection_default_stop_signal_close = std::numeric_limits<double>::quiet_NaN();
+    double projection_explicit_equity = std::numeric_limits<double>::quiet_NaN();
+    double projection_explicit_signal_close = std::numeric_limits<double>::quiet_NaN();
+    double projection_affordability_equity = std::numeric_limits<double>::quiet_NaN();
+    double projection_affordability_signal_price = std::numeric_limits<double>::quiet_NaN();
+    double projection_affordability_held_qty = std::numeric_limits<double>::quiet_NaN();
     PineSizingSnapshot sizing{};
     PineExitLevels exit_levels{};
 };
@@ -262,6 +283,13 @@ public:
     void set_risk_max_drawdown(double value, bool percent) noexcept;
     void set_risk_max_intraday_loss(double value, bool percent) noexcept;
     void set_risk_max_position_size(double value) noexcept;
+    bool allows_risk_direction(bool is_long) const noexcept {
+        return risk_.direction == 0 || (is_long ? risk_.direction > 0 : risk_.direction < 0);
+    }
+    bool max_drawdown_is_percent() const noexcept { return risk_.max_drawdown_percent; }
+    bool max_intraday_loss_is_percent() const noexcept {
+        return risk_.max_intraday_loss_percent;
+    }
     void set_margin_call_enabled(bool enabled) noexcept;
     void enable_intraday_cap() noexcept;
     void attach_execution_adapter() noexcept;

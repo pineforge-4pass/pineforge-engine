@@ -101,8 +101,8 @@ before this flag existed.
 The last bar of the array fed to every subsequent `run()` runs only the
 broker's pre-`on_bar` steps and returns, in this order: intraday-cap
 deferred close, advancing native source-series history
-(`_push_source_series`), settling resting stop/limit orders against the bar
-(`process_pending_orders`), the max-intraday-loss path check
+(`_push_source_series`), settling native resting requests against the bar,
+the max-intraday-loss path check
 (`evaluate_max_intraday_loss_over_path`), and updating per-trade extremes
 (`update_per_trade_extremes`). `on_bar` is never invoked for that bar, and
 nothing that ordinarily runs after it runs either — no
@@ -238,15 +238,12 @@ array, freed by `report_free` — same ownership rule as `trades` /
 
 ## The pending-order mirror {#live_surface_pending_mirror}
 
-`pf_pending_order_v1_t` is a **generated**, C-compatible POD mirror of the
-source-owned `source::PendingOrder` record, produced by
-`scripts/gen_pending_order_mirror.py` from
-`include/pineforge/source/pine_pending_intent.hpp` into
-`include/pineforge/pending_order_mirror.hpp` — never hand-edited. The generator
-emits a source-free descriptor/layout TU (`src/pending_order_mirror.cpp`) and a
-source projection TU (`src/source/pine_pending_mirror.cpp`). It
-starts with `struct_version` and `size` (a self-describing header),
-followed by 98 mirrored `PendingOrder` members (scalars by value, strings
+`pf_pending_order_v1_t` is a frozen, C-compatible POD layout described by
+`strategy_pending_order_layout()`. Its values are projected allocation-free by
+`PendingIntentView` from native request definitions/live facts, adapter
+placement snapshots, and receipts; no compatibility order object is rebuilt.
+It starts with `struct_version` and `size` (a self-describing header), followed
+by 98 public projection fields (scalars by value, strings
 as the fixed `char[64]` + truncated-flag + hash64 triple above, enums as
 `int32_t`). `strategy_pending_order_get(s, index, out, size_in)` copies
 `min(size_in, sizeof(pf_pending_order_v1_t))` bytes: an older reader with a

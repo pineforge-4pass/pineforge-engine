@@ -1,6 +1,8 @@
 // Native-route twin of tests/oracle/test_oracle_pooc_immediate.cpp.
 #include <pineforge/source/pine_native_host.hpp>
 
+#include "oracle_fixture_config_shim.hpp"
+
 #include <cmath>
 #include <cstdio>
 #include <limits>

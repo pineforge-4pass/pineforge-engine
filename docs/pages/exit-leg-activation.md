@@ -53,9 +53,7 @@ callback use. The Pine adapter is still invoked by the current exit producer.
 other historical execution rules remain separate work. The effective-level
 accessor still reports resolved levels rather than masking eligibility.
 
-The internal object layout changes and requires matching C++ headers/library.
-The activation slice shipped with internal v6. Subsequent reservation ownership
-integration advances PendingOrder and BacktestEngine to v7 with broker/stream
-fingerprint v7. Exact shipped ff54/v6 and earlier149/v5 standalone PendingOrder clients
-are checked by compile/link-only mismatch controls with matching positives.
-Public C ABI 4, stream API 1 and pending mirror version 1 are preserved.
+Historical internal object layouts require matching C++ headers/library. L3b
+removes the compatibility order object and projects the frozen pending-row ABI
+from native requests plus adapter facts. Public C ABI 4, stream API 1, and
+pending mirror version 1 are preserved.

@@ -80,9 +80,89 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
 }
 
 void PineScheduler::publish_series(const Bar& bar, PineStrategyHost& host) {
-    if (language_.history_slot_is_new_) language_.prev_chart_close_ = language_.last_chart_close_;
+    (void)host;
+    update_source_series(bar);
+}
+
+void PineScheduler::update_source_series(const Bar& bar) {
+    if (language_.history_slot_is_new_)
+        language_.prev_chart_close_ = language_.last_chart_close_;
     language_.last_chart_close_ = bar.close;
-    host.scheduler_push_source_series(bar);
+    if (!language_._src_series_active_) return;
+    const double hl2 = (bar.high + bar.low) / 2.0;
+    const double hlc3 = (bar.high + bar.low + bar.close) / 3.0;
+    const double ohlc4 = (bar.open + bar.high + bar.low + bar.close) / 4.0;
+    const double hlcc4 = (bar.high + bar.low + bar.close + bar.close) / 4.0;
+    if (language_.history_slot_is_new_) {
+        language_._src_open_.push(bar.open);
+        language_._src_high_.push(bar.high);
+        language_._src_low_.push(bar.low);
+        language_._src_close_.push(bar.close);
+        language_._src_volume_.push(bar.volume);
+        language_._src_hl2_.push(hl2);
+        language_._src_hlc3_.push(hlc3);
+        language_._src_ohlc4_.push(ohlc4);
+        language_._src_hlcc4_.push(hlcc4);
+        return;
+    }
+    language_._src_open_.update(bar.open);
+    language_._src_high_.update(bar.high);
+    language_._src_low_.update(bar.low);
+    language_._src_close_.update(bar.close);
+    language_._src_volume_.update(bar.volume);
+    language_._src_hl2_.update(hl2);
+    language_._src_hlc3_.update(hlc3);
+    language_._src_ohlc4_.update(ohlc4);
+    language_._src_hlcc4_.update(hlcc4);
+}
+
+double PineScheduler::script_position_view(
+        int bar_index, PositionSide side, double quantity) const noexcept {
+    if (language_.pos_view_freeze_bar_ == bar_index) {
+        if (language_.pos_view_frozen_side_ == PositionSide::LONG)
+            return language_.pos_view_frozen_qty_;
+        if (language_.pos_view_frozen_side_ == PositionSide::SHORT)
+            return -language_.pos_view_frozen_qty_;
+        return 0.0;
+    }
+    if (side == PositionSide::LONG) return quantity;
+    if (side == PositionSide::SHORT) return -quantity;
+    return 0.0;
+}
+
+void PineScheduler::freeze_script_position_view(
+        int bar_index, PositionSide side, double quantity,
+        const std::vector<PyramidEntry>& lots) {
+    if (language_.pos_view_freeze_bar_ == bar_index) return;
+    language_.pos_view_freeze_bar_ = bar_index;
+    language_.pos_view_frozen_side_ = side;
+    language_.pos_view_frozen_qty_ = quantity;
+    language_.pos_view_frozen_entry_qty_.clear();
+    for (const auto& lot : lots)
+        language_.pos_view_frozen_entry_qty_[lot.entry_id] += lot.qty;
+}
+
+void PineScheduler::clear_script_position_view() noexcept {
+    language_.pos_view_freeze_bar_ = -1;
+}
+
+const Series<double>& PineScheduler::source_series(const std::string& key) const {
+    if (key == "open") return language_._src_open_;
+    if (key == "high") return language_._src_high_;
+    if (key == "low") return language_._src_low_;
+    if (key == "close") return language_._src_close_;
+    if (key == "volume") return language_._src_volume_;
+    if (key == "hl2") return language_._src_hl2_;
+    if (key == "hlc3") return language_._src_hlc3_;
+    if (key == "ohlc4") return language_._src_ohlc4_;
+    if (key == "hlcc4") return language_._src_hlcc4_;
+    throw std::invalid_argument("unknown source series");
+}
+
+void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_history_slot) {
+    language_.history_slot_is_new_ = new_history_slot;
+    language_.is_first_tick_ = new_history_slot;
+    update_source_series(bar);
 }
 
 void PineScheduler::input(
@@ -155,9 +235,6 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     language_.is_first_tick_ = context.is_terminal_sub_bar;
     language_.is_last_tick_ = context.is_terminal_sub_bar;
     language_.history_slot_is_new_ = context.is_terminal_sub_bar;
-    host.is_first_tick_ = language_.is_first_tick_;
-    host.is_last_tick_ = language_.is_last_tick_;
-    host.history_slot_is_new_ = language_.history_slot_is_new_;
     if (!context.is_terminal_sub_bar) return;
     // A COOF recalc at this script bar is the source evaluation for that bar;
     // do not issue a second terminal callback with a new source-bar index.
@@ -219,9 +296,6 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
                     event.resolved_price, 0.0, context.script_bar_open_ms};
     language_.is_first_tick_ = true; language_.is_last_tick_ = false;
     language_.history_slot_is_new_ = false;
-    host.is_first_tick_ = language_.is_first_tick_;
-    host.is_last_tick_ = language_.is_last_tick_;
-    host.history_slot_is_new_ = language_.history_slot_is_new_;
     host.adapter_.begin_coof_recalc(context, first_open);
     try {
         host.scheduler_publish_source_bar(point, true, first_open);

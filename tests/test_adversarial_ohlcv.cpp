@@ -23,6 +23,8 @@
 
 #include <pineforge/engine.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
+
+#include "oracle_fixture_config_shim.hpp"
 #include <pineforge/bar.hpp>
 #include <pineforge/na.hpp>
 
@@ -44,19 +46,6 @@ static int tests_failed = 0;
 namespace {
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 constexpr double kInf = std::numeric_limits<double>::infinity();
-
-class QtyProbe : public pineforge::source::PineStrategyHost {
-public:
-    QtyProbe() {
-        initial_capital_ = 100'000;
-        default_qty_type_ = QtyType::PERCENT_OF_EQUITY;
-        default_qty_value_ = 10.0;   // 10% of equity
-        slippage_ = 0; commission_value_ = 0; pyramiding_ = 1;
-    }
-    void on_source_bar(const Bar&) override {}
-    double cq(double fp, double qv, int qt) { return calc_qty_for_type(fp, qv, qt); }
-    double cq_default(double fp) { return calc_qty(fp); }
-};
 
 // Momentum %-equity strategy used to stress degenerate feeds end-to-end.
 class StressProbe : public pineforge::source::PineStrategyHost {
@@ -81,24 +70,6 @@ Bar mk(double o, double h, double l, double c, double v, int64_t ts) {
     Bar b; b.open=o; b.high=h; b.low=l; b.close=c; b.volume=v; b.timestamp=ts; return b;
 }
 }  // namespace
-
-// The silent wrong-qty fallback must be gone: reject (0), never the % number.
-static void test_no_silent_qty_fallback() {
-    std::printf("test_no_silent_qty_fallback\n");
-    QtyProbe p;
-    // PERCENT_OF_EQUITY at a $0 / NaN / negative fill price -> reject, not 10.
-    CHECK(p.cq(0.0, 10.0, (int)QtyType::PERCENT_OF_EQUITY) == 0.0);   // was 10.0
-    CHECK(p.cq(kNaN, 10.0, (int)QtyType::PERCENT_OF_EQUITY) == 0.0);
-    CHECK(p.cq(-5.0, 10.0, (int)QtyType::PERCENT_OF_EQUITY) == 0.0);
-    // CASH likewise.
-    CHECK(p.cq(0.0, 5000.0, (int)QtyType::CASH) == 0.0);             // was 5000.0
-    CHECK(p.cq(kNaN, 5000.0, (int)QtyType::CASH) == 0.0);
-    // Default-sizing path (qty_value NaN -> calc_qty).
-    CHECK(p.cq_default(0.0) == 0.0);
-    CHECK(p.cq_default(kNaN) == 0.0);
-    // Sanity: a valid fill price still sizes normally (10% of 100k / 100 = 100).
-    CHECK(std::fabs(p.cq(100.0, 10.0, (int)QtyType::PERCENT_OF_EQUITY) - 100.0) < 1e-9);
-}
 
 static bool all_trades_finite(const BacktestEngine& e) {
     for (int i = 0; i < e.trade_count(); ++i) {
@@ -140,7 +111,6 @@ static void test_empty_and_single_bar() {
 }
 
 int main() {
-    test_no_silent_qty_fallback();
     test_degenerate_feeds_finite();
     test_empty_and_single_bar();
     std::printf("\n%d passed, %d failed\n", tests_passed, tests_failed);

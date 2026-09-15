@@ -29,10 +29,12 @@ public:
 
     const Cap& cap() const { return adapter_.cap; }
 
-    bool allows_long() const { return check_risk_allow_entry(true); }
-    bool allows_short() const { return check_risk_allow_entry(false); }
-    bool drawdown_is_percent() const { return risk_max_drawdown_is_pct_; }
-    bool intraday_loss_is_percent() const { return risk_max_intraday_loss_is_pct_; }
+    bool allows_long() const { return adapter_.allows_risk_direction(true); }
+    bool allows_short() const { return adapter_.allows_risk_direction(false); }
+    bool drawdown_is_percent() const { return adapter_.max_drawdown_is_percent(); }
+    bool intraday_loss_is_percent() const {
+        return adapter_.max_intraday_loss_is_percent();
+    }
 
     void seed_latched_day() {
         compat::pine::CapClock clock{};

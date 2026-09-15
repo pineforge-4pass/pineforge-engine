@@ -81,7 +81,7 @@ std::vector<PyramidEntry> fragmented_lots() {
 
 class Fixture final : public BacktestEngine {
 public:
-    Fixture() {
+    Fixture() : BacktestEngine(NativeConsumerBindTag{}) {
         // Deliberately different from the supplied physical close coordinate.
         current_bar_ = {100, 125, 95, 120, 1, 60000};
         bar_index_ = 1;

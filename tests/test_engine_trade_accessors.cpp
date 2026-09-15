@@ -76,13 +76,15 @@ public:
     int  open_count_at[N_BARS] = {};
 
     PyramidProbe() {
-        initial_capital_ = 100000;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1.0;
-        commission_type_ = CommissionType::PERCENT;
-        commission_value_ = 0.1;  // 0.1% commission per side
-        slippage_ = 0;
-        pyramiding_ = 5;          // allow multi-entry pyramid
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 1.0;
+        config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        config.commission_value = 0.1;
+        config.slippage = 0;
+        config.pyramiding = 5;
+        configure_pine_strategy(config);
     }
 
     void on_source_bar(const Bar& bar) override {
@@ -229,10 +231,12 @@ public:
     double profit_at_close = 0;
     double pct_at_close = 0;
     ShortProbe() {
-        initial_capital_ = 100000;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 2.0;
-        commission_value_ = 0;
+        source::PineStrategyConfig config;
+        config.initial_capital = 100000;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 2.0;
+        config.commission_value = 0.0;
+        configure_pine_strategy(config);
     }
     void on_source_bar(const Bar& bar) override {
         (void)bar;

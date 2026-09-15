@@ -46,7 +46,7 @@ int main() {
     CHECK(row.struct_version == 1);
     CHECK(row.size == sizeof(row));
     CHECK(std::strcmp(row.id, "C-projection") == 0);
-    CHECK(row.type == static_cast<int>(pineforge::OrderType::ENTRY));
+    CHECK(row.type == 1);
     CHECK(row.is_long == 1);
     CHECK(row.qty == 2.0);
     CHECK(row.incarnation != 0);

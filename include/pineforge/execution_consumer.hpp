@@ -18,9 +18,8 @@ inline namespace engine_script_run_v17 {
 
 class BacktestEngine;
 
-// Constructor-bound execution consumer. LegacyCompatibilityConsumer preserves
-// the existing Pine call order. NativeExecutionConsumer owns native lifecycle,
-// matching and the sole native timeline allocator. Neither is copyable.
+// Constructor-bound execution consumer. NativeExecutionConsumer owns lifecycle,
+// matching and the sole timeline allocator. It is not copyable.
 class IExecutionConsumer {
 public:
     IExecutionConsumer() = default;
@@ -67,7 +66,6 @@ public:
     virtual bool stream_end(BacktestEngine& engine, bool finalize_partial_input_bar) = 0;
 };
 
-std::unique_ptr<IExecutionConsumer> make_legacy_execution_consumer();
 std::unique_ptr<IExecutionConsumer> make_native_execution_consumer();
 
 }  // inline namespace engine_script_run_v17

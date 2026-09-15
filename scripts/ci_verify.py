@@ -37,8 +37,12 @@ DEFAULT_JOBS = 4
 JOBS_MIN, JOBS_MAX = 1, 64
 SCHEMA = 'pineforge-ci-verify/v1'
 SANITIZER_FLAG = '-fsanitize=address,undefined'
+# LeakSanitizer is unavailable in Apple's ASan runtime.  Keep the Linux CI
+# lane strict, while allowing the local macOS ASan/UBSan profile to execute
+# its actual instrumented tests instead of failing during runtime startup.
+_ASAN_LEAKS = '0' if sys.platform == 'darwin' else '1'
 SANITIZER_RUN_ENV = {
-    'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1:abort_on_error=1',
+    'ASAN_OPTIONS': f'detect_leaks={_ASAN_LEAKS}:halt_on_error=1:abort_on_error=1',
     'UBSAN_OPTIONS': 'print_stacktrace=1:halt_on_error=1',
 }
 SOURCE_GUARD_SCRIPTS = (
@@ -729,8 +733,17 @@ class Driver:
         self.ensure_abi_v15_frozen()
         self.ensure_abi_v16_frozen()
 
+        # AppleClang's ASan runtime serializes shadow-memory initialization
+        # behind a process-global spin lock. Starting several instrumented
+        # binaries at once can wedge them before main(). Keep an AppleClang
+        # Darwin sanitizer lane serial; a caller that explicitly selects a
+        # GNU g++ runtime can retain normal parallelism, as can Linux CI.
+        cxx_name = Path(os.environ.get('CXX', '')).name
+        apple_asan = (self.cfg.profile.sanitizers and sys.platform == 'darwin'
+                      and not cxx_name.startswith('g++'))
+        ctest_jobs = 1 if apple_asan else self.cfg.jobs
         ctest = ['ctest', '--test-dir', str(self.cfg.build_dir),
-                 '--output-on-failure', '--no-tests=error', '--parallel', str(self.cfg.jobs)]
+                 '--output-on-failure', '--no-tests=error', '--parallel', str(ctest_jobs)]
         if ctest_supports_junit(self.cfg.runner):
             ctest += ['--output-junit', str(self.cfg.build_dir / 'ctest-junit.xml')]
         self.invoke('ctest', ctest, extra_env=self.sanitizer_env(), timeout=1800)

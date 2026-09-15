@@ -7,13 +7,13 @@ prefix is preserved; 163 canonical lifecycle fields follow it, with admission
 facts in a separate append segment.
 See [reflection and completion](exit-leg-lifecycle-reflection.md).
 
-`PendingOrder::legs` owns the current immutable trigger definition. All order
-price reads use that definition; setters replace the complete const value and
-advance its revision. The old scalar price members do not remain as a second
-mutable authority. ENTRY/RAW trigger calculations and quantities are unchanged.
-A retained definition handle can be created only by its canonical owner, and
-retains old values when a successor replaces its current definition. Deferred
-closes acquire an incarnation before lifecycle attachment.
+Native request definitions own trigger state. The source adapter retains an
+immutable placement-level snapshot for public projections, so no compatibility
+order object or second executable price store remains. ENTRY/RAW trigger
+calculations and quantities are unchanged. A retained definition handle can be
+created only by its canonical owner, and retains old values when a successor
+replaces its current definition. Deferred closes acquire an incarnation before
+lifecycle attachment.
 
 The native reducer in `exit_leg_lifecycle.hpp` accepts exact target incarnation,
 owner and revision, a cause frame, and a typed action: bind owner, suspend selected
@@ -73,10 +73,9 @@ forks receive a new instruction identity and no inherited replay receipt.
 All nested definition, generation, cause, obligation, window and latest-receipt
 facts are reflected/hashed once from canonical state. Legacy D/R/T/O/H/K/B/B0
 fields are read-only projections. This model removes three stored booleans.
-Admission, cancellation and placement-fact consolidation have reduced the
-direct PendingOrder boolean census from 17 to 5; the opposite-predecessor
-result is now derived from the accepted command journal. The five include two ordinary
-direction/activation facts and does not count every engine policy option.
+Admission, cancellation, and placement facts are represented by the native
+request/receipt model and adapter journal. The retired compatibility-order
+boolean census is no longer maintained.
 Optional obligations, three leg generations,
 retirement receipts, immutable definition references and action/domain variants
 remain disclosed domain state. This is not a whole-engine fewer-than-five claim.

@@ -390,7 +390,7 @@
       "suppressed_close_retired_ledger_qty"
     ],
     [
-      "ShortSeedCollisionRole",
+      "int32_t",
       "short_seed_collision_role"
     ]
   ]

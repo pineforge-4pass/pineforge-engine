@@ -8,7 +8,7 @@
 namespace pineforge::source {
 
 using PineNativeHost = PineStrategyHost;
-using FixturePendingOrder = PineStrategyHost::FixturePendingOrder;
-using FixturePendingOrderType = PineStrategyHost::FixturePendingOrderType;
+using FixtureIntentRow = PineStrategyHost::FixtureIntentRow;
+using FixtureIntentKind = PineStrategyHost::FixtureIntentKind;
 
 } // namespace pineforge::source

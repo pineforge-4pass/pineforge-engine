@@ -1,5 +1,4 @@
-// Tests for BacktestEngine::get_input_source + the native source-series
-// backing store (_src_<field>_ / _push_source_series).
+// Tests for the source-host series accessors backed by PineScheduler.
 //
 // Pine v6 `input.source(defval)` returns a `series float` and supports
 // RUNTIME override of which native price series feeds an indicator. The
@@ -19,30 +18,30 @@ using namespace pineforge;
 namespace {
 
 struct SourceHarness : public pineforge::source::PineStrategyHost {
-    explicit SourceHarness(bool active = true) { _src_series_active_ = active; }
+    explicit SourceHarness(bool active = true) {
+        pineforge::source::PineStrategyConfig config;
+        config.src_series_active = active;
+        configure_pine_strategy(config);
+    }
     void on_source_bar(const Bar& /*bar*/) override {}
 
     const Series<double>& resolve(const std::string& key) {
-        return get_input_source(key, _src_close_);
+        return source_input_series(key, source_series("close"));
     }
 
     // Drive one bar through the source-series push exactly as dispatch_bar
     // would (first tick => push). Bar fields: open, high, low, close, volume.
     void feed(double o, double h, double l, double c, double v) {
-        current_bar_ = Bar{o, h, l, c, v, 0};
-        is_first_tick_ = true;
-        _push_source_series();
+        fixture_publish_source_series(Bar{o, h, l, c, v, 0}, true);
     }
     // Simulate a magnifier intrabar refinement of the current bar (no push).
     void feed_intrabar(double o, double h, double l, double c, double v) {
-        current_bar_ = Bar{o, h, l, c, v, 0};
-        is_first_tick_ = false;
-        _push_source_series();
+        fixture_publish_source_series(Bar{o, h, l, c, v, 0}, false);
     }
 
-    const Series<double>& close_s() const { return _src_close_; }
-    const Series<double>& high_s()  const { return _src_high_; }
-    const Series<double>& hl2_s()   const { return _src_hl2_; }
+    const Series<double>& close_s() const { return source_series("close"); }
+    const Series<double>& high_s()  const { return source_series("high"); }
+    const Series<double>& hl2_s()   const { return source_series("hl2"); }
 };
 
 int tests_run = 0;

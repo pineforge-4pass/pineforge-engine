@@ -4,8 +4,14 @@
     "from": "engine_script_run_v16",
     "to": "engine_script_run_v17"
   },
-  "sourcePendingOrder": "pineforge::source::PendingOrder",
-  "removedStorage": [],
+  "retiredSourceOrderHeader": "pineforge/source/pine_pending_intent.hpp",
+  "removedStorage": [
+    "BacktestEngine::process_orders_on_close_",
+    "BacktestEngine::calc_on_order_fills_",
+    "PineStrategyHost::pending_orders_",
+    "PineStrategyHost::id_unclosed_qty_",
+    "PineStrategyHost::PineLanguageState mixin"
+  ],
   "addedStorage": [],
   "addedValueMembers": [
     "NativeBeginArgs::syminfo",
@@ -22,7 +28,21 @@
     "on_native_bar_open",
     "on_native_input"
   ],
-  "removedVirtuals": [],
+  "removedVirtuals": [
+    "legacy_run_simple",
+    "legacy_run_tf",
+    "legacy_run_rich",
+    "legacy_stream_begin",
+    "legacy_stream_push_bar",
+    "legacy_stream_push_tick",
+    "legacy_stream_push_ticks",
+    "legacy_stream_advance_time",
+    "legacy_stream_end",
+    "validate_source_lifecycle",
+    "preflight_source_lifecycle",
+    "apply_source_pre_close_lifecycle",
+    "apply_source_pending_removals"
+  ],
   "rejectionPairs": [
     ["v16-frozen", "v17-current"],
     ["v17-current", "v16-frozen"]

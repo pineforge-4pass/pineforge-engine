@@ -4,8 +4,9 @@
 
 #define PineStrategyHost PineNativeHost
 #define signed_position_size live_position_size
-#define PendingOrder FixturePendingOrder
+#define PendingOrder FixtureIntentRow
 #define pending_orders_ source_pending_view()
+#include "oracle_fixture_config_shim.hpp"
 #include "oracle/test_oracle_stop_snapshot.cpp"
 #undef pending_orders_
 #undef PendingOrder

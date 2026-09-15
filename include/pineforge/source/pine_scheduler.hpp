@@ -36,6 +36,15 @@ public:
         return language_.history_slot_is_new_;
     }
     double previous_chart_close() const noexcept { return language_.prev_chart_close_; }
+    int bar_index_offset() const noexcept { return language_.bar_index_offset_; }
+    void set_bar_index_offset(int value) noexcept { language_.bar_index_offset_ = value; }
+    void set_source_series_active(bool value) noexcept { language_._src_series_active_ = value; }
+    double script_position_view(int bar_index, PositionSide side, double quantity) const noexcept;
+    void freeze_script_position_view(int bar_index, PositionSide side, double quantity,
+                                     const std::vector<PyramidEntry>& lots);
+    void clear_script_position_view() noexcept;
+    const Series<double>& source_series(const std::string&) const;
+    void fixture_publish_source_series(const Bar&, bool new_history_slot);
     int source_bar_count() const noexcept { return source_bar_count_; }
     bool terminal_source_bar() const noexcept {
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
@@ -68,6 +77,7 @@ private:
     };
 
     void publish_series(const Bar&, PineStrategyHost&);
+    void update_source_series(const Bar&);
     void reset_language();
 
     struct DeferredBoundaryInput {

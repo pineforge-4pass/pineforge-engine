@@ -260,13 +260,6 @@ void BacktestEngine::stage_native_settlement(
         fail(status);
         return;
     }
-    if (lifecycle) {
-        if (auto invalid = validate_source_lifecycle(*lifecycle)) {
-            fail(*invalid);
-            return;
-        }
-    }
-
     CloseScopeInspection selection;
     if (selected) {
         selection = inspect_selected_opening_set(
@@ -350,12 +343,6 @@ void BacktestEngine::stage_native_settlement(
         status != Status::Applied) {
         fail(status);
         return;
-    }
-    if (lifecycle) {
-        if (auto invalid = validate_source_lifecycle(*lifecycle)) {
-            fail(*invalid);
-            return;
-        }
     }
     stage.incoming = reversal.signed_units < 0.0
         ? PositionSide::SHORT : PositionSide::LONG;
@@ -593,23 +580,10 @@ execution::Result BacktestEngine::settle_source_staged_execution(
     if (const auto status = prepare_native_settlement_commit(stage, fill, context, rows);
         status != execution::Status::Applied)
         return {status};
-    // Source intraday readiness precedes all close-counter checks, including
-    // Ready opening-only calls. Invalid/NoEffect returned before this point.
-    std::optional<int> loss_day;
-    if (const auto status = on_source_close_preflight(
-            rows.closed_trades.data(), rows.closed_trades.size(), loss_day);
-        status != execution::Status::Applied)
-        return {status};
     if (const auto status = preflight_native_settlement_effects(stage, lifecycle, rows);
         status != execution::Status::Applied)
         return {status};
-    const auto result = commit_prepared_native_settlement_stage(
-        stage, fill, lifecycle, context, rows);
-    if (result.status == execution::Status::Applied && result.closed_trade_count != 0) {
-        on_source_close_observed(trades_.data() + result.first_trade_index,
-                                  result.closed_trade_count, loss_day);
-    }
-    return result;
+    return commit_prepared_native_settlement_stage(stage, fill, lifecycle, context, rows);
 }
 
 void BacktestEngine::build_native_settlement_close_rows(
@@ -710,13 +684,6 @@ execution::Status BacktestEngine::preflight_native_settlement_effects(
         && position_entry_count_ == std::numeric_limits<int>::max())
         throw std::overflow_error("position entry counter exhausted");
 
-    const bool will_reset = stage.closed > 0.0 && stage.survivors.empty();
-    const bool will_open_quoted = stage.opening > 0.0
-        && (position_side_ == PositionSide::FLAT || stage.survivors.empty());
-    if (auto invalid = preflight_source_lifecycle(
-            lifecycle, will_reset, will_open_quoted))
-        return *invalid;
-
     const size_t events = closed_trades.size() + (stage.opening > 0.0 ? 1 : 0);
     if (stream_observe_actions_) {
         if (events > std::numeric_limits<uint64_t>::max() - stream_action_sequence_)
@@ -740,9 +707,7 @@ execution::Result BacktestEngine::commit_prepared_native_settlement_stage(
     // Commit through the existing accounting/observation sinks. Allocation or
     // lifecycle exceptions still abort the owning engine run; this internal
     // synchronous kernel does not promise recovery/replay of a failed commit.
-    // Order: authorized pre-close events, close observations and old-cycle
-    // unbind, authorized pending removals, then quoted opening bind.
-    if (lifecycle.pre_close) apply_source_pre_close_lifecycle(*lifecycle.pre_close);
+    // Lifecycle effects are already reflected by the native request core.
     for (auto& trade : closed_trades) record_close_trade(std::move(trade));
     if (stage.closed > 0.0) {
         if (stage.survivors.empty()) {
@@ -754,7 +719,6 @@ execution::Result BacktestEngine::commit_prepared_native_settlement_stage(
             position_entry_count_ = static_cast<int>(pyramid_entries_.size());
         }
     }
-    apply_source_pending_removals(lifecycle.removals);
     if (stage.opening > 0.0) {
         const double opening_commission = stage.current_costs.back();
         PyramidEntry lot{fill.price, context.effective_time_ms, stage.opening, fill.id,
