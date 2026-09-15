@@ -457,6 +457,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         hash_native_request(f, command.request); hash_placement(f, command.snapshot);
         f.s(command.replacement_key); f.b(command.opening);
     }
+    f.u(source_shadow_pending_.size());
+    for (const auto& shadow : source_shadow_pending_) {
+        hash_placement(f, shadow.snapshot); f.s(shadow.label);
+    }
     f.d(pending_same_bar_close_qty_);
     f.u(pending_relative_exits_.size());
     for (const auto& exit : pending_relative_exits_) {
@@ -522,7 +526,9 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);
     hash_native_handle(f, short_seed_.long_entry); hash_native_handle(f, short_seed_.materialize_long);
     hash_native_handle(f, short_seed_.final_short); f.b(short_seed_.active);
+    f.b(short_seed_.report_swap_pending);
     hash_native_handle(f, short_seed_candidate_long_);
+    hash_native_handle(f, short_seed_candidate_materialize_);
     hash_native_handle(f, short_seed_candidate_final_short_);
     f.i(last_bar_dual_entry_path_); f.b(pending_view_.owner_ != nullptr);
     f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);

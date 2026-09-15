@@ -174,7 +174,7 @@ protected:
     const std::vector<FixturePendingOrder>& source_pending_view() const {
         source_pending_view_cache_.clear();
         source_pending_view_cache_.reserve(adapter_.pending_same_bar_commands_.size()
-            + adapter_.live_handles_.size());
+            + adapter_.source_shadow_pending_.size() + adapter_.live_handles_.size());
         const auto append = [&](const PlacementSnapshot& snapshot, const std::string& label) {
             FixturePendingOrderType type = FixturePendingOrderType::MARKET;
             switch (snapshot.family) {
@@ -200,6 +200,9 @@ protected:
         for (const auto& command : adapter_.pending_same_bar_commands_) {
             append(command.snapshot, command.request.label);
         }
+        for (const auto& shadow : adapter_.source_shadow_pending_) {
+            append(shadow.snapshot, shadow.label);
+        }
         for (const auto& handle : adapter_.live_handles_) {
             const auto found = adapter_.placement_.find(handle.incarnation);
             if (found != adapter_.placement_.end()) append(found->second, found->second.source_id);
@@ -218,6 +221,7 @@ private:
     void scheduler_prepare_chart_day_partition(const std::vector<Bar>& bars);
     void scheduler_record_range_end(const Bar&);
     void scheduler_publish_source_bar(const Bar&, bool first_tick, bool advance_source_index = true);
+    void project_short_seed_report_rows(const native_order::ExecutionAppliedEvent&);
     bool scheduler_coof_enabled() const noexcept { return config_.calc_on_order_fills; }
     static PineStrategyConfig apply_overrides(PineStrategyConfig, const StrategyOverrides&);
 

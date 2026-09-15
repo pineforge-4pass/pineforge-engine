@@ -145,6 +145,11 @@ struct ShortSeedPlan {
     native_order::RequestHandle materialize_long{};
     native_order::RequestHandle final_short{};
     bool active = false;
+    // Generic matching must execute the artifact before the final source
+    // short.  For variable-size source books their acceptance handles are
+    // consequently opposite to their source report incarnations; retain the
+    // pending source-report projection until the remnant is closed.
+    bool report_swap_pending = false;
 };
 
 struct SourceDayLedger {
@@ -326,6 +331,15 @@ private:
         bool opening = false;
     };
 
+    // A source command can remain observable through the enclosing source
+    // evaluation after generic admission has already produced its terminal
+    // receipt.  This is a source projection row, never a second executable
+    // request; it expires at the following broker open.
+    struct SourceShadowPending {
+        PlacementSnapshot snapshot;
+        std::string label;
+    };
+
     struct PendingRelativeExit {
         SourceId exit_id;
         SourceId from_entry;
@@ -363,6 +377,8 @@ private:
     void apply_fx_opening_margin_slice(const native_order::ExecutionAppliedEvent&,
                                        const NativeDecisionContext&);
     void submit_fx_margin_slice(const Bar&, const NativeDecisionContext&, double rate);
+    void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
+    void maybe_activate_short_seed_plan();
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
     void cancel_bracket_origin(const native_order::RequestHandle&);
@@ -396,6 +412,7 @@ private:
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
     std::vector<PendingSameBarCommand> pending_same_bar_commands_;
+    std::vector<SourceShadowPending> source_shadow_pending_;
     double pending_same_bar_close_qty_ = 0.0;
     std::vector<PendingRelativeExit> pending_relative_exits_;
     std::vector<PendingCoofRequest> pending_coof_requests_;
@@ -428,6 +445,7 @@ private:
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};
     native_order::RequestHandle short_seed_candidate_long_{};
+    native_order::RequestHandle short_seed_candidate_materialize_{};
     native_order::RequestHandle short_seed_candidate_final_short_{};
     int last_bar_dual_entry_path_ = 0;
     PendingIntentView pending_view_{};

@@ -134,12 +134,47 @@ void PineNativeHost::on_native_bar(const Bar& bar, const NativeDecisionContext& 
 void PineNativeHost::on_native_applied(const native_order::ExecutionAppliedEvent& event,
                                        const NativeDecisionContext& context) {
     adapter_.on_applied(event, context);
+    project_short_seed_report_rows(event);
     scheduler_.applied(event, context, *this);
     if (scheduler_.terminal_source_bar()) {
         const Bar terminal = scheduler_.current_script_bar()
             ? *scheduler_.current_script_bar() : current_bar_;
         scheduler_record_range_end(terminal);
     }
+}
+
+void PineNativeHost::project_short_seed_report_rows(
+        const native_order::ExecutionAppliedEvent& event) {
+    auto& plan = adapter_.short_seed_;
+    if (!plan.report_swap_pending || event.closed_trade_count == 0
+        || event.handle() == plan.final_short) {
+        return;
+    }
+    const auto placement = adapter_.placement_.find(event.handle().incarnation);
+    if (placement == adapter_.placement_.end()
+        || placement->second.family != PineOrderFamily::Close
+        || placement->second.from_entry != "Short") {
+        return;
+    }
+    // The source's submission ledger numbers the final Short before its
+    // internally materialized close lot. Generic matching must execute the
+    // latter first, so only this completed-report projection swaps their
+    // source-visible incarnations; no live generic owner is rewritten.
+    for (auto& trade : trades_) {
+        if (trade.entry_incarnation == plan.materialize_long.incarnation
+            && trade.entry_id == "__close__Short") {
+            trade.entry_incarnation = plan.final_short.incarnation;
+        }
+    }
+    const std::size_t begin = event.first_trade_index;
+    const std::size_t end = begin + event.closed_trade_count;
+    for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
+        if (trades_[index].entry_incarnation == plan.final_short.incarnation
+            && trades_[index].entry_id == "Short") {
+            trades_[index].entry_incarnation = plan.materialize_long.incarnation;
+        }
+    }
+    plan.report_swap_pending = false;
 }
 native_order::ExecutionTerms PineNativeHost::resolve_execution_terms(const NativeExecutionTermsFacts& facts) const {
     return adapter_.resolve_terms(facts);
