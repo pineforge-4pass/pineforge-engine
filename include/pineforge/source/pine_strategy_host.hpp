@@ -41,6 +41,12 @@ public:
     virtual void on_source_bar(const Bar&) = 0;
     void configure_pine_strategy(const PineStrategyConfig&);
     void set_strategy_override(const StrategyOverrides&);
+    // A stream's historical warmup remains a configuration window until the
+    // first realtime input.  The legacy stream path permits the feed to
+    // finalize its session template in that window (the sparse-boundary
+    // request.security probe relies on it); retain that source-host surface
+    // while native staged ingress remains refused once realtime starts.
+    void set_syminfo_session(const std::string&);
     void set_pine_risk_direction(int);
     void set_pine_risk_max_cons_loss_days(int);
     void set_pine_risk_max_drawdown(double, bool);

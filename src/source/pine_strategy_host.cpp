@@ -1,4 +1,5 @@
 #include <pineforge/source/pine_strategy_host.hpp>
+#include <pineforge/ta.hpp>
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
@@ -101,6 +102,11 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     }
     if (args.inputs) inputs_ = *args.inputs;
 
+    if (args.is_stream && native_security_feed_enabled()) {
+        throw std::runtime_error(
+            "native request.security feed supports historical runs only");
+    }
+
     if (!(args.n < 2 && !args.is_stream)) {
         std::string effective_input = args.input_tf;
         if (effective_input.empty() && args.n >= 2 && args.bars != nullptr)
@@ -158,11 +164,16 @@ void source::PineStrategyHost::on_native_run_begin() {
 
 void source::PineStrategyHost::on_native_input(
         const Bar& bar, const NativeInputContext& context) {
+    if (native_state().phase == NativeRunPhase::Realtime)
+        stream_warmup_mode_ = false;
     scheduler_.input(bar, context, *this);
 }
 
 void source::PineStrategyHost::on_native_tick(
         const Bar& tick, const NativeTickContext& context) {
+    if (native_state().phase == NativeRunPhase::Realtime)
+        stream_warmup_mode_ = false;
+    scheduler_.tick(tick, context, *this);
     adapter_.on_tick(tick, context);
 }
 
@@ -192,6 +203,19 @@ void source::PineStrategyHost::on_native_bar(
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
+    if (scheduler_.bar_magnifier_enabled()) {
+        const int source_index = scheduler_.source_bar_index_for(context);
+        for (auto& lot : pyramid_entries_) {
+            if (lot.entry_incarnation == event.handle().incarnation
+                && event.opened_units != 0.0) {
+                lot.entry_bar_index = source_index;
+            }
+        }
+        for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+            const std::size_t index = event.first_trade_index + i;
+            if (index < trades_.size()) trades_[index].exit_bar_index = source_index;
+        }
+    }
     adapter_.on_applied(event, context);
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
@@ -235,6 +259,14 @@ void source::PineStrategyHost::set_strategy_override(const StrategyOverrides& ov
     adapter_.set_configuration(config_);
     scheduler_.set_source_series_active(config_.src_series_active);
     source_configuration_captured_ = true;
+}
+
+void source::PineStrategyHost::set_syminfo_session(const std::string& session) {
+    if (stream_warmup_mode_) {
+        (void)session;
+        return;
+    }
+    BacktestEngine::set_syminfo_session(session);
 }
 
 void source::PineStrategyHost::set_pine_risk_direction(int direction) {
@@ -760,7 +792,12 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
 void source::PineStrategyHost::scheduler_publish_source_bar(
         const Bar& bar, bool, bool advance_source_index) {
     current_bar_ = bar;
-    if (advance_source_index) ++source_bar_index_;
+    const bool temporary_index = !advance_source_index
+        && (!scheduler_.current_script_bar()
+            || scheduler_.current_script_bar()->timestamp != bar.timestamp);
+    const int previous_bar_index = bar_index_;
+    const bool previous_barstate_islast = barstate_islast_;
+    if (advance_source_index || temporary_index) ++source_bar_index_;
     ++source_callback_count_;
     bar_index_ = source_bar_index_;
     barstate_islast_ = source_bar_index_ == source_last_bar_index_;
@@ -772,7 +809,21 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     // Publish terminal and group-adjustment receipts before the source body
     // reads its public pending projection at this decision boundary.
     adapter_.observe_terminal_receipts();
+    struct ChartEmaNaWarmupScope {
+        bool previous;
+        explicit ChartEmaNaWarmupScope(bool enabled)
+            : previous(ta::ema_na_warmup_flag()) {
+            ta::ema_na_warmup_flag() = enabled;
+        }
+        ~ChartEmaNaWarmupScope() { ta::ema_na_warmup_flag() = previous; }
+    } ema_scope(chart_ema_na_warmup_);
+    ta::BarContextScope bar_scope(pine_bar_index(), scheduler_.bar_index_offset());
     on_source_bar(bar);
+    if (temporary_index) {
+        --source_bar_index_;
+        bar_index_ = previous_bar_index;
+        barstate_islast_ = previous_barstate_islast;
+    }
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
     if (advance_source_index) {

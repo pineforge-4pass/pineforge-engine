@@ -207,6 +207,9 @@ struct PlacementSnapshot {
     double projection_affordability_held_qty = std::numeric_limits<double>::quiet_NaN();
     PineSizingSnapshot sizing{};
     PineExitLevels exit_levels{};
+    // Resolved absolute trail activation used by the source fill policy when
+    // trail_points is lowered after its parent opening becomes live.
+    double trail_activation_level = std::numeric_limits<double>::quiet_NaN();
     // L4c policy receipts. They are immutable placement/live facts owned by
     // the adapter, never a second executable pending-order representation.
     OrderBirth birth{};
