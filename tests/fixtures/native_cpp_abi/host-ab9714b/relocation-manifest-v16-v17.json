@@ -18,6 +18,8 @@
     "NativeRunSpec::slot_label_policy",
     "NativeRunSpec::legacy_tolerance",
     "NativeRunSpec::abort_reporting",
+    "NativeRunSpec::path_order",
+    "ExecutionTerms::grid_policy",
     "IntrabarPath::lower_tf::sample_eligibility",
     "IntrabarPath::synthesized",
     "NativeDecisionContext::driver_statistics",

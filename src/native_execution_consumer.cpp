@@ -56,6 +56,7 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
     f.b(spec.timeframe_undetected);
     f.u(static_cast<uint64_t>(spec.slot_label_policy));
     f.u(static_cast<uint64_t>(spec.legacy_tolerance));
+    f.u(static_cast<uint64_t>(spec.path_order));
     f.s(spec.ticker); f.s(spec.tickerid); f.s(spec.type);
     f.s(spec.currency); f.s(spec.basecurrency); f.s(spec.description); f.s(spec.volumetype);
     f.s(spec.timezone); f.s(spec.session); f.s(spec.chart_timezone);
@@ -126,6 +127,7 @@ void hash_execution_terms(Fnv& f, const native_order::ExecutionTerms& terms) noe
     f.b(terms.units.has_value());
     if (terms.units) f.d(*terms.units);
     f.u(static_cast<uint64_t>(terms.shape));
+    f.u(static_cast<uint64_t>(terms.grid_policy));
 }
 
 void hash_optional_execution_terms(Fnv& f,
@@ -141,8 +143,73 @@ bool same_double_bits(double left, double right) noexcept {
 bool identity_terms(const native_order::ExecutionTerms& terms, double default_price) noexcept {
     return same_double_bits(terms.resolved_price, default_price)
         && !terms.units.has_value()
-        && terms.shape == native_order::OpeningShape::Transact;
+        && terms.shape == native_order::OpeningShape::Transact
+        && terms.grid_policy == native_order::ExecutionGridPolicy::SnapToGrid;
 }
+
+bool valid_execution_grid_policy(native_order::ExecutionGridPolicy policy) noexcept {
+    switch (policy) {
+    case native_order::ExecutionGridPolicy::SnapToGrid:
+    case native_order::ExecutionGridPolicy::ExplicitUnits:
+        return true;
+    }
+    return false;
+}
+
+bool explicit_reduction_units_representable(double units, double exposure) noexcept {
+    if (!std::isfinite(units) || !std::isfinite(exposure)
+        || !(units > 0.0) || !(exposure > 0.0) || units > exposure) {
+        return false;
+    }
+    return order_action::plan(exposure, order_action::Reduce{units}).has_value();
+}
+
+bool execution_terms_grid_representable(
+        const native_order::ExecutionTerms& terms,
+        const native_order::HostSized* host_sized, bool unresolved,
+        double scope_exposure_units, const NativeRunSpec* spec) noexcept {
+    if (!valid_execution_grid_policy(terms.grid_policy)) return false;
+    if (terms.grid_policy == native_order::ExecutionGridPolicy::ExplicitUnits) {
+        return unresolved && host_sized
+            && host_sized->kind == native_order::HostSizedKind::Close
+            && terms.shape == native_order::OpeningShape::Transact
+            && terms.units
+            && explicit_reduction_units_representable(
+                *terms.units, scope_exposure_units);
+    }
+    if (!terms.units || !(*terms.units > 0.0)) return true;
+    return spec && (!spec->quantity_grid
+        || native_order::quantity_on_grid(*terms.units, *spec->quantity_grid));
+}
+
+bool path_uses_high_first(const Bar& bar, NativePathOrder order) noexcept {
+    switch (order) {
+    case NativePathOrder::HighFirst:
+        return true;
+    case NativePathOrder::LowFirst:
+        return false;
+    case NativePathOrder::Auto:
+        return std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
+    }
+    return false;
+}
+
+class NativePathOrderScope {
+public:
+    explicit NativePathOrderScope(NativePathOrder order)
+        : prior_(internal::path_order_override()) {
+        const int mode = order == NativePathOrder::HighFirst ? 1
+            : (order == NativePathOrder::LowFirst ? 2 : 0);
+        internal::set_path_order_override(mode);
+    }
+    ~NativePathOrderScope() { internal::set_path_order_override(prior_); }
+
+    NativePathOrderScope(const NativePathOrderScope&) = delete;
+    NativePathOrderScope& operator=(const NativePathOrderScope&) = delete;
+
+private:
+    int prior_ = 0;
+};
 
 bool remaining_path_coordinate(const NativeCoordinate& coordinate) noexcept {
     const bool continuous_provenance = coordinate.provenance == NativePriceProvenance::Confirmed
@@ -2648,13 +2715,10 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         if (terms.units && (!std::isfinite(*terms.units) || *terms.units < 0.0)) {
             return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
-        if (terms.units && *terms.units > 0.0) {
-            const auto* spec = spec_ptr();
-            if (!spec || (spec->quantity_grid
-                          && !native_order::quantity_on_grid(*terms.units,
-                                                              *spec->quantity_grid))) {
-                return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
-            }
+        if (!execution_terms_grid_representable(
+                terms, host_sized, unresolved, terms_facts.scope_exposure_units,
+                spec_ptr())) {
+            return terminal(native_order::MatchRejectReason::InvalidTerms, terms);
         }
 
         double after = 0.0;
@@ -3792,13 +3856,10 @@ NativeCurrentExecutionPreview NativeExecutionConsumer::inspect_current_execution
         out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
         return out;
     }
-    if (terms.units && *terms.units > 0.0) {
-        const auto* spec = spec_ptr();
-        if (!spec || (spec->quantity_grid
-                      && !native_order::quantity_on_grid(*terms.units, *spec->quantity_grid))) {
-            out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
-            return out;
-        }
+    if (!execution_terms_grid_representable(
+            terms, host_sized, unresolved, facts.scope_exposure_units, spec_ptr())) {
+        out.terms_rejection = native_order::MatchRejectReason::InvalidTerms;
+        return out;
     }
     double after = 0.0;
     double deduction = 0.0;
@@ -4234,9 +4295,9 @@ void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar&
 
 void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, const Bar& bar,
                                                        const NativeCoordinate& base) {
-    // Native AUTO is local to this input; another legacy host may have a
-    // thread-local forced path installed around a nested native run.
-    const bool high_first = std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
+    const auto* spec = spec_ptr();
+    const bool high_first = path_uses_high_first(
+        bar, spec ? spec->path_order : NativePathOrder::Auto);
     callback_context_ = NativeDecisionContext{};
     callback_context_.sub_index = 0;
     callback_context_.sub_count = 1;
@@ -4315,7 +4376,6 @@ void NativeExecutionConsumer::deliver_confirmed_script(BacktestEngine& engine, c
     engine.current_bar_.timestamp = close_time;
     invoke_callback(engine, bar, calc);
     if (failed()) return;
-    const auto* spec = spec_ptr();
     if (spec && spec->close_execution == NativeCloseExecution::AfterCalculation) {
         emit_discrete(bar.close, close_time, NativePriceProvenance::AfterCalculationClose,
                       NativePathPhase::Close, true);
@@ -4389,18 +4449,24 @@ void NativeExecutionConsumer::deliver_intrabar_script(
         // sampler from include/pineforge/magnifier.hpp as ordered point
         // decisions. This reproduces the read-only consumption ordering at
         // src/source/pine_scheduler.cpp:806-960 without source policy here.
-        if (!distribution_samples || direct_sub_bar_corners) {
-            // A retained lower bar already supplies its four exact turning
-            // points. Continuous eligibility traverses those segments directly;
-            // likewise, a path containing several retained lower bars has no
-            // missing intrabar detail for a synthetic sampler to recover.
-            sample_price_path(sub, 4, MagnifierDistribution::ENDPOINTS, samples);
-        } else if (volume_weighted) {
-            sample_price_path_volume_weighted(
-                sub, sample_count, mean_volume, volume_weighted_min_samples,
-                volume_weighted_max_samples, distribution, samples);
-        } else {
-            sample_price_path(sub, sample_count, distribution, samples);
+        {
+            // The sampler still serves the byte-identical legacy route through
+            // its scoped internal order. Install this run's generic policy only
+            // while materializing the native driver's point sequence.
+            NativePathOrderScope path_scope(spec->path_order);
+            if (!distribution_samples || direct_sub_bar_corners) {
+                // A retained lower bar already supplies its four exact turning
+                // points. Continuous eligibility traverses those segments directly;
+                // likewise, a path containing several retained lower bars has no
+                // missing intrabar detail for a synthetic sampler to recover.
+                sample_price_path(sub, 4, MagnifierDistribution::ENDPOINTS, samples);
+            } else if (volume_weighted) {
+                sample_price_path_volume_weighted(
+                    sub, sample_count, mean_volume, volume_weighted_min_samples,
+                    volume_weighted_max_samples, distribution, samples);
+            } else {
+                sample_price_path(sub, sample_count, distribution, samples);
+            }
         }
         if (samples.empty()) {
             fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Input});

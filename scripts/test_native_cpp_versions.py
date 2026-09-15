@@ -78,6 +78,32 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[7], 'NativeLegacyTolerance::BatchStructuralBars',
                     'NativeLegacyTolerance::RemovedBatchStructuralBars')
 
+    def test_path_order_policy_is_explicit_validated_hashed_and_consumed(self):
+        for before, after in (
+            ('enum class NativePathOrder : std::uint32_t {',
+             'enum class MissingNativePathOrder : std::uint32_t {'),
+            ('NativePathOrder path_order = NativePathOrder::Auto;', ''),
+            ('PathOrder,', 'MissingPathOrder,'),
+            ('UnknownPathOrder,', 'MissingUnknownPathOrder,'),
+        ):
+            with self.subTest(before=before, after=after):
+                self.reject(FILES[4], before, after)
+        self.reject(FILES[5], 'spec.path_order', 'spec.removed_path_order')
+        self.reject(FILES[10], 'f.u(static_cast<uint64_t>(spec.path_order));', '')
+        self.reject(FILES[10], 'bool path_uses_high_first(',
+                    'bool removed_path_uses_high_first(')
+        self.reject(FILES[10], 'class NativePathOrderScope {',
+                    'class RemovedNativePathOrderScope {')
+
+    def test_execution_grid_policy_is_explicit_hashed_and_consumed(self):
+        self.reject(FILES[0], 'enum class ExecutionGridPolicy : std::uint8_t {',
+                    'enum class MissingExecutionGridPolicy : std::uint8_t {')
+        self.reject(FILES[0],
+                    'ExecutionGridPolicy grid_policy = ExecutionGridPolicy::SnapToGrid;', '')
+        self.reject(FILES[10], 'f.u(static_cast<uint64_t>(terms.grid_policy));', '')
+        self.reject(FILES[10], 'bool execution_terms_grid_representable(',
+                    'bool removed_execution_terms_grid_representable(')
+
     def test_abort_reporting_policy_and_input_hook_are_explicit_and_hashed(self):
         for before, after in (
             ('enum class NativeAbortReporting : std::uint32_t {',

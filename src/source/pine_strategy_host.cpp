@@ -257,7 +257,11 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     adapter_.set_margin_call_enabled(margin_call_enabled_);
     scheduler_.capture_begin(args);
     scheduler_.set_source_series_active(effective.src_series_active);
-    const NativeRunSpec spec = adapter_.project(effective, staged, args);
+    const NativePathOrder path_order = path_order_mode_ == 1
+        ? NativePathOrder::HighFirst
+        : (path_order_mode_ == 2 ? NativePathOrder::LowFirst
+                                 : NativePathOrder::Auto);
+    const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
     const auto setup = configure_native(spec);
     if (setup.status != NativeSetupStatus::Applied)
         throw std::logic_error("Pine native adapter failed to configure projected run spec");

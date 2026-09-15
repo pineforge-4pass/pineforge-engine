@@ -789,6 +789,64 @@ void a_t5_bound_host_sized_rematch_rejects_units() {
     CHECK(bits(*receipts.front().input.terms.units) == bits(2.0));
 }
 
+void explicit_reduction_grid_policy_both_ways() {
+    struct Summary {
+        double position = 0.0;
+        std::vector<no::ExecutionAppliedEvent> applied;
+        std::vector<no::MatchRejectedEvent> rejected;
+    };
+    const auto run_case = [](no::ExecutionGridPolicy policy, double units,
+                             const char* key) {
+        TermsHost host;
+        host.resolver = [policy, units](const NativeExecutionTermsFacts& facts) {
+            if (facts.definition->request.label == "half-close") {
+                no::ExecutionTerms terms{facts.default_resolved_price, units,
+                                         no::OpeningShape::Transact};
+                terms.grid_policy = policy;
+                return terms;
+            }
+            return no::ExecutionTerms{facts.default_resolved_price, std::nullopt,
+                                      no::OpeningShape::Transact};
+        };
+        host.beginning = [](Host& base) {
+            auto& current = static_cast<TermsHost&>(base);
+            put(current, tx(1.0, "seed"));
+            put(current, host_close("half-close"));
+        };
+        auto configuration = spec(key);
+        configuration.quantity_grid = 1.0;
+        run(host, configuration, {100.0});
+        completed(host);
+        return Summary{host.physical_position().signed_units,
+                       events<no::ExecutionAppliedEvent>(host),
+                       events<no::MatchRejectedEvent>(host)};
+    };
+
+    const auto explicit_units = run_case(
+        no::ExecutionGridPolicy::ExplicitUnits, 0.5, "terms-explicit-units-grid");
+    CHECK(bits(explicit_units.position) == bits(0.5));
+    REQUIRE(explicit_units.applied.size() == 2);
+    CHECK(explicit_units.applied.back().request().label == "half-close");
+    CHECK(bits(explicit_units.applied.back().closed_units) == bits(0.5));
+    CHECK(explicit_units.rejected.empty());
+
+    const auto snap_to_grid = run_case(
+        no::ExecutionGridPolicy::SnapToGrid, 0.5, "terms-snap-to-grid");
+    CHECK(bits(snap_to_grid.position) == bits(1.0));
+    REQUIRE(snap_to_grid.rejected.size() == 1);
+    CHECK(snap_to_grid.rejected.front().request().label == "half-close");
+    CHECK(snap_to_grid.rejected.front().reason == no::MatchRejectReason::InvalidTerms);
+    REQUIRE(snap_to_grid.rejected.front().attempted_terms);
+    CHECK(snap_to_grid.rejected.front().attempted_terms->grid_policy
+          == no::ExecutionGridPolicy::SnapToGrid);
+
+    const auto over_exposure = run_case(
+        no::ExecutionGridPolicy::ExplicitUnits, 1.5, "terms-explicit-over-exposure");
+    CHECK(bits(over_exposure.position) == bits(1.0));
+    REQUIRE(over_exposure.rejected.size() == 1);
+    CHECK(over_exposure.rejected.front().reason == no::MatchRejectReason::InvalidTerms);
+}
+
 void a_t10_callback_exception_mapping() {
     TermsHost queued;
     queued.resolver = [](const NativeExecutionTermsFacts&) -> no::ExecutionTerms {
@@ -1933,6 +1991,7 @@ int main() {
     test("A-T4d authenticated unrepresentable deduction", a_t4d_authenticated_unrepresentable_deduction);
     test("A-T5 terms rejections retain attempts", a_t5_terms_rejections_retain_attempted_terms);
     test("A-T5 bound host-sized rematch units", a_t5_bound_host_sized_rematch_rejects_units);
+    test("explicit reduction grid policy both ways", explicit_reduction_grid_policy_both_ways);
     test("A-T10 resolver callback exception mapping", a_t10_callback_exception_mapping);
     test("A-T7 scoped facts and flat close", a_t7_scope_facts_and_flat_close_shortcut);
     test("A-T8 host-sized PointBudget rematch", a_t8_point_budget_binding_and_price_rematch);

@@ -128,7 +128,6 @@ struct L4dIntentRow {
     std::uint64_t same_id_stop_deferred_close_all_incarnation = 0;
     int same_id_stop_deferred_close_all_bar = -1;
     int coof_cascade_seg_i = -1;
-    bool over_pyramiding_cap_at_placement = false;
     L4dShortSeedRole short_seed_collision_role = L4dShortSeedRole::NONE;
     double signal_close_mc_remaining_qty = std::numeric_limits<double>::quiet_NaN();
     std::uint64_t signal_close_mc_entry_incarnation = 0;
