@@ -556,15 +556,20 @@ source::PineStrategyHost::source_pending_view() const {
 
 void source::PineStrategyHost::project_short_seed_report_rows(
         const native_order::ExecutionAppliedEvent& event) {
-    auto& plan = adapter_.short_seed_;
+    // Keep the report projection independent of the adapter's mutable plan
+    // while it touches report containers.
+    const ShortSeedPlan plan = adapter_.short_seed_;
     if (!plan.report_swap_pending || event.closed_trade_count == 0
         || event.handle() == plan.final_short) {
         return;
     }
-    const auto placement = adapter_.placement_.find(event.handle().incarnation);
-    if (placement == adapter_.placement_.end()
-        || placement->second.family != PineOrderFamily::Close
-        || placement->second.from_entry != "Short") {
+    std::optional<PlacementSnapshot> placement_snapshot;
+    if (const auto placement = adapter_.placement_.find(event.handle().incarnation);
+        placement != adapter_.placement_.end()) {
+        placement_snapshot = placement->second;
+    }
+    if (!placement_snapshot || placement_snapshot->family != PineOrderFamily::Close
+        || placement_snapshot->from_entry != "Short") {
         return;
     }
     for (auto& trade : trades_) {
@@ -581,7 +586,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
             trades_[index].entry_incarnation = plan.materialize_long.incarnation;
         }
     }
-    plan.report_swap_pending = false;
+    adapter_.short_seed_.report_swap_pending = false;
 }
 
 void source::PineStrategyHost::scheduler_prepare_script_run(

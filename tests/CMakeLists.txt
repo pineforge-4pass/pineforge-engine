@@ -497,6 +497,29 @@ set(L3A_LEGACY_OWNER_TEST_SOURCES
     test_live_trade_accessors
     test_live_flags_lane_positive
 )
+# A24: these source-host security/timeframe/admission tests are behavioral
+# coverage, not approved legacy-owner inventory removals.  They run unchanged
+# against the switched route.
+list(REMOVE_ITEM L3A_LEGACY_OWNER_TEST_SOURCES
+    test_chart_tf_security_split_feed
+    test_get_input_source
+    test_htf_chart_close_completion
+    test_htf_weekly_lookahead
+    test_live_abort
+    test_ltf_buffer_no_leak
+    test_ltf_lookahead_first_bucket
+    test_market_admission_decisions
+    test_oanda_lazy_close
+    test_security_lower_tf_input_passthrough
+    test_security_lower_tf_script_bound
+    test_security_range_start_bucket_gating
+    test_security_range_start_na_warmup
+    test_security_tf_validation
+    test_security_validation_throws
+    test_split_feed_partial_bucket
+    test_syminfo_metadata
+    test_timeframe
+)
 list(REMOVE_ITEM TEST_SOURCES ${L3A_LEGACY_OWNER_TEST_SOURCES})
 
 find_package(Threads REQUIRED)

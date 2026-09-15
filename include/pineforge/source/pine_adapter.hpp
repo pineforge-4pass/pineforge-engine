@@ -369,7 +369,7 @@ private:
         native_order::Request request, PlacementSnapshot snapshot, bool opening,
         const SourceId& replacement_key = {});
     void remember(const native_order::RequestHandle&, PlacementSnapshot);
-    void retire(const native_order::RequestHandle&) noexcept;
+    void retire(native_order::RequestHandle) noexcept;
     std::vector<native_order::RequestHandle> openings_for(const SourceId&) const;
     double cohort_exposure_for(const SourceId&) const noexcept;
     double quantize_close_units(double basis, double percent) const noexcept;
@@ -382,9 +382,9 @@ private:
     void maybe_activate_short_seed_plan();
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
-    void cancel_bracket_origin(const native_order::RequestHandle&);
-    void cancel_bracket_siblings(const native_order::RequestHandle&);
-    void materialize_relative_exits(const PlacementSnapshot&,
+    void cancel_bracket_origin(native_order::RequestHandle);
+    void cancel_bracket_siblings(native_order::RequestHandle);
+    void materialize_relative_exits(PlacementSnapshot,
                                    const native_order::ExecutionAppliedEvent&);
     bool defer_coof_tail() const noexcept;
     void flush_coof_tail();
