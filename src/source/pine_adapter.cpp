@@ -581,7 +581,12 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             path.volume_weighted = args.magnifier_volume_weighted;
             path.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
             path.volume_weighted_max_samples = volume_weighted_cap;
-            path.sample_eligibility = IntrabarPath::SampleEligibility::DistributionSamples;
+            // Real lower-timeframe bars already carry the legacy four
+            // turning points.  Preserve the source broker's continuous
+            // segment crossing over those points: a stop reached between the
+            // open and an endpoint fills at its level, while synthesized
+            // paths below retain the sampled one-price/gap semantics.
+            path.sample_eligibility = IntrabarPath::SampleEligibility::ContinuousSegments;
             spec.intrabar.value = std::move(path);
         }
     } else if (!spec.timeframe_undetected
@@ -1067,7 +1072,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             if (predecessor_snapshot
                 && predecessor_snapshot->family == PineOrderFamily::ExitTrail
                 && snapshot.family == PineOrderFamily::ExitTrail
-                && config_.process_orders_on_close) {
+                ) {
                 const auto same = [](double left, double right) {
                     return (std::isnan(left) && std::isnan(right)) || left == right;
                 };
@@ -1075,13 +1080,14 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                                                    snapshot.exit_levels.trail_points)
                     && same(predecessor_snapshot->exit_levels.trail_price,
                             snapshot.exit_levels.trail_price);
-                const bool offset_changed = !same(predecessor_snapshot->exit_levels.trail_offset,
-                                                   snapshot.exit_levels.trail_offset);
-                if (same_activation && offset_changed) {
+                if (same_activation) {
                     const auto live = placement_.find(existing_handle->incarnation);
                     if (live != placement_.end()) {
                         live->second.exit_levels.trail_offset = snapshot.exit_levels.trail_offset;
+                        live->second.trail_activation_level = snapshot.trail_activation_level;
                         live->second.sizing = snapshot.sizing;
+                        live->second.requested_qty = snapshot.requested_qty;
+                        live->second.qty_percent = snapshot.qty_percent;
                     }
                     refresh_pending_view();
                     return existing_handle;
@@ -2295,8 +2301,9 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // entry-id cohort), and it retains its caller-supplied report comment.
     if (id.empty()) {
         const std::uint64_t command_ordinal = ++command_ordinal_;
-        if (const auto point = require_host().current_execution_point())
+        if (const auto point = require_host().current_execution_point()) {
             close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
+        }
         bool empty_entry = false;
         bool opposite_entry = false;
         bool empty_is_long = false;
@@ -2543,8 +2550,9 @@ void PineExecutionAdapter::close_all() {
         point && cap_placement_denied(point->decision)) {
         return;
     }
-    if (const auto point = require_host().current_execution_point())
+    if (const auto point = require_host().current_execution_point()) {
         close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
+    }
     if (config_.calc_on_order_fills) {
         const auto point = require_host().current_execution_point();
         const std::int64_t script_open = point ? point->decision.script_bar_open_ms
@@ -2656,14 +2664,16 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         // the symbol grid so generic Trail tracking remains live; source
         // settlement rounds its public level back to that grid.
         native_trail_offset = offset_ticks == 0.0
-            ? tick * 1e-6
+            ? tick * 0.5
             : offset_ticks * tick;
     }
     const bool unresolved_relative = !finite_positive(limit_price) && !finite_positive(stop_price)
         && (!has_trail_request || !finite_positive(trail_price))
         && (finite_positive(profit_ticks) || finite_positive(loss_ticks)
             || std::isfinite(source_trail_points));
-    if (unresolved_relative) {
+    const bool unresolved_trail_companion = has_trail_request
+        && !finite_positive(trail_price) && std::isfinite(source_trail_points);
+    if (unresolved_relative || unresolved_trail_companion) {
         PendingRelativeExit pending;
         pending.exit_id = exit_id; pending.from_entry = from_entry;
         pending.trail_points = source_trail_points; pending.trail_offset = source_trail_offset;
@@ -2676,7 +2686,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             });
         if (existing == pending_relative_exits_.end()) pending_relative_exits_.push_back(std::move(pending));
         else *existing = std::move(pending);
-        return;
+        if (unresolved_relative) return;
     }
     if (std::isnan(qty) && qty_percent == 100.0) {
         const auto cohort = cohorts_by_id_.find(from_entry);
@@ -2779,6 +2789,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.exit_levels = {limit_price, stop_price, source_trail_points,
                                     source_trail_offset, source_trail_price,
                                     profit_ticks, loss_ticks};
+            snapshot.trail_activation_level = trail_price;
             snapshot.sizing = exit_sizing;
             const double source_position = std::abs(require_host().physical_position().signed_units);
             if (host_sized && !std::isfinite(snapshot.requested_qty) && source_position > 0.0) {
@@ -2906,21 +2917,77 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     };
     if (finite_positive(limit_price)) submit_leg(PineOrderFamily::ExitLimit, native_order::Limit{limit_price});
-    if (finite_positive(stop_price)) submit_leg(PineOrderFamily::ExitStop, native_order::Stop{stop_price});
+    if (finite_positive(stop_price)) {
+        double native_stop = stop_price;
+        if (finite_positive(tick)) {
+            const bool buy_close = physical.signed_units < 0.0;
+            native_stop += (buy_close ? -0.5 : 0.5) * tick;
+        }
+        submit_leg(PineOrderFamily::ExitStop, native_order::Stop{native_stop});
+    }
+    bool trail_one_shot = false;
     if (has_trail_request && finite_positive(trail_price)) {
-        if (native_trail_offset) {
+        // The legacy broker compares trail activation against tick-quantized
+        // OHLC extremes while retaining the raw running best.  The native
+        // geometric matcher receives raw segments, so move only the arm
+        // threshold by half a tick (toward the reachable side); placement
+        // facts and the eventual source fill remain on the original level.
+        double native_trail_price = trail_price;
+        bool trail_already_reached = false;
+        const bool zero_distance = native_trail_offset
+            && std::isfinite(source_trail_offset)
+            && std::floor(source_trail_offset) == 0.0;
+        if (finite_positive(tick)) {
+            const bool buy_close = physical.signed_units < 0.0;
+            const auto point = require_host().current_execution_point();
+            const bool already_reached = point && (buy_close
+                ? point->price <= trail_price : point->price >= trail_price);
+            trail_already_reached = already_reached;
+            const bool no_trailing_distance = !native_trail_offset || zero_distance;
+            // An omitted offset and an explicit offset that truncates to zero
+            // are both one-shot activation legs until the activation is
+            // reached.  Once a zero-distance trail is already armed at the
+            // placement point, retain the generic Trail so its raw best can
+            // ride subsequent bars.
+            trail_one_shot = no_trailing_distance && !already_reached;
+            if (zero_distance && point) {
+                // Once the activation is already reached at placement, the
+                // explicit-zero trail's first live print is its carried
+                // running best.  Arm on that print's grid image so a later
+                // adverse leg does not incorrectly ride a raw sub-tick high.
+                if (already_reached) {
+                    native_trail_price = nearest_tick(point->price, tick);
+                } else {
+                    native_trail_price += (buy_close ? 0.5 : -0.5) * tick;
+                }
+            }
+        }
+        if (trail_one_shot) {
+            submit_leg(PineOrderFamily::ExitTrail, native_order::Limit{native_trail_price});
+        } else if (native_trail_offset) {
+            std::optional<double> native_arm_price = native_trail_price;
+            if (zero_distance && trail_already_reached)
+                native_arm_price.reset();
             submit_leg(PineOrderFamily::ExitTrail, native_order::Trail{
-                *native_trail_offset, trail_price});
+                *native_trail_offset, native_arm_price});
+        } else if (trail_already_reached) {
+            // An omitted offset that was already activated at placement is a
+            // durable activation-only leg.  A directional stop preserves its
+            // armed state and books an adverse opening gap at the print,
+            // whereas a limit would incorrectly wait for a return to the
+            // activation level.
+            submit_leg(PineOrderFamily::ExitTrail, native_order::Stop{native_trail_price});
         } else {
             // An omitted source offset exits at activation.  A generic limit
             // is the same one-shot direction for either close side and does
             // not introduce a second source matcher.
-            submit_leg(PineOrderFamily::ExitTrail, native_order::Limit{trail_price});
+            submit_leg(PineOrderFamily::ExitTrail, native_order::Limit{native_trail_price});
         }
     }
     const bool zero_tick_trail = has_trail_request && native_trail_offset
         && std::isfinite(source_trail_offset) && std::floor(source_trail_offset) == 0.0;
-    if (zero_tick_trail && !finite_positive(stop_price) && finite_positive(trail_price)) {
+    if (!trail_one_shot && zero_tick_trail
+        && !finite_positive(stop_price) && finite_positive(trail_price)) {
         if (const auto point = require_host().current_execution_point()) {
             const bool long_side = require_host().physical_position().signed_units > 0.0;
             const bool already_armed = long_side ? point->price >= trail_price
@@ -3206,8 +3273,10 @@ void PineExecutionAdapter::materialize_relative_exits(
             stop = event.resolved_price - (opening.is_long ? 1.0 : -1.0)
                 * value.loss_ticks * tick;
         }
-        if (!finite_positive(offset) && finite_positive(value.trail_points))
-            offset = value.trail_points * tick;
+        // An omitted trail_offset is a one-shot activation leg in Pine.  Do
+        // not synthesize a trailing distance from trail_points here; an
+        // explicit zero/sub-tick offset remains distinguishable and is
+        // lowered by exit()'s native sentinel policy.
         materializing_relative_ = true;
         try {
             exit(value.exit_id, value.from_entry, limit, stop, value.trail_points, offset,
@@ -3395,6 +3464,135 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     const auto snapshot = placement_.find(facts.target.incarnation);
     if (snapshot == placement_.end()) return result;
     const auto& source = snapshot->second;
+    const bool explicit_zero_trail =
+        (source.family == PineOrderFamily::ExitTrail)
+        && std::isfinite(source.exit_levels.trail_offset)
+        && std::floor(source.exit_levels.trail_offset) == 0.0;
+    const auto host_state = require_host().native_state();
+    const bool sampled_one_price_gap = host_state.spec
+        && !host_state.spec->intrabar.is_none()
+        && facts.cursor.point.provenance == NativePriceProvenance::ModeledOHLCOpen
+        && facts.price_kind == native_order::NativeCandidatePriceKind::PointPrice;
+    const bool trail_limit_one_shot = source.family == PineOrderFamily::ExitTrail
+        && std::holds_alternative<native_order::Limit>(facts.definition->request.trigger);
+    const auto* trail_active = std::get_if<native_order::TrailActive>(&facts.trigger_state);
+    const bool placement_reached_trail_activation =
+        std::isfinite(source.sizing.price) && std::isfinite(source.trail_activation_level)
+        && (facts.is_buy ? source.sizing.price <= source.trail_activation_level
+                         : source.sizing.price >= source.trail_activation_level);
+    const bool zero_trail_first_activation = explicit_zero_trail && trail_active
+        && !placement_reached_trail_activation
+        && std::isfinite(source.trail_activation_level)
+        && ((facts.is_buy
+             && trail_active->best_at_trigger <= source.trail_activation_level
+                    + staged_.syminfo.mintick * 1e-6)
+            || (!facts.is_buy
+                && trail_active->best_at_trigger >= source.trail_activation_level
+                    - staged_.syminfo.mintick * 1e-6));
+    const auto zero_trail_source_price = [&]() -> std::optional<double> {
+        if (!explicit_zero_trail || sampled_one_price_gap || !facts.trigger_level
+            || !policy_script_bar_valid_ || !std::isfinite(source.trail_activation_level)) {
+            return std::nullopt;
+        }
+        const double open = policy_script_bar_.open;
+        const double placement = source.sizing.price;
+        const double activation = source.trail_activation_level;
+        const bool reached_at_placement = facts.is_buy
+            ? placement <= activation : placement >= activation;
+        const bool open_beyond = facts.is_buy
+            ? open <= activation : open >= activation;
+        const bool high_first = std::abs(policy_script_bar_.high - open)
+            < std::abs(open - policy_script_bar_.low);
+        const bool adverse_first = facts.is_buy ? high_first : !high_first;
+        const bool same_open = std::isfinite(placement)
+            && std::abs(open - placement) <= staged_.syminfo.mintick * 0.5;
+        if (reached_at_placement && same_open)
+            return nearest_tick(open, staged_.syminfo.mintick);
+        if (!reached_at_placement && !open_beyond)
+            return nearest_tick(activation, staged_.syminfo.mintick);
+        if (!reached_at_placement && open_beyond && adverse_first)
+            return directional_tick(open, staged_.syminfo.mintick, facts.is_buy);
+        return std::nullopt;
+    };
+    const auto zero_trail_policy_price = [&]() -> std::optional<double> {
+        if (!explicit_zero_trail || !policy_script_bar_valid_
+            || !std::isfinite(source.trail_activation_level)
+            || !finite_positive(staged_.syminfo.mintick)) {
+            return std::nullopt;
+        }
+        const double tick = staged_.syminfo.mintick;
+        const bool long_side = !facts.is_buy;
+        const double open = policy_script_bar_.open;
+        const double activation = source.trail_activation_level;
+        const double placement = source.sizing.price;
+        const auto print = [&](double value) {
+            return std::floor(value / tick + 0.5) * tick;
+        };
+        const auto level = [&](double value) {
+            return directional_tick(value, tick, facts.is_buy);
+        };
+        const bool placement_armed = std::isfinite(placement)
+            && (long_side ? nearest_tick(placement, tick) >= activation
+                          : nearest_tick(placement, tick) <= activation);
+        const bool open_reaches = long_side
+            ? nearest_tick(open, tick) >= activation
+            : nearest_tick(open, tick) <= activation;
+        const bool open_favorable = std::isfinite(placement)
+            && (long_side ? open > placement : open < placement);
+        bool armed = placement_armed;
+        bool armed_from_open = false;
+        double best = placement;
+        if (!std::isfinite(best)) best = open;
+        if (!armed && open_reaches && open_favorable) {
+            armed = true;
+            armed_from_open = true;
+            best = open;
+        }
+        if (armed) {
+            if (!armed_from_open && long_side && open <= best) return print(open);
+            if (!armed_from_open && !long_side && open >= best) return print(open);
+            if (armed_from_open || open_favorable) {
+                best = open;
+                if (print(open) == level(open)) return print(open);
+            }
+        }
+        const bool high_first = std::abs(policy_script_bar_.high - open)
+            <= std::abs(open - policy_script_bar_.low);
+        double path[4];
+        path[0] = open;
+        if (high_first) {
+            path[1] = policy_script_bar_.high;
+            path[2] = policy_script_bar_.low;
+        } else {
+            path[1] = policy_script_bar_.low;
+            path[2] = policy_script_bar_.high;
+        }
+        path[3] = policy_script_bar_.close;
+        for (int i = 1; i < 4; ++i) {
+            const double from = path[i - 1];
+            const double to = path[i];
+            if (!armed) {
+                const bool reached = long_side
+                    ? (to >= activation && to > from)
+                    : (to <= activation && to < from);
+                if (reached) return level(activation);
+                continue;
+            }
+            const bool favorable = long_side ? to > best : to < best;
+            if (favorable) {
+                best = to;
+                continue;
+            }
+            const double stop = level(best);
+            const bool crossed = long_side
+                ? (to <= stop && from > stop)
+                : (to >= stop && from < stop);
+            if (crossed) return stop;
+        }
+        if (trail_active && std::isfinite(trail_active->best_at_trigger))
+            return level(trail_active->best_at_trigger);
+        return std::nullopt;
+    };
     // Explicit native intents already carry their canonical trigger/fill
     // price. Limits retain their immutable generic value. The generic consumer
     // has already applied the one market slippage step; source projection only
@@ -3405,7 +3603,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         } else if (source.family == PineOrderFamily::Entry
                    && std::holds_alternative<native_order::Stop>(facts.definition->request.trigger)
                    && facts.trigger_level
-                   && facts.cursor.point.path_phase != NativePathPhase::Open) {
+                   && facts.price_kind == native_order::NativeCandidatePriceKind::TriggerLevel) {
             // Pine's continuous source path commits a crossed resting entry
             // at its stop level; only an open gap retains the presented quote.
             // Keep that source fill-price rule above the generic matcher.
@@ -3448,15 +3646,77 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     // armed level, whereas an open gap retains the presented open quote.  The
     // generic driver deliberately exposes both facts; selecting this source
     // policy here preserves the non-gap relative-parent lifecycle.
-    if ((source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
+    if ((source.family == PineOrderFamily::ExitLimit
+         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
          || source.family == PineOrderFamily::Margin)
-        && facts.trigger_level && facts.cursor.point.path_phase != NativePathPhase::Open) {
+        && facts.trigger_level
+        && facts.price_kind == native_order::NativeCandidatePriceKind::TriggerLevel) {
+        if (const auto source_price = zero_trail_policy_price()) {
+            result.resolved_price = *source_price;
+        } else if (const auto source_price = zero_trail_source_price()) {
+            result.resolved_price = *source_price;
+        } else if (trail_limit_one_shot) {
+            result.resolved_price = directional_tick(
+                facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
+        } else if (explicit_zero_trail) {
+            if (zero_trail_first_activation) {
+                result.resolved_price = directional_tick(
+                    source.trail_activation_level, staged_.syminfo.mintick, facts.is_buy);
+            } else {
+                const double best = trail_active
+                    ? trail_active->best_at_trigger : facts.default_resolved_price;
+                result.resolved_price = directional_tick(
+                    best, staged_.syminfo.mintick, facts.is_buy);
+            }
+        } else if (source.family == PineOrderFamily::ExitLimit) {
+            result.resolved_price = nearest_tick(
+                facts.default_resolved_price, staged_.syminfo.mintick);
+        } else if (source.family == PineOrderFamily::ExitTrail) {
+            result.resolved_price = directional_tick(
+                facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
+        } else if (source.family == PineOrderFamily::ExitStop
+                   && std::isfinite(source.exit_levels.stop)) {
+            result.resolved_price = directional_tick(
+                source.exit_levels.stop, staged_.syminfo.mintick, facts.is_buy);
+        } else {
+            result.resolved_price = directional_tick(
+                *facts.trigger_level, staged_.syminfo.mintick, facts.is_buy);
+        }
+    } else if (const auto source_price = zero_trail_policy_price()) {
+        result.resolved_price = *source_price;
+    } else if (const auto source_price = zero_trail_source_price()) {
+        result.resolved_price = *source_price;
+    } else if (trail_limit_one_shot && facts.trigger_level && !sampled_one_price_gap) {
         result.resolved_price = directional_tick(
             facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
+    } else if (explicit_zero_trail && facts.trigger_level && !sampled_one_price_gap) {
+        // Native's positive sentinel offset keeps the generic trail alive;
+        // source settlement prints the carried raw best on the directional
+        // chart grid.  A first activation is the source activation level.
+        result.resolved_price = zero_trail_first_activation
+            ? directional_tick(source.trail_activation_level, staged_.syminfo.mintick, facts.is_buy)
+            : directional_tick(trail_active ? trail_active->best_at_trigger
+                                            : facts.default_resolved_price,
+                               staged_.syminfo.mintick, facts.is_buy);
+    } else if (source.family == PineOrderFamily::ExitStop && facts.trigger_level
+               && facts.price_kind == native_order::NativeCandidatePriceKind::PointPrice
+               && facts.cursor.point.path_phase == NativePathPhase::Open) {
+        // A resting stop crossed by an adverse opening gap books the raw
+        // opening print, then applies the ordinary nearest chart-tick print
+        // projection (distinct from a non-gap trigger-level fill).
+        result.resolved_price = nearest_tick(
+            facts.default_resolved_price, staged_.syminfo.mintick);
     }
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
         || source.family == PineOrderFamily::Margin) {
+        if ((source.family == PineOrderFamily::ExitLimit
+             || source.family == PineOrderFamily::ExitStop
+             || source.family == PineOrderFamily::ExitTrail)
+            && !(facts.scope_exposure_units > 0.0)) {
+            result.units = 0.0;
+            return result;
+        }
         const bool has_projected_remaining = source.from_entry.empty()
             && std::isfinite(source.projection_remaining_qty);
         if (has_projected_remaining) {
@@ -3687,6 +3947,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     const bool exit = source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail;
     if (exit) {
+        // A bound exit whose selected scope has no remaining physical units is
+        // a stale source leg, not a zero-quantity trade.  The legacy pending
+        // book removed that sibling before settlement; refusing the native
+        // candidate preserves the same observable trade roster.
+        if (!view.account.would_open && !(view.inspected_closed_units > 0.0))
+            return NativePrecommitVerdict::Refuse;
         const auto& bounds = source.leg_activation.bounds();
         const bool stop_leg = source.family == PineOrderFamily::ExitStop;
         const bool limit_leg = source.family == PineOrderFamily::ExitLimit;

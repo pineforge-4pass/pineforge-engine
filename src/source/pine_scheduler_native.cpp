@@ -40,6 +40,7 @@ void PineScheduler::reset_language() {
     coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
     prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    last_stream_input_open_ms_ = std::numeric_limits<std::int64_t>::min();
     input_script_completes_.clear();
     input_script_boundary_completes_.clear();
     uses_aux_security_feed_ = false;
@@ -73,10 +74,24 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     for (const auto complete : input_script_completes_) {
         expected_source_bars_ += complete != 0U ? 1 : 0;
     }
+    host.stream_warmup_mode_ = retained_.is_stream;
     host.scheduler_prepare_script_run(retained_.bars, static_eligible, expected_source_bars_);
     host.scheduler_configure_security_evaluators();
     uses_aux_security_feed_ = host.scheduler_uses_aux_security_feed();
     host.scheduler_prepare_security_sequence(retained_.bars);
+}
+
+int PineScheduler::source_bar_index_for(const NativeDecisionContext& context) const noexcept {
+    // Matching at a new script-bar open precedes the terminal source callback;
+    // all fills after that callback (including COOF/POOC notifications) belong
+    // to the already-published source index.  This is the same cadence the
+    // legacy aggregation loop used for Trade.entry_bar_index/exit_bar_index.
+    const bool published = current_script_bar_valid_
+        && current_script_bar_.timestamp == context.script_bar_open_ms;
+    const bool coof_published = coof_callback_script_open_ == context.script_bar_open_ms;
+    if (published || coof_published)
+        return std::max(0, source_bar_count_ - 1);
+    return source_bar_count_;
 }
 
 void PineScheduler::publish_series(const Bar& bar, PineStrategyHost& host) {
@@ -167,6 +182,13 @@ void PineScheduler::fixture_publish_source_series(const Bar& bar, bool new_histo
 
 void PineScheduler::input(
         const Bar& bar, const NativeInputContext& context, PineStrategyHost& host) {
+    struct InputBarIndexScope {
+        PineStrategyHost& host;
+        int previous;
+        explicit InputBarIndexScope(PineStrategyHost& value, int index)
+            : host(value), previous(value.bar_index_) { host.bar_index_ = index; }
+        ~InputBarIndexScope() { host.bar_index_ = previous; }
+    } input_bar_index(host, context.input_index);
     if (uses_aux_security_feed_) {
         prior_input_script_open_ms_ = context.script_interval.open_ms;
         return;
@@ -176,12 +198,33 @@ void PineScheduler::input(
         && context.input_index + 1 < static_cast<int>(retained_.bars.size())) {
         next_input_ms = retained_.bars[static_cast<std::size_t>(context.input_index + 1)].timestamp;
     }
+    if (retained_.bar_magnifier && deferred_boundary_input_.active
+        && deferred_boundary_input_.prior_script_open_ms != context.script_interval.open_ms) {
+        // A sparse lower feed reveals the completed caller only when the next
+        // child arrives. Feed the retained final child first, then let the
+        // new caller's child proceed in timestamp order.
+        const std::int64_t completed_script_open =
+            deferred_boundary_input_.prior_script_open_ms;
+        (void)host.scheduler_feed_security_input(
+            deferred_boundary_input_.bar, deferred_boundary_input_.next_input_ms,
+            true, false);
+        // Keep the new caller's first child out of request.security until the
+        // completed caller's chart callback has observed the published value.
+        deferred_boundary_input_.bar = bar;
+        deferred_boundary_input_.next_input_ms = next_input_ms;
+        deferred_boundary_input_.prior_script_open_ms = completed_script_open;
+        deferred_boundary_input_.calling_bar_complete = false;
+        deferred_boundary_input_.all_security_states = true;
+        deferred_boundary_input_.active = true;
+        prior_input_script_open_ms_ = context.script_interval.open_ms;
+        return;
+    }
     // The generic calendar may wait for a later tradable opening before it
     // seals a script interval.  The source chart aggregator can have already
     // completed that interval on the prior raw bar.  Keep the new raw input
     // out of request.security until the pending script callback observes the
     // same legacy point; then feed it immediately after that callback.
-    if (awaiting_legacy_script_open_ms_
+    if (!retained_.bar_magnifier && awaiting_legacy_script_open_ms_
         != std::numeric_limits<std::int64_t>::min()) {
         deferred_boundary_input_.bar = bar;
         deferred_boundary_input_.next_input_ms = next_input_ms;
@@ -204,8 +247,38 @@ void PineScheduler::input(
         boundary = input_script_boundary_completes_[
             static_cast<std::size_t>(context.input_index)] != 0U;
     }
+    // The final sparse magnifier child is a partial requested bucket.  The
+    // legacy lower-TF pump does not promote that tail to a completed
+    // request.security value merely because the input array ended.
+    if (retained_.bar_magnifier && next_input_ms == 0)
+        calling_bar_complete = false;
+    bool security_boundary_ahead = false;
+    if (retained_.bar_magnifier && next_input_ms != 0) {
+        const bool caller_boundary = tf_change(
+            bar.timestamp, next_input_ms, retained_.script_tf,
+            host.syminfo_.timezone, host.syminfo_.session);
+        if (caller_boundary) {
+            for (const auto& state : host.security_eval_states_) {
+                if (state.publish_gate_tf_seconds > 0) {
+                    security_boundary_ahead = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (security_boundary_ahead) {
+        deferred_boundary_input_.bar = bar;
+        deferred_boundary_input_.next_input_ms = next_input_ms;
+        deferred_boundary_input_.prior_script_open_ms = context.script_interval.open_ms;
+        deferred_boundary_input_.calling_bar_complete = true;
+        deferred_boundary_input_.all_security_states = false;
+        deferred_boundary_input_.active = true;
+        prior_input_script_open_ms_ = context.script_interval.open_ms;
+        return;
+    }
     const bool deferred_gate = host.scheduler_feed_security_input(
-        bar, next_input_ms, calling_bar_complete, boundary);
+        bar, next_input_ms, calling_bar_complete,
+        boundary && !retained_.bar_magnifier);
     if (deferred_gate) {
         deferred_boundary_input_.bar = bar;
         deferred_boundary_input_.next_input_ms = next_input_ms;
@@ -214,11 +287,31 @@ void PineScheduler::input(
         deferred_boundary_input_.all_security_states = false;
         deferred_boundary_input_.active = true;
     }
-    if (calling_bar_complete) {
+    if (calling_bar_complete && !retained_.bar_magnifier) {
         awaiting_legacy_script_open_ms_ = boundary
             ? prior_input_script_open_ms_ : context.script_interval.open_ms;
     }
     prior_input_script_open_ms_ = context.script_interval.open_ms;
+}
+
+void PineScheduler::tick(const Bar& bar, const NativeTickContext& context,
+                         PineStrategyHost& host) {
+    if (!retained_.is_stream) return;
+    const auto& interval = context.decision.input_interval;
+    if (last_stream_input_open_ms_ == interval.open_ms) return;
+    if (prior_input_script_open_ms_ != std::numeric_limits<std::int64_t>::min()
+        && prior_input_script_open_ms_ != context.decision.script_interval.open_ms) {
+        // A realtime tick can be the first child of the next caller after a
+        // sparse warmup.  The legacy stream replays the retained final child
+        // at this boundary (without advancing the requested-context slot).
+        host.scheduler_publish_security_boundary();
+    }
+    last_stream_input_open_ms_ = interval.open_ms;
+    const auto& script = context.decision.script_interval;
+    const bool complete = interval.next_period_open_ms >= script.next_period_open_ms;
+    (void)host.scheduler_feed_security_input(
+        bar, interval.next_input_open_ms, complete, false);
+    prior_input_script_open_ms_ = script.open_ms;
 }
 
 void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, PineStrategyHost&) {
@@ -251,9 +344,6 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     }
     // A COOF recalc at this script bar is the source evaluation for that bar;
     // do not issue a second terminal callback with a new source-bar index.
-    if (host.scheduler_coof_enabled() && coof_callback_script_open_ == context.script_bar_open_ms) {
-        return;
-    }
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
     current_script_bar_ = script_bar;
@@ -263,7 +353,11 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     if (deferred_boundary_input_.active
         && !deferred_boundary_input_.all_security_states
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
-        host.scheduler_publish_security_boundary();
+        // The legacy magnifier feeds the boundary-triggering lower bar after
+        // the completed script callback; it does not replay the caller at the
+        // callback boundary.  The ordinary batch loop does replay it.
+        if (!retained_.bar_magnifier)
+            host.scheduler_publish_security_boundary();
     }
     const int chart_index = context.coordinate.interval_index;
     if (uses_aux_security_feed_) host.scheduler_feed_aux_security(chart_index);
@@ -313,14 +407,13 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     language_.history_slot_is_new_ = false;
     host.adapter_.begin_coof_recalc(context, first_open);
     try {
-        host.scheduler_publish_source_bar(callback_bar, true, first_open);
+        host.scheduler_publish_source_bar(callback_bar, true, false);
     } catch (...) {
         host.adapter_.end_coof_recalc();
         throw;
     }
     host.adapter_.end_coof_recalc();
     coof_callback_script_open_ = context.script_bar_open_ms;
-    if (first_open) ++source_bar_count_;
     if (!first_open) return;
     constexpr std::uint64_t kNoFillEventBudget = std::numeric_limits<std::uint64_t>::max();
     constexpr std::size_t kCoofLoopGuard = 1U << 20;
@@ -337,7 +430,6 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
             (void)host.execute_current({handle, NativeCurrentPriceRule::NearestTick});
         }
     }
-    host.scheduler_record_broker_hash();
 }
 
 } // namespace pineforge::source

@@ -20,6 +20,7 @@ public:
     void capture_begin(const NativeBeginArgs&);
     void run_begin(PineStrategyHost&);
     void input(const Bar&, const NativeInputContext&, PineStrategyHost&);
+    void tick(const Bar&, const NativeTickContext&, PineStrategyHost&);
     void bar_open(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
     void bar(const Bar&, const NativeDecisionContext&, PineStrategyHost&);
     void applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&,
@@ -49,6 +50,7 @@ public:
     bool terminal_source_bar() const noexcept {
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
     }
+    int source_bar_index_for(const NativeDecisionContext& context) const noexcept;
     const Bar* current_script_bar() const noexcept {
         return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
     }
@@ -96,6 +98,7 @@ private:
     std::int64_t coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
+    std::int64_t last_stream_input_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::vector<unsigned char> input_script_completes_;
     std::vector<unsigned char> input_script_boundary_completes_;
     bool uses_aux_security_feed_ = false;

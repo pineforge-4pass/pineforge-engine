@@ -79,6 +79,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
+    f.d(value.trail_activation_level);
     f.i(static_cast<std::int64_t>(value.birth.cause())); f.i(value.birth.bar());
     f.i(value.birth.timestamp()); f.i(static_cast<std::int64_t>(value.birth.cursor().domain()));
     f.i(static_cast<std::int64_t>(value.birth.cursor().position()));
@@ -430,6 +431,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(expected_source_bars_); f.u(applied_cursor_); f.i(coof_callback_script_open_);
     f.i(prior_input_script_open_ms_);
     f.i(awaiting_legacy_script_open_ms_);
+    f.i(last_stream_input_open_ms_);
     f.u(input_script_completes_.size());
     for (const auto value : input_script_completes_) f.u(value);
     f.u(input_script_boundary_completes_.size());
