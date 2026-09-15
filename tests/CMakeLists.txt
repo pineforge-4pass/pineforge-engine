@@ -328,6 +328,9 @@ set(TEST_SOURCES
     test_live_trade_accessors
     test_live_flags_off_identity
     test_live_flags_lane_positive
+    test_l4e_trade_export_provenance
+    test_l4e_native_settlement_h07
+    test_l4e_native_install_h08
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly
