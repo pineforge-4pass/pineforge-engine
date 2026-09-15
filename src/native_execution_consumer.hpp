@@ -70,6 +70,8 @@ public:
     void cohort_remove(BacktestEngine& engine, native_order::CohortHandle cohort,
                        native_order::RequestHandle origin);
     std::optional<NativeCurrentPointView> current_execution_point() const;
+    std::optional<NativeTrailState> trail_state(
+        const BacktestEngine& engine, const native_order::RequestHandle& target) const;
     NativeCurrentExecutionPreview inspect_current_execution(
         const BacktestEngine& engine, const NativeCurrentExecution& command) const;
     NativeCurrentExecutionResult execute_current(

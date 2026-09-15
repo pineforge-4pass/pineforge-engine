@@ -318,6 +318,17 @@ struct NativeCurrentPointView {
     std::uint64_t quote_origin_ordinal = 0;
 };
 
+// Read-only projection of a live generic Trail request. Before its arm is
+// reached, activated is false and the numeric/ordinal fields are zero. Once
+// armed, best_price and current_level are the exact raw matcher values and
+// activation_ordinal identifies the TrailArm event that began tracking.
+struct NativeTrailState {
+    bool activated = false;
+    double best_price = 0.0;
+    double current_level = 0.0;
+    std::uint64_t activation_ordinal = 0;
+};
+
 enum class NativeCurrentRefusal : std::uint8_t {
     NoExecutionContext = 0, Reentrant = 1, InvalidHandle = 2, NotWorking = 3,
     NotAcceptedInCallback = 4, UnsupportedRequest = 5, UnreadyOwner = 6,
@@ -437,6 +448,8 @@ public:
     }
 
     std::optional<NativeCurrentPointView> current_execution_point() const;
+    std::optional<NativeTrailState> trail_state(
+        const native_order::RequestHandle& target) const;
     NativeCurrentExecutionPreview inspect_current_execution(const NativeCurrentExecution&) const;
     NativeCurrentExecutionResult execute_current(const NativeCurrentExecution&);
 

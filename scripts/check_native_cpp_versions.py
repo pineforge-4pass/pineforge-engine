@@ -442,6 +442,7 @@ def check_texts(files):
                    "NativeInRunRecipient", "NativeInRunCursor", "NativeMarketEvent",
                    "NativeSetupResult", "NativePhysicalPosition", "NativeAccountObservation",
                    "NativeCurrentPriceRule", "NativeCurrentQuoteKind", "NativeCurrentPointView",
+                   "NativeTrailState",
                    "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
                    "NativeExecutionTermsFacts", "NativePrecommitView",
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
@@ -490,6 +491,11 @@ def check_texts(files):
     for member in ('NativeDecisionContextdecision{};', 'std::uint64_tsequence=0;'):
         if member not in compact_tick_context:
             raise ValueError('NativeTickContext omits accepted-tick fact: ' + member)
+    trail_state = body(host, r'struct\s+NativeTrailState\s*\{', 'native trail state')
+    if re.sub(r'\s+', '', trail_state) != (
+            'boolactivated=false;doublebest_price=0.0;doublecurrent_level=0.0;'
+            'std::uint64_tactivation_ordinal=0;'):
+        raise ValueError('NativeTrailState must expose the exact read-only A35 facts')
     require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v17",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
@@ -524,6 +530,8 @@ def check_texts(files):
          r'\s*const\s+Bar\s*&\s*,\s*const\s+NativeTickContext\s*&', "on_native_tick"),
         (r'\bvirtual\s+void\s+on_native_bar_open\s*\('
          r'\s*const\s+Bar\s*&', "on_native_bar_open"),
+        (r'\bstd::optional\s*<\s*NativeTrailState\s*>\s+trail_state\s*\('
+         r'\s*const\s+native_order::RequestHandle\s*&', "trail_state"),
     )
     for pattern, name in required_host_methods:
         if len(re.findall(pattern, host)) != 1:
@@ -552,7 +560,7 @@ def check_texts(files):
              "NativeStrategyHost::native_events",
              "NativeStrategyHost::configure_native_fx_curve",
              "NativeStrategyHost::cohort_open", "NativeStrategyHost::cohort_add",
-             "NativeStrategyHost::cohort_remove"),
+             "NativeStrategyHost::cohort_remove", "NativeStrategyHost::trail_state"),
             "engine_script_run_v17", r'\bNAME\s*\(')
 
 
