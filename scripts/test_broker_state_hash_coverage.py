@@ -58,8 +58,8 @@ class Coverage(unittest.TestCase):
     def test_unknown_waiver_is_rejected(self):
         result, output = self.check((
             ("scripts/broker_state_hash_waivers.txt",
-             "trade_start_time_ # configured execution window",
-             "trade_start_time_ # configured execution window\nunknown_state_ # invalid"),))
+             "trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.",
+             "trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.\nunknown_state_ # invalid"),))
         self.assertEqual(result, 1, output)
 
 

@@ -1,10 +1,10 @@
 #pragma once
 #include <pineforge/engine.hpp>
-#include <pineforge/source/pine_pending_intent.hpp>
 
 // Storage counterfactuals only. Production never rewrites an original command.
-// Keep its remaining facts and receipts when an older flag-mutation test is
-// translated into a mutation of the factual placement operands.
+// The retired source PendingOrder declaration is deliberately not included:
+// native-route twins supply their read-only L4dPendingOrder projection before
+// including this fixture.  This header is not a production compatibility seam.
 namespace placement_fixture {
 template<class Change>
 void change(pineforge::source::PendingOrder& order, Change edit) {

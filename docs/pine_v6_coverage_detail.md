@@ -189,7 +189,7 @@
 | `strategy.grossprofit_percent` | var | ✅ Runtime | `grossprofit_percent()` | |
 | `strategy.initial_capital` | var | ✅ Runtime | `initial_capital_` | |
 | `strategy.losstrades` | var | ✅ Runtime | `count_losstrades()` | |
-| `strategy.margin_liquidation_price` | var | ✅ Runtime | `margin_liquidation_price()` → always na | Returns na per docs |
+| `strategy.margin_liquidation_price` | var | ✅ Source host | `PineStrategyHost::margin_liquidation_price()` | Source-level projection over current native position/account facts |
 | `strategy.max_contracts_held_all` | var | ✅ Runtime | `max_contracts_held_all_` per-bar `std::max(|position_qty_|)` in `update_equity_extremes()` | Sprint F |
 | `strategy.max_contracts_held_long` | var | ✅ Runtime | `max_contracts_held_long_` (gated on `position_side_ == LONG`) | Sprint F |
 | `strategy.max_contracts_held_short` | var | ✅ Runtime | `max_contracts_held_short_` (gated on `position_side_ == SHORT`) | Sprint F |

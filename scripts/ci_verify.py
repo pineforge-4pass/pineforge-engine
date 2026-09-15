@@ -54,6 +54,7 @@ SOURCE_GUARD_SCRIPTS = (
     ('source-guard-aggregate-versions', ['scripts/check_aggregate_cpp_versions.py']),
 )
 NATIVE_INCLUDE_INDEPENDENCE_PROFILES = frozenset(('release', 'native'))
+TWIN_PARITY_PROFILES = frozenset(('release', 'native'))
 
 
 class ConfigError(Exception):
@@ -142,6 +143,10 @@ def source_guard_commands(source: Path) -> list[tuple[str, list[str]]]:
 def native_include_independence_command(cfg: VerifyConfig, prefix: Path) -> list[str]:
     return [sys.executable, str(cfg.source / 'scripts/check_native_include_independence.py'),
             '--build-dir', str(cfg.build_dir), '--prefix', str(prefix)]
+
+
+def twin_parity_command(source: Path) -> list[str]:
+    return [sys.executable, str(source / 'scripts/check_twin_parity.py')]
 
 
 def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
@@ -669,6 +674,10 @@ class Driver:
         guard_failed = False
         for name, argv in source_guard_commands(self.cfg.source):
             if self.invoke(name, argv, timeout=120).returncode != 0:
+                guard_failed = True
+        if self.cfg.profile.name in TWIN_PARITY_PROFILES:
+            if self.invoke('source-guard-twin-parity',
+                           twin_parity_command(self.cfg.source), timeout=120).returncode != 0:
                 guard_failed = True
         if guard_failed:
             return self.finish('failed', 1)

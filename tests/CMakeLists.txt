@@ -566,6 +566,90 @@ list(REMOVE_ITEM TEST_SOURCES
     test_intraday_rollover_chart_tz
 )
 
+# L4d switched-route restoration twins. Keep the original L3A inventory
+# immutable: each restored witness has a separately named native-route TU.
+list(APPEND TEST_SOURCES
+    test_native_live_order_derived_l4d
+    test_native_live_pending_order_mirror_l4d
+    test_native_pending_order_v1_canary_l4d
+    test_native_source_fifo_endpoints_l4d
+    test_native_session_key_derivation_l4d
+    test_native_market_admission_projection_l4d
+    test_native_live_state_hash_l4d
+    test_native_oracle_reversal_f8_l4d
+    test_live_flags_lane_positive_l4d
+    test_live_path_order_l4d
+    test_live_realtime_tail_l4d
+    test_live_state_hash_recording_l4d
+    test_m_admission_36_l4d
+    test_pending_order_mirror_no_alloc_l4d
+    test_stream_preflight_rejections_l4d
+    test_taro_price_gap_admission_l4d
+    test_aux_security_feed_l4d
+    test_chart_ema_na_warmup_l4d
+    test_famag_close_survives_l4d
+    test_frozen_flat_gap_reject_l4d
+    test_full_close_while_pyramiding_l4d
+    test_historical_security_lookahead_projection_l4d
+    test_integer_flat_budget_tie_l4d
+    test_integer_opening_budget_l4d
+    test_level_grid_snap_l4d
+    test_limit_exact_touch_level_residue_l4d
+    test_limit_fill_slippage_l4d
+    test_market_structure_fills_l4d
+    test_metrics_l4d
+    test_native_daily_holiday_l4d
+    test_native_security_feed_l4d
+    test_native_wm_buckets_l4d
+    test_pooc_short_close_tick_l4d
+    test_pyramiding_count_partial_drain_l4d
+    test_range_end_close_l4d
+    test_session_predicates_daily_chart_l4d
+    test_stop_tick_rounding_l4d
+    test_tv_fill_rounding_l4d
+    test_cancellation_mirror_coverage_l4d
+    test_default_flat_market_gross_admission_l4d
+    test_explicit_market_price_admission_l4d
+    test_famag_close_first_admission_l4d
+    test_high_value_price_admission_l4d
+    test_live_order_derived_l4d
+    test_live_pending_order_mirror_l4d
+    test_live_position_market_gross_admission_l4d
+    test_live_probe_suppress_tail_l4d
+    test_live_state_hash_l4d
+    test_live_trade_accessors_l4d
+    test_market_admission_matrix_l4d
+    test_market_admission_state_l4d
+    test_pending_order_core_l4d
+    test_pending_order_identity_l4d
+    test_pending_order_v1_canary_l4d
+    test_pending_placement_receipts_l4d
+    test_pending_quantity_intent_l4d
+    test_placement_facts_l4d
+    test_stop_entry_admission_l4d
+    test_streaming_l4d
+    test_bulk_preflight_l4d
+    test_close_all_coqueued_entry_l4d
+    test_close_id_retires_ledger_l4d
+    test_dual_stop_transactions_l4d
+    test_fills_edge_l4d
+    test_frozen_market_instruction_l4d
+    test_high_value_signal_cost_l4d
+    test_integration_l4d
+    test_pine_transaction_settlement_l4d
+    test_pooc_flat_signal_cost_l4d
+    test_request_security_l4d
+    test_root_cancel_sole_stop_l4d
+    test_run_inputs_overrides_l4d
+    test_script_run_prepare_l4d
+    test_settlement_observation_boundary_l4d
+    test_sparse_atr_prev_close_l4d
+    test_stop_decline_continue_path_l4d
+    test_strategy_commands_extra_l4d
+    test_strategy_pyramiding_l4d
+    test_taro_mc_close_residue_l4d
+)
+
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -575,6 +659,8 @@ add_test(NAME test_ci_verify
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_verify.py)
 add_test(NAME test_ci_preflight
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_ci_preflight.py)
+add_test(NAME test_twin_parity_mutations
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_twin_parity.py)
 
 add_test(
     NAME test_aggregate_cpp_versions
@@ -601,7 +687,14 @@ add_test(
             --library $<TARGET_FILE:pineforge>
             --include ${PROJECT_SOURCE_DIR}/include
             --generated-include ${PROJECT_BINARY_DIR}/include
+            --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
+            --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
             ${_pf_script_cpp_abi_flags}
+)
+set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300)
+add_test(
+    NAME test_script_cpp_abi_tooling
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_script_cpp_abi.py
 )
 
 add_test(
@@ -668,6 +761,16 @@ add_test(NAME test_settlement_cpp_abi
 set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
+add_test(NAME test_aggregate_cpp_versions_runtime
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_aggregate_cpp_versions.py
+        --compiler ${CMAKE_CXX_COMPILER}
+        --library $<TARGET_FILE:pineforge>
+        --include ${PROJECT_SOURCE_DIR}/include
+        --generated-include ${PROJECT_BINARY_DIR}/include
+        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+        --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
+        ${_pf_script_cpp_abi_flags})
+set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300)
 
 add_test(
     NAME test_derive_corpus_feeds
@@ -854,6 +957,66 @@ set(ORACLE_TEST_SOURCES
 )
 # The switched-route fixture twins include the frozen oracle source unchanged
 # and expose only adapter/native projections at its former owner-private seams.
+# Every restored L4d twin is compiled and registered immediately.  Its policy
+# owner is another active L4 lane, so release/native record the real RED
+# diagnostics without allowing unfinished policy work to mask the required
+# non-pending suite.  Green twins are removed from this label below as they
+# are verified on the switched route.
+foreach(test_name ${TEST_SOURCES})
+    if(test_name MATCHES "_l4d$")
+        set_tests_properties(${test_name} PROPERTIES LABELS l4-pending)
+    endif()
+endforeach()
+
+# Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
+# names while their executable twins make the switched route explicit.
+add_test(NAME test_live_order_derived COMMAND test_native_live_order_derived_l4d)
+add_test(NAME test_live_pending_order_mirror COMMAND test_native_live_pending_order_mirror_l4d)
+add_test(NAME test_pending_order_v1_canary COMMAND test_native_pending_order_v1_canary_l4d)
+add_test(NAME test_source_fifo_endpoints COMMAND test_native_source_fifo_endpoints_l4d)
+set_tests_properties(
+    test_native_live_order_derived_l4d
+    test_live_order_derived
+    test_native_live_pending_order_mirror_l4d
+    test_live_pending_order_mirror
+    test_native_source_fifo_endpoints_l4d
+    test_source_fifo_endpoints
+    test_native_market_admission_projection_l4d
+    test_native_oracle_reversal_f8_l4d
+    PROPERTIES LABELS l4-pending)
+
+# These restored twins already execute green through the switched route. Keep
+# their CTest rows in the required profile rather than hiding green evidence
+# behind the pending policy label.
+set_tests_properties(
+    test_native_pending_order_v1_canary_l4d
+    test_native_session_key_derivation_l4d
+    test_native_live_state_hash_l4d
+    test_metrics_l4d
+    test_native_daily_holiday_l4d
+    test_native_wm_buckets_l4d
+    test_live_state_hash_l4d
+    test_market_admission_matrix_l4d
+    test_market_admission_state_l4d
+    test_pending_order_core_l4d
+    test_pending_order_identity_l4d
+    test_pending_order_v1_canary_l4d
+    test_pending_placement_receipts_l4d
+    test_pending_quantity_intent_l4d
+    test_placement_facts_l4d
+    test_close_id_retires_ledger_l4d
+    test_frozen_market_instruction_l4d
+    test_pine_transaction_settlement_l4d
+    test_root_cancel_sole_stop_l4d
+    test_run_inputs_overrides_l4d
+    test_settlement_observation_boundary_l4d
+    test_stop_decline_continue_path_l4d
+    test_taro_mc_close_residue_l4d
+    PROPERTIES LABELS "")
+
+# R4-D L0 carriers are included verbatim by their switched-route twin targets.
+# There is deliberately no ORACLE_TEST_SOURCES list: a source list that does
+# not build targets is not executable oracle coverage.
 add_test(NAME test_oracle_deferred_birth COMMAND test_native_oracle_deferred_birth_l2)
 add_test(NAME test_oracle_relative_exit COMMAND test_native_oracle_relative_exit_l2)
 add_test(NAME test_oracle_reversal_close_only COMMAND test_native_oracle_reversal_close_only_l2)
@@ -879,6 +1042,10 @@ add_test(NAME test_oracle_short_seed
 add_test(NAME test_oracle_stop_snapshot
          COMMAND test_native_oracle_stop_snapshot_full_l2)
 set_tests_properties(test_oracle_stop_snapshot PROPERTIES LABELS l4-pending)
+add_test(NAME test_oracle_twin_census
+         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_twin_census.py)
+add_test(NAME test_oracle_sha256_pin
+         COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_oracle_sha256.py)
 
 target_compile_definitions(test_native_market_vertical PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")

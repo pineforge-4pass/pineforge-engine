@@ -1265,7 +1265,10 @@ int main() {
         auto spec = spec_for("positive-ohlc-nan-volume", 1);
         CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
         const uint64_t hash_ready = host.native_continuation_hash();
-        Bar zero_px{0.0, 1.0, 0.0, 1.0, 1.0, 60000};
+        // Keep the original non-tolerant structural witness unchanged. A
+        // separate all-nonpositive row below is the A13 tolerant fixture;
+        // do not silently rewrite this historical rejection shape to fit it.
+        Bar zero_px{0.0, 101.0, 99.0, 100.0, 1.0, 60000};
         host.run(&zero_px, 1);
         CHECK(host.native_state().kind == NativeLifecycleKind::Ready);
         CHECK(host.last_run_status() != 0);
@@ -1287,7 +1290,8 @@ int main() {
         auto tolerant = spec;
         tolerant.slot_label_policy = NativeSlotLabelPolicy::LegacyTolerant;
         tolerant.legacy_tolerance = NativeLegacyTolerance::BatchStructuralBars;
-        CHECK(preflight_native_inputs(tolerant, &zero_px, 1, NativeInputPolicy::Batch));
+        Bar tolerant_zero_px{0.0, 1.0, 0.0, 1.0, 1.0, 60000};
+        CHECK(preflight_native_inputs(tolerant, &tolerant_zero_px, 1, NativeInputPolicy::Batch));
         CHECK(preflight_native_inputs(tolerant, &nanvol, 1, NativeInputPolicy::Batch));
         CHECK(preflight_native_inputs(tolerant, &zero_px, 1,
                                      NativeInputPolicy::StreamWarmup).error

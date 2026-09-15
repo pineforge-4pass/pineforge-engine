@@ -142,6 +142,7 @@ class Scripted:
                 'source-guard-pending-mirror': 'gen_pending_order_mirror.py',
                 'source-guard-native-versions': 'check_native_cpp_versions.py',
                 'source-guard-aggregate-versions': 'check_aggregate_cpp_versions.py',
+                'source-guard-twin-parity': 'check_twin_parity.py',
             }
             for key, needle in needles.items():
                 if key in self.exits and any(needle in part for part in argv):
@@ -845,6 +846,20 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 code, summary, _, _ = self.run_profile(profile)
                 self.assertEqual(code, 0, summary['failures'])
                 self.assertEqual('native-include-independence' in stage_names(summary), expected)
+
+    def test_twin_parity_guard_runs_for_release_and_native_only(self):
+        for profile, expected in (("release", True), ("native", True),
+                                  ("debug", False), ("sanitizers", False)):
+            with self.subTest(profile=profile):
+                code, summary, _, _ = self.run_profile(profile)
+                self.assertEqual(code, 0, summary['failures'])
+                self.assertEqual('source-guard-twin-parity' in stage_names(summary), expected)
+
+    def test_twin_parity_failure_skips_configure(self):
+        code, summary, scripted, _ = self.run_profile(**{'source-guard-twin-parity': 1})
+        self.assertEqual(code, 1)
+        self.assertIn('source-guard-twin-parity', failure_stages(summary))
+        self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
 
     def test_native_include_independence_failure_stops_before_abi(self):
         code, summary, scripted, _ = self.run_profile(**{'native-include-independence': 1})

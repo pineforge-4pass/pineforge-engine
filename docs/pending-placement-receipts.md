@@ -34,17 +34,15 @@ their scopes are unchanged. A complete physical placement/close-claim model is
 separate work.
 
 The public size-aware `pf_pending_order_v1_t` retains every existing field at
-its original offset. Its old replacement Boolean, EXIT predecessor scalar and
-in-position Boolean are deprecated derived **output projections**, never core
-state or inputs. The legacy RAW projections remain false/zero; the appended
-`replaced_order_incarnation` reports the true RAW predecessor. Dynamic-layout
-readers can discover the new field; older prefix readers retain their layout.
-The generator emits these projections explicitly without native storage or a
-readback path. Native hashing includes the predecessor once and placement side
-once; removed redundant fields need no independent hash state.
+its original offset. That is a layout guarantee, not a claim that every value
+is a permanent constant or that the retired `PendingOrder` remains executable.
+`PendingIntentView` projects each row from live native request facts, adapter
+placement facts, and terminal receipts. Dynamic-layout readers can discover
+appended fields while older prefix readers retain their layout. Mirror-fidelity
+twins check those value projections separately from the immutable v1 prefix.
 
 The retired compatibility-order Boolean census is no longer a runtime design
 surface. Native request definitions, adapter placement snapshots, and terminal
-receipts carry the corresponding causal facts. Existing Pine
-priority/admission/close policies retain their qualification rules. Public C
-ABI version 4 and pending mirror version 1 remain unchanged.
+receipts carry the corresponding causal facts. Public C ABI version 4 and the
+pending mirror v1 layout remain unchanged; value fidelity is enforced by the
+native-route mirror tests rather than asserted by this document.

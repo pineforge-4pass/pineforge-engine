@@ -852,9 +852,10 @@ def main() -> int:
                                              render_host_caller(HOST_EVENTS_CALLER, "engine_script_run_v17"), include)
         current_execution = compile_object("current_execution_caller",
                                            render_current_execution_caller("engine_script_run_v17"), include)
-        # The frozen L0 provider has the same published epoch and must accept
-        # every current caller at compile time. Link-time pairing with its
-        # real archive is enforced in the settlement matrix.
+        # These callers are compiled against the authenticated v16 closure.
+        # The executable settlement/script/aggregate controls then link the
+        # real v16 archive with v16 callers (accept) and v17 callers (reject)
+        # in both directions; this compile-only guard does not claim linkage.
         compile_object("v16_frozen_host_caller",
                        render_host_caller(HOST_CALLER, V16_FROZEN_ENGINE_EPOCH), v16_frozen_include)
         compile_object("v16_frozen_current_execution_caller",

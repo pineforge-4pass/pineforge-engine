@@ -1,40 +1,42 @@
-# Generic configuration, feed cursor, and report projections are not durable
-# broker decisions. Source-adapter and scheduler state have no waivers.
-account_currency_fx_ # configured scalar fallback
-account_currency_fx_rates_ # configured provider values
-account_currency_fx_timestamps_ # configured provider instants
-bar_index_ # feed cursor
-bars_in_market_ # report accumulator
-broker_state_hash_recording_ # recording switch
-broker_state_hashes_ # recorded output history
-chart_ema_na_warmup_ # script configuration
-chart_timezone_ # script configuration
-commission_type_ # projected fee configuration
-commission_value_ # projected fee configuration
-current_bar_ # feed cursor value
-equity_curve_ # report history
-first_bar_open_ # report basis
-historical_security_lookahead_projection_ # script configuration
-historical_security_lookahead_projection_active_ # security publication cursor
-initial_capital_ # projected run configuration
-inputs_ # script input map
-is_tail_bar_ # feed cursor flag
-last_bar_index_ # feed metadata
-last_bar_time_ # feed metadata
-margin_call_enabled_ # source provider configuration
-path_order_mode_ # configured path selector
-probe_suppress_tail_logic_ # configured reporting selector
-qty_step_ # symbol metadata
-range_end_trades_ # report-only projection
-realtime_tail_ # configured run mode
-realtime_tail_horizon_bars_ # configured run horizon
-security_calling_close_ms_ # security feed cursor
-security_first_chart_bar_ms_ # run-start feed metadata
-security_next_input_ms_ # security feed cursor
-security_range_start_ms_ # security configuration
-security_range_start_na_warmup_ # security configuration
-slippage_ # projected fee configuration
-syminfo_ # symbol metadata
-syminfo_metadata_ # symbol metadata transport
-syminfo_mintick_ # symbol metadata
-trade_start_time_ # configured execution window
+# A waiver is permitted only for a value that is configuration, input cursor,
+# or report output rather than durable next-decision state. The native request
+# core and every source-adapter/scheduler durable field are hashed; each reason
+# below explains why this particular generic carrier is not a second omission.
+account_currency_fx_ # Staged scalar fallback; provider copies the chosen curve into the hashed native run specification before matching begins.
+account_currency_fx_rates_ # Input transport vector only; configure_native_fx_curve owns the active, hashed curve used by executions.
+account_currency_fx_timestamps_ # Input transport timestamps only; active FX lookup state is installed in the native consumer and hashed there.
+bar_index_ # Feed cursor reconstructed from delivered bars; it is not an independently mutable broker decision.
+bars_in_market_ # Diagnostic/report counter; no admission, matching, or settlement branch reads it.
+broker_state_hash_recording_ # Opt-in output-recording switch; it changes collected reports, never the next execution decision.
+broker_state_hashes_ # Previously emitted hash history; append-only report output not consulted by execution.
+chart_ema_na_warmup_ # Source configuration copied into evaluator preparation; the evaluator's durable series state has its own fold.
+chart_timezone_ # Provider configuration used to form the run spec/calendar; active native calendar identity is hashed by the consumer.
+commission_type_ # Legacy configuration carrier projected into the immutable native fee terms before requests are admitted.
+commission_value_ # Legacy configuration carrier projected into the immutable native fee terms before requests are admitted.
+current_bar_ # Callback/report convenience copy; native decision context and request birth facts own executable time/price state.
+equity_curve_ # Historical reporting series; current marked equity and live lots are hashed independently.
+first_bar_open_ # Run-report baseline only; no later matching or admission rule reads this cached value.
+historical_security_lookahead_projection_ # Prepared publication output; evaluator state and source scheduler continuation are hashed separately.
+historical_security_lookahead_projection_active_ # Publication cursor for report/source delivery, not an execution-owner decision field.
+initial_capital_ # Legacy configuration carrier; projected initial capital is part of the immutable native run specification.
+inputs_ # Staged source input map; generated source series and scheduler-owned language state are hashed after provider application.
+is_tail_bar_ # Callback visibility flag derived from the delivered feed, with no independent execution transition.
+last_bar_index_ # Feed metadata for reports/accessors; source scheduler indexes its durable cadence state separately.
+last_bar_time_ # Feed metadata for reports/accessors; request timing uses native decision/birth timestamps instead.
+margin_call_enabled_ # Source provider configuration; active margin terms are projected into native run/request facts.
+path_order_mode_ # Requested path-mode configuration; selected native path and current decision context are hashed by the consumer.
+probe_suppress_tail_logic_ # Reporting/probe mode configuration; it does not alter accepted historical execution decisions.
+qty_step_ # Symbol metadata carrier; quantized request/term facts preserve the executable value at placement.
+range_end_trades_ # Report-only synthetic rows, never a live matching population or future admission input.
+realtime_tail_ # Run-mode configuration consumed at begin; native stream lifecycle/hash owns active continuation state.
+realtime_tail_horizon_bars_ # Run-mode configuration consumed at begin; it is not mutated by or read from broker settlement.
+security_calling_close_ms_ # Security-feed publication cursor; no order matching or account settlement branch consumes it.
+security_first_chart_bar_ms_ # Feed-start metadata used while preparing security publication, not a mutable execution fact.
+security_next_input_ms_ # Security-feed cursor; source scheduler's durable deferred-boundary state is hashed independently.
+security_range_start_ms_ # Security evaluator configuration; active evaluator buckets/series own their continuation folds.
+security_range_start_na_warmup_ # Security evaluator configuration flag; resulting source language/evaluator state is hashed.
+slippage_ # Legacy configuration carrier; each executable request snapshots projected slippage terms before matching.
+syminfo_ # Metadata transport; provider copies symbol/session/timezone facts into the immutable native run specification.
+syminfo_metadata_ # Staged metadata map; it is consumed at begin and does not evolve as broker state during a run.
+syminfo_mintick_ # Metadata convenience scalar; executable levels/terms retain their snapped native values.
+trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.

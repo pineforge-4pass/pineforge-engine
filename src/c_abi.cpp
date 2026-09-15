@@ -16,7 +16,7 @@
  *     strategy_set_probe_suppress_tail_logic, strategy_set_path_order,
  *     strategy_last_bar_dual_entry_path,
  *     strategy_set_broker_state_hash_recording, strategy_broker_state_hash,
- *     strategy_request_rosterlen, strategy_pending_order_get,
+ *     strategy_pending_orders_len, strategy_pending_order_get,
  *     strategy_pending_order_layout, strategy_pending_order_fill_qty,
  *     strategy_pending_order_level_resolved,
  *     strategy_pending_order_effective_levels, strategy_trail_best_price,
@@ -473,8 +473,8 @@ PF_API const pf_field_desc_t* strategy_pending_order_layout(int* count) {
 
 /* ABI v4 live-runtime surface (task 8, spec 3.6): engine-computed derived
  * order values and position scalars -- pure const reads of the engine's own
- * sizing / admission / level-resolution predicates
- * (BacktestEngine::probe_fill_qty & co., src/engine_fills.cpp). NULL-handle
+ * sizing / admission / level-resolution predicates supplied by the native
+ * request core plus the source adapter projection. NULL-handle
  * convention of the pf_live group: -1 for an int return, NaN for a double,
  * with nothing written through the out-pointers. */
 PF_API int strategy_pending_order_fill_qty(pf_strategy_t s, int index, double fill_price,

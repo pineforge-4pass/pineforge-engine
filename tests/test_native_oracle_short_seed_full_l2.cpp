@@ -1,11 +1,12 @@
 // Exact native-route twin of the complete L0 ShortSeed oracle.
 #include <pineforge/source/pine_strategy_host.hpp>
 #include <pineforge/source/pine_native_host.hpp>
+#include "oracle_fixture_accessors.hpp"
 
 using pineforge::source::FixtureIntentKind;
 
-#define PineStrategyHost PineNativeHost
-#define signed_position_size live_position_size
+#define PineStrategyHost OraclePineNativeHost
+#define signed_position_size oracle_script_position_size
 #define PendingOrder FixtureIntentRow
 #define OrderType FixtureIntentKind
 #define pending_orders_ source_pending_view()

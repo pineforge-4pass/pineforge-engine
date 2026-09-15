@@ -132,63 +132,24 @@ consumer identity is
 | `host-ab9714b` immutable provider | `engine_script_run_v16` |
 | Source extension | `pineforge-source-adapter/v2` |
 
-The current v16 archive is checked with six archived provider inputs: the real
-e60 R2 and 0e R3 providers, authenticated c3ed455 v13 and f736676 v14 host
-closures, the immutable e7cdf05 v15 source-layer-base closure, and the
-immutable ab9714b v16 adapter-lowering-base closure. The verifier
-prepares real archives from immutable sources with the current profile's
-compiler and settings. Constructor/vtable, return-only `native_events()`, host
-observation, core request, driver and current-execution callers compile before
-links are interpreted. The v15↔v16 host/source pair is a required rejection in
-both directions; the frozen ab9714b v16 ↔ live v16 pair is a required positive
-pairing in both directions. Existing historical v13/v14/v15 verdicts,
-including the unchanged driver-v4 positive links where applicable, remain
-required. No ABI caller executable is run.
-
-The v15 current-execution controls have been active since landing 1c.
+The verifier prepares six immutable historical archives with the profile's
+compiler/settings and authenticates every receipt against the real archive and
+header bytes. The active transition control is deliberately narrower and
+executable: callers compiled against `host-ab9714b` v16 link to its archive,
+callers compiled against live v17 link to the live archive, and both v16→v17
+and v17→v16 links must reject the exact epoch-qualified
+`BacktestEngine::broker_state_hash` symbol. Settlement, script-host, and
+aggregate controls each exercise that pair; no caller executable is run.
 
 For the 0.14.x line, this is an internal C++ epoch transition rather than a
 public C ABI break: `PF_ABI_VERSION` remains 4 and the append-only C ABI
 guarantee remains in force.
 
-The historical transitions retain their full comparisons. The reviewed v15→v16
-transition additionally consumes the authenticated relocation manifest: it
-allows exactly the listed retired source storage and source seams, verifies the
-frozen public pending-row POD separately, and rejects every other storage,
-vtable, layout, header, compile, or link difference. Against the older
-providers the checker still compares, in full and unconditionally:
-
-* every engine named data declaration in source order (252 declarations, 251
-  of them non-static data members) and the entire virtual method inventory —
-  an epoch transition is never a licence to change engine storage or the
-  vtable;
-* every compiler-emitted layout word — all 789 against e60 R2 and all 793
-  against 0e R3, covering `sizeof`/`alignof` of `BacktestEngine`,
-  the native aggregates and the selected/projection types, plus
-  the offset/size/alignment triple of each of the 251 engine data members, not
-  only the leading financial `Result`/`SettlementInspection`, status and
-  Action/CloseScope words. The receipt's `layout.comparedWords` and
-  `priorLayout.comparedWords` therefore equal their `wordCount`;
-* every frozen native header's text, with exactly four enumerated exemptions —
-  `native_order.hpp`, `native_host.hpp`, `market_driver.hpp` and
-  `execution_consumer.hpp`, the headers that legitimately advance with
-  `native_order_v4`, host v16, `native_driver_v4` and consumer v6. Each actual
-  difference is recorded in `frozenShape.exemptedHeaders` with both digests and
-  its transition; an exempted header that did not change records nothing, and
-  any other differing header still raises. The exemption table lives in one
-  module constant keyed by the reviewed historical transitions, including
-  v15→v16.
-  Every recorded exemption must also match the pinned current header bytes.
-
-`native_order_identity.hpp`, `native_run_spec.hpp` and `native_calendar.hpp`
-remain frozen after comment stripping and whitespace normalization. The identity
-header's request/core/event namespace comment is renamed in Phase 0; its
-normalized text is unchanged. No other differences in these three headers are
-exempted.
-
-Earlier v2–v10 and v12 controls remain. Reusing an uninstrumented historical
-Release archive in a sanitizer profile is refused; preparation never overwrites
-an existing provider directory or substitutes a symbol stub for a real archive.
+The relocation manifest remains a reviewed description of the v16→v17 source
+and host transition; it is not proof by itself. The proof is the authenticated
+archive/header input plus the acceptance/rejection links above. The frozen
+pending-row POD is checked separately. Preparation never overwrites an
+existing provider directory or substitutes a symbol stub for a real archive.
 
 New standalone lifecycle values and `Lifecycle` own the inline namespace
 `pineforge::exit_legs::lifecycle_v1`; new admission values, `Draft`, `Journal`

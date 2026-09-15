@@ -61,10 +61,9 @@ until point-value wiring lands** — capture TV first, then implement to match.
 
 ## Family B — Leverage / margin-call / forced liquidation
 
-`margin_liquidation_price()` is hardwired `na` and margin is only checked at
-signal time, so a leveraged position that should be liquidated runs to its own
-exit. A skeptic calls this "your equity curve is fiction for a leveraged
-account."
+The probe records both the source-host `margin_liquidation_price()` projection
+and any native-route margin liquidation rows. A discrepancy is a lowering
+defect to investigate; it is not evidence that the projection is hardwired.
 
 - `leverage-margin-call-perp-5x-01` — `BINANCE:ETHUSDT.P` 15m, a 5× position
   entered then held through an adverse move that crosses the maintenance margin.

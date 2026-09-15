@@ -51,7 +51,7 @@ EXPECTED_RUNTIME = frozenset({
     "strategy_last_bar_dual_entry_path",
     "strategy_set_broker_state_hash_recording",
     "strategy_broker_state_hash",
-    "strategy_" + "pending" + "_orders_len",
+    "strategy_pending_orders_len",
     "strategy_pending_order_get",
     "strategy_pending_order_layout",
     "strategy_pending_order_fill_qty",
