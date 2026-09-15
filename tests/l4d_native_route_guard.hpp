@@ -171,8 +171,12 @@ protected:
     CommissionType fixture_commission_type_slot() const noexcept {
         return static_cast<CommissionType>(fixture_configuration().commission_type);
     }
-    bool l4d_coof_fill_recalc_active() const noexcept { return false; }
-    bool l4d_coof_cursor_is_bar_close() const noexcept { return false; }
+    bool l4d_coof_fill_recalc_active() const noexcept {
+        return adapter_.fixture_coof_recalc_active();
+    }
+    bool l4d_coof_cursor_is_bar_close() const noexcept {
+        return adapter_.fixture_coof_cursor_is_bar_close();
+    }
 
     std::vector<L4dIntentRow>& l4d_pending_rows() const {
         l4d_pending_rows_.clear();

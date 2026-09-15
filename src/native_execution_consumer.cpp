@@ -3633,7 +3633,8 @@ std::optional<NativeCurrentRefusal> NativeExecutionConsumer::validate_current_ex
     if (!current_execution_point()) return Refusal::NoExecutionContext;
     if (callback_phase_ != CallbackPhase::PreOpen
         && callback_phase_ != CallbackPhase::Bar
-        && callback_phase_ != CallbackPhase::Applied) {
+        && callback_phase_ != CallbackPhase::Applied
+        && callback_phase_ != CallbackPhase::Tick) {
         return Refusal::NoExecutionContext;
     }
     if (!projection_ok(engine)) return Refusal::ConfigurationMismatch;
@@ -4135,10 +4136,12 @@ bool NativeExecutionConsumer::invoke_tick_callback(
     current.quote_origin_ordinal = callback_context_.coordinate.ordinal;
     current_frame_ = CurrentExecutionFrame{current, next_timeline_ordinal_ - 1};
     in_callback_ = true;
+    callback_phase_ = CallbackPhase::Tick;
     try {
         host->on_native_tick(bar, presented);
     } catch (const std::bad_alloc& e) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         tick_callback_context_.reset();
         tick_callback_bar_.reset();
@@ -4148,6 +4151,7 @@ bool NativeExecutionConsumer::invoke_tick_callback(
         return false;
     } catch (const std::exception& e) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         tick_callback_context_.reset();
         tick_callback_bar_.reset();
@@ -4160,6 +4164,7 @@ bool NativeExecutionConsumer::invoke_tick_callback(
         return false;
     } catch (...) {
         in_callback_ = false;
+        callback_phase_ = CallbackPhase::None;
         current_frame_.reset();
         tick_callback_context_.reset();
         tick_callback_bar_.reset();

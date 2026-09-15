@@ -1239,3 +1239,25 @@ set_tests_properties(
     test_trail_ref_entry_bar_extreme_l4c
     test_zero_offset_trail_rides_l4c
     PROPERTIES LABELS l4-pending)
+
+# R4-D L5a: these restored twins now pass on the merged switched route.  Keep
+# only the root-visible generic-kernel STOP rows under the interim label.
+set_tests_properties(
+    test_bracket_lifecycle_declined_reversal_l4c
+    test_dropped_reversal_mc_first_l4c
+    test_exit_bracket_position_cycle_lifetime_l4c
+    test_prearmed_exit_path_cursor_l4c
+    test_rounded_carried_short_trail_l4c
+    test_live_flags_lane_positive_l4d
+    test_live_realtime_tail_l4d
+    test_m_admission_36_l4d
+    test_script_run_prepare_l4d
+    test_sparse_atr_prev_close_l4d
+    test_famag_opening_money_l4b
+    test_open_money_before_priced_exit_l4b
+    test_pooc_long_money_before_trail_l4b
+    test_sizing_basis_mintick_l4b
+    test_tv_money_band_l4b
+    test_tv_money_carried_pooc_l4b
+    test_tv_money_precision_l4b
+    PROPERTIES LABELS "")

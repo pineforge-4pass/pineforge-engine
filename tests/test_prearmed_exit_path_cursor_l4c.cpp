@@ -277,7 +277,7 @@ public:
     bool cap_attached() const {
         return adapter_.cap.attachment() != compat::pine::CapAttachment::None;
     }
-    uint64_t fills() const { return broker_fill_event_seq_; }
+    uint64_t fills() const { return fixture_applied_receipt_count(); }
     double position() const { return signed_position_size(); }
     bool fresh_parent_shape_seen = false;
     bool parent_cancel_provenance_seen = false;

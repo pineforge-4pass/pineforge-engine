@@ -188,6 +188,12 @@ struct PlacementSnapshot {
     std::uint64_t projection_predecessor = 0;
     std::uint64_t recreated_after_named_cancelled_entry_incarnation = 0;
     std::uint64_t named_cancel_surviving_exit_incarnation = 0;
+    bool retained_parent_topology = false;
+    // A flat child declared before a fresh priced parent was already visited
+    // (and skipped) by the legacy whole-bar broker pass.  Keep that source
+    // chronology outside the native path matcher until the post-calculation
+    // point of the parent's fill bar.
+    bool defer_until_post_parent_calculation = false;
     bool projection_predecessor_market = false;
     bool projection_predecessor_exit = false;
     bool projection_created_during_coof = false;
@@ -448,6 +454,7 @@ public:
     struct FixturePendingSnapshot {
         std::uint64_t incarnation = 0;
         PlacementSnapshot snapshot{};
+        bool staged = false;
     };
     // Keep the legacy host's construction surface valid until L3a. A null
     // host means this compatibility carrier has no lowering authority.
@@ -671,10 +678,22 @@ private:
                                 bool execute_at_current);
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
-                                  bool execute_current);
+                                  bool execute_current,
+                                  bool opening_checkpoint = false);
     bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
-                                  double units);
+                                  double units,
+                                  bool force_execution_price = true);
     bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&);
+    bool slipped_pooc_opening_money_scope(
+        const Bar&, const NativeDecisionContext&) const;
+    bool submit_slipped_pooc_opening_money_call(
+        const Bar&, const NativeDecisionContext&);
+    bool schedule_tv_money_long_margin_before_trail(
+        const Bar&, const NativeDecisionContext&);
+    bool carried_pooc_short_margin_before_script_scope(
+        const NativeDecisionContext&) const;
+    bool carried_pooc_short_priced_exit_after_adverse_scope(
+        const Bar&) const;
     void schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     bool intraday_loss_breached(double mark_price) const noexcept;
     bool submit_intraday_loss_close(double mark_price, const NativeDecisionContext&,
@@ -702,11 +721,16 @@ private:
     void consume_opening_fees(const native_order::ExecutionAppliedEvent&,
                               const SourceId*);
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
+    void consume_margin_cohort_units(const native_order::ExecutionAppliedEvent&);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
     void cancel_bracket_origin(native_order::RequestHandle);
     void cancel_bracket_siblings(native_order::RequestHandle);
     void materialize_relative_exits(PlacementSnapshot,
                                    const native_order::ExecutionAppliedEvent&);
+    void materialize_pending_bracket_legs(
+        const native_order::ExecutionAppliedEvent&);
+    void stage_flat_children_before_parent(const SourceId&, std::int32_t,
+                                           std::int64_t);
     bool defer_coof_tail() const noexcept;
     void flush_coof_tail();
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
@@ -733,6 +757,22 @@ private:
     std::uint64_t terminal_receipt_cursor_ = 0;
     ReceiptHighWaterReader event_high_water_reader_ = nullptr;
     ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
+    bool is_declined_market_reversal(
+        const native_order::MatchRejectedEvent&) const noexcept;
+    bool follows_same_bar_declined_reversal(
+        const PlacementSnapshot&, const NativePrecommitView&) const;
+    bool bracket_belongs_to_reversal(
+        const PlacementSnapshot&, const PlacementSnapshot&) const noexcept;
+    void suspend_brackets_for_reversal(
+        const PlacementSnapshot&, const exit_legs::Frame&, double open_price);
+    void suspend_declined_reversal_brackets(
+        const native_order::MatchRejectedEvent&);
+    void suspend_coof_declined_reversal_at_open(
+        const Bar&, const NativeDecisionContext&);
+    void hold_reversal_pair_brackets(const SourceId&);
+    void purge_brackets_after_applied_reversal(const PlacementSnapshot&);
+    void revive_brackets_after_margin(
+        const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;

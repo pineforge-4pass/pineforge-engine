@@ -4,6 +4,7 @@
 #include <pineforge/source/pine_native_host.hpp>
 
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <optional>
@@ -166,7 +167,7 @@ public:
         return const_cast<L4cFixtureHost*>(this)->fixture_configuration();
     }
 
-    std::vector<L4cPendingOrder> l4c_pending_orders() const {
+    const std::vector<L4cPendingOrder>& l4c_pending_orders() const {
         std::vector<L4cPendingOrder> result;
         const PendingIntentView& view = pending_intent_view();
         const int count = view.size();
@@ -251,9 +252,16 @@ public:
             result.push_back(std::move(projection));
         }
         for (const auto& row : adapter_.fixture_pending_snapshots()) {
-            if (row.incarnation != 0) continue;
+            if (!row.staged) continue;
+            if (row.incarnation != 0
+                && std::any_of(result.begin(), result.end(), [&](const L4cPendingOrder& value) {
+                    return value.incarnation == row.incarnation;
+                })) {
+                continue;
+            }
             const PlacementSnapshot& snapshot = row.snapshot;
             L4cPendingOrder projection;
+            projection.incarnation = row.incarnation;
             projection.id = snapshot.source_id;
             projection.from_entry = snapshot.from_entry;
             switch (snapshot.family) {
@@ -333,7 +341,27 @@ public:
             projection.pine_birth_reach = snapshot.birth_reach;
             result.push_back(std::move(projection));
         }
-        return result;
+        const auto same = [](const L4cPendingOrder& left,
+                             const L4cPendingOrder& right) {
+            const auto equal_number = [](double lhs, double rhs) {
+                return lhs == rhs || (std::isnan(lhs) && std::isnan(rhs));
+            };
+            return left.id == right.id && left.from_entry == right.from_entry
+                && left.type == right.type && left.incarnation == right.incarnation
+                && left.replaced_order_incarnation == right.replaced_order_incarnation
+                && left.recreated_after_named_cancelled_entry_incarnation
+                    == right.recreated_after_named_cancelled_entry_incarnation
+                && left.named_cancel_surviving_exit_incarnation
+                    == right.named_cancel_surviving_exit_incarnation
+                && left.created_seq == right.created_seq
+                && left.created_bar == right.created_bar
+                && equal_number(left.limit_price, right.limit_price)
+                && equal_number(left.stop_price, right.stop_price);
+        };
+        const bool unchanged = result.size() == pending_cache_.size()
+            && std::equal(result.begin(), result.end(), pending_cache_.begin(), same);
+        if (!unchanged) pending_cache_ = std::move(result);
+        return pending_cache_;
     }
 
     bool l4c_coof_recalc_active() const noexcept {
@@ -353,6 +381,7 @@ public:
 
 private:
     std::uint64_t l4c_exit_leg_event_seq_ = 0;
+    mutable std::vector<L4cPendingOrder> pending_cache_;
 };
 
 } // namespace pineforge::source
