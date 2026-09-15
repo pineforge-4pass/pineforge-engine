@@ -198,7 +198,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(pending.replacement_key); f.b(pending.opening); f.u(pending.family_key);
     }
     hash_native_handle_vector(f, live_handles_); hash_native_handle_vector(f, first_open_newborns_);
-    hash_native_handle_vector(f, pending_view_handles_);
+    // PendingIntentView is a derived read-only alias of live_handles_. Keep
+    // its historical fingerprint position and bytes without copying the
+    // roster at every mutation boundary.
+    hash_native_handle_vector(f, live_handles_);
     std::vector<std::uint64_t> current_debit_ordinals;
     current_debit_ordinals.reserve(current_debited_applied_ordinals_.size());
     for (const auto ordinal : current_debited_applied_ordinals_) current_debit_ordinals.push_back(ordinal);

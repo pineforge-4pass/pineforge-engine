@@ -19,6 +19,24 @@ namespace {
 
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
+bool same_double_bits(double left, double right) noexcept {
+    std::uint64_t left_bits = 0;
+    std::uint64_t right_bits = 0;
+    std::memcpy(&left_bits, &left, sizeof(left_bits));
+    std::memcpy(&right_bits, &right, sizeof(right_bits));
+    return left_bits == right_bits;
+}
+
+bool same_exit_levels(const PineExitLevels& left, const PineExitLevels& right) noexcept {
+    return same_double_bits(left.limit, right.limit)
+        && same_double_bits(left.stop, right.stop)
+        && same_double_bits(left.trail_points, right.trail_points)
+        && same_double_bits(left.trail_offset, right.trail_offset)
+        && same_double_bits(left.trail_price, right.trail_price)
+        && same_double_bits(left.profit_ticks, right.profit_ticks)
+        && same_double_bits(left.loss_ticks, right.loss_ticks);
+}
+
 bool finite_positive(double value) noexcept {
     return std::isfinite(value) && value > 0.0;
 }
@@ -151,9 +169,9 @@ void PineExecutionAdapter::reset_for_run() {
     pending_coof_requests_.clear();
     live_handles_.clear();
     first_open_newborns_.clear();
-    pending_view_handles_.clear();
     current_debited_applied_ordinals_.clear();
     receipt_cursor_ = 0;
+    terminal_receipt_cursor_ = 0;
     materializing_relative_ = false;
     current_position_cycle_ = 0;
     current_position_sign_ = 0;
@@ -182,6 +200,11 @@ void PineExecutionAdapter::reset_for_run() {
 
 void PineExecutionAdapter::set_configuration(const PineStrategyConfig& config) noexcept { config_ = config; }
 void PineExecutionAdapter::set_staged_configuration(const StagedConfiguration& staged) { staged_ = staged; }
+void PineExecutionAdapter::set_receipt_high_water_readers(
+        ReceiptHighWaterReader event_reader, ReceiptHighWaterReader terminal_reader) noexcept {
+    event_high_water_reader_ = event_reader;
+    terminal_receipt_high_water_reader_ = terminal_reader;
+}
 
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
@@ -419,7 +442,11 @@ native_order::Group PineExecutionAdapter::group_for(const std::string& name, int
 
 void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
                                     PlacementSnapshot snapshot) {
-    placement_[handle.incarnation] = std::move(snapshot);
+    // Every accepted request receives a fresh incarnation. Construct its
+    // immutable placement evidence directly in the hash table rather than
+    // default-constructing a string-bearing snapshot and move-assigning it.
+    const auto inserted = placement_.try_emplace(handle.incarnation, std::move(snapshot));
+    if (!inserted.second) inserted.first->second = std::move(snapshot);
     if (std::find(live_handles_.begin(), live_handles_.end(), handle) == live_handles_.end())
         live_handles_.push_back(handle);
     refresh_pending_view();
@@ -490,18 +517,50 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
         snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
     }
-    if (auto* member = std::get_if<native_order::Member>(&request.group)) {
-        if (source_sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-            throw std::overflow_error("Pine OCA member sequence exhausted");
-        }
-        // The generic group member's cohort distinguishes siblings. A source
-        // OCA name identifies the group; every accepted source instruction is
-        // a distinct member of it, including replacement incarnations.
-        member->cohort = static_cast<std::int64_t>(source_sequence_ + 1U);
-    }
     const auto key = replacement_key.empty() ? 0 : key_for(replacement_key);
     std::optional<native_order::RequestHandle> accepted;
-    std::optional<PlacementSnapshot> predecessor_snapshot;
+    bool predecessor_exit = false;
+    bool predecessor_market = false;
+    const auto unchanged_dynamic_exit = [&](const PlacementSnapshot& prior) {
+        if (opening || coof_recalc_active_ || materializing_relative_
+            || config_.calc_on_order_fills || !snapshot.deferred_cohort
+            || !prior.deferred_cohort || snapshot.family != prior.family
+            || (snapshot.family != PineOrderFamily::ExitLimit
+                && snapshot.family != PineOrderFamily::ExitStop
+                && snapshot.family != PineOrderFamily::ExitTrail)
+            || !std::isnan(snapshot.requested_qty) || !std::isnan(prior.requested_qty)
+            || snapshot.source_id != prior.source_id || snapshot.from_entry != prior.from_entry
+            || snapshot.comment != prior.comment || snapshot.oca_name != prior.oca_name
+            || snapshot.oca_type != prior.oca_type
+            || !same_double_bits(snapshot.qty_percent, prior.qty_percent)
+            || snapshot.bracket_origin != prior.bracket_origin
+            || !same_exit_levels(snapshot.exit_levels, prior.exit_levels)) {
+            return false;
+        }
+        const auto* sized = std::get_if<native_order::HostSized>(&request.intent);
+        const auto* owner = std::get_if<native_order::BindCohort>(&request.owner);
+        const auto cohort = cohorts_by_id_.find(snapshot.from_entry);
+        if (!sized || sized->kind != native_order::HostSizedKind::Close || sized->side
+            || !owner || cohort == cohorts_by_id_.end() || owner->cohort != cohort->second.handle) {
+            return false;
+        }
+        if (const auto* limit = std::get_if<native_order::Limit>(&request.trigger)) {
+            return snapshot.family == PineOrderFamily::ExitLimit
+                && same_double_bits(limit->price, prior.exit_levels.limit);
+        }
+        if (const auto* stop = std::get_if<native_order::Stop>(&request.trigger)) {
+            return snapshot.family == PineOrderFamily::ExitStop
+                && same_double_bits(stop->price, prior.exit_levels.stop);
+        }
+        if (const auto* trail = std::get_if<native_order::Trail>(&request.trigger)) {
+            return snapshot.family == PineOrderFamily::ExitTrail
+                && same_double_bits(trail->offset, prior.exit_levels.trail_offset)
+                && trail->arm_price.has_value() == std::isfinite(prior.exit_levels.trail_price)
+                && (!trail->arm_price || same_double_bits(*trail->arm_price,
+                                                           prior.exit_levels.trail_price));
+        }
+        return false;
+    };
     if (key != 0) {
         std::optional<native_order::RequestHandle> existing_handle;
         if (const auto existing = live_by_source_key_.find(key);
@@ -511,26 +570,39 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             existing_handle = existing->second;
             if (const auto previous = placement_.find(existing_handle->incarnation);
                 previous != placement_.end()) {
-                predecessor_snapshot = previous->second;
+                // The legacy pending book leaves a same-definition bracket
+                // untouched. Its source cohort remains live and its dynamic
+                // close quantity is resolved at fill time, so a normal-bar
+                // reissue has no new executable fact to record.
+                if (unchanged_dynamic_exit(previous->second)) return existing_handle;
+                const auto family = previous->second.family;
+                predecessor_exit = family == PineOrderFamily::ExitLimit
+                    || family == PineOrderFamily::ExitStop || family == PineOrderFamily::ExitTrail;
+                predecessor_market = family == PineOrderFamily::Entry
+                    && !std::isfinite(previous->second.exit_levels.limit)
+                    && !std::isfinite(previous->second.exit_levels.stop)
+                    && !std::isfinite(previous->second.exit_levels.trail_offset);
             }
         }
         if (existing_handle) {
             const auto result = host.replace(*existing_handle, request);
             if (result.status == native_order::ReplaceStatus::Replaced && result.successor) {
                 snapshot.projection_predecessor = existing_handle->incarnation;
-                if (predecessor_snapshot) {
-                    const auto family = predecessor_snapshot->family;
-                    snapshot.projection_predecessor_exit = family == PineOrderFamily::ExitLimit
-                        || family == PineOrderFamily::ExitStop || family == PineOrderFamily::ExitTrail;
-                    snapshot.projection_predecessor_market = family == PineOrderFamily::Entry
-                        && !std::isfinite(predecessor_snapshot->exit_levels.limit)
-                        && !std::isfinite(predecessor_snapshot->exit_levels.stop)
-                        && !std::isfinite(predecessor_snapshot->exit_levels.trail_offset);
-                }
+                snapshot.projection_predecessor_exit = predecessor_exit;
+                snapshot.projection_predecessor_market = predecessor_market;
                 retire(*existing_handle);
                 accepted = *result.successor;
             }
         }
+    }
+    if (auto* member = std::get_if<native_order::Member>(&request.group)) {
+        if (source_sequence_ >= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+            throw std::overflow_error("Pine OCA member sequence exhausted");
+        }
+        // The generic group member's cohort distinguishes siblings. A source
+        // OCA name identifies the group; every accepted source instruction is
+        // a distinct member of it, including replacement incarnations.
+        member->cohort = static_cast<std::int64_t>(source_sequence_ + 1U);
     }
     if (!accepted) {
         const auto result = host.submit(request);
@@ -863,7 +935,42 @@ void PineExecutionAdapter::cancel_bracket_siblings(native_order::RequestHandle h
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {
-    const auto rows = require_host().native_events(receipt_cursor_);
+    auto& host = require_host();
+    const auto state = host.native_state();
+    if (event_high_water_reader_ && terminal_receipt_high_water_reader_
+        && (!state.spec || state.spec->intrabar.is_none())) {
+        const std::uint64_t terminal_high_water = terminal_receipt_high_water_reader_(host);
+        if (terminal_high_water <= terminal_receipt_cursor_) {
+            // Preserve the source-visible cursor value the owning snapshot path
+            // would have recorded, without copying and sorting every driver row.
+            receipt_cursor_ = event_high_water_reader_(host);
+            return;
+        }
+        const auto rows = host.native_events(receipt_cursor_);
+        for (const auto& row : rows) {
+            receipt_cursor_ = std::max(receipt_cursor_, row.ordinal);
+            if (!row.command) continue;
+            std::visit([&](const auto& event) {
+                using Event = std::decay_t<decltype(event)>;
+                if constexpr (std::is_same_v<Event, native_order::MatchRejectedEvent>
+                              || std::is_same_v<Event, native_order::CancelledEvent>) {
+                    const auto placement = placement_.find(event.handle().incarnation);
+                    if (placement != placement_.end()) {
+                        const auto handle = event.handle();
+                        const bool opening = placement->second.opening;
+                        retire(handle);
+                        if (opening) cancel_bracket_origin(handle);
+                    }
+                } else if constexpr (std::is_same_v<Event, native_order::ExecutionAppliedEvent>) {
+                    if (event.terminal) cancel_bracket_siblings(event.handle());
+                }
+            }, *row.command);
+        }
+        receipt_cursor_ = event_high_water_reader_(host);
+        terminal_receipt_cursor_ = terminal_high_water;
+        return;
+    }
+    const auto rows = host.native_events(receipt_cursor_);
     for (const auto& row : rows) {
         receipt_cursor_ = std::max(receipt_cursor_, row.ordinal);
         if (!row.command) continue;
@@ -1103,8 +1210,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     request.group = group_for(oca_name, oca_type);
     PlacementSnapshot snapshot;
-    snapshot.family = PineOrderFamily::Entry; snapshot.source_id = id; snapshot.comment = comment;
-    snapshot.oca_name = oca_name; snapshot.oca_type = oca_type; snapshot.qty_type = qty_type;
+    snapshot.family = PineOrderFamily::Entry;
+    snapshot.source_id = id;
+    snapshot.comment = comment;
+    snapshot.oca_name = oca_name;
+    snapshot.oca_type = oca_type; snapshot.qty_type = qty_type;
     snapshot.requested_qty = normalized_qty; snapshot.is_long = is_long;
     snapshot.deferred_cohort = default_sized;
     // Reuse the durable level tuple for the parent trigger facts.  A deferred
@@ -1526,8 +1636,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     request.label = "__close__" + id;
     request.comment = comment; request.owner = owner_for_close(id, host_sized);
     PlacementSnapshot snapshot;
-    snapshot.family = PineOrderFamily::Close; snapshot.source_id = id; snapshot.from_entry = id;
-    snapshot.comment = comment; snapshot.requested_qty = frozen_qty; snapshot.qty_percent = qty_percent;
+    snapshot.family = PineOrderFamily::Close;
+    snapshot.source_id = id;
+    snapshot.from_entry = id;
+    snapshot.comment = comment;
+    snapshot.requested_qty = frozen_qty; snapshot.qty_percent = qty_percent;
     snapshot.immediately = immediately; snapshot.deferred_cohort = host_sized; snapshot.sizing = sizing_snapshot();
     // The all-in source collision retains a same-side re-entry which may be
     // rejected only at the next opening.  Its close must be a child of that
@@ -1603,7 +1716,8 @@ void PineExecutionAdapter::close_all() {
     native_order::Request request;
     request.intent = native_order::Flatten{}; request.label = "__pine_close_all";
     PlacementSnapshot snapshot;
-    snapshot.family = PineOrderFamily::CloseAll; snapshot.source_id = request.label;
+    snapshot.family = PineOrderFamily::CloseAll;
+    snapshot.source_id = request.label;
     snapshot.sizing = sizing_snapshot();
     submit_or_replace(std::move(request), std::move(snapshot), false, "__pine_close_all");
 }
@@ -1675,9 +1789,69 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     }
     const bool dynamic = std::isnan(qty);
     const auto family_key = key_for(exit_id, from_entry);
+    // The legacy pending book leaves an identical resting bracket untouched.
+    // In the ordinary source-bar path, a dynamic exit resolves against its
+    // live cohort only when it fills, so reissuing unchanged levels cannot
+    // alter its executable terms. Avoid rebuilding two requests, snapshots,
+    // and replacement events on the common every-bar bracket pattern.
+    const auto unchanged_dynamic_leg = [&](PineOrderFamily family, double level) {
+        const SourceId replacement_key = exit_id + "\x1f" + from_entry
+            + std::to_string(static_cast<int>(family));
+        const auto live = live_by_source_key_.find(key_for(replacement_key));
+        if (live == live_by_source_key_.end()) return false;
+        const auto placement = placement_.find(live->second.incarnation);
+        if (placement == placement_.end()) return false;
+        const auto& prior = placement->second;
+        if (prior.family != family || !prior.deferred_cohort || !std::isnan(prior.requested_qty)
+            || prior.source_id != exit_id || prior.from_entry != from_entry
+            || prior.comment != comment || prior.oca_name != oca_name
+            || prior.oca_type != 0
+            || !same_double_bits(prior.qty_percent, qty_percent)
+            || prior.bracket_origin.incarnation != 0
+            || !same_double_bits(prior.exit_levels.limit, limit_price)
+            || !same_double_bits(prior.exit_levels.stop, stop_price)
+            || !std::isnan(prior.exit_levels.trail_points)
+            || !std::isnan(prior.exit_levels.trail_offset)
+            || !std::isnan(prior.exit_levels.trail_price)
+            || !std::isnan(prior.exit_levels.profit_ticks)
+            || !std::isnan(prior.exit_levels.loss_ticks)) {
+            return false;
+        }
+        return (family == PineOrderFamily::ExitLimit
+                    && same_double_bits(prior.exit_levels.limit, level))
+            || (family == PineOrderFamily::ExitStop
+                    && same_double_bits(prior.exit_levels.stop, level));
+    };
+    const bool plain_dynamic_bracket = dynamic && !coof_recalc_active_
+        && !materializing_relative_ && !config_.calc_on_order_fills
+        && physical.signed_units != 0.0 && std::isnan(trail_points)
+        && std::isnan(trail_offset) && std::isnan(trail_price)
+        && std::isnan(profit_ticks) && std::isnan(loss_ticks)
+        && (finite_positive(limit_price) || finite_positive(stop_price));
+    if (plain_dynamic_bracket
+        && (!finite_positive(limit_price)
+            || unchanged_dynamic_leg(PineOrderFamily::ExitLimit, limit_price))
+        && (!finite_positive(stop_price)
+            || unchanged_dynamic_leg(PineOrderFamily::ExitStop, stop_price))) {
+        return;
+    }
+    // Every leg emitted by one source strategy.exit shares its placement-time
+    // sizing facts. Submitting the first resting sibling cannot alter the
+    // physical account, so capture them once rather than re-marking equity
+    // for each leg.
+    const PineSizingSnapshot exit_sizing = sizing_snapshot();
+    const native_order::Owner dynamic_owner = dynamic
+        ? owner_for_close(from_entry, !materializing_relative_)
+        : native_order::Owner{native_order::Independent{}};
+    const SourceId dynamic_group_name = dynamic
+        ? (oca_name.empty() ? exit_id + "\x1f" + from_entry : oca_name) : SourceId{};
+    const native_order::Group dynamic_group = dynamic
+        ? group_for(dynamic_group_name, oca_name.empty() ? 1 : 0)
+        : native_order::Group{native_order::NoGroup{}};
+    const SourceId dynamic_key_prefix = dynamic ? exit_id + "\x1f" + from_entry : SourceId{};
     auto submit_leg = [&](PineOrderFamily family, native_order::Trigger trigger) {
         auto submit_one = [&](native_order::Owner owner, bool host_sized,
-                              const SourceId& replacement_key, const std::string& group_name,
+                              const SourceId& replacement_key, native_order::Group group,
                               bool defer_new_instance,
                               native_order::RequestHandle bracket_origin = {}) {
             native_order::Request request;
@@ -1688,15 +1862,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     native_order::ExplicitUnits{qty}}};
             request.label = exit_id; request.comment = comment; request.trigger = trigger;
             request.owner = std::move(owner);
-            request.group = group_for(group_name, oca_name.empty() ? 1 : 0);
+            request.group = std::move(group);
             PlacementSnapshot snapshot;
-            snapshot.family = family; snapshot.source_id = exit_id; snapshot.from_entry = from_entry;
-            snapshot.comment = comment; snapshot.oca_name = oca_name; snapshot.requested_qty = qty;
+            snapshot.family = family;
+            snapshot.source_id = exit_id;
+            snapshot.from_entry = from_entry;
+            snapshot.comment = comment;
+            snapshot.oca_name = oca_name;
+            snapshot.requested_qty = qty;
             snapshot.qty_percent = qty_percent; snapshot.deferred_cohort = host_sized;
             snapshot.bracket_origin = std::move(bracket_origin);
             snapshot.exit_levels = {limit_price, stop_price, trail_points, trail_offset,
                                     trail_price, profit_ticks, loss_ticks};
-            snapshot.sizing = sizing_snapshot();
+            snapshot.sizing = exit_sizing;
             if (defer_coof_tail()) {
                 pending_coof_requests_.push_back({std::move(request), std::move(snapshot), replacement_key,
                                                   false, family_key});
@@ -1713,13 +1891,16 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                     replacement_key);
-            if (accepted) bracket_families_[family_key].push_back(*accepted);
+            if (accepted) {
+                auto& family = bracket_families_[family_key];
+                if (std::find(family.begin(), family.end(), *accepted) == family.end())
+                    family.push_back(*accepted);
+            }
         };
 
         if (dynamic) {
-            const auto group_name = oca_name.empty() ? exit_id + "\x1f" + from_entry : oca_name;
-            submit_one(owner_for_close(from_entry, !materializing_relative_), true,
-                exit_id + "\x1f" + from_entry + std::to_string(static_cast<int>(family)), group_name, false);
+            submit_one(dynamic_owner, true,
+                dynamic_key_prefix + std::to_string(static_cast<int>(family)), dynamic_group, false);
             return;
         }
 
@@ -1743,7 +1924,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             const bool has_live_leg = live_by_source_key_.find(key_for(replacement_key))
                 != live_by_source_key_.end();
             if (origin.incarnation != 0 && !has_live_leg && !origin_is_pending(origin)) continue;
-            submit_one(native_order::BindCohort{cohort}, true, replacement_key, group_name,
+            submit_one(native_order::BindCohort{cohort}, true, replacement_key,
+                       group_for(group_name, oca_name.empty() ? 1 : 0),
                        !has_live_leg, origin);
         }
     };
@@ -2007,7 +2189,9 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         }
     }
     PlacementSnapshot snapshot;
-    snapshot.family = PineOrderFamily::Order; snapshot.source_id = id; snapshot.oca_name = oca_name;
+    snapshot.family = PineOrderFamily::Order;
+    snapshot.source_id = id;
+    snapshot.oca_name = oca_name;
     snapshot.oca_type = oca_type; snapshot.requested_qty = normalized_qty; snapshot.is_long = is_long;
     snapshot.sizing = sizing_snapshot();
     if (default_sized && finite_positive(snapshot.sizing.price)
@@ -2342,15 +2526,20 @@ std::vector<native_order::RequestHandle> PineExecutionAdapter::take_first_open_n
     return result;
 }
 
-void PineExecutionAdapter::refresh_pending_view() noexcept { pending_view_handles_ = live_handles_; }
+void PineExecutionAdapter::refresh_pending_view() noexcept {
+    // PendingIntentView is a read-only projection of the current live-handle
+    // roster. It used to duplicate that roster after every submit, replace and
+    // retirement; expose the live roster directly instead. hash_state keeps
+    // the historical two-vector encoding by folding the same roster twice.
+}
 
-int PendingIntentView::size() const noexcept { return owner_ ? static_cast<int>(owner_->pending_view_handles_.size()) : 0; }
+int PendingIntentView::size() const noexcept { return owner_ ? static_cast<int>(owner_->live_handles_.size()) : 0; }
 
 int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
                                       int* close_only, int* partition) const noexcept {
-    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->pending_view_handles_.size())
+    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->live_handles_.size())
         || !qty || !close_only || !partition) return -1;
-    const auto handle = owner_->pending_view_handles_[static_cast<std::size_t>(index)];
+    const auto handle = owner_->live_handles_[static_cast<std::size_t>(index)];
     const auto it = owner_->placement_.find(handle.incarnation);
     if (it == owner_->placement_.end()) return -1;
     const auto& snapshot = it->second;
@@ -2365,8 +2554,8 @@ int PendingIntentView::probe_fill_qty(int index, double fill_price, double* qty,
 }
 
 int PendingIntentView::level_resolved(int index) const noexcept {
-    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->pending_view_handles_.size())) return -1;
-    const auto handle = owner_->pending_view_handles_[static_cast<std::size_t>(index)];
+    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->live_handles_.size())) return -1;
+    const auto handle = owner_->live_handles_[static_cast<std::size_t>(index)];
     const auto it = owner_->placement_.find(handle.incarnation);
     if (it == owner_->placement_.end()) return -1;
     if (it->second.from_entry.empty()) return 1;
@@ -2376,9 +2565,9 @@ int PendingIntentView::level_resolved(int index) const noexcept {
 
 int PendingIntentView::effective_levels(int index, double* stop, double* limit,
                                         double* trail_activation) const noexcept {
-    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->pending_view_handles_.size())
+    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->live_handles_.size())
         || !stop || !limit || !trail_activation) return -1;
-    const auto handle = owner_->pending_view_handles_[static_cast<std::size_t>(index)];
+    const auto handle = owner_->live_handles_[static_cast<std::size_t>(index)];
     const auto it = owner_->placement_.find(handle.incarnation);
     if (it == owner_->placement_.end()) return -1;
     *stop = it->second.exit_levels.stop;
@@ -2389,10 +2578,10 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
 
 int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noexcept {
     if (!owner_ || !out || index < 0
-        || index >= static_cast<int>(owner_->pending_view_handles_.size())) {
+        || index >= static_cast<int>(owner_->live_handles_.size())) {
         return -1;
     }
-    const auto handle = owner_->pending_view_handles_[static_cast<std::size_t>(index)];
+    const auto handle = owner_->live_handles_[static_cast<std::size_t>(index)];
     const auto it = owner_->placement_.find(handle.incarnation);
     if (it == owner_->placement_.end()) return -1;
     const PlacementSnapshot& snapshot = it->second;
@@ -2532,8 +2721,8 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
 }
 
 int PendingIntentView::short_seed_collision_role(int index) const noexcept {
-    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->pending_view_handles_.size())) return -1;
-    return owner_->short_seed_collision_role_v1(owner_->pending_view_handles_[static_cast<std::size_t>(index)]);
+    if (!owner_ || index < 0 || index >= static_cast<int>(owner_->live_handles_.size())) return -1;
+    return owner_->short_seed_collision_role_v1(owner_->live_handles_[static_cast<std::size_t>(index)]);
 }
 int PendingIntentView::last_bar_dual_entry_path() const noexcept { return owner_ ? owner_->last_bar_dual_entry_path_ : 0; }
 double PendingIntentView::trail_best_price() const noexcept {

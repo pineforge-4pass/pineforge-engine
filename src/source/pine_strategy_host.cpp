@@ -2,6 +2,7 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include "../native_execution_consumer.hpp"
 
 #include <cmath>
 #include <stdexcept>
@@ -24,6 +25,20 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       _src_ohlc4_(scheduler_.language()._src_ohlc4_),
       _src_hlcc4_(scheduler_.language()._src_hlcc4_),
       is_last_tick_(scheduler_.language().is_last_tick_) {}
+
+std::uint64_t source::PineStrategyHost::adapter_event_high_water(
+        const NativeStrategyHost& base) noexcept {
+    const auto& host = static_cast<const PineStrategyHost&>(base);
+    return as_native_consumer(const_cast<IExecutionConsumer&>(host.execution_consumer()))
+        .event_high_water();
+}
+
+std::uint64_t source::PineStrategyHost::adapter_terminal_receipt_high_water(
+        const NativeStrategyHost& base) noexcept {
+    const auto& host = static_cast<const PineStrategyHost&>(base);
+    return as_native_consumer(const_cast<IExecutionConsumer&>(host.execution_consumer()))
+        .terminal_receipt_high_water();
+}
 
 std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
     // Native run generations reject stale native handles, but they were not
@@ -133,6 +148,22 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
             "timestamped account-currency FX is not supported with bar magnifier");
 
     adapter_.reset_for_run();
+    adapter_.set_receipt_high_water_readers(&PineStrategyHost::adapter_event_high_water,
+                                            &PineStrategyHost::adapter_terminal_receipt_high_water);
+    if (args.n > 0 && static_cast<std::size_t>(args.n)
+        <= std::numeric_limits<std::size_t>::max() / 4U) {
+        as_native_consumer(execution_consumer()).reserve_driver_log(
+            static_cast<std::size_t>(args.n) * 4U);
+    }
+    // Source placement evidence is retained by request incarnation so a
+    // re-issued bracket can preserve its exact historical projection.  Batch
+    // callers already disclose their bar count here; reserve the ordinary
+    // two-leg-per-bar capacity once instead of repeatedly rehashing that
+    // durable table during a long replay.
+    if (args.n > 0 && static_cast<std::size_t>(args.n)
+        <= adapter_.placement_.max_size() / 2U) {
+        adapter_.placement_.reserve(static_cast<std::size_t>(args.n) * 2U);
+    }
     adapter_.set_configuration(effective);
     adapter_.set_staged_configuration(staged);
     adapter_.set_margin_call_enabled(margin_call_enabled_);

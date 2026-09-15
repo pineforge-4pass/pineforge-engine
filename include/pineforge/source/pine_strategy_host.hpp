@@ -245,6 +245,8 @@ private:
     StagedConfiguration staged_configuration() const;
     static PineStrategyConfig apply_overrides(PineStrategyConfig,
                                               const StrategyOverrides&);
+    static std::uint64_t adapter_event_high_water(const NativeStrategyHost&) noexcept;
+    static std::uint64_t adapter_terminal_receipt_high_water(const NativeStrategyHost&) noexcept;
     void scheduler_prepare_script_run(const std::vector<Bar>&,
                                       bool static_eligible, int expected_script_bars);
     void scheduler_configure_security_evaluators();

@@ -3,6 +3,7 @@
 #include <pineforge/execution_consumer.hpp>
 #include <pineforge/native_host.hpp>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -77,6 +78,11 @@ public:
     NativePhysicalPosition position(const BacktestEngine& engine) const;
     double marked(const BacktestEngine& engine, double price) const;
     std::vector<NativeMarketEvent> events_after(uint64_t after_ordinal) const;
+    uint64_t event_high_water() const noexcept;
+    uint64_t terminal_receipt_high_water() const noexcept {
+        return terminal_receipt_high_water_;
+    }
+    void reserve_driver_log(std::size_t expected_points);
     int64_t decision_floor() const noexcept {
         return has_floor_ ? decision_floor_ms_ : std::numeric_limits<int64_t>::min();
     }
@@ -179,6 +185,13 @@ private:
         }
     };
 
+    // Derived read-only observations for ordinary OHLC points. They are not
+    // matching state: every request/position mutation clears this cache.
+    struct CohortTargetCacheEntry {
+        native_order::RequestHandle handle{};
+        native_order::TargetObservation target{};
+    };
+
     bool failed() const noexcept;
     bool recoverable_abort() const noexcept;
     void latch_failure(NativeFailure failure) noexcept;
@@ -239,6 +252,11 @@ private:
             int64_t cycle) const;
     native_order::TargetObservation read_target(
             const BacktestEngine& engine, const native_order::LiveRequest* live) const;
+    const native_order::TargetObservation* cached_cohort_target(
+            const BacktestEngine& engine, const native_order::LiveRequest& live);
+    void clear_cohort_target_cache() noexcept;
+    void retarget_cohort_target_cache(const native_order::RequestHandle& predecessor,
+                                      const native_order::RequestHandle& successor) noexcept;
     native_order::CommandContext make_command_context(
             const BacktestEngine& engine, const native_order::Request& request,
             native_order::CommandSurface surface) const;
@@ -296,6 +314,7 @@ private:
     void sync_history_digest() const noexcept;
     void fold_driver_digest(const NativeDriverPoint& point) const noexcept;
     void fold_account_digest(const NativeAccountObservation& row) const noexcept;
+    void note_terminal_events(const native_order::EventRange& events) noexcept;
 
     NativeLifecycle state_{NativeUnconfigured{}};
     uint64_t consumed_high_water_ = 0;
@@ -343,6 +362,11 @@ private:
     std::optional<Bar> input_callback_bar_;
     NativeDriverStatistics driver_statistics_{};
     std::optional<native_calendar::TimezoneIdentityDescriptor> tz_identity_{};
+    // Derived receipt cursor: it can be reconstructed from the immutable
+    // command history and only lets source projections skip empty polls.
+    uint64_t terminal_receipt_high_water_ = 0;
+    std::array<CohortTargetCacheEntry, 16> cohort_target_cache_{};
+    std::size_t cohort_target_cache_size_ = 0;
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};
     mutable AppendDigest account_digest_{};

@@ -6,6 +6,7 @@
 #include <pineforge/market_driver.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -1361,6 +1362,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     engine.diag_input_bars_processed_ = 0;
     engine.diag_script_bars_processed_ = 0;
     requests_.reset(spec.identity);
+    clear_cohort_target_cache();
+    terminal_receipt_high_water_ = 0;
     next_timeline_ordinal_ = 1;
     decision_floor_ms_ = initial_floor_ms;
     has_floor_ = true;
@@ -1551,7 +1554,17 @@ void NativeExecutionConsumer::fold_account_digest(const NativeAccountObservation
 
 void NativeExecutionConsumer::record_driver(const NativeDriverPoint& point) {
     driver_log_.push_back(point);
-    fold_driver_digest(point);
+    // The driver log is an owning readback surface. Its continuation digest is
+    // queried only by native-state consumers, so append the point now and
+    // fold the derived digest lazily in continuation_hash() rather than at
+    // every ordinary source-route waypoint.
+}
+
+void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
+    if (expected_points > driver_log_.max_size()) {
+        throw std::length_error("native driver-log capacity exhausted");
+    }
+    if (expected_points > driver_log_.capacity()) driver_log_.reserve(expected_points);
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
@@ -1657,6 +1670,37 @@ native_order::TargetObservation NativeExecutionConsumer::read_target(
         out.opening = read_opening(engine, bind->opening, bind->cycle);
     }
     return out;
+}
+
+const native_order::TargetObservation* NativeExecutionConsumer::cached_cohort_target(
+        const BacktestEngine& engine, const native_order::LiveRequest& live) {
+    const auto* spec = spec_ptr();
+    if (!spec || !spec->intrabar.is_none()
+        || !std::holds_alternative<native_order::CohortClose>(live.authority)) {
+        return nullptr;
+    }
+    for (std::size_t index = 0; index < cohort_target_cache_size_; ++index) {
+        if (cohort_target_cache_[index].handle == live.handle())
+            return &cohort_target_cache_[index].target;
+    }
+    if (cohort_target_cache_size_ == cohort_target_cache_.size()) return nullptr;
+    auto& entry = cohort_target_cache_[cohort_target_cache_size_++];
+    entry.handle = live.handle();
+    entry.target = read_target(engine, &live);
+    return &entry.target;
+}
+
+void NativeExecutionConsumer::clear_cohort_target_cache() noexcept {
+    cohort_target_cache_size_ = 0;
+}
+
+void NativeExecutionConsumer::retarget_cohort_target_cache(
+        const native_order::RequestHandle& predecessor,
+        const native_order::RequestHandle& successor) noexcept {
+    for (std::size_t index = 0; index < cohort_target_cache_size_; ++index) {
+        if (cohort_target_cache_[index].handle == predecessor)
+            cohort_target_cache_[index].handle = successor;
+    }
 }
 
 std::optional<native_order::Side> NativeExecutionConsumer::cohort_side(
@@ -1803,7 +1847,12 @@ bool NativeExecutionConsumer::install_mutation(
         render(engine, "native mutation install failed");
         return false;
     }
-    sync_history_digest();
+    note_terminal_events(std::get<native_order::Installed>(result).events);
+    clear_cohort_target_cache();
+    // The continuation digest is a readback value.  Keep its append cursor
+    // lazy: a source host that projects its own broker hash must not re-fold
+    // every immutable history event at each ordinary command boundary.
+    // continuation_hash() synchronizes it before exposing the value.
     catch_up_timeline();
     return true;
 }
@@ -1825,7 +1874,8 @@ bool NativeExecutionConsumer::install_execution(
         render(engine, "native execution install failed after settlement");
         return false;
     }
-    sync_history_digest();
+    note_terminal_events(std::get<native_order::Installed>(result).events);
+    clear_cohort_target_cache();
     catch_up_timeline();
     return true;
 }
@@ -1893,6 +1943,10 @@ void NativeExecutionConsumer::drain_parent_terminal(
         BacktestEngine& engine, const native_order::EventId& cause,
         const native_order::RequestHandle& parent,
         NativeFailureOperation operation) {
+    // Most source replacements have no WaitForApplied descendants.  Avoid
+    // constructing the dependency queue (and its seed allocation) for that
+    // ordinary no-op while retaining the exact queue path once a child exists.
+    if (requests_.waiting_children(parent).empty()) return;
     std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
     try {
         seeds.push_back({cause, parent});
@@ -1991,13 +2045,22 @@ void NativeExecutionConsumer::observe_trails(
         BacktestEngine& engine, const NativeDriverPoint& point,
         const native_order::MatchCursor& cursor, bool continuous, double price) {
     if (!std::isfinite(price) || failed()) return;
+    // A path with only market/limit/stop requests has no trailing state to
+    // advance.  In particular, do not snapshot every live cohort request or
+    // resolve its target side at each waypoint merely to discover that fact.
+    const auto& live_requests = requests_.live();
+    if (std::none_of(live_requests.begin(), live_requests.end(), [](const auto& live) {
+            return std::holds_alternative<native_order::TrailTrack>(live.trigger_state);
+        })) {
+        return;
+    }
     native_order::EvaluationContext evaluation;
     evaluation.cursor = cursor;
     evaluation.driver_class = classify_driver(point, continuous);
     evaluation.existing_matching_bit = point.matching;
     std::vector<native_order::RequestHandle> handles;
-    handles.reserve(requests_.live().size());
-    for (const auto& live : requests_.live()) handles.push_back(live.handle());
+    handles.reserve(live_requests.size());
+    for (const auto& live : live_requests) handles.push_back(live.handle());
     for (const auto& handle : handles) {
         if (failed()) return;
         const auto* live = requests_.find_live(handle);
@@ -2782,6 +2845,13 @@ void NativeExecutionConsumer::match_path(
     }
     const auto* spec = spec_ptr();
     if (!spec) return;
+    // With no live request there is no trigger, allowance, trail, receipt or
+    // callback work to perform. Keep the one physical excursion effect the
+    // regular segment path would have applied to an already-open position.
+    if (requests_.live().empty()) {
+        if (continuous) apply_excursion(engine, to_price);
+        return;
+    }
     const auto driver_class = classify_driver(point, continuous);
     const uint64_t P = point.coordinate.ordinal;
     double t_cursor = 0.0;
@@ -2892,15 +2962,6 @@ void NativeExecutionConsumer::match_path(
                 [&](const CandidateProvenance& row) { return row.handle == handle; }),
             candidate_provenance.end());
     };
-    auto provenance_still_matches = [&](const CandidateProvenance& row) {
-        const auto* live = requests_.find_live(row.handle);
-        if (!live) return false;
-        const bool buy = request_is_buy(engine, *live);
-        return row.is_buy == buy
-            && row.trigger_state_index == live->trigger_state.index()
-            && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
-    };
-
     auto cause_floor = [&](const native_order::LiveRequest& live) {
         double t_min = t_cursor;
         if (const auto* armed = std::get_if<native_order::ArmedTransaction>(&live.authority)) {
@@ -2930,6 +2991,29 @@ void NativeExecutionConsumer::match_path(
         return false;
     };
 
+    auto side_from_target = [](const native_order::TargetObservation& target)
+            -> std::optional<native_order::Side> {
+        for (const auto& opening : target.openings) {
+            if (!opening.has_live_matching_lot) continue;
+            if (const auto* position = std::get_if<native_order::PositionNonflat>(
+                    &opening.current_position)) {
+                return position->side;
+            }
+        }
+        return std::nullopt;
+    };
+
+    auto provenance_still_matches = [&](const CandidateProvenance& row) {
+        const auto* live = requests_.find_live(row.handle);
+        if (!live) return false;
+        const auto* target = cached_cohort_target(engine, *live);
+        const bool buy = target ? requests_.working_is_buy(*live, side_from_target(*target))
+                                : request_is_buy(engine, *live);
+        return row.is_buy == buy
+            && row.trigger_state_index == live->trigger_state.index()
+            && same_optional_bits(row.trigger_level, level_for(*live, row.kind, buy));
+    };
+
     std::set<std::pair<uint64_t, std::uint8_t>> skipped;
     double skip_t = t_cursor;
     auto skip_key = [](uint64_t incarnation, Kind kind) {
@@ -2953,14 +3037,41 @@ void NativeExecutionConsumer::match_path(
         eval.driver_class = driver_class;
         eval.existing_matching_bit = point.matching;
         std::optional<Candidate> winner;
-        std::vector<native_order::RequestHandle> snapshot;
-        snapshot.reserve(requests_.live().size());
-        for (const auto& live : requests_.live()) snapshot.push_back(live.handle());
-        for (const auto& handle : snapshot) {
-            const auto* live = requests_.find_live(handle);
+        // Candidate selection makes no request-core mutation; only the
+        // selected winner can replace or retire a later request afterwards.
+        // Snapshot pointers through that selection pass. The ordinary route
+        // has only the two bracket siblings, so keep it on the stack.
+        std::array<const native_order::LiveRequest*, 8> inline_snapshot{};
+        std::vector<const native_order::LiveRequest*> overflow_snapshot;
+        const auto& live_requests = requests_.live();
+        const native_order::LiveRequest* const* snapshot = inline_snapshot.data();
+        const std::size_t snapshot_size = live_requests.size();
+        if (snapshot_size <= inline_snapshot.size()) {
+            for (std::size_t i = 0; i < snapshot_size; ++i)
+                inline_snapshot[i] = &live_requests[i];
+        } else {
+            overflow_snapshot.reserve(snapshot_size);
+            for (const auto& live : live_requests) overflow_snapshot.push_back(&live);
+            snapshot = overflow_snapshot.data();
+        }
+        for (std::size_t snapshot_index = 0; snapshot_index < snapshot_size; ++snapshot_index) {
+            const auto* live = snapshot[snapshot_index];
             if (!live) continue;
+            const auto& handle = live->handle();
             native_order::EvaluationContext candidate_eval = eval;
-            candidate_eval.cohort_side = cohort_side(engine, *live);
+            const native_order::TargetObservation* candidate_target = nullptr;
+            std::optional<native_order::TargetObservation> uncached_target;
+            if (std::holds_alternative<native_order::CohortClose>(live->authority)) {
+                // Candidate selection is read-only. Reuse its complete target
+                // observation for the side and trigger calculations, then
+                // rebuild at the selected mutation boundary below.
+                candidate_target = cached_cohort_target(engine, *live);
+                if (!candidate_target) {
+                    uncached_target = read_target(engine, live);
+                    candidate_target = &*uncached_target;
+                }
+                candidate_eval.cohort_side = side_from_target(*candidate_target);
+            }
             if (std::holds_alternative<native_order::CohortClose>(live->authority)
                 && !candidate_eval.cohort_side) {
                 erase_provenance_for(handle);
@@ -2988,7 +3099,9 @@ void NativeExecutionConsumer::match_path(
                 row.price = start.price;
                 row.kind = Kind::Evaluate;
             } else {
-                const bool buy = request_is_buy(engine, *live);
+                const bool buy = std::holds_alternative<native_order::CohortClose>(live->authority)
+                    ? requests_.working_is_buy(*live, candidate_eval.cohort_side)
+                    : request_is_buy(engine, *live);
                 const auto& trigger = live->request().trigger;
                 const auto& state = live->trigger_state;
                 std::optional<native_matching::GeometricHit> hit;
@@ -3084,7 +3197,9 @@ void NativeExecutionConsumer::match_path(
                 continue;
             }
             if (row.kind != Kind::Evaluate) {
-                const bool buy = request_is_buy(engine, *live);
+                const bool buy = std::holds_alternative<native_order::CohortClose>(live->authority)
+                    ? requests_.working_is_buy(*live, candidate_eval.cohort_side)
+                    : request_is_buy(engine, *live);
                 if (!row.trigger_level) row.trigger_level = level_for(*live, row.kind, buy);
                 if (!row.at_level) {
                     if (const auto* retained = retained_origin(
@@ -3129,17 +3244,37 @@ void NativeExecutionConsumer::match_path(
         eval.cursor = path_cursor;
         const auto* live = requests_.find_live(winner->handle);
         if (!live) continue;
-        eval.cohort_side = cohort_side(engine, *live);
+        const auto* winner_target = cached_cohort_target(engine, *live);
+        eval.cohort_side = winner_target ? side_from_target(*winner_target)
+                                         : cohort_side(engine, *live);
         if (std::holds_alternative<native_order::CohortClose>(live->authority)
             && !eval.cohort_side) {
             skipped.insert(skip_key(winner->incarnation, winner->kind));
             continue;
         }
         if (winner->kind == Kind::Evaluate) {
+            if (winner_target && std::holds_alternative<native_order::CohortClose>(live->authority)) {
+                try {
+                    if (requests_.refresh_cohort_allowance(
+                            winner->handle, eval, *winner_target)) {
+                        continue;
+                    }
+                } catch (const std::exception& e) {
+                    fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                               NativeFailureOperation::Settlement, P});
+                    render(engine, e.what());
+                    return;
+                }
+            }
             native_order::Preparation<native_order::PreparedMutation> prep;
             try {
-                prep = requests_.prepare_evaluation(
-                    winner->handle, eval, read_target(engine, live), next_timeline_ordinal_);
+                if (winner_target) {
+                    prep = requests_.prepare_evaluation(
+                        winner->handle, eval, *winner_target, next_timeline_ordinal_);
+                } else {
+                    prep = requests_.prepare_evaluation(
+                        winner->handle, eval, read_target(engine, live), next_timeline_ordinal_);
+                }
             } catch (const std::exception& e) {
                 fail(engine, NativeFailure{NativeFailureCode::Allocation,
                                            NativeFailureOperation::Settlement, P});
@@ -4853,7 +4988,8 @@ native_order::SubmitResult NativeExecutionConsumer::submit_with_surface(
         throw std::runtime_error("native submit install failed");
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::SubmitResult>>(installed);
-    sync_history_digest();
+    note_terminal_events(ok.events);
+    clear_cohort_target_cache();
     catch_up_timeline();
     if (ok.result.status == native_order::SubmitStatus::Accepted) {
         ++engine.next_order_incarnation_;
@@ -4893,7 +5029,21 @@ native_order::ReplaceResult NativeExecutionConsumer::replace_with_surface(
         throw std::runtime_error("native replace install failed");
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::ReplaceResult>>(installed);
-    sync_history_digest();
+    note_terminal_events(ok.events);
+    if (predicted_status == native_order::ReplaceStatus::Replaced && ok.result.successor) {
+        const auto* successor = requests_.find_live(*ok.result.successor);
+        if (successor && std::holds_alternative<native_order::CohortClose>(successor->authority)) {
+            // A resting cohort replacement changes trigger/definition facts,
+            // not the physical opening roster captured by this derived view.
+            // Preserve it across ordinary source bracket reissues; dependency
+            // mutations below still clear it through install_mutation().
+            retarget_cohort_target_cache(target, *ok.result.successor);
+        } else {
+            clear_cohort_target_cache();
+        }
+    } else if (predicted_status != native_order::ReplaceStatus::NotWorking) {
+        clear_cohort_target_cache();
+    }
     catch_up_timeline();
     if (predicted_status == native_order::ReplaceStatus::Replaced) {
         ++engine.next_order_incarnation_;
@@ -4964,7 +5114,8 @@ native_order::CancelResult NativeExecutionConsumer::cancel(
         throw std::runtime_error("native cancel install failed");
     }
     auto& ok = std::get<native_order::CommandInstalled<native_order::CancelResult>>(installed);
-    sync_history_digest();
+    note_terminal_events(ok.events);
+    clear_cohort_target_cache();
     catch_up_timeline();
     if (predicted_status == native_order::CancelStatus::Cancelled) {
         try {
@@ -4987,7 +5138,9 @@ native_order::CohortHandle NativeExecutionConsumer::cohort_open(BacktestEngine& 
         throw std::runtime_error("native cohort_open refused outside allowed phase");
     }
     try {
-        return requests_.cohort_open();
+        const auto cohort = requests_.cohort_open();
+        clear_cohort_target_cache();
+        return cohort;
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
@@ -5003,6 +5156,7 @@ void NativeExecutionConsumer::cohort_add(
     }
     try {
         requests_.cohort_add(cohort, std::move(origin));
+        clear_cohort_target_cache();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
@@ -5018,6 +5172,7 @@ void NativeExecutionConsumer::cohort_remove(
     }
     try {
         requests_.cohort_remove(cohort, std::move(origin));
+        clear_cohort_target_cache();
     } catch (const std::exception& e) {
         fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Command});
         render(engine, e.what());
@@ -5089,6 +5244,38 @@ std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t af
                   return static_cast<std::uint8_t>(a.kind) < static_cast<std::uint8_t>(b.kind);
               });
     return out;
+}
+
+uint64_t NativeExecutionConsumer::event_high_water() const noexcept {
+    uint64_t high = 0;
+    const auto& history = requests_.history();
+    if (!history.empty()) high = std::max(high, command_ordinal(history.back()));
+    if (!driver_log_.empty()) high = std::max(high, driver_log_.back().coordinate.ordinal);
+    if (!account_log_.empty()) high = std::max(high, account_log_.back().ordinal);
+    return high;
+}
+
+void NativeExecutionConsumer::note_terminal_events(
+        const native_order::EventRange& events) noexcept {
+    const auto& history = requests_.history();
+    const std::size_t end = std::min(history.size(), events.first_index + events.count);
+    for (std::size_t index = events.first_index; index < end; ++index) {
+        const auto& event = history[index];
+        const bool terminal = std::visit([](const auto& payload) {
+            using Event = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<Event, native_order::CancelledEvent>
+                          || std::is_same_v<Event, native_order::MatchRejectedEvent>) {
+                return true;
+            } else if constexpr (std::is_same_v<Event, native_order::ExecutionAppliedEvent>) {
+                return payload.terminal;
+            }
+            return false;
+        }, event);
+        if (terminal) {
+            terminal_receipt_high_water_ = std::max(
+                terminal_receipt_high_water_, command_ordinal(event));
+        }
+    }
 }
 
 void NativeExecutionConsumer::reject_inherited_on_bar(BacktestEngine& engine) {
