@@ -2315,8 +2315,10 @@ NativeExecutionConsumer::ResolvedCandidate NativeExecutionConsumer::inspect_cand
             ? engine.inspect_native_settlement_selected(action, candidate.fill, *candidate.selected)
             : engine.inspect_native_settlement_scoped(action, candidate.fill, candidate.financial_scope);
     }
-    // The real commit pins this ticket; every preview must use its allocation too.
-    candidate.fill.commission_account = candidate.inspect.current_ticket;
+    // Carry the inspection's binary64 ticket through every preview and the
+    // real settlement commit; proportional allocation must not replace it.
+    const double inspected_ticket = candidate.inspect.current_ticket;
+    candidate.fill.commission_account = inspected_ticket;
     return candidate;
 }
 
@@ -2638,7 +2640,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         proposal.pre_target = candidate.target;
         proposal.inspected_closed_units = inspect.closed_units;
         proposal.inspected_opened_units = inspect.opened_units;
-        proposal.inspected_current_ticket = inspect.current_ticket;
+        proposal.inspected_current_ticket = *candidate.fill.commission_account;
         const int64_t cycle_before = engine.position_cycle_seq_;
         const native_order::EventId applied_id{handle.run, next_timeline_ordinal_};
         auto prepared = requests_.prepare_execution(handle, proposal, next_timeline_ordinal_);
@@ -2668,7 +2670,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
         view.resolved_price = resolved_price;
         view.inspected_closed_units = inspect.closed_units;
         view.inspected_opened_units = inspect.opened_units;
-        view.inspected_current_ticket = inspect.current_ticket;
+        view.inspected_current_ticket = proposal.inspected_current_ticket;
         view.current = current;
         if (const auto* reversal = std::get_if<execution::ReverseTo>(&candidate.physical)) {
             view.settlement_readiness = engine.preview_native_settlement_commit(

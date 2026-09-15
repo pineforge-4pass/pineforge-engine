@@ -2456,7 +2456,7 @@ InstallResult WorkingRequestCore::install_execution(PreparedExecution&& prepared
     }
 
     auto stamp = [&](ExecutionAppliedEvent& event) {
-        event.current_ticket = facts.result.current_ticket;
+        event.current_ticket = impl.proposal.inspected_current_ticket;
         event.first_trade_index = facts.result.first_trade_index;
         event.closed_trade_count = facts.result.closed_trade_count;
         event.opened_lot_incarnation = facts.result.opened_lot_incarnation;

@@ -2076,7 +2076,14 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         double percent = source.qty_percent;
         if (std::isnan(percent)) percent = 100.0;
-        result.units = std::max(0.0, facts.scope_exposure_units * percent / 100.0);
+        const bool selected_exit =
+            (source.family == PineOrderFamily::ExitLimit
+             || source.family == PineOrderFamily::ExitStop
+             || source.family == PineOrderFamily::ExitTrail)
+            && std::holds_alternative<native_order::SelectedExposure>(facts.scope);
+        result.units = selected_exit && percent == 100.0
+            ? facts.scope_exposure_units
+            : std::max(0.0, facts.scope_exposure_units * percent / 100.0);
         return result;
     }
     if (source.family == PineOrderFamily::Entry && source.terms_priced_reverse) {

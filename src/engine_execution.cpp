@@ -185,6 +185,9 @@ execution::Status BacktestEngine::allocate_native_settlement_closes(
         const execution::CloseScope& book_or_opening,
         double& remaining) const {
     using execution::Status;
+    const bool consume_selected_exactly = stage.use_selected
+        && !stage.flatten
+        && stage.allocation_requested == stage.selected_held;
     if (!stage.flatten || stage.scoped)
         stage.survivors.reserve(pyramid_entries_.size());
     stage.closing_indices.reserve(stage.closes ? pyramid_entries_.size() : 0);
@@ -196,7 +199,8 @@ execution::Status BacktestEngine::allocate_native_settlement_closes(
             ? stage.selected_ids.count(lot.entry_incarnation) != 0
             : selected_for_close(book_or_opening, lot);
         const auto split = next_close_split(
-            lot, stage.closes && member, stage.flatten,
+            lot, stage.closes && member,
+            stage.flatten || consume_selected_exactly,
             stage.allocation_requested, closed, remaining);
         if (split.status != Status::Applied) return split.status;
         if (split.amount == 0.0) {
@@ -392,6 +396,10 @@ void BacktestEngine::finish_native_settlement_stage(
             return;
         }
     }
+    // A caller-pinned ticket is the canonical inspected value. Allocation
+    // shares may sum one ULP away after proportional division; settlement
+    // installs the inspected ticket, while the shares retain its residue.
+    if (fill.commission_account) stage.ticket = *fill.commission_account;
     double after_qty = 0.0;
     double weighted = 0.0;
     for (const auto& lot : stage.survivors) {
