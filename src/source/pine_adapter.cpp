@@ -77,6 +77,14 @@ double directional_tick(double value, double tick, bool upward) noexcept {
     return (upward ? std::ceil(scaled - 1e-12) : std::floor(scaled + 1e-12)) * tick;
 }
 
+int legacy_volume_weighted_max_samples(int samples) noexcept {
+    constexpr int kMaxSamples = 1 << 20;
+    const int nonnegative = std::max(samples, 0);
+    const int scaled = nonnegative > kMaxSamples / 4
+        ? kMaxSamples : nonnegative * 4;
+    return std::max(scaled, 8);
+}
+
 double floor_quantity_grid(double units, const std::optional<double>& grid) noexcept {
     if (!std::isfinite(units) || units <= 0.0) return 0.0;
     if (!grid || !std::isfinite(*grid) || *grid <= 0.0) return units;
@@ -268,7 +276,8 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             path.distribution = args.magnifier_distribution;
             path.volume_weighted = args.magnifier_volume_weighted;
             path.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
-            path.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
+            path.volume_weighted_max_samples =
+                legacy_volume_weighted_max_samples(args.magnifier_samples);
             spec.intrabar.value = std::move(path);
         } else {
             // A18: a genuinely finer supplied feed remains a retained
@@ -281,7 +290,8 @@ NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
             path.distribution = args.magnifier_distribution;
             path.volume_weighted = args.magnifier_volume_weighted;
             path.volume_weighted_min_samples = args.magnifier_volume_weighted_min_samples;
-            path.volume_weighted_max_samples = args.magnifier_volume_weighted_max_samples;
+            path.volume_weighted_max_samples =
+                legacy_volume_weighted_max_samples(args.magnifier_samples);
             path.sample_eligibility = IntrabarPath::SampleEligibility::DistributionSamples;
             spec.intrabar.value = std::move(path);
         }
@@ -2027,22 +2037,20 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if (snapshot == placement_.end()) return result;
     const auto& source = snapshot->second;
     // Explicit native intents already carry their canonical trigger/fill
-    // price. Re-rounding a binary64 limit here can move it one representable
-    // value beyond its immutable level and turn an otherwise valid limit fill
-    // into InvalidTerms (the 65-resting-order oracle exposes exactly that).
+    // price. Limits retain their immutable generic value. The generic consumer
+    // has already applied the one market slippage step; source projection only
+    // rounds that resulting quote to the ordinary chart tick.
     if (!std::holds_alternative<native_order::HostSized>(facts.definition->request.intent)) {
         if (std::holds_alternative<native_order::Market>(facts.definition->request.trigger)) {
             result.resolved_price = nearest_tick(result.resolved_price, staged_.syminfo.mintick);
         }
         return result;
     }
-    double resolved = facts.default_resolved_price;
     const bool market_like = std::holds_alternative<native_order::Market>(facts.definition->request.trigger);
-    if (market_like && config_.slippage != 0 && finite_positive(staged_.syminfo.mintick)) {
-        resolved += facts.is_buy ? config_.slippage * staged_.syminfo.mintick
-                                 : -config_.slippage * staged_.syminfo.mintick;
+    if (market_like) {
+        result.resolved_price = nearest_tick(
+            facts.default_resolved_price, staged_.syminfo.mintick);
     }
-    if (market_like) result.resolved_price = nearest_tick(resolved, staged_.syminfo.mintick);
     // Source stop/trail exits crossed inside a modeled path settle at their
     // armed level, whereas an open gap retains the presented open quote.  The
     // generic driver deliberately exposes both facts; selecting this source
@@ -2050,7 +2058,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if ((source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
          || source.family == PineOrderFamily::Margin)
         && facts.trigger_level && facts.cursor.point.path_phase != NativePathPhase::Open) {
-        result.resolved_price = nearest_tick(*facts.trigger_level, staged_.syminfo.mintick);
+        result.resolved_price = directional_tick(
+            facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
     }
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail

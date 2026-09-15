@@ -328,6 +328,7 @@ set(TEST_SOURCES
     test_live_trade_accessors
     test_live_flags_off_identity
     test_live_flags_lane_positive
+    test_l4f_security_magnifier
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly

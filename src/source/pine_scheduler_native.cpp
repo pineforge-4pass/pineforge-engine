@@ -252,7 +252,6 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     // A COOF recalc at this script bar is the source evaluation for that bar;
     // do not issue a second terminal callback with a new source-bar index.
     if (host.scheduler_coof_enabled() && coof_callback_script_open_ == context.script_bar_open_ms) {
-        ++source_bar_count_;
         return;
     }
     Bar script_bar = value;
@@ -266,14 +265,11 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
         host.scheduler_publish_security_boundary();
     }
-    if (uses_aux_security_feed_) {
-        host.scheduler_feed_aux_security(source_bar_count_);
-    }
+    const int chart_index = context.coordinate.interval_index;
+    if (uses_aux_security_feed_) host.scheduler_feed_aux_security(chart_index);
     publish_series(script_bar, host);
     host.scheduler_publish_source_bar(script_bar, true);
-    if (uses_aux_security_feed_) {
-        host.scheduler_feed_deferred_aux_security(source_bar_count_);
-    }
+    if (uses_aux_security_feed_) host.scheduler_feed_deferred_aux_security(chart_index);
     if (deferred_boundary_input_.active
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
         if (deferred_boundary_input_.all_security_states) {

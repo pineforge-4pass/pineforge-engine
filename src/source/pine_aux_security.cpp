@@ -190,12 +190,10 @@ void source::PineStrategyHost::prepare_aux_security_chart_ranges(
             record_aux(aux_index);
         }
     }
-    for (int i = 0; i < n_chart; ++i) {
-        if (aux_security_chart_begin_[static_cast<std::size_t>(i)] == missing) {
-            throw std::runtime_error(
-                "native chart bar has no matching auxiliary request.security bars");
-        }
-    }
+    // An exchange chart can retain a short/early-close chart slot for which
+    // the finer export has no bar. Retain the sentinel so the native-hook
+    // route supplies no auxiliary evaluator input at that slot and holds the
+    // existing request.security value instead of rejecting the chart run.
 }
 
 int64_t source::PineStrategyHost::aux_security_calling_close_ms() const {
@@ -226,6 +224,8 @@ void source::PineStrategyHost::feed_aux_security_for_chart_bar(int chart_index) 
     }
     const std::size_t begin = aux_security_chart_begin_[idx];
     const std::size_t end = aux_security_chart_end_[idx];
+    const std::size_t missing = std::numeric_limits<std::size_t>::max();
+    if (begin == missing || end == missing) return;
 
     security_calling_close_ms_ = aux_security_calling_close_ms();
 
