@@ -404,6 +404,7 @@ set(TEST_SOURCES
     test_l4e_native_settlement_h07
     test_l4e_native_install_h08
     test_l4f_security_magnifier
+    test_l4h_native_settlement_arithmetic
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly

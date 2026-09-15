@@ -1,8 +1,5 @@
-// L4e H08 capture: a source-cohort close over four commission-bearing lots
-// reaches the generic prepared-execution ticket equality failure.  This stays
-// a green diagnostic until the generic settlement/install owner repairs the
-// one-ULP ticket handoff; its exact discriminator prevents the broad runner
-// message from hiding that root cause.
+// L4e H08 regression: a source-cohort close over four commission-bearing lots
+// must carry the inspected ticket through generic settlement and install.
 #include <pineforge/source/pine_strategy_host.hpp>
 
 #include <cstdio>
@@ -60,12 +57,11 @@ int main() {
     probe.run(bars.data(), static_cast<int>(bars.size()));
     const auto state = probe.native_state();
 
-    CHECK(probe.last_error() == "native execution install failed after settlement");
-    CHECK(state.kind == NativeLifecycleKind::Failed);
-    CHECK(state.failure.code == NativeFailureCode::Contract);
-    CHECK(state.failure.operation == NativeFailureOperation::Settlement);
-    CHECK(state.failure.discriminator
-        == static_cast<std::uint32_t>(native_order::InstallError::WrongCoreOrRun));
-    std::printf("L4e H08 install handoff capture: %d checks, %d failures\n", checks, failures);
+    CHECK(probe.last_error().empty());
+    CHECK(state.kind == NativeLifecycleKind::Completed);
+    CHECK(probe.trade_count() == 4);
+    CHECK(probe.physical_position().signed_units == 0.0);
+    std::printf("L4e H08 install handoff regression: %d checks, %d failures\n",
+                checks, failures);
     return failures == 0 ? 0 : 1;
 }
