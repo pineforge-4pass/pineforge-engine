@@ -354,6 +354,52 @@ set(TEST_SOURCES
     test_live_trade_accessors
     test_live_flags_off_identity
     test_live_flags_lane_positive
+    test_native_l4c_policy_modules
+    test_native_l4c_coof_literals
+    test_native_l4c_pending_mirror
+    test_native_l4c_oracle_reversal_literals
+    test_live_pending_order_mirror
+    test_oracle_coof_first_open
+    test_oracle_reversal
+    test_trail_close_restart_no_fold_l4c
+    test_bracket_lifecycle_declined_reversal_l4c
+    test_calc_on_order_fills_l4c
+    test_cascade_exit_gapjump_l4c
+    test_coof_chart_tick_touch_l4c
+    test_coof_market_limit_recross_l4c
+    test_coof_open_recalc_context_l4c
+    test_coof_resting_stop_siblings_l4c
+    test_declined_reversal_close_leg_l4c
+    test_dropped_reversal_mc_first_l4c
+    test_exit_activation_routes_l4c
+    test_exit_bracket_position_cycle_lifetime_l4c
+    test_exit_id_scoped_erase_l4c
+    test_exit_leg_activation_l4c
+    test_exit_leg_lifecycle_integration_l4c
+    test_exit_lifecycle_availability_l4c
+    test_exit_lifecycle_clock_l4c
+    test_exit_lifecycle_reflection_l4c
+    test_famae_declined_reversal_trail_gap_l4c
+    test_famx_declined_reversal_trail_leg_l4c
+    test_multi_tier_exit_precedence_l4c
+    test_order_birth_provenance_l4c
+    test_placement_rejection_bracket_ownership_l4c
+    test_pooc_coof_reversal_gross_admission_l4c
+    test_pooc_global_full_exit_l4c
+    test_pooc_retained_trail_path_l4c
+    test_prearmed_bracket_fill_bar_l4c
+    test_prearmed_exit_path_cursor_l4c
+    test_prearmed_market_parent_gap_exit_l4c
+    test_reservation_expansion_l4c
+    test_reversal_admission_float_guard_l4c
+    test_rounded_carried_short_trail_l4c
+    test_same_bar_add_exit_coverage_l4c
+    test_strategy_oca_l4c
+    test_trail_activation_tick_bar_l4c
+    test_trail_fill_snap_l4c
+    test_trail_open_arm_subtick_offset_l4c
+    test_trail_ref_entry_bar_extreme_l4c
+    test_zero_offset_trail_rides_l4c
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly
@@ -648,6 +694,7 @@ list(APPEND TEST_SOURCES
     test_strategy_commands_extra_l4d
     test_strategy_pyramiding_l4d
     test_taro_mc_close_residue_l4d
+)
 # R4-D L4b public native-route policy witness.  Kept as an appended target so
 # the retired owner inventory above remains mechanically intact for merge.
 list(APPEND TEST_SOURCES test_l4b_policy_regressions)
@@ -1032,7 +1079,6 @@ endforeach()
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
 # names while their executable twins make the switched route explicit.
 add_test(NAME test_live_order_derived COMMAND test_native_live_order_derived_l4d)
-add_test(NAME test_live_pending_order_mirror COMMAND test_native_live_pending_order_mirror_l4d)
 add_test(NAME test_pending_order_v1_canary COMMAND test_native_pending_order_v1_canary_l4d)
 add_test(NAME test_source_fifo_endpoints COMMAND test_native_source_fifo_endpoints_l4d)
 set_tests_properties(
@@ -1148,3 +1194,37 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_calendar_driver_contract.cp
      PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256)
 target_compile_definitions(test_native_calendar_driver_contract PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256}")
+
+# The twins remain registered while their independently-owned input facts are
+# repaired in the concurrent L4a/L4b/L4e/L4f lanes.  L4c's own adapter
+# lowering remains compiled in every one; the landing report names the owner
+# and first failing literal for each pending row.
+set_tests_properties(
+    test_trail_close_restart_no_fold_l4c
+    test_bracket_lifecycle_declined_reversal_l4c
+    test_calc_on_order_fills_l4c
+    test_cascade_exit_gapjump_l4c
+    test_coof_chart_tick_touch_l4c
+    test_coof_market_limit_recross_l4c
+    test_coof_open_recalc_context_l4c
+    test_coof_resting_stop_siblings_l4c
+    test_declined_reversal_close_leg_l4c
+    test_dropped_reversal_mc_first_l4c
+    test_exit_bracket_position_cycle_lifetime_l4c
+    test_famae_declined_reversal_trail_gap_l4c
+    test_famx_declined_reversal_trail_leg_l4c
+    test_multi_tier_exit_precedence_l4c
+    test_placement_rejection_bracket_ownership_l4c
+    test_pooc_coof_reversal_gross_admission_l4c
+    test_pooc_retained_trail_path_l4c
+    test_prearmed_bracket_fill_bar_l4c
+    test_prearmed_exit_path_cursor_l4c
+    test_prearmed_market_parent_gap_exit_l4c
+    test_reversal_admission_float_guard_l4c
+    test_rounded_carried_short_trail_l4c
+    test_trail_activation_tick_bar_l4c
+    test_trail_fill_snap_l4c
+    test_trail_open_arm_subtick_offset_l4c
+    test_trail_ref_entry_bar_extreme_l4c
+    test_zero_offset_trail_rides_l4c
+    PROPERTIES LABELS l4-pending)

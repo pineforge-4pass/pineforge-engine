@@ -39,7 +39,8 @@ void hash_native_handle_vector(BrokerStateHashSink& f,
 void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& value) {
     f.i(static_cast<std::int64_t>(value.family)); f.s(value.source_id); f.s(value.from_entry);
     f.s(value.comment); f.s(value.oca_name); f.i(value.oca_type); f.i(value.qty_type);
-    f.d(value.requested_qty); f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
+    f.d(value.requested_qty); f.d(value.projection_remaining_qty);
+    f.d(value.qty_percent); f.b(value.is_long); f.b(value.immediately);
     f.b(value.opening); f.b(value.deferred_cohort); f.b(value.frozen_market_instruction);
     f.d(value.frozen_market_own_units); f.d(value.frozen_market_transaction_units);
     f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
@@ -55,10 +56,13 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.u(value.bracket_origin.incarnation);
     f.u(value.source_sequence);
     f.u(value.command_ordinal); f.u(value.placement_open_epoch);
+    f.u(value.command_sequence);
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
     f.b(value.projection_over_pyramiding); f.u(value.projection_predecessor);
+    f.u(value.recreated_after_named_cancelled_entry_incarnation);
+    f.u(value.named_cancel_surviving_exit_incarnation);
     f.b(value.projection_predecessor_market); f.b(value.projection_predecessor_exit);
     f.b(value.projection_created_during_coof); f.b(value.projection_coof_at_terminal);
     f.b(value.projection_coof_mid_bar); f.d(value.forced_execution_price);
@@ -75,6 +79,57 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
+    f.i(static_cast<std::int64_t>(value.birth.cause())); f.i(value.birth.bar());
+    f.i(value.birth.timestamp()); f.i(static_cast<std::int64_t>(value.birth.cursor().domain()));
+    f.i(static_cast<std::int64_t>(value.birth.cursor().position()));
+    f.i(value.birth.cursor().index()); f.i(value.birth.cursor().count());
+    f.d(value.birth.cursor_price()); f.u(value.birth.first_fill()); f.u(value.birth.last_fill());
+    f.u(value.birth.evaluation_ordinal()); f.i(static_cast<std::int64_t>(value.birth_reach));
+    f.b(value.leg_activation.bounds().has_value());
+    if (value.leg_activation.bounds()) {
+        f.i(value.leg_activation.bounds()->position_cycle);
+        f.i(value.leg_activation.bounds()->stop_first_bar);
+        f.i(value.leg_activation.bounds()->limit_first_bar);
+    }
+    f.b(value.exit_activation.evidence().has_value());
+    if (value.exit_activation.evidence()) {
+        const auto& evidence = *value.exit_activation.evidence();
+        f.i(evidence.position_cycle); f.i(evidence.entry_bar); f.i(evidence.direction);
+        f.d(evidence.cursor_price); f.d(evidence.stop_level); f.d(evidence.limit_level);
+        f.b(evidence.limit_continuation.has_value());
+        if (evidence.limit_continuation) {
+            f.i(static_cast<std::int64_t>(evidence.limit_continuation->cause));
+            f.u(evidence.limit_continuation->observed_fill_sequence);
+        }
+    }
+    value.legs.visit(f);
+    f.b(value.reservation_expansion.capture().has_value());
+    if (value.reservation_expansion.capture()) {
+        const auto& capture = *value.reservation_expansion.capture();
+        f.i(capture.position_cycle); f.i(static_cast<std::int64_t>(capture.side));
+        f.b(capture.first_later_admission.has_value());
+        if (capture.first_later_admission) f.u(*capture.first_later_admission);
+    }
+    f.b(value.reservation_growth_source.reservation_owner().has_value());
+    if (value.reservation_growth_source.reservation_owner())
+        f.u(*value.reservation_growth_source.reservation_owner());
+    f.b(value.stop_limit_activated); f.i(value.coof_cascade_seg_i);
+    f.b(value.coof_cascade_inflight_fires); f.b(value.paired_flat_market_candidate);
+    f.d(value.paired_flat_market_own_qty); f.d(value.paired_flat_market_signal_close);
+    f.d(value.paired_flat_market_signal_equity);
+    f.d(value.paired_flat_market_signal_margin_pct);
+    f.d(value.paired_flat_market_signal_pointvalue); f.d(value.paired_flat_market_signal_fx);
+    f.i(value.paired_flat_market_peer_seq); f.d(value.paired_flat_market_transaction_qty);
+    f.i(value.signal_close_mc_bar); f.u(value.signal_close_mc_entry_incarnation);
+    f.u(value.signal_close_mc_fill_seq); f.d(value.signal_close_mc_remaining_qty);
+    f.b(value.pooc_global_full_exit_dynamic_qty);
+    f.b(value.pooc_global_full_exit_tracks_bound_adds);
+    f.b(value.pooc_global_full_exit_bound_add);
+    f.i(static_cast<std::int32_t>(value.cancellation.cause)); f.i(value.cancellation.state);
+    f.i(value.cancellation.close_claim_release); f.u(value.cancellation.source_incarnation);
+    f.i(value.cancellation.source_sequence); f.u(value.cancellation.target_incarnation);
+    f.i(value.cancellation.target_owner); f.u(value.cancellation.target_revision);
+    f.d(value.cancellation.close_claim_consumed); f.d(value.cancellation.close_claim_retired);
 }
 
 void hash_short_seed_plan(BrokerStateHashSink& f, const source::ShortSeedPlan& value) {
@@ -131,7 +186,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
     hash_source_run_epoch(f, run_counter_);
     f.u(source_sequence_); f.u(command_ordinal_); f.u(broker_open_epoch_);
-    f.i(last_broker_open_ms_); f.b(host_ != nullptr);
+    f.i(last_broker_open_ms_); f.u(source_command_sequence_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
     f.d(config_.initial_capital); f.i(config_.default_qty_type); f.d(config_.default_qty_value);
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
@@ -238,7 +293,25 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(intraday_relabel_ordinals.begin(), intraday_relabel_ordinals.end());
     f.u(intraday_relabel_ordinals.size());
     for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
+    std::vector<std::string> consumed_partial_keys;
+    consumed_partial_keys.reserve(consumed_partial_exit_cycles_.size());
+    for (const auto& row : consumed_partial_exit_cycles_) consumed_partial_keys.push_back(row.first);
+    std::sort(consumed_partial_keys.begin(), consumed_partial_keys.end());
+    f.u(consumed_partial_keys.size());
+    for (const auto& key : consumed_partial_keys) {
+        f.s(key); f.i(consumed_partial_exit_cycles_.at(key));
+    }
+    std::vector<std::string> named_cancel_keys;
+    named_cancel_keys.reserve(named_entry_cancel_tokens_.size());
+    for (const auto& row : named_entry_cancel_tokens_) named_cancel_keys.push_back(row.first);
+    std::sort(named_cancel_keys.begin(), named_cancel_keys.end());
+    f.u(named_cancel_keys.size());
+    for (const auto& key : named_cancel_keys) {
+        const auto& token = named_entry_cancel_tokens_.at(key);
+        f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
+    }
     f.u(receipt_cursor_);
+    f.u(last_applied_ordinal_);
     f.b(materializing_relative_);
     f.i(current_position_cycle_);
     f.i(current_position_sign_);

@@ -766,6 +766,12 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     barstate_islast_ = source_bar_index_ == source_last_bar_index_;
     NativeDayPartitionScope chart_day_partition(
         chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
+    // A named-entry cancellation token has source-evaluation scope.  Clear a
+    // prior callback before publishing receipts and entering this body.
+    adapter_.begin_source_evaluation();
+    // Publish terminal and group-adjustment receipts before the source body
+    // reads its public pending projection at this decision boundary.
+    adapter_.observe_terminal_receipts();
     on_source_bar(bar);
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();

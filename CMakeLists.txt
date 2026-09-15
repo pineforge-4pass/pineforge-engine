@@ -77,6 +77,11 @@ endif()
 
 # === pineforge library =================================================
 set(PINEFORGE_SOURCE_LAYER_SOURCES
+    src/compat/pine/exit_activation.cpp
+    src/compat/pine/exit_lifecycle.cpp
+    src/compat/pine/order_birth.cpp
+    src/compat/pine/order_priority.cpp
+    src/compat/pine/reservation_expansion.cpp
     src/source/pine_adapter.cpp
     src/source/pine_scheduler_native.cpp
     src/source/pine_scheduler.cpp
@@ -95,6 +100,7 @@ add_library(pineforge STATIC
     src/engine_execution.cpp
     src/engine_path_resolve.cpp
     src/engine_report.cpp
+    src/reservation_expansion.cpp
     src/engine_run.cpp
     src/engine_security.cpp
     src/engine_state_hash.cpp

@@ -305,13 +305,19 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     const bool at_open = context.coordinate.path_phase == NativePathPhase::Open;
     const bool first_open = at_open && !saw_open_fill_;
     if (at_open) saw_open_fill_ = true;
-    const Bar point{event.resolved_price, event.resolved_price, event.resolved_price,
-                    event.resolved_price, 0.0, context.script_bar_open_ms};
+    // COOF re-evaluates the source script against the full script bar while
+    // the native current-execution coordinate still supplies the fill price
+    // for sizing/placement.  A one-price synthetic callback erases high/low,
+    // volume and barstate facts that the legacy scheduler retained.
+    Bar callback_bar = current_script_bar_valid_
+        && current_script_bar_.timestamp == context.script_bar_open_ms
+        ? current_script_bar_ : host.current_bar_;
+    callback_bar.timestamp = context.script_bar_open_ms;
     language_.is_first_tick_ = true; language_.is_last_tick_ = false;
     language_.history_slot_is_new_ = false;
     host.adapter_.begin_coof_recalc(context, first_open);
     try {
-        host.scheduler_publish_source_bar(point, true, first_open);
+        host.scheduler_publish_source_bar(callback_bar, true, first_open);
     } catch (...) {
         host.adapter_.end_coof_recalc();
         throw;

@@ -30,3 +30,16 @@ struct FixtureRiskDirection {
 #define _intraday_cap_currently_latched fixture_intraday_cap_latched
 #define pine_cap_clock fixture_cap_clock
 #define pine_cap_calculation fixture_cap_calculation
+
+#ifdef PINEFORGE_L4C_NATIVE_ROUTE_TWIN
+#undef PineStrategyHost
+#define PineStrategyHost L4cFixtureHost
+#define PendingOrder L4cPendingOrder
+#define OrderType L4cOrderType
+#define pending_orders_ l4c_pending_orders()
+#define coof_fill_recalc_active_ l4c_coof_recalc_active()
+#define coof_cursor_is_bar_close_ l4c_coof_cursor_is_bar_close()
+#define callsite_close_callsites_ l4c_callsite_close_callsites()
+#define exit_leg_event_seq_ l4c_exit_leg_event_seq()
+#define is_first_tick_ is_first_tick()
+#endif
