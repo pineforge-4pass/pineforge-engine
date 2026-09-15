@@ -137,11 +137,15 @@ Result validate_values(const NativeRunSpec& spec) noexcept {
         {spec.initial_capital, Field::InitialCapital},
         {spec.point_value, Field::PointValue},
         {spec.account_fx, Field::AccountFx},
-        {spec.price_tick, Field::PriceTick},
     };
     for (const auto& value : financial) {
         if (!positive(value.value)) return {Error::NotFinitePositive, value.field};
     }
+    // A38: zero is the explicit unquantized-price sentinel. Preserve either
+    // zero sign for the exact-bit spec hash; only nonfinite and negative
+    // values are invalid.
+    if (!std::isfinite(spec.price_tick) || spec.price_tick < 0.0)
+        return {Error::NotFinitePositive, Field::PriceTick};
     if (spec.slippage_ticks > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
         return {Error::SlippageOutOfRange, Field::SlippageTicks};
     switch (spec.fee_kind) {

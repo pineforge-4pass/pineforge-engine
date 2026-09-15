@@ -79,8 +79,8 @@ See `NativeFailureCode` / `NativeFailureOperation` in `native_host.hpp`.
 ## NativeRunSpec
 
 `NativeRunSpec` defaults are **incomplete**. Empty required strings and zero
-financials fail validation. There is no UTC/1-minute/24x7 substitution for a
-missing native spec.
+capital, point value, or account FX fail validation. There is no
+UTC/1-minute/24x7 substitution for a missing native spec.
 
 Required:
 
@@ -88,9 +88,10 @@ Required:
 - `input_tf` and `script_tf` (exact literals; see calendar below)
 - `tickerid`
 - scheduling `timezone` (must resolve; empty is not UTC)
-- `initial_capital`, `point_value`, `account_fx`, `price_tick`: finite, strictly
-  positive. `account_fx` is the pre-first-rate fallback; an optional immutable
-  native FX curve is staged separately below.
+- `initial_capital`, `point_value`, `account_fx`: finite, strictly positive.
+  `price_tick`: finite and nonnegative; zero means raw, unquantized prices.
+  `account_fx` is the pre-first-rate fallback; an optional immutable native FX
+  curve is staged separately below.
 
 Always set, with documented defaults in the header:
 

@@ -207,7 +207,6 @@ void financial_values_and_options() {
         {&NativeRunSpec::initial_capital, Field::InitialCapital},
         {&NativeRunSpec::point_value, Field::PointValue},
         {&NativeRunSpec::account_fx, Field::AccountFx},
-        {&NativeRunSpec::price_tick, Field::PriceTick},
     };
     for (const auto& field : fields) {
         for (double value : invalid) {
@@ -221,6 +220,20 @@ void financial_values_and_options() {
             spec.*field.member = value;
             expect_acceptance(spec); // No invented arithmetic/cap restriction.
         }
+    }
+    for (double value : {-1.0, std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity(), std::nan("tick")}) {
+        auto tick_spec = complete_spec();
+        tick_spec.price_tick = value;
+        expect_refusal(tick_spec, Error::NotFinitePositive, Field::PriceTick);
+    }
+    for (double value : {0.0, -0.0, std::numeric_limits<double>::denorm_min(),
+                         0.125, 1.0, std::numeric_limits<double>::max()}) {
+        auto tick_spec = complete_spec();
+        tick_spec.price_tick = value;
+        expect_acceptance(tick_spec);
+        check(std::signbit(tick_spec.price_tick) == std::signbit(value),
+              "price tick validation preserves the admitted zero sign");
     }
     const struct {
         std::optional<double> NativeRunSpec::* member;
