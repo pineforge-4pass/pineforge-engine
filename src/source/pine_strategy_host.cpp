@@ -473,12 +473,12 @@ void source::PineStrategyHost::project_short_seed_report_rows(
         placement_snapshot = placement->second;
     }
     if (!placement_snapshot || placement_snapshot->family != PineOrderFamily::Close
-        || placement_snapshot->from_entry != "Short") {
+        || placement_snapshot->from_entry != plan.seed_id) {
         return;
     }
     for (auto& trade : trades_) {
         if (trade.entry_incarnation == plan.materialize_long.incarnation
-            && trade.entry_id == "__close__Short") {
+            && trade.entry_id == plan.materialize_label) {
             trade.entry_incarnation = plan.final_short.incarnation;
         }
     }
@@ -486,7 +486,7 @@ void source::PineStrategyHost::project_short_seed_report_rows(
     const std::size_t end = begin + event.closed_trade_count;
     for (std::size_t index = begin; index < end && index < trades_.size(); ++index) {
         if (trades_[index].entry_incarnation == plan.final_short.incarnation
-            && trades_[index].entry_id == "Short") {
+            && trades_[index].entry_id == plan.final_short_id) {
             trades_[index].entry_incarnation = plan.materialize_long.incarnation;
         }
     }

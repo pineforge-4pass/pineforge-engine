@@ -540,6 +540,10 @@ list(REMOVE_ITEM TEST_SOURCES
     test_intraday_rollover_chart_tz
 )
 
+# R4-D L4b public native-route policy witness.  Kept as an appended target so
+# the retired owner inventory above remains mechanically intact for merge.
+list(APPEND TEST_SOURCES test_l4b_policy_regressions)
+
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

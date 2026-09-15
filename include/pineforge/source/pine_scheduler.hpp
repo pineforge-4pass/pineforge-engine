@@ -4,7 +4,6 @@
 #include <pineforge/source/pine_language_state.hpp>
 
 #include <cstdint>
-#include <deque>
 #include <limits>
 #include <string>
 #include <vector>
@@ -71,12 +70,6 @@ private:
         int warmup_n = 0;
     };
 
-    struct CoofInterval {
-        std::uint64_t applied_ordinal = 0;
-        std::int64_t script_open_ms = 0;
-        bool first_open = false;
-    };
-
     void publish_series(const Bar&, PineStrategyHost&);
     void update_source_series(const Bar&);
     void reset_language();
@@ -92,7 +85,6 @@ private:
 
     // @source-state begin
     PineLanguageState language_;
-    std::deque<CoofInterval> coof_;
     RetainedBegin retained_;
     std::int64_t current_script_open_ms_ = 0;
     Bar current_script_bar_{};
