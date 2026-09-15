@@ -129,7 +129,7 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     const StagedConfiguration staged = staged_configuration();
     if (!staged.account_fx_effective_from_ms.empty() && effective.calc_on_order_fills)
         throw std::logic_error(
-            "timestamped account-currency FX is not supported with calc_on_order_fills");
+            "timestamped account-currency FX does not support calc_on_order_fills");
     if (!staged.account_fx_effective_from_ms.empty() && args.bar_magnifier)
         throw std::logic_error(
             "timestamped account-currency FX is not supported with bar magnifier");
@@ -153,21 +153,33 @@ void source::PineStrategyHost::on_native_run_begin() {
     source_bar_index_ = -1;
     source_last_bar_index_ = -1;
     source_callback_count_ = 0;
-    scheduler_.run_begin(*this);
+    source_prepare_failed_ = false;
+    try {
+        scheduler_.run_begin(*this);
+    } catch (const std::exception& error) {
+        source_prepare_failed_ = true;
+        last_error_ = error.what();
+    } catch (...) {
+        source_prepare_failed_ = true;
+        last_error_ = "unknown error during Pine script preparation";
+    }
 }
 
 void source::PineStrategyHost::on_native_input(
         const Bar& bar, const NativeInputContext& context) {
+    if (source_prepare_failed_) return;
     scheduler_.input(bar, context, *this);
 }
 
 void source::PineStrategyHost::on_native_tick(
         const Bar& tick, const NativeTickContext& context) {
+    if (source_prepare_failed_) return;
     adapter_.on_tick(tick, context);
 }
 
 void source::PineStrategyHost::on_native_bar_open(
         const Bar& bar, const NativeDecisionContext& context) {
+    if (source_prepare_failed_) return;
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
     diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
@@ -179,6 +191,7 @@ void source::PineStrategyHost::on_native_bar_open(
 
 void source::PineStrategyHost::on_native_bar(
         const Bar& bar, const NativeDecisionContext& context) {
+    if (source_prepare_failed_) return;
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();
     diag_magnifier_sub_bars_processed_ = bar_magnifier_enabled_
         ? static_cast<std::int64_t>(context.driver_statistics.sub_bars_processed) : 0;
@@ -192,6 +205,7 @@ void source::PineStrategyHost::on_native_bar(
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
+    if (source_prepare_failed_) return;
     adapter_.on_applied(event, context);
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
@@ -550,7 +564,7 @@ source::PineStrategyHost::source_pending_view() const {
             && config_.default_qty_value <= 100.0;
         const double absent = std::numeric_limits<double>::quiet_NaN();
         row.default_stop_placement_qty = default_stop ? snapshot.sizing.frozen_units : absent;
-        row.default_stop_sizing_price = default_stop ? snapshot.sizing.price : absent;
+        row.default_stop_sizing_price = snapshot.sizing.price;
         row.frozen_market_own_units = snapshot.frozen_market_own_units;
         row.frozen_market_transaction_units = snapshot.frozen_market_transaction_units;
         row.from_entry = snapshot.from_entry;
@@ -617,7 +631,8 @@ void source::PineStrategyHost::project_short_seed_report_rows(
 }
 
 void source::PineStrategyHost::scheduler_prepare_script_run(
-        const std::vector<Bar>& bars, bool static_eligible, int expected_script_bars) {
+        const std::vector<Bar>& bars, bool static_eligible,
+        int expected_script_bars, bool script_bar_geometry) {
     if (const auto state = native_state(); state.spec) {
         input_tf_ = state.spec->timeframe_undetected ? "" : state.spec->input_tf;
         script_tf_ = state.spec->timeframe_undetected ? "" : state.spec->script_tf;
@@ -625,7 +640,12 @@ void source::PineStrategyHost::scheduler_prepare_script_run(
     }
     prepare_script_run(bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
                        static_eligible);
-    source_last_bar_index_ = expected_script_bars - 1;
+    last_bar_index_ = expected_script_bars - 1;
+    last_bar_time_ = bars.empty() ? 0 : bars.back().timestamp;
+    apply_realtime_tail_horizon(
+        bars.empty() ? nullptr : bars.data(), static_cast<int>(bars.size()),
+        script_bar_geometry);
+    source_last_bar_index_ = last_bar_index_;
 }
 
 void source::PineStrategyHost::scheduler_configure_security_evaluators() {
@@ -721,7 +741,8 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
-    if (stream_warmup_mode_ || position_side_ == PositionSide::FLAT || equity_curve_.empty()
+    if (stream_warmup_mode_ || realtime_tail_
+        || position_side_ == PositionSide::FLAT || equity_curve_.empty()
         || !std::isfinite(terminal_bar.close)) return;
     const Bar saved = current_bar_;
     current_bar_ = terminal_bar;
@@ -757,13 +778,47 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     current_bar_ = saved;
 }
 
+void source::PineStrategyHost::scheduler_update_session_state(
+        const Bar& bar, std::optional<std::int64_t> next_script_open_ms) {
+    const bool in_session = chart_bar_ismarket(bar.timestamp);
+    bool next_in_session = false;
+    if (in_session && next_script_open_ms) {
+        next_in_session = chart_bar_ismarket(*next_script_open_ms);
+    } else if (in_session && realtime_tail_ && script_tf_seconds_ > 0
+               && bar.timestamp <= std::numeric_limits<std::int64_t>::max()
+                    - static_cast<std::int64_t>(script_tf_seconds_) * 1000) {
+        next_in_session = chart_bar_ismarket(
+            bar.timestamp + static_cast<std::int64_t>(script_tf_seconds_) * 1000);
+    } else if (in_session && realtime_tail_) {
+        next_in_session = true;
+    }
+    session_ismarket_ = in_session;
+    if (tf_is_daily_or_higher(script_tf_)) {
+        session_isfirstbar_ = in_session;
+        session_islastbar_ = in_session;
+    } else {
+        session_isfirstbar_ = in_session && !prev_in_session_;
+        session_islastbar_ = in_session && !next_in_session;
+    }
+    prev_in_session_ = in_session;
+}
+
 void source::PineStrategyHost::scheduler_publish_source_bar(
         const Bar& bar, bool, bool advance_source_index) {
     current_bar_ = bar;
     if (advance_source_index) ++source_bar_index_;
     ++source_callback_count_;
     bar_index_ = source_bar_index_;
-    barstate_islast_ = source_bar_index_ == source_last_bar_index_;
+    const auto lifecycle = native_state();
+    if (lifecycle.kind == NativeLifecycleKind::Running
+        && lifecycle.phase == NativeRunPhase::Warmup) {
+        barstate_islast_ = false;
+    } else if (lifecycle.kind == NativeLifecycleKind::Running
+               && lifecycle.phase == NativeRunPhase::Realtime) {
+        barstate_islast_ = true;
+    } else {
+        barstate_islast_ = source_bar_index_ == source_last_bar_index_;
+    }
     NativeDayPartitionScope chart_day_partition(
         chart_day_partition_.empty() ? nullptr : &chart_day_partition_);
     // A named-entry cancellation token has source-evaluation scope.  Clear a

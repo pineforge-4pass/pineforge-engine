@@ -46,6 +46,59 @@ void PineScheduler::reset_language() {
     deferred_boundary_input_ = {};
 }
 
+void PineScheduler::snapshot_coof_script_state(PineStrategyHost& host) {
+    if (language_._src_series_active_) {
+        language_.coof_checkpoint_src_open_ = language_._src_open_;
+        language_.coof_checkpoint_src_high_ = language_._src_high_;
+        language_.coof_checkpoint_src_low_ = language_._src_low_;
+        language_.coof_checkpoint_src_close_ = language_._src_close_;
+        language_.coof_checkpoint_src_volume_ = language_._src_volume_;
+        language_.coof_checkpoint_src_hl2_ = language_._src_hl2_;
+        language_.coof_checkpoint_src_hlc3_ = language_._src_hlc3_;
+        language_.coof_checkpoint_src_ohlc4_ = language_._src_ohlc4_;
+        language_.coof_checkpoint_src_hlcc4_ = language_._src_hlcc4_;
+    }
+    language_.coof_checkpoint_prev_chart_close_ = language_.prev_chart_close_;
+    language_.coof_checkpoint_last_chart_close_ = language_.last_chart_close_;
+    language_.coof_checkpoint_contains_current_bar_ = false;
+    host.snapshot_script_state();
+}
+
+void PineScheduler::restore_coof_script_state(PineStrategyHost& host) {
+    if (language_._src_series_active_) {
+        language_._src_open_ = language_.coof_checkpoint_src_open_;
+        language_._src_high_ = language_.coof_checkpoint_src_high_;
+        language_._src_low_ = language_.coof_checkpoint_src_low_;
+        language_._src_close_ = language_.coof_checkpoint_src_close_;
+        language_._src_volume_ = language_.coof_checkpoint_src_volume_;
+        language_._src_hl2_ = language_.coof_checkpoint_src_hl2_;
+        language_._src_hlc3_ = language_.coof_checkpoint_src_hlc3_;
+        language_._src_ohlc4_ = language_.coof_checkpoint_src_ohlc4_;
+        language_._src_hlcc4_ = language_.coof_checkpoint_src_hlcc4_;
+    }
+    language_.prev_chart_close_ = language_.coof_checkpoint_prev_chart_close_;
+    language_.last_chart_close_ = language_.coof_checkpoint_last_chart_close_;
+    host.restore_script_state();
+}
+
+void PineScheduler::commit_coof_script_state(PineStrategyHost& host) {
+    if (language_._src_series_active_) {
+        language_.coof_checkpoint_src_open_ = language_._src_open_;
+        language_.coof_checkpoint_src_high_ = language_._src_high_;
+        language_.coof_checkpoint_src_low_ = language_._src_low_;
+        language_.coof_checkpoint_src_close_ = language_._src_close_;
+        language_.coof_checkpoint_src_volume_ = language_._src_volume_;
+        language_.coof_checkpoint_src_hl2_ = language_._src_hl2_;
+        language_.coof_checkpoint_src_hlc3_ = language_._src_hlc3_;
+        language_.coof_checkpoint_src_ohlc4_ = language_._src_ohlc4_;
+        language_.coof_checkpoint_src_hlcc4_ = language_._src_hlcc4_;
+    }
+    language_.coof_checkpoint_prev_chart_close_ = language_.prev_chart_close_;
+    language_.coof_checkpoint_last_chart_close_ = language_.last_chart_close_;
+    language_.coof_checkpoint_contains_current_bar_ = true;
+    host.commit_script_state();
+}
+
 void PineScheduler::run_begin(PineStrategyHost& host) {
     reset_language();
     const bool static_eligible = !retained_.is_stream && !retained_.bar_magnifier
@@ -73,8 +126,9 @@ void PineScheduler::run_begin(PineStrategyHost& host) {
     for (const auto complete : input_script_completes_) {
         expected_source_bars_ += complete != 0U ? 1 : 0;
     }
-    host.scheduler_prepare_script_run(retained_.bars, static_eligible, expected_source_bars_);
-    host.scheduler_configure_security_evaluators();
+    host.scheduler_prepare_script_run(retained_.bars, static_eligible,
+                                      expected_source_bars_, !needs_aggregation);
+    if (!static_eligible) host.scheduler_configure_security_evaluators();
     uses_aux_security_feed_ = host.scheduler_uses_aux_security_feed();
     host.scheduler_prepare_security_sequence(retained_.bars);
 }
@@ -221,11 +275,13 @@ void PineScheduler::input(
     prior_input_script_open_ms_ = context.script_interval.open_ms;
 }
 
-void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context, PineStrategyHost&) {
+void PineScheduler::bar_open(const Bar&, const NativeDecisionContext& context,
+                             PineStrategyHost& host) {
     if (context.script_bar_open_ms != current_script_open_ms_) {
         current_script_open_ms_ = context.script_bar_open_ms;
         saw_open_fill_ = false;
         coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
+        if (host.scheduler_coof_enabled()) snapshot_coof_script_state(host);
     }
 }
 
@@ -249,11 +305,9 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         host.scheduler_record_broker_hash();
         return;
     }
-    // A COOF recalc at this script bar is the source evaluation for that bar;
-    // do not issue a second terminal callback with a new source-bar index.
-    if (host.scheduler_coof_enabled() && coof_callback_script_open_ == context.script_bar_open_ms) {
-        return;
-    }
+    const bool coof = host.scheduler_coof_enabled();
+    const bool had_coof_recalc = coof_callback_script_open_
+        == context.script_bar_open_ms;
     Bar script_bar = value;
     script_bar.timestamp = context.script_bar_open_ms;
     current_script_bar_ = script_bar;
@@ -267,8 +321,28 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     }
     const int chart_index = context.coordinate.interval_index;
     if (uses_aux_security_feed_) host.scheduler_feed_aux_security(chart_index);
+    if (coof) {
+        restore_coof_script_state(host);
+        language_.is_first_tick_ = true;
+        language_.is_last_tick_ = true;
+        language_.history_slot_is_new_ =
+            !language_.coof_checkpoint_contains_current_bar_;
+    }
     publish_series(script_bar, host);
-    host.scheduler_publish_source_bar(script_bar, true);
+    std::optional<std::int64_t> next_script_open_ms;
+    if (const auto state = host.native_state(); state.spec
+        && !state.spec->timeframe_undetected
+        && tf_ratio(state.spec->input_tf, state.spec->script_tf) == 1
+        && source_bar_count_ + 1 < static_cast<int>(retained_.bars.size())) {
+        next_script_open_ms = retained_.bars[
+            static_cast<std::size_t>(source_bar_count_ + 1)].timestamp;
+    }
+    if (const auto state = host.native_state(); state.spec
+        && !state.spec->timeframe_undetected) {
+        host.scheduler_update_session_state(script_bar, next_script_open_ms);
+    }
+    host.scheduler_publish_source_bar(script_bar, true, !had_coof_recalc);
+    if (coof) commit_coof_script_state(host);
     if (uses_aux_security_feed_) host.scheduler_feed_deferred_aux_security(chart_index);
     if (deferred_boundary_input_.active
         && deferred_boundary_input_.prior_script_open_ms == context.script_bar_open_ms) {
@@ -285,7 +359,7 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     if (completes_awaiting_legacy_script) {
         awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     }
-    ++source_bar_count_;
+    if (!had_coof_recalc) ++source_bar_count_;
     if (terminal_source_bar()) {
         host.scheduler_record_range_end(current_script_bar_);
         if (!retained_.is_stream) host.scheduler_finish_security_sequence();
@@ -301,6 +375,10 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     const bool at_open = context.coordinate.path_phase == NativePathPhase::Open;
     const bool first_open = at_open && !saw_open_fill_;
     if (at_open) saw_open_fill_ = true;
+    const bool first_callback = coof_callback_script_open_
+        != context.script_bar_open_ms;
+    const bool callback_advances_source_bar = first_callback
+        && !language_.coof_checkpoint_contains_current_bar_;
     // COOF re-evaluates the source script against the full script bar while
     // the native current-execution coordinate still supplies the fill price
     // for sizing/placement.  A one-price synthetic callback erases high/low,
@@ -309,18 +387,24 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         && current_script_bar_.timestamp == context.script_bar_open_ms
         ? current_script_bar_ : host.current_bar_;
     callback_bar.timestamp = context.script_bar_open_ms;
-    language_.is_first_tick_ = true; language_.is_last_tick_ = false;
-    language_.history_slot_is_new_ = false;
+    restore_coof_script_state(host);
+    language_.is_first_tick_ = true;
+    language_.is_last_tick_ = true;
+    language_.history_slot_is_new_ =
+        !language_.coof_checkpoint_contains_current_bar_;
+    publish_series(callback_bar, host);
     host.adapter_.begin_coof_recalc(context, first_open);
     try {
-        host.scheduler_publish_source_bar(callback_bar, true, first_open);
+        host.scheduler_publish_source_bar(
+            callback_bar, true, callback_advances_source_bar);
     } catch (...) {
         host.adapter_.end_coof_recalc();
         throw;
     }
     host.adapter_.end_coof_recalc();
+    restore_coof_script_state(host);
     coof_callback_script_open_ = context.script_bar_open_ms;
-    if (first_open) ++source_bar_count_;
+    if (callback_advances_source_bar) ++source_bar_count_;
     if (!first_open) return;
     constexpr std::uint64_t kNoFillEventBudget = std::numeric_limits<std::uint64_t>::max();
     constexpr std::size_t kCoofLoopGuard = 1U << 20;
@@ -337,7 +421,6 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
             (void)host.execute_current({handle, NativeCurrentPriceRule::NearestTick});
         }
     }
-    host.scheduler_record_broker_hash();
 }
 
 } // namespace pineforge::source

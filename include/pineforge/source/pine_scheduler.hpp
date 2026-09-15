@@ -73,6 +73,9 @@ private:
     void publish_series(const Bar&, PineStrategyHost&);
     void update_source_series(const Bar&);
     void reset_language();
+    void snapshot_coof_script_state(PineStrategyHost&);
+    void restore_coof_script_state(PineStrategyHost&);
+    void commit_coof_script_state(PineStrategyHost&);
 
     struct DeferredBoundaryInput {
         Bar bar{};

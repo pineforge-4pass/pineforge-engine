@@ -175,6 +175,7 @@ private:
         PreOpen = 1,
         Bar = 2,
         Applied = 3,
+        Tick = 4,
     };
 
     struct AppendDigest {

@@ -278,7 +278,8 @@ private:
     static PineStrategyConfig apply_overrides(PineStrategyConfig,
                                               const StrategyOverrides&);
     void scheduler_prepare_script_run(const std::vector<Bar>&,
-                                      bool static_eligible, int expected_script_bars);
+                                      bool static_eligible, int expected_script_bars,
+                                      bool script_bar_geometry);
     void scheduler_configure_security_evaluators();
     bool scheduler_uses_aux_security_feed() const noexcept;
     void scheduler_prepare_security_sequence(const std::vector<Bar>&);
@@ -296,6 +297,8 @@ private:
     void scheduler_finish_security_sequence();
     void scheduler_record_range_end(const Bar&);
     void scheduler_record_broker_hash();
+    void scheduler_update_session_state(
+        const Bar&, std::optional<std::int64_t> next_script_open_ms);
     void scheduler_publish_source_bar(const Bar&, bool first_tick,
                                       bool advance_source_index = true);
     double compute_liquidation_price() const;
@@ -332,6 +335,7 @@ protected:
     int source_last_bar_index_ = -1;
     std::uint64_t source_callback_count_ = 0;
     bool source_configuration_captured_ = false;
+    bool source_prepare_failed_ = false;
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     std::vector<Bar> aux_security_bars_;
     std::string aux_security_input_tf_;

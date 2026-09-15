@@ -63,6 +63,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.projection_over_pyramiding); f.u(value.projection_predecessor);
     f.u(value.recreated_after_named_cancelled_entry_incarnation);
     f.u(value.named_cancel_surviving_exit_incarnation);
+    f.b(value.retained_parent_topology);
+    f.b(value.defer_until_post_parent_calculation);
     f.b(value.projection_predecessor_market); f.b(value.projection_predecessor_exit);
     f.b(value.projection_created_during_coof); f.b(value.projection_coof_at_terminal);
     f.b(value.projection_coof_mid_bar); f.d(value.forced_execution_price);
@@ -453,8 +455,13 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.i(override_.pyramiding); f.i(override_.slippage); f.i(override_.commission_type);
     f.i(override_.default_qty_type); f.i(override_.process_orders_on_close);
     f.i(override_.calc_on_order_fills); f.i(override_.close_entries_rule);
-    f.i(source_bar_index_); f.i(source_last_bar_index_); f.u(source_callback_count_);
-    f.b(source_configuration_captured_);
+    // source_last_bar_index_ is a derived script-input horizon, not broker
+    // state.  The legacy hash diverged only if that input caused different
+    // commands; folding the horizon itself makes an indifferent strategy's
+    // broker hash differ before any behavior does.
+    (void)source_last_bar_index_;
+    f.i(source_bar_index_); f.u(source_callback_count_);
+    f.b(source_configuration_captured_); f.b(source_prepare_failed_);
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1
     f.u(aux_security_bars_.size());
     for (const auto& bar : aux_security_bars_) {
