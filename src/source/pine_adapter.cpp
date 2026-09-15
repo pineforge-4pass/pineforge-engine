@@ -3484,7 +3484,14 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         double percent = source.qty_percent;
         if (std::isnan(percent)) percent = 100.0;
-        result.units = quantize_close_units(facts.scope_exposure_units, percent);
+        const bool selected_exit =
+            (source.family == PineOrderFamily::ExitLimit
+             || source.family == PineOrderFamily::ExitStop
+             || source.family == PineOrderFamily::ExitTrail)
+            && std::holds_alternative<native_order::SelectedExposure>(facts.scope);
+        result.units = selected_exit && percent == 100.0
+            ? facts.scope_exposure_units
+            : quantize_close_units(facts.scope_exposure_units, percent);
         return result;
     }
     if (source.family == PineOrderFamily::Order && std::isfinite(source.requested_qty)) {
