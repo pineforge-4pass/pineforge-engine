@@ -330,6 +330,32 @@ int main() {
         CHECK(off.index == 0);
     }
 
+    // L4a / P1-1: Canonical hosts keep the base per-bar refusal ordering.
+    // An off-session bar wins over a later non-monotonic timestamp, while an
+    // invalid calendar refuses before any structural inspection.
+    {
+        NativeRunSpec spec = spec_for("canonical-refusal-order", 1);
+        spec.session = "0930-1600:23456";
+        const Bar bars[] = {
+            bar_at(1749225540000LL, 100, 101, 99, 100),  // known RTH label
+            bar_at(std::numeric_limits<int64_t>::max() - 1000,
+                   100, 101, 99, 100),                    // outside calendar range
+            bar_at(std::numeric_limits<int64_t>::max() - 2000,
+                   100, 101, 99, 100),                    // also decreasing
+        };
+        const auto unaligned = preflight_native_inputs(
+            spec, bars, 3, NativeInputPolicy::Batch);
+        CHECK(unaligned.error == NativeInputPreflightError::Unaligned);
+        CHECK(unaligned.index == 1);
+
+        auto malformed = spec;
+        malformed.input_tf = "not-a-timeframe";
+        const Bar structural = bar_at(60000, 0.0, 1.0, 0.0, 1.0);
+        const auto calendar = preflight_native_inputs(
+            malformed, &structural, 1, NativeInputPolicy::Batch);
+        CHECK(calendar.error == NativeInputPreflightError::CalendarFailure);
+    }
+
     // A25: a generic host observes every accepted input before the consumer
     // folds the input_tf=1 feed into its script_tf=5 interval. The context is
     // live in the continuation hash during the callback and vanishes after it.

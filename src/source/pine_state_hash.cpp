@@ -57,7 +57,8 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.projection_over_pyramiding); f.u(value.projection_predecessor);
     f.b(value.projection_predecessor_market); f.b(value.projection_predecessor_exit);
     f.b(value.projection_created_during_coof); f.b(value.projection_coof_at_terminal);
-    f.b(value.projection_coof_mid_bar); f.d(value.projection_tv_carry_qty);
+    f.b(value.projection_coof_mid_bar); f.d(value.forced_execution_price);
+    f.d(value.projection_tv_carry_qty);
     f.d(value.projection_default_stop_equity);
     f.d(value.projection_default_stop_signal_close);
     f.d(value.projection_explicit_equity); f.d(value.projection_explicit_signal_close);
@@ -205,6 +206,13 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(current_debit_ordinals.begin(), current_debit_ordinals.end());
     f.u(current_debit_ordinals.size());
     for (const auto ordinal : current_debit_ordinals) f.u(ordinal);
+    std::vector<std::uint64_t> intraday_relabel_ordinals;
+    intraday_relabel_ordinals.reserve(intraday_loss_relabel_ordinals_.size());
+    for (const auto ordinal : intraday_loss_relabel_ordinals_)
+        intraday_relabel_ordinals.push_back(ordinal);
+    std::sort(intraday_relabel_ordinals.begin(), intraday_relabel_ordinals.end());
+    f.u(intraday_relabel_ordinals.size());
+    for (const auto ordinal : intraday_relabel_ordinals) f.u(ordinal);
     f.u(receipt_cursor_);
     f.b(materializing_relative_);
     f.i(current_position_cycle_);
@@ -241,13 +249,20 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
     for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
     f.d(pooc_open_basis_); f.i(pooc_open_script_bar_); f.i(close_all_pending_script_bar_);
-    f.d(last_fx_rate_); f.i(position_open_script_bar_); f.b(source_margin_call_enabled_);
+    f.d(last_fx_rate_); f.i(position_open_script_bar_); f.u(cap_latest_fill_);
+    f.b(source_margin_call_enabled_);
+    f.d(policy_script_bar_.open); f.d(policy_script_bar_.high);
+    f.d(policy_script_bar_.low); f.d(policy_script_bar_.close);
+    f.d(policy_script_bar_.volume); f.i(policy_script_bar_.timestamp);
+    f.b(policy_script_bar_valid_); f.b(stream_mode_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
     f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);
     f.i(risk_.direction); f.i(risk_.max_cons_loss_days); f.d(risk_.max_drawdown);
     f.b(risk_.max_drawdown_percent); f.d(risk_.max_intraday_loss);
     f.b(risk_.max_intraday_loss_percent); f.d(risk_.max_position_size); f.b(risk_.halted);
+    f.d(risk_.observed_peak_equity); f.d(risk_.observed_max_drawdown);
+    f.i(risk_.intraday_block_day); f.b(risk_.intraday_cancel_pending);
     hash_native_handle(f, short_seed_.long_entry); hash_native_handle(f, short_seed_.materialize_long);
     hash_native_handle(f, short_seed_.final_short); f.b(short_seed_.active);
     f.b(short_seed_.report_swap_pending);
@@ -257,7 +272,22 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(last_bar_dual_entry_path_); f.b(pending_view_.owner_ != nullptr);
     f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);
     f.b(cap.configuration().skip_noop_market); f.b(cap.configuration().defer_pooc_close);
-    f.b(cap.configuration().count_pooc_full_close); f.b(priority.attached());
+    f.b(cap.configuration().count_pooc_full_close);
+    const auto& cap_budget = cap.budget();
+    f.b(cap_budget.day().has_value());
+    if (cap_budget.day()) f.i(cap_budget.day()->key);
+    f.i(cap_budget.charged_slots()); f.b(cap_budget.latched());
+    f.b(cap_budget.transfer().has_value());
+    if (const auto& transfer = cap_budget.transfer()) {
+        f.i(transfer->day.key); f.u(transfer->close_fill);
+        f.i(transfer->source_bar); f.u(transfer->inheritor);
+    }
+    f.b(cap.due_cause().has_value());
+    if (const auto& due = cap.due_cause()) {
+        f.u(due->action_id); f.i(due->charged_day.key); f.i(due->charged_slots);
+        f.i(due->trigger_bar); f.u(due->trigger_order);
+    }
+    f.u(cap.next_action()); f.b(priority.attached());
     f.b(priority.retained_parent_first());
     admission_journal.reflect("journal", [&](const auto& field) { hash_admission_field(f, field); });
 }

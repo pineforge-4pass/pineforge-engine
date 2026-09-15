@@ -678,6 +678,12 @@ execution::Status BacktestEngine::preflight_native_settlement_effects(
         const NativeSettlementStage& stage,
         const execution::LifecycleEffects& lifecycle,
         const NativeSettlementRows& rows) {
+    // LifecycleEffects was the deleted compatibility-owner seam.  A native
+    // host has no source lifecycle interpreter: accepting a non-empty batch
+    // would silently discard caller intent.  Preserve the base native-route
+    // refusal rather than retaining an inert legacy body.
+    if (lifecycle.pre_close || !lifecycle.removals.empty())
+        return execution::Status::InvalidLifecycle;
     const auto& closed_trades = rows.closed_trades;
     validate_close_trade_counters(closed_trades.data(), closed_trades.size());
     if (stage.opening > 0.0 && !stage.survivors.empty()

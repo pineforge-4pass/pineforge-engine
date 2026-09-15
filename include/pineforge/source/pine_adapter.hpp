@@ -77,6 +77,7 @@ enum class PineOrderFamily : std::uint8_t {
     ExitTrail = 5,
     Order = 6,
     Margin = 7,
+    Risk = 8,
 };
 
 struct PineExitLevels {
@@ -149,6 +150,11 @@ struct PlacementSnapshot {
     bool projection_created_during_coof = false;
     bool projection_coof_at_terminal = false;
     bool projection_coof_mid_bar = false;
+    // An adapter-owned immediate source policy may resolve a generic
+    // host-sized close at a previously established broker path price.  The
+    // request remains owned and settled by the native core; only its
+    // immutable terms fact is source-specific.
+    double forced_execution_price = std::numeric_limits<double>::quiet_NaN();
     double projection_tv_carry_qty = 0.0;
     double projection_default_stop_equity = std::numeric_limits<double>::quiet_NaN();
     double projection_default_stop_signal_close = std::numeric_limits<double>::quiet_NaN();
@@ -192,6 +198,14 @@ struct PineRiskState {
     bool max_intraday_loss_percent = false;
     double max_position_size = 0.0;
     bool halted = false;
+    // Runtime facts belong to the source policy, not to the generic
+    // settlement kernel.  They are updated from public native projections at
+    // the same broker coordinates at which the retired source route updated
+    // its latches.
+    double observed_peak_equity = std::numeric_limits<double>::quiet_NaN();
+    double observed_max_drawdown = 0.0;
+    std::int64_t intraday_block_day = std::numeric_limits<std::int64_t>::min();
+    bool intraday_cancel_pending = false;
 };
 
 class PineExecutionAdapter;
@@ -230,6 +244,7 @@ public:
     void reset_for_run();
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
+    void set_begin_mode(bool is_stream) noexcept;
 
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&) const;
@@ -267,7 +282,15 @@ public:
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
+    void on_bar_close(const Bar&, const NativeDecisionContext&);
     void on_applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
+    void source_batch_end();
+
+    // Fixture/public projection of the chart-timezone day decomposition used
+    // by the risk and intraday-cap ledgers.  It carries no generic-kernel
+    // policy and lets native-route tests avoid reaching into retired host
+    // internals.
+    std::int64_t chart_day_key(std::int64_t timestamp_ms) const noexcept;
 
     int short_seed_collision_role_v1(native_order::RequestHandle) const noexcept;
     const PendingIntentView& pending_intent_view() const noexcept { return pending_view_; }
@@ -290,6 +313,7 @@ public:
     bool max_intraday_loss_is_percent() const noexcept {
         return risk_.max_intraday_loss_percent;
     }
+    bool take_intraday_loss_relabel(std::uint64_t ordinal) noexcept;
     void set_margin_call_enabled(bool enabled) noexcept;
     void enable_intraday_cap() noexcept;
     void attach_execution_adapter() noexcept;
@@ -407,6 +431,24 @@ private:
                                        const NativeDecisionContext&);
     void submit_fx_margin_slice(const Bar&, const NativeDecisionContext&, double rate);
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
+    bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
+                                  bool execute_current);
+    void schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
+    bool intraday_loss_breached(double mark_price) const noexcept;
+    bool submit_intraday_loss_close(double mark_price, const NativeDecisionContext&,
+                                    bool execute_current);
+    void schedule_intraday_loss_path(const Bar&, const NativeDecisionContext&);
+    void update_risk_state(double mark_price);
+    bool intraday_loss_orders_blocked() const noexcept;
+    compat::pine::CapClock cap_clock(const NativeDecisionContext&) const;
+    compat::pine::Calculation cap_calculation(const NativeDecisionContext&) const;
+    compat::pine::MatchedAttempt cap_attempt(const PlacementSnapshot&) const;
+    bool cap_placement_denied(const NativeDecisionContext&);
+    void observe_intraday_cap(const native_order::ExecutionAppliedEvent&,
+                              const PlacementSnapshot&, const NativeDecisionContext&);
+    void observe_intraday_cap_noop(bool is_long, const NativeDecisionContext&);
+    void execute_cap_close_now(const compat::pine::CloseNow&);
+    void execute_due_cap_close(const NativeDecisionContext&);
     void maybe_activate_short_seed_plan();
     void consume_cohort_units(const SourceId&, const native_order::ExecutionAppliedEvent&);
     bool origin_is_pending(const native_order::RequestHandle&) const noexcept;
@@ -425,7 +467,6 @@ private:
     native_order::Group group_for(const std::string&, int) const;
     PineSizingSnapshot sizing_snapshot() const;
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;
-    static std::int64_t day_key(std::int64_t timestamp_ms) noexcept;
     void refresh_pending_view() noexcept;
 
     // @source-state begin
@@ -453,6 +494,7 @@ private:
     // source-cohort debit so a second immediate command sees the new basis,
     // then suppress just that duplicate debit at notification delivery.
     std::unordered_set<std::uint64_t> current_debited_applied_ordinals_;
+    std::unordered_set<std::uint64_t> intraday_loss_relabel_ordinals_;
     std::uint64_t receipt_cursor_ = 0;
     bool materializing_relative_ = false;
     std::int64_t current_position_cycle_ = 0;
@@ -469,7 +511,11 @@ private:
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     double last_fx_rate_ = std::numeric_limits<double>::quiet_NaN();
     std::int64_t position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::uint64_t cap_latest_fill_ = 0;
     bool source_margin_call_enabled_ = true;
+    Bar policy_script_bar_{};
+    bool policy_script_bar_valid_ = false;
+    bool stream_mode_ = false;
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
     ShortSeedPlan short_seed_{};

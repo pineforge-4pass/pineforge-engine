@@ -76,6 +76,74 @@ NativeInputPreflightResult preflight_native_inputs(
         out.error = NativeInputPreflightError::CalendarFailure;
         return out;
     }
+    // Canonical native hosts retain the base driver's refusal ordering:
+    // calendar parsing first, then every bar's structural/interval/label/
+    // monotonic/overlap checks in order.  The compatibility policy keeps its
+    // intentionally narrower raw-label preflight below.
+    const bool canonical = !spec.timeframe_undetected
+        && !legacy_tolerant_slot_labels(spec);
+    std::optional<native_calendar::Timeframe> parsed_tf;
+    if (canonical) {
+        parsed_tf = native_calendar::parse_timeframe(spec.input_tf);
+        if (!parsed_tf) {
+            out.error = NativeInputPreflightError::CalendarFailure;
+            return out;
+        }
+    }
+    if (canonical) {
+        std::optional<native_calendar::NativeInterval> previous;
+        for (int i = 0; i < n; ++i) {
+            const Bar& bar = bars[i];
+            if (!preflight_bar_structurally_valid(spec, bar, policy)) {
+                out.error = NativeInputPreflightError::StructuralInvalid;
+                out.index = i;
+                return out;
+            }
+            auto interval = native_calendar::interval_containing(
+                *parsed_session, *parsed_tf, bar.timestamp);
+            if (!interval) {
+                out.error = NativeInputPreflightError::Unaligned;
+                out.index = i;
+                return out;
+            }
+            if (!native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
+                out.error = NativeInputPreflightError::OffGridLabel;
+                out.index = i;
+                return out;
+            }
+            if (i > 0) {
+                const std::int64_t earlier = bars[i - 1].timestamp;
+                if (bar.timestamp <= earlier) {
+                    out.error = NativeInputPreflightError::NotStrictlyIncreasing;
+                    out.index = i;
+                    return out;
+                }
+                if (timestamp_delta_overflows(earlier, bar.timestamp)) {
+                    out.error = NativeInputPreflightError::TimestampDeltaOverflow;
+                    out.index = i;
+                    return out;
+                }
+            }
+            if (previous) {
+                if (interval->open_ms <= previous->open_ms) {
+                    out.error = NativeInputPreflightError::OverlappingSlot;
+                    out.index = i;
+                    return out;
+                }
+                if (policy == NativeInputPolicy::StreamWarmup) {
+                    auto expected = native_calendar::interval_containing(
+                        *parsed_session, *parsed_tf, previous->next_input_open_ms);
+                    if (!expected || expected->open_ms != interval->open_ms) {
+                        out.error = NativeInputPreflightError::InSessionGap;
+                        out.index = i;
+                        return out;
+                    }
+                }
+            }
+            previous = *interval;
+        }
+        return out;
+    }
     for (int i = 0; i < n; ++i) {
         const Bar& bar = bars[i];
         if (!preflight_bar_structurally_valid(spec, bar, policy)) {
@@ -98,45 +166,6 @@ NativeInputPreflightResult preflight_native_inputs(
                 return out;
             }
         }
-    }
-    if (spec.timeframe_undetected || legacy_tolerant_slot_labels(spec)) return out;
-    auto parsed_tf = native_calendar::parse_timeframe(spec.input_tf);
-    if (!parsed_tf) {
-        out.error = NativeInputPreflightError::CalendarFailure;
-        return out;
-    }
-    std::optional<native_calendar::NativeInterval> previous;
-    for (int i = 0; i < n; ++i) {
-        const Bar& bar = bars[i];
-        auto interval = native_calendar::interval_containing(
-            *parsed_session, *parsed_tf, bar.timestamp);
-        if (!interval) {
-            out.error = NativeInputPreflightError::Unaligned;
-            out.index = i;
-            return out;
-        }
-        if (!native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
-            out.error = NativeInputPreflightError::OffGridLabel;
-            out.index = i;
-            return out;
-        }
-        if (previous) {
-            if (interval->open_ms <= previous->open_ms) {
-                out.error = NativeInputPreflightError::OverlappingSlot;
-                out.index = i;
-                return out;
-            }
-            if (policy == NativeInputPolicy::StreamWarmup) {
-                auto expected = native_calendar::interval_containing(
-                    *parsed_session, *parsed_tf, previous->next_input_open_ms);
-                if (!expected || expected->open_ms != interval->open_ms) {
-                    out.error = NativeInputPreflightError::InSessionGap;
-                    out.index = i;
-                    return out;
-                }
-            }
-        }
-        previous = *interval;
     }
     return out;
 }

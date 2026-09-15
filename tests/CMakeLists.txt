@@ -1,4 +1,30 @@
 set(TEST_SOURCES
+    # R4-D L4a native-route behavioral twins.  These retain the legacy
+    # oracle literals while driving the switched host only through its public
+    # source commands and projections.
+    test_aapl15_margin_brackets_l4a
+    test_carried_pooc_short_margin_state_l4a
+    test_engine_risk_l4a
+    test_entry_bar_margin_path_l4a
+    test_high_value_fractional_money_margin_l4a
+    test_integer_short_margin_state_l4a
+    test_intraday_cap_auto_close_l4a
+    test_intraday_order_session_day_l4a
+    test_intraday_rollover_chart_tz_l4a
+    test_margin_admission_gate_l4a
+    test_margin_call_l4a
+    test_margin_call_1x_long_entry_fill_l4a
+    test_margin_call_gap_open_l4a
+    test_margin_call_intrabar_chronology_l4a
+    test_margin_call_trail_exit_chronology_l4a
+    test_margin_stop_admission_l4a
+    test_pine_cap_boundary_l4a
+    test_risk_max_intraday_loss_tv_l4a
+    test_short_margin_script_state_l4a
+    test_small_money_margin_residual_l4a
+    test_stop_open_margin_script_state_l4a
+    test_tv_money_long_margin_call_eth_l4a
+    test_unbounded_margin_admission_l4a
     test_unbounded_margin_admission
     test_resolved_execution
     test_native_current_execution

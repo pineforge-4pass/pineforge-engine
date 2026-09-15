@@ -22,3 +22,6 @@ struct FixtureRiskDirection {
 #define RiskDirection FixtureRiskDirection
 #define risk_direction_ fixture_risk_direction_slot()
 #define id_unclosed_qty_ source_id_ledger_view()
+#define _intraday_cap_currently_latched fixture_intraday_cap_latched
+#define pine_cap_clock fixture_cap_clock
+#define pine_cap_calculation fixture_cap_calculation

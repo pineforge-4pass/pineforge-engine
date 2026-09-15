@@ -4,9 +4,12 @@
 
 #include <pineforge/timeframe.hpp>
 
+#include "../timezone.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -54,7 +57,8 @@ int mirror_order_type(PineOrderFamily family) noexcept {
     case PineOrderFamily::ExitTrail: return 2;
     case PineOrderFamily::Close:
     case PineOrderFamily::CloseAll:
-    case PineOrderFamily::Margin: return 0;
+    case PineOrderFamily::Margin:
+    case PineOrderFamily::Risk: return 0;
     }
     return 0;
 }
@@ -153,6 +157,7 @@ void PineExecutionAdapter::reset_for_run() {
     first_open_newborns_.clear();
     pending_view_handles_.clear();
     current_debited_applied_ordinals_.clear();
+    intraday_loss_relabel_ordinals_.clear();
     receipt_cursor_ = 0;
     materializing_relative_ = false;
     current_position_cycle_ = 0;
@@ -169,7 +174,15 @@ void PineExecutionAdapter::reset_for_run() {
     close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     last_fx_rate_ = kNaN;
     position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    cap_latest_fill_ = 0;
     day_ledger_ = {};
+    risk_.observed_peak_equity = kNaN;
+    risk_.observed_max_drawdown = 0.0;
+    risk_.intraday_block_day = std::numeric_limits<std::int64_t>::min();
+    risk_.intraday_cancel_pending = false;
+    policy_script_bar_ = {};
+    policy_script_bar_valid_ = false;
+    stream_mode_ = false;
     short_seed_ = {};
     short_seed_candidate_long_ = {};
     short_seed_candidate_materialize_ = {};
@@ -182,6 +195,7 @@ void PineExecutionAdapter::reset_for_run() {
 
 void PineExecutionAdapter::set_configuration(const PineStrategyConfig& config) noexcept { config_ = config; }
 void PineExecutionAdapter::set_staged_configuration(const StagedConfiguration& staged) { staged_ = staged; }
+void PineExecutionAdapter::set_begin_mode(bool is_stream) noexcept { stream_mode_ = is_stream; }
 
 NativeRunSpec PineExecutionAdapter::project(const PineStrategyConfig& config,
                                              const StagedConfiguration& staged,
@@ -957,6 +971,34 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const double signed_target = is_long ? normalized_qty : -normalized_qty;
     const double current = require_host().physical_position().signed_units;
     const auto source_point = require_host().current_execution_point();
+    if (risk_.halted || intraday_loss_orders_blocked()
+        || (source_point && cap_placement_denied(source_point->decision))) {
+        return;
+    }
+    // Explicit entry quantities have a source placement-time admission
+    // boundary.  In particular, non-finite units and finite values whose
+    // required margin overflows must never become a live generic request that
+    // waits until a later matching point to be rejected.
+    if (!default_sized) {
+        if (!std::isfinite(qty)) return;
+        const bool opposite_live = current != 0.0 && ((current > 0.0) != is_long);
+        if (!opposite_live) {
+            // Admission is a source command fact at the signal mark; a
+            // priced entry's later trigger/gap check remains at fill time.
+            const double mark = source_point ? source_point->price : kNaN;
+            const double margin = is_long ? config_.margin_long : config_.margin_short;
+            const double fx = source_point
+                ? active_staged_fx(source_point->decision.sub_bar_open_ms) : staged_.account_fx;
+            const double equity = source_point
+                ? require_host().native_marked_equity(source_point->price) : kNaN;
+            const double required = std::abs(normalized_qty) * mark
+                * staged_.syminfo.pointvalue * fx * margin / 100.0;
+            if (margin <= 100.0 && (!std::isfinite(required) || !std::isfinite(equity)
+                                    || required > equity)) {
+                return;
+            }
+        }
+    }
     const bool short_seed_long_candidate = current < 0.0 && is_long;
     const bool short_seed_final_candidate = current < 0.0 && !is_long
         && short_seed_candidate_long_.incarnation != 0;
@@ -979,6 +1021,15 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             paired_all_in_reentry = true;
             break;
         }
+    }
+    if (!same_bar_market_candidate && current != 0.0
+        && ((current > 0.0) == is_long) && config_.pyramiding == 0) {
+        // A zero pyramiding setting permits the flat opening but makes a
+        // same-direction MARKET reissue a source no-op.  It must be dropped
+        // before native matching so IntradayCap's factor-A policy observes no
+        // fabricated physical fill.
+        if (source_point) observe_intraday_cap_noop(is_long, source_point->decision);
+        return;
     }
     if (!same_bar_market_candidate && config_.pyramiding > 0 && current != 0.0
         && ((current > 0.0) == is_long)) {
@@ -1355,6 +1406,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
 
 void PineExecutionAdapter::close(const SourceId& id, const std::string& comment, double qty,
                                  double qty_percent, bool immediately, std::uint64_t callsite_token) {
+    if (intraday_loss_orders_blocked()) return;
+    if (const auto point = require_host().current_execution_point();
+        point && cap_placement_denied(point->decision)) {
+        return;
+    }
     // The public empty-id spelling is the source route's full-position
     // strategy.close form.  It is not a cohort lookup (there is no empty
     // entry-id cohort), and it retains its caller-supplied report comment.
@@ -1581,6 +1637,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
 }
 
 void PineExecutionAdapter::close_all() {
+    if (intraday_loss_orders_blocked()) return;
+    if (const auto point = require_host().current_execution_point();
+        point && cap_placement_denied(point->decision)) {
+        return;
+    }
     if (const auto point = require_host().current_execution_point())
         close_all_pending_script_bar_ = point->decision.script_bar_open_ms;
     if (config_.calc_on_order_fills) {
@@ -1614,6 +1675,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                                 const std::string& comment, double qty,
                                 const std::string& oca_name, double profit_ticks,
                                 double loss_ticks) {
+    if (intraday_loss_orders_blocked()) return;
+    if (const auto point = require_host().current_execution_point();
+        point && cap_placement_denied(point->decision)) {
+        return;
+    }
     // Relative levels resolve against a live source cohort. The original tick
     // facts remain in the snapshot for deferred/observer projections.
     const auto physical = require_host().physical_position();
@@ -1988,6 +2054,11 @@ void PineExecutionAdapter::cancel_all() {
 void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                                  double limit_price, double stop_price,
                                  const std::string& oca_name, int oca_type) {
+    if (risk_.halted || intraday_loss_orders_blocked()) return;
+    if (const auto point = require_host().current_execution_point();
+        point && cap_placement_denied(point->decision)) {
+        return;
+    }
     native_order::Request request;
     const bool default_sized = std::isnan(qty);
     const double normalized_qty = default_sized ? qty
@@ -2034,6 +2105,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         if (std::holds_alternative<native_order::Market>(facts.definition->request.trigger)) {
             result.resolved_price = nearest_tick(result.resolved_price, staged_.syminfo.mintick);
         }
+        if (finite_positive(source.forced_execution_price)) {
+            result.resolved_price = nearest_tick(source.forced_execution_price,
+                                                 staged_.syminfo.mintick);
+        }
         return result;
     }
     double resolved = facts.default_resolved_price;
@@ -2043,6 +2118,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                                  : -config_.slippage * staged_.syminfo.mintick;
     }
     if (market_like) result.resolved_price = nearest_tick(resolved, staged_.syminfo.mintick);
+    if (finite_positive(source.forced_execution_price)) {
+        result.resolved_price = nearest_tick(source.forced_execution_price,
+                                             staged_.syminfo.mintick);
+    }
     // Source stop/trail exits crossed inside a modeled path settle at their
     // armed level, whereas an open gap retains the presented open quote.  The
     // generic driver deliberately exposes both facts; selecting this source
@@ -2150,6 +2229,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
 
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
     if (risk_.halted) return NativePrecommitVerdict::Refuse;
+    if (intraday_loss_orders_blocked()) return NativePrecommitVerdict::Refuse;
     if (risk_.max_position_size > 0.0 && std::abs(view.inspected_opened_units) > risk_.max_position_size)
         return NativePrecommitVerdict::Refuse;
     if (risk_.max_cons_loss_days > 0 && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days)
@@ -2204,6 +2284,18 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         return NativePrecommitVerdict::Proceed;
     }
     const double required = view.account.resulting_abs_notional * fraction;
+    // A 1x LONG opening may be admitted against its pre-entry realized
+    // budget even when the entry commission makes the post-entry marked
+    // equity fractionally short.  The adapter immediately runs the
+    // opening-price margin checkpoint from on_native_applied, which produces
+    // the source-required 4x/one-contract reduction before any same-bar
+    // exit.  Rejecting here would erase that observable margin event.
+    const bool opening_margin_checkpoint =
+        source.family == PineOrderFamily::Entry && margin_pct == 100.0
+        && finite_positive(source.requested_qty)
+        && std::isfinite(view.account.realized_balance)
+        && required <= view.account.realized_balance;
+    if (opening_margin_checkpoint) return NativePrecommitVerdict::Proceed;
     if (!std::isfinite(required) || !std::isfinite(view.account.marked_equity)
         || required > view.account.marked_equity) {
         return NativePrecommitVerdict::Refuse;
@@ -2211,9 +2303,346 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     return NativePrecommitVerdict::Proceed;
 }
 
-std::int64_t PineExecutionAdapter::day_key(std::int64_t timestamp_ms) noexcept {
-    constexpr std::int64_t kDayMs = 86400000;
-    return timestamp_ms >= 0 ? timestamp_ms / kDayMs : -(((-timestamp_ms) + kDayMs - 1) / kDayMs);
+std::int64_t PineExecutionAdapter::chart_day_key(std::int64_t timestamp_ms) const noexcept {
+    const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
+    std::tm fields{};
+    const auto utc = [&]() {
+        return ::gmtime_r(&seconds, &fields) != nullptr;
+    };
+    const std::string& timezone = staged_.chart_timezone;
+    if (timezone.empty() || timezone == "UTC" || timezone == "Etc/UTC") {
+        if (!utc()) return std::numeric_limits<std::int64_t>::min();
+    } else {
+        try {
+            pine_tz::ScopedTimezone guard(timezone);
+            if (::localtime_r(&seconds, &fields) == nullptr) {
+                if (!utc()) return std::numeric_limits<std::int64_t>::min();
+            }
+        } catch (...) {
+            // A malformed staged timezone must not turn a source-policy
+            // read into an unhashable partial state.  The run-spec validator
+            // owns rejection; preserve the legacy UTC fallback meanwhile.
+            if (!utc()) return std::numeric_limits<std::int64_t>::min();
+        }
+    }
+    return static_cast<std::int64_t>(fields.tm_mday) * 100
+        + static_cast<std::int64_t>(fields.tm_mon + 1);
+}
+
+compat::pine::CapClock PineExecutionAdapter::cap_clock(
+        const NativeDecisionContext& context) const {
+    const std::int64_t key = chart_day_key(context.sub_bar_open_ms);
+    return {context.sub_bar_open_ms,
+            staged_.syminfo.session.empty() ? "24x7" : staged_.syminfo.session,
+            staged_.syminfo.timezone.empty() ? "UTC" : staged_.syminfo.timezone,
+            static_cast<int>(key / 100), static_cast<int>(key % 100)};
+}
+
+compat::pine::Calculation PineExecutionAdapter::cap_calculation(
+        const NativeDecisionContext& context) const {
+    return {config_.process_orders_on_close, config_.calc_on_order_fills,
+            coof_recalc_active_, context.driver_statistics.intrabar_path_enabled,
+            stream_mode_, !stream_mode_, !config_.close_entries_rule_any,
+            context.coordinate.interval_index};
+}
+
+compat::pine::MatchedAttempt PineExecutionAdapter::cap_attempt(
+        const PlacementSnapshot& snapshot) const {
+    compat::pine::OrderKind kind = compat::pine::OrderKind::Other;
+    if (snapshot.family == PineOrderFamily::Entry) {
+        kind = (finite_positive(snapshot.exit_levels.limit)
+                || finite_positive(snapshot.exit_levels.stop))
+            ? compat::pine::OrderKind::Entry : compat::pine::OrderKind::Market;
+    }
+    const auto position = require_host().physical_position();
+    const auto projected = static_cast<PositionSide>(snapshot.projection_position_side);
+    // Factor-A's no-op filter is defined against the matched request's
+    // pre-dispatch position.  Applied notifications observe the physical
+    // book afterwards, so retain the truthful placement-side snapshot for a
+    // flat opening rather than misclassifying its first fill as a no-op.
+    const auto side = projected == PositionSide::LONG ? compat::pine::Side::Long
+        : (projected == PositionSide::SHORT ? compat::pine::Side::Short
+                                            : compat::pine::Side::Flat);
+    const int live_entries = projected == PositionSide::FLAT
+        ? 0 : static_cast<int>(position.lot_count);
+    return {kind, snapshot.source_sequence, snapshot.projection_created_bar,
+            snapshot.is_long, side, live_entries,
+            config_.pyramiding};
+}
+
+bool PineExecutionAdapter::cap_placement_denied(const NativeDecisionContext& context) {
+    return cap.active() && cap.placement(cap_clock(context)) == compat::pine::Placement::Deny;
+}
+
+bool PineExecutionAdapter::intraday_loss_orders_blocked() const noexcept {
+    return risk_.intraday_block_day != std::numeric_limits<std::int64_t>::min()
+        && risk_.intraday_block_day == day_ledger_.current_day;
+}
+
+void PineExecutionAdapter::update_risk_state(double mark_price) {
+    if (std::isfinite(mark_price)) {
+        const double equity = require_host().native_marked_equity(mark_price);
+        if (std::isfinite(equity)) {
+            if (!std::isfinite(risk_.observed_peak_equity)
+                || equity > risk_.observed_peak_equity) {
+                risk_.observed_peak_equity = equity;
+            }
+            const double drawdown = risk_.observed_peak_equity - equity;
+            if (drawdown > risk_.observed_max_drawdown)
+                risk_.observed_max_drawdown = drawdown;
+        }
+    }
+    if (risk_.halted) return;
+    if (risk_.max_drawdown > 0.0 && std::isfinite(risk_.observed_peak_equity)) {
+        const double threshold = risk_.max_drawdown_percent
+            ? risk_.observed_peak_equity * risk_.max_drawdown / 100.0
+            : risk_.max_drawdown;
+        if (risk_.observed_max_drawdown >= threshold) {
+            risk_.halted = true;
+            return;
+        }
+    }
+    if (risk_.max_cons_loss_days > 0
+        && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days) {
+        risk_.halted = true;
+    }
+}
+
+bool PineExecutionAdapter::intraday_loss_breached(double mark_price) const noexcept {
+    if (!(risk_.max_intraday_loss > 0.0) || intraday_loss_orders_blocked()
+        || !std::isfinite(day_ledger_.intraday_start_equity)
+        || !std::isfinite(mark_price)) {
+        return false;
+    }
+    const double equity = require_host().native_marked_equity(mark_price);
+    const double loss = day_ledger_.intraday_start_equity - equity;
+    const double threshold = risk_.max_intraday_loss_percent
+        ? day_ledger_.intraday_start_equity * risk_.max_intraday_loss / 100.0
+        : risk_.max_intraday_loss;
+    if (!(threshold > 0.0) || !(loss > 0.0) || !std::isfinite(loss)) return false;
+    const double epsilon = 1e-9 * std::max(1.0, std::abs(threshold));
+    return loss + epsilon >= threshold;
+}
+
+bool PineExecutionAdapter::submit_margin_call_slice(
+        double mark_price, const NativeDecisionContext& context, bool execute_current) {
+    const auto position = require_host().physical_position();
+    const double held = std::abs(position.signed_units);
+    const double margin_pct = position.signed_units > 0.0
+        ? config_.margin_long : config_.margin_short;
+    if (!source_margin_call_enabled_ || !(held > 0.0)
+        || !finite_positive(mark_price) || !finite_positive(margin_pct)
+        || !finite_positive(staged_.syminfo.pointvalue)) {
+        return false;
+    }
+    const double fx = active_staged_fx(context.sub_bar_open_ms);
+    const double fraction = margin_pct / 100.0;
+    const double unit_margin = mark_price * staged_.syminfo.pointvalue * fx * fraction;
+    const double required = held * unit_margin;
+    const double equity = require_host().native_marked_equity(mark_price);
+    if (!finite_positive(unit_margin) || !std::isfinite(equity)
+        || !(required > equity)) {
+        return false;
+    }
+    const double raw_minimum = (required - equity) / unit_margin;
+    if (!(raw_minimum > 0.0) || !std::isfinite(raw_minimum)) return false;
+    double minimum = floor_quantity_grid(raw_minimum, staged_.quantity_grid);
+    double units = minimum > 0.0
+        ? floor_quantity_grid(4.0 * minimum, staged_.quantity_grid) : 0.0;
+    if (!(units > 0.0) && staged_.quantity_grid
+        && *staged_.quantity_grid <= 1.0 && raw_minimum < 1.0) {
+        const double candidate = std::min(1.0, held);
+        const double rounded = floor_quantity_grid(candidate, staged_.quantity_grid);
+        const double guard = std::max(1e-12, std::abs(candidate) * 1e-12);
+        if (candidate >= held - guard || std::abs(rounded - candidate) <= guard)
+            units = candidate;
+    }
+    units = std::min(held, units);
+    if (!(units > 0.0) || !std::isfinite(units)) return false;
+
+    native_order::Request request;
+    request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+    request.label = "__margin_call__";
+    request.comment = "Margin call";
+    if (!execute_current) request.trigger = native_order::Stop{mark_price};
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::Margin;
+    snapshot.source_id = request.label;
+    snapshot.requested_qty = units;
+    snapshot.sizing = sizing_snapshot();
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
+                                            "__margin_call__");
+    if (!accepted) return false;
+    if (execute_current) {
+        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
+    }
+    return true;
+}
+
+void PineExecutionAdapter::schedule_margin_call_path(
+        const Bar& bar, const NativeDecisionContext& context) {
+    const auto position = require_host().physical_position();
+    if (position.signed_units == 0.0) return;
+    const double adverse = position.signed_units > 0.0 ? bar.low : bar.high;
+    if (!finite_positive(adverse) || adverse == bar.open) return;
+    if (position.signed_units > 0.0 ? !(adverse < bar.open) : !(adverse > bar.open))
+        return;
+    (void)submit_margin_call_slice(adverse, context, false);
+}
+
+bool PineExecutionAdapter::submit_intraday_loss_close(
+        double mark_price, const NativeDecisionContext& context, bool execute_current) {
+    if (!intraday_loss_breached(mark_price)
+        || require_host().physical_position().signed_units == 0.0) {
+        return false;
+    }
+    native_order::Request request;
+    request.intent = native_order::Flatten{};
+    // The legacy forced-close report has an empty exit id and this exact
+    // comment.  An empty generic label is supported by the request algebra.
+    request.comment = "Close Position (Max intraday Loss)";
+    if (!execute_current) request.trigger = native_order::Stop{mark_price};
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::Risk;
+    snapshot.source_id = "__intraday_loss__";
+    snapshot.comment = request.comment;
+    snapshot.sizing = sizing_snapshot();
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
+                                            "__intraday_loss_close__");
+    if (!accepted) return false;
+    if (execute_current) {
+        const auto result = require_host().execute_current(
+            {*accepted, NativeCurrentPriceRule::NearestTick});
+        if (const auto* applied = std::get_if<native_order::ExecutionAppliedEvent>(&result);
+            applied && applied->closed_units > 0.0) {
+            risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
+            risk_.intraday_cancel_pending = true;
+        }
+    }
+    return true;
+}
+
+void PineExecutionAdapter::schedule_intraday_loss_path(
+        const Bar& bar, const NativeDecisionContext& context) {
+    const auto position = require_host().physical_position();
+    if (position.signed_units == 0.0) return;
+    const double adverse = position.signed_units > 0.0 ? bar.low : bar.high;
+    if (!finite_positive(adverse) || adverse == bar.open) return;
+    if (position.signed_units > 0.0 ? !(adverse < bar.open) : !(adverse > bar.open))
+        return;
+    (void)submit_intraday_loss_close(adverse, context, false);
+}
+
+void PineExecutionAdapter::execute_due_cap_close(const NativeDecisionContext& context) {
+    const auto due = cap.due_cause();
+    if (!due || context.coordinate.interval_index <= due->trigger_bar
+        || require_host().physical_position().signed_units == 0.0) {
+        return;
+    }
+    native_order::Request request;
+    request.intent = native_order::Flatten{};
+    request.comment = "Close Position (Max number of filled orders in one day)";
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::CloseAll;
+    snapshot.source_id = "__intraday_cap_close__";
+    snapshot.comment = request.comment;
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
+                                            "__intraday_cap_close__");
+    if (accepted) {
+        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
+        cap.after_immediate_close_attempt();
+    }
+}
+
+void PineExecutionAdapter::execute_cap_close_now(const compat::pine::CloseNow& close) {
+    if (require_host().physical_position().signed_units == 0.0) {
+        cap.after_immediate_close_attempt();
+        return;
+    }
+    native_order::Request request;
+    request.intent = native_order::Flatten{};
+    request.comment = close.request.comment;
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::CloseAll;
+    snapshot.source_id = "__intraday_cap_close__";
+    snapshot.comment = close.request.comment;
+    snapshot.forced_execution_price = close.price;
+    const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
+                                            "__intraday_cap_close__");
+    if (accepted) {
+        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
+    }
+    cap.after_immediate_close_attempt();
+}
+
+void PineExecutionAdapter::observe_intraday_cap(
+        const native_order::ExecutionAppliedEvent& event,
+        const PlacementSnapshot& snapshot, const NativeDecisionContext& context) {
+    if (snapshot.family == PineOrderFamily::Margin || snapshot.family == PineOrderFamily::Risk
+        || snapshot.source_id == "__intraday_cap_close__")
+        return;
+    const auto clock = cap_clock(context);
+    const auto calculation = cap_calculation(context);
+    const auto attempt = cap_attempt(snapshot);
+    const auto origin = cap.origin(clock, calculation, event.handle().incarnation, cap_latest_fill_);
+    const auto admission = cap.pre_dispatch(clock, calculation, attempt, cap_latest_fill_);
+    if (admission.dispatch == compat::pine::Dispatch::Decline) {
+        cap.decline(event.handle().incarnation);
+        return;
+    }
+    cap.outcome(compat::pine::FillOutcome::Committed, origin);
+    const auto position = require_host().physical_position();
+    const Bar& prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
+    const auto decision = cap.post_dispatch(admission, calculation, attempt,
+        position.signed_units > 0.0 ? compat::pine::Side::Long
+        : (position.signed_units < 0.0 ? compat::pine::Side::Short
+                                       : compat::pine::Side::Flat),
+        current_position_cycle_,
+        {event.resolved_price, prices.open, prices.high, prices.low});
+    if (const auto* now = std::get_if<compat::pine::CloseNow>(&decision)) {
+        execute_cap_close_now(*now);
+    }
+    cap_latest_fill_ = event.ordinal;
+}
+
+void PineExecutionAdapter::observe_intraday_cap_noop(
+        bool is_long, const NativeDecisionContext& context) {
+    if (!cap.active()) return;
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::Entry;
+    snapshot.is_long = is_long;
+    snapshot.projection_position_side = is_long
+        ? static_cast<std::int32_t>(PositionSide::LONG)
+        : static_cast<std::int32_t>(PositionSide::SHORT);
+    snapshot.projection_created_bar = context.coordinate.interval_index;
+    snapshot.source_sequence = source_sequence_;
+    const auto clock = cap_clock(context);
+    const auto calculation = cap_calculation(context);
+    const auto attempt = cap_attempt(snapshot);
+    const auto origin = cap.origin(clock, calculation, 0, cap_latest_fill_);
+    const auto admission = cap.pre_dispatch(clock, calculation, attempt, cap_latest_fill_);
+    if (admission.dispatch == compat::pine::Dispatch::Decline) {
+        cap.decline(0);
+        return;
+    }
+    cap.outcome(compat::pine::FillOutcome::NoEffect, origin);
+    const auto position = require_host().physical_position();
+    const Bar& prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
+    const auto decision = cap.post_dispatch(admission, calculation, attempt,
+        position.signed_units > 0.0 ? compat::pine::Side::Long
+        : (position.signed_units < 0.0 ? compat::pine::Side::Short
+                                       : compat::pine::Side::Flat),
+        current_position_cycle_,
+        {context.coordinate.path_phase == NativePathPhase::None ? prices.close
+                                                                 : require_host().current_execution_point()->price,
+         prices.open, prices.high, prices.low});
+    if (const auto* now = std::get_if<compat::pine::CloseNow>(&decision)) {
+        execute_cap_close_now(*now);
+    }
+}
+
+void PineExecutionAdapter::source_batch_end() {
+    cap.source_batch_end();
 }
 
 void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionContext& context) {
@@ -2221,23 +2650,40 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     // generic receipt before the next matching point so their deferred
     // per-origin bracket legs cannot close a different cohort member.
     observe_terminal_receipts();
+    // The preceding source broker batch is complete at this next opening.
+    // This is deliberately after any POOC after-calculation matching of the
+    // prior script bar, so a same-batch cap transfer remains available to its
+    // designated sibling.
+    source_batch_end();
     source_shadow_pending_.clear();
     coof_script_bar_ = bar;
     coof_script_bar_valid_ = true;
+    policy_script_bar_ = bar;
+    policy_script_bar_valid_ = true;
     flush_coof_tail();
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
         close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     pooc_open_script_bar_ = context.script_bar_open_ms;
     pooc_open_basis_ = std::abs(require_host().physical_position().signed_units);
-    day_ledger_.current_day = day_key(context.sub_bar_open_ms);
+    day_ledger_.current_day = chart_day_key(context.sub_bar_open_ms);
     if (day_ledger_.intraday_loss_day != day_ledger_.current_day) {
         day_ledger_.intraday_loss_day = day_ledger_.current_day;
         day_ledger_.intraday_start_equity = require_host().native_marked_equity(bar.open);
         day_ledger_.intraday_realized = 0.0;
     }
+    execute_due_cap_close(context);
+    update_risk_state(bar.open);
     apply_fx_open_margin_slice(bar, context);
+    (void)submit_margin_call_slice(bar.open, context, true);
+    schedule_margin_call_path(bar, context);
+    (void)submit_intraday_loss_close(bar.open, context, true);
+    schedule_intraday_loss_path(bar, context);
     schedule_preopen_margin_slice(bar, context);
-    cap.ordinary_open(0);
+    cap.ordinary_open(context.coordinate.interval_index);
+}
+
+void PineExecutionAdapter::on_bar_close(const Bar& bar, const NativeDecisionContext&) {
+    update_risk_state(bar.close);
 }
 
 void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent& event,
@@ -2249,6 +2695,27 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (const auto placement = placement_.find(event.handle().incarnation);
         placement != placement_.end()) {
         placement_snapshot = placement->second;
+    }
+    bool preclose_intraday_loss = false;
+    if (event.closed_trade_count > 0 && risk_.max_intraday_loss > 0.0
+        && !intraday_loss_orders_blocked()
+        && std::isfinite(day_ledger_.intraday_start_equity)) {
+        double closed_pnl = 0.0;
+        const auto& host = require_host();
+        for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+            const auto index = event.first_trade_index + i;
+            if (index < static_cast<std::size_t>(host.trade_count()))
+                closed_pnl += host.get_trade(static_cast<int>(index)).pnl;
+        }
+        const double after = host.native_marked_equity(event.resolved_price);
+        const double before = after - closed_pnl;
+        const double loss = day_ledger_.intraday_start_equity - before;
+        const double threshold = risk_.max_intraday_loss_percent
+            ? day_ledger_.intraday_start_equity * risk_.max_intraday_loss / 100.0
+            : risk_.max_intraday_loss;
+        const double epsilon = 1e-9 * std::max(1.0, std::abs(threshold));
+        preclose_intraday_loss = std::isfinite(before) && threshold > 0.0
+            && loss > 0.0 && loss + epsilon >= threshold;
     }
     const double live_position = require_host().physical_position().signed_units;
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
@@ -2292,20 +2759,79 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (event.terminal) retire(event.handle());
     if (event.ordinal != day_ledger_.observed_applied_ordinal) {
         day_ledger_.observed_applied_ordinal = event.ordinal;
-        const auto day = day_key(context.sub_bar_open_ms);
+        const auto day = chart_day_key(context.sub_bar_open_ms);
         if (event.closed_trade_count > 0) {
-            double total = 0.0;
             const auto& host = require_host();
             for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
                 const auto index = event.first_trade_index + i;
-                if (index < static_cast<std::size_t>(host.trade_count())) total += host.get_trade(static_cast<int>(index)).pnl;
-            }
-            day_ledger_.intraday_realized += total;
-            if (day != day_ledger_.last_loss_day) {
-                day_ledger_.consecutive_loss_days = total < 0.0 ? day_ledger_.consecutive_loss_days + 1 : 0;
-                day_ledger_.last_loss_day = day;
+                if (index >= static_cast<std::size_t>(host.trade_count())) continue;
+                const double pnl = host.get_trade(static_cast<int>(index)).pnl;
+                day_ledger_.intraday_realized += pnl;
+                if (pnl < 0.0 && day != day_ledger_.last_loss_day) {
+                    day_ledger_.last_loss_day = day;
+                    if (day_ledger_.consecutive_loss_days
+                        == std::numeric_limits<int>::max()) {
+                        throw std::overflow_error("closed trade counter exhausted");
+                    }
+                    ++day_ledger_.consecutive_loss_days;
+                } else if (pnl > 0.0) {
+                    day_ledger_.consecutive_loss_days = 0;
+                }
             }
         }
+    }
+    if (placement_snapshot) {
+        observe_intraday_cap(event, *placement_snapshot, context);
+        if (placement_snapshot->family == PineOrderFamily::Risk
+            && event.closed_units > 0.0) {
+            risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
+            risk_.intraday_cancel_pending = true;
+        }
+    }
+    if (preclose_intraday_loss) {
+        risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
+        risk_.intraday_cancel_pending = true;
+        if (require_host().physical_position().signed_units != 0.0) {
+            native_order::Request request;
+            request.intent = native_order::Flatten{};
+            request.comment = "Close Position (Max intraday Loss)";
+            PlacementSnapshot snapshot;
+            snapshot.family = PineOrderFamily::Risk;
+            snapshot.source_id = "__intraday_loss__";
+            snapshot.comment = request.comment;
+            snapshot.sizing = sizing_snapshot();
+            const auto accepted = submit_or_replace(
+                std::move(request), std::move(snapshot), false,
+                "__intraday_loss_close__");
+            if (accepted) {
+                (void)require_host().execute_current(
+                    {*accepted, NativeCurrentPriceRule::NearestTick});
+            }
+        }
+    }
+    update_risk_state(event.resolved_price);
+    if (risk_.intraday_cancel_pending) {
+        risk_.intraday_cancel_pending = false;
+        cancel_all();
+    }
+    if (placement_snapshot && placement_snapshot->opening
+        && std::abs(event.opened_units) > 0.0 && policy_script_bar_valid_) {
+        // Legacy processes the opening-affordability checkpoint at the
+        // matched entry price before the remainder of that bar's path.  The
+        // native callback is at exactly that current execution point, so the
+        // adapter can issue the generic reduction synchronously without a
+        // second matching loop.
+        const bool commissioned_short_opening =
+            require_host().physical_position().signed_units < 0.0
+            && config_.margin_short == 100.0
+            && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+            && config_.commission_value > 0.0
+            && finite_positive(placement_snapshot->requested_qty);
+        if (!commissioned_short_opening) {
+            (void)submit_margin_call_slice(event.resolved_price, context, true);
+            schedule_margin_call_path(policy_script_bar_, context);
+        }
+        schedule_intraday_loss_path(policy_script_bar_, context);
     }
     apply_fx_opening_margin_slice(event, context);
     refresh_pending_view();
@@ -2317,6 +2843,10 @@ int PineExecutionAdapter::short_seed_collision_role_v1(native_order::RequestHand
     if (handle == short_seed_.materialize_long) return 2;
     if (handle == short_seed_.final_short) return 3;
     return 0;
+}
+
+bool PineExecutionAdapter::take_intraday_loss_relabel(std::uint64_t ordinal) noexcept {
+    return intraday_loss_relabel_ordinals_.erase(ordinal) != 0;
 }
 
 void PineExecutionAdapter::set_risk_direction(int direction) noexcept { risk_.direction = direction; }

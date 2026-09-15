@@ -217,6 +217,15 @@ void check_native_empty_lifecycle() {
     // S23/S24 consequently have no source work to apply.
     CHECK(applied.status == x::Status::Applied);
 
+    NativeWitness nonempty;
+    CHECK(nonempty.settle(order_action::Transact{1.0}, fill(100.0, "open", 1)).status
+          == x::Status::Applied);
+    x::LifecycleEffects rejected;
+    rejected.removals.push_back({999, 999, {}, 0});
+    const auto refusal = nonempty.settle_with_effects(
+        x::Flatten{}, fill(90.0, "nonempty", 2), rejected);
+    CHECK(refusal.status == x::Status::InvalidLifecycle);
+    CHECK(nonempty.physical_position().signed_units == 1.0);
 }
 
 } // namespace

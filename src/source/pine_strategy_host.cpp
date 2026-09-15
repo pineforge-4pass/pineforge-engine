@@ -2,8 +2,10 @@
 #include <pineforge/timeframe.hpp>
 
 #include "../engine_internal.hpp"
+#include "../timezone.hpp"
 
 #include <cmath>
+#include <ctime>
 #include <stdexcept>
 #include <utility>
 
@@ -135,6 +137,7 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     adapter_.reset_for_run();
     adapter_.set_configuration(effective);
     adapter_.set_staged_configuration(staged);
+    adapter_.set_begin_mode(args.is_stream);
     adapter_.set_margin_call_enabled(margin_call_enabled_);
     scheduler_.capture_begin(args);
     scheduler_.set_source_series_active(effective.src_series_active);
@@ -178,12 +181,21 @@ void source::PineStrategyHost::on_native_bar(
         ? static_cast<std::int64_t>(context.driver_statistics.sample_ticks_processed) : 0;
     adapter_.observe_terminal_receipts();
     scheduler_.bar(bar, context, *this);
+    adapter_.on_bar_close(bar, context);
 }
 
 void source::PineStrategyHost::on_native_applied(
         const native_order::ExecutionAppliedEvent& event,
         const NativeDecisionContext& context) {
     adapter_.on_applied(event, context);
+    if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
+        for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
+            const std::size_t index = event.first_trade_index + i;
+            if (index >= trades_.size()) continue;
+            trades_[index].exit_id.clear();
+            trades_[index].exit_comment = "Close Position (Max intraday Loss)";
+        }
+    }
     project_short_seed_report_rows(event);
     scheduler_.applied(event, context, *this);
     if (scheduler_.terminal_source_bar()) {
@@ -258,6 +270,81 @@ bool source::PineStrategyHost::is_first_tick() const noexcept {
 
 bool source::PineStrategyHost::is_last_tick() const noexcept {
     return scheduler_.is_last_tick();
+}
+
+compat::pine::CapClock source::PineStrategyHost::fixture_cap_clock() const {
+    NativeDecisionContext context;
+    if (const auto point = current_execution_point()) {
+        context = point->decision;
+    } else {
+        context.coordinate.interval_index = bar_index_;
+        context.sub_bar_open_ms = current_bar_.timestamp;
+        context.script_bar_open_ms = current_bar_.timestamp;
+    }
+    const BarTime time = fixture_chart_time(context.sub_bar_open_ms);
+    return {context.sub_bar_open_ms,
+            syminfo_.session.empty() ? "24x7" : syminfo_.session,
+            syminfo_.timezone.empty() ? "UTC" : syminfo_.timezone,
+            time.dayofmonth, time.month};
+}
+
+compat::pine::Calculation source::PineStrategyHost::fixture_cap_calculation() const {
+    NativeDecisionContext context;
+    if (const auto point = current_execution_point()) {
+        context = point->decision;
+    } else {
+        context.coordinate.interval_index = bar_index_;
+        context.sub_bar_open_ms = current_bar_.timestamp;
+        context.script_bar_open_ms = current_bar_.timestamp;
+    }
+    return adapter_.cap_calculation(context);
+}
+
+bool source::PineStrategyHost::fixture_intraday_cap_latched() {
+    return adapter_.cap.placement(fixture_cap_clock())
+        == compat::pine::Placement::Deny;
+}
+
+source::PineStrategyHost::BarTime source::PineStrategyHost::fixture_chart_time(
+        std::int64_t timestamp_ms) const {
+    const std::time_t seconds = static_cast<std::time_t>(timestamp_ms / 1000);
+    std::tm tm{};
+    const auto utc = [&]() {
+        return ::gmtime_r(&seconds, &tm) != nullptr;
+    };
+    if (chart_timezone_.empty() || chart_timezone_ == "UTC"
+        || chart_timezone_ == "Etc/UTC") {
+        (void)utc();
+    } else {
+        try {
+            pine_tz::ScopedTimezone guard(chart_timezone_);
+            if (::localtime_r(&seconds, &tm) == nullptr) (void)utc();
+        } catch (...) {
+            (void)utc();
+        }
+    }
+    BarTime result;
+    result.year = tm.tm_year + 1900;
+    result.month = tm.tm_mon + 1;
+    result.dayofmonth = tm.tm_mday;
+    result.hour = tm.tm_hour;
+    result.minute = tm.tm_min;
+    result.second = tm.tm_sec;
+    result.dayofweek = tm.tm_wday + 1;
+    result.weekofyear = (tm.tm_yday + 7 - ((tm.tm_wday + 6) % 7)) / 7;
+    return result;
+}
+
+std::uint64_t source::PineStrategyHost::fixture_applied_receipt_count() const {
+    std::uint64_t count = 0;
+    for (const auto& event : native_events(0)) {
+        if (!event.command
+            || !std::holds_alternative<native_order::ExecutionAppliedEvent>(*event.command)) {
+            continue;
+        }
+        ++count;
+    }
+    return count;
 }
 
 bool source::PineStrategyHost::history_advances_new_bar() const noexcept {
@@ -357,6 +444,11 @@ void source::PineStrategyHost::enable_pine_intraday_cap() {
 
 void source::PineStrategyHost::attach_pine_execution_adapter() {
     adapter_.attach_execution_adapter();
+    // Generated constructors attach the source execution bridge before their
+    // risk statements and metadata arrive.  The intraday-cap configuration is
+    // part of that same source-policy attachment; leaving it detached makes a
+    // later max_intraday_filled_orders declaration silently inert.
+    adapter_.enable_intraday_cap();
 }
 
 void source::PineStrategyHost::set_syminfo_metadata(
@@ -433,6 +525,7 @@ source::PineStrategyHost::source_pending_view() const {
         case PineOrderFamily::ExitStop:
         case PineOrderFamily::ExitTrail:
         case PineOrderFamily::Margin:
+        case PineOrderFamily::Risk:
             type = FixtureIntentKind::EXIT;
             break;
         case PineOrderFamily::Order:

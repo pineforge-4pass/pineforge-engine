@@ -136,6 +136,19 @@ protected:
     // unchanged while routing their setup through the source configuration
     // projected at the native begin boundary.
     PineStrategyConfig& fixture_configuration() noexcept { return config_; }
+    const PineStrategyConfig& fixture_configuration() const noexcept { return config_; }
+    bool fixture_intraday_cap_latched();
+    compat::pine::CapClock fixture_cap_clock() const;
+    compat::pine::Calculation fixture_cap_calculation() const;
+    BarTime fixture_chart_time(std::int64_t timestamp_ms) const;
+    std::int64_t fixture_chart_day_key(std::int64_t timestamp_ms) const noexcept {
+        const BarTime time = fixture_chart_time(timestamp_ms);
+        return static_cast<std::int64_t>(time.dayofmonth) * 100 + time.month;
+    }
+    std::uint64_t fixture_applied_receipt_count() const;
+    bool fixture_cap_due_pending() const noexcept {
+        return adapter_.cap.due_cause().has_value();
+    }
     class FixtureQtyTypeSlot {
     public:
         explicit FixtureQtyTypeSlot(PineStrategyHost& host) noexcept : host_(host) {}
