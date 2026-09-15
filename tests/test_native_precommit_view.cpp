@@ -367,6 +367,41 @@ void a_p4_cycle_exhaustion_precedes_effects_and_validator() {
     CHECK(reached);
 }
 
+void a36_host_margin_verdict_precedes_generic_margin_gate() {
+    TermsHost host_margin;
+    host_margin.validator = [](const NativePrecommitView&) {
+        return NativePrecommitVerdict::AdmitWithHostMargin;
+    };
+    host_margin.calculation = [](Host& base) {
+        put(static_cast<TermsHost&>(base), tx(1.0, "host-margin"));
+    };
+    auto host_spec = spec("precommit-host-margin");
+    host_spec.initial_capital = 50.0;
+    host_spec.initial_margin_fraction = 1.0;
+    run(host_margin, host_spec, {100.0});
+    completed(host_margin);
+    CHECK(host_margin.validator_calls == 1);
+    CHECK(host_margin.lots().size() == 1);
+
+    TermsHost native_gate;
+    native_gate.validator = [](const NativePrecommitView&) {
+        return NativePrecommitVerdict::Admit;
+    };
+    native_gate.calculation = [](Host& base) {
+        put(static_cast<TermsHost&>(base), tx(1.0, "native-margin"));
+    };
+    auto native_spec = spec("precommit-native-margin");
+    native_spec.initial_capital = 50.0;
+    native_spec.initial_margin_fraction = 1.0;
+    run(native_gate, native_spec, {100.0});
+    completed(native_gate);
+    CHECK(native_gate.validator_calls == 1);
+    CHECK(native_gate.lots().empty());
+    const auto rejection = last_event<no::MatchRejectedEvent>(native_gate);
+    REQUIRE(rejection);
+    CHECK(rejection->reason == no::MatchRejectReason::InitialMargin);
+}
+
 }  // namespace
 
 int main() {
@@ -380,6 +415,7 @@ int main() {
     test("A-P5 validator and A-P6b preview", a_p5_validator_exception_and_a_p6b_preview_exception);
     test("A-P6 submit exception split", a_p6_submit_exception_is_callback_failure);
     test("A-P4 cycle exhaustion pre-effects", a_p4_cycle_exhaustion_precedes_effects_and_validator);
+    test("A36 host-margin verdict ordering", a36_host_margin_verdict_precedes_generic_margin_gate);
     std::printf("R4-B precommit: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

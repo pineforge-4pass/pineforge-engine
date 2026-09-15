@@ -413,6 +413,7 @@ def check_texts(files):
         "native_driver_v5")
     for token in ('spec.slot_label_policy == NativeSlotLabelPolicy::LegacyTolerant',
                   'NativeLegacyTolerance::BatchStructuralBars',
+                  'NativeLegacyTolerance::WarmupNonNegativeOHLC',
                   'NativeInputPreflightError::TimestampDeltaOverflow'):
         if token not in driver_src:
             raise ValueError('native driver omits legacy-compatible preflight token: ' + token)

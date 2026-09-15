@@ -25,8 +25,23 @@ bool legacy_batch_bar_structurally_valid(const Bar& bar) noexcept {
     return std::isnan(bar.volume) || (std::isfinite(bar.volume) && bar.volume >= 0.0);
 }
 
+bool legacy_stream_warmup_bar_structurally_valid(const Bar& bar) noexcept {
+    if (!std::isfinite(bar.open) || bar.open < 0.0) return false;
+    if (!std::isfinite(bar.high) || bar.high < 0.0) return false;
+    if (!std::isfinite(bar.low) || bar.low < 0.0) return false;
+    if (!std::isfinite(bar.close) || bar.close < 0.0) return false;
+    if (bar.low > std::min(bar.open, bar.close)) return false;
+    if (bar.high < std::max(bar.open, bar.close)) return false;
+    return std::isfinite(bar.volume) && bar.volume >= 0.0;
+}
+
 bool preflight_bar_structurally_valid(const NativeRunSpec& spec, const Bar& bar,
                                       NativeInputPolicy policy) noexcept {
+    if (policy == NativeInputPolicy::StreamWarmup
+        && native_legacy_tolerance_enabled(
+            spec.legacy_tolerance, NativeLegacyTolerance::WarmupNonNegativeOHLC)) {
+        return legacy_stream_warmup_bar_structurally_valid(bar);
+    }
     if (policy == NativeInputPolicy::Batch
         && native_legacy_tolerance_enabled(
             spec.legacy_tolerance, NativeLegacyTolerance::BatchStructuralBars)) {

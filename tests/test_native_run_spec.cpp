@@ -477,12 +477,19 @@ void legacy_tolerant_policy_contract() {
     check(!native_legacy_tolerance_enabled(
               NativeLegacyTolerance::None, NativeLegacyTolerance::BatchStructuralBars),
           "absent legacy structural tolerance stays strict");
+    spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(
+        static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
+        | static_cast<std::uint32_t>(NativeLegacyTolerance::WarmupNonNegativeOHLC));
+    expect_acceptance(spec);
+    check(native_legacy_tolerance_enabled(
+              spec.legacy_tolerance, NativeLegacyTolerance::WarmupNonNegativeOHLC),
+          "stream warmup tolerance bit is readable");
 
     spec = complete_spec();
     spec.slot_label_policy = static_cast<NativeSlotLabelPolicy>(2u);
     expect_refusal(spec, Error::UnknownSlotLabelPolicy, Field::SlotLabelPolicy);
     spec = complete_spec();
-    spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(2u);
+    spec.legacy_tolerance = static_cast<NativeLegacyTolerance>(4u);
     expect_refusal(spec, Error::UnknownLegacyTolerance, Field::LegacyTolerance);
 }
 

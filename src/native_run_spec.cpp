@@ -92,7 +92,8 @@ bool valid_slot_label_policy(NativeSlotLabelPolicy policy) noexcept {
 
 bool valid_legacy_tolerance(NativeLegacyTolerance tolerance) noexcept {
     constexpr std::uint32_t kKnown =
-        static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars);
+        static_cast<std::uint32_t>(NativeLegacyTolerance::BatchStructuralBars)
+        | static_cast<std::uint32_t>(NativeLegacyTolerance::WarmupNonNegativeOHLC);
     const auto bits = static_cast<std::uint32_t>(tolerance);
     return (bits & ~kKnown) == 0u;
 }

@@ -277,6 +277,7 @@ private:
                         const native_order::LiveRequest& live) const;
     bool admit_opening_inspect(const BacktestEngine& engine, double resolved_price,
                                const execution::SettlementInspection& inspect,
+                               bool skip_initial_margin,
                                native_order::MatchRejectReason* reason) const;
     void fail_preparation(BacktestEngine& engine, const native_order::PreparationError& error,
                           NativeFailureOperation operation);
@@ -388,6 +389,11 @@ private:
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};
     mutable AppendDigest account_digest_{};
+    // A host-owned margin verdict is part of the continuation only when the
+    // generic spec actually exposes an initial-margin gate.  Source specs do
+    // not set that gate, preserving their established fingerprint while the
+    // new generic authority remains hash-visible for native hosts.
+    mutable AppendDigest precommit_digest_{};
 };
 
 inline NativeExecutionConsumer& as_native_consumer(IExecutionConsumer& consumer) {
