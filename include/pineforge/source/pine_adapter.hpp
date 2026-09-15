@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -237,6 +238,110 @@ struct PlacementSnapshot {
     bool pooc_global_full_exit_tracks_bound_adds = false;
     bool pooc_global_full_exit_bound_add = false;
     PineCancellationReceipt cancellation{};
+};
+
+// Source placement handles are monotonically allocated by the native core.
+// Retain their immutable evidence in incarnation order rather than in a
+// node-per-row hash table: historical re-issued brackets then remain cheap to
+// append and lookup without changing the observable key/value collection.
+class PlacementTable {
+public:
+    template<bool IsConst>
+    class Iterator {
+        using Owner = std::conditional_t<IsConst, const PlacementTable, PlacementTable>;
+        using Snapshot = std::conditional_t<IsConst, const PlacementSnapshot, PlacementSnapshot>;
+        struct Reference {
+            Reference(std::uint64_t key, Snapshot& value) : first(key), second(value) {}
+
+            std::uint64_t first = 0;
+            Snapshot& second;
+        };
+
+    public:
+        Iterator() = default;
+
+        Reference operator*() const { return {static_cast<std::uint64_t>(index_ + 1U),
+                                               *owner_->slots_[index_]}; }
+        Reference* operator->() const {
+            reference_.emplace(static_cast<std::uint64_t>(index_ + 1U),
+                               *owner_->slots_[index_]);
+            return &*reference_;
+        }
+        Iterator& operator++() {
+            ++index_;
+            skip_empty();
+            return *this;
+        }
+        bool operator==(const Iterator& other) const noexcept {
+            return owner_ == other.owner_ && index_ == other.index_;
+        }
+        bool operator!=(const Iterator& other) const noexcept { return !(*this == other); }
+
+    private:
+        friend class PlacementTable;
+        Iterator(Owner* owner, std::size_t index) : owner_(owner), index_(index) { skip_empty(); }
+        void skip_empty() {
+            while (owner_ && index_ < owner_->slots_.size() && !owner_->slots_[index_]) ++index_;
+        }
+
+        Owner* owner_ = nullptr;
+        std::size_t index_ = 0;
+        mutable std::optional<Reference> reference_;
+    };
+
+    using iterator = Iterator<false>;
+    using const_iterator = Iterator<true>;
+
+    std::size_t size() const noexcept { return size_; }
+    std::size_t max_size() const noexcept { return slots_.max_size(); }
+    void reserve(std::size_t count) { slots_.reserve(count); }
+    void clear() noexcept {
+        slots_.clear();
+        size_ = 0;
+    }
+
+    iterator begin() noexcept { return iterator(this, 0); }
+    iterator end() noexcept { return iterator(this, slots_.size()); }
+    const_iterator begin() const noexcept { return const_iterator(this, 0); }
+    const_iterator end() const noexcept { return const_iterator(this, slots_.size()); }
+
+    iterator find(std::uint64_t incarnation) noexcept {
+        if (incarnation == 0 || incarnation > slots_.size() || !slots_[incarnation - 1U]) return end();
+        return iterator(this, static_cast<std::size_t>(incarnation - 1U));
+    }
+    const_iterator find(std::uint64_t incarnation) const noexcept {
+        if (incarnation == 0 || incarnation > slots_.size() || !slots_[incarnation - 1U]) return end();
+        return const_iterator(this, static_cast<std::size_t>(incarnation - 1U));
+    }
+
+    PlacementSnapshot& at(std::uint64_t incarnation) {
+        const auto found = find(incarnation);
+        if (found == end()) throw std::out_of_range("source placement handle is absent");
+        return found->second;
+    }
+    const PlacementSnapshot& at(std::uint64_t incarnation) const {
+        const auto found = find(incarnation);
+        if (found == end()) throw std::out_of_range("source placement handle is absent");
+        return found->second;
+    }
+
+    template<class... Args>
+    std::pair<iterator, bool> try_emplace(std::uint64_t incarnation, Args&&... args) {
+        if (incarnation == 0 || incarnation > slots_.max_size()) {
+            throw std::length_error("source placement incarnation is out of range");
+        }
+        const auto index = static_cast<std::size_t>(incarnation - 1U);
+        if (index >= slots_.size()) slots_.resize(index + 1U);
+        auto& slot = slots_[index];
+        if (slot) return {iterator(this, index), false};
+        slot.emplace(std::forward<Args>(args)...);
+        ++size_;
+        return {iterator(this, index), true};
+    }
+
+private:
+    std::vector<std::optional<PlacementSnapshot>> slots_;
+    std::size_t size_ = 0;
 };
 
 struct ShortSeedPlan {
@@ -616,6 +721,15 @@ private:
     void update_l4c_priority();
     void update_l4c_lifecycle(const native_order::ExecutionAppliedEvent&,
                               const NativeDecisionContext&);
+    using ReceiptHighWaterReader = std::uint64_t (*)(const NativeStrategyHost&) noexcept;
+    void set_receipt_high_water_readers(ReceiptHighWaterReader event_reader,
+                                        ReceiptHighWaterReader terminal_reader) noexcept;
+
+    // Derived receipt watermark used only to avoid materializing an owning
+    // native-events snapshot when no terminal command was appended.
+    std::uint64_t terminal_receipt_cursor_ = 0;
+    ReceiptHighWaterReader event_high_water_reader_ = nullptr;
+    ReceiptHighWaterReader terminal_receipt_high_water_reader_ = nullptr;
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
@@ -629,7 +743,7 @@ private:
     std::uint64_t source_command_sequence_ = 0;
     std::unordered_map<SourceId, CohortFacts> cohorts_by_id_;
     std::vector<SourceId> cohort_order_;
-    std::unordered_map<std::uint64_t, PlacementSnapshot> placement_;
+    PlacementTable placement_;
     std::unordered_map<std::uint64_t, native_order::RequestHandle> live_by_source_key_;
     std::unordered_map<std::uint64_t, std::vector<native_order::RequestHandle>> bracket_families_;
     std::vector<PendingBracketLeg> pending_bracket_legs_;
@@ -641,7 +755,6 @@ private:
     std::vector<PendingCoofRequest> pending_coof_requests_;
     std::vector<native_order::RequestHandle> live_handles_;
     std::vector<native_order::RequestHandle> first_open_newborns_;
-    std::vector<native_order::RequestHandle> pending_view_handles_;
     std::vector<DroppedCloseReceipt> dropped_close_receipts_;
     std::vector<OpenEntryFeeFact> open_entry_fees_;
     // Current executions settle synchronously, while their generic Applied

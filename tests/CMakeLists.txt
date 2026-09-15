@@ -404,6 +404,7 @@ set(TEST_SOURCES
     test_l4e_native_settlement_h07
     test_l4e_native_install_h08
     test_l4f_security_magnifier
+    test_l4g_runtime_budget
 )
 
 # L3b deletes the former compatibility-owner bodies. These targets directly
@@ -1043,6 +1044,9 @@ set(L4B_PENDING_TESTS
     test_tv_money_precision_l4b
 )
 set_tests_properties(${L4B_PENDING_TESTS} PROPERTIES LABELS l4-pending)
+target_compile_definitions(test_l4g_runtime_budget PRIVATE
+    PINEFORGE_L4G_TUTORIAL_CSV="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
+set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 30)
 
 # R4-D L0 captures literal values from the ab9714be legacy source route in
 # dedicated translation units.  They intentionally live outside the ordinary

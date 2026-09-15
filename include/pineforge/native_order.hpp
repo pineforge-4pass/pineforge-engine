@@ -7,6 +7,7 @@
 #include "native_order_identity.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -725,6 +726,65 @@ using CommandEvent = std::variant<AcceptedEvent,
                                   ArmedEvent,
                                   TermsResolvedEvent>;
 
+// Almost every prepared command yields one history event. Keep that ordinary
+// transactional payload inline; the overflow vector preserves the existing
+// arbitrary-length behavior for group/lifecycle plans that emit more events.
+class InlineCommandEvents {
+public:
+    InlineCommandEvents() = default;
+    InlineCommandEvents(InlineCommandEvents&&) noexcept = default;
+    InlineCommandEvents& operator=(InlineCommandEvents&&) noexcept = default;
+    InlineCommandEvents(const InlineCommandEvents&) = default;
+    InlineCommandEvents& operator=(const InlineCommandEvents&) = default;
+
+    std::size_t size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+
+    template<class Event>
+    void emplace_back(Event&& event) {
+        push_back(CommandEvent(std::forward<Event>(event)));
+    }
+
+    void push_back(CommandEvent event) {
+        if (overflow_.empty() && size_ < inline_.size()) {
+            inline_[size_++].emplace(std::move(event));
+            return;
+        }
+        if (overflow_.empty()) {
+            overflow_.reserve(inline_.size() * 2U);
+            for (std::size_t i = 0; i < size_; ++i) {
+                overflow_.push_back(std::move(*inline_[i]));
+                inline_[i].reset();
+            }
+        }
+        overflow_.push_back(std::move(event));
+        ++size_;
+    }
+
+    void clear() noexcept {
+        if (overflow_.empty()) {
+            for (std::size_t i = 0; i < size_; ++i) inline_[i].reset();
+        } else {
+            overflow_.clear();
+        }
+        size_ = 0;
+    }
+
+    CommandEvent& front() noexcept { return (*this)[0]; }
+    const CommandEvent& front() const noexcept { return (*this)[0]; }
+    CommandEvent& operator[](std::size_t index) noexcept {
+        return overflow_.empty() ? *inline_[index] : overflow_[index];
+    }
+    const CommandEvent& operator[](std::size_t index) const noexcept {
+        return overflow_.empty() ? *inline_[index] : overflow_[index];
+    }
+
+private:
+    std::array<std::optional<CommandEvent>, 2> inline_{};
+    std::vector<CommandEvent> overflow_{};
+    std::size_t size_ = 0;
+};
+
 struct CommandContext {
     int64_t decision_time_ms = 0;
     std::optional<double> quantity_grid;
@@ -986,6 +1046,12 @@ public:
 
     // The allowance that prepare_evaluation would install for this point.
     static Allowance evaluated_allowance(const LiveRequest& live, uint64_t point) noexcept;
+    // Consumer-only no-event form of the ordinary CohortClose allowance
+    // refresh. It preserves prepare_evaluation's eligibility and liveness
+    // checks while avoiding a transient mutation envelope per driver point.
+    bool refresh_cohort_allowance(const RequestHandle& target,
+                                  const EvaluationContext& context,
+                                  const TargetObservation& observation);
     // Pure arithmetic over the cached pending total. Outputs are assigned only
     // after every validation and subtraction succeeds.
     static bool effective_host_units(const PendingAdjustments& pending,
@@ -1077,7 +1143,7 @@ private:
         std::size_t history_size = 0;
         uint64_t last_ordinal = 0;
         bool consumed = false;
-        std::vector<CommandEvent> events;
+        InlineCommandEvents events;
         std::uint8_t live_change = 0;  // 0 none, 1 push, 2 erase, 3 update
         std::size_t live_index = 0;
         LiveRequest live_row{};

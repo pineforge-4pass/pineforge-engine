@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -373,6 +374,45 @@ bool on_optional_grid(double value, std::optional<double> grid) {
     return !grid || quantity_on_grid(value, *grid);
 }
 
+// Prepared tokens are short-lived transactional envelopes. Reusing their
+// storage keeps repeated submit/replace/evaluation traffic from returning to
+// the allocator at every broker point; the contained plans still construct,
+// validate and commit exactly as before. This thread-local scratch is neither
+// request state nor part of the continuation hash.
+template<class Tag>
+struct PreparedImplStorage {
+    static void* allocate(std::size_t size) {
+        auto& recycled = free_blocks();
+        if (!recycled.empty()) {
+            void* block = recycled.back();
+            recycled.pop_back();
+            return block;
+        }
+        return ::operator new(size);
+    }
+
+    static void deallocate(void* block) noexcept {
+        if (!block) return;
+        try {
+            free_blocks().push_back(block);
+        } catch (...) {
+            ::operator delete(block);
+        }
+    }
+
+private:
+    static std::vector<void*>& free_blocks() {
+        static thread_local std::vector<void*> recycled;
+        return recycled;
+    }
+};
+
+struct PreparedSubmitStorageTag {};
+struct PreparedReplaceStorageTag {};
+struct PreparedCancelStorageTag {};
+struct PreparedMutationStorageTag {};
+struct PreparedExecutionStorageTag {};
+
 void fill_applied_cursor(ExecutionAppliedEvent& event, const MatchCursor& cursor) {
     event.cursor = cursor;
 }
@@ -395,6 +435,16 @@ CancelledEvent make_cancelled(uint64_t ordinal, const LiveRequest& live, CancelR
 struct PreparedSubmit::Impl {
     WorkingRequestCore::MutationPlan plan;
     SubmitResult result;
+
+    static void* operator new(std::size_t size) {
+        return PreparedImplStorage<PreparedSubmitStorageTag>::allocate(size);
+    }
+    static void operator delete(void* block) noexcept {
+        PreparedImplStorage<PreparedSubmitStorageTag>::deallocate(block);
+    }
+    static void operator delete(void* block, std::size_t) noexcept {
+        PreparedImplStorage<PreparedSubmitStorageTag>::deallocate(block);
+    }
 };
 PreparedSubmit::PreparedSubmit() noexcept = default;
 PreparedSubmit::PreparedSubmit(PreparedSubmit&&) noexcept = default;
@@ -414,6 +464,16 @@ EventId PreparedSubmit::predicted_event_id() const {
 struct PreparedReplace::Impl {
     WorkingRequestCore::MutationPlan plan;
     ReplaceResult result;
+
+    static void* operator new(std::size_t size) {
+        return PreparedImplStorage<PreparedReplaceStorageTag>::allocate(size);
+    }
+    static void operator delete(void* block) noexcept {
+        PreparedImplStorage<PreparedReplaceStorageTag>::deallocate(block);
+    }
+    static void operator delete(void* block, std::size_t) noexcept {
+        PreparedImplStorage<PreparedReplaceStorageTag>::deallocate(block);
+    }
 };
 PreparedReplace::PreparedReplace() noexcept = default;
 PreparedReplace::PreparedReplace(PreparedReplace&&) noexcept = default;
@@ -433,6 +493,16 @@ EventId PreparedReplace::predicted_event_id() const {
 struct PreparedCancel::Impl {
     WorkingRequestCore::MutationPlan plan;
     CancelResult result;
+
+    static void* operator new(std::size_t size) {
+        return PreparedImplStorage<PreparedCancelStorageTag>::allocate(size);
+    }
+    static void operator delete(void* block) noexcept {
+        PreparedImplStorage<PreparedCancelStorageTag>::deallocate(block);
+    }
+    static void operator delete(void* block, std::size_t) noexcept {
+        PreparedImplStorage<PreparedCancelStorageTag>::deallocate(block);
+    }
 };
 PreparedCancel::PreparedCancel() noexcept = default;
 PreparedCancel::PreparedCancel(PreparedCancel&&) noexcept = default;
@@ -451,6 +521,16 @@ EventId PreparedCancel::predicted_event_id() const {
 
 struct PreparedMutation::Impl {
     WorkingRequestCore::MutationPlan plan;
+
+    static void* operator new(std::size_t size) {
+        return PreparedImplStorage<PreparedMutationStorageTag>::allocate(size);
+    }
+    static void operator delete(void* block) noexcept {
+        PreparedImplStorage<PreparedMutationStorageTag>::deallocate(block);
+    }
+    static void operator delete(void* block, std::size_t) noexcept {
+        PreparedImplStorage<PreparedMutationStorageTag>::deallocate(block);
+    }
 };
 PreparedMutation::PreparedMutation() noexcept = default;
 PreparedMutation::PreparedMutation(PreparedMutation&&) noexcept = default;
@@ -471,6 +551,16 @@ struct PreparedExecution::Impl {
     std::optional<OpeningsClose> openings_close;
     std::optional<CohortClose> cohort_close;
     ExecutionProposal proposal{};
+
+    static void* operator new(std::size_t size) {
+        return PreparedImplStorage<PreparedExecutionStorageTag>::allocate(size);
+    }
+    static void operator delete(void* block) noexcept {
+        PreparedImplStorage<PreparedExecutionStorageTag>::deallocate(block);
+    }
+    static void operator delete(void* block, std::size_t) noexcept {
+        PreparedImplStorage<PreparedExecutionStorageTag>::deallocate(block);
+    }
 };
 PreparedExecution::PreparedExecution() noexcept = default;
 PreparedExecution::PreparedExecution(PreparedExecution&&) noexcept = default;
@@ -638,8 +728,15 @@ const CommandEvent* WorkingRequestCore::event_at(const EventId& id) const {
 
 const RequestDefinition* WorkingRequestCore::definition_for(
         const RequestHandle& handle) const noexcept {
+    if (handle.incarnation == 0 || handle.run != identity_) return nullptr;
     if (const auto* live = find_live(handle)) return live->definition.get();
-    for (const auto& event : history_) {
+    // A definition is immutable and its later lifecycle events retain the
+    // same shared definition pointer. Requests receive monotonically
+    // increasing incarnations, so the most recent occurrence is normally
+    // close to the tail. Search backwards to avoid a whole-run forward scan
+    // at every generic cohort candidate.
+    for (auto it = history_.rbegin(); it != history_.rend(); ++it) {
+        const auto& event = *it;
         if (const auto* accepted = std::get_if<AcceptedEvent>(&event)) {
             if (accepted->definition && accepted->definition->handle == handle)
                 return accepted->definition.get();
@@ -896,7 +993,8 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     if (const auto error = validate_plan(plan)) return *error;
     const std::size_t first = history_.size();
     const std::size_t count = plan.events.size();
-    for (auto& event : plan.events) {
+    for (std::size_t i = 0; i < plan.events.size(); ++i) {
+        auto& event = plan.events[i];
         const uint64_t ordinal = event_ordinal(event);
         history_.push_back(std::move(event));
         ordinal_index_.push_back({ordinal, history_.size() - 1});
@@ -1369,7 +1467,7 @@ PreparedSubmit WorkingRequestCore::prepare_submit(const Request& request,
     RequestHandle handle{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
     auto definition = std::make_shared<RequestDefinition>(
-            RequestDefinition{handle, staged, birth, std::nullopt});
+            RequestDefinition{handle, std::move(staged), birth, std::nullopt});
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
     AcceptedEvent accepted;
     accepted.ordinal = ordinal;
@@ -1435,7 +1533,7 @@ PreparedReplace WorkingRequestCore::prepare_replace(const RequestHandle& target,
     RequestHandle successor{identity_, incarnation};
     Birth birth{ordinal, context.decision_time_ms};
     auto definition = std::make_shared<RequestDefinition>(
-            RequestDefinition{successor, staged, birth, staged_target});
+            RequestDefinition{successor, std::move(staged), birth, staged_target});
     LiveRequest live = make_live(definition, context, EventId{identity_, ordinal});
     ReplacedEvent replaced;
     replaced.ordinal = ordinal;
@@ -1599,6 +1697,38 @@ bool same_point_allowance(const Allowance& allowance, uint64_t point) noexcept {
 Allowance WorkingRequestCore::evaluated_allowance(const LiveRequest& live,
                                                   uint64_t point) noexcept {
     return initialize_allowance(live.remaining, live.request().capacity, point);
+}
+
+bool WorkingRequestCore::refresh_cohort_allowance(
+        const RequestHandle& target, const EvaluationContext& context,
+        const TargetObservation& observation) {
+    require_identity(identity_);
+    std::size_t live_index = 0;
+    if (classify(target, &live_index) != TargetKind::Live) return false;
+    LiveRequest& live = live_[live_index];
+    if (!std::holds_alternative<CohortClose>(live.authority)
+        || std::holds_alternative<Wait>(live.authority)) {
+        return false;
+    }
+    const EligibilityFacts facts = eligibility_facts(live, context);
+    if (!facts.birth_ok || !facts.driver_ok || !context.cohort_side) return false;
+    bool has_live_member = false;
+    for (const auto& opening : observation.openings)
+        has_live_member = has_live_member || opening.has_live_matching_lot;
+    if (!has_live_member || same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
+        return false;
+    }
+    if (epoch_ > std::numeric_limits<uint64_t>::max() - 2U) {
+        throw std::overflow_error("native working-request epoch exhausted");
+    }
+    live.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
+    // prepare_evaluation seals then commits its no-event update, advancing the
+    // token epoch twice. Retain that invalidation contract for outstanding
+    // preparations without adding a history record.
+    if (!bump_epoch() || !bump_epoch()) {
+        throw std::overflow_error("native working-request epoch exhausted");
+    }
+    return true;
 }
 
 bool WorkingRequestCore::effective_host_units(const PendingAdjustments& pending,
