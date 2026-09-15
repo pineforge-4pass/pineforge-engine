@@ -371,6 +371,13 @@ class ConfigValidation(unittest.TestCase):
             validate_config(parse_args(['release', '--require-websocket']))
         self.assertEqual(main(['debug', '--require-websocket']), 2)
 
+    def test_exclude_label_is_a_simple_ctest_label(self):
+        cfg = validate_config(parse_args(
+            ['release', '--build-dir', 'build-ci-x', '--exclude-label', 'l4-pending']))
+        self.assertEqual(cfg.exclude_label, 'l4-pending')
+        with self.assertRaisesRegex(ConfigError, 'exclude-label'):
+            validate_config(parse_args(['release', '--exclude-label', 'bad label']))
+
     def test_ccache_requires_installed_tool(self):
         args = parse_args(['release', '--ccache'])
         with self.assertRaisesRegex(ConfigError, 'ccache'):
@@ -897,6 +904,15 @@ class DriverOrderingAndAggregation(unittest.TestCase):
             self.assertIn('--output-junit', ctest_argv)
             self.assertEqual(Path(ctest_argv[ctest_argv.index('--output-junit') + 1]).resolve(),
                              (build_dir / 'ctest-junit.xml').resolve())
+
+    def test_ctest_label_exclusion_is_forwarded(self):
+        code, summary, scripted, _ = self.run_profile(
+            extra=['--exclude-label', 'l4-pending'])
+        self.assertEqual(code, 0, summary['failures'])
+        ctest_argv = next(
+            argv for argv in scripted.calls if argv[0] == 'ctest' and '--test-dir' in argv)
+        self.assertIn('-LE', ctest_argv)
+        self.assertEqual(ctest_argv[ctest_argv.index('-LE') + 1], 'l4-pending')
 
     def test_junit_flag_omitted_when_unsupported(self):
         code, summary, scripted, build_dir = self.run_profile(junit_help='absent')

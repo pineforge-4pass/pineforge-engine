@@ -234,6 +234,22 @@ int main(int argc, char** argv) {
     return int(validation.error) + int(setup.status) + int(setup.validation.index);
 }
 '''
+NATIVE_TICK_CALLER = '''#include <pineforge/native_host.hpp>
+#include <cstdint>
+#include <type_traits>
+using H = pineforge::engine_script_run_v17::NativeStrategyHost;
+using T = pineforge::engine_script_run_v17::NativeTickContext;
+static_assert(std::is_same_v<decltype(T::decision), pineforge::NativeDecisionContext>);
+static_assert(std::is_same_v<decltype(T::sequence), std::uint64_t>);
+struct TickHost final : H {
+    void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {}
+    void on_native_tick(const pineforge::Bar&, const T&) override {}
+};
+int main() {
+    TickHost host;
+    return int(host.native_state().kind);
+}
+'''
 HOST_CONSTRUCTOR_CALLER = '''#include <pineforge/native_host.hpp>
 struct Host final : pineforge::NativeStrategyHost {
     void on_native_bar(const pineforge::Bar&, const pineforge::NativeDecisionContext&) override {}
@@ -302,10 +318,14 @@ def control_applicability(ready: bool | None = None) -> list[dict]:
          "CURRENT_EXECUTION_V15_CALLER", "engine_script_run_v17"),
         ("v17_native_fx_curve_surface_compile", "compile", ready,
          "NATIVE_FX_CURVE_CALLER", "engine_script_run_v17"),
+        ("v17_native_tick_surface_compile", "compile", ready,
+         "NATIVE_TICK_CALLER", "engine_script_run_v17"),
         ("v17_to_v16_frozen_current_execution_compile_reject", "compile_rejection", ready,
          "CURRENT_EXECUTION_V15_CALLER", V16_FROZEN_ENGINE_EPOCH),
         ("v17_to_v16_frozen_native_fx_curve_compile_reject", "compile_rejection", ready,
          "NATIVE_FX_CURVE_CALLER", V16_FROZEN_ENGINE_EPOCH),
+        ("v17_to_v16_frozen_native_tick_compile_reject", "compile_rejection", ready,
+         "NATIVE_TICK_CALLER", V16_FROZEN_ENGINE_EPOCH),
     )
     return [{"name": name, "kind": kind, "applicable": bool(applicable),
              "status": "required" if applicable else "pending_surface",
@@ -841,17 +861,21 @@ def main() -> int:
                        render_current_execution_caller("engine_script_run_v16"), v16_frozen_include)
         compile_object("v14_current_execution_shape_agnostic_compile",
                        render_current_execution_caller(V14_ENGINE_EPOCH), v14_include)
-        current_surface = current_fx_curve = None
+        current_surface = current_fx_curve = current_tick = None
         if CURRENT_TERMS_SURFACE_READY:
             current_surface = compile_object("v17_current_execution_surface_compile",
                                              CURRENT_EXECUTION_V15_CALLER, include)
             current_fx_curve = compile_object("v17_native_fx_curve_surface_compile",
                                               NATIVE_FX_CURVE_CALLER, include)
+            current_tick = compile_object("v17_native_tick_surface_compile",
+                                          NATIVE_TICK_CALLER, include)
             for name, source in (
                 ("v17_to_v16_frozen_current_execution_compile_reject",
                  CURRENT_EXECUTION_V15_CALLER),
                 ("v17_to_v16_frozen_native_fx_curve_compile_reject",
                  NATIVE_FX_CURVE_CALLER),
+                ("v17_to_v16_frozen_native_tick_compile_reject",
+                 NATIVE_TICK_CALLER),
             ):
                 path = root / (name + ".cpp")
                 path.write_text(source)

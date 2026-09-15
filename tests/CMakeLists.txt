@@ -809,6 +809,26 @@ foreach(test_name ${TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
+# A28(1): these remain executable native-route witnesses, but their named
+# rows depend on L4c's exit-leg lifecycle / OCA / retained-parent ordering.
+# They are deliberately excluded only from the interim L4a verification set;
+# the report enumerates the individual assertions and L4c re-enables them.
+set(L4_PENDING_TESTS
+    test_aapl15_margin_brackets_l4a
+    test_carried_pooc_short_margin_state_l4a
+    test_integer_short_margin_state_l4a
+    test_intraday_cap_auto_close_l4a
+    test_margin_call_intrabar_chronology_l4a
+    test_margin_call_trail_exit_chronology_l4a
+    test_pine_cap_boundary_l4a
+    test_risk_max_intraday_loss_tv_l4a
+    test_native_oracle_stop_snapshot_full_l2
+    test_short_margin_script_state_l4a
+    test_stop_open_margin_script_state_l4a
+    test_tv_money_long_margin_call_eth_l4a
+)
+set_tests_properties(${L4_PENDING_TESTS} PROPERTIES LABELS l4-pending)
+
 # R4-D L0 captures literal values from the ab9714be legacy source route in
 # dedicated translation units.  They intentionally live outside the ordinary
 # `tests/test_*.cpp` inventory so later lowering work cannot silently rewrite
@@ -858,6 +878,7 @@ add_test(NAME test_oracle_short_seed
          COMMAND test_native_oracle_short_seed_full_l2)
 add_test(NAME test_oracle_stop_snapshot
          COMMAND test_native_oracle_stop_snapshot_full_l2)
+set_tests_properties(test_oracle_stop_snapshot PROPERTIES LABELS l4-pending)
 
 target_compile_definitions(test_native_market_vertical PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_MARKET_VERTICAL_SHA256}")

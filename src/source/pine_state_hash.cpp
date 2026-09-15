@@ -249,7 +249,10 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
     for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
     f.d(pooc_open_basis_); f.i(pooc_open_script_bar_); f.i(close_all_pending_script_bar_);
-    f.d(last_fx_rate_); f.i(position_open_script_bar_); f.u(cap_latest_fill_);
+    f.d(last_fx_rate_); f.i(position_open_script_bar_);
+    f.u(static_cast<std::uint64_t>(position_open_phase_));
+    f.b(position_open_priced_);
+    f.i(last_margin_call_script_bar_); f.u(cap_latest_fill_);
     f.b(source_margin_call_enabled_);
     f.d(policy_script_bar_.open); f.d(policy_script_bar_.high);
     f.d(policy_script_bar_.low); f.d(policy_script_bar_.close);

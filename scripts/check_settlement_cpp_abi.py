@@ -37,7 +37,10 @@ def verify(include: Path) -> dict:
     present = [name for name in RETIRED_SEAMS if name in engine]
     if present:
         raise RuntimeError("retired engine seams remain: " + ", ".join(present))
-    required_virtuals = {"prepare_native_begin", "on_native_bar_open", "on_native_input"}
+    required_virtuals = {
+        "prepare_native_begin", "on_native_bar_open", "on_native_input",
+        "on_native_tick",
+    }
     if not required_virtuals.issubset(set(manifest.get("addedVirtuals", []))):
         raise RuntimeError("relocation manifest omits a native hook")
     if not all("virtual void " + name in native for name in required_virtuals):

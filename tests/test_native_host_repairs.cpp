@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <typeinfo>
@@ -159,6 +160,61 @@ public:
         }
     }
     double runup() const { return open_trade_max_runup(0); }
+};
+
+int applied_fill_count(const NativeStrategyHost& host);
+
+class PostCalculationCurrentHost final : public NativeStrategyHost {
+public:
+    bool script_body_completed = false;
+    native_order::SubmitStatus submit_status = native_order::SubmitStatus::Rejected;
+    std::optional<NativeCurrentPointView> point_after_script;
+    std::optional<native_order::ExecutionAppliedEvent> applied;
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {
+        // This models a host's script body completing before the source
+        // policy submits its current-point operation.
+        script_body_completed = true;
+        const auto submitted = submit_market(Request{Transact{1.0}, "post-calc", ""});
+        submit_status = submitted.status;
+        point_after_script = current_execution_point();
+        if (!submitted.handle) return;
+        const auto result = execute_current(
+            {*submitted.handle, NativeCurrentPriceRule::NearestTick});
+        if (const auto* event =
+                std::get_if<native_order::ExecutionAppliedEvent>(&result)) {
+            applied = *event;
+        }
+    }
+};
+
+class TickCurrentHost final : public NativeStrategyHost {
+public:
+    std::vector<Bar> ticks;
+    std::vector<NativeTickContext> contexts;
+    std::vector<std::uint64_t> callback_hashes;
+    int applied_before_first_tick = -1;
+    std::optional<NativeCurrentPointView> first_current_point;
+    std::optional<native_order::ExecutionAppliedEvent> current_applied;
+
+    void on_native_tick(const Bar& tick, const NativeTickContext& context) override {
+        ticks.push_back(tick);
+        contexts.push_back(context);
+        callback_hashes.push_back(native_continuation_hash());
+        if (ticks.size() != 1) return;
+        applied_before_first_tick = applied_fill_count(*this);
+        const auto submitted = submit_market(Request{Transact{1.0}, "tick-current", ""});
+        first_current_point = current_execution_point();
+        if (!submitted.handle) return;
+        const auto result = execute_current(
+            {*submitted.handle, NativeCurrentPriceRule::NearestTick});
+        if (const auto* event =
+                std::get_if<native_order::ExecutionAppliedEvent>(&result)) {
+            current_applied = *event;
+        }
+    }
+
+    void on_native_bar(const Bar&, const NativeDecisionContext&) override {}
 };
 
 class NanHost final : public NativeStrategyHost {
@@ -328,6 +384,75 @@ int main() {
         const auto off = preflight_native_inputs(spec, &mid, 1, NativeInputPolicy::Batch);
         CHECK(off.error == NativeInputPreflightError::OffGridLabel);
         CHECK(off.index == 0);
+    }
+
+    // A28(4): the generic calculation callback remains a current-execution
+    // frame through host work that follows the script body.
+    {
+        PostCalculationCurrentHost host;
+        auto spec = spec_for("post-calculation-current-permission", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        const Bar bar = bar_at(60000, 100, 110, 90, 101);
+        host.run(&bar, 1);
+        CHECK(host.last_error().empty());
+        CHECK(host.script_body_completed);
+        CHECK(host.submit_status == native_order::SubmitStatus::Accepted);
+        CHECK(host.point_after_script.has_value());
+        CHECK(host.applied.has_value());
+        if (host.point_after_script && host.applied) {
+            CHECK(host.applied->effective_time_ms()
+                  == host.point_after_script->decision.coordinate.effective_time_ms);
+            CHECK(host.applied->interval_open_ms()
+                  == host.point_after_script->decision.coordinate.open_ms);
+            near(host.applied->resolved_price, 101.0);
+        }
+        near(host.physical_position().signed_units, 1.0);
+    }
+
+    // A28(3): accepted realtime prints enter a current generic callback in
+    // arrival order before matching. The first callback observes an already
+    // live market request still unfilled, then executes its own current
+    // request at the print coordinate; the prior request is matched only
+    // after that callback returns.
+    {
+        TickCurrentHost host;
+        auto spec = spec_for("native-tick-current-order", 1);
+        CHECK(host.configure_native(spec).status == NativeSetupStatus::Applied);
+        const Bar warmup = bar_at(0, 100, 101, 99, 100);
+        CHECK(host.stream_begin(&warmup, 1, "1", "1"));
+        const auto preexisting = host.submit_market(Request{Transact{1.0}, "preexisting", ""});
+        CHECK(preexisting.status == native_order::SubmitStatus::Accepted);
+        CHECK(preexisting.handle.has_value());
+        const TradeTick ticks[] = {
+            {60001, 41, 100.25, 2.0},
+            {60002, 42, 100.50, 3.0},
+            {60003, 43, 100.75, 4.0},
+        };
+        CHECK(host.stream_push_ticks(ticks, 3));
+        CHECK(host.ticks.size() == 3);
+        CHECK(host.contexts.size() == 3);
+        CHECK(host.callback_hashes.size() == 3);
+        CHECK(host.applied_before_first_tick == 0);
+        CHECK(host.first_current_point.has_value());
+        CHECK(host.current_applied.has_value());
+        for (std::size_t i = 0; i < host.ticks.size() && i < host.contexts.size(); ++i) {
+            CHECK(host.ticks[i].timestamp == ticks[i].timestamp);
+            near(host.ticks[i].open, ticks[i].price);
+            near(host.ticks[i].volume, ticks[i].quantity);
+            CHECK(host.contexts[i].sequence == ticks[i].sequence);
+            CHECK(host.contexts[i].decision.coordinate.effective_time_ms == ticks[i].timestamp);
+            CHECK(host.contexts[i].decision.coordinate.source_price_time_ms == ticks[i].timestamp);
+            CHECK(host.contexts[i].decision.sub_bar_open_ms == ticks[i].timestamp);
+            CHECK(host.callback_hashes[i] != 0);
+        }
+        if (host.first_current_point && host.current_applied) {
+            CHECK(host.current_applied->effective_time_ms()
+                  == host.first_current_point->decision.coordinate.effective_time_ms);
+            near(host.current_applied->resolved_price, ticks[0].price);
+        }
+        near(host.physical_position().signed_units, 2.0);
+        CHECK(applied_fill_count(host) == 2);
+        CHECK(host.stream_end(false));
     }
 
     // L4a / P1-1: Canonical hosts keep the base per-bar refusal ordering.

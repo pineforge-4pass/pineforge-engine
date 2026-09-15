@@ -161,6 +161,11 @@ void source::PineStrategyHost::on_native_input(
     scheduler_.input(bar, context, *this);
 }
 
+void source::PineStrategyHost::on_native_tick(
+        const Bar& tick, const NativeTickContext& context) {
+    adapter_.on_tick(tick, context);
+}
+
 void source::PineStrategyHost::on_native_bar_open(
         const Bar& bar, const NativeDecisionContext& context) {
     bar_magnifier_enabled_ = scheduler_.bar_magnifier_enabled();

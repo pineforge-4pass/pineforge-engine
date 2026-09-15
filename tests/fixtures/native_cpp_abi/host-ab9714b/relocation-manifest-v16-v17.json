@@ -21,12 +21,14 @@
     "IntrabarPath::lower_tf::sample_eligibility",
     "IntrabarPath::synthesized",
     "NativeDecisionContext::driver_statistics",
-    "NativeInputContext"
+    "NativeInputContext",
+    "NativeTickContext"
   ],
   "addedVirtuals": [
     "prepare_native_begin",
     "on_native_bar_open",
-    "on_native_input"
+    "on_native_input",
+    "on_native_tick"
   ],
   "removedVirtuals": [
     "legacy_run_simple",

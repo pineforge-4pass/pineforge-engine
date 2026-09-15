@@ -174,6 +174,9 @@ void PineExecutionAdapter::reset_for_run() {
     close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     last_fx_rate_ = kNaN;
     position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    position_open_phase_ = NativePathPhase::None;
+    position_open_priced_ = false;
+    last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
     cap_latest_fill_ = 0;
     day_ledger_ = {};
     risk_.observed_peak_equity = kNaN;
@@ -2460,23 +2463,113 @@ bool PineExecutionAdapter::submit_margin_call_slice(
     units = std::min(held, units);
     if (!(units > 0.0) || !std::isfinite(units)) return false;
 
+    if (execute_current) return submit_margin_call_units(mark_price, context, units);
+
     native_order::Request request;
     request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
     request.label = "__margin_call__";
     request.comment = "Margin call";
-    if (!execute_current) request.trigger = native_order::Stop{mark_price};
+    request.trigger = native_order::Stop{mark_price};
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Margin;
     snapshot.source_id = request.label;
     snapshot.requested_qty = units;
     snapshot.sizing = sizing_snapshot();
+    return static_cast<bool>(submit_or_replace(
+        std::move(request), std::move(snapshot), false, "__margin_call__"));
+}
+
+bool PineExecutionAdapter::submit_margin_call_units(
+        double mark_price, const NativeDecisionContext& context, double units) {
+    const auto position = require_host().physical_position();
+    const double held = std::abs(position.signed_units);
+    if (!(units > 0.0) || !std::isfinite(units) || !(held > 0.0)
+        || !finite_positive(mark_price)) {
+        return false;
+    }
+    units = std::min(units, held);
+    native_order::Request request;
+    request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+    request.label = "__margin_call__";
+    request.comment = "Margin call";
+    PlacementSnapshot snapshot;
+    snapshot.family = PineOrderFamily::Margin;
+    snapshot.source_id = request.label;
+    snapshot.requested_qty = units;
+    snapshot.forced_execution_price = mark_price;
+    snapshot.sizing = sizing_snapshot();
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                             "__margin_call__");
     if (!accepted) return false;
-    if (execute_current) {
-        (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
-    }
+    (void)require_host().execute_current({*accepted, NativeCurrentPriceRule::NearestTick});
     return true;
+}
+
+bool PineExecutionAdapter::submit_tv_money_long_margin_call(
+        const Bar& bar, const NativeDecisionContext& context) {
+    // The one-contract 10-significant-digit money residual is an adapter
+    // policy over the native position and its ordinary chart path.  It is not
+    // a second matching loop: the resulting reduction is still a generic
+    // current execution with an immutable source terms fact.
+    const auto position = require_host().physical_position();
+    const auto grid = staged_.quantity_grid;
+    if (!source_margin_call_enabled_ || stream_mode_
+        || position.signed_units <= 0.0 || position.lot_count != 1
+        || position_open_priced_
+        || std::abs(config_.margin_long - 100.0) > 1e-12
+        || config_.commission_value != 0.0 || config_.slippage != 0
+        || config_.pyramiding < 0 || config_.pyramiding > 1
+        || !grid || !(*grid > 0.0) || *grid > 1.0
+        || std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12
+        || active_staged_fx(context.sub_bar_open_ms) != 1.0
+        || cap.active() || risk_.max_intraday_loss > 0.0
+        || risk_.max_drawdown > 0.0 || risk_.max_cons_loss_days > 0
+        || last_margin_call_script_bar_ == context.script_bar_open_ms) {
+        return false;
+    }
+
+    int begin = 0;
+    if (position_open_script_bar_ == context.script_bar_open_ms) {
+        // A new position can see only the suffix after its actual native
+        // opening point.  The high-value residual witnesses deliberately
+        // cover a true market opening at O; a close-time/priced entry cannot
+        // retrospectively inspect this bar.
+        if (position_open_phase_ != NativePathPhase::Open) return false;
+        begin = 0;
+    }
+    const bool high_first = std::abs(bar.high - bar.open) < std::abs(bar.open - bar.low);
+    const double path[] = {bar.open, high_first ? bar.high : bar.low,
+                           high_first ? bar.low : bar.high, bar.close};
+    const double quantity = position.signed_units;
+    const double point_value = staged_.syminfo.pointvalue;
+    for (int index = begin; index != 4; ++index) {
+        const double price = path[index];
+        if (!finite_positive(price)) continue;
+        const double exact_value = quantity * price * point_value;
+        const double equity = require_host().native_marked_equity(price);
+        const double rounded_value = source_money_round(exact_value);
+        // This trigger is exclusively for an exact-funded book whose
+        // 10-significant-digit account valuation is fractionally larger.
+        // Preserve the base 1e-7 guard for ordinary historical arithmetic.
+        // The native marked-equity reconstruction has one additional
+        // subtraction relative to the retired source ledger.  Preserve the
+        // base 1e-7 boundary while admitting its adjacent binary64 value;
+        // this remains far below the funded 1e-7 control.
+        constexpr double kArithmeticGuard = 1e-7;
+        if (!std::isfinite(exact_value) || !std::isfinite(equity)
+            || equity + kArithmeticGuard < exact_value
+            || !(equity + kArithmeticGuard < rounded_value)) {
+            continue;
+        }
+        const double units = std::min(1.0, quantity);
+        const double rounded_units = std::round(units / *grid) * *grid;
+        const double guard = std::max({1e-12, std::abs(units) * 1e-12,
+                                       std::abs(*grid) * 1e-9});
+        if (units < quantity - guard && std::abs(rounded_units - units) > guard)
+            return false;
+        return submit_margin_call_units(price, context, units);
+    }
+    return false;
 }
 
 void PineExecutionAdapter::schedule_margin_call_path(
@@ -2674,16 +2767,42 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     execute_due_cap_close(context);
     update_risk_state(bar.open);
     apply_fx_open_margin_slice(bar, context);
-    (void)submit_margin_call_slice(bar.open, context, true);
-    schedule_margin_call_path(bar, context);
+    const auto opening_position = require_host().physical_position();
+    const bool long_full_margin = opening_position.signed_units > 0.0
+        && std::abs(config_.margin_long - 100.0) < 1e-12;
+    if (!long_full_margin && staged_.account_fx_effective_from_ms.empty()) {
+        (void)submit_margin_call_slice(bar.open, context, true);
+        schedule_margin_call_path(bar, context);
+    }
     (void)submit_intraday_loss_close(bar.open, context, true);
     schedule_intraday_loss_path(bar, context);
     schedule_preopen_margin_slice(bar, context);
     cap.ordinary_open(context.coordinate.interval_index);
 }
 
-void PineExecutionAdapter::on_bar_close(const Bar& bar, const NativeDecisionContext&) {
+void PineExecutionAdapter::on_tick(
+        const Bar& tick, const NativeTickContext& context) {
+    // A realtime print is a current generic decision point. The source
+    // policy owns the financial threshold; the native request core still
+    // owns request acceptance, settlement, receipts and any later matching.
+    (void)submit_margin_call_slice(tick.close, context.decision, true);
+}
+
+void PineExecutionAdapter::on_bar_close(
+        const Bar& bar, const NativeDecisionContext& context) {
     update_risk_state(bar.close);
+    if (stream_mode_) return;
+    // The native callback frame remains current after the source script
+    // returns. Reproduce the legacy once-per-script-bar margin checkpoint at
+    // the adverse path extreme, unless the earlier open/path policy already
+    // applied a margin slice on this script bar.
+    if (last_margin_call_script_bar_ == context.script_bar_open_ms) return;
+    if (submit_tv_money_long_margin_call(bar, context)) return;
+    // Ordinary price-path slices are born at the native open/applied points
+    // and matched by the generic driver at their actual waypoint.  This
+    // post-calculation checkpoint owns the source-only rounded-money policy;
+    // replaying the full bar's adverse quote here would incorrectly give a
+    // close-time position access to prices it did not yet exist through.
 }
 
 void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent& event,
@@ -2722,6 +2841,11 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign)) {
         ++current_position_cycle_;
         position_open_script_bar_ = context.script_bar_open_ms;
+        position_open_phase_ = context.coordinate.path_phase;
+        position_open_priced_ = placement_snapshot
+            && (finite_positive(placement_snapshot->exit_levels.limit)
+                || finite_positive(placement_snapshot->exit_levels.stop)
+                || placement_snapshot->family == PineOrderFamily::Order);
     }
     current_position_sign_ = next_sign;
     if (placement_snapshot && placement_snapshot->opening
@@ -2747,6 +2871,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (require_host().physical_position().signed_units == 0.0) {
         position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+        position_open_phase_ = NativePathPhase::None;
+        position_open_priced_ = false;
         for (auto& cohort : cohorts_by_id_) {
             cohort.second.opened.clear();
             cohort.second.live_units_by_origin.clear();
@@ -2782,6 +2908,10 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (placement_snapshot) {
         observe_intraday_cap(event, *placement_snapshot, context);
+        if (placement_snapshot->family == PineOrderFamily::Margin
+            && event.closed_units > 0.0) {
+            last_margin_call_script_bar_ = context.script_bar_open_ms;
+        }
         if (placement_snapshot->family == PineOrderFamily::Risk
             && event.closed_units > 0.0) {
             risk_.intraday_block_day = chart_day_key(context.sub_bar_open_ms);
@@ -2827,9 +2957,25 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
             && config_.commission_value > 0.0
             && finite_positive(placement_snapshot->requested_qty);
-        if (!commissioned_short_opening) {
-            (void)submit_margin_call_slice(event.resolved_price, context, true);
-            schedule_margin_call_path(policy_script_bar_, context);
+        // Timestamped FX has its own base-equivalent opening checkpoint
+        // (apply_fx_opening_margin_slice).  A generic fill-price retry here
+        // would replay a rate epoch that was consumed while the host was
+        // flat, producing a false margin row on the subsequent opening.
+        if (!commissioned_short_opening
+            && staged_.account_fx_effective_from_ms.empty()) {
+            const auto opened_position = require_host().physical_position();
+            const bool long_full_margin = opened_position.signed_units > 0.0
+                && std::abs(config_.margin_long - 100.0) < 1e-12;
+            // The 10-significant-digit long residual is same-currency,
+            // pointvalue-one policy.  A non-unit point value does not inherit
+            // an exact-money opening slice merely because the generic
+            // floating ledger rounds its fill cost differently.
+            if (!(long_full_margin
+                  && std::abs(staged_.syminfo.pointvalue - 1.0) > 1e-12)) {
+                (void)submit_margin_call_slice(event.resolved_price, context, true);
+            }
+            if (!long_full_margin)
+                schedule_margin_call_path(policy_script_bar_, context);
         }
         schedule_intraday_loss_path(policy_script_bar_, context);
     }

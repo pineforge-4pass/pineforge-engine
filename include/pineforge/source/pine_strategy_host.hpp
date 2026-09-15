@@ -28,6 +28,7 @@ public:
     void prepare_native_begin(const NativeBeginArgs&) final;
     void on_native_run_begin() final;
     void on_native_input(const Bar&, const NativeInputContext&) final;
+    void on_native_tick(const Bar&, const NativeTickContext&) final;
     void on_native_bar_open(const Bar&, const NativeDecisionContext&) final;
     void on_native_bar(const Bar&, const NativeDecisionContext&) final;
     void on_native_applied(const native_order::ExecutionAppliedEvent&,

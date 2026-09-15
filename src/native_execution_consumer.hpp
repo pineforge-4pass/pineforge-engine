@@ -227,6 +227,8 @@ private:
                                   const NativeDriverPoint& point);
     bool invoke_input_callback(BacktestEngine& engine, const Bar& bar,
                                const NativeInputContext& context);
+    bool invoke_tick_callback(BacktestEngine& engine, const Bar& bar,
+                              const NativeTickContext& context);
     void invoke_callback(BacktestEngine& engine, const Bar& bar, const NativeCoordinate& coordinate);
     uint64_t take_ordinal(BacktestEngine& engine);
     void raise_floor(int64_t t);
@@ -341,6 +343,8 @@ private:
     NativeDecisionContext callback_context_{};
     std::optional<NativeInputContext> input_callback_context_;
     std::optional<Bar> input_callback_bar_;
+    std::optional<NativeTickContext> tick_callback_context_;
+    std::optional<Bar> tick_callback_bar_;
     NativeDriverStatistics driver_statistics_{};
     std::optional<native_calendar::TimezoneIdentityDescriptor> tz_identity_{};
     mutable AppendDigest history_digest_{};

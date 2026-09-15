@@ -22,6 +22,8 @@ public:
     double explicit_qty=qnan;
     double entry_limit=qnan, entry_stop=qnan;
     bool raw_order=false;
+    bool rich_syminfo=false;
+    double rich_pointvalue=1.0;
     Probe(double capital,double step,double tick) {
         initial_capital_=capital;default_qty_type_=QtyType::PERCENT_OF_EQUITY;
         default_qty_value_=100;qty_step_=step;syminfo_mintick_=tick;
@@ -31,7 +33,7 @@ public:
     void small_fee(){commission_type_=CommissionType::CASH_PER_ORDER;commission_value_=0.000001;}
     void one_tick_slippage(){slippage_=1;}
     void constant_fx(){account_currency_fx_=2;}
-    void double_point_value(){syminfo_.pointvalue=2;}
+    void double_point_value(){rich_syminfo=true;rich_pointvalue=2.0;}
     void larger_pyramid_cap(){pyramiding_=2;}
     void on_source_bar(const Bar&) override {
         if(bar_index_==0){
@@ -56,7 +58,16 @@ std::vector<Bar> xau(){return {
     {3145.45,3146.31,3130.63,3132.08,100,1000},
     {3132.085,3132.88,3126.665,3130.84,100,2000},
     {3130.83,3138.26,3130.15,3136.37,100,3000}};}
-void run(Probe&p,const std::vector<Bar>&bars){p.run(bars.data(),static_cast<int>(bars.size()));}
+void run(Probe&p,const std::vector<Bar>&bars){
+    if(!p.rich_syminfo){
+        p.run(bars.data(),static_cast<int>(bars.size()));
+        return;
+    }
+    SymInfo syminfo{};
+    syminfo.pointvalue=p.rich_pointvalue;
+    syminfo.mintick=0.01;
+    p.run(bars.data(),static_cast<int>(bars.size()),"1","1",{},syminfo);
+}
 void check_margin(Probe&p,double price,int expected){
     CHECK(p.margin_count()==expected);CHECK(near(p.final_position(),0));
     if(expected&&p.margin()){

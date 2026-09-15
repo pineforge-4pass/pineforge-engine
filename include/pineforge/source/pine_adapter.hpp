@@ -282,6 +282,9 @@ public:
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
+    void on_tick(const Bar&, const NativeTickContext&);
+    // Called from the generic calculation callback after the source script
+    // has returned while the current decision point remains executable.
     void on_bar_close(const Bar&, const NativeDecisionContext&);
     void on_applied(const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
     void source_batch_end();
@@ -433,6 +436,9 @@ private:
     void schedule_preopen_margin_slice(const Bar&, const NativeDecisionContext&);
     bool submit_margin_call_slice(double mark_price, const NativeDecisionContext&,
                                   bool execute_current);
+    bool submit_margin_call_units(double mark_price, const NativeDecisionContext&,
+                                  double units);
+    bool submit_tv_money_long_margin_call(const Bar&, const NativeDecisionContext&);
     void schedule_margin_call_path(const Bar&, const NativeDecisionContext&);
     bool intraday_loss_breached(double mark_price) const noexcept;
     bool submit_intraday_loss_close(double mark_price, const NativeDecisionContext&,
@@ -511,6 +517,9 @@ private:
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     double last_fx_rate_ = std::numeric_limits<double>::quiet_NaN();
     std::int64_t position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    NativePathPhase position_open_phase_ = NativePathPhase::None;
+    bool position_open_priced_ = false;
+    std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t cap_latest_fill_ = 0;
     bool source_margin_call_enabled_ = true;
     Bar policy_script_bar_{};

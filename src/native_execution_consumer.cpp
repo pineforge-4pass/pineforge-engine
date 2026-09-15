@@ -459,6 +459,20 @@ void hash_input_context(Fnv& f, const NativeInputContext& context) noexcept {
     f.b(context.completes_script_interval);
 }
 
+void hash_tick_context(Fnv& f, const NativeTickContext& context) noexcept {
+    hash_coordinate(f, context.decision.coordinate);
+    f.i(context.decision.decision_floor_ms);
+    hash_interval(f, context.decision.input_interval);
+    hash_interval(f, context.decision.script_interval);
+    f.i(context.decision.sub_index);
+    f.i(context.decision.sub_count);
+    f.b(context.decision.is_terminal_sub_bar);
+    f.i(context.decision.sub_bar_open_ms);
+    f.i(context.decision.script_bar_open_ms);
+    hash_driver_statistics(f, context.decision.driver_statistics);
+    f.u(context.sequence);
+}
+
 void hash_bar(Fnv& f, const Bar& bar) noexcept {
     f.d(bar.open); f.d(bar.high); f.d(bar.low); f.d(bar.close); f.d(bar.volume);
     f.i(bar.timestamp);
@@ -958,6 +972,10 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     if (input_callback_context_) hash_input_context(f, *input_callback_context_);
     f.b(input_callback_bar_.has_value());
     if (input_callback_bar_) hash_bar(f, *input_callback_bar_);
+    f.b(tick_callback_context_.has_value());
+    if (tick_callback_context_) hash_tick_context(f, *tick_callback_context_);
+    f.b(tick_callback_bar_.has_value());
+    if (tick_callback_bar_) hash_bar(f, *tick_callback_bar_);
     hash_coordinate(f, callback_context_.coordinate);
     f.i(callback_context_.decision_floor_ms);
     hash_interval(f, callback_context_.input_interval);
@@ -1393,6 +1411,8 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     callback_context_.driver_statistics = driver_statistics_;
     input_callback_context_.reset();
     input_callback_bar_.reset();
+    tick_callback_context_.reset();
+    tick_callback_bar_.reset();
     state_ = NativeRunning{std::move(spec), phase};
     if (!check_abort_or_projection(engine, NativeFailureOperation::Begin)) return false;
     if (auto* host = dynamic_cast<NativeStrategyHost*>(&engine)) {
@@ -3755,6 +3775,64 @@ bool NativeExecutionConsumer::invoke_input_callback(
     return !failed();
 }
 
+bool NativeExecutionConsumer::invoke_tick_callback(
+        BacktestEngine& engine, const Bar& bar, const NativeTickContext& context) {
+    auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
+    if (!host) return true;
+    NativeTickContext presented = context;
+    presented.decision.decision_floor_ms = decision_floor();
+    tick_callback_context_ = presented;
+    tick_callback_bar_ = bar;
+    callback_context_ = presented.decision;
+    NativeCurrentPointView current;
+    current.decision = callback_context_;
+    current.price = bar.close;
+    current.quote_kind = NativeCurrentQuoteKind::MarketDecision;
+    current.quote_origin_ordinal = callback_context_.coordinate.ordinal;
+    current_frame_ = CurrentExecutionFrame{current, next_timeline_ordinal_ - 1};
+    in_callback_ = true;
+    try {
+        host->on_native_tick(bar, presented);
+    } catch (const std::bad_alloc& e) {
+        in_callback_ = false;
+        current_frame_.reset();
+        tick_callback_context_.reset();
+        tick_callback_bar_.reset();
+        fail(engine, NativeFailure{NativeFailureCode::Allocation, NativeFailureOperation::Input,
+                                   context.decision.coordinate.ordinal});
+        render(engine, e.what());
+        return false;
+    } catch (const std::exception& e) {
+        in_callback_ = false;
+        current_frame_.reset();
+        tick_callback_context_.reset();
+        tick_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input,
+                                       context.decision.coordinate.ordinal});
+            render(engine, e.what());
+        }
+        return false;
+    } catch (...) {
+        in_callback_ = false;
+        current_frame_.reset();
+        tick_callback_context_.reset();
+        tick_callback_bar_.reset();
+        if (!failed()) {
+            fail(engine, NativeFailure{NativeFailureCode::CallbackException,
+                                       NativeFailureOperation::Input,
+                                       context.decision.coordinate.ordinal});
+            render(engine, "native tick callback exception");
+        }
+        return false;
+    }
+    finish_callback(engine, context.decision.coordinate.ordinal);
+    tick_callback_context_.reset();
+    tick_callback_bar_.reset();
+    return !failed();
+}
+
 void NativeExecutionConsumer::invoke_callback(BacktestEngine& engine, const Bar& bar,
                                               const NativeCoordinate& coordinate) {
     auto* host = dynamic_cast<NativeStrategyHost*>(&engine);
@@ -4685,6 +4763,27 @@ bool NativeExecutionConsumer::deliver_tick(BacktestEngine& engine, const TradeTi
     point.matching = true;
     point.excursion = true;
     record_driver(point);
+    NativeTickContext tick_context;
+    tick_context.decision.coordinate = point.coordinate;
+    tick_context.decision.input_interval = *interval;
+    if (const auto script_interval = script_interval_at(tick.timestamp)) {
+        tick_context.decision.script_interval = *script_interval;
+        tick_context.decision.script_bar_open_ms = script_interval->open_ms;
+    } else {
+        tick_context.decision.script_bar_open_ms = point.coordinate.open_ms;
+    }
+    tick_context.decision.sub_index = 0;
+    tick_context.decision.sub_count = 1;
+    tick_context.decision.is_terminal_sub_bar = true;
+    tick_context.decision.sub_bar_open_ms = tick.timestamp;
+    tick_context.decision.driver_statistics = driver_statistics_;
+    tick_context.sequence = tick.sequence;
+    const Bar tick_bar{tick.price, tick.price, tick.price, tick.price,
+                       tick.quantity, tick.timestamp};
+    if (!invoke_tick_callback(engine, tick_bar, tick_context)) {
+        processing_input_ = false;
+        return false;
+    }
     match_point(engine, point);
     apply_excursion(engine, tick.price);
     raise_floor(tick.timestamp);

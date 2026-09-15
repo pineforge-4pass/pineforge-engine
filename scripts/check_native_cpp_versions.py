@@ -430,6 +430,8 @@ def check_texts(files):
                   'driver_statistics_.sample_ticks_processed',
                   'const bool intrabar_points_drive_floor = kind == InputContribution::ConfirmedBar',
                   'input_callback_context_', 'hash_input_context',
+                  'tick_callback_context_', 'hash_tick_context',
+                  'invoke_tick_callback(engine, tick_bar, tick_context)',
                   'staged_ingress_fx_', 'if (failed() && !recoverable_abort())'):
         if token not in consumer_src:
             raise ValueError('native consumer omits staged/intrabar policy token: ' + token)
@@ -443,7 +445,7 @@ def check_texts(files):
                    "NativeCurrentRefusal", "NativeCurrentExecution", "NativeCurrentExecutionPreview",
                    "NativeExecutionTermsFacts", "NativePrecommitView",
                    "NativePrecommitVerdict", "NativeFxCurveSetupResult", "NativeBeginArgs",
-                   "NativeInputContext"),
+                   "NativeInputContext", "NativeTickContext"),
             "engine_script_run_v17",
             r'\b(?:enum\s+class|class|struct)\s+NAME\s*(?::[^;{]+)?\{')
     begin_args = body(host, r'struct\s+NativeBeginArgs\s*\{', 'native begin args')
@@ -483,6 +485,11 @@ def check_texts(files):
                    'intinput_index=0;', 'boolcompletes_script_interval=false;'):
         if member not in compact_input_context:
             raise ValueError('NativeInputContext omits accepted-input fact: ' + member)
+    tick_context = body(host, r'struct\s+NativeTickContext\s*\{', 'native tick context')
+    compact_tick_context = re.sub(r'\s+', '', tick_context)
+    for member in ('NativeDecisionContextdecision{};', 'std::uint64_tsequence=0;'):
+        if member not in compact_tick_context:
+            raise ValueError('NativeTickContext omits accepted-tick fact: ' + member)
     require(host, ("NativeCurrentExecutionResult",), "engine_script_run_v17",
             r'\busing\s+NAME\s*=')
     require_exact_alias(
@@ -513,6 +520,8 @@ def check_texts(files):
          r'\s*const\s+NativeBeginArgs\s*&', "prepare_native_begin"),
         (r'\bvirtual\s+void\s+on_native_input\s*\('
          r'\s*const\s+Bar\s*&\s*,\s*const\s+NativeInputContext\s*&', "on_native_input"),
+        (r'\bvirtual\s+void\s+on_native_tick\s*\('
+         r'\s*const\s+Bar\s*&\s*,\s*const\s+NativeTickContext\s*&', "on_native_tick"),
         (r'\bvirtual\s+void\s+on_native_bar_open\s*\('
          r'\s*const\s+Bar\s*&', "on_native_bar_open"),
     )
@@ -579,6 +588,8 @@ def check_texts(files):
                  'callback_context_.script_bar_open_ms', 'callback_context_.driver_statistics',
                  'input_callback_context_.has_value()', 'hash_input_context(f, *input_callback_context_)',
                  'input_callback_bar_.has_value()', 'hash_bar(f, *input_callback_bar_)',
+                 'tick_callback_context_.has_value()', 'hash_tick_context(f, *tick_callback_context_)',
+                 'tick_callback_bar_.has_value()', 'hash_bar(f, *tick_callback_bar_)',
                  'staged_ingress_fx_', 'driver_statistics_', 'hash_cohorts(f, requests_)'):
         if fact not in continuation:
             raise ValueError('native continuation omits current frame/queue fact: ' + fact)

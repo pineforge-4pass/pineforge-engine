@@ -97,6 +97,16 @@ class NativeVersions(unittest.TestCase):
         self.reject(FILES[10], 'input_callback_context_', 'removed_input_context_')
         self.reject(FILES[10], 'input_callback_bar_', 'removed_input_bar_')
 
+    def test_tick_hook_is_explicit_and_hashed(self):
+        self.reject(FILES[8], 'struct NativeTickContext {', 'struct MissingNativeTickContext {')
+        self.reject(FILES[8],
+                    'on_native_tick(const Bar&, const NativeTickContext&)',
+                    'on_native_tick_missing(const Bar&, const NativeTickContext&)')
+        self.reject(FILES[10], 'tick_callback_context_', 'removed_tick_context_')
+        self.reject(FILES[10], 'tick_callback_bar_', 'removed_tick_bar_')
+        self.reject(FILES[10], 'invoke_tick_callback(engine, tick_bar, tick_context)',
+                    'invoke_tick_callback_missing(engine, tick_bar, tick_context)')
+
     def test_distribution_sample_eligibility_is_explicit_and_hashed(self):
         for before, after in (
             ('enum class SampleEligibility : std::uint32_t {',
@@ -425,20 +435,23 @@ class NativeVersions(unittest.TestCase):
 
     def test_phase1c_native_abi_templates_are_active(self):
         from check_native_cpp_abi import (
-            CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER,
+            CURRENT_EXECUTION_V15_CALLER, NATIVE_FX_CURVE_CALLER, NATIVE_TICK_CALLER,
             CURRENT_TERMS_SURFACE_READY, control_applicability,
         )
         self.assertTrue(CURRENT_TERMS_SURFACE_READY)
         self.assertIn('R4B_CURRENT_RESULT_ALTERNATIVES', CURRENT_EXECUTION_V15_CALLER)
         self.assertIn('configure_native_fx_curve', CURRENT_EXECUTION_V15_CALLER)
         self.assertIn('validate_native_fx_curve', NATIVE_FX_CURVE_CALLER)
+        self.assertIn('on_native_tick', NATIVE_TICK_CALLER)
         controls = {row['name']: row for row in control_applicability()}
         self.assertEqual(controls['v14_current_execution_shape_agnostic_compile']['status'], 'required')
         for name in ('v17_current_execution_surface_compile',
                      'v17_current_result_missing_cancelled_compile_reject',
                      'v17_native_fx_curve_surface_compile',
+                     'v17_native_tick_surface_compile',
                      'v17_to_v16_frozen_current_execution_compile_reject',
-                     'v17_to_v16_frozen_native_fx_curve_compile_reject'):
+                     'v17_to_v16_frozen_native_fx_curve_compile_reject',
+                     'v17_to_v16_frozen_native_tick_compile_reject'):
             self.assertEqual(controls[name]['status'], 'required')
 
     def test_order_namespace_is_derived_not_literal(self):

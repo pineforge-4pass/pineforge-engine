@@ -380,6 +380,16 @@ struct NativeInputContext {
     bool completes_script_interval = false;
 };
 
+// One accepted realtime print before native matching at its current decision
+// point. The Bar is a value presentation of that print (O=H=L=C=price,
+// volume=print quantity, timestamp=print timestamp); no source-language
+// policy is embedded here. Sequence zero retains the public TradeTick
+// sentinel meaning “provider did not supply a sequence”.
+struct NativeTickContext {
+    NativeDecisionContext decision{};
+    std::uint64_t sequence = 0;
+};
+
 // Most-derived native strategy host. Binds NativeExecutionConsumer in the
 // protected engine constructor. Noncopyable and nonmovable. Lives in the
 // same inline engine epoch as BacktestEngine so old-header/new-library
@@ -402,9 +412,15 @@ public:
     // Called once for every accepted confirmed input bar, before that bar is
     // aggregated or matched. It has no current execution point.
     virtual void on_native_input(const Bar&, const NativeInputContext&) {}
+    // Called once for every accepted realtime print, before matching at that
+    // point. inspect_current_execution/execute_current are legal here.
+    virtual void on_native_tick(const Bar&, const NativeTickContext&) {}
     // Precedes the matching pass at the script bar's open decision point.
     // inspect_current_execution/execute_current are legal in this hook.
     virtual void on_native_bar_open(const Bar&, const NativeDecisionContext&) {}
+    // The current decision point remains valid for the complete callback.
+    // A host may therefore execute a command after its own script-body work
+    // returns, before the consumer advances beyond this calculation point.
     virtual void on_native_bar(const Bar& bar, const NativeDecisionContext& context) = 0;
 
     virtual void on_native_applied(const native_order::ExecutionAppliedEvent&,
