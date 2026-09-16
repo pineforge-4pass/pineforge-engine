@@ -3734,7 +3734,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             ? nearest_tick(source_point->price, staged_.syminfo.mintick) : kNaN;
         const bool marketable = finite_positive(signal)
             && (is_long ? stop_price <= signal : stop_price >= signal);
-        default_stop_sizing_price = marketable ? signal : stop_price;
+        const double slip = (is_long ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
+        default_stop_sizing_price = (marketable ? signal : stop_price) + slip;
     }
     if (default_sized || typed_sized || direction_blocked || affordability_reversal_candidate) {
         request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
@@ -4051,7 +4052,8 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             || config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
             snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
         }
-        snapshot.sizing.at_fill = config_.calc_on_order_fills && coof_recalc_active_;
+        snapshot.sizing.at_fill = (config_.calc_on_order_fills && coof_recalc_active_)
+            || (priced && !default_stop_scope);
     }
     // The TV money band is a source policy, not a generic margin rule.  Its
     // all-in source tuple is judged at placement on ten-significant-digit
@@ -7849,6 +7851,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             && facts.cursor.point.provenance == NativePriceProvenance::Confirmed;
         if (!non_open || deferred_open_gap) return source_bar_fill_tick(
             facts.raw_price, staged_.syminfo.mintick);
+        if (std::holds_alternative<native_order::StopLimit>(trigger)) {
+            return directional_tick(facts.raw_price, staged_.syminfo.mintick,
+                                    !facts.is_buy);
+        }
         const double level = finite_positive(source.exit_levels.limit)
             ? source.exit_levels.limit
             : (facts.trigger_level ? *facts.trigger_level : facts.raw_price);
@@ -8258,21 +8264,17 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         result.units = source.sizing.frozen_units;
     } else if (config_.default_qty_type == static_cast<int>(QtyType::FIXED)) {
         result.units = config_.default_qty_value;
-    } else if (config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
-        result.units = finite_positive(result.resolved_price) ? config_.default_qty_value / result.resolved_price : 0.0;
     } else {
         const double equity = source.sizing.at_fill
             ? percent_commission_live_equity(result.resolved_price) : source.sizing.equity;
         const double price = source.sizing.at_fill ? result.resolved_price : source.sizing.price;
         const double fx = source.sizing.at_fill ? facts.active_fx : source.sizing.fx;
-        const double denominator = price * staged_.syminfo.pointvalue * fx;
-        double cash = equity * config_.default_qty_value / 100.0;
-        if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
-            && config_.commission_value > 0.0) {
-            cash /= 1.0 + config_.commission_value / 100.0;
-        }
-        result.units = finite_positive(equity) && finite_positive(denominator)
-            ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
+        PineSizingSnapshot sizing;
+        sizing.price = price;
+        sizing.fx = fx;
+        sizing.mark = price;
+        sizing.equity = equity;
+        result.units = default_sizing_units(sizing);
     }
     const auto created_side = static_cast<PositionSide>(source.projection_position_side);
     if (source.family == PineOrderFamily::Entry) {

@@ -337,6 +337,26 @@ void source::PineStrategyHost::on_native_bar(
     adapter_.observe_terminal_receipts();
     scheduler_.bar(bar, context, *this);
     adapter_.on_bar_close(bar, context);
+    if (adapter_.config_.slippage > 0) {
+        for (auto& lot : pyramid_entries_) {
+            if (lot.entry_bar_index == context.coordinate.interval_index && lot.qty > 0.0) {
+                const auto found = adapter_.placement_.find(lot.entry_incarnation);
+                if (found != adapter_.placement_.end()) {
+                    const auto& snap = found->second;
+                    const bool pure_stop_entry = snap.family == PineOrderFamily::Entry
+                        && std::isfinite(snap.exit_levels.stop) && snap.exit_levels.stop > 0.0
+                        && !std::isfinite(snap.exit_levels.limit);
+                    if (pure_stop_entry) {
+                        if (lot.price > bar.high && std::isfinite(bar.low) && bar.low > 0.0) {
+                            lot.max_drawdown = std::max(lot.max_drawdown, (lot.price - bar.low) * lot.qty);
+                        } else if (lot.price < bar.low && std::isfinite(bar.high) && bar.high > 0.0) {
+                            lot.max_drawdown = std::max(lot.max_drawdown, (bar.high - lot.price) * lot.qty);
+                        }
+                    }
+                }
+            }
+        }
+    }
     if (context.is_terminal_sub_bar
         && context.coordinate.interval_index == source_last_bar_index_) {
         scheduler_record_range_end(bar);
