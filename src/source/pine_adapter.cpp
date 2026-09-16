@@ -6219,6 +6219,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.birth_reach = exit_birth_reach;
             snapshot.trail_activation_level = trail_price;
             snapshot.sizing = exit_sizing;
+            if (family == PineOrderFamily::ExitTrail && std::isfinite(exit_sizing.price))
+                snapshot.retained_trail_best = exit_sizing.price;
             snapshot.placement_cycle = current_position_cycle_;
             if (source_point) {
                 snapshot.projection_created_bar =
@@ -6682,7 +6684,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             && std::isfinite(source_trail_offset)
             && std::floor(source_trail_offset) == 0.0;
         if (finite_positive(tick)) {
-            const bool buy_close = physical.signed_units < 0.0;
+            const bool buy_close = physical.signed_units != 0.0
+                ? physical.signed_units < 0.0 : exit_is_buy;
             const auto point = require_host().current_execution_point();
             const bool already_reached = point && (buy_close
                 ? point->price <= trail_price : point->price >= trail_price);
@@ -6717,17 +6720,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                        native_order::Limit{one_shot_level});
         } else if (native_trail_offset) {
             std::optional<double> native_arm_price = native_trail_price;
-            if (zero_distance && trail_already_reached)
+            if (trail_already_reached)
                 native_arm_price.reset();
             submit_leg(PineOrderFamily::ExitTrail, native_order::Trail{
                 *native_trail_offset, native_arm_price});
         } else if (trail_already_reached) {
-            // An omitted offset that was already activated at placement is a
-            // durable activation-only leg.  A directional stop preserves its
-            // armed state and books an adverse opening gap at the print,
-            // whereas a limit would incorrectly wait for a return to the
-            // activation level.
-            submit_leg(PineOrderFamily::ExitTrail, native_order::Stop{native_trail_price});
+            // An omitted offset that was already activated at placement is
+            // marketable at the next open.
+            submit_leg(PineOrderFamily::ExitTrail, native_order::Market{});
         } else {
             // An omitted source offset exits at activation.  A generic limit
             // is the same one-shot direction for either close side. Its
@@ -7893,6 +7893,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         if (!std::isfinite(source.retained_trail_best)
             || !std::isfinite(source.exit_levels.trail_offset)
             || source.exit_levels.trail_offset < 0.0
+            || explicit_zero_trail
             || !finite_positive(staged_.syminfo.mintick)
             || facts.cursor.point.path_phase == NativePathPhase::Open) {
             return std::nullopt;
@@ -8875,6 +8876,19 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
+        const bool source_priced_exit =
+            (source.family == PineOrderFamily::ExitLimit
+             || source.family == PineOrderFamily::ExitStop
+             || source.family == PineOrderFamily::ExitTrail)
+            && (std::isfinite(source.exit_levels.limit)
+                || std::isfinite(source.exit_levels.stop)
+                || std::isfinite(source.exit_levels.trail_points)
+                || std::isfinite(source.exit_levels.trail_price)
+                || std::isfinite(source.exit_levels.trail_offset));
+        if (source_priced_exit) {
+            if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host()))
+                pine_host->fold_exit_path_extremes_ = true;
+        }
         const auto physical = require_host().physical_position();
         // ab9714be pine_fills.cpp:7483-7537: priced (stop/limit) entries are
         // throttled to one opening from flat per bar after an earlier entry
