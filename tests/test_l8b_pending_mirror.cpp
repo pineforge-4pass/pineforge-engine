@@ -26,6 +26,19 @@ void operator delete(void* memory) noexcept { std::free(memory); }
 void operator delete[](void* memory) noexcept { std::free(memory); }
 void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
 void operator delete[](void* memory, std::size_t) noexcept { std::free(memory); }
+// libstdc++'s temporary buffers (std::stable_sort) allocate through the
+// nothrow forms and release through the sized delete above; replacing only
+// the throwing forms mixes the real operator new with free (ASan
+// alloc-dealloc-mismatch on the sanitizers lane).
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    if (deny_allocation) { ++denied_allocations; return nullptr; }
+    return std::malloc(size);
+}
+void* operator new[](std::size_t size, const std::nothrow_t& tag) noexcept {
+    return ::operator new(size, tag);
+}
+void operator delete(void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
+void operator delete[](void* memory, const std::nothrow_t&) noexcept { std::free(memory); }
 
 using namespace pineforge;
 
