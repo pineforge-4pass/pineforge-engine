@@ -52,7 +52,10 @@ def run_checks(commands: list[tuple[str, list[str]]], output: Path, *, source: P
         summary['stages'].append(stage)
         record()
         try:
-            result = subprocess.run(argv, cwd=source, capture_output=True, timeout=180)
+            # 900 s: the verifier self-tests (test_ci_verify.py) now drive the real
+            # literal-aware parity, receipt and submodule guards (L8d) and take
+            # ~80 s locally, >180 s on the hosted runner.
+            result = subprocess.run(argv, cwd=source, capture_output=True, timeout=900)
             code, log = result.returncode, result.stdout + result.stderr
         except subprocess.TimeoutExpired as error:
             code = 124
