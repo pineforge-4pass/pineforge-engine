@@ -70,9 +70,28 @@ public:
         return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
     }
     std::optional<Bar> broker_bar(const NativeDecisionContext& context) const {
-        const auto found = std::find_if(retained_.bars.begin(), retained_.bars.end(),
-            [&](const Bar& bar) { return bar.timestamp == context.sub_bar_open_ms; });
-        if (found != retained_.bars.end()) return *found;
+        const auto& bars = retained_.bars;
+        const std::size_t n = bars.size();
+        if (n > 0) {
+            if (broker_bar_cursor < n && bars[broker_bar_cursor].timestamp == context.sub_bar_open_ms) {
+                return bars[broker_bar_cursor];
+            }
+            if (broker_bar_cursor >= n || bars[broker_bar_cursor].timestamp > context.sub_bar_open_ms) {
+                broker_bar_cursor = 0;
+            }
+            while (broker_bar_cursor < n && bars[broker_bar_cursor].timestamp < context.sub_bar_open_ms) {
+                ++broker_bar_cursor;
+            }
+            if (broker_bar_cursor < n && bars[broker_bar_cursor].timestamp == context.sub_bar_open_ms) {
+                return bars[broker_bar_cursor];
+            }
+            const auto found = std::find_if(bars.begin(), bars.end(),
+                [&](const Bar& bar) { return bar.timestamp == context.sub_bar_open_ms; });
+            if (found != bars.end()) {
+                broker_bar_cursor = static_cast<std::size_t>(std::distance(bars.begin(), found));
+                return *found;
+            }
+        }
         return current_script_bar_valid_ ? std::optional<Bar>{current_script_bar_}
                                          : std::nullopt;
     }
@@ -112,6 +131,8 @@ private:
         bool all_security_states = false;
         bool active = false;
     };
+
+    mutable std::size_t broker_bar_cursor = 0;
 
     // @source-state begin
     PineLanguageState language_;

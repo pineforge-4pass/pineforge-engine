@@ -742,10 +742,42 @@ using CommandEvent = std::variant<AcceptedEvent,
 class InlineCommandEvents {
 public:
     InlineCommandEvents() = default;
-    InlineCommandEvents(InlineCommandEvents&&) noexcept = default;
-    InlineCommandEvents& operator=(InlineCommandEvents&&) noexcept = default;
-    InlineCommandEvents(const InlineCommandEvents&) = default;
-    InlineCommandEvents& operator=(const InlineCommandEvents&) = default;
+    InlineCommandEvents(InlineCommandEvents&& other) noexcept : size_(other.size_) {
+        for (std::size_t i = 0; i < size_ && i < inline_.size(); ++i) {
+            inline_[i] = std::move(other.inline_[i]);
+        }
+        overflow_ = std::move(other.overflow_);
+        other.size_ = 0;
+    }
+    InlineCommandEvents& operator=(InlineCommandEvents&& other) noexcept {
+        if (this != &other) {
+            clear();
+            size_ = other.size_;
+            for (std::size_t i = 0; i < size_ && i < inline_.size(); ++i) {
+                inline_[i] = std::move(other.inline_[i]);
+            }
+            overflow_ = std::move(other.overflow_);
+            other.size_ = 0;
+        }
+        return *this;
+    }
+    InlineCommandEvents(const InlineCommandEvents& other) : size_(other.size_) {
+        for (std::size_t i = 0; i < size_ && i < inline_.size(); ++i) {
+            inline_[i] = other.inline_[i];
+        }
+        overflow_ = other.overflow_;
+    }
+    InlineCommandEvents& operator=(const InlineCommandEvents& other) {
+        if (this != &other) {
+            clear();
+            size_ = other.size_;
+            for (std::size_t i = 0; i < size_ && i < inline_.size(); ++i) {
+                inline_[i] = other.inline_[i];
+            }
+            overflow_ = other.overflow_;
+        }
+        return *this;
+    }
 
     std::size_t size() const noexcept { return size_; }
     bool empty() const noexcept { return size_ == 0; }
@@ -772,11 +804,10 @@ public:
     }
 
     void clear() noexcept {
-        if (overflow_.empty()) {
-            for (std::size_t i = 0; i < size_; ++i) inline_[i].reset();
-        } else {
-            overflow_.clear();
+        for (std::size_t i = 0; i < size_ && i < inline_.size(); ++i) {
+            inline_[i].reset();
         }
+        overflow_.clear();
         size_ = 0;
     }
 
@@ -1057,9 +1088,13 @@ public:
 
     // The allowance that prepare_evaluation would install for this point.
     static Allowance evaluated_allowance(const LiveRequest& live, uint64_t point) noexcept;
-    // Consumer-only no-event form of the ordinary CohortClose allowance
+    // Consumer-only no-event form of the ordinary allowance
     // refresh. It preserves prepare_evaluation's eligibility and liveness
     // checks while avoiding a transient mutation envelope per driver point.
+    void refresh_point_allowances(uint64_t point, const PositionIdentity& position) noexcept;
+    bool refresh_allowance(const RequestHandle& target,
+                           const EvaluationContext& context,
+                           const TargetObservation& observation);
     bool refresh_cohort_allowance(const RequestHandle& target,
                                   const EvaluationContext& context,
                                   const TargetObservation& observation);
@@ -1071,8 +1106,10 @@ public:
                                      double* after,
                                      bool* exhausted) noexcept;
 
+    void reserve(std::size_t expected_events);
     std::vector<RequestHandle> group_recipients(const EventId& applied) const;
     std::vector<RequestHandle> waiting_children(const RequestHandle& parent) const;
+    bool has_waiting_children(const RequestHandle& parent) const noexcept;
     std::vector<RequestHandle> bound_close_handles() const;
 
     Preparation<PreparedMutation> prepare_group_effect(const EventId& applied,
