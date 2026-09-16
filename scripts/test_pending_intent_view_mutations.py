@@ -19,7 +19,7 @@ class ProjectionCoverage(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / "repo"
         shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so"))
+            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so", ".native-fx-introduced-*", ".ccache"))
         for relative, before, after in mutations:
             path = root / relative
             text = path.read_text()
