@@ -421,7 +421,11 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.d(last_fx_rate_); f.i(position_open_script_bar_); f.u(position_open_epoch_); f.i(position_open_bar_index_);
     f.u(static_cast<std::uint64_t>(position_open_phase_));
     f.b(position_open_priced_);
-    f.i(last_margin_call_script_bar_); f.i(signal_close_mc_event_bar_);
+    f.i(last_margin_call_script_bar_); f.u(last_margin_call_event_ordinal_);
+    f.u(last_margin_call_entry_incarnation_); f.i(last_margin_call_position_cycle_);
+    f.b(last_margin_call_at_script_close_);
+    f.d(last_margin_call_closed_units_); f.d(last_margin_call_remaining_units_);
+    f.i(signal_close_mc_event_bar_);
     f.i(signal_close_mc_position_cycle_); f.u(signal_close_mc_entry_incarnation_);
     f.u(signal_close_mc_fill_seq_); f.d(signal_close_mc_before_qty_);
     f.d(signal_close_mc_remaining_qty_); f.i(risk_coof_direct_script_bar_);

@@ -1031,6 +1031,12 @@ void PineExecutionAdapter::reset_for_run() {
     signal_close_mc_fill_seq_ = 0;
     signal_close_mc_before_qty_ = kNaN;
     signal_close_mc_remaining_qty_ = kNaN;
+    last_margin_call_event_ordinal_ = 0;
+    last_margin_call_entry_incarnation_ = 0;
+    last_margin_call_position_cycle_ = 0;
+    last_margin_call_at_script_close_ = false;
+    last_margin_call_closed_units_ = 0.0;
+    last_margin_call_remaining_units_ = 0.0;
     risk_coof_direct_script_bar_ = std::numeric_limits<std::int64_t>::min();
     cap_latest_fill_ = 0;
     day_ledger_ = {};
@@ -1628,6 +1634,48 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         snapshot.projection_created_bar = point->decision.coordinate.interval_index;
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
         snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
+    }
+    if (opening && snapshot.family == PineOrderFamily::Entry
+        && !snapshot.is_long && snapshot.deferred_cohort
+        && snapshot.affordability_close_only
+        && !std::isfinite(snapshot.requested_qty)
+        && !finite_positive(snapshot.exit_levels.limit)
+        && !finite_positive(snapshot.exit_levels.stop)
+        && !snapshot.projection_after_close
+        && !config_.process_orders_on_close && !config_.calc_on_order_fills
+        && !coof_recalc_active_ && !stream_mode_
+        && physical.signed_units > 0.0 && physical.lot_count == 1U
+        && last_margin_call_script_bar_ == snapshot.placement_script_open_ms
+        && last_margin_call_event_ordinal_ != 0
+        && last_margin_call_event_ordinal_ == last_applied_ordinal_
+        && last_margin_call_entry_incarnation_ != 0
+        && last_margin_call_position_cycle_ == current_position_cycle_
+        && last_margin_call_at_script_close_
+        && last_margin_call_closed_units_ == 1.0
+        && last_margin_call_remaining_units_ == std::abs(physical.signed_units)) {
+        const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&host);
+        const auto state = host.native_state();
+        const bool magnifier = pine_host
+            && pine_host->scheduler_.bar_magnifier_enabled();
+        const double carried = last_margin_call_remaining_units_
+            + last_margin_call_closed_units_;
+        if (pine_host && !magnifier && state.phase == NativeRunPhase::Batch
+            && std::isfinite(carried)
+            && std::abs(carried - std::abs(physical.signed_units) - 1.0) < 1e-6) {
+            // The native pre-open/path callback has already applied the
+            // signal-close margin event before this source command is
+            // published. Preserve the exact event receipt the legacy pending
+            // owner wrote after command publication (pine_fills.cpp:2049-52).
+            snapshot.projection_tv_carry_qty = carried;
+            snapshot.signal_close_mc_bar = snapshot.projection_created_bar;
+            snapshot.signal_close_mc_entry_incarnation =
+                last_margin_call_entry_incarnation_;
+            snapshot.signal_close_mc_fill_seq =
+                pine_host->adapter_broker_fill_event_sequence();
+            snapshot.signal_close_mc_remaining_qty =
+                last_margin_call_remaining_units_;
+            snapshot.affordability_keep_mc_close_surplus = true;
+        }
     }
     if (snapshot.opening && snapshot.family == PineOrderFamily::Entry
         && !snapshot.is_long && snapshot.rounded_signal_cost_close_only
@@ -3330,7 +3378,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     stop_price = source_level_on_price_grid(stop_price, staged_.syminfo.mintick);
     const bool pure_stop_entry = std::isnan(limit_price)
         && finite_positive(stop_price);
-    if (risk_.halted || intraday_loss_orders_blocked()
+    if (intraday_loss_orders_blocked()
         || (source_point && cap_placement_denied(source_point->decision))) {
         return;
     }
@@ -7309,7 +7357,7 @@ void PineExecutionAdapter::cancel_all() {
 void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
                                  double limit_price, double stop_price,
                                  const std::string& oca_name, int oca_type) {
-    if (risk_.halted || intraday_loss_orders_blocked()) return;
+    if (intraday_loss_orders_blocked()) return;
     if (const auto point = require_host().current_execution_point();
         point && cap_placement_denied(point->decision)) {
         return;
@@ -7818,7 +7866,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         }
         return result;
     }
-    if (source.direction_gate) {
+    const bool live_direction_gate = source.family == PineOrderFamily::Entry
+        && ((risk_.direction > 0 && !source.is_long)
+            || (risk_.direction < 0 && source.is_long));
+    if (live_direction_gate) {
         const bool opposite = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
         if (opposite) {
@@ -8142,12 +8193,16 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 ? source.requested_qty / (result.resolved_price * staged_.syminfo.pointvalue
                                           * facts.active_fx) : 0.0;
         } else if (source.qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)) {
-            const double equity = require_host().native_marked_equity(result.resolved_price);
+            const double equity = percent_commission_live_equity(result.resolved_price);
             const double denominator = result.resolved_price * staged_.syminfo.pointvalue
                 * facts.active_fx;
+            double cash = equity * source.requested_qty / 100.0;
+            if (config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+                && config_.commission_value > 0.0) {
+                cash /= 1.0 + config_.commission_value / 100.0;
+            }
             result.units = finite_positive(equity) && finite_positive(denominator)
-                ? floor_quantity_grid(equity * source.requested_qty / 100.0 / denominator,
-                                      staged_.quantity_grid) : 0.0;
+                ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
         } else {
             result.units = source.requested_qty;
         }
@@ -8181,6 +8236,50 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if (source.family == PineOrderFamily::Entry) {
         const bool opposite = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
+        const bool keep_mc_close_surplus = [&]() {
+            if (!source.affordability_keep_mc_close_surplus) return false;
+            bool receipt_origin_live = false;
+            for (const auto& cohort_id : cohort_order_) {
+                const auto cohort = cohorts_by_id_.find(cohort_id);
+                if (cohort == cohorts_by_id_.end()) continue;
+                const auto units = cohort->second.live_units_by_origin.find(
+                    source.signal_close_mc_entry_incarnation);
+                if (units != cohort->second.live_units_by_origin.end()
+                    && units->second > 0.0) {
+                    receipt_origin_live = true;
+                    break;
+                }
+            }
+            const auto state = require_host().native_state();
+            const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+            const bool magnifier = pine_host
+                && pine_host->scheduler_.bar_magnifier_enabled();
+            const double close_surplus = source.projection_tv_carry_qty
+                - std::abs(facts.position.signed_units);
+            return source.signal_close_mc_bar == source.projection_created_bar
+                && source.projection_created_bar
+                    == facts.cursor.point.interval_index - 1
+                && source.signal_close_mc_entry_incarnation != 0
+                && last_margin_call_event_ordinal_ == last_applied_ordinal_
+                && pine_host
+                && source.signal_close_mc_fill_seq
+                    == pine_host->adapter_broker_fill_event_sequence()
+                && !config_.process_orders_on_close && !config_.calc_on_order_fills
+                && !coof_recalc_active_ && !magnifier
+                && state.phase == NativeRunPhase::Batch
+                && std::holds_alternative<native_order::Market>(trigger)
+                && !source.is_long && !std::isfinite(source.requested_qty)
+                && !source.projection_after_close && !source.birth.from_fill()
+                && source.projection_position_side
+                    == static_cast<std::int32_t>(PositionSide::LONG)
+                && source.placement_cycle == current_position_cycle_
+                && facts.position.signed_units > 0.0
+                && facts.position.lot_count == 1U && receipt_origin_live
+                && facts.position.signed_units
+                    == source.signal_close_mc_remaining_qty
+                && std::isfinite(close_surplus)
+                && std::abs(close_surplus - 1.0) < 1e-6;
+        }();
         // ab9714be pine_fills.cpp:6577-6598: a default MARKET request carries
         // frozen_default_qty into execute_market_entry as a prequantized
         // quantity. Only per-call typed percentage requests use the
@@ -8278,9 +8377,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                     notional_per_price
                         * (pooc_flat_money ? source.sizing.mark : source.sizing.price));
                 if (source.sizing.equity + 1e-9 < rounded_cost) {
-                    result.units = opposite ? facts.opposite_book_units : 0.0;
-                    result.shape = opposite ? native_order::OpeningShape::CloseOpposite
-                                            : native_order::OpeningShape::Transact;
+                    result.units = keep_mc_close_surplus ? 1.0
+                        : (opposite ? facts.opposite_book_units : 0.0);
+                    result.shape = keep_mc_close_surplus
+                        ? native_order::OpeningShape::ReverseTo
+                        : (opposite ? native_order::OpeningShape::CloseOpposite
+                                    : native_order::OpeningShape::Transact);
                     return result;
                 }
                 if (!source.projection_after_close) {
@@ -8317,9 +8419,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 result.units = 0.0;
                 return result;
             }
-            result.units = source.affordability_keep_mc_close_surplus ? 1.0
+            result.units = keep_mc_close_surplus ? 1.0
                 : facts.opposite_book_units;
-            result.shape = source.affordability_keep_mc_close_surplus
+            result.shape = keep_mc_close_surplus
                 ? native_order::OpeningShape::ReverseTo
                 : native_order::OpeningShape::CloseOpposite;
             return result;
@@ -8430,20 +8532,30 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
 }
 
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
-    if (risk_.halted) return NativePrecommitVerdict::Refuse;
-    if (intraday_loss_orders_blocked()) return NativePrecommitVerdict::Refuse;
-    // pine_risk.cpp:115 gates an ENTRY from the live source position, not the
-    // candidate's opening amount.  A close remains legal at the cap; equality
-    // is refused before an additional opening can be committed.
-    if (risk_.max_position_size > 0.0 && view.account.would_open
-        && std::abs(require_host().physical_position().signed_units)
-            >= risk_.max_position_size)
-        return NativePrecommitVerdict::Refuse;
-    if (risk_.max_cons_loss_days > 0 && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days)
-        return NativePrecommitVerdict::Refuse;
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
+        const auto physical = require_host().physical_position();
+        const bool opposite_entry = source.family == PineOrderFamily::Entry
+            && physical.signed_units != 0.0
+            && ((physical.signed_units > 0.0) != source.is_long);
+        // ab9714be pine_risk.cpp:111-118, called only from
+        // pine_orders.cpp:221 and pine_fills.cpp:4720-4727: these latches
+        // gate a same-side/flat ENTRY at its fill. They never gate closes,
+        // exits, RAW orders, or the closing half of an opposite entry.
+        if (source.family == PineOrderFamily::Entry && !opposite_entry) {
+            if (risk_.halted) return NativePrecommitVerdict::Refuse;
+            if (risk_.max_cons_loss_days > 0
+                && day_ledger_.consecutive_loss_days >= risk_.max_cons_loss_days) {
+                return NativePrecommitVerdict::Refuse;
+            }
+            // pine_risk.cpp:115 compares the live source position, not the
+            // candidate's resulting quantity. Equality blocks a further add.
+            if (risk_.max_position_size > 0.0 && view.account.would_open
+                && std::abs(physical.signed_units) >= risk_.max_position_size) {
+                return NativePrecommitVerdict::Refuse;
+            }
+        }
         const bool exit = source.family == PineOrderFamily::ExitLimit
             || source.family == PineOrderFamily::ExitStop
             || source.family == PineOrderFamily::ExitTrail;
@@ -8899,15 +9011,22 @@ compat::pine::CapClock PineExecutionAdapter::cap_clock(
 
 compat::pine::Calculation PineExecutionAdapter::cap_calculation(
         const NativeDecisionContext& context) const {
+    const auto state = require_host().native_state();
+    const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+    const bool magnifier = pine_host
+        ? pine_host->scheduler_.bar_magnifier_enabled()
+        : context.sub_count > 1;
     return {config_.process_orders_on_close, config_.calc_on_order_fills,
-            coof_recalc_active_, context.sub_count > 1
-                || context.driver_statistics.intrabar_path_enabled,
-            stream_mode_, !stream_mode_, !config_.close_entries_rule_any,
+            coof_recalc_active_, magnifier,
+            state.phase == NativeRunPhase::Warmup,
+            state.phase != NativeRunPhase::Realtime,
+            !config_.close_entries_rule_any,
             context.coordinate.interval_index};
 }
 
 compat::pine::MatchedAttempt PineExecutionAdapter::cap_attempt(
-        const PlacementSnapshot& snapshot, std::uint64_t incarnation) const {
+        const PlacementSnapshot& snapshot, std::uint64_t incarnation,
+        const native_order::ExecutionAppliedEvent* applied) const {
     compat::pine::OrderKind kind = compat::pine::OrderKind::Other;
     if (snapshot.family == PineOrderFamily::Entry) {
         kind = (finite_positive(snapshot.exit_levels.limit)
@@ -8915,18 +9034,38 @@ compat::pine::MatchedAttempt PineExecutionAdapter::cap_attempt(
             ? compat::pine::OrderKind::Entry : compat::pine::OrderKind::Market;
     }
     const auto position = require_host().physical_position();
-    const auto projected = static_cast<PositionSide>(snapshot.projection_position_side);
-    // Factor-A's no-op filter is defined against the matched request's
-    // pre-dispatch position.  Applied notifications observe the physical
-    // book afterwards, so retain the truthful placement-side snapshot for a
-    // flat opening rather than misclassifying its first fill as a no-op.
-    const auto side = projected == PositionSide::FLAT
-        ? compat::pine::Side::Flat
-        : (position.signed_units > 0.0 ? compat::pine::Side::Long
-            : (position.signed_units < 0.0 ? compat::pine::Side::Short
-                                           : compat::pine::Side::Flat));
-    const int live_entries = projected == PositionSide::FLAT
-        ? 0 : static_cast<int>(position.lot_count);
+    compat::pine::Side side = position.signed_units > 0.0
+        ? compat::pine::Side::Long
+        : (position.signed_units < 0.0 ? compat::pine::Side::Short
+                                       : compat::pine::Side::Flat);
+    std::size_t prefill_entries = position.lot_count;
+    if (applied) {
+        if (applied->closed_units > 0.0) {
+            // The matched ENTRY saw the side opposite its requested side.
+            // Factor A only needs that exact side to avoid misclassifying a
+            // reversal as a same-side no-op.
+            side = snapshot.is_long ? compat::pine::Side::Short
+                                    : compat::pine::Side::Long;
+        } else if (applied->opened_units != 0.0
+                   && applied->cycle_before != applied->cycle_after) {
+            side = compat::pine::Side::Flat;
+            prefill_entries = 0;
+        } else if (applied->opened_units != 0.0
+                   && applied->opened_lot_incarnation != 0
+                   && prefill_entries > 0) {
+            // A same-side add created exactly one new physical opening.
+            --prefill_entries;
+        }
+    } else {
+        const auto projected = static_cast<PositionSide>(snapshot.projection_position_side);
+        if (projected == PositionSide::FLAT) {
+            side = compat::pine::Side::Flat;
+            prefill_entries = 0;
+        }
+    }
+    const int live_entries = prefill_entries
+            > static_cast<std::size_t>(std::numeric_limits<int>::max())
+        ? std::numeric_limits<int>::max() : static_cast<int>(prefill_entries);
     return {kind, incarnation, snapshot.projection_created_bar,
             snapshot.is_long, side, live_entries,
             config_.pyramiding};
@@ -9563,14 +9702,13 @@ bool PineExecutionAdapter::schedule_margin_call_path(
                     && (found->second.family == PineOrderFamily::Entry
                         || found->second.family == PineOrderFamily::Order);
             });
-        bool prior_margin_slice = false;
-        for (int index = 0; index < require_host().trade_count(); ++index) {
-            if (require_host().get_trade(index).exit_comment == "Margin call") {
-                prior_margin_slice = true;
-                break;
-            }
+        // ab9714be pine_fills.cpp:2154: only a margin event already applied
+        // on this script bar suppresses a competing schedule. Exit comments
+        // are user-writable report data and never form policy state.
+        if (competing_entry
+            && last_margin_call_script_bar_ == context.script_bar_open_ms) {
+            return false;
         }
-        if (competing_entry && prior_margin_slice) return false;
     }
     // ab9714be pine_fills.cpp:1025-1063, :1314-1339: an entry-bar margin
     // pass sees only the OHLC suffix after the actual opening point. Later
@@ -9838,6 +9976,7 @@ void PineExecutionAdapter::execute_cap_close_now(const compat::pine::CloseNow& c
 void PineExecutionAdapter::observe_intraday_cap(
         const native_order::ExecutionAppliedEvent& event,
         const PlacementSnapshot& snapshot, const NativeDecisionContext& context) {
+    if (!cap.active()) return;
     if (snapshot.family == PineOrderFamily::Margin || snapshot.family == PineOrderFamily::Risk
         || snapshot.source_id == "__intraday_cap_close__")
         return;
@@ -9950,16 +10089,25 @@ void PineExecutionAdapter::observe_intraday_cap(
         // remain uncounted.
         return;
     }
-    const auto attempt = cap_attempt(snapshot, event.handle().incarnation);
+    const auto attempt = cap_attempt(snapshot, event.handle().incarnation, &event);
     const auto origin = cap.origin(clock, calculation, event.handle().incarnation, cap_latest_fill_);
     const auto admission = cap.pre_dispatch(clock, calculation, attempt, cap_latest_fill_);
     if (admission.dispatch == compat::pine::Dispatch::Decline) {
         cap.decline(event.handle().incarnation);
         return;
     }
-    cap.outcome(compat::pine::FillOutcome::Committed, origin);
+    const bool primary_fill_applied = event.closed_units > 0.0
+        || event.opened_units != 0.0 || event.closed_trade_count > 0
+        || event.opened_lot_incarnation != 0
+        || event.cycle_before != event.cycle_after;
+    cap.outcome(primary_fill_applied ? compat::pine::FillOutcome::Committed
+                                     : compat::pine::FillOutcome::NoEffect,
+                origin);
     const auto position = require_host().physical_position();
-    const Bar& prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
+    Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
+    if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+        if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
+    }
     const auto decision = cap.post_dispatch(admission, calculation, attempt,
         position.signed_units > 0.0 ? compat::pine::Side::Long
         : (position.signed_units < 0.0 ? compat::pine::Side::Short
@@ -9994,7 +10142,10 @@ void PineExecutionAdapter::observe_intraday_cap_noop(
     }
     cap.outcome(compat::pine::FillOutcome::NoEffect, origin);
     const auto position = require_host().physical_position();
-    const Bar& prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
+    Bar prices = policy_script_bar_valid_ ? policy_script_bar_ : coof_script_bar_;
+    if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+        if (const auto broker = pine_host->scheduler_.broker_bar(context)) prices = *broker;
+    }
     const auto decision = cap.post_dispatch(admission, calculation, attempt,
         position.signed_units > 0.0 ? compat::pine::Side::Long
         : (position.signed_units < 0.0 ? compat::pine::Side::Short
@@ -10716,7 +10867,6 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
         day_ledger_.intraday_realized = 0.0;
     }
     execute_due_cap_close(context);
-    update_risk_state(bar.open);
     apply_fx_open_margin_slice(bar, context);
     (void)submit_slipped_pooc_opening_money_call(bar, context);
     const auto opening_position = require_host().physical_position();
@@ -10815,7 +10965,8 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
     (void)submit_intraday_loss_close(bar.open, context, true);
     schedule_intraday_loss_path(bar, context);
     schedule_preopen_margin_slice(bar, context);
-    cap.ordinary_open(context.coordinate.interval_index);
+    if (context.sub_index == 0)
+        cap.ordinary_open(context.coordinate.interval_index);
 }
 
 void PineExecutionAdapter::on_tick(
@@ -11477,6 +11628,49 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             signal_close_mc_before_qty_ = signal_close_mc_remaining_qty_
                 + std::abs(event.closed_units);
         }
+        std::uint64_t sole_entry_incarnation = 0;
+        int live_entry_origins = 0;
+        if (physical.signed_units != 0.0 && physical.lot_count == 1U) {
+            for (const auto& cohort_id : cohort_order_) {
+                const auto cohort = cohorts_by_id_.find(cohort_id);
+                if (cohort == cohorts_by_id_.end()) continue;
+                for (const auto& origin : cohort->second.opened) {
+                    const auto units = cohort->second.live_units_by_origin.find(
+                        origin.incarnation);
+                    if (units == cohort->second.live_units_by_origin.end()
+                        || !(units->second > 0.0)) {
+                        continue;
+                    }
+                    const auto opening = placement_.find(origin.incarnation);
+                    if (opening == placement_.end()
+                        || !opening->second.opening
+                        || opening->second.is_long != (physical.signed_units > 0.0)) {
+                        continue;
+                    }
+                    sole_entry_incarnation = origin.incarnation;
+                    ++live_entry_origins;
+                }
+            }
+        }
+        if (live_entry_origins != 1) sole_entry_incarnation = 0;
+        last_margin_call_script_bar_ = context.script_bar_open_ms;
+        last_margin_call_event_ordinal_ = event.ordinal;
+        last_margin_call_entry_incarnation_ = sole_entry_incarnation;
+        last_margin_call_position_cycle_ = current_position_cycle_;
+        last_margin_call_at_script_close_ = policy_script_bar_valid_
+            && policy_script_bar_.timestamp == context.script_bar_open_ms
+            && nearest_tick(event.resolved_price, staged_.syminfo.mintick)
+                == nearest_tick(policy_script_bar_.close, staged_.syminfo.mintick);
+        last_margin_call_closed_units_ = event.closed_units;
+        last_margin_call_remaining_units_ = std::abs(physical.signed_units);
+        const auto state = require_host().native_state();
+        const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host());
+        const bool magnifier = pine_host
+            && pine_host->scheduler_.bar_magnifier_enabled();
+        const bool ordinary_margin_receipt = !config_.process_orders_on_close
+            && !config_.calc_on_order_fills && !coof_recalc_active_
+            && !magnifier && state.phase == NativeRunPhase::Batch
+            && last_margin_call_at_script_close_;
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) continue;
@@ -11487,13 +11681,28 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 && candidate.affordability_close_only && !candidate.is_long
                 && candidate.rounded_signal_cost_close_only
                 && candidate.deferred_cohort
-                && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+                && ordinary_margin_receipt
+                && !std::isfinite(candidate.requested_qty)
+                && !finite_positive(candidate.exit_levels.limit)
+                && !finite_positive(candidate.exit_levels.stop)
+                && !candidate.projection_after_close
+                && candidate.projection_created_bar
+                    == context.coordinate.interval_index
+                && candidate.projection_position_side
+                    == static_cast<std::int32_t>(PositionSide::LONG)
                 && candidate.placement_cycle == current_position_cycle_
                 && physical.signed_units > 0.0 && physical.lot_count == 1U
+                && sole_entry_incarnation != 0
                 && std::isfinite(close_surplus) && std::abs(close_surplus - 1.0) < 1e-6
                 && std::abs(event.closed_units - 1.0) < 1e-6;
             if (exact_margin_receipt) {
                 candidate.affordability_keep_mc_close_surplus = true;
+                candidate.signal_close_mc_bar = candidate.projection_created_bar;
+                candidate.signal_close_mc_entry_incarnation = sole_entry_incarnation;
+                candidate.signal_close_mc_fill_seq = pine_host
+                    ? pine_host->adapter_broker_fill_event_sequence() : 0;
+                candidate.signal_close_mc_remaining_qty =
+                    std::abs(physical.signed_units);
                 if (live_entry_count == 1U && sole_live_entry_incarnation != 0) {
                     candidate.signal_close_mc_bar = candidate.projection_created_bar;
                     candidate.signal_close_mc_entry_incarnation =
@@ -11763,7 +11972,6 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             }
         }
     }
-    update_risk_state(event.resolved_price);
     if (risk_.intraday_cancel_pending) {
         risk_.intraday_cancel_pending = false;
         cancel_all();

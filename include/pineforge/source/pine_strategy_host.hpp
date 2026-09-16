@@ -168,8 +168,7 @@ protected:
     compat::pine::Calculation fixture_cap_calculation() const;
     BarTime fixture_chart_time(std::int64_t timestamp_ms) const;
     std::int64_t fixture_chart_day_key(std::int64_t timestamp_ms) const noexcept {
-        const BarTime time = fixture_chart_time(timestamp_ms);
-        return static_cast<std::int64_t>(time.dayofmonth) * 100 + time.month;
+        return adapter_.chart_day_key(timestamp_ms);
     }
     std::uint64_t fixture_applied_receipt_count() const;
     bool fixture_cap_due_pending() const noexcept {
@@ -306,6 +305,9 @@ private:
                                               const StrategyOverrides&);
     static std::uint64_t adapter_event_high_water(const NativeStrategyHost&) noexcept;
     static std::uint64_t adapter_terminal_receipt_high_water(const NativeStrategyHost&) noexcept;
+    std::uint64_t adapter_broker_fill_event_sequence() const noexcept {
+        return broker_fill_event_seq_;
+    }
     void scheduler_prepare_script_run(const std::vector<Bar>&,
                                       bool static_eligible, int expected_script_bars,
                                       bool script_bar_geometry);

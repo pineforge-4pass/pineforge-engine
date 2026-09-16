@@ -111,7 +111,9 @@ void test_funded_and_competing_order_controls() {
     CarriedShort competing(Action::REVERSE);
     competing.parked_entry = true;
     competing.run(bars.data(), static_cast<int>(bars.size()));
-    CHECK(near(competing.second_view, -12.44432));
+    // A prior-bar margin event does not suppress this bar's slice merely
+    // because another entry is live (pine_fills.cpp:2154 is a per-bar latch).
+    CHECK(near(competing.second_view, -12.33168));
     // The same command topology with prices and capital rescaled together
     // enters the broker's separate rounded-margin financial class. Keep its
     // established script timing until that class has its own complete proof.
