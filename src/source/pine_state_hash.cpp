@@ -67,6 +67,11 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.u(value.source_sequence);
     f.u(value.command_ordinal); f.u(value.placement_open_epoch);
     f.u(value.command_sequence);
+    f.u(value.close_callsite_token); f.u(value.close_batch_calls);
+    f.s(value.close_first_id); f.d(value.close_first_target);
+    f.b(value.close_first_ledger_consumed); f.b(value.close_first_carry_valid);
+    f.d(value.close_first_carry_qty); f.b(value.close_retire_ledger_whole);
+    f.d(value.close_pending_later_qty);
     f.i(value.placement_script_open_ms);
     f.i(value.placement_sub_open_ms); f.i(value.projection_created_bar);
     f.i(value.projection_position_side); f.b(value.projection_after_close);
@@ -120,6 +125,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
         }
     }
     value.legs.visit(f);
+    f.b(value.restored_after_margin);
     f.b(value.reservation_expansion.capture().has_value());
     if (value.reservation_expansion.capture()) {
         const auto& capture = *value.reservation_expansion.capture();
@@ -209,6 +215,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.i(config_.pyramiding); f.d(config_.commission_value); f.i(config_.commission_type);
     f.i(config_.slippage); f.d(config_.margin_long); f.d(config_.margin_short);
     f.b(config_.close_entries_rule_any); f.b(config_.src_series_active);
+    f.i(static_cast<std::int64_t>(path_order_));
     f.s(staged_.syminfo.ticker); f.s(staged_.syminfo.tickerid); f.s(staged_.syminfo.currency);
     f.s(staged_.syminfo.basecurrency); f.s(staged_.syminfo.type); f.s(staged_.syminfo.timezone);
     f.s(staged_.syminfo.session); f.s(staged_.syminfo.volumetype); f.s(staged_.syminfo.description);
@@ -346,6 +353,34 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         const auto& token = named_entry_cancel_tokens_.at(key);
         f.s(key); f.u(token.entry_incarnation); f.u(token.surviving_exit_incarnation);
     }
+    const auto hash_close_units = [&](const auto& values) {
+        f.u(values.size());
+        for (const auto& row : values) { f.s(row.first); f.d(row.second); }
+    };
+    hash_close_units(close_logical_units_);
+    hash_close_units(close_reserved_units_);
+    hash_close_units(close_first_units_);
+    const auto hash_close_owners = [&](const auto& owners) {
+        f.u(owners.size());
+        for (const auto& owner : owners) {
+            f.u(owner.first); hash_close_units(owner.second);
+        }
+    };
+    hash_close_owners(close_callsite_reserved_units_);
+    hash_close_owners(close_callsite_first_units_);
+    f.u(close_batch_callsites_.size());
+    for (const auto& row : close_batch_callsites_) {
+        const auto& site = row.second;
+        f.u(row.first); f.b(site.active); f.u(site.token); f.i(site.calls);
+        f.s(site.first_id); f.d(site.first_target);
+        f.b(site.first_ledger_consumed); f.b(site.first_carry_valid);
+        f.d(site.first_carry_qty); f.s(site.id); f.s(site.comment);
+        f.d(site.target); f.b(site.retire_ledger_whole);
+        f.u(site.queue_sequence); f.u(site.deferred_cleanup_ids.size());
+        for (const auto& id : site.deferred_cleanup_ids) f.s(id);
+    }
+    f.i(close_batch_bar_); f.u(close_batch_queue_sequence_);
+    f.d(close_batch_pending_debt_); f.d(close_batch_admitted_total_);
     f.u(receipt_cursor_);
     f.u(last_applied_ordinal_);
     f.i(entry_attempt_bar_); f.u(entry_attempts_on_bar_);
@@ -418,7 +453,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     hash_short_seed_plan(f, pending_short_seed_.plan);
     f.u(pending_short_seed_.expected_open_epoch); f.b(pending_short_seed_.ready);
     hash_native_handle(f, short_seed_long_candidate_);
-    f.i(last_bar_dual_entry_path_); f.b(pending_view_.owner_ != nullptr);
+    f.i(last_bar_dual_entry_path_); f.i(last_bar_dual_entry_script_open_ms_);
+    f.b(pending_view_.owner_ != nullptr);
     f.i(static_cast<std::int64_t>(cap.attachment())); f.i(cap.configuration().limit);
     f.b(cap.configuration().skip_noop_market); f.b(cap.configuration().defer_pooc_close);
     f.b(cap.configuration().count_pooc_full_close);

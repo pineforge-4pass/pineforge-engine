@@ -12,7 +12,6 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #ifndef PINEFORGE_HAS_NATIVE_LOWERING_V1
@@ -139,20 +138,73 @@ struct L4dIntentRow {
     OrderCancellationReceipt cancellation{};
 };
 
-// These are test-local observation scratchpads for twins whose historical
-// bodies explicitly inspect the deleted close-reservation owner.  They never
-// feed adapter execution: native commands continue to be submitted through
-// strategy_close and all live facts come from the ABI-v4 projection.  A twin
-// that needs one of these scratchpads remains l4-pending until its owning
-// policy lane supplies an observable replacement; Appendix 5 records every
-// owner-only CHECK literal rather than treating this storage as a second book.
-struct L4dCloseCallsite {
-    bool active = false;
-    double target = 0.0;
-    int calls = 0;
-    std::string id;
-    std::string comment;
-    std::uint64_t queue_seq = 0;
+// A37(4): mutable fixture view over the adapter-owned cancellation receipt.
+// It reproduces the retired receipt API without copying the frozen C mirror
+// or creating a second execution owner; every successful transition writes
+// the PlacementSnapshot fields consumed by both source hashing and copy_v1.
+class L4dCancellationReceiptView {
+public:
+    explicit L4dCancellationReceiptView(PineCancellationReceipt& receipt) noexcept
+        : receipt_(receipt) {}
+
+    CancellationResult cancel(CancellationCause cause,
+            std::uint64_t source_incarnation, std::int64_t source_sequence,
+            CancellationTarget target, CancellationTarget current_target) {
+        const bool valid = cause != CancellationCause::None
+            && source_incarnation != 0 && source_sequence > 0
+            && target.incarnation != 0 && target.owner >= 0
+            && target.revision != std::numeric_limits<std::uint64_t>::max()
+            && current_target.incarnation == target.incarnation
+            && current_target.owner == target.owner
+            && current_target.revision == target.revision;
+        if (!valid) return CancellationResult::Invalid;
+        if (receipt_.state != 0) {
+            return receipt_.cause == static_cast<PineCancellationCause>(cause)
+                && receipt_.source_incarnation == source_incarnation
+                && receipt_.source_sequence == source_sequence
+                && receipt_.target_incarnation == target.incarnation
+                && receipt_.target_owner == target.owner
+                && receipt_.target_revision == target.revision
+                ? CancellationResult::Replay
+                : CancellationResult::AlreadyTerminal;
+        }
+        receipt_.cause = static_cast<PineCancellationCause>(cause);
+        receipt_.state = 1;
+        receipt_.source_incarnation = source_incarnation;
+        receipt_.source_sequence = source_sequence;
+        receipt_.target_incarnation = target.incarnation;
+        receipt_.target_owner = target.owner;
+        receipt_.target_revision = target.revision;
+        return CancellationResult::Applied;
+    }
+
+    bool bind_close_claim(double consumed, double retired) {
+        if (receipt_.state != 0 || receipt_.close_claim_release != 0) return false;
+        const bool no_claim = std::isnan(consumed) && retired == 0.0;
+        const bool valid_claim = std::isfinite(consumed) && consumed > 0.0
+            && std::isfinite(retired) && retired >= 0.0;
+        if (!no_claim && !valid_claim) return false;
+        receipt_.close_claim_consumed = consumed;
+        receipt_.close_claim_retired = retired;
+        receipt_.close_claim_release = valid_claim ? 2 : 1;
+        return true;
+    }
+
+    bool release_close_claim_once(double& ledger) {
+        if (receipt_.state != 1 || receipt_.close_claim_release != 2
+            || !std::isfinite(ledger)) {
+            return false;
+        }
+        const double credit = receipt_.close_claim_consumed
+            + receipt_.close_claim_retired;
+        if (!std::isfinite(credit) || !std::isfinite(ledger + credit)) return false;
+        ledger += credit;
+        receipt_.close_claim_release = 3;
+        return true;
+    }
+
+private:
+    PineCancellationReceipt& receipt_;
 };
 
 class L4dPineHost : public PineStrategyHost {
@@ -178,6 +230,51 @@ protected:
     }
     bool l4d_coof_cursor_is_bar_close() const noexcept {
         return adapter_.fixture_coof_cursor_is_bar_close();
+    }
+    double l4d_close_logical_units(const std::string& id) const noexcept {
+        return adapter_.fixture_close_logical_units(id);
+    }
+    double l4d_close_reserved_units(const std::string& id) const noexcept {
+        return adapter_.fixture_close_reserved_units(id);
+    }
+    double l4d_close_first_units(const std::string& id) const noexcept {
+        return adapter_.fixture_close_first_units(id);
+    }
+    double l4d_callsite_reserved_units(
+            std::uint64_t token, const std::string& id) const noexcept {
+        return adapter_.fixture_callsite_close_reserved_units(token, id);
+    }
+    double l4d_callsite_first_units(
+            std::uint64_t token, const std::string& id) const noexcept {
+        return adapter_.fixture_callsite_close_first_units(token, id);
+    }
+    std::size_t l4d_close_reservation_count() const noexcept {
+        return adapter_.fixture_close_reservation_count();
+    }
+    std::size_t l4d_close_first_count() const noexcept {
+        return adapter_.fixture_close_first_count();
+    }
+    std::size_t l4d_close_logical_count() const noexcept {
+        return adapter_.fixture_close_logical_count();
+    }
+    std::size_t l4d_callsite_reservation_count() const noexcept {
+        return adapter_.fixture_callsite_close_reservation_count();
+    }
+    std::size_t l4d_callsite_first_count() const noexcept {
+        return adapter_.fixture_callsite_close_first_count();
+    }
+    double l4d_callsite_reserved_total() const noexcept {
+        return adapter_.fixture_callsite_close_reserved_total();
+    }
+    double l4d_close_pending_debt() const noexcept {
+        return adapter_.fixture_close_pending_debt();
+    }
+    double l4d_close_admitted_total() const noexcept {
+        return adapter_.fixture_close_admitted_total();
+    }
+    std::vector<PineExecutionAdapter::FixtureCloseCallsite>
+    l4d_close_callsites() const {
+        return adapter_.fixture_close_callsites();
     }
 
     std::vector<L4dIntentRow>& l4d_pending_rows() const {
@@ -225,7 +322,8 @@ protected:
             view.signal_close_mc_remaining_qty = row.signal_close_mc_remaining_qty;
             view.signal_close_mc_entry_incarnation = row.signal_close_mc_entry_incarnation;
             view.signal_close_mc_bar = row.signal_close_mc_bar;
-            if (row.market_admission_observation_present != 0) {
+            if (row.market_admission_observation_present != 0
+                && row.market_admission_observation_command != 0) {
                 auto observation = std::make_shared<admission::CommandObservation>();
                 observation->command = row.market_admission_observation_command;
                 observation->kind = static_cast<admission::CommandKind>(
@@ -411,19 +509,6 @@ public:
 
 private:
     mutable std::vector<L4dIntentRow> l4d_pending_rows_;
-
-protected:
-    std::unordered_map<std::string, double> l4d_fixture_id_unclosed_qty_;
-    std::unordered_map<std::string, double> l4d_fixture_close_reserved_qty_;
-    std::unordered_map<std::string, double> l4d_fixture_close_two_call_first_qty_;
-    std::unordered_map<std::uint64_t, std::unordered_map<std::string, double>>
-        l4d_fixture_callsite_close_reserved_qty_;
-    std::unordered_map<std::uint64_t, std::unordered_map<std::string, double>>
-        l4d_fixture_callsite_close_two_call_first_qty_;
-    std::unordered_map<std::uint64_t, L4dCloseCallsite>
-        l4d_fixture_callsite_close_callsites_;
-    double l4d_fixture_pending_close_qty_in_bar_ = 0.0;
-    double l4d_fixture_callsite_close_admitted_total_ = 0.0;
 };
 
 using L4dPendingOrder = L4dIntentRow;

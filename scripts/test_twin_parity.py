@@ -120,6 +120,25 @@ void test() {
         with self.assertRaisesRegex(checker.ParityError, "covering twin is missing"):
             checker.check_inventory(root=root, ev=ev, base_reader=lambda _: BASE)
 
+    def test_owner_group_range_counts_omitted_checks(self) -> None:
+        root, ev = self.fixture(
+            '#define CHECK(x) do {} while (0)\n',
+            '| tests/test_case.cpp:3-4 | 2 CHECKs | direct owner group | '
+            'retired owner state has no public projection | '
+            'tests/test_case_l4d.cpp:1 public run receipt |\n')
+        self.assertEqual(checker.check_inventory(
+            root=root, ev=ev, base_reader=lambda _: BASE),
+            {"tests": 1, "base": 3, "twin": 1, "ledgered": 2})
+
+    def test_owner_group_range_count_is_bounded_by_base_rows(self) -> None:
+        root, ev = self.fixture(
+            '#define CHECK(x) do {} while (0)\n',
+            '| tests/test_case.cpp:3-4 | 3 CHECKs | direct owner group | '
+            'retired owner state has no public projection | '
+            'tests/test_case_l4d.cpp:1 public run receipt |\n')
+        with self.assertRaisesRegex(checker.ParityError, "range count exceeds"):
+            checker.check_inventory(root=root, ev=ev, base_reader=lambda _: BASE)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1162,10 +1162,9 @@ add_test(NAME test_oracle_stop_snapshot
          COMMAND test_native_oracle_stop_snapshot_full_l2)
 set_tests_properties(test_oracle_stop_snapshot PROPERTIES LABELS l4-pending)
 
-# R4-D L5c: these assigned twins now reproduce their legacy source-policy
-# literals on the switched native route. Keep only the five root-visible STOP
-# rows under l4-pending (live path, cancellation projection, integration
-# scratchpad, contradictory reversal restoration, and off-grid reduction).
+# R4-D L5c/L6c: these assigned twins now reproduce their legacy source-policy
+# literals on the switched native route. L6c also completed the path-order,
+# cancellation, integration-close, and explicit off-grid reduction rows.
 set_tests_properties(
     test_aapl15_margin_brackets_l4a
     test_carried_pooc_short_margin_state_l4a
@@ -1181,15 +1180,19 @@ set_tests_properties(
     test_native_oracle_stop_snapshot_full_l2
     test_native_live_order_derived_l4d
     test_live_order_derived
+    test_live_path_order_l4d
     test_pending_order_mirror_no_alloc_l4d
     test_full_close_while_pyramiding_l4d
     test_pooc_short_close_tick_l4d
     test_pyramiding_count_partial_drain_l4d
     test_live_order_derived_l4d
+    test_cancellation_mirror_coverage_l4d
     test_fills_edge_l4d
+    test_integration_l4d
     test_strategy_commands_extra_l4d
     test_strategy_pyramiding_l4d
     test_dual_entry_placement_sizing_l4b
+    test_integer_lot_percent_exit_min_step_l4b
     test_market_entry_affordability_l4b
     test_qty_step_epsilon_floor_l4b
     test_stop_entry_placement_open_qty_l4b

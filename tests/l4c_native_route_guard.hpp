@@ -175,6 +175,10 @@ public:
         for (int index = 0; index < count; ++index) {
             pf_pending_order_v1_t row{};
             if (view.copy_v1(index, &row) != 0) continue;
+            // Staged rows have no generic request handle. The fixture facade
+            // below supplies their read-only legacy incarnation projection;
+            // do not retain the public handle-zero copy alongside it.
+            if (row.incarnation == 0) continue;
             L4cPendingOrder projection;
             projection.id = row.id;
             projection.from_entry = row.from_entry;
@@ -359,6 +363,7 @@ public:
                     == right.named_cancel_surviving_exit_incarnation
                 && left.created_seq == right.created_seq
                 && left.created_bar == right.created_bar
+                && equal_number(left.qty, right.qty)
                 && equal_number(left.limit_price, right.limit_price)
                 && equal_number(left.stop_price, right.stop_price);
         };
@@ -380,6 +385,9 @@ public:
     }
     bool l4c_named_entry_cancel_active(const std::string& id) const noexcept {
         return adapter_.fixture_named_entry_cancel_active(id);
+    }
+    void l4c_remove_entry_without_named_cancel(const std::string& id) {
+        adapter_.fixture_remove_entry_without_named_cancel(id);
     }
     std::uint64_t& l4c_exit_leg_event_seq() noexcept { return l4c_exit_leg_event_seq_; }
 
