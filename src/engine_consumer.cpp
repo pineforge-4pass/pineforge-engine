@@ -40,6 +40,15 @@ int BacktestEngine::execution_contract() const {
 }
 
 void BacktestEngine::guard_native_mutation(const char* operation) {
+    // ab9714be:src/engine_consumer.cpp LegacyCompatibilityConsumer::refuse
+    // was a no-op on the source-route handle. After stream_begin the switched
+    // source host keeps stream_warmup_mode_ set until the first realtime
+    // input (pine_scheduler_native.cpp run_begin); that is the window where
+    // ab9714be accepted push_tick/advance_time/stream_end after the FX API
+    // refusal. Keep the call site first (P1-22) but do not latch
+    // UnsupportedSource in that window. Native hosts never set the flag, so
+    // their in-run FX setter still throws.
+    if (stream_warmup_mode_) return;
     execution_consumer().refuse_source_mutation(operation);
 }
 

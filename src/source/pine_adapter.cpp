@@ -926,6 +926,7 @@ void PineExecutionAdapter::reset_for_run() {
     policy_script_bar_valid_ = false;
     trail_state_at_open_.clear();
     stream_mode_ = false;
+    bar_magnifier_ = false;
     path_order_ = NativePathOrder::Auto;
     short_seed_ = {};
     pending_short_seed_ = {};
@@ -946,7 +947,10 @@ void PineExecutionAdapter::reset_for_run() {
 
 void PineExecutionAdapter::set_configuration(const PineStrategyConfig& config) noexcept { config_ = config; }
 void PineExecutionAdapter::set_staged_configuration(const StagedConfiguration& staged) { staged_ = staged; }
-void PineExecutionAdapter::set_begin_mode(bool is_stream) noexcept { stream_mode_ = is_stream; }
+void PineExecutionAdapter::set_begin_mode(bool is_stream, bool bar_magnifier) noexcept {
+    stream_mode_ = is_stream;
+    bar_magnifier_ = bar_magnifier;
+}
 void PineExecutionAdapter::set_path_order(NativePathOrder path_order) noexcept {
     path_order_ = path_order;
 }
@@ -1278,9 +1282,7 @@ bool PineExecutionAdapter::qualify_short_seed_plan(const ShortSeedPlan& plan) co
     const PlacementSnapshot& long_entry = long_it->second;
     const PlacementSnapshot& materialize = materialize_it->second;
     const PlacementSnapshot& final_short = final_it->second;
-    const auto* source_host = dynamic_cast<const PineStrategyHost*>(host_);
-    const bool bar_magnifier = source_host
-        && source_host->scheduler_.bar_magnifier_enabled();
+    const bool bar_magnifier = bar_magnifier_;
     const auto is_live = [&](const native_order::RequestHandle& handle) {
         return std::find(live_handles_.begin(), live_handles_.end(), handle) != live_handles_.end();
     };

@@ -250,7 +250,7 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
     }
     adapter_.set_configuration(effective);
     adapter_.set_staged_configuration(staged);
-    adapter_.set_begin_mode(args.is_stream);
+    adapter_.set_begin_mode(args.is_stream, args.bar_magnifier);
     adapter_.set_margin_call_enabled(margin_call_enabled_);
     scheduler_.capture_begin(args);
     scheduler_.set_source_series_active(effective.src_series_active);

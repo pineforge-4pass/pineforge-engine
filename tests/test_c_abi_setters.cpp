@@ -305,9 +305,9 @@ int main() {
     warmup.timestamp = 0;
     CHECK(strategy_stream_begin(sh, &warmup, 1, "1", "1") == 0);
 
-    // Timestamped FX is not supported by the realtime scheduler. The source
-    // mutation guard runs before that API-level refusal, latching the native
-    // UnsupportedSource failure exactly as the generic route did at the base.
+    // Timestamped FX is not supported by the realtime scheduler. Installing a
+    // curve after stream_begin must fail atomically; otherwise callers could
+    // bypass the begin-time fail-closed check.
     const int64_t stream_fx_ts[] = {0};
     const double stream_fx_rates[] = {1.001};
     CHECK(strategy_set_account_currency_fx_series(
@@ -318,17 +318,17 @@ int main() {
     tick.sequence = 7;
     tick.price = 101.0;
     tick.quantity = 0.5;
-    CHECK(strategy_stream_push_tick(sh, &tick) == -1);
-    CHECK(strategy_stream_push_ticks(sh, nullptr, 0) == -1);
-    CHECK(strategy_stream_advance_time(sh, 120000) == -1);
+    CHECK(strategy_stream_push_tick(sh, &tick) == 0);
+    CHECK(strategy_stream_push_ticks(sh, nullptr, 0) == 0);
+    CHECK(strategy_stream_advance_time(sh, 120000) == 0);
 
     pf_report_t report{};
     CHECK(strategy_stream_fill_report(sh, &report) == 0);
-    CHECK(report.input_bars_processed == 1);
-    CHECK(report.script_bars_processed == 1);
+    CHECK(report.input_bars_processed == 2);
+    CHECK(report.script_bars_processed == 2);
     pineforge::BacktestEngine::free_report(
         reinterpret_cast<pineforge::ReportC*>(&report));
-    CHECK(strategy_stream_end(sh, 0) == -1);
+    CHECK(strategy_stream_end(sh, 0) == 0);
 
     if (g_fail == 0) {
         std::printf("test_c_abi_setters: OK (pineforge %s)\n", vs);

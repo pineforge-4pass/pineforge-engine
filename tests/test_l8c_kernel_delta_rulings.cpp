@@ -58,6 +58,15 @@ public:
         return settle_native_execution_at(
             action, ex::Fill{price, "active", "native", 7}, context);
     }
+
+    ex::Result settle_with_effects(const ex::Action& action, double price,
+                                   const ex::LifecycleEffects& lifecycle) {
+        ex::PhysicalExecutionContext context;
+        context.effective_time_ms = 60'000;
+        context.interval_index = 0;
+        return settle_with_context(
+            action, ex::Fill{price, "unrepresentable", "native", 8}, lifecycle, context);
+    }
 };
 
 void accepted_generic_diagnostic_counters() {
@@ -108,6 +117,33 @@ void active_native_settlement_keeps_the_legacy_literals() {
     CHECK(host.physical_position().signed_units == 0.0);
 }
 
+void nonempty_lifecycle_over_unrepresentable_selection_is_invalid_lifecycle() {
+    // A39 P1-24 second half / A41(4): ab9714be refused a non-empty lifecycle
+    // in stage_native_settlement (after book validation, before allocation).
+    // An unrepresentable Reduce over that book must still report
+    // InvalidLifecycle, not UnrepresentableQuantity.
+    NativeProbe host;
+    const auto opened = host.settle(order_action::Transact{2.0}, 100.0);
+    CHECK(opened.status == ex::Status::Applied);
+
+    const auto empty = host.settle(
+        order_action::Reduce{std::numeric_limits<double>::denorm_min()}, 110.0);
+    CHECK(empty.status == ex::Status::UnrepresentableQuantity);
+    CHECK(host.physical_position().signed_units == 2.0);
+
+    NativeProbe refused_host;
+    CHECK(refused_host.settle(order_action::Transact{2.0}, 100.0).status
+          == ex::Status::Applied);
+    ex::LifecycleEffects lifecycle;
+    lifecycle.removals.push_back({999, 999, {}, 0});
+    const auto refused = refused_host.settle_with_effects(
+        order_action::Reduce{std::numeric_limits<double>::denorm_min()},
+        110.0,
+        lifecycle);
+    CHECK(refused.status == ex::Status::InvalidLifecycle);
+    CHECK(refused_host.physical_position().signed_units == 2.0);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -116,8 +152,10 @@ int main(int argc, char** argv) {
         accepted_generic_diagnostic_counters();
     if (selected == "all" || selected == "p1-22")
         realtime_fx_mutation_latches_before_the_api_refusal();
-    if (selected == "all" || selected == "p1-24")
+    if (selected == "all" || selected == "p1-24") {
         active_native_settlement_keeps_the_legacy_literals();
+        nonempty_lifecycle_over_unrepresentable_selection_is_invalid_lifecycle();
+    }
     std::printf("L8c kernel delta rulings: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }
