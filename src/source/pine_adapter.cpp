@@ -6261,12 +6261,19 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 else *queued = std::move(staged);
                 return;
             }
+            const std::uint64_t placement_high_water = placement_.high_water();
             const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                                     replacement_key);
             if (accepted) {
                 auto& family = bracket_families_[family_key];
-                if (std::find(family.begin(), family.end(), *accepted) == family.end())
+                // Every family member was remembered before this submission,
+                // so a successor above the prior placement high-water cannot
+                // already be present; only a returned existing handle needs
+                // the membership scan.
+                if (accepted->incarnation > placement_high_water
+                    || std::find(family.begin(), family.end(), *accepted) == family.end()) {
                     family.push_back(*accepted);
+                }
             }
         };
 
@@ -10296,21 +10303,26 @@ void PineExecutionAdapter::apply_open_market_admission(
         const PlacementSnapshot* snapshot = nullptr;
     };
     std::vector<Candidate> market;
-    std::size_t commands_on_bar = 0;
     bool foreign_live_order = false;
-    for (const auto& row : placement_) {
-        const auto& snapshot = row.second;
-        if (snapshot.projection_created_bar != source_bar
-            || (snapshot.family != PineOrderFamily::Entry
-                && snapshot.family != PineOrderFamily::Order)) {
-            continue;
+    // The historical placement scan is consumed only by the two-candidate
+    // pair rule below; evaluate it there rather than on every broker open.
+    const auto commands_on_bar = [&]() {
+        std::size_t count = 0;
+        for (const auto& row : placement_) {
+            const auto& snapshot = row.second;
+            if (snapshot.projection_created_bar != source_bar
+                || (snapshot.family != PineOrderFamily::Entry
+                    && snapshot.family != PineOrderFamily::Order)) {
+                continue;
+            }
+            ++count;
         }
-        ++commands_on_bar;
-    }
-    for (const auto& delayed : delayed_market_orders_) {
-        if (delayed.snapshot.projection_created_bar == source_bar)
-            ++commands_on_bar;
-    }
+        for (const auto& delayed : delayed_market_orders_) {
+            if (delayed.snapshot.projection_created_bar == source_bar)
+                ++count;
+        }
+        return count;
+    };
     for (const auto& handle : live_handles_) {
         const auto found = placement_.find(handle.incarnation);
         if (found == placement_.end()) continue;
@@ -10364,7 +10376,7 @@ void PineExecutionAdapter::apply_open_market_admission(
         }
     };
 
-    if (market.size() == 2 && commands_on_bar == 2 && !foreign_live_order) {
+    if (market.size() == 2 && !foreign_live_order && commands_on_bar() == 2) {
         const auto& first = *market[0].snapshot;
         const auto& second = *market[1].snapshot;
         if (first.projection_predecessor == 0 && second.projection_predecessor == 0) {
