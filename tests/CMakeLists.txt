@@ -66,6 +66,8 @@ set(TEST_SOURCES
     test_l8c_adapter_ordering
     test_l8c_broker_hash_projection
     test_l8c_kernel_delta_rulings
+    test_l9c_c_abi_fx_setter_after_realtime
+    test_l9c_broker_hash_recording_independent
     test_native_remaining_path_l5k
     test_native_trail_state_l5k
     test_native_zero_price_tick_l5o

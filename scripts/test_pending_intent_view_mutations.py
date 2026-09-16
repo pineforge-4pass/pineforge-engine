@@ -19,7 +19,9 @@ class ProjectionCoverage(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name) / "repo"
         shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so"))
+            ".git", "build*", "corpus", "benchmarks", "*.a", "*.so",
+            # ABI receipt sentinels created while CTest runs guards in parallel.
+            ".native-fx-introduced-*"))
         for relative, before, after in mutations:
             path = root / relative
             text = path.read_text()
@@ -43,6 +45,18 @@ class ProjectionCoverage(unittest.TestCase):
             "src/source/pine_adapter.cpp",
             "out->created_bar = snapshot.projection_created_bar;",
             "out->created_bar = 0U;"),))
+        self.assertIsNone(result)
+        self.assertIn("created_bar", diagnostic)
+
+    def test_named_constant_fold_is_rejected(self):
+        result, diagnostic = self.check(((
+            "src/source/pine_adapter.cpp",
+            "constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();",
+            "constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();\n"
+            "constexpr std::uint32_t kZero = 0U;"),
+            ("src/source/pine_adapter.cpp",
+             "out->created_bar = snapshot.projection_created_bar;",
+             "out->created_bar = kZero;"),))
         self.assertIsNone(result)
         self.assertIn("created_bar", diagnostic)
 
