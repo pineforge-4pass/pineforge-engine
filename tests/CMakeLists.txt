@@ -1366,6 +1366,10 @@ set_tests_properties(
     test_streaming_l4d
     PROPERTIES LABELS "")
 
+# R4-D L7r: the final residual trail booking row now composes with the
+# round-3c adapter policies and is part of every unfiltered profile.
+set_tests_properties(test_trail_fill_snap_l4c PROPERTIES LABELS "")
+
 # R4-D L6b: the round-3c sizing/ShortSeed composition regressions and the
 # remaining COOF source-cadence rows are repaired on the fully merged tree.
 set_tests_properties(

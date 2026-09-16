@@ -859,6 +859,7 @@ private:
                                            std::int64_t);
     bool defer_coof_tail() const noexcept;
     bool source_path_uses_high_first(const Bar&) const noexcept;
+    bool coof_current_fill_was_forced_waypoint() const noexcept;
     double coof_next_waypoint() const noexcept;
     double next_coof_waypoint_price() const noexcept;
     bool coof_remaining_recrosses(double level, bool long_position) const noexcept;
