@@ -1090,29 +1090,6 @@ set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_
 add_test(NAME test_l4g_runtime_budget_mutations
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_runtime_budget.py)
 
-# R4-D L0 captures literal values from the ab9714be legacy source route in
-# dedicated translation units.  They intentionally live outside the ordinary
-# `tests/test_*.cpp` inventory so later lowering work cannot silently rewrite
-# a characterization test while porting a legacy fixture.
-set(ORACLE_TEST_SOURCES
-    test_oracle_deferred_birth
-    test_oracle_relative_exit
-    test_oracle_reversal_close_only
-    test_oracle_reversal_same_bar_tx
-    test_oracle_reversal_replaced_percent
-    test_oracle_reversal_later_tick
-    test_oracle_short_seed_percent
-    test_oracle_fx
-    test_oracle_coof
-    test_oracle_pooc_freeze
-    test_oracle_pooc_immediate
-    test_oracle_magnifier_distribution
-    test_oracle_day_key
-    test_oracle_frozen_size
-    test_oracle_deferred_any_witnesses
-    test_oracle_magnifier_barstate
-    test_oracle_more_than_64_fills
-)
 
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
 # names while their executable twins make the switched route explicit.

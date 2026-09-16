@@ -592,7 +592,11 @@ int main() {
         CHECK(canonical_overflow.index == 1);
         const auto tolerant_overflow = preflight_native_inputs(
             tolerant_spec, delta_overflow, 2, NativeInputPolicy::Batch);
-        CHECK(tolerant_overflow.ok());
+        // ab9714be pine_scheduler.cpp:64-66 refused the overflow on the source
+        // route; the tolerant branch keeps that structural refusal.
+        CHECK(tolerant_overflow.error
+              == NativeInputPreflightError::TimestampDeltaOverflow);
+        CHECK(tolerant_overflow.index == 1);
     }
 
     {

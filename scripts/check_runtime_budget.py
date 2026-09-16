@@ -13,13 +13,15 @@ import tempfile
 from cpp_abi_pairing import PairingError, enforce_receipt_mode, load_frozen_v16
 
 
-# A40 rev 3 (root, 2026-09-17): the slice-C ceiling is 12x of ab9714be on both
-# profiles: measured 8.96x/9.07x on Apple Silicon and 10.24x on the hosted
-# ubuntu-24.04 runner (0.947 s vs 0.092 s), so 10x left no cross-host headroom. L8f measured the generic kernel floor at ~5.7x (two live-leg
+# A40 rev 5 (root, 2026-09-17): the slice-C ceiling is 15x of ab9714be on both
+# profiles. Best-of-five measurements on an identical tree: 8.96x/9.07x on
+# Apple Silicon (local), 10.24x on the hosted ubuntu-24.04 runner, 12.84x on
+# the hosted macos-26 runner (0.602 s vs 0.047 s); the ceiling gates every
+# host class we run with ~15 % headroom and still catches a 2x regression. L8f measured the generic kernel floor at ~5.7x (two live-leg
 # matchings, request-core mutation plans and event history per bar, by design);
 # the follow-up kernel lane lowers this constant toward that floor. The workload
 # and the ab9714be side are frozen; only this constant may move, by root.
-LIMIT = 12.0
+LIMIT = 15.0
 SAMPLES = 5  # best-of-N per side (A40 rev 4)
 TIMING = re.compile(r"^PF_RUNTIME_SECONDS=(\d+(?:\.\d+)?)$", re.M)
 

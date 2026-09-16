@@ -1045,7 +1045,6 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     if (const auto* failed_state = std::get_if<NativeFailed>(&state_)) {
         hash_failure(f, failed_state->failure);
     }
-    f.u(consumed_high_water_ - f.run_base);
     f.s(bound_session_key_);
     f.i(decision_floor_ms_);
     f.b(has_floor_);

@@ -174,6 +174,15 @@ NativeInputPreflightResult preflight_native_inputs(
                 out.index = i;
                 return out;
             }
+            // An int64 delta overflow is structural on every branch: the
+            // legacy source scheduler refused it (ab9714be
+            // pine_scheduler.cpp:64-66) and the source route always runs
+            // this tolerant branch (A39(12) P1-23 corrected).
+            if (timestamp_delta_overflows(previous, bar.timestamp)) {
+                out.error = NativeInputPreflightError::TimestampDeltaOverflow;
+                out.index = i;
+                return out;
+            }
         }
     }
     return out;

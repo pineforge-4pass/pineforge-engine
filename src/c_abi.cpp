@@ -217,7 +217,7 @@ extern "C" {
  * engine's per-lot range-end rows themselves matched TV (xau-grid 6/6,
  * silicon 9/9 rows). The row is built by build_close_trade from the open
  * pyramid lot, so it carries that lot's entry_incarnation like any other
- * close. No struct changed: PF_ABI_VERSION stays 3. */
+ * close. No struct changed by this accessor (PF_ABI_VERSION is 4 since the native lowering). */
 PF_API uint64_t strategy_closed_trade_entry_incarnation(
         pf_strategy_t s, int trade_index) {
     if (!s) return 0;
