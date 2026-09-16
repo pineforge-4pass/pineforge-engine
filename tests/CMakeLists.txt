@@ -1006,51 +1006,6 @@ foreach(test_name ${TEST_SOURCES})
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
-# A28(1): these remain executable native-route witnesses, but their named
-# rows depend on L4c's exit-leg lifecycle / OCA / retained-parent ordering.
-# They are deliberately excluded only from the interim L4a verification set;
-# the report enumerates the individual assertions and L4c re-enables them.
-set(L4_PENDING_TESTS
-    test_aapl15_margin_brackets_l4a
-    test_carried_pooc_short_margin_state_l4a
-    test_integer_short_margin_state_l4a
-    test_intraday_cap_auto_close_l4a
-    test_margin_call_intrabar_chronology_l4a
-    test_margin_call_trail_exit_chronology_l4a
-    test_pine_cap_boundary_l4a
-    test_risk_max_intraday_loss_tv_l4a
-    test_native_oracle_stop_snapshot_full_l2
-    test_short_margin_script_state_l4a
-    test_stop_open_margin_script_state_l4a
-    test_tv_money_long_margin_call_eth_l4a
-)
-set_tests_properties(${L4_PENDING_TESTS} PROPERTIES LABELS l4-pending)
-# These L4b CHECK-parity twins are registered and compiled on the switched
-# route.  Their remaining RED literals are owned by parallel L4a/L4c/L4d/L4f
-# policy landings, so the interim L4b verification excludes only this label.
-# The L4b report records ownership for every remaining CHECK line.
-set(L4B_PENDING_TESTS
-    test_direct_short_reversal_affordability_l4b
-    test_dual_entry_placement_sizing_l4b
-    test_explicit_qty_fill_admission_l4b
-    test_famag_opening_money_l4b
-    test_integer_lot_percent_exit_min_step_l4b
-    test_magnifier_real_bars_l4b
-    test_market_admission_commission_l4b
-    test_market_entry_affordability_l4b
-    test_open_money_before_priced_exit_l4b
-    test_percent_equity_open_entry_fee_l4b
-    test_pooc_long_money_before_trail_l4b
-    test_pooc_money_admission_l4b
-    test_pooc_open_money_event_l4b
-    test_qty_step_epsilon_floor_l4b
-    test_sizing_basis_mintick_l4b
-    test_stop_entry_placement_open_qty_l4b
-    test_tv_money_band_l4b
-    test_tv_money_carried_pooc_l4b
-    test_tv_money_precision_l4b
-)
-set_tests_properties(${L4B_PENDING_TESTS} PROPERTIES LABELS l4-pending)
 target_compile_definitions(test_l4g_runtime_budget PRIVATE
     PINEFORGE_L4G_TUTORIAL_CSV="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
 set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 30)
@@ -1078,34 +1033,12 @@ set(ORACLE_TEST_SOURCES
     test_oracle_magnifier_barstate
     test_oracle_more_than_64_fills
 )
-# The switched-route fixture twins include the frozen oracle source unchanged
-# and expose only adapter/native projections at its former owner-private seams.
-# Every restored L4d twin is compiled and registered immediately.  Its policy
-# owner is another active L4 lane, so release/native record the real RED
-# diagnostics without allowing unfinished policy work to mask the required
-# non-pending suite.  Green twins are removed from this label below as they
-# are verified on the switched route.
-foreach(test_name ${TEST_SOURCES})
-    if(test_name MATCHES "_l4d$")
-        set_tests_properties(${test_name} PROPERTIES LABELS l4-pending)
-    endif()
-endforeach()
 
 # Contract §3.4 / deferred-ANY pin witnesses retain their historical CTest
 # names while their executable twins make the switched route explicit.
 add_test(NAME test_live_order_derived COMMAND test_native_live_order_derived_l4d)
 add_test(NAME test_pending_order_v1_canary COMMAND test_native_pending_order_v1_canary_l4d)
 add_test(NAME test_source_fifo_endpoints COMMAND test_native_source_fifo_endpoints_l4d)
-set_tests_properties(
-    test_native_live_order_derived_l4d
-    test_live_order_derived
-    test_native_live_pending_order_mirror_l4d
-    test_live_pending_order_mirror
-    test_native_source_fifo_endpoints_l4d
-    test_source_fifo_endpoints
-    test_native_market_admission_projection_l4d
-    test_native_oracle_reversal_f8_l4d
-    PROPERTIES LABELS l4-pending)
 
 # These restored twins already execute green through the switched route. Keep
 # their CTest rows in the required profile rather than hiding green evidence
@@ -1163,7 +1096,6 @@ add_test(NAME test_oracle_short_seed
          COMMAND test_native_oracle_short_seed_full_l2)
 add_test(NAME test_oracle_stop_snapshot
          COMMAND test_native_oracle_stop_snapshot_full_l2)
-set_tests_properties(test_oracle_stop_snapshot PROPERTIES LABELS l4-pending)
 
 # R4-D L5c/L6c: these assigned twins now reproduce their legacy source-policy
 # literals on the switched native route. L6c also completed the path-order,
@@ -1246,41 +1178,6 @@ file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/test_native_calendar_driver_contract.cp
      PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256)
 target_compile_definitions(test_native_calendar_driver_contract PRIVATE
     PINEFORGE_NATIVE_SYNTHETIC_SOURCE_SHA256="${PINEFORGE_NATIVE_CALENDAR_DRIVER_SHA256}")
-
-# The twins remain registered while their independently-owned input facts are
-# repaired in the concurrent L4a/L4b/L4e/L4f lanes.  L4c's own adapter
-# lowering remains compiled in every one; the landing report names the owner
-# and first failing literal for each pending row.
-set_tests_properties(
-    test_trail_close_restart_no_fold_l4c
-    test_bracket_lifecycle_declined_reversal_l4c
-    test_calc_on_order_fills_l4c
-    test_cascade_exit_gapjump_l4c
-    test_coof_chart_tick_touch_l4c
-    test_coof_market_limit_recross_l4c
-    test_coof_open_recalc_context_l4c
-    test_coof_resting_stop_siblings_l4c
-    test_declined_reversal_close_leg_l4c
-    test_dropped_reversal_mc_first_l4c
-    test_exit_bracket_position_cycle_lifetime_l4c
-    test_famae_declined_reversal_trail_gap_l4c
-    test_famx_declined_reversal_trail_leg_l4c
-    test_multi_tier_exit_precedence_l4c
-    test_placement_rejection_bracket_ownership_l4c
-    test_pooc_coof_reversal_gross_admission_l4c
-    test_pooc_retained_trail_path_l4c
-    test_prearmed_bracket_fill_bar_l4c
-    test_prearmed_exit_path_cursor_l4c
-    test_prearmed_market_parent_gap_exit_l4c
-    test_reversal_admission_float_guard_l4c
-    test_rounded_carried_short_trail_l4c
-    test_trail_activation_tick_bar_l4c
-    test_trail_fill_snap_l4c
-    test_trail_open_arm_subtick_offset_l4c
-    test_trail_ref_entry_bar_extreme_l4c
-    test_zero_offset_trail_rides_l4c
-    PROPERTIES LABELS l4-pending)
-
 # R4-D L5a: these restored twins now pass on the merged switched route.  Keep
 # only the root-visible generic-kernel STOP rows under the interim label.
 set_tests_properties(
@@ -1305,8 +1202,7 @@ set_tests_properties(
 
 # R4-D L5b: these restored sizing, money, admission, deferred-close and
 # source-projection twins now pass on the switched native route. Keep the
-# independently stopped COOF-path and zero-mintick rows under l4-pending until
-# their recorded generic-kernel blockers are merged/resolved.
+# required rows in the unfiltered profile without any exclusion label.
 set_tests_properties(
     test_declined_reversal_close_leg_l4c
     test_famae_declined_reversal_trail_gap_l4c
