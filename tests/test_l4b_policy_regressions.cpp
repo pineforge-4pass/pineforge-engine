@@ -112,7 +112,7 @@ public:
     }
 };
 
-void alternate_id_short_seed_is_qualified_from_facts() {
+void completed_short_seed_plan_projects_no_executable_roles() {
     AlternateIdShortSeed host;
     run(host, {bar(1'000), bar(2'000), bar(3'000), bar(4'000)});
     const auto long_entry = latest_accepted(host, "long-leg");
@@ -122,9 +122,9 @@ void alternate_id_short_seed_is_qualified_from_facts() {
     CHECK(final_short.has_value());
     CHECK(materialize.has_value());
     if (long_entry && final_short && materialize) {
-        CHECK(host.short_seed_collision_role_v1(*long_entry) == 1);
-        CHECK(host.short_seed_collision_role_v1(*materialize) == 2);
-        CHECK(host.short_seed_collision_role_v1(*final_short) == 3);
+        CHECK(host.short_seed_collision_role_v1(*long_entry) == 0);
+        CHECK(host.short_seed_collision_role_v1(*materialize) == 0);
+        CHECK(host.short_seed_collision_role_v1(*final_short) == 0);
     }
 }
 
@@ -368,7 +368,7 @@ void pooc_over_cap_add_does_not_reopen_after_close_all() {
 } // namespace
 
 int main() {
-    alternate_id_short_seed_is_qualified_from_facts();
+    completed_short_seed_plan_projects_no_executable_roles();
     partial_close_cannot_qualify_the_short_seed_plan();
     unaffordable_reversal_keeps_the_closing_leg();
     affordability_close_only_is_projected_from_its_placement_fact();

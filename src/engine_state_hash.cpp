@@ -10,8 +10,10 @@ void BacktestEngine::hash_source_extension(BrokerStateHashSink& sink) const {
 }
 
 uint64_t BacktestEngine::broker_state_hash() const {
-    if (const auto* provider = dynamic_cast<const BrokerStateHashProvider*>(this))
-        return provider->broker_state_hash_projection();
+    return broker_state_hash_projection();
+}
+
+uint64_t BacktestEngine::broker_state_hash_projection() const {
     return broker_state_hash_from_execution_hash(execution_consumer().continuation_hash());
 }
 

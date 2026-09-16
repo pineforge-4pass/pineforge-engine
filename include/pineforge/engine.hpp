@@ -412,9 +412,9 @@ using InputsMap = std::unordered_map<std::string, std::string>;
 // silently bind out-of-line members of this different object layout.
 inline namespace engine_script_run_v17 {
 class BrokerStateHashSink;
-// Optional frontend projection for a broker hash. A frontend can preserve a
-// stable public state model while its execution backend retains opaque
-// anti-stale generations.
+// Optional frontend projection interface retained for source compatibility.
+// Broker dispatch itself is virtual on BacktestEngine and never discovers a
+// host kind with RTTI.
 class BrokerStateHashProvider {
 public:
     virtual ~BrokerStateHashProvider() = default;
@@ -429,6 +429,7 @@ protected:
     IExecutionConsumer& execution_consumer();
     const IExecutionConsumer& execution_consumer() const;
     virtual void hash_source_extension(BrokerStateHashSink&) const;
+    virtual std::uint64_t broker_state_hash_projection() const;
     std::uint64_t broker_state_hash_from_execution_hash(std::uint64_t) const;
     // --- Position state ---
     // @broker-state begin
@@ -893,24 +894,6 @@ protected:
     // removes every order it has not yet applied.
     // @broker-state end
     // --- Per-trade extreme tracking ---
-    // Source compatibility extension: settle an already resolved execution
-    // using the current chart context and source-day preflight/observation.
-    // This does not place an order, perform admission/slippage, or provide
-    // cancellation/replay. Explicit native/context seams below are source-day
-    // independent. The owning run must abort on an exception; failed commits
-    // are not retryable in place. A saved plan is not execution authority.
-    // Empty lifecycle effects. Member-pointer type is the original two-argument
-    // symbol; it forwards to settle_execution_with_lifecycle.
-    execution::Result settle_resolved_execution(
-        const execution::Action& action, const execution::Fill& fill);
-    // Source coordinator for one execution plus lifecycle effects and source days.
-    // Pre-close operations, then close observations and old-cycle unbind, then
-    // the listed pending removals, then the quoted opening path which binds
-    // only remaining exits. Native settlement does not call source-layer
-    // selectors; the effects value is not retained.
-    execution::Result settle_execution_with_lifecycle(
-        const execution::Action& action, const execution::Fill& fill,
-        const execution::LifecycleEffects& lifecycle);
     execution::Result settle_native_execution_at(
         const execution::Action& action, const execution::Fill& fill,
         const execution::PhysicalExecutionContext& context);
@@ -2829,16 +2812,6 @@ protected:
         double fill_price, bool was_long, double entry_commission,
         double exit_commission,
         const execution::PhysicalExecutionContext& context) const;
-    // FIFO-drain up to qty_limit from pyramid_entries_, in order, splitting the
-    // boundary entry as needed. When from_entry is non-null only entries whose
-    // entry_id == *from_entry are eligible (others are kept untouched); null
-    // drains across all entries. Emits one close Trade per drained slice at
-    // fill_price (already slippage-adjusted) and rebuilds pyramid_entries_ /
-    // decrements position_qty_ by the amount drained. Returns the total qty
-    // drained. Shared by execute_partial_exit_qty and both entry-scoped
-    // partial-exit helpers.
-    double fifo_drain(const std::string* from_entry, double qty_limit,
-                      double fill_price, bool was_long);
     void reset_position_state_to_flat();
     // Reset ALL per-run state (trades, accumulators, position, pending orders,
     // equity extremes, risk latches, intraday/day counters, source-series
@@ -2965,7 +2938,6 @@ protected:
     virtual void source_stream_entry_comment(const PyramidEntry&, std::string&) const;
     void stream_observe_exit(size_t trade_index);
     void stream_refresh_action_metadata(size_t first_action, size_t first_trade);
-    bool stream_finalize_until(int64_t timestamp_ms);
     void stream_feed_input_bar(const Bar& bar, bool had_tick);
     virtual void dispatch_source_stream_script_bar(const Bar& bar, bool had_tick);
 

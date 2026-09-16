@@ -578,14 +578,21 @@ int main() {
         CHECK(applied_fill_count(tolerant) == 1);
         near(tolerant.physical_position().signed_units, 1.0);
 
+        constexpr std::int64_t minute = 60'000;
+        const std::int64_t latest_aligned = std::numeric_limits<int64_t>::max()
+            - std::numeric_limits<int64_t>::max() % minute;
         const Bar delta_overflow[] = {
-            bar_at(-1, 100, 101, 99, 100),
-            bar_at(std::numeric_limits<int64_t>::max(), 100, 101, 99, 100),
+            bar_at(-minute, 100, 101, 99, 100),
+            bar_at(latest_aligned, 100, 101, 99, 100),
         };
-        const auto overflow = preflight_native_inputs(
+        const auto canonical_overflow = preflight_native_inputs(
+            canonical_spec, delta_overflow, 2, NativeInputPolicy::Batch);
+        CHECK(canonical_overflow.error
+              == NativeInputPreflightError::TimestampDeltaOverflow);
+        CHECK(canonical_overflow.index == 1);
+        const auto tolerant_overflow = preflight_native_inputs(
             tolerant_spec, delta_overflow, 2, NativeInputPolicy::Batch);
-        CHECK(overflow.error == NativeInputPreflightError::TimestampDeltaOverflow);
-        CHECK(overflow.index == 1);
+        CHECK(tolerant_overflow.ok());
     }
 
     {

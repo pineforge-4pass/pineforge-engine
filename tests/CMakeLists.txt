@@ -62,6 +62,10 @@ set(TEST_SOURCES
     test_native_market_vertical_contract
     test_native_calendar_driver_contract
     test_native_host_repairs
+    test_l8c_short_seed_guards
+    test_l8c_adapter_ordering
+    test_l8c_broker_hash_projection
+    test_l8c_kernel_delta_rulings
     test_native_remaining_path_l5k
     test_native_trail_state_l5k
     test_native_zero_price_tick_l5o
@@ -1005,6 +1009,25 @@ foreach(test_name ${TEST_SOURCES})
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+add_test(NAME test_l8c_short_seed_p0_10
+         COMMAND test_l8c_short_seed_guards p0-10)
+add_test(NAME test_l8c_short_seed_p1_16
+         COMMAND test_l8c_short_seed_guards p1-16)
+add_test(NAME test_l8c_short_seed_p1_18
+         COMMAND test_l8c_short_seed_guards p1-18)
+add_test(NAME test_l8c_ordering_p0_11
+         COMMAND test_l8c_adapter_ordering p0-11)
+add_test(NAME test_l8c_ordering_p1_13
+         COMMAND test_l8c_adapter_ordering p1-13)
+add_test(NAME test_l8c_ordering_p1_14
+         COMMAND test_l8c_adapter_ordering p1-14)
+add_test(NAME test_l8c_kernel_p1_21
+         COMMAND test_l8c_kernel_delta_rulings p1-21)
+add_test(NAME test_l8c_kernel_p1_22
+         COMMAND test_l8c_kernel_delta_rulings p1-22)
+add_test(NAME test_l8c_kernel_p1_24
+         COMMAND test_l8c_kernel_delta_rulings p1-24)
 
 target_compile_definitions(test_l4g_runtime_budget PRIVATE
     PINEFORGE_L4G_TUTORIAL_CSV="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")

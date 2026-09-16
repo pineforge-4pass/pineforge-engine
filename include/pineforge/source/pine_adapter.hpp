@@ -994,6 +994,7 @@ private:
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     double last_fx_rate_ = std::numeric_limits<double>::quiet_NaN();
     std::int64_t position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::uint64_t position_open_epoch_ = 0;
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();

@@ -7,11 +7,10 @@ physical lot book. Scoped and selected variants use the same financial owner.
 Use `PhysicalExecutionContext{}` when zero time/index and no preceding-path
 facts are appropriate; native settlement has no implicit source chart clock.
 
-The original two-argument `settle_resolved_execution` symbol is a source
-compatibility alias of `settle_execution_with_lifecycle` with empty effects.
-It uses current chart context and preserves source-day checks and observations.
-It is distinct from the explicit native/context seams, which do not depend on
-those source fields. Both routes book physical and financial effects once.
+There is no implicit-chart-context compatibility alias. Callers use the
+explicit native/context seams, while the remaining selected/reversal source
+coordinators supply their chart context directly. Every route books physical
+and financial effects once.
 
 The caller supplies an `execution::Action` and `execution::Fill` from
 `<pineforge/execution.hpp>`. These values describe immediate effects:
@@ -177,9 +176,9 @@ or nonfinite cached source intraday value cannot refuse an otherwise valid
 native execution. Financial win/loss/even, entry/cycle/stream capacity and
 lifecycle checks remain generic and still run before physical effects.
 
-Three source coordinators preserve the existing source behavior:
-`settle_execution_with_lifecycle`, `settle_execution_selected_with_lifecycle`
-and `settle_reversal_with_lifecycle_v1`. They share the native stage and quote,
+Two source coordinators preserve the existing source behavior:
+`settle_execution_selected_with_lifecycle` and
+`settle_reversal_with_lifecycle_v1`. They share the native stage and quote,
 prepare this execution's close rows once, validate source observations before
 effects, and use the same physical/financial commit. Only after Applied do they
 observe the newly committed slice identified by the Result. Historical and
@@ -218,12 +217,10 @@ paths. Callers resolve source scheduling, quantity grids, price and slot policy;
 the owner applies the physical effects and accounting once. A separately matched
 scratch fill remains its own execution. Reversal closing and opening share one
 already-resolved price and one current ticket.
-`compat::pine` suspension selection stays at the
-replacement caller. `settle_resolved_execution` remains the original
-two-argument symbol and forwards empty effects to
-`settle_execution_with_lifecycle`, the protected seam that consumes transient
-lifecycle effects. Those effects name exact pending identities, revisions and
-operations; `created_seq` 0 and `Target{0,0}` are literal expected values.
+`compat::pine` suspension selection stays at the replacement caller. Transient
+lifecycle effects consumed by the active context/selected/reversal seams name
+exact pending identities, revisions and operations; `created_seq` 0 and
+`Target{0,0}` are literal expected values.
 Source selection may preview the upcoming lifecycle frame without consuming it
 and must supply a literal operation payload. They are not stored, hashed, or
 reusable execution authority. Empty effects leave other settlement callers

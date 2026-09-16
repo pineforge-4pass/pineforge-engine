@@ -13,68 +13,6 @@
 
 namespace pineforge {
 
-namespace {
-
-Bar price_point(double price, double volume, int64_t timestamp) {
-    return Bar{price, price, price, price, volume, timestamp};
-}
-
-}  // namespace
-
-
-
-
-
-
-
-
-
-
-
-
-
-bool BacktestEngine::stream_finalize_until(int64_t timestamp_ms) {
-    while (timestamp_ms >= stream_next_input_open_ms_ + stream_input_tf_ms_) {
-        const bool had_tick = stream_has_input_bar_;
-        // The raw time-of-day session test (namespace-scope form), not the
-        // chart-bar rule BacktestEngine::pine_session_ismarket applies: this
-        // decides whether a tick-less INPUT interval is a closed market that
-        // must not become a synthetic bar, and stays byte-identical on
-        // daily-or-higher feeds too.
-        const bool in_session = pineforge::pine_session_ismarket(
-            syminfo_.session, syminfo_.timezone,
-            stream_next_input_open_ms_);
-
-        // A normalized provider may jump from one market session to the next.
-        // Do not turn the closed interval into synthetic tradable bars. A real
-        // source record is still honored even if the configured metadata is
-        // imperfect, so provider data remains authoritative.
-        if (!had_tick && !in_session) {
-            stream_input_bar_ = Bar{};
-            stream_next_input_open_ms_ += stream_input_tf_ms_;
-            continue;
-        }
-
-        Bar completed;
-        if (had_tick) {
-            completed = stream_input_bar_;
-        } else {
-            if (!stream_has_last_price_) {
-                last_error_ = "stream cannot synthesize a gap before any price";
-                return false;
-            }
-            completed = price_point(
-                stream_last_price_, 0.0, stream_next_input_open_ms_);
-        }
-
-        stream_feed_input_bar(completed, had_tick);
-        stream_has_input_bar_ = false;
-        stream_input_bar_ = Bar{};
-        stream_next_input_open_ms_ += stream_input_tf_ms_;
-    }
-    return true;
-}
-
 void BacktestEngine::stream_feed_input_bar(const Bar& bar, bool had_tick) {
     ++diag_input_bars_processed_;
     last_bar_time_ = bar.timestamp;
