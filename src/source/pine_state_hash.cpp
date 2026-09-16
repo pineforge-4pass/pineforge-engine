@@ -271,6 +271,12 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
         f.s(order.replacement_key); f.u(order.release_open_epoch);
         f.b(order.execute_at_open);
     }
+    f.u(deferred_open_marketable_sells_.size());
+    for (const auto& sell : deferred_open_marketable_sells_) {
+        hash_placement(f, sell.snapshot); f.s(sell.replacement_key); f.d(sell.fill_price);
+        f.d(sell.path_position); f.b(sell.open_marketable);
+    }
+    f.i(entry_openings_interval_index_); f.i(entry_openings_this_interval_);
     f.u(pending_same_bar_commands_.size());
     for (const auto& command : pending_same_bar_commands_) {
         hash_native_request(f, command.request); hash_placement(f, command.snapshot);

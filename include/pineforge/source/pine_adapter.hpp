@@ -722,6 +722,19 @@ private:
         bool execute_at_open = false;
     };
 
+    // A36/A28: a sell-side stop that is already marketable at the open, while
+    // a buy-side open-marketable stop of the same flat pair is still live,
+    // is held out of kernel matching (legacy opposing-stop pass-0 deferral)
+    // and admitted after the bar path so later-path same-direction legs can
+    // pyramid first. forced_execution_price keeps the open fill.
+    struct DeferredOpenMarketableSell {
+        PlacementSnapshot snapshot;
+        SourceId replacement_key;
+        double fill_price = std::numeric_limits<double>::quiet_NaN();
+        double path_position = 0.0;
+        bool open_marketable = false;
+    };
+
     // The legacy same-bar MARKET transaction is a source-side command batch:
     // all BUY members are admitted before SELL members at the next broker
     // open, while each member retains its placement-time physical quantity.
@@ -943,6 +956,8 @@ private:
     static bool same_projected_order(const PlacementSnapshot& left,
                                      const PlacementSnapshot& right) noexcept;
     void apply_open_market_admission(const NativeDecisionContext&);
+    void defer_open_marketable_sells(const Bar& bar);
+    void admit_deferred_open_marketable_sells();
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);
     void refresh_pending_sizing_after_margin(
@@ -978,6 +993,9 @@ private:
     std::vector<PendingBracketLeg> pending_bracket_legs_;
     std::vector<PendingEntry> pending_entries_;
     std::vector<DelayedMarketOrder> delayed_market_orders_;
+    std::vector<DeferredOpenMarketableSell> deferred_open_marketable_sells_;
+    int entry_openings_interval_index_ = -1;
+    int entry_openings_this_interval_ = 0;
     std::vector<PendingSameBarCommand> pending_same_bar_commands_;
     std::vector<SourceShadowPending> source_shadow_pending_;
     double pending_same_bar_close_qty_ = 0.0;

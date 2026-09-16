@@ -5,6 +5,8 @@ set(TEST_SOURCES
     test_aapl15_margin_brackets_l4a
     test_carried_pooc_short_margin_state_l4a
     test_l9a_carried_pooc_competing_checkpoint
+    test_l9b_open_marketable_order
+    test_l9b_open_marketable_shapes
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a
