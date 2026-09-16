@@ -346,6 +346,12 @@ public:
 
     std::size_t size() const noexcept { return size_; }
     std::size_t max_size() const noexcept { return slots_.max_size(); }
+    // Largest incarnation ever retained. Incarnations are monotone, so a
+    // handle above this mark at an observation time was unknown to every
+    // adapter collection populated before that observation.
+    std::uint64_t high_water() const noexcept {
+        return static_cast<std::uint64_t>(slots_.size());
+    }
     void reserve(std::size_t count) { slots_.reserve(count); }
     void clear() noexcept {
         slots_.clear();
