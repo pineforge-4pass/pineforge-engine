@@ -1115,14 +1115,14 @@ static void test_timezone_identity() {
     CHECK(ny->effective_definition == "America/New_York");
     CHECK(ny->zoneinfo_root == root);
     CHECK(ny->resource_paths.size() == 1);
-    CHECK(ny->resource_paths.front() == ny_path);
+    CHECK(!ny->resource_paths.empty() && ny->resource_paths.front() == ny_path);
 
     auto eastern = timezone_identity_descriptor("US/Eastern");
     CHECK(eastern.has_value());
     CHECK(eastern->kind == TimezoneSourceKind::Tzfile);
     CHECK(eastern->effective_definition == "US/Eastern");
     CHECK(eastern->resource_paths.size() == 1);
-    CHECK(eastern->resource_paths.front() == eastern_path);
+    CHECK(!eastern->resource_paths.empty() && eastern->resource_paths.front() == eastern_path);
 
     auto colon = timezone_identity_descriptor(":America/New_York");
     CHECK(colon.has_value());
