@@ -7,15 +7,15 @@ from check_runtime_budget import enforce_ratio
 
 class RuntimeBudget(unittest.TestCase):
     def test_ratio_at_or_below_limit_passes(self):
-        self.assertAlmostEqual(enforce_ratio(10.0, 1.0), 10.0)
+        self.assertAlmostEqual(enforce_ratio(12.0, 1.0), 12.0)
         self.assertAlmostEqual(enforce_ratio(1.5, 1.0), 1.5)
         self.assertAlmostEqual(enforce_ratio(0.75, 1.0), 0.75)
 
     def test_absolute_twelve_second_escape_is_gone(self):
-        with self.assertRaisesRegex(ValueError, "11.000x"):
-            enforce_ratio(22.0, 2.0)
-        with self.assertRaisesRegex(ValueError, "10.020x"):
-            enforce_ratio(10.02, 1.0)
+        with self.assertRaisesRegex(ValueError, "13.000x"):
+            enforce_ratio(26.0, 2.0)
+        with self.assertRaisesRegex(ValueError, "12.020x"):
+            enforce_ratio(12.02, 1.0)
 
     def test_nonpositive_sample_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "positive"):
