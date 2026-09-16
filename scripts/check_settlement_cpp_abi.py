@@ -108,7 +108,16 @@ def main() -> int:
     parser.add_argument("--v16-frozen-receipt", type=Path, required=True)
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--skip-if-receipt-missing", action="store_true")
     args = parser.parse_args()
+    if args.skip_if_receipt_missing:
+        for dest in vars(args):
+            if not dest.endswith("_receipt"):
+                continue
+            value = getattr(args, dest)
+            if value is not None and not Path(value).exists():
+                print(f"SKIP: receipt missing: {value} (prepared by scripts/ci_verify.py)")
+                return 77
     try:
         result = verify_pair(args)
     except PairingError as error:
