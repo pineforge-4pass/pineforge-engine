@@ -40,3 +40,5 @@ syminfo_ # Metadata transport; provider copies symbol/session/timezone facts int
 syminfo_metadata_ # Staged metadata map; it is consumed at begin and does not evolve as broker state during a run.
 syminfo_mintick_ # Metadata convenience scalar; executable levels/terms retain their snapped native values.
 trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.
+run_counter_ # run-scoped; excluded for reuse invariance (ab9714be test_script_run_prepare:111)
+source_last_bar_index_ # derived script-input horizon, not broker state: a prefix run's per-bar hashes must equal the full run's (test_live_state_hash_recording_l4d:69; ab9714be behaviour); folding it would differ before any behaviour does

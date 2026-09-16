@@ -33,6 +33,13 @@ void reserve_next(std::vector<T>& values) {
 
 struct Fnv {
     uint64_t h = 1469598103934665603ULL;
+    // Native run generations (`RunIdentity::run_number`, the consumed
+    // high-water) are anti-stale counters that advance on every begin of a
+    // reused host.  The continuation digest folds them relative to the run
+    // it describes so a reused host's Nth run and a fresh host's first run
+    // share one continuation identity while a leaked prior-generation handle
+    // or event still folds a non-zero distance (A41(1)).
+    uint64_t run_base = 0;
     void bytes(const void* p, size_t n) noexcept {
         const auto* c = static_cast<const unsigned char*>(p);
         for (size_t i = 0; i < n; ++i) { h ^= c[i]; h *= 1099511628211ULL; }
@@ -51,7 +58,7 @@ void hash_birth(Fnv& f, const native_order::Birth& birth) noexcept;
 void hash_optional_handle(Fnv& f, const std::optional<native_order::RequestHandle>& handle) noexcept;
 
 void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
-    f.s(spec.identity.session_key); f.u(spec.identity.run_number);
+    f.s(spec.identity.session_key); f.u(spec.identity.run_number - f.run_base);
     f.s(spec.input_tf); f.s(spec.script_tf);
     f.b(spec.timeframe_undetected);
     f.u(static_cast<uint64_t>(spec.slot_label_policy));
@@ -75,7 +82,7 @@ void hash_spec(Fnv& f, const NativeRunSpec& spec) noexcept {
 
 void hash_handle(Fnv& f, const native_order::RequestHandle& handle) noexcept {
     f.s(handle.run.session_key);
-    f.u(handle.run.run_number);
+    f.u(handle.run.run_number - f.run_base);
     f.u(handle.incarnation);
 }
 
@@ -85,7 +92,7 @@ void hash_cohort_handle(Fnv& f, native_order::CohortHandle handle) noexcept {
 
 void hash_event_id(Fnv& f, const native_order::EventId& id) noexcept {
     f.s(id.run.session_key);
-    f.u(id.run.run_number);
+    f.u(id.run.run_number - f.run_base);
     f.u(id.ordinal);
 }
 
@@ -1024,6 +1031,7 @@ bool NativeExecutionConsumer::stage_account_currency_fx_series(
 
 uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     Fnv f;
+    f.run_base = requests_.identity().run_number;
     f.s(kNativeConsumerSemanticVersion);
     f.s(kNativeDriverSemanticVersion);
     f.s(kNativeCalendarSemanticVersion);
@@ -1037,7 +1045,7 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     if (const auto* failed_state = std::get_if<NativeFailed>(&state_)) {
         hash_failure(f, failed_state->failure);
     }
-    f.u(consumed_high_water_);
+    f.u(consumed_high_water_ - f.run_base);
     f.s(bound_session_key_);
     f.i(decision_floor_ms_);
     f.b(has_floor_);
@@ -1090,7 +1098,6 @@ uint64_t NativeExecutionConsumer::continuation_hash() const noexcept {
     if (staged_fx_curve_) f.u(native_fx_curve_digest(*staged_fx_curve_));
     hash_tz_identity(f, tz_identity_);
     f.s(requests_.identity().session_key);
-    f.u(requests_.identity().run_number);
     f.u(requests_.live().size());
     for (const auto& live : requests_.live()) {
         hash_definition(f, live.definition);
@@ -1491,6 +1498,11 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
     script_ = ScriptBucket{};
     has_forming_ = false;
     has_last_price_ = false;
+    // Stream print state is run-scoped: a reused host must not carry the
+    // previous run's last print into the next run's decision coordinates
+    // (source_price_time/effective_time fallbacks) or its continuation digest.
+    last_price_ = 0.0;
+    last_print_time_ms_ = 0;
     driver_log_.clear();
     account_log_.clear();
     history_digest_.reset();
@@ -1686,6 +1698,7 @@ void NativeExecutionConsumer::sync_history_digest() const noexcept {
     if (history_digest_.count > hist.size()) history_digest_.reset();
     if (history_digest_.count == hist.size()) return;
     Fnv f;
+    f.run_base = requests_.identity().run_number;
     f.h = history_digest_.h;
     for (std::size_t i = history_digest_.count; i < hist.size(); ++i) {
         hash_command(f, hist[i]);
@@ -1696,6 +1709,7 @@ void NativeExecutionConsumer::sync_history_digest() const noexcept {
 
 void NativeExecutionConsumer::fold_driver_digest(const NativeDriverPoint& point) const noexcept {
     Fnv f;
+    f.run_base = requests_.identity().run_number;
     f.h = driver_digest_.h;
     hash_driver_point(f, point);
     driver_digest_.h = f.h;
@@ -1704,6 +1718,7 @@ void NativeExecutionConsumer::fold_driver_digest(const NativeDriverPoint& point)
 
 void NativeExecutionConsumer::fold_account_digest(const NativeAccountObservation& row) const noexcept {
     Fnv f;
+    f.run_base = requests_.identity().run_number;
     f.h = account_digest_.h;
     hash_account_row(f, row);
     account_digest_.h = f.h;
@@ -2965,6 +2980,7 @@ std::optional<NativeCurrentExecutionResult> NativeExecutionConsumer::consume_mat
                 const auto* admitted_spec = spec_ptr();
                 if (admitted_spec && admitted_spec->initial_margin_fraction) {
                     Fnv digest;
+                    digest.run_base = requests_.identity().run_number;
                     digest.h = precommit_digest_.h;
                     digest.u(P);
                     digest.u(static_cast<std::uint64_t>(verdict));
