@@ -987,6 +987,7 @@ void PineExecutionAdapter::reset_for_run() {
     pending_entries_.clear();
     delayed_market_orders_.clear();
     deferred_open_marketable_sells_.clear();
+    throttled_reopen_rearm_.clear();
     entry_openings_interval_index_ = -1;
     entry_openings_this_interval_ = 0;
     pending_same_bar_commands_.clear();
@@ -7376,6 +7377,7 @@ void PineExecutionAdapter::cancel_all() {
     pending_entries_.clear();
     delayed_market_orders_.clear();
     deferred_open_marketable_sells_.clear();
+    throttled_reopen_rearm_.clear();
     pending_same_bar_commands_.clear();
     pending_same_bar_close_qty_ = 0.0;
     pending_relative_exits_.clear();
@@ -8579,6 +8581,10 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && !config_.calc_on_order_fills
             && !config_.process_orders_on_close
             && !stream_mode_) {
+            // The legacy throttle is OrderEligibility::Skip for the bar; the
+            // order keeps resting. A generic Refuse is terminal, so re-arm the
+            // original stop at the bar close (L9g).
+            throttled_reopen_rearm_.push_back(source);
             return NativePrecommitVerdict::Refuse;
         }
         const bool opposite_entry = source.family == PineOrderFamily::Entry
@@ -11196,9 +11202,36 @@ void PineExecutionAdapter::on_tick(
     (void)submit_margin_call_slice(tick.close, context.decision, true);
 }
 
+void PineExecutionAdapter::rearm_throttled_reopens() {
+    auto queued = std::move(throttled_reopen_rearm_);
+    throttled_reopen_rearm_.clear();
+    for (auto& snapshot : queued) {
+        native_order::Request request;
+        if (snapshot.deferred_cohort || !std::isfinite(snapshot.requested_qty)) {
+            request.intent = native_order::HostSized{
+                native_order::HostSizedKind::Open,
+                snapshot.is_long ? native_order::Side::Long : native_order::Side::Short};
+        } else {
+            const double units = std::abs(snapshot.requested_qty);
+            request.intent = native_order::Transact{snapshot.is_long ? units : -units};
+        }
+        request.label = snapshot.source_id;
+        request.comment = snapshot.comment;
+        request.trigger = native_order::Stop{snapshot.exit_levels.stop};
+        request.group = group_for(snapshot.oca_name, snapshot.oca_type);
+        snapshot.forced_execution_price = kNaN;
+        snapshot.projection_after_close = false;
+        snapshot.cancellation = {};
+        snapshot.market_admission = {};
+        const SourceId key = snapshot.source_id;
+        (void)submit_or_replace(std::move(request), std::move(snapshot), true, key);
+    }
+}
+
 void PineExecutionAdapter::on_bar_close(
         const Bar& bar, const NativeDecisionContext& context) {
     admit_deferred_open_marketable_sells();
+    rearm_throttled_reopens();
     // A tolerant stream can synthesize a pair-less script callback without a
     // separate open hook. Batch bars always pass through on_bar_open and keep
     // their completed arbitration observable after the run.
@@ -11640,6 +11673,24 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     && pending->second.projection_created_bar
                         == placement_snapshot->projection_created_bar;
             });
+        // A same-bar leg whose level is already marketable at the parent's
+        // fill is a wrong-side scratch candidate; legacy scratches it at the
+        // open for a sole MARKET parent only (test_prearmed_market_parent_gap_exit).
+        const auto marketable_at_fill = [&](const PlacementSnapshot& row) {
+            const bool long_position = event.opened_units > 0.0;
+            const bool stop_marketable = finite_positive(row.exit_levels.stop)
+                && (long_position ? event.resolved_price <= row.exit_levels.stop
+                                  : event.resolved_price >= row.exit_levels.stop);
+            const bool limit_marketable = finite_positive(row.exit_levels.limit)
+                && (long_position ? event.resolved_price >= row.exit_levels.limit
+                                  : event.resolved_price <= row.exit_levels.limit);
+            return stop_marketable || limit_marketable;
+        };
+        // ab9714be pine_fills.cpp:7679-7700: TradingView evaluates a filled
+        // parent's priced exits on the entry bar itself. With sibling pre-armed
+        // parents on the same bar, only the wrong-side (marketable) legs wait
+        // for the next opening; the right-side legs join the entry bar
+        // (L9g; delta-3 P0-N4). A partial-quantity bracket waits entirely.
         if (partial_prearmed_parent || multiple_prearmed_parents) {
             std::vector<native_order::RequestHandle> delayed_legs;
             for (const auto& handle : live_handles_) {
@@ -11650,7 +11701,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                      || row.family == PineOrderFamily::ExitLimit)
                     && row.from_entry == placement_snapshot->source_id
                     && row.projection_created_bar
-                        == placement_snapshot->projection_created_bar) {
+                        == placement_snapshot->projection_created_bar
+                    && (partial_prearmed_parent || marketable_at_fill(row))) {
                     delayed_legs.push_back(handle);
                 }
             }
@@ -11694,7 +11746,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     broker_open_epoch_ + 1U});
             }
         }
-        if (!partial_prearmed_parent && !multiple_prearmed_parents) {
+        if (!partial_prearmed_parent) {
             std::optional<PlacementSnapshot> rearm;
             for (const auto& handle : live_handles_) {
                 const auto pending = placement_.find(handle.incarnation);
@@ -11726,9 +11778,22 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // parent bracket that is not an immediate wrong-side scratch
                 // joins the remaining entry-bar path. Reissuing from the
                 // parent's Applied callback gives the generic requests that
-                // exact birth floor and the now-known close direction.
+                // exact birth floor and the now-known close direction. With
+                // sibling parents the wrong-side leg was parked above, so
+                // only the right-side levels are reissued here (L9g).
+                const bool long_position = event.opened_units > 0.0;
+                const bool stop_wrong_side = multiple_prearmed_parents
+                    && finite_positive(rearm->exit_levels.stop)
+                    && (long_position ? event.resolved_price <= rearm->exit_levels.stop
+                                      : event.resolved_price >= rearm->exit_levels.stop);
+                const bool limit_wrong_side = multiple_prearmed_parents
+                    && finite_positive(rearm->exit_levels.limit)
+                    && (long_position ? event.resolved_price >= rearm->exit_levels.limit
+                                      : event.resolved_price <= rearm->exit_levels.limit)
+                    && event.resolved_price != rearm->exit_levels.limit;
                 exit(rearm->source_id, rearm->from_entry,
-                     rearm->exit_levels.limit, rearm->exit_levels.stop,
+                     limit_wrong_side ? kNaN : rearm->exit_levels.limit,
+                     stop_wrong_side ? kNaN : rearm->exit_levels.stop,
                      rearm->exit_levels.trail_points,
                      rearm->exit_levels.trail_offset,
                      rearm->exit_levels.trail_price,

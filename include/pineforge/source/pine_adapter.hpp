@@ -958,6 +958,7 @@ private:
     void apply_open_market_admission(const NativeDecisionContext&);
     void defer_open_marketable_sells(const Bar& bar);
     void admit_deferred_open_marketable_sells();
+    void rearm_throttled_reopens();
     void record_market_review(admission::Checkpoint, int,
                               const std::vector<native_order::RequestHandle>&);
     void refresh_pending_sizing_after_margin(
@@ -994,6 +995,9 @@ private:
     std::vector<PendingEntry> pending_entries_;
     std::vector<DelayedMarketOrder> delayed_market_orders_;
     std::vector<DeferredOpenMarketableSell> deferred_open_marketable_sells_;
+    // Flat stop entries the per-bar priced-entry throttle refused; re-armed
+    // as their original stop at the bar close (validate_precommit is const).
+    mutable std::vector<PlacementSnapshot> throttled_reopen_rearm_;
     int entry_openings_interval_index_ = -1;
     int entry_openings_this_interval_ = 0;
     std::vector<PendingSameBarCommand> pending_same_bar_commands_;
