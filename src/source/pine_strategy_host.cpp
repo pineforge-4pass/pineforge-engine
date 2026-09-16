@@ -699,13 +699,23 @@ double source::PineStrategyHost::observe_trail_best_price_v1() const {
 }
 
 void source::PineStrategyHost::adapter_label_bracket_trades(
-        const native_order::ExecutionAppliedEvent& event, bool from_bracket) {
+        const native_order::ExecutionAppliedEvent& event, bool from_bracket,
+        bool normalize_resting_stop_drawdown) {
     // ab9714be pine_fills.cpp:6232-6252: every trade row emitted by a real
     // strategy.exit leg carries the bracket cause; strategy.close and
     // close_all requests remain script closes.
     for (std::size_t offset = 0; offset < event.closed_trade_count; ++offset) {
         const std::size_t index = event.first_trade_index + offset;
-        if (index < trades_.size()) trades_[index].exit_from_bracket = from_bracket;
+        if (index >= trades_.size()) continue;
+        auto& trade = trades_[index];
+        trade.exit_from_bracket = from_bracket;
+        if (normalize_resting_stop_drawdown) {
+            const double adverse = (trade.is_long
+                ? trade.entry_price - trade.exit_price
+                : trade.exit_price - trade.entry_price)
+                * trade.qty * syminfo_.pointvalue * active_account_currency_fx();
+            trade.max_drawdown = std::max(0.0, adverse);
+        }
     }
 }
 

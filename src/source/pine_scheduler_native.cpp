@@ -39,6 +39,7 @@ void PineScheduler::reset_language() {
     current_script_bar_ = {}; current_script_bar_valid_ = false;
     source_bar_count_ = 0; expected_source_bars_ = 0; applied_cursor_ = 0;
     coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
+    last_published_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     last_stream_input_open_ms_ = std::numeric_limits<std::int64_t>::min();
@@ -141,8 +142,8 @@ int PineScheduler::source_bar_index_for(const NativeDecisionContext& context) co
     // all fills after that callback (including COOF/POOC notifications) belong
     // to the already-published source index.  This is the same cadence the
     // legacy aggregation loop used for Trade.entry_bar_index/exit_bar_index.
-    const bool published = current_script_bar_valid_
-        && current_script_bar_.timestamp == context.script_bar_open_ms;
+    const bool published = last_published_script_open_ms_
+        == context.script_bar_open_ms;
     const bool coof_published = coof_callback_script_open_ == context.script_bar_open_ms;
     if (published || coof_published)
         return std::max(0, source_bar_count_ - 1);
@@ -514,7 +515,10 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
         && expected_source_bars_ > 0
         && source_bar_count_ + 1 >= expected_source_bars_;
     if (suppress_probe_tail) host.scheduler_publish_suppressed_tail(script_bar);
-    else host.scheduler_publish_source_bar(script_bar, true, !had_coof_recalc);
+    else {
+        host.scheduler_publish_source_bar(script_bar, true, !had_coof_recalc);
+        last_published_script_open_ms_ = context.script_bar_open_ms;
+    }
     if (coof) commit_coof_script_state(host);
     if (uses_aux_security_feed_) host.scheduler_feed_deferred_aux_security(chart_index);
     if (deferred_boundary_input_.active
@@ -554,6 +558,7 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         // schedule a calc_on_order_fills source callback.
         return;
     }
+    if (host.adapter_.suppress_grouped_stop_recalc(event, context)) return;
     const bool at_open = context.coordinate.path_phase == NativePathPhase::Open;
     const bool first_open = at_open && !saw_open_fill_;
     if (at_open) saw_open_fill_ = true;
@@ -585,6 +590,7 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         // that source queue while the fill coordinate is still current; the
         // accepted MARKET newborns below then execute at this same broker
         // point, matching calc_on_order_fills chronology.
+        host.adapter_.flush_coof_tail(/*openings_only=*/true);
         if (drain_risk_recalc) host.adapter_.flush_coof_tail();
     } catch (...) {
         host.adapter_.end_coof_recalc();
@@ -593,6 +599,7 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     host.adapter_.end_coof_recalc();
     restore_coof_script_state(host);
     coof_callback_script_open_ = context.script_bar_open_ms;
+    last_published_script_open_ms_ = context.script_bar_open_ms;
     if (callback_advances_source_bar) ++source_bar_count_;
     if (!first_open) {
         auto newborns = host.adapter_.take_first_open_newborns();

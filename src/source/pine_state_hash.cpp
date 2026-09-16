@@ -93,7 +93,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.d(value.exit_levels.trail_points); f.d(value.exit_levels.trail_offset);
     f.d(value.exit_levels.trail_price); f.d(value.exit_levels.profit_ticks);
     f.d(value.exit_levels.loss_ticks);
-    f.d(value.trail_activation_level);
+    f.d(value.trail_activation_level); f.d(value.retained_trail_best);
     admission::reflect(value.market_admission, "placement.market_admission",
         [&](const admission::Field& field) { hash_admission_field(f, field); });
     f.i(static_cast<std::int64_t>(value.birth.cause())); f.i(value.birth.bar());
@@ -267,6 +267,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& order : delayed_market_orders_) {
         hash_native_request(f, order.request); hash_placement(f, order.snapshot);
         f.s(order.replacement_key); f.u(order.release_open_epoch);
+        f.b(order.execute_at_open);
     }
     f.u(pending_same_bar_commands_.size());
     for (const auto& command : pending_same_bar_commands_) {
@@ -392,7 +393,18 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.d(policy_script_bar_.open); f.d(policy_script_bar_.high);
     f.d(policy_script_bar_.low); f.d(policy_script_bar_.close);
     f.d(policy_script_bar_.volume); f.i(policy_script_bar_.timestamp);
-    f.b(policy_script_bar_valid_); f.b(stream_mode_);
+    f.b(policy_script_bar_valid_);
+    std::vector<std::uint64_t> trail_open_keys;
+    trail_open_keys.reserve(trail_state_at_open_.size());
+    for (const auto& row : trail_state_at_open_) trail_open_keys.push_back(row.first);
+    std::sort(trail_open_keys.begin(), trail_open_keys.end());
+    f.u(trail_open_keys.size());
+    for (const auto key : trail_open_keys) {
+        const auto& state = trail_state_at_open_.at(key);
+        f.u(key); f.b(state.activated); f.d(state.best_price);
+        f.d(state.current_level); f.u(state.activation_ordinal);
+    }
+    f.b(stream_mode_);
     f.i(day_ledger_.current_day); f.i(day_ledger_.last_loss_day); f.i(day_ledger_.consecutive_loss_days);
     f.i(day_ledger_.intraday_loss_day); f.d(day_ledger_.intraday_start_equity);
     f.d(day_ledger_.intraday_realized); f.u(day_ledger_.observed_applied_ordinal);
@@ -469,6 +481,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.b(current_script_bar_valid_); f.b(saw_open_fill_); f.i(source_bar_count_);
     f.b(expected_source_bars_ >= source_bar_count_);
     f.u(applied_cursor_); f.i(coof_callback_script_open_);
+    f.i(last_published_script_open_ms_);
     f.i(prior_input_script_open_ms_);
     f.i(awaiting_legacy_script_open_ms_);
     f.i(last_stream_input_open_ms_);

@@ -1340,3 +1340,18 @@ set_tests_properties(
     test_percent_equity_open_entry_fee_l4b
     test_source_fifo_endpoints
     PROPERTIES LABELS "")
+
+# R4-D L6f: the merged-tree sampled-path, tick-price, trail-state,
+# request.security and stream-cadence policies now satisfy their restored rows.
+set_tests_properties(
+    test_trail_close_restart_no_fold_l4c
+    test_cascade_exit_gapjump_l4c
+    test_coof_chart_tick_touch_l4c
+    test_coof_resting_stop_siblings_l4c
+    test_pooc_retained_trail_path_l4c
+    test_prearmed_bracket_fill_bar_l4c
+    test_trail_ref_entry_bar_extreme_l4c
+    test_zero_offset_trail_rides_l4c
+    test_magnifier_real_bars_l4b
+    test_streaming_l4d
+    PROPERTIES LABELS "")

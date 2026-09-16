@@ -113,6 +113,8 @@ private:
     int expected_source_bars_ = 0;
     std::uint64_t applied_cursor_ = 0;
     std::int64_t coof_callback_script_open_ = std::numeric_limits<std::int64_t>::min();
+    std::int64_t last_published_script_open_ms_ =
+        std::numeric_limits<std::int64_t>::min();
     std::int64_t prior_input_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t awaiting_legacy_script_open_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int64_t last_stream_input_open_ms_ = std::numeric_limits<std::int64_t>::min();
