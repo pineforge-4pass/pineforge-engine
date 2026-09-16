@@ -108,6 +108,10 @@ jobs:
             ccache-${{ runner.os }}-${{ runner.arch }}-${{ matrix.build_type }}-
 
       - name: Verify (${{ matrix.build_type }})
+        env:
+          # A40 rev 6: the hosted macOS VM is not a stable timing host; the
+          # relative runtime witness gates on Linux CI and local builds.
+          PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY: ${{ runner.os == 'macOS' && '1' || '0' }}
         run: python3 scripts/ci_verify.py ${{ matrix.build_type == 'Release' && 'release' || 'debug' }} --build-dir build --jobs 4 --ccache
 
       - name: Stage and summarize diagnostics

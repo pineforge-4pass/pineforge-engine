@@ -1074,6 +1074,12 @@ target_compile_definitions(test_l4g_runtime_budget PRIVATE
 set(_pf_runtime_budget_mode)
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     set(_pf_runtime_budget_mode --candidate-only)
+elseif("$ENV{PINEFORGE_RUNTIME_BUDGET_CANDIDATE_ONLY}" STREQUAL "1")
+    # A40 rev 6: hosted macOS runners are not stable timing hosts (the same
+    # tree measured 12.8x and 17.2x best-of-five an hour apart), so the CI
+    # workflow sets this for its macOS lane. The relative gate still runs on
+    # every local Release build and on the Linux CI lane.
+    set(_pf_runtime_budget_mode --candidate-only)
 endif()
 add_test(NAME test_l4g_runtime_budget
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_runtime_budget.py
