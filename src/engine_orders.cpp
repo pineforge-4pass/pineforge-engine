@@ -294,6 +294,17 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
                       * close_qty;
     double runup = std::max(pe.max_runup * slice, fill_fav);
     double drawdown = std::max(pe.max_drawdown * slice, -fill_fav);
+    // Native apply_excursion can sample a masked first extreme after the lot
+    // exists (gap-through stop booked 1 ulp through the open). On the entry
+    // bar replace that sample with the masked H/L walk; later bars keep the
+    // carried pe.max_* from on_native_bar.
+    const bool same_bar = (pe.entry_bar_index == context.interval_index);
+    if (same_bar && (pe.skip_entry_bar_high || pe.skip_entry_bar_low)) {
+        // Drop apply_excursion samples of the masked first extreme. Pre-exit
+        // unmasked extremes are folded below from the exit fill's path prefix.
+        runup = std::max(0.0, fill_fav);
+        drawdown = std::max(0.0, -fill_fav);
+    }
     // Priced (stop/limit/trail) exits fill mid-bar: the bar-path extremes the
     // assumed OHLC path reaches BEFORE the exit fill belong to this trade's
     // excursion, but per-bar sampling never sees them (the entry is removed
@@ -308,13 +319,16 @@ Trade BacktestEngine::build_close_trade_with_costs(const PyramidEntry& pe, doubl
         double peak_fav = (was_long ? (peak - pe.price) : (pe.price - peak)) * close_qty;
         runup = std::max(runup, peak_fav);
     }
-    if (context.preceding_exit_path_prefix && *context.preceding_exit_path_prefix) {
+    const bool fold_exit_prefix = context.preceding_exit_path_prefix.has_value()
+        ? *context.preceding_exit_path_prefix
+        : (fold_exit_path_extremes_
+           || (same_bar && (pe.skip_entry_bar_high || pe.skip_entry_bar_low)));
+    if (fold_exit_prefix) {
         double fill_pos = 0.0;
         if (internal::first_touch_position(current_bar_, fill_price, &fill_pos)) {
             const bool high_first = internal::bar_path_uses_high_first(current_bar_);
             const double high_pos = high_first ? 1.0 : 2.0;
             const double low_pos  = high_first ? 2.0 : 1.0;
-            const bool same_bar = (pe.entry_bar_index == context.interval_index);
             if (high_pos < fill_pos && !(same_bar && pe.skip_entry_bar_high)) {
                 double hi_fav = (was_long ? (current_bar_.high - pe.price)
                                           : (pe.price - current_bar_.high)) * close_qty;
