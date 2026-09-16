@@ -1150,6 +1150,8 @@ void source::PineStrategyHost::scheduler_finish_security_sequence() {
 #endif
 }
 
+static void sort_same_bar_exit_trades(std::vector<Trade>&, const source::PineExecutionAdapter&);
+
 void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_bar) {
     range_end_trades_.clear();
     if (stream_warmup_mode_ || realtime_tail_
@@ -1186,6 +1188,7 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     max_drawdown_ = 0.0;
     max_runup_ = 0.0;
     for (const auto& point : equity_curve_) fold_equity_extreme(point.equity);
+    sort_same_bar_exit_trades(trades_, adapter_);
     current_bar_ = saved;
 }
 
@@ -1212,6 +1215,32 @@ void source::PineStrategyHost::scheduler_update_session_state(
         session_islastbar_ = in_session && !next_in_session;
     }
     prev_in_session_ = in_session;
+}
+
+static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
+                                      const source::PineExecutionAdapter& adapter) {
+    if (trades.size() < 2) return;
+    std::size_t start = 0;
+    while (start < trades.size()) {
+        std::size_t end = start + 1;
+        while (end < trades.size()
+               && trades[end].exit_time == trades[start].exit_time
+               && trades[end].entry_time == trades[start].entry_time
+               && trades[end].entry_id == trades[start].entry_id
+               && trades[start].exit_from_bracket
+               && trades[end].exit_from_bracket) {
+            ++end;
+        }
+        if (end - start > 1) {
+            std::stable_sort(trades.begin() + start, trades.begin() + end,
+                [&](const Trade& a, const Trade& b) {
+                    const auto sa = adapter.command_sequence_for_exit(a.exit_id, a.entry_id);
+                    const auto sb = adapter.command_sequence_for_exit(b.exit_id, b.entry_id);
+                    return sa < sb;
+                });
+        }
+        start = end;
+    }
 }
 
 void source::PineStrategyHost::scheduler_publish_source_bar(
@@ -1242,6 +1271,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
     adapter_.begin_source_evaluation();
     // Publish terminal and group-adjustment receipts before the source body
     // reads its public pending projection at this decision boundary.
+    sort_same_bar_exit_trades(trades_, adapter_);
     adapter_.observe_terminal_receipts();
     struct ChartEmaNaWarmupScope {
         bool previous;
