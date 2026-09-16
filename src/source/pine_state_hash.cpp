@@ -24,12 +24,6 @@ void hash_source_run_identity(BrokerStateHashSink& f,
     // it does not change the source-visible state of a fresh run.
     f.u(0);
 }
-void hash_source_run_epoch(BrokerStateHashSink& f, std::uint64_t run_counter) {
-    // Retain the anti-stale counter as an explicit projection input while
-    // keeping source broker fingerprints independent of handle reuse.
-    (void)run_counter;
-    f.u(0);
-}
 void hash_native_handle(BrokerStateHashSink& f, const native_order::RequestHandle& handle) {
     hash_source_run_identity(f, handle.run); f.u(handle.incarnation);
 }
@@ -207,7 +201,6 @@ void hash_native_request(BrokerStateHashSink& f, const native_order::Request& re
 
 void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.s(kSourceAdapterDomain);
-    hash_source_run_epoch(f, run_counter_);
     f.u(source_sequence_); f.u(command_ordinal_); f.u(broker_open_epoch_);
     f.i(last_broker_open_ms_); f.u(source_command_sequence_); f.b(host_ != nullptr);
     f.b(config_.process_orders_on_close); f.b(config_.calc_on_order_fills);
@@ -383,6 +376,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.d(close_batch_pending_debt_); f.d(close_batch_admitted_total_);
     f.u(receipt_cursor_);
     f.u(last_applied_ordinal_);
+    f.u(terminal_receipt_cursor_);
     f.i(entry_attempt_bar_); f.u(entry_attempts_on_bar_);
     f.b(materializing_relative_);
     f.i(current_position_cycle_);
@@ -552,11 +546,6 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.i(override_.pyramiding); f.i(override_.slippage); f.i(override_.commission_type);
     f.i(override_.default_qty_type); f.i(override_.process_orders_on_close);
     f.i(override_.calc_on_order_fills); f.i(override_.close_entries_rule);
-    // source_last_bar_index_ is a derived script-input horizon, not broker
-    // state.  The legacy hash diverged only if that input caused different
-    // commands; folding the horizon itself makes an indifferent strategy's
-    // broker hash differ before any behavior does.
-    (void)source_last_bar_index_;
     f.i(source_bar_index_); f.u(source_callback_count_);
     f.b(source_configuration_captured_); f.b(source_prepare_failed_);
 #ifdef PINEFORGE_HAS_AUX_SECURITY_FEED_V1

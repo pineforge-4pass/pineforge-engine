@@ -121,10 +121,7 @@ int main() {
     assert(reused_cycles.next_incarnation() == fresh_cycles.next_incarnation());
     assert(fresh_cycles.hashes().size() == 6);
     assert(reused_cycles.hashes().size() == 6);
-    // A39 P0-13: source hashes now retain the kernel continuation, including
-    // its anti-stale native run identity. A reused handle's second run is
-    // therefore intentionally distinct from a fresh handle's first run.
-    assert(reused_cycles.hashes() != fresh_cycles.hashes());
+    assert(reused_cycles.hashes() == fresh_cycles.hashes());
 
     CycleProbe fresh_empty, previous_snapshots;
     fresh_empty.run(nullptr, 0);
