@@ -1556,10 +1556,14 @@ bool NativeExecutionConsumer::preflight_bars(BacktestEngine& engine, const Bar* 
     };
     switch (result.error) {
     case NativeInputPreflightError::NullArray:
-        refuse("native bars require a non-null array");
+        // The warmup stage names itself so an invalid warmup request still
+        // carries the warmup word through the generic field/index renderer.
+        refuse(stream ? "native warmup bars require a non-null array"
+                      : "native bars require a non-null array");
         break;
     case NativeInputPreflightError::InvalidCount:
-        refuse("native bar count is invalid");
+        refuse(stream ? "native warmup bar count is invalid"
+                      : "native bar count is invalid");
         break;
     case NativeInputPreflightError::StructuralInvalid:
         if (bars != nullptr && result.index >= 0 && result.index < n) {
