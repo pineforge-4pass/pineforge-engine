@@ -373,6 +373,32 @@ void source::PineStrategyHost::on_native_applied(
             if (index < trades_.size()) trades_[index].exit_bar_index = source_index;
         }
     }
+    // ab9714be pine_fills.cpp:42: a priced (stop/limit) entry masks the
+    // assumed-OHLC extreme the path reaches BEFORE the fill so a later
+    // full-bar sample (margin-call pre-liquidation walk) does not credit
+    // pre-entry range to this lot.
+    if (event.opened_units != 0.0) {
+        const auto found = adapter_.placement_.find(event.handle().incarnation);
+        if (found != adapter_.placement_.end() && found->second.opening
+            && (!std::isnan(found->second.exit_levels.stop)
+                || !std::isnan(found->second.exit_levels.limit))) {
+            for (auto& lot : pyramid_entries_) {
+                if (lot.entry_incarnation != event.handle().incarnation)
+                    continue;
+                double fill_pos = 0.0;
+                if (!internal::first_touch_position(
+                        current_bar_, lot.price, &fill_pos)) {
+                    continue;
+                }
+                const bool high_first =
+                    internal::bar_path_uses_high_first(current_bar_);
+                const double high_pos = high_first ? 1.0 : 2.0;
+                const double low_pos = high_first ? 2.0 : 1.0;
+                lot.skip_entry_bar_high = (high_pos < fill_pos);
+                lot.skip_entry_bar_low = (low_pos < fill_pos);
+            }
+        }
+    }
     // The legacy source observer counted one broker fill for every committed
     // execution event.  The native consumer owns those events now; mirror the
     // count at its notification boundary so restored source tests and public

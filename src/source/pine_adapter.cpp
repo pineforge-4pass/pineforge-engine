@@ -53,6 +53,79 @@ bool finite_non_negative(double value) noexcept {
     return std::isfinite(value) && value >= 0.0;
 }
 
+// ab9714be pine_risk.cpp:256-292: sample the full bar H/L/C into every open
+// lot. Legacy runs this AFTER pending-order fills and BEFORE
+// process_margin_call, so a liquidation at the first extreme still owns the
+// rest of the bar. Native apply_excursion stops when the lot is closed, so
+// the adapter re-runs this walk at margin-call submit.
+void sample_open_trade_extremes(std::vector<PyramidEntry>& lots,
+                                PositionSide side, int bar_index, const Bar& bar) {
+    if (side == PositionSide::FLAT || lots.empty()) return;
+    if (!std::isfinite(bar.high) || !std::isfinite(bar.low)
+        || !std::isfinite(bar.close)) {
+        return;
+    }
+    const bool is_long = (side == PositionSide::LONG);
+    for (auto& pe : lots) {
+        double pe_hi = bar.high;
+        double pe_lo = bar.low;
+        if (pe.entry_bar_index == bar_index) {
+            if (pe.skip_entry_bar_high) pe_hi = pe.price;
+            if (pe.skip_entry_bar_low) pe_lo = pe.price;
+        }
+        const double fav_px = is_long ? pe_hi : pe_lo;
+        const double adv_px = is_long ? pe_lo : pe_hi;
+        const double favorable = is_long ? (fav_px - pe.price) * pe.qty
+                                         : (pe.price - fav_px) * pe.qty;
+        const double adverse = is_long ? (pe.price - adv_px) * pe.qty
+                                       : (adv_px - pe.price) * pe.qty;
+        if (favorable > pe.max_runup) pe.max_runup = favorable;
+        if (adverse > pe.max_drawdown) pe.max_drawdown = adverse;
+        const double closing = is_long ? (bar.close - pe.price) * pe.qty
+                                       : (pe.price - bar.close) * pe.qty;
+        if (closing > pe.max_runup) pe.max_runup = closing;
+        const double closing_dd = -closing;
+        if (closing_dd > pe.max_drawdown) pe.max_drawdown = closing_dd;
+    }
+}
+
+// ab9714be pine_fills.cpp:2009-2023: a POOC margin slice samples only the
+// traversed waypoint prefix (open-trigger must not inherit a later high).
+// Non-POOC process_margin_call runs after the ordinary full-bar sample, so
+// the switched route pre-loads the complete bar at submit.
+Bar margin_call_sample_bar(const Bar& bar, double fire_price, bool pooc,
+                           bool high_first) {
+    if (!pooc || !std::isfinite(fire_price)) return bar;
+    const double path[4] = {
+        bar.open,
+        high_first ? bar.high : bar.low,
+        high_first ? bar.low : bar.high,
+        bar.close,
+    };
+    int fire = 0;
+    for (int i = 0; i < 4; ++i) {
+        fire = i;
+        if (same_double_bits(path[i], fire_price)) break;
+    }
+    Bar prefix = bar;
+    prefix.high = prefix.low = path[0];
+    for (int i = 1; i <= fire; ++i) {
+        prefix.high = std::max(prefix.high, path[i]);
+        prefix.low = std::min(prefix.low, path[i]);
+    }
+    prefix.close = fire_price;
+    return prefix;
+}
+
+void sample_margin_call_open_extremes(std::vector<PyramidEntry>& lots,
+                                      PositionSide side, const Bar& bar,
+                                      double fire_price, bool pooc, bool high_first,
+                                      int bar_index) {
+    sample_open_trade_extremes(
+        lots, side, bar_index,
+        margin_call_sample_bar(bar, fire_price, pooc, high_first));
+}
+
 // ab9714be pine_strategy_commands.cpp:533-537: a non-NaN limit/stop is a
 // present price level, including 0.0.
 bool price_present(double value) noexcept { return !std::isnan(value); }
@@ -2528,7 +2601,7 @@ double PineExecutionAdapter::active_staged_fx(std::int64_t timestamp_ms) const n
 }
 
 void PineExecutionAdapter::submit_fx_margin_slice(
-        const Bar& bar, const NativeDecisionContext&, double rate, bool execute_at_current) {
+        const Bar& bar, const NativeDecisionContext& context, double rate, bool execute_at_current) {
     const auto position = require_host().physical_position();
     const double held = std::abs(position.signed_units);
     const double margin = position.signed_units > 0.0 ? config_.margin_long : config_.margin_short;
@@ -2569,6 +2642,13 @@ void PineExecutionAdapter::submit_fx_margin_slice(
     snapshot.source_id = request.label;
     snapshot.requested_qty = units;
     snapshot.sizing = sizing_snapshot();
+    if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+        sample_margin_call_open_extremes(
+            pine->pyramid_entries_, pine->position_side_, bar, bar.open,
+            execute_at_current || config_.process_orders_on_close,
+            source_path_uses_high_first(bar),
+            context.coordinate.interval_index);
+    }
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                             "__margin_call__");
     if (accepted && execute_at_current) {
@@ -2706,6 +2786,12 @@ void PineExecutionAdapter::schedule_preopen_margin_slice(
         snapshot.comment = request.comment;
         snapshot.requested_qty = slice;
         snapshot.sizing = opening.sizing;
+        if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+            sample_margin_call_open_extremes(
+                pine->pyramid_entries_, pine->position_side_, bar, adverse_raw,
+                config_.process_orders_on_close, source_path_uses_high_first(bar),
+                context.coordinate.interval_index);
+        }
         (void)submit_or_replace(std::move(request), std::move(snapshot), false,
                                 "__margin_preopen__" + opening.source_id);
         // The source stop-entry row is unique under this pre-open condition;
@@ -9322,6 +9408,13 @@ bool PineExecutionAdapter::submit_margin_call_slice(
     snapshot.requested_qty = units;
     snapshot.forced_execution_price = mark_price;
     snapshot.sizing = sizing_snapshot();
+    if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+        sample_margin_call_open_extremes(
+            pine->pyramid_entries_, pine->position_side_, pine->current_bar_,
+            raw_mark_price, config_.process_orders_on_close,
+            source_path_uses_high_first(pine->current_bar_),
+            context.coordinate.interval_index);
+    }
     return static_cast<bool>(submit_or_replace(
         std::move(request), std::move(snapshot), false, "__margin_call__"));
 }
@@ -9346,6 +9439,13 @@ bool PineExecutionAdapter::submit_margin_call_units(
     snapshot.requested_qty = units;
     if (force_execution_price) snapshot.forced_execution_price = mark_price;
     snapshot.sizing = sizing_snapshot();
+    if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+        sample_margin_call_open_extremes(
+            pine->pyramid_entries_, pine->position_side_, pine->current_bar_,
+            mark_price, true,
+            source_path_uses_high_first(pine->current_bar_),
+            context.coordinate.interval_index);
+    }
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false,
                                             "__margin_call__");
     if (!accepted) return false;
@@ -9439,6 +9539,12 @@ bool PineExecutionAdapter::submit_tv_money_long_margin_call(
                                        std::abs(*grid) * 1e-9});
         if (units < quantity - guard && std::abs(rounded_units - units) > guard)
             return false;
+        if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+            sample_margin_call_open_extremes(
+                pine->pyramid_entries_, pine->position_side_, bar, price,
+                true, source_path_uses_high_first(bar),
+                context.coordinate.interval_index);
+        }
         return submit_margin_call_units(price, context, units, false);
     }
     return false;
@@ -9614,6 +9720,12 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
     snapshot.source_id = request.label;
     snapshot.requested_qty = std::min(1.0, position.signed_units);
     snapshot.sizing = sizing_snapshot();
+    if (auto* pine = dynamic_cast<PineStrategyHost*>(&require_host())) {
+        sample_margin_call_open_extremes(
+            pine->pyramid_entries_, pine->position_side_, bar, fire_price,
+            config_.process_orders_on_close, source_path_uses_high_first(bar),
+            context.coordinate.interval_index);
+    }
     return static_cast<bool>(submit_or_replace(
         std::move(request), std::move(snapshot), false,
         "__tv_money_margin_path__"));
