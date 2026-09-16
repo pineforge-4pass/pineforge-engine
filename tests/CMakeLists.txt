@@ -12,6 +12,7 @@ set(TEST_SOURCES
     test_l10e_opposite_entry_close_same_pass
     test_l10d_entry_bar_excursion_masks
     test_l9e_zero_price_presence
+    test_l10f_sizing_basis_stop_limit
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a
