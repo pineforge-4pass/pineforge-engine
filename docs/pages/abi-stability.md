@@ -188,13 +188,13 @@ validate an erased `pf_strategy_t` handle. Use a handle only with functions from
 its creating strategy module. A fully self-contained old module can still use
 its own matching runtime; this check does not turn it into a v11 module.
 
-The integrated representation advances the generic broker fingerprint domain to
-`pineforge-broker-state/v16` and stream fingerprint version to 16; the source
-extension begins with `pineforge-source-adapter/v1`. Native
-consumer identity is `native-consumer/v6`; driver v4 is unchanged, while
-`close_scope_v1` and `native_run_spec_v1` stay frozen. Stable `RunIdentity` /
-`RequestHandle` / `Birth` remain `native_order_v1`; request, core, and event
-values own `native_order_v4`. Terms receipts, attempted terms, deferred
+The current integrated representation uses generic broker fingerprint domain
+`pineforge-broker-state/v17` and stream fingerprint version 17; the source
+extension begins with `pineforge-source-adapter/v2`. Native consumer identity
+is `native-consumer/v7`, driver values own `native_driver_v5`, and run specs own
+`native_run_spec_v2`. Stable `RunIdentity` / `RequestHandle` / `Birth` remain
+`native_order_v1`; request, core, and event values own `native_order_v5`.
+Terms receipts, attempted terms, deferred
 remaining/allowance state, and a staged FX-curve digest contribute through the
 native continuation hash. Lifecycle definitions, generations, obligations and
 replay receipts, plus causal journal state remain represented. Existing

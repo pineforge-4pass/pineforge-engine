@@ -55,6 +55,8 @@ option(PINEFORGE_ENABLE_SANITIZERS
 # to quantify implicit-conversion debt. Not -Werror; never fails the build.
 option(PINEFORGE_STRICT_WARNINGS
     "Enable -Wconversion / -Wsign-conversion (does not imply -Werror)" OFF)
+option(PINEFORGE_REQUIRE_ABI_RECEIPTS
+    "Make receipt-backed ABI CTest rows fail instead of skip when evidence is missing" OFF)
 
 # === Eigen3 ============================================================
 # Used for matrix-typed PineScript (matrix.* API). Tries system install

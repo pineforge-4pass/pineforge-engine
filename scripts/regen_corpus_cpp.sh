@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # scripts/regen_corpus_cpp.sh — regenerate (or verify) every corpus
-# generated.cpp straight from strategy.pine, using the bundled transpiler
-# in the pineforge-release Docker image. Docker is the only dependency —
-# no host Python, pip, or C++ toolchain needed for this step.
+# generated.cpp straight from strategy.pine, using the exact paired codegen
+# commit mounted read-only into an immutable pineforge-release Python image.
+# Docker and Git are the only dependencies — no host Python, pip, or C++
+# toolchain is needed for this step.
 #
 # This closes the reproducibility loop: the shipped corpus/*/*/generated.cpp
 # can be re-derived from corpus/*/*/strategy.pine through the public
 # pineforge-release image (engine runtime + bundled pineforge-codegen),
-# in transpile-only mode. NOTE: the bare pineforge-engine image no longer
-# bundles the transpiler — REGEN must use pineforge-release.
+# in transpile-only mode. The image's bundled transpiler is deliberately
+# shadowed by PYTHONPATH=/codegen, whose HEAD is authenticated below.
 #
 # Env vars:
-#   IMAGE    Image to transpile with
-#            (default: ghcr.io/pineforge-4pass/pineforge-release:latest)
+#   IMAGE    Immutable Python runtime image used to execute the pinned checkout
+#   CODEGEN_DIR  Optional existing clean checkout at CODEGEN_COMMIT. When
+#            unset, the script fetches that exact public commit into a temp dir.
+#   CODEGEN_REPO  Fetch URL used only when CODEGEN_DIR is unset.
 #   ONLY     Substring filter; only process strategies whose path matches
 #   VERIFY   1 = do NOT overwrite; transpile to a temp file and diff against
 #            the committed generated.cpp. Exit non-zero if any file drifts.
@@ -31,7 +34,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-IMAGE="${IMAGE:-ghcr.io/pineforge-4pass/pineforge-release:latest}"
+IMAGE="${IMAGE:-ghcr.io/pineforge-4pass/pineforge-release@sha256:a69c3700e44868d9657697f43e3f3954a7ed8bde039b55b52ec901538720ac05}"
+CODEGEN_COMMIT="66612eda9ea834e872f48dbe3689c500b1e22cb5"
+CODEGEN_REPO="${CODEGEN_REPO:-https://github.com/pineforge-4pass/pineforge-codegen-oss.git}"
 VERIFY="${VERIFY:-0}"
 
 log()  { printf '\033[1;34m[regen_corpus]\033[0m %s\n' "$*"; }
@@ -45,9 +50,34 @@ Run:  git submodule update --init corpus
 fi
 
 command -v docker >/dev/null 2>&1 || fail "docker not found on PATH."
+command -v git >/dev/null 2>&1 || fail "git not found on PATH."
+
+owned_codegen=0
+if [[ -n "${CODEGEN_DIR:-}" ]]; then
+    codegen_checkout="$(cd "$CODEGEN_DIR" && pwd)"
+else
+    codegen_checkout="$(mktemp -d)"
+    owned_codegen=1
+    git -C "$codegen_checkout" init --quiet
+    git -C "$codegen_checkout" remote add origin "$CODEGEN_REPO"
+    git -C "$codegen_checkout" fetch --quiet --depth=1 origin "$CODEGEN_COMMIT"
+    git -C "$codegen_checkout" checkout --quiet --detach FETCH_HEAD
+fi
+
+actual_codegen="$(git -C "$codegen_checkout" rev-parse HEAD)"
+[[ "$actual_codegen" == "$CODEGEN_COMMIT" ]] || \
+    fail "codegen checkout is $actual_codegen, required $CODEGEN_COMMIT"
+[[ -z "$(git -C "$codegen_checkout" status --porcelain)" ]] || \
+    fail "codegen checkout has local changes: $codegen_checkout"
+[[ -f "$codegen_checkout/pineforge_codegen/__init__.py" ]] || \
+    fail "codegen checkout lacks pineforge_codegen package: $codegen_checkout"
 
 tmp_cpp="$(mktemp)"
-trap 'rm -f "$tmp_cpp"' EXIT
+cleanup() {
+    rm -f "$tmp_cpp"
+    if [[ "$owned_codegen" == "1" ]]; then rm -rf "$codegen_checkout"; fi
+}
+trap cleanup EXIT
 
 n=0; drifted=(); failed=()
 
@@ -59,11 +89,14 @@ for pine in corpus/*/*/strategy.pine; do
     fi
     n=$((n + 1))
 
-    # Transpile in-container (transpile-only, no network). stdout = C++.
+    # Transpile in-container with the authenticated checkout and no network.
     if ! docker run --rm --network=none \
-            -e PINEFORGE_TRANSPILE_ONLY=1 \
+            --entrypoint python3 \
+            -e PYTHONPATH=/codegen \
+            -v "$codegen_checkout:/codegen:ro" \
             -v "$ROOT_DIR/$pine:/in/strategy.pine:ro" \
-            "$IMAGE" > "$tmp_cpp" 2>/dev/null; then
+            "$IMAGE" -c 'from pathlib import Path; import sys; from pineforge_codegen import transpile; sys.stdout.write(transpile(Path(sys.argv[1]).read_text(), filename="strategy.pine"))' \
+            /in/strategy.pine > "$tmp_cpp" 2>/dev/null; then
         warn "transpile failed: $strat_dir"
         failed+=("$strat_dir")
         continue
@@ -96,4 +129,4 @@ if [[ "$VERIFY" == "1" && ${#drifted[@]} -gt 0 ]]; then
     exit 1
 fi
 
-log "done."
+log "done (codegen $CODEGEN_COMMIT)."

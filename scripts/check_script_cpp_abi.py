@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-from cpp_abi_pairing import PairingError, execute_v16_v17_pair
+from cpp_abi_pairing import PairingError, enforce_receipt_mode, execute_v16_v17_pair
 
 
 def verify_source_shape(include: Path) -> None:
@@ -32,17 +32,16 @@ def main() -> int:
     parser.add_argument("--v16-frozen-receipt", type=Path, required=True)
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path, required=True)
-    parser.add_argument("--skip-if-receipt-missing", action="store_true")
+    receipt_mode = parser.add_mutually_exclusive_group()
+    receipt_mode.add_argument("--skip-if-receipt-missing", action="store_true")
+    receipt_mode.add_argument("--require-receipts", action="store_true")
     args = parser.parse_args()
-    if args.skip_if_receipt_missing:
-        for dest in vars(args):
-            if not dest.endswith("_receipt"):
-                continue
-            value = getattr(args, dest)
-            if value is not None and not Path(value).exists():
-                print(f"SKIP: receipt missing: {value} (prepared by scripts/ci_verify.py)")
-                return 77
     try:
+        mode = enforce_receipt_mode(
+            (args.v16_frozen_receipt,), skip=args.skip_if_receipt_missing,
+            require=args.require_receipts, label="script C++ ABI")
+        if mode is not None:
+            return mode
         verify_source_shape(args.include)
         result = execute_v16_v17_pair(
             compiler=args.compiler,

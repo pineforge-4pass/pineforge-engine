@@ -1,52 +1,41 @@
-// A29 native-route twin for test_stop_decline_continue_path.cpp.
-//
-// The base literals that read or mutate retired owner-only state are recorded
-// individually in Appendix 5. This executable covers the surviving public
-// route: source command -> native admission -> ABI-v4 pending projection.
-#include "l4d_native_route_guard.hpp"
-#include "oracle_fixture_config_shim.hpp"
-#define PineStrategyHost L4dPineHost
-
-#include <pineforge/bar.hpp>
-#include <pineforge/pineforge.h>
-#include <pineforge/source/pine_strategy_host.hpp>
+// A29 native-route twin: a real resting stop continues through the native path.
+#include "l8d_twin_support.hpp"
 
 #include <cstdio>
-#include <cstring>
-#include <limits>
 
 using namespace pineforge;
+using namespace pineforge::l8d_test;
 
 namespace {
 int failures = 0;
-#define CHECK(condition) do { if (!(condition)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
+#define CHECK(expr) do { if (!(expr)) { ++failures; std::fprintf(stderr, "FAIL %d %s\n", __LINE__, #expr); } } while (0)
 
-class Probe final : public pineforge::source::PineStrategyHost {
+class Probe final : public source::L4dPineHost {
 public:
-    Probe() {
-        initial_capital_ = 10'000.0;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1.0;
+    using BacktestEngine::open_trade_entry_id;
+    Probe() { configure_pine_strategy(fixed_config()); }
+    PositionSide side() const {
+        return physical_position().signed_units > 0.0 ? PositionSide::LONG
+            : (physical_position().signed_units < 0.0 ? PositionSide::SHORT
+                                                       : PositionSide::FLAT);
     }
-
+    double qty() const { return physical_position().signed_units; }
+    std::size_t open_lot_count() const { return physical_position().lot_count; }
     void on_source_bar(const Bar&) override {
-        if (bar_index_ == 0) {
-            const double missing = std::numeric_limits<double>::quiet_NaN();
-            strategy_entry("L", true, missing, missing, 1.0);
-        }
+        if (pine_bar_index() == 0) strategy_entry("L", true, missing, 105.0, 1.0);
     }
 };
-}  // namespace
+} // namespace
 
 int main() {
-    const Bar bar{100, 101, 99, 100, 1, 0};
-    Probe probe;
-    probe.run(&bar, 1);
-    pf_pending_order_v1_t row{};
-    CHECK(strategy_pending_order_get(&probe, 0, &row, sizeof row) == 0
-          && row.incarnation != 0 && std::strcmp(row.id, "L") == 0);
+    const Bar bars[] = {point(100, 0), {100, 110, 99, 106, 1, 60'000}, point(106, 120'000)};
+    Probe probe; probe.run(bars, 3, "1", "1");
+    CHECK(probe.side() == PositionSide::LONG);
+    CHECK(probe.last_error().empty());
+    CHECK(probe.qty() == 1.0);
+    CHECK(probe.trade_count() == 0);
+    CHECK(probe.open_lot_count() == 1);
+    CHECK(probe.open_trade_entry_id(0) == "L");
+    CHECK(strategy_pending_orders_len(&probe) == 0);
     return failures == 0 ? 0 : 1;
 }
-
-#undef CHECK
-#undef PineStrategyHost

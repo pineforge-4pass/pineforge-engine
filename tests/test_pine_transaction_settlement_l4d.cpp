@@ -1,49 +1,43 @@
-// A29 native-route twin for test_pine_transaction_settlement.cpp.
-//
-// The legacy direct process_pending_orders drive is deleted.  This native
-// route uses an ordinary command tape and preserves one public ABI assertion;
- // remaining owner-only receipt literals are enumerated in Appendix 5.
-#include "l4d_native_route_guard.hpp"
-#include "oracle_fixture_config_shim.hpp"
-#define PineStrategyHost L4dPineHost
-
-#include <pineforge/bar.hpp>
-#include <pineforge/pineforge.h>
-#include <pineforge/source/pine_strategy_host.hpp>
+// A29 native-route twin: a public reversal settles close/open rows atomically.
+#include "l8d_twin_support.hpp"
 
 #include <cstdio>
-#include <cstring>
-#include <limits>
+#include <functional>
+#include <stdexcept>
 
 using namespace pineforge;
+using namespace pineforge::l8d_test;
 
 namespace {
 int failures = 0;
-#define CHECK(condition) do { if (!(condition)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
-
-class Probe final : public pineforge::source::PineStrategyHost {
-public:
-    void on_source_bar(const Bar&) override {
-        const double missing = std::numeric_limits<double>::quiet_NaN();
-        if (bar_index_ == 0) strategy_entry("seed", true, missing, missing, 1.0);
-        if (bar_index_ == 1) strategy_close("seed");
-    }
-};
-}  // namespace
-
-int main() {
-    const Bar bars[] = {
-        {100, 100, 100, 100, 1, 0},
-        {100, 101, 99, 100, 1, 60'000},
-        {100, 101, 99, 100, 1, 120'000},
-    };
-    Probe probe;
-    probe.run(bars, 3);
-    pf_pending_order_v1_t row{};
-    CHECK(strategy_pending_order_get(&probe, 0, &row, sizeof row) == -1
-          || std::strcmp(row.id, "seed") == 0);
-    return failures == 0 ? 0 : 1;
+#define CHECK(condition) do { if (!(condition)) { ++failures; std::fprintf(stderr, "FAIL %d %s\n", __LINE__, #condition); } } while (0)
+void expect_throw(const std::function<void()>& action) {
+    try { action(); CHECK(false); }
+    catch (const std::runtime_error&) {}
 }
 
-#undef CHECK
-#undef PineStrategyHost
+class Probe final : public source::L4dPineHost {
+public:
+    using BacktestEngine::open_trade_entry_id;
+    Probe() { configure_pine_strategy(fixed_config()); }
+    std::size_t open_lot_count() const { return physical_position().lot_count; }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_order("seed", true, 4.0);
+        if (pine_bar_index() == 2) strategy_order("reverse", false, 6.0);
+    }
+};
+} // namespace
+
+int main() {
+    expect_throw([] { throw std::runtime_error("transaction validation"); });
+    const Bar bars[] = {point(100, 0), point(100, 60'000), point(100, 120'000), point(100, 180'000)};
+    Probe probe; probe.run(bars, 4, "1", "1");
+    CHECK(probe.last_error().empty());
+    CHECK(probe.trade_count() == 1);
+    CHECK(probe.get_trade(0).entry_id == "seed");
+    CHECK(probe.get_trade(0).qty == 4.0);
+    CHECK(probe.live_position_size() == -2.0);
+    CHECK(probe.open_lot_count() == 1);
+    CHECK(probe.open_trade_entry_id(0) == "reverse");
+    return failures == 0 ? 0 : 1;
+}

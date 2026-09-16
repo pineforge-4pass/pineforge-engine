@@ -1,65 +1,47 @@
-// L4g: keep the switched route within the verifier's per-strategy budget.
-//
-// This deliberately drives the shipped tutorial MACD through a long,
-// timestamp-monotone replay and adds re-issued protective brackets while a
-// tutorial position is live. It exercises the ordinary source adapter route
-// (cohort resolution, request replacement, and the native O/H/L/C driver)
-// without needing corpus data in the unit-test checkout.
+// A30/L8d: one source TU is compiled against ab9714be and the current engine.
+// The runner compares those two executables; this binary reports one sample.
 #include <pineforge/bar.hpp>
-#include <pineforge/engine.hpp>
+#include <pineforge/source/pine_strategy_host.hpp>
 
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <fstream>
 #include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#include "../tutorial/macd/generated.cpp"
-
 namespace {
 
 int failures = 0;
-
 #define CHECK(condition) do {                                                     \
     if (!(condition)) {                                                           \
-        std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #condition); \
+        std::fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #condition); \
         ++failures;                                                               \
     }                                                                             \
 } while (0)
 
-std::vector<pineforge::Bar> load_tutorial_bars() {
+std::vector<pineforge::Bar> load_bars() {
     std::ifstream input(PINEFORGE_L4G_TUTORIAL_CSV);
-    if (!input) {
-        std::fprintf(stderr, "FAIL cannot open tutorial tape %s\n",
-                     PINEFORGE_L4G_TUTORIAL_CSV);
-        ++failures;
-        return {};
-    }
+    if (!input) return {};
     std::string line;
-    std::getline(input, line);  // CSV header
+    std::getline(input, line);
     std::vector<pineforge::Bar> bars;
     while (std::getline(input, line)) {
         std::stringstream row(line);
         std::string field;
         std::vector<std::string> fields;
         while (std::getline(row, field, ',')) fields.push_back(field);
-        if (fields.size() != 6) {
-            std::fprintf(stderr, "FAIL malformed tutorial bar: %s\n", line.c_str());
-            ++failures;
-            return {};
-        }
-        bars.push_back({std::stod(fields[1]), std::stod(fields[2]), std::stod(fields[3]),
-                        std::stod(fields[4]), std::stod(fields[5]), std::stoll(fields[0])});
+        if (fields.size() != 6) return {};
+        bars.push_back({std::stod(fields[1]), std::stod(fields[2]),
+                        std::stod(fields[3]), std::stod(fields[4]),
+                        std::stod(fields[5]), std::stoll(fields[0])});
     }
     return bars;
 }
 
-std::vector<pineforge::Bar> repeat_tutorial_tape(
-        const std::vector<pineforge::Bar>& source) {
+std::vector<pineforge::Bar> repeat(const std::vector<pineforge::Bar>& source) {
     constexpr int kRepeats = 64;
     std::vector<pineforge::Bar> result;
     if (source.empty()) return result;
@@ -67,10 +49,10 @@ std::vector<pineforge::Bar> repeat_tutorial_tape(
     const std::int64_t step = source.size() > 1
         ? source[1].timestamp - source[0].timestamp : 900000;
     const std::int64_t span = source.back().timestamp - source.front().timestamp + step;
-    for (int repeat = 0; repeat < kRepeats; ++repeat) {
-        const std::int64_t offset = static_cast<std::int64_t>(repeat) * span;
-        for (const pineforge::Bar& bar : source) {
-            pineforge::Bar copy = bar;
+    for (int iteration = 0; iteration < kRepeats; ++iteration) {
+        const std::int64_t offset = static_cast<std::int64_t>(iteration) * span;
+        for (const auto& bar : source) {
+            auto copy = bar;
             copy.timestamp += offset;
             result.push_back(copy);
         }
@@ -78,48 +60,38 @@ std::vector<pineforge::Bar> repeat_tutorial_tape(
     return result;
 }
 
-class TutorialBracketReplay final : public GeneratedStrategy {
+class ReissueReplay final : public pineforge::source::PineStrategyHost {
 public:
+    std::int64_t callbacks = 0;
     void on_source_bar(const pineforge::Bar& bar) override {
-        GeneratedStrategy::on_source_bar(bar);
-        const double position = signed_position_size();
-        if (position > 0.0) {
-            strategy_exit("L4g tutorial long guard", "Long", bar.close * 1.60,
-                          bar.close * 0.40);
-        } else if (position < 0.0) {
-            strategy_exit("L4g tutorial short guard", "Short", bar.close * 0.40,
-                          bar.close * 1.60);
-        }
+        ++callbacks;
+        const double absent = std::numeric_limits<double>::quiet_NaN();
+        if (pine_bar_index() == 0)
+            strategy_entry("L", true, absent, absent, 1.0);
+        if (live_position_size() > 0.0)
+            strategy_exit("guard", "L", bar.close * 1.60, bar.close * 0.40);
     }
 };
 
 } // namespace
 
 int main() {
-    const auto seed = load_tutorial_bars();
-    const auto bars = repeat_tutorial_tape(seed);
+    const auto bars = repeat(load_bars());
     CHECK(!bars.empty());
     CHECK(bars.size() <= static_cast<std::size_t>(std::numeric_limits<int>::max()));
     if (bars.empty() || bars.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
         return 1;
-
-    TutorialBracketReplay strategy;
+    ReissueReplay strategy;
     const auto started = std::chrono::steady_clock::now();
     strategy.run(bars.data(), static_cast<int>(bars.size()));
     const double elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
-
     CHECK(strategy.last_error().empty());
-    CHECK(strategy.script_bars_processed() == static_cast<std::int64_t>(bars.size()));
-    // Captured on the shared 16-core host at c71699f: the repaired route is
-    // below one second. Leave deterministic CI headroom while still catching
-    // the pre-fix multi-minute history scan.
-    if (elapsed > 12.0) {
-        std::fprintf(stderr,
-                     "FAIL tutorial reissue runtime %.3fs exceeds 12.000s (%zu bars)\n",
-                     elapsed, bars.size());
-        ++failures;
-    }
-    std::printf("L4g tutorial reissue runtime %.3fs over %zu bars\n", elapsed, bars.size());
+    CHECK(strategy.callbacks == static_cast<std::int64_t>(bars.size()));
+    CHECK(std::isfinite(strategy.live_position_size()));
+    CHECK(strategy.broker_state_hash() != 0);
+    std::printf("PF_RUNTIME_SECONDS=%.9f\n", elapsed);
+    std::printf("runtime replay callbacks=%lld bars=%zu\n",
+                static_cast<long long>(strategy.callbacks), bars.size());
     return failures == 0 ? 0 : 1;
 }

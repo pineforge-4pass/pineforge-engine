@@ -167,6 +167,7 @@ def cmake_cache_definitions(cfg: VerifyConfig) -> dict[str, str]:
         'PINEFORGE_BUILD_EXAMPLES': 'OFF',
         'PINEFORGE_ENABLE_COVERAGE': 'OFF',
         'PINEFORGE_STRICT_WARNINGS': 'OFF',
+        'PINEFORGE_REQUIRE_ABI_RECEIPTS': 'ON',
         'PINEFORGE_VERSION_SOURCE': 'FILE',
     }
     if cfg.curl_dir is not None:
@@ -509,6 +510,31 @@ class Driver:
         self.write_summary()
         return not failed
 
+    def ensure_corpus_submodule(self) -> bool:
+        """Materialize the exact public corpus gitlink before sweep-adjacent CI."""
+        update = [
+            'git', '-C', str(self.cfg.source), 'submodule', 'update', '--init',
+            '--depth', '1', '--', 'corpus',
+        ]
+        if self.invoke('corpus-submodule-init', update, timeout=600).returncode != 0:
+            return False
+        status = self.invoke(
+            'corpus-submodule-status',
+            ['git', '-C', str(self.cfg.source), 'submodule', 'status', '--', 'corpus'],
+            timeout=60)
+        if status.returncode != 0:
+            return False
+        value = status.stdout.decode('utf-8', 'replace').strip()
+        if not value or value[0] in '-+':
+            self.fail_stage(
+                'corpus-submodule-pin',
+                'corpus submodule is absent or not at the recorded gitlink: ' + repr(value),
+                argv=['git', 'submodule', 'status', '--', 'corpus'])
+            return False
+        self.pass_stage('corpus-submodule-pin', value,
+                        argv=['git', 'submodule', 'status', '--', 'corpus'])
+        return True
+
     def verify_configured_profile(self, cache: dict[str, str]) -> str | None:
         profile = self.cfg.profile
         if cache.get('CMAKE_BUILD_TYPE') != profile.build_type:
@@ -525,6 +551,7 @@ class Driver:
             ('PINEFORGE_BUILD_TUTORIAL', profile.tutorial),
             ('PINEFORGE_BUILD_LIVE_RUNNER', profile.live_runner),
             ('PINEFORGE_ENABLE_SANITIZERS', profile.sanitizers),
+            ('PINEFORGE_REQUIRE_ABI_RECEIPTS', True),
         ):
             if cmake_on(cache.get(key)) != wanted:
                 return f'{key} expected {"ON" if wanted else "OFF"} got {cache.get(key)!r}'
@@ -670,6 +697,8 @@ class Driver:
         self.logs.mkdir(parents=True, exist_ok=True)
         self.write_summary()
         if not self.collect_tool_versions():
+            return self.finish('failed', 1)
+        if not self.ensure_corpus_submodule():
             return self.finish('failed', 1)
         guard_failed = False
         for name, argv in source_guard_commands(self.cfg.source):

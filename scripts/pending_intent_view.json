@@ -130,21 +130,21 @@
       "member": "cancellation",
       "cpp_type": "OrderCancellationReceipt",
       "kind": "receipt fact",
-      "source": "native_order::CancelledEvent plus PineExecutionAdapter::receipt_by_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation plus native_order::CancelledEvent",
       "no_write": true
     },
     {
       "member": "recreated_after_named_cancelled_entry_incarnation",
       "cpp_type": "uint64_t",
       "kind": "receipt fact",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact::recreated_after_named_cancelled_entry",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::recreated_after_named_cancelled_entry_incarnation",
       "no_write": true
     },
     {
       "member": "named_cancel_surviving_exit_incarnation",
       "cpp_type": "uint64_t",
       "kind": "receipt fact",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact::named_cancel_surviving_exit",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::named_cancel_surviving_exit_incarnation",
       "no_write": true
     },
     {
@@ -186,7 +186,7 @@
       "member": "coof_cascade_seg_i",
       "cpp_type": "int8_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_segment",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_seg_i",
       "no_write": true
     },
     {
@@ -200,14 +200,14 @@
       "member": "created_position_side",
       "cpp_type": "PositionSide",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_side",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_position_side",
       "no_write": true
     },
     {
       "member": "created_position_cycle_seq",
       "cpp_type": "int64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_cycle",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_cycle",
       "no_write": true
     },
     {
@@ -221,7 +221,7 @@
       "member": "same_id_stop_deferred_close_all_incarnation",
       "cpp_type": "uint64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::same_id_stop_deferred_close_all_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation.target_incarnation",
       "no_write": true
     },
     {
@@ -277,7 +277,7 @@
       "member": "paired_flat_market_peer_seq",
       "cpp_type": "int64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.peer_sequence",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market_peer_seq",
       "no_write": true
     },
     {
@@ -361,14 +361,14 @@
       "member": "explicit_placement_equity",
       "cpp_type": "double",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.equity",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_explicit_equity",
       "no_write": true
     },
     {
       "member": "explicit_slipped_signal_close",
       "cpp_type": "double",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.slipped_signal_close",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_explicit_signal_close",
       "no_write": true
     },
     {
@@ -410,14 +410,14 @@
       "member": "signal_close_mc_bar",
       "cpp_type": "int",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.bar",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::signal_close_mc_bar",
       "no_write": true
     },
     {
       "member": "signal_close_mc_entry_incarnation",
       "cpp_type": "uint64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.entry_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::signal_close_mc_entry_incarnation",
       "no_write": true
     },
     {
@@ -431,7 +431,7 @@
       "member": "signal_close_mc_remaining_qty",
       "cpp_type": "double",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.remaining_qty",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::signal_close_mc_remaining_qty",
       "no_write": true
     },
     {
@@ -445,7 +445,7 @@
       "member": "quantity_request",
       "cpp_type": "QuantityRequest",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::quantity_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::requested_qty plus qty_percent",
       "no_write": true
     },
     {
@@ -459,7 +459,7 @@
       "member": "reservation_growth_source",
       "cpp_type": "ReservationGrowthSource",
       "kind": "receipt fact",
-      "source": "source::PineExecutionAdapter::ReservationReceiptFact::growth_source",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::reservation_growth_source",
       "no_write": true
     },
     {
@@ -639,7 +639,7 @@
       "field": "declined_by_replaced_short_market",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact::cause",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation.cause",
       "derivation": "true iff the adapter-selected cancellation cause is replacement",
       "no_write": true
     },
@@ -655,14 +655,14 @@
       "field": "recreated_after_named_cancelled_entry_incarnation",
       "cpp_type": "uint64_t",
       "kind": "receipt fact",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact::recreated_after_named_cancelled_entry",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::recreated_after_named_cancelled_entry_incarnation",
       "no_write": true
     },
     {
       "field": "named_cancel_surviving_exit_incarnation",
       "cpp_type": "uint64_t",
       "kind": "receipt fact",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact::named_cancel_surviving_exit",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::named_cancel_surviving_exit_incarnation",
       "no_write": true
     },
     {
@@ -716,7 +716,7 @@
       "field": "coof_cascade_seg_i",
       "cpp_type": "int8_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_segment",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::coof_cascade_seg_i",
       "no_write": true
     },
     {
@@ -730,21 +730,21 @@
       "field": "created_position_side",
       "cpp_type": "PositionSide",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_side",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_position_side",
       "no_write": true
     },
     {
       "field": "created_position_cycle_seq",
       "cpp_type": "int64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_cycle",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_cycle",
       "no_write": true
     },
     {
       "field": "created_after_position_close_in_bar",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_history",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_after_close",
       "derivation": "prior-close receipt on this source evaluation",
       "no_write": true
     },
@@ -752,7 +752,7 @@
       "field": "over_pyramiding_cap_at_placement",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_history",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_over_pyramiding",
       "derivation": "entry-capacity predicate at placement",
       "no_write": true
     },
@@ -767,7 +767,7 @@
       "field": "same_id_stop_deferred_close_all_incarnation",
       "cpp_type": "uint64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::same_id_stop_deferred_close_all_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation.target_incarnation",
       "no_write": true
     },
     {
@@ -832,7 +832,7 @@
       "field": "paired_flat_market_peer_seq",
       "cpp_type": "int64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market.peer_sequence",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::paired_flat_market_peer_seq",
       "no_write": true
     },
     {
@@ -940,14 +940,14 @@
       "field": "explicit_placement_equity",
       "cpp_type": "double",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.equity",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_explicit_equity",
       "no_write": true
     },
     {
       "field": "explicit_slipped_signal_close",
       "cpp_type": "double",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::explicit_admission.slipped_signal_close",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_explicit_signal_close",
       "no_write": true
     },
     {
@@ -989,14 +989,14 @@
       "field": "signal_close_mc_bar",
       "cpp_type": "int",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.bar",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::signal_close_mc_bar",
       "no_write": true
     },
     {
       "field": "signal_close_mc_entry_incarnation",
       "cpp_type": "uint64_t",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.entry_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::signal_close_mc_entry_incarnation",
       "no_write": true
     },
     {
@@ -1010,7 +1010,7 @@
       "field": "signal_close_mc_remaining_qty",
       "cpp_type": "double",
       "kind": "adapter placement snapshot",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::margin_call_close.remaining_qty",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::signal_close_mc_remaining_qty",
       "no_write": true
     },
     {
@@ -1024,7 +1024,7 @@
       "field": "requested_partial",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::quantity_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::requested_qty plus qty_percent",
       "derivation": "partial predicate over request/reservation",
       "no_write": true
     },
@@ -1032,7 +1032,7 @@
       "field": "full_percent_exit_request",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::quantity_request",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::requested_qty plus qty_percent",
       "derivation": "requests_all predicate",
       "no_write": true
     },
@@ -1056,7 +1056,7 @@
       "field": "pooc_global_full_exit_bound_add",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::ReservationReceiptFact::growth_source",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::reservation_growth_source",
       "derivation": "reservation_owner present",
       "no_write": true
     },
@@ -1064,7 +1064,7 @@
       "field": "created_while_in_position",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::PlacementSnapshot::placement_position_side",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::projection_position_side",
       "derivation": "exit family and non-flat side",
       "no_write": true
     },
@@ -1120,7 +1120,7 @@
       "field": "suppress_as_declined_reversal_close",
       "cpp_type": "bool",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact::cause",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation.cause",
       "derivation": "true iff dependency cancellation",
       "no_write": true
     },
@@ -1192,7 +1192,7 @@
       "field": "suppressed_close_consumed_ledger_qty",
       "cpp_type": "double",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation",
       "derivation": "close_claim_consumed",
       "no_write": true
     },
@@ -1200,7 +1200,7 @@
       "field": "suppressed_close_retired_ledger_qty",
       "cpp_type": "double",
       "kind": "derived",
-      "source": "source::PineExecutionAdapter::CancellationReceiptFact",
+      "source": "source::PineExecutionAdapter::PlacementSnapshot::cancellation",
       "derivation": "close_claim_retired",
       "no_write": true
     },
@@ -1237,7 +1237,7 @@
     {
       "name": "last_bar_dual_entry_path",
       "kind": "receipt fact",
-      "source": "source::PineExecutionAdapter::DecisionReceipt::last_bar_dual_entry_path",
+      "source": "source::PineExecutionAdapter::last_bar_dual_entry_path_",
       "derivation": "The adapter records the final two-entry path decision once at the native applied boundary for the script bar and exposes its enum value; no request field is fabricated.",
       "failure": "no decision for the completed bar => legacy zero enum value from the initialized receipt, not a projected order constant."
     },

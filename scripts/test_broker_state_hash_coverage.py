@@ -62,6 +62,52 @@ class Coverage(unittest.TestCase):
              "trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.\nunknown_state_ # invalid"),))
         self.assertEqual(result, 1, output)
 
+    def test_void_cast_cannot_fake_a_fold(self):
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", "f.u(cap_latest_fill_);",
+            "(void)cap_latest_fill_;"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("cap_latest_fill_", output)
+
+    def test_constant_cannot_replace_a_fold(self):
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", "f.u(cap_latest_fill_);",
+            "f.u(0);"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("cap_latest_fill_", output)
+
+    def test_dead_branch_cannot_fake_a_fold(self):
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp", "f.u(cap_latest_fill_);",
+            "if (false) { f.u(cap_latest_fill_); }"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("cap_latest_fill_", output)
+
+    def test_member_above_marker_is_still_covered(self):
+        result, output = self.check(((
+            "include/pineforge/source/pine_adapter.hpp",
+            "    // @source-state begin",
+            "    std::uint64_t injected_unhashed_state_ = 0;\n"
+            "    // @source-state begin"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("injected_unhashed_state_", output)
+
+    def test_nested_struct_field_is_enumerated(self):
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp",
+            "f.d(value.frozen_reversal_transaction);",
+            "f.d(0.0);"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("frozen_reversal_transaction", output)
+
+    def test_pinned_sibling_debt_must_be_removed_explicitly(self):
+        result, output = self.check(((
+            "src/source/pine_state_hash.cpp",
+            "(void)source_last_bar_index_;",
+            "f.i(source_last_bar_index_);"),))
+        self.assertEqual(result, 1, output)
+        self.assertIn("debt", output)
+
 
 if __name__ == "__main__":
     unittest.main()

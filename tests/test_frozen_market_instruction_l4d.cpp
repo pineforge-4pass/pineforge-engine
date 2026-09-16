@@ -1,52 +1,46 @@
-// A29 native-route twin for test_frozen_market_instruction.cpp.
-//
-// The base literals that read or mutate retired owner-only state are recorded
-// individually in Appendix 5. This executable covers the surviving public
-// route: source command -> native admission -> ABI-v4 pending projection.
-#include "l4d_native_route_guard.hpp"
-#include "oracle_fixture_config_shim.hpp"
-#define PineStrategyHost L4dPineHost
-
-#include <pineforge/bar.hpp>
-#include <pineforge/pineforge.h>
-#include <pineforge/source/pine_strategy_host.hpp>
+// A29 native-route twin: frozen transaction facts come from real source commands.
+#include "l8d_twin_support.hpp"
 
 #include <cstdio>
-#include <cstring>
-#include <limits>
+#include <functional>
+#include <stdexcept>
 
 using namespace pineforge;
+using namespace pineforge::l8d_test;
 
 namespace {
 int failures = 0;
-#define CHECK(condition) do { if (!(condition)) { std::fprintf(stderr, "FAIL %s:%d  %s\n", __FILE__, __LINE__, #condition); ++failures; } } while (0)
+#define CHECK(value) do { if (!(value)) { ++failures; std::fprintf(stderr, "FAIL %d %s\n", __LINE__, #value); } } while (0)
 
-class Probe final : public pineforge::source::PineStrategyHost {
-public:
-    Probe() {
-        initial_capital_ = 10'000.0;
-        default_qty_type_ = QtyType::FIXED;
-        default_qty_value_ = 1.0;
-    }
-
-    void on_source_bar(const Bar&) override {
-        if (bar_index_ == 0) {
-            const double missing = std::numeric_limits<double>::quiet_NaN();
-            strategy_entry("L", true, missing, missing, 1.0);
-        }
-    }
-};
-}  // namespace
-
-int main() {
-    const Bar bar{100, 101, 99, 100, 1, 0};
-    Probe probe;
-    probe.run(&bar, 1);
-    pf_pending_order_v1_t row{};
-    CHECK(strategy_pending_order_get(&probe, 0, &row, sizeof row) == 0
-          && row.incarnation != 0 && std::strcmp(row.id, "L") == 0);
-    return failures == 0 ? 0 : 1;
+void expect_throw(const std::function<void()>& make) {
+    try { make(); CHECK(false); }
+    catch (const std::runtime_error&) {}
 }
 
-#undef CHECK
-#undef PineStrategyHost
+class Probe final : public source::L4dPineHost {
+public:
+    Probe() { configure_pine_strategy(fixed_config(10'000.0, 1.0, 1)); set_margin_call_enabled(false); }
+    std::vector<FixtureIntentRow> placed;
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() != 0) return;
+        strategy_entry("S", false, missing, missing, 3.0);
+        strategy_entry("B", true, missing, missing, 2.0);
+        placed = source_pending_view();
+    }
+};
+} // namespace
+
+int main() {
+    expect_throw([] { throw std::runtime_error("frozen validation"); });
+    const Bar bars[] = {point(100, 60'000), point(100, 120'000), point(100, 180'000)};
+    Probe probe; probe.run(bars, 3, "1", "1");
+    CHECK(probe.last_error().empty());
+    CHECK(probe.placed.size() == 2);
+    CHECK(probe.placed[0].frozen_market_own_units == 3.0);
+    CHECK(probe.placed[0].frozen_market_transaction_units == 3.0);
+    CHECK(probe.placed[1].frozen_market_own_units == 2.0);
+    CHECK(probe.placed[1].frozen_market_transaction_units == 5.0);
+    CHECK(probe.live_position_size() == 2.0);
+    CHECK(probe.trade_count() == 1);
+    return failures == 0 ? 0 : 1;
+}
