@@ -180,7 +180,7 @@ public:
                 // Construct the same final topology after a non-command
                 // removal. The production rule must require the named-cancel
                 // tombstone, not merely infer cancellation from absence.
-                strategy_cancel("E");
+                l4c_remove_entry_without_named_cancel("E");
             } else {
                 strategy_cancel("E");
             }

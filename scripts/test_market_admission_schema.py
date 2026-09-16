@@ -15,7 +15,8 @@ class AdmissionSchema(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         root = Path(directory.name) / "repo"
         shutil.copytree(ROOT, root, ignore=shutil.ignore_patterns(
-            "build*", ".git", "corpus", "*.so", "*.a"))
+            "build*", ".git", "corpus", "*.so", "*.a",
+            ".native-fx-introduced-*"))
         return directory, root
 
     def test_current(self):

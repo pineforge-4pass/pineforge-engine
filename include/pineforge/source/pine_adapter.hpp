@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -182,6 +183,18 @@ struct PlacementSnapshot {
     // Command-boundary order is retained separately from native submission
     // order: deferred source commands may materialize after a later command.
     std::uint64_t command_sequence = 0;
+    // Source close-callsite lowering facts. They describe one admitted
+    // script-evaluation command; the native request remains the sole
+    // executable order.
+    std::uint64_t close_callsite_token = 0;
+    std::uint32_t close_batch_calls = 0;
+    SourceId close_first_id{};
+    double close_first_target = 0.0;
+    bool close_first_ledger_consumed = false;
+    bool close_first_carry_valid = false;
+    double close_first_carry_qty = 0.0;
+    bool close_retire_ledger_whole = false;
+    double close_pending_later_qty = 0.0;
     std::int64_t placement_script_open_ms = 0;
     std::int64_t placement_sub_open_ms = 0;
     // Immutable C-row projection facts.  These are source placement facts,
@@ -235,6 +248,7 @@ struct PlacementSnapshot {
     ExitLegActivation leg_activation{};
     compat::pine::ExitActivationPolicy exit_activation{};
     exit_legs::Lifecycle legs{};
+    bool restored_after_margin = false;
     ReservationExpansion reservation_expansion{};
     ReservationGrowthSource reservation_growth_source{};
     bool stop_limit_activated = false;
@@ -466,6 +480,15 @@ public:
         PlacementSnapshot snapshot{};
         bool staged = false;
     };
+    struct FixtureCloseCallsite {
+        std::uint64_t token = 0;
+        bool active = false;
+        double target = 0.0;
+        int calls = 0;
+        SourceId id{};
+        std::string comment{};
+        std::uint64_t queue_sequence = 0;
+    };
     // Keep the legacy host's construction surface valid until L3a. A null
     // host means this compatibility carrier has no lowering authority.
     explicit PineExecutionAdapter(
@@ -478,6 +501,7 @@ public:
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
     void set_begin_mode(bool is_stream) noexcept;
+    void set_path_order(NativePathOrder path_order) noexcept;
 
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
                           const NativeBeginArgs&,
@@ -541,6 +565,28 @@ public:
         return cohort_exposure_for(id);
     }
     int source_entry_slot_count() const noexcept;
+    double fixture_close_logical_units(const SourceId&) const noexcept;
+    double fixture_close_reserved_units(const SourceId&) const noexcept;
+    double fixture_close_first_units(const SourceId&) const noexcept;
+    double fixture_callsite_close_reserved_units(
+        std::uint64_t, const SourceId&) const noexcept;
+    double fixture_callsite_close_first_units(
+        std::uint64_t, const SourceId&) const noexcept;
+    std::size_t fixture_close_reservation_count() const noexcept;
+    std::size_t fixture_close_first_count() const noexcept;
+    std::size_t fixture_close_logical_count() const noexcept {
+        return close_logical_units_.size();
+    }
+    std::size_t fixture_callsite_close_reservation_count() const noexcept;
+    std::size_t fixture_callsite_close_first_count() const noexcept;
+    double fixture_callsite_close_reserved_total() const noexcept;
+    double fixture_close_pending_debt() const noexcept {
+        return close_batch_pending_debt_;
+    }
+    double fixture_close_admitted_total() const noexcept {
+        return close_batch_admitted_total_;
+    }
+    std::vector<FixtureCloseCallsite> fixture_close_callsites() const;
 
     void set_risk_direction(int direction) noexcept;
     void set_risk_max_cons_loss_days(int value) noexcept;
@@ -566,6 +612,8 @@ public:
     bool fixture_coof_cursor_is_bar_close() const noexcept {
         return coof_recalc_active_ && coof_context_.coordinate.path_phase == NativePathPhase::Close;
     }
+    PineCancellationReceipt* fixture_mutable_cancellation(int index) noexcept;
+    void fixture_remove_entry_without_named_cancel(const SourceId&);
     void begin_source_evaluation() noexcept {
         named_entry_cancel_tokens_.clear();
         pending_same_bar_close_qty_ = 0.0;
@@ -582,11 +630,12 @@ public:
     // Called by the fixture scheduler after one source script evaluation so
     // re-priced carried bracket legs retain their original roster order before
     // newly pending-entry legs are appended.
-    void flush_pending_bracket_legs();
+    void flush_pending_bracket_legs(bool post_calculation = true);
     // Ordinary POOC same-direction adds are held until the source evaluation
     // closes, so a later close_all in that same evaluation settles first and
     // the add opens the next source position at the same close point.
     void flush_pending_entries();
+    void flush_pending_closes();
     void release_delayed_orders(bool explicit_brackets_only = false);
     void begin_coof_recalc(const NativeDecisionContext&, bool first_open);
     void end_coof_recalc() noexcept;
@@ -689,6 +738,23 @@ private:
         std::uint64_t surviving_exit_incarnation = 0;
     };
 
+    struct CloseCallsiteState {
+        bool active = false;
+        std::uint64_t token = 0;
+        int calls = 0;
+        SourceId first_id{};
+        double first_target = 0.0;
+        bool first_ledger_consumed = false;
+        bool first_carry_valid = false;
+        double first_carry_qty = 0.0;
+        SourceId id{};
+        std::string comment{};
+        double target = 0.0;
+        bool retire_ledger_whole = false;
+        std::uint64_t queue_sequence = 0;
+        std::vector<SourceId> deferred_cleanup_ids;
+    };
+
     NativeStrategyHost& require_host() const;
     native_order::CohortHandle cohort_for(const SourceId& id);
     std::optional<native_order::RequestHandle> submit_or_replace(
@@ -748,7 +814,8 @@ private:
     bool intraday_loss_orders_blocked() const noexcept;
     compat::pine::CapClock cap_clock(const NativeDecisionContext&) const;
     compat::pine::Calculation cap_calculation(const NativeDecisionContext&) const;
-    compat::pine::MatchedAttempt cap_attempt(const PlacementSnapshot&) const;
+    compat::pine::MatchedAttempt cap_attempt(
+        const PlacementSnapshot&, std::uint64_t incarnation) const;
     bool cap_placement_denied(const NativeDecisionContext&);
     void observe_intraday_cap(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot&, const NativeDecisionContext&);
@@ -779,6 +846,8 @@ private:
     void stage_flat_children_before_parent(const SourceId&, std::int32_t,
                                            std::int64_t);
     bool defer_coof_tail() const noexcept;
+    bool source_path_uses_high_first(const Bar&) const noexcept;
+    double next_coof_waypoint_price() const noexcept;
     void flush_coof_tail();
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
@@ -832,11 +901,18 @@ private:
     void apply_reversal_gap_bracket_policy(
         const Bar&, const NativeDecisionContext&, bool defer_trails = false);
     void apply_terminal_explicit_market_policy(const NativeDecisionContext&);
+    bool enqueue_pooc_fifo_close(const SourceId&, const std::string&,
+                                 std::uint64_t, std::uint64_t);
+    double close_reserved_other_units(const SourceId&,
+                                      std::uint64_t) const noexcept;
+    void observe_close_policy(const native_order::ExecutionAppliedEvent&,
+                              const PlacementSnapshot&);
 
     // @source-state begin
     NativeStrategyHost* host_ = nullptr;
     PineStrategyConfig config_{};
     StagedConfiguration staged_{};
+    NativePathOrder path_order_ = NativePathOrder::Auto;
     mutable std::uint64_t run_counter_ = 0;
     std::uint64_t source_sequence_ = 0;
     std::uint64_t command_ordinal_ = 0;
@@ -872,6 +948,18 @@ private:
     std::unordered_map<SourceId, std::int64_t> consumed_partial_exit_cycles_;
     std::unordered_set<std::uint64_t> bracket_shadowed_openings_;
     std::unordered_map<SourceId, NamedEntryCancelToken> named_entry_cancel_tokens_;
+    std::map<SourceId, double> close_logical_units_;
+    std::map<SourceId, double> close_reserved_units_;
+    std::map<SourceId, double> close_first_units_;
+    std::map<std::uint64_t, std::map<SourceId, double>>
+        close_callsite_reserved_units_;
+    std::map<std::uint64_t, std::map<SourceId, double>>
+        close_callsite_first_units_;
+    std::map<std::uint64_t, CloseCallsiteState> close_batch_callsites_;
+    std::int32_t close_batch_bar_ = -1;
+    std::uint64_t close_batch_queue_sequence_ = 0;
+    double close_batch_pending_debt_ = 0.0;
+    double close_batch_admitted_total_ = 0.0;
     std::uint64_t receipt_cursor_ = 0;
     std::uint64_t last_applied_ordinal_ = 0;
     bool materializing_relative_ = false;
@@ -905,6 +993,8 @@ private:
     PendingShortSeedPlan pending_short_seed_{};
     native_order::RequestHandle short_seed_long_candidate_{};
     int last_bar_dual_entry_path_ = 0;
+    std::int64_t last_bar_dual_entry_script_open_ms_ =
+        std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
     // @source-state end
 };

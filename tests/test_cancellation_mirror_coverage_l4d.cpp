@@ -28,6 +28,7 @@
 #include <vector>
 
 using namespace pineforge;
+using pineforge::source::L4dCancellationReceiptView;
 
 namespace {
 int failures = 0;
@@ -41,11 +42,15 @@ public:
         if (bar_index_ == 0) strategy_entry("L", true);
     }
 
-    using Mutation = std::function<void(OrderCancellationReceipt&)>;
+    using Mutation = std::function<void(L4dCancellationReceiptView&)>;
 
     void mutate(const Mutation& mutation) {
         CHECK(!pending_orders_.empty());
-        if (!pending_orders_.empty()) mutation(pending_orders_.front().cancellation);
+        if (pending_orders_.empty()) return;
+        if (auto* receipt = adapter_.fixture_mutable_cancellation(0)) {
+            L4dCancellationReceiptView view(*receipt);
+            mutation(view);
+        }
     }
 
     uint64_t hash() const { return broker_state_hash(); }
@@ -66,7 +71,8 @@ CancellationTarget target(uint64_t inc, int64_t owner, uint64_t revision) {
     return CancellationTarget{inc, owner, revision};
 }
 
-void cancel_with(OrderCancellationReceipt& c, CancellationCause cause,
+template <typename Receipt>
+void cancel_with(Receipt& c, CancellationCause cause,
                  uint64_t source, int64_t sequence,
                  CancellationTarget t) {
     CHECK(c.cancel(cause, source, sequence, t, t) == CancellationResult::Applied);

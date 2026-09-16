@@ -261,6 +261,7 @@ void source::PineStrategyHost::prepare_native_begin(const NativeBeginArgs& args)
         ? NativePathOrder::HighFirst
         : (path_order_mode_ == 2 ? NativePathOrder::LowFirst
                                  : NativePathOrder::Auto);
+    adapter_.set_path_order(path_order);
     const NativeRunSpec spec = adapter_.project(effective, staged, args, path_order);
     const auto setup = configure_native(spec);
     if (setup.status != NativeSetupStatus::Applied)
@@ -1120,6 +1121,7 @@ void source::PineStrategyHost::scheduler_publish_source_bar(
         bar_index_ = previous_bar_index;
         barstate_islast_ = previous_barstate_islast;
     }
+    adapter_.flush_pending_closes();
     adapter_.flush_pending_entries();
     adapter_.flush_pending_bracket_legs();
     if (advance_source_index) {

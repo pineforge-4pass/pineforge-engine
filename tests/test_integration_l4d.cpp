@@ -10,15 +10,7 @@
 #define is_first_tick_ is_first_tick()
 #define coof_fill_recalc_active_ l4d_coof_fill_recalc_active()
 #define coof_cursor_is_bar_close_ l4d_coof_cursor_is_bar_close()
-#undef id_unclosed_qty_
-#define id_unclosed_qty_ l4d_fixture_id_unclosed_qty_
-#define close_reserved_qty_ l4d_fixture_close_reserved_qty_
-#define close_two_call_first_qty_ l4d_fixture_close_two_call_first_qty_
-#define callsite_close_reserved_qty_ l4d_fixture_callsite_close_reserved_qty_
-#define callsite_close_two_call_first_qty_ l4d_fixture_callsite_close_two_call_first_qty_
-#define callsite_close_callsites_ l4d_fixture_callsite_close_callsites_
-#define pending_close_qty_in_bar_ l4d_fixture_pending_close_qty_in_bar_
-#define callsite_close_admitted_total_ l4d_fixture_callsite_close_admitted_total_
+#define callsite_close_callsites_ l4d_close_callsites()
 
 #include <cassert>
 #include <array>
@@ -2771,16 +2763,13 @@ public:
         process_orders_on_close_ = true;
     }
     double ledger(const std::string& id) const {
-        auto it = id_unclosed_qty_.find(id);
-        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+        return l4d_close_logical_units(id);
     }
     double reservation(const std::string& id) const {
-        auto it = close_reserved_qty_.find(id);
-        return it == close_reserved_qty_.end() ? 0.0 : it->second;
+        return l4d_close_reserved_units(id);
     }
     double two_call_first_qty(const std::string& id) const {
-        auto it = close_two_call_first_qty_.find(id);
-        return it == close_two_call_first_qty_.end() ? 0.0 : it->second;
+        return l4d_close_first_units(id);
     }
 };
 
@@ -2902,8 +2891,8 @@ public:
         }
         if (bar_index_ == 8) {
             final_pos = signed_position_size();
-            final_reservations = close_reserved_qty_.size();
-            final_provenance = close_two_call_first_qty_.size();
+            final_reservations = l4d_close_reservation_count();
+            final_provenance = l4d_close_first_count();
         }
     }
 };
@@ -3019,45 +3008,45 @@ public:
     double final_pos = -1.0;
 
     double total_reservations() const {
-        double total = 0.0;
-        for (const auto& kv : close_reserved_qty_) total += kv.second;
-        return total;
+        return reservation("A") + reservation("B")
+            + reservation("C") + reservation("R");
     }
 
     void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
-        if (bar_index_ == 0) strategy_entry("seed", true, na, na, 5.0);
+        if (bar_index_ == 0) {
+            strategy_entry("X", true, na, na, 1.0);
+            strategy_entry("A", true, na, na, 1.0);
+            strategy_entry("C", true, na, na, 1.0);
+            strategy_entry("B", true, na, na, 3.0);
+            strategy_entry("R", true, na, na, 2.0);
+        }
         if (bar_index_ == 1) {
-            // Model a FIFO history where logical ids overlap the five live
-            // physical units: R already owns two reserved units, while B's
-            // surviving close can fill the remaining three exactly.
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            id_unclosed_qty_["A"] = 1.0;
-            id_unclosed_qty_["B"] = 3.0;
-            id_unclosed_qty_["R"] = 2.0;
-            close_reserved_qty_["R"] = 2.0;
+            strategy_close("X", "setup-first");
+            strategy_close("R", "setup-reservation");
+            strategy_order("setup-trim", false, 1.0);
+        }
+        if (bar_index_ == 2) {
+            trades_.clear();
             strategy_close("A", "first");
             strategy_close("B", "survivor");
         }
-        if (bar_index_ == 2) {
+        if (bar_index_ == 3) {
             post_pos = signed_position_size();
             post_ledger_b = ledger("B");
             post_res_b = reservation("B");
             post_first_b = two_call_first_qty("B");
             post_total_res = total_reservations();
 
-            id_unclosed_qty_["C"] = 1.0;
             strategy_close("C", "blocked");  // no unreserved physical qty
             blocked_ledger_c = ledger("C");
             strategy_entry("C", true, na, na, 1.0);
         }
-        if (bar_index_ == 3) {
+        if (bar_index_ == 4) {
             reentry_ledger_c = ledger("C");
             strategy_close("C", "fresh-cycle");
         }
-        if (bar_index_ == 4) {
+        if (bar_index_ == 5) {
             final_ledger_c = ledger("C");
             final_pos = signed_position_size();
         }
@@ -3073,8 +3062,9 @@ static void test_zero_backed_close_reservation_clears_stale_cycle() {
         {100, 101, 99, 100, 50, 180000},
         {100, 101, 99, 100, 50, 240000},
         {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
     };
-    strat.run(bars, 5);
+    strat.run(bars, 6);
 
     CHECK(near(strat.post_pos, 2.0));
     CHECK(near(strat.post_ledger_b, 0.0));
@@ -3102,25 +3092,28 @@ public:
 
     void on_source_bar(const Bar&) override {
         double na = std::numeric_limits<double>::quiet_NaN();
-        if (bar_index_ == 0) strategy_entry("seed", true, na, na, 6.0);
+        if (bar_index_ == 0) {
+            strategy_entry("X", true, na, na, 1.0);
+            strategy_entry("A", true, na, na, 1.0);
+            strategy_entry("B", true, na, na, 4.0);
+            strategy_entry("R", true, na, na, 1.0);
+        }
         if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            id_unclosed_qty_["A"] = 1.0;
-            id_unclosed_qty_["B"] = 4.0;
-            id_unclosed_qty_["R"] = 1.0;
-            close_reserved_qty_["R"] = 1.0;
+            strategy_close("X", "setup-first");
+            strategy_close("R", "setup-reservation");
+        }
+        if (bar_index_ == 2) {
+            trades_.clear();
             strategy_close("A", "first");
             strategy_close("B", "survivor");
         }
-        if (bar_index_ == 2) {
+        if (bar_index_ == 3) {
             final_pos = signed_position_size();
             ledger_b = ledger("B");
             res_b = reservation("B");
             first_b = two_call_first_qty("B");
-            total_res = 0.0;
-            for (const auto& kv : close_reserved_qty_) total_res += kv.second;
+            total_res = reservation("A") + reservation("B")
+                + reservation("R");
         }
     }
 };
@@ -3132,8 +3125,9 @@ static void test_positive_truncated_close_reservation_keeps_ledger_only() {
         {100, 101, 99, 100, 50,  60000},
         {100, 101, 99, 100, 50, 120000},
         {100, 101, 99, 100, 50, 180000},
+        {100, 101, 99, 100, 50, 240000},
     };
-    strat.run(bars, 3);
+    strat.run(bars, 4);
 
     CHECK(near(strat.final_pos, 2.0));
     CHECK(near(strat.ledger_b, 4.0));
@@ -3162,8 +3156,7 @@ public:
     }
 
     double ledger(const std::string& id) const {
-        const auto it = id_unclosed_qty_.find(id);
-        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+        return l4d_close_logical_units(id);
     }
 
     void on_source_bar(const Bar&) override {
@@ -3232,14 +3225,13 @@ public:
     }
 
     double ledger(const std::string& id) const {
-        const auto it = id_unclosed_qty_.find(id);
-        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+        return l4d_close_logical_units(id);
     }
 
     double admitted_qty() const {
         double total = 0.0;
-        for (const auto& kv : callsite_close_callsites_) {
-            if (kv.second.active) total += kv.second.target;
+        for (const auto& site : l4d_close_callsites()) {
+            if (site.active) total += site.target;
         }
         return total;
     }
@@ -3311,10 +3303,10 @@ public:
             strategy_close("C", "SITE2_C", na, na, false, 412);
             admitted_sites_after_calls = 0;
             admitted_qty_after_calls = 0.0;
-            for (const auto& kv : callsite_close_callsites_) {
-                if (!kv.second.active) continue;
+            for (const auto& site : l4d_close_callsites()) {
+                if (!site.active) continue;
                 ++admitted_sites_after_calls;
-                admitted_qty_after_calls += kv.second.target;
+                admitted_qty_after_calls += site.target;
             }
         }
     }
@@ -3361,8 +3353,7 @@ public:
     }
 
     double ledger(const std::string& id) const {
-        const auto it = id_unclosed_qty_.find(id);
-        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+        return l4d_close_logical_units(id);
     }
 
     void on_source_bar(const Bar&) override {
@@ -3457,9 +3448,9 @@ public:
             strategy_close("A", "first", na, na, false);
             strategy_close("B", "survivor", na, na, false);
         }
-        pending_close_after_replacement = pending_close_qty_in_bar_;
+        pending_close_after_replacement = l4d_close_pending_debt();
         admitted_total_after_replacement =
-            callsite_close_admitted_total_;
+            l4d_close_admitted_total();
 
         // This priced order stays out of range. Its placement snapshot exposes
         // the source-order carry calculation without adding another fill.
@@ -3527,35 +3518,29 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 1.2542);
+            strategy_entry("F7", true, na, na, 0.2133);
+            strategy_entry("L7", true, na, na, 0.4310);
+            strategy_entry("F15", true, na, na, 0.2312);
+            strategy_entry("L15", true, na, na, 0.4672);
+            strategy_entry("L3", true, na, na, 0.2069);
+            strategy_entry("L4", true, na, na, 0.4159);
+            strategy_entry("seed", true, na, na, 0.1869);
         } else if (bar_index_ == 1) {
-            // Exact bounded shape from the ETH compatibility discriminator:
-            // two older reservations leave .356 physical capacity. Replacing
-            // L3(.2069) with L4(.4159) must reuse this site's own live claim,
-            // admitting the full .356 just like token 0.
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            callsite_close_reserved_qty_.clear();
-            callsite_close_two_call_first_qty_.clear();
-            id_unclosed_qty_["L3"] = 0.2069;
-            id_unclosed_qty_["L4"] = 0.4159;
-            if (tokenized_) {
-                callsite_close_reserved_qty_[715]["L7"] = 0.4310;
-                callsite_close_reserved_qty_[715]["L15"] = 0.4672;
-                callsite_close_two_call_first_qty_[715]["L7"] = 0.2133;
-                callsite_close_two_call_first_qty_[715]["L15"] = 0.2312;
-            } else {
-                close_reserved_qty_["L7"] = 0.4310;
-                close_reserved_qty_["L15"] = 0.4672;
-                close_two_call_first_qty_["L7"] = 0.2133;
-                close_two_call_first_qty_["L15"] = 0.2312;
-            }
+            close_site("F7", "SETUP_F7");
+            close_site("L7", "SETUP_L7");
+        } else if (bar_index_ == 2) {
+            close_site("F15", "SETUP_F15");
+            close_site("L15", "SETUP_L15");
+        } else if (bar_index_ == 3) {
+            // The two public exact-two batches above leave .8982 of persistent
+            // backing against a 1.2542 live book. Replacing L3(.2069) with
+            // L4(.4159) can therefore reuse exactly .3560 of capacity.
+            trades_.clear();
             close_site("L3", "FIRST_L3");
             close_site("L4", "SURVIVOR_L4");
-            debt_after_calls = pending_close_qty_in_bar_;
-            admitted_after_calls = callsite_close_admitted_total_;
-        } else if (bar_index_ == 2) {
+            debt_after_calls = l4d_close_pending_debt();
+            admitted_after_calls = l4d_close_admitted_total();
+        } else if (bar_index_ == 4) {
             final_position = signed_position_size();
         }
     }
@@ -3572,9 +3557,11 @@ static void test_single_site_replacement_reuses_own_live_claim() {
         {100, 101, 99, 100, 50,  60000},
         {100, 106, 99, 105, 50, 120000},
         {105, 106, 99, 105, 50, 180000},
+        {105, 106, 99, 105, 50, 240000},
+        {105, 106, 99, 105, 50, 300000},
     };
-    legacy.run(bars, 3);
-    tokenized.run(bars, 3);
+    legacy.run(bars, 5);
+    tokenized.run(bars, 5);
 
     for (BacktestEngine* base : std::array<BacktestEngine*, 2>{
              &legacy, &tokenized}) {
@@ -3626,29 +3613,31 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) strategy_entry("A", true, na, na, 1.0);
-        if (bar_index_ == 1) strategy_entry("B", true, na, na, 1.0);
+        if (bar_index_ == 1) {
+            strategy_entry("B", true, na, na, 2.0);
+            strategy_order("trim", false, 1.0);
+        }
         if (bar_index_ != 2) return;
 
         strategy_exit("protect-B", "B", 200.0, na);
-        // Make B look like a would-be full close if the two already-admitted
-        // A instructions were incorrectly ignored during replacement.
-        id_unclosed_qty_["B"] = 2.0;
+        // B's public two-unit opening and the one-unit RAW reduction above
+        // leave a two-unit logical claim over the two-unit physical book.
         strategy_close("A", "SITE1_A", na, na, false, 721);
         strategy_close("A", "SITE2_A", na, na, false, 722);
         exits_before_rejected = pending_exit_count();
-        debt_before_rejected = pending_close_qty_in_bar_;
-        admitted_before_rejected = callsite_close_admitted_total_;
+        debt_before_rejected = l4d_close_pending_debt();
+        admitted_before_rejected = l4d_close_admitted_total();
 
         strategy_close("B", "REJECTED_FULL_B", na, na, false, 722);
         exits_after_rejected = pending_exit_count();
-        debt_after_rejected = pending_close_qty_in_bar_;
-        admitted_after_rejected = callsite_close_admitted_total_;
-        const auto site = callsite_close_callsites_.find(722);
-        if (site != callsite_close_callsites_.end()) {
-            site_calls_after_rejected = site->second.calls;
-            site_id_after_rejected = site->second.id;
-            site_comment_after_rejected = site->second.comment;
-            site_queue_after_rejected = site->second.queue_seq;
+        debt_after_rejected = l4d_close_pending_debt();
+        admitted_after_rejected = l4d_close_admitted_total();
+        for (const auto& site : l4d_close_callsites()) {
+            if (site.token != 722) continue;
+            site_calls_after_rejected = site.calls;
+            site_id_after_rejected = site.id;
+            site_comment_after_rejected = site.comment;
+            site_queue_after_rejected = site.queue_sequence;
         }
     }
 };
@@ -3723,16 +3712,11 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 6.0);
+            strategy_entry("seed", true, na, na, 3.0);
+            strategy_entry("A", true, na, na, 1.0);
+            strategy_entry("J", true, na, na, 1.0);
+            strategy_entry("K", true, na, na, 1.0);
         } else if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            callsite_close_reserved_qty_.clear();
-            callsite_close_two_call_first_qty_.clear();
-            id_unclosed_qty_["A"] = 1.0;
-            id_unclosed_qty_["J"] = 1.0;
-            id_unclosed_qty_["K"] = 1.0;
             if (cleanup_site_first_) {
                 cleanup_site();
                 t2_survivor_site();
@@ -3741,29 +3725,18 @@ public:
                 cleanup_site();
             }
         } else if (bar_index_ == 2) {
-            t2_claim = owner_value(
-                callsite_close_reserved_qty_, 732, "K");
-            t2_provenance = owner_value(
-                callsite_close_two_call_first_qty_, 732, "K");
-            const auto ledger = id_unclosed_qty_.find("K");
-            shared_k_ledger = ledger == id_unclosed_qty_.end()
-                ? 0.0 : ledger->second;
-            total_claims = 0.0;
-            for (const auto& owner : callsite_close_reserved_qty_) {
-                for (const auto& claim : owner.second) {
-                    total_claims += claim.second;
-                }
-            }
+            t2_claim = l4d_callsite_reserved_units(732, "K");
+            t2_provenance = l4d_callsite_first_units(732, "K");
+            shared_k_ledger = l4d_close_logical_units("K");
+            total_claims = l4d_callsite_reserved_total();
             live_position = position_qty_;
-            const auto t1 = callsite_close_reserved_qty_.find(731);
-            t1_owns_k = t1 != callsite_close_reserved_qty_.end()
-                && t1->second.find("K") != t1->second.end();
+            t1_owns_k = l4d_callsite_reserved_units(731, "K") > 0.0;
             strategy_close("", "FLAT_RESET");
         } else if (bar_index_ == 3) {
             owner_maps_empty_after_flat =
-                callsite_close_reserved_qty_.empty()
-                && callsite_close_two_call_first_qty_.empty();
-            ledger_empty_after_flat = id_unclosed_qty_.empty();
+                l4d_callsite_reservation_count() == 0
+                && l4d_callsite_first_count() == 0;
+            ledger_empty_after_flat = l4d_close_logical_count() == 0;
         }
     }
 
@@ -3826,34 +3799,22 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 3.0);
+            strategy_entry("A", true, na, na, 1.0);
+            strategy_entry("B", true, na, na, 1.0);
+            strategy_entry("C", true, na, na, 1.0);
         } else if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            id_unclosed_qty_["A"] = 1.0;
-            id_unclosed_qty_["B"] = 1.0;
-            id_unclosed_qty_["C"] = 1.0;
             strategy_close("A", "T1_FIRST_A", na, na, false, 741);
             strategy_close("B", "T1_SURVIVOR_B", na, na, false, 741);
             strategy_close("A", "T2_FIRST_A", na, na, false, 742);
             strategy_close("C", "T2_SURVIVOR_C", na, na, false, 742);
         } else if (bar_index_ == 2) {
-            t1_b_claim = owner_value(
-                callsite_close_reserved_qty_, 741, "B");
-            t1_b_provenance = owner_value(
-                callsite_close_two_call_first_qty_, 741, "B");
-            t2_c_claim = owner_value(
-                callsite_close_reserved_qty_, 742, "C");
-            t2_c_provenance = owner_value(
-                callsite_close_two_call_first_qty_, 742, "C");
-            total_claims = 0.0;
-            for (const auto& owner : callsite_close_reserved_qty_) {
-                for (const auto& claim : owner.second) {
-                    total_claims += claim.second;
-                }
-            }
+            t1_b_claim = l4d_callsite_reserved_units(741, "B");
+            t1_b_provenance = l4d_callsite_first_units(741, "B");
+            t2_c_claim = l4d_callsite_reserved_units(742, "C");
+            t2_c_provenance = l4d_callsite_first_units(742, "C");
+            total_claims = l4d_callsite_reserved_total();
             live_position = position_qty_;
-            const auto c = id_unclosed_qty_.find("C");
-            ledger_c = c == id_unclosed_qty_.end() ? 0.0 : c->second;
+            ledger_c = l4d_close_logical_units("C");
         }
     }
 };
@@ -3909,31 +3870,20 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 6.0);
+            strategy_entry("A", true, na, na, 1.0);
+            strategy_entry("B", true, na, na, 1.0);
+            strategy_entry("D", true, na, na, 3.0);
+            strategy_entry("C", true, na, na, 1.0);
         } else if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            callsite_close_reserved_qty_.clear();
-            callsite_close_two_call_first_qty_.clear();
-            id_unclosed_qty_["A"] = 1.0;
-            id_unclosed_qty_["B"] = 1.0;
-            id_unclosed_qty_["C"] = 1.0;
             strategy_close("A", "T1_FIRST_A", na, na, false, 751);
             strategy_close("B", "T1_SURVIVOR_B", na, na, false, 751);
             strategy_close("A", "T2_FIRST_A", na, na, false, 752);
             strategy_close("C", "T2_SURVIVOR_C", na, na, false, 752);
         } else if (bar_index_ == 2) {
             position_before_d = position_qty_;
-            claims_before_d = 0.0;
-            for (const auto& owner : callsite_close_reserved_qty_) {
-                for (const auto& claim : owner.second) {
-                    claims_before_d += claim.second;
-                }
-            }
-            id_unclosed_qty_["D"] = 3.0;
+            claims_before_d = l4d_callsite_reserved_total();
             strategy_close("D", "SECOND_BAR_D", na, na, false, 753);
-            admitted_d = callsite_close_admitted_total_;
+            admitted_d = l4d_close_admitted_total();
         } else if (bar_index_ == 3) {
             position_after_d = position_qty_;
         }
@@ -3982,26 +3932,27 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 4.0);
+            strategy_entry("F1", true, na, na, 0.6);
+            strategy_entry("A", true, na, na, 0.6);
+            strategy_entry("F2", true, na, na, 1.0);
         } else if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            callsite_close_reserved_qty_.clear();
-            callsite_close_two_call_first_qty_.clear();
-
-            // Two source sites alias one shared A ledger. Physical backing is
-            // max(0.6, 1.0), not their 1.6 sum.
-            id_unclosed_qty_["A"] = 1.0;
-            callsite_close_reserved_qty_[761]["A"] = 0.6;
-            callsite_close_reserved_qty_[762]["A"] = 1.0;
-            callsite_close_two_call_first_qty_[761]["A"] = 0.6;
-            callsite_close_two_call_first_qty_[762]["A"] = 1.0;
-            id_unclosed_qty_["D"] = 3.0;
-
-            strategy_close("D", "GROUPED_BACKING_D", na, na, false, 763);
-            admitted_d = callsite_close_admitted_total_;
+            strategy_close("F1", "SETUP_F1", na, na, false, 761);
+            strategy_close("A", "SETUP_A_06", na, na, false, 761);
         } else if (bar_index_ == 2) {
+            strategy_entry("A", true, na, na, 0.4);
+        } else if (bar_index_ == 3) {
+            strategy_close("F2", "SETUP_F2", na, na, false, 762);
+            strategy_close("A", "SETUP_A_10", na, na, false, 762);
+        } else if (bar_index_ == 4) {
+            strategy_entry("D", true, na, na, 3.0);
+        } else if (bar_index_ == 5) {
+            strategy_order("setup-trim", false, 1.0);
+            strategy_entry("D", true, na, na, 1.0);
+        } else if (bar_index_ == 6) {
+            trades_.clear();
+            strategy_close("D", "GROUPED_BACKING_D", na, na, false, 763);
+            admitted_d = l4d_close_admitted_total();
+        } else if (bar_index_ == 7) {
             final_position = position_qty_;
         }
     }
@@ -4014,8 +3965,13 @@ static void test_same_id_owner_claims_share_physical_backing() {
         {100, 101, 99, 100, 50,  60000},
         {100, 106, 99, 105, 50, 120000},
         {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
+        {100, 101, 99, 100, 50, 420000},
+        {100, 101, 99, 100, 50, 480000},
     };
-    strat.run(bars, 3);
+    strat.run(bars, 8);
 
     CHECK(near(strat.admitted_d, 3.0));
     CHECK(near(strat.final_position, 1.0));
@@ -4045,31 +4001,25 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 2.0);
+            strategy_entry("F1", true, na, na, 0.6);
+            strategy_entry("F2", true, na, na, 1.0);
+            strategy_entry("X", true, na, na, 1.0);
+            strategy_entry("A", true, na, na, 0.6);
         } else if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            callsite_close_reserved_qty_.clear();
-            callsite_close_two_call_first_qty_.clear();
-            id_unclosed_qty_["A"] = 1.0;
-            id_unclosed_qty_["X"] = 1.0;
-            callsite_close_reserved_qty_[771]["A"] = 0.6;
-            callsite_close_reserved_qty_[772]["A"] = 1.0;
-            callsite_close_two_call_first_qty_[771]["A"] = 0.6;
-            callsite_close_two_call_first_qty_[772]["A"] = 1.0;
-
+            strategy_close("F1", "SETUP_F1", na, na, false, 771);
+            strategy_close("A", "SETUP_A_06", na, na, false, 771);
+        } else if (bar_index_ == 2) {
+            strategy_entry("A", true, na, na, 0.4);
+        } else if (bar_index_ == 3) {
+            strategy_close("F2", "SETUP_F2", na, na, false, 772);
+            strategy_close("A", "SETUP_A_10", na, na, false, 772);
+        } else if (bar_index_ == 4) {
+            trades_.clear();
             strategy_close("X", "FIRST_X", na, na, false, 773);
             strategy_close("A", "SURVIVOR_A", na, na, false, 773);
-        } else if (bar_index_ == 2) {
+        } else if (bar_index_ == 5) {
             final_position = position_qty_;
-            const auto owner = callsite_close_reserved_qty_.find(773);
-            if (owner != callsite_close_reserved_qty_.end()) {
-                const auto claim = owner->second.find("A");
-                if (claim != owner->second.end()) {
-                    new_a_claim = claim->second;
-                }
-            }
+            new_a_claim = l4d_callsite_reserved_units(773, "A");
         }
     }
 };
@@ -4082,8 +4032,11 @@ static void test_post_fill_backing_excludes_all_same_id_aliases() {
         {100, 101, 99, 100, 50,  60000},
         {100, 106, 99, 105, 50, 120000},
         {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
     };
-    strat.run(bars, 3);
+    strat.run(bars, 6);
 
     CHECK(near(strat.final_position, 1.0));
     CHECK(near(strat.new_a_claim, 1.0));
@@ -4117,37 +4070,44 @@ public:
     void on_source_bar(const Bar&) override {
         const double na = std::numeric_limits<double>::quiet_NaN();
         if (bar_index_ == 0) {
-            strategy_entry("seed", true, na, na, 4.0);
+            strategy_entry("F_SMALL", true, na, na, 0.6);
+            strategy_entry("B", true, na, na, 0.6);
+            strategy_entry("F_BIG", true, na, na, 1.0);
+            strategy_entry("C", true, na, na, 1.0);
         } else if (bar_index_ == 1) {
-            id_unclosed_qty_.clear();
-            close_reserved_qty_.clear();
-            close_two_call_first_qty_.clear();
-            callsite_close_reserved_qty_.clear();
-            callsite_close_two_call_first_qty_.clear();
-            id_unclosed_qty_["B"] = 1.0;
-            id_unclosed_qty_["C"] = 1.0;
-            id_unclosed_qty_["D"] = 4.0;
-            callsite_close_reserved_qty_[781]["B"] = current_claim_;
-            callsite_close_reserved_qty_[782]["B"] = competing_claim_;
-            callsite_close_two_call_first_qty_[781]["B"] = current_claim_;
-            callsite_close_two_call_first_qty_[782]["B"] = competing_claim_;
-
+            const std::uint64_t small_token = current_claim_ < competing_claim_
+                ? 781 : 782;
+            strategy_close("F_SMALL", "SETUP_SMALL_FIRST", na, na, false,
+                           small_token);
+            strategy_close("B", "SETUP_SMALL_B", na, na, false,
+                           small_token);
+        } else if (bar_index_ == 2) {
+            strategy_entry("B", true, na, na, 0.4);
+        } else if (bar_index_ == 3) {
+            const std::uint64_t big_token = current_claim_ > competing_claim_
+                ? 781 : 782;
+            strategy_close("F_BIG", "SETUP_BIG_FIRST", na, na, false,
+                           big_token);
+            strategy_close("B", "SETUP_BIG_B", na, na, false,
+                           big_token);
+        } else if (bar_index_ == 4) {
+            strategy_entry("D", true, na, na, 4.0);
+        } else if (bar_index_ == 5) {
+            strategy_order("SETUP_TRIM", false,
+                           std::nextafter(2.0,
+                               std::numeric_limits<double>::infinity()));
+        } else if (bar_index_ == 6) {
+            trades_.clear();
             strategy_close("B", "FIRST_B", na, na, false, 781);
             strategy_close("C", "MIDDLE_C", na, na, false, 781);
             strategy_close("D", "SURVIVOR_D", na, na, false, 781);
-            admitted_d = callsite_close_admitted_total_;
-        } else if (bar_index_ == 2) {
+            admitted_d = l4d_close_admitted_total();
+        } else if (bar_index_ == 7) {
             final_position = position_qty_;
-            const auto current = callsite_close_reserved_qty_.find(781);
-            current_claim_erased = current == callsite_close_reserved_qty_.end()
-                || current->second.find("B") == current->second.end();
-            const auto competing = callsite_close_reserved_qty_.find(782);
-            if (competing != callsite_close_reserved_qty_.end()) {
-                const auto claim = competing->second.find("B");
-                if (claim != competing->second.end()) {
-                    competing_claim_after = claim->second;
-                }
-            }
+            current_claim_erased =
+                l4d_callsite_reserved_units(781, "B") == 0.0;
+            competing_claim_after =
+                l4d_callsite_reserved_units(782, "B");
         }
     }
 
@@ -4163,6 +4123,11 @@ static void test_local_alias_release_frees_only_marginal_backing() {
         {100, 101, 99, 100, 50,  60000},
         {100, 106, 99, 105, 50, 120000},
         {105, 106, 99, 104, 50, 180000},
+        {104, 105, 98, 100, 50, 240000},
+        {100, 101, 99, 100, 50, 300000},
+        {100, 101, 99, 100, 50, 360000},
+        {100, 101, 99, 100, 50, 420000},
+        {100, 101, 99, 100, 50, 480000},
     };
     struct Case {
         double current;
@@ -4176,7 +4141,7 @@ static void test_local_alias_release_frees_only_marginal_backing() {
     for (const Case& test : cases) {
         UnequalAliasLocalReleaseStrategy strat(
             test.current, test.competing);
-        strat.run(bars, 3);
+        strat.run(bars, 8);
         CHECK(near(strat.admitted_d, test.expected_d));
         CHECK(near(strat.final_position, test.competing));
         CHECK(strat.current_claim_erased);
@@ -4208,8 +4173,7 @@ public:
     }
 
     double ledger(const std::string& id) const {
-        const auto it = id_unclosed_qty_.find(id);
-        return it == id_unclosed_qty_.end() ? 0.0 : it->second;
+        return l4d_close_logical_units(id);
     }
 
     void on_source_bar(const Bar&) override {
@@ -6383,14 +6347,7 @@ int main() {
 #undef coof_cursor_is_bar_close_
 #undef coof_fill_recalc_active_
 #undef is_first_tick_
-#undef callsite_close_admitted_total_
-#undef pending_close_qty_in_bar_
 #undef callsite_close_callsites_
-#undef callsite_close_two_call_first_qty_
-#undef callsite_close_reserved_qty_
-#undef close_two_call_first_qty_
-#undef close_reserved_qty_
-#undef id_unclosed_qty_
 #undef ShortSeedCollisionRole
 #undef OrderType
 #undef pending_orders_
