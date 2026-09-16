@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 
 using namespace pineforge;
 namespace {
@@ -19,8 +20,9 @@ std::uint64_t bits(double value) {
 class FlipProbe final : public source::PineNativeHost {
 public:
     void on_source_bar(const Bar&) override {
-        if (pine_bar_index() == 0) strategy_entry("old", true, 0.0, 0.0, 1.0);
-        if (pine_bar_index() == 1) strategy_entry("flip", false, 0.0, 0.0, 0.1);
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        if (pine_bar_index() == 0) strategy_entry("old", true, nan, nan, 1.0);
+        if (pine_bar_index() == 1) strategy_entry("flip", false, nan, nan, 0.1);
     }
 };
 

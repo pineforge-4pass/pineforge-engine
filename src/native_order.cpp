@@ -46,6 +46,10 @@ bool finite_positive(double value) noexcept {
     return std::isfinite(value) && value > 0.0;
 }
 
+bool finite_non_negative(double value) noexcept {
+    return std::isfinite(value) && value >= 0.0;
+}
+
 bool finite_nonzero(double value) noexcept {
     return std::isfinite(value) && value != 0.0;
 }
@@ -298,7 +302,7 @@ const MatchCursor& transition_cursor(const TriggerTransition& transition) noexce
 }
 
 bool stop_price_reached(bool is_buy, double level, double reached) noexcept {
-    if (!std::isfinite(reached) || !finite_positive(level)) return false;
+    if (!std::isfinite(reached) || !finite_non_negative(level)) return false;
     return is_buy ? reached >= level : reached <= level;
 }
 
@@ -348,15 +352,15 @@ int receipt_cmp(uint64_t oa, uint64_t ia, GroupEffect ea, uint64_t ob, uint64_t 
 
 std::optional<RequestRejectReason> validate_levels(const Trigger& trigger) {
     if (const auto* limit = std::get_if<Limit>(&trigger)) {
-        if (!finite_positive(limit->price)) return RequestRejectReason::InvalidTrigger;
+        if (!finite_non_negative(limit->price)) return RequestRejectReason::InvalidTrigger;
         return std::nullopt;
     }
     if (const auto* stop = std::get_if<Stop>(&trigger)) {
-        if (!finite_positive(stop->price)) return RequestRejectReason::InvalidTrigger;
+        if (!finite_non_negative(stop->price)) return RequestRejectReason::InvalidTrigger;
         return std::nullopt;
     }
     if (const auto* stop_limit = std::get_if<StopLimit>(&trigger)) {
-        if (!finite_positive(stop_limit->stop) || !finite_positive(stop_limit->limit)) {
+        if (!finite_non_negative(stop_limit->stop) || !finite_non_negative(stop_limit->limit)) {
             return RequestRejectReason::InvalidTrigger;
         }
         return std::nullopt;

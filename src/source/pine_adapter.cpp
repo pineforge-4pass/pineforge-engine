@@ -49,6 +49,14 @@ bool finite_positive(double value) noexcept {
     return std::isfinite(value) && value > 0.0;
 }
 
+bool finite_non_negative(double value) noexcept {
+    return std::isfinite(value) && value >= 0.0;
+}
+
+// ab9714be pine_strategy_commands.cpp:533-537: a non-NaN limit/stop is a
+// present price level, including 0.0.
+bool price_present(double value) noexcept { return !std::isnan(value); }
+
 bool pure_stop_entry_marketable_at(const PlacementSnapshot& snapshot, double open) noexcept {
     if (snapshot.family != PineOrderFamily::Entry) return false;
     if (!finite_positive(snapshot.exit_levels.stop)) return false;
@@ -1338,10 +1346,10 @@ native_order::Trigger PineExecutionAdapter::trigger_for(double limit_price, doub
         return native_order::Trail{trail_offset,
             finite_positive(trail_price) ? std::optional<double>{trail_price} : std::nullopt};
     }
-    if (finite_positive(limit_price) && finite_positive(stop_price))
+    if (price_present(limit_price) && price_present(stop_price))
         return native_order::StopLimit{stop_price, limit_price};
-    if (finite_positive(limit_price)) return native_order::Limit{limit_price};
-    if (finite_positive(stop_price)) return native_order::Stop{stop_price};
+    if (price_present(limit_price)) return native_order::Limit{limit_price};
+    if (price_present(stop_price)) return native_order::Stop{stop_price};
     return native_order::Market{};
 }
 
@@ -5632,7 +5640,10 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             source_shadow_pending_.end());
         // A known absolute sibling remains executable while the relative
         // trail/profit/loss component waits for its MARKET parent's fill.
-        if (finite_positive(limit_price) || finite_positive(stop_price)) {
+        // ab9714be pine_strategy_commands.cpp:533-537: 0.0 is a present level.
+        // Kernel validate_levels still refuses non-finite and negative
+        // levels (A43); those stay command projections.
+        if (finite_non_negative(limit_price) || finite_non_negative(stop_price)) {
             // Continue below and submit the known absolute sibling.
         } else {
         PlacementSnapshot shadow;
@@ -6382,21 +6393,25 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         }
     };
     const bool exit_is_buy = !parent_long;
-    if (finite_positive(limit_price)) {
+    bool placed_absolute_leg = false;
+    if (finite_non_negative(limit_price)) {
         const double snapped_limit = nearest_tick(limit_price, tick);
         submit_leg(PineOrderFamily::ExitLimit, native_order::Limit{
             !finite_positive(tick) || snapped_limit == limit_price
                 ? limit_price
                 : source_trigger_threshold(limit_price, tick, exit_is_buy, true)});
-    }
-    if (std::isfinite(limit_price) && limit_price <= 0.0
-        && physical.signed_units > 0.0) {
+        placed_absolute_leg = true;
+    } else if (std::isfinite(limit_price) && limit_price < 0.0
+               && physical.signed_units > 0.0) {
+        // Sell limit < 0 is always marketable; A43 still refuses negatives.
         submit_leg(PineOrderFamily::ExitLimit, native_order::Market{});
+        placed_absolute_leg = true;
     }
-    if (finite_positive(stop_price)) {
+    if (finite_non_negative(stop_price)) {
         const double native_stop = source_trigger_threshold(
             stop_price, tick, exit_is_buy, false);
         submit_leg(PineOrderFamily::ExitStop, native_order::Stop{native_stop});
+        placed_absolute_leg = true;
     }
     bool trail_one_shot = false;
     if (has_trail_request && finite_positive(trail_price)) {
@@ -6532,13 +6547,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
         }
     }
-    if (!finite_positive(limit_price) && !finite_positive(stop_price)
+    if (!placed_absolute_leg
         && !(has_trail_request && finite_positive(trail_price))) {
-        // The native trigger algebra deliberately rejects non-finite and
-        // nonpositive prices, while the historical source command kept every
-        // non-NaN operand observable as a resting (usually unreachable) row.
-        // Preserve only that command projection; it never participates in
-        // matching or settlement.
+        // ab9714be pine_strategy_commands.cpp:533-537: only a NaN operand is
+        // absent. Preserve a command projection for all-NaN absolute levels
+        // with no trail arm; it never participates in matching or settlement.
         exit_cancel_bracket(exit_id, from_entry, comment);
         source_shadow_pending_.erase(
             std::remove_if(source_shadow_pending_.begin(), source_shadow_pending_.end(),
