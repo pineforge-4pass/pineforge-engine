@@ -1105,35 +1105,47 @@ static void test_timezone_identity() {
         CHECK(utc_path != gmt_path);
         auto gmt = timezone_identity_descriptor("GMT");
         CHECK(gmt.has_value());
-        CHECK(gmt->resource_paths.size() != 1 || gmt->resource_paths.front() != gmt_path);
+        if (gmt) {
+            CHECK(gmt->resource_paths.size() != 1 || gmt->resource_paths.front() != gmt_path);
+        }
     }
 
     auto ny = timezone_identity_descriptor("America/New_York");
     CHECK(ny.has_value());
-    CHECK(ny->valid());
-    CHECK(ny->kind == TimezoneSourceKind::Tzfile);
-    CHECK(ny->effective_definition == "America/New_York");
-    CHECK(ny->zoneinfo_root == root);
-    CHECK(ny->resource_paths.size() == 1);
-    CHECK(!ny->resource_paths.empty() && ny->resource_paths.front() == ny_path);
+    if (ny) {
+        CHECK(ny->valid());
+        CHECK(ny->kind == TimezoneSourceKind::Tzfile);
+        CHECK(ny->effective_definition == "America/New_York");
+        CHECK(ny->zoneinfo_root == root);
+        CHECK(ny->resource_paths.size() == 1);
+        CHECK(!ny->resource_paths.empty() && ny->resource_paths.front() == ny_path);
+    }
 
     auto eastern = timezone_identity_descriptor("US/Eastern");
     CHECK(eastern.has_value());
-    CHECK(eastern->kind == TimezoneSourceKind::Tzfile);
-    CHECK(eastern->effective_definition == "US/Eastern");
-    CHECK(eastern->resource_paths.size() == 1);
-    CHECK(!eastern->resource_paths.empty() && eastern->resource_paths.front() == eastern_path);
+    if (eastern) {
+        CHECK(eastern->kind == TimezoneSourceKind::Tzfile);
+        CHECK(eastern->effective_definition == "US/Eastern");
+        CHECK(eastern->resource_paths.size() == 1);
+        CHECK(!eastern->resource_paths.empty() && eastern->resource_paths.front() == eastern_path);
+    }
 
     auto colon = timezone_identity_descriptor(":America/New_York");
     CHECK(colon.has_value());
-    CHECK(colon->kind == TimezoneSourceKind::Tzfile);
-    CHECK(colon->effective_definition == "America/New_York");
-    CHECK(colon->resource_paths == ny->resource_paths);
+    if (colon) {
+        CHECK(colon->kind == TimezoneSourceKind::Tzfile);
+        CHECK(colon->effective_definition == "America/New_York");
+    }
+    if (colon && ny) {
+        CHECK(colon->resource_paths == ny->resource_paths);
+    }
 
     auto japan = timezone_identity_descriptor("Japan");
     CHECK(japan.has_value());
-    CHECK(japan->kind == TimezoneSourceKind::Tzfile);
-    CHECK(japan->resource_paths.front() == japan_path);
+    if (japan) {
+        CHECK(japan->kind == TimezoneSourceKind::Tzfile);
+        CHECK(japan->resource_paths.size() == 1 && japan->resource_paths.front() == japan_path);
+    }
 
     check_identity("UTC+05:30", TimezoneSourceKind::FixedOffset, "UTC-5:30", nullptr);
     check_identity("GMT-4", TimezoneSourceKind::FixedOffset, "UTC+4", nullptr);
