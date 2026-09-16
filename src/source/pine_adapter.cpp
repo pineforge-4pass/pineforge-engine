@@ -10568,6 +10568,9 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
     if (!deferred_open_sell) return;
     for (const auto& sell : sells) {
         if (sell.open_marketable) continue;
+        // ab9714be: a resting stop the bar path never reaches is not an
+        // order of this bar; it stays in the book for a later bar (L9d).
+        if (!sell.touched) continue;
         deferred.push_back(sell);
     }
     std::stable_sort(deferred.begin(), deferred.end(),
@@ -10624,6 +10627,20 @@ void PineExecutionAdapter::admit_deferred_open_marketable_sells() {
         row.snapshot.cancellation = {};
         row.snapshot.market_admission = {};
         const SourceId key = row.replacement_key;
+        // ab9714be pine_fills.cpp:7483-7537: once a priced entry filled on
+        // this bar, an entry that would open from flat is skipped for the
+        // bar and keeps resting. Re-arm the original stop for the next bar
+        // instead of filling it at the deferred price (L9d).
+        const bool throttled_reopen =
+            require_host().physical_position().signed_units == 0.0
+            && entry_openings_this_interval_ > 0;
+        if (throttled_reopen) {
+            request.trigger = native_order::Stop{row.snapshot.exit_levels.stop};
+            row.snapshot.forced_execution_price = kNaN;
+            row.snapshot.projection_after_close = false;
+            (void)submit_or_replace(std::move(request), std::move(row.snapshot), true, key);
+            continue;
+        }
         const auto accepted = submit_or_replace(
             std::move(request), std::move(row.snapshot), true, key);
         if (accepted) {
