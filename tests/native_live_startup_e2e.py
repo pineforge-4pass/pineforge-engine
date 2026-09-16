@@ -193,13 +193,14 @@ with tempfile.TemporaryDirectory(prefix='pineforge-native-startup-') as raw:
     assert ledger_bound(legacy_ledger)
     ident = identity_of(legacy_ledger)
     assert len(ident) == 64
-    # Changing a legacy input changes identity; native-config is refused.
+    # Changing a legacy input changes identity; a misaligned 1-minute warmup with
+    # a native config is refused by the native stream preflight.
     p = invoke(base_cmd(absent, warmup1m, legacy_ledger, extra=['--input', 'changed=1']),
                success=False)
     assert 'identity' in p.stderr
     p = invoke(base_cmd(legacy_library, warmup1m, root / 'legacy-real-nativecfg.sqlite3', cfg),
                success=False)
-    assert 'native-config requires NativeMarketV1' in p.stderr
+    assert 'native stream refused' in p.stderr, p.stderr
     assert not ledger_bound(root / 'legacy-real-nativecfg.sqlite3')
 
     # Real native example: nonempty physical actions, durable delivery failure,
