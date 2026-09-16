@@ -11,7 +11,9 @@
 #include <pineforge/compat/pine/order_priority.hpp>
 #include <pineforge/compat/pine/reservation_expansion.hpp>
 
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -294,6 +296,15 @@ public:
         };
 
     public:
+        // libstdc++ dispatches std::find_if/any_of on iterator_traits; a
+        // proxy iterator must still publish the five Cpp17 typedefs (libc++
+        // tolerated their absence, GCC on the Cloud Run runner did not).
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = Reference;
+        using difference_type = std::ptrdiff_t;
+        using pointer = Reference*;
+        using reference = Reference;
+
         Iterator() = default;
 
         Reference operator*() const { return {static_cast<std::uint64_t>(index_ + 1U),
@@ -307,6 +318,11 @@ public:
             ++index_;
             skip_empty();
             return *this;
+        }
+        Iterator operator++(int) {
+            Iterator before = *this;
+            ++*this;
+            return before;
         }
         bool operator==(const Iterator& other) const noexcept {
             return owner_ == other.owner_ && index_ == other.index_;
