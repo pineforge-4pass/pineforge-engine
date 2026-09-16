@@ -766,6 +766,22 @@ CommissionType fee_to_commission(NativeFeeKind kind) {
     return CommissionType::PERCENT;
 }
 
+namespace {
+struct IntervalCache {
+    std::int64_t input_ts = std::numeric_limits<std::int64_t>::min();
+    std::optional<native_calendar::NativeInterval> input_interval;
+    std::int64_t script_ts = std::numeric_limits<std::int64_t>::min();
+    std::optional<native_calendar::NativeInterval> script_interval;
+    void clear() noexcept {
+        input_ts = std::numeric_limits<std::int64_t>::min();
+        input_interval.reset();
+        script_ts = std::numeric_limits<std::int64_t>::min();
+        script_interval.reset();
+    }
+};
+thread_local IntervalCache s_interval_cache;
+}
+
 uint64_t command_ordinal(const native_order::CommandEvent& event) {
     return std::visit([](const auto& payload) { return payload.ordinal; }, event);
 }
@@ -870,6 +886,7 @@ bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
 
 bool NativeExecutionConsumer::prepare_public_begin(
         BacktestEngine& engine, const NativeBeginArgs& args) {
+    s_interval_cache.clear();
     if (preparing_begin_) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "native prepare_native_begin cannot reenter");
@@ -939,10 +956,10 @@ bool NativeExecutionConsumer::check_abort_or_projection(BacktestEngine& engine,
 }
 
 const NativeRunSpec* NativeExecutionConsumer::spec_ptr() const {
-    if (auto* r = std::get_if<NativeReady>(&state_)) return &r->spec;
-    if (auto* n = std::get_if<NativeRunning>(&state_)) return &n->spec;
-    if (auto* c = std::get_if<NativeCompleted>(&state_)) return &c->spec;
-    if (auto* f = std::get_if<NativeFailed>(&state_)) {
+    if (const auto* n = std::get_if<NativeRunning>(&state_)) return &n->spec;
+    if (const auto* r = std::get_if<NativeReady>(&state_)) return &r->spec;
+    if (const auto* c = std::get_if<NativeCompleted>(&state_)) return &c->spec;
+    if (const auto* f = std::get_if<NativeFailed>(&state_)) {
         if (f->spec) return &*f->spec;
     }
     return nullptr;
@@ -1200,17 +1217,27 @@ native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
+    if (s_interval_cache.input_ts == timestamp) {
+        return s_interval_cache.input_interval;
+    }
     if (uses_raw_label_partition()) return timestamp_partition(timestamp);
     auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp);
-    if (!interval && legacy_tolerant_slot_labels()) return timestamp_partition(timestamp);
+    if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
+    s_interval_cache.input_ts = timestamp;
+    s_interval_cache.input_interval = interval;
     return interval;
 }
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
+    if (s_interval_cache.script_ts == timestamp) {
+        return s_interval_cache.script_interval;
+    }
     if (uses_raw_label_partition()) return timestamp_partition(timestamp);
     auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp);
-    if (!interval && legacy_tolerant_slot_labels()) return timestamp_partition(timestamp);
+    if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
+    s_interval_cache.script_ts = timestamp;
+    s_interval_cache.script_interval = interval;
     return interval;
 }
 
@@ -1737,6 +1764,7 @@ void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
         throw std::length_error("native driver-log capacity exhausted");
     }
     if (expected_points > driver_log_.capacity()) driver_log_.reserve(expected_points);
+    requests_.reserve(expected_points);
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
@@ -2129,7 +2157,7 @@ void NativeExecutionConsumer::drain_parent_terminal(
     // Most source replacements have no WaitForApplied descendants.  Avoid
     // constructing the dependency queue (and its seed allocation) for that
     // ordinary no-op while retaining the exact queue path once a child exists.
-    if (requests_.waiting_children(parent).empty()) return;
+    if (!requests_.has_waiting_children(parent)) return;
     std::vector<std::pair<native_order::EventId, native_order::RequestHandle>> seeds;
     try {
         seeds.push_back({cause, parent});
@@ -3086,6 +3114,7 @@ void NativeExecutionConsumer::match_path(
     }
     const auto driver_class = classify_driver(point, continuous);
     const uint64_t P = point.coordinate.ordinal;
+    requests_.refresh_point_allowances(P, read_position(engine));
     double t_cursor = 0.0;
     double cursor_price = from_price;
     native_order::MatchCursor path_cursor = make_cursor(point, t_cursor);
@@ -3506,18 +3535,28 @@ void NativeExecutionConsumer::match_path(
             continue;
         }
         if (winner->kind == Kind::Evaluate) {
-            if (winner_target && std::holds_alternative<native_order::CohortClose>(live->authority)) {
-                try {
-                    if (requests_.refresh_cohort_allowance(
-                            winner->handle, eval, *winner_target)) {
+            try {
+                if (winner_target) {
+                    if (requests_.refresh_allowance(winner->handle, eval, *winner_target)) {
                         continue;
                     }
-                } catch (const std::exception& e) {
-                    fail(engine, NativeFailure{NativeFailureCode::Allocation,
-                                               NativeFailureOperation::Settlement, P});
-                    render(engine, e.what());
-                    return;
+                } else if (std::holds_alternative<native_order::BookClose>(live->authority)) {
+                    native_order::TargetObservation obs;
+                    obs.current_position = read_position(engine);
+                    if (requests_.refresh_allowance(winner->handle, eval, obs)) {
+                        continue;
+                    }
+                } else {
+                    const auto obs = read_target(engine, live);
+                    if (requests_.refresh_allowance(winner->handle, eval, obs)) {
+                        continue;
+                    }
                 }
+            } catch (const std::exception& e) {
+                fail(engine, NativeFailure{NativeFailureCode::Allocation,
+                                           NativeFailureOperation::Settlement, P});
+                render(engine, e.what());
+                return;
             }
             native_order::Preparation<native_order::PreparedMutation> prep;
             try {
@@ -5694,7 +5733,15 @@ void NativeExecutionConsumer::cohort_remove(
 
 NativePhysicalPosition NativeExecutionConsumer::position(const BacktestEngine& engine) const {
     NativePhysicalPosition out;
-    out.lot_count = engine.pyramid_entries_.size();
+    const auto n = engine.pyramid_entries_.size();
+    out.lot_count = n;
+    if (n == 0) return out;
+    if (n == 1) {
+        const auto& lot = engine.pyramid_entries_[0];
+        out.signed_units = engine.position_side_ == PositionSide::SHORT ? -lot.qty : lot.qty;
+        out.average_price = lot.price;
+        return out;
+    }
     double qty = 0.0;
     double weighted = 0.0;
     for (const auto& lot : engine.pyramid_entries_) {
@@ -5711,50 +5758,99 @@ double NativeExecutionConsumer::marked(const BacktestEngine& engine, double pric
 }
 
 std::vector<NativeMarketEvent> NativeExecutionConsumer::events_after(uint64_t after_ordinal) const {
-    std::vector<NativeMarketEvent> out;
     const auto& history = requests_.history();
-    const auto command_begin = std::upper_bound(history.begin(), history.end(), after_ordinal,
-        [](uint64_t ordinal, const native_order::CommandEvent& event) {
-            return ordinal < std::visit([](const auto& p) { return p.ordinal; }, event);
-        });
+    auto command_begin = history.end();
+    if (!history.empty() && command_ordinal(history.back()) > after_ordinal) {
+        auto it = history.end();
+        while (it != history.begin()) {
+            auto prev = std::prev(it);
+            if (command_ordinal(*prev) <= after_ordinal) {
+                command_begin = it;
+                break;
+            }
+            it = prev;
+            if (std::distance(it, history.end()) > 32) {
+                command_begin = std::upper_bound(history.begin(), it, after_ordinal,
+                    [](uint64_t ordinal, const native_order::CommandEvent& event) {
+                        return ordinal < command_ordinal(event);
+                    });
+                break;
+            }
+        }
+        if (it == history.begin()) command_begin = history.begin();
+    }
+
+    auto driver_begin = driver_log_.end();
+    if (!driver_log_.empty() && driver_log_.back().coordinate.ordinal > after_ordinal) {
+        auto it = driver_log_.end();
+        while (it != driver_log_.begin()) {
+            auto prev = std::prev(it);
+            if (prev->coordinate.ordinal <= after_ordinal) {
+                driver_begin = it;
+                break;
+            }
+            it = prev;
+            if (std::distance(it, driver_log_.end()) > 32) {
+                driver_begin = std::upper_bound(driver_log_.begin(), it, after_ordinal,
+                    [](uint64_t ordinal, const NativeDriverPoint& point) {
+                        return ordinal < point.coordinate.ordinal;
+                    });
+                break;
+            }
+        }
+        if (it == driver_log_.begin()) driver_begin = driver_log_.begin();
+    }
+
+    auto account_begin = account_log_.end();
+    if (!account_log_.empty() && account_log_.back().ordinal > after_ordinal) {
+        auto it = account_log_.end();
+        while (it != account_log_.begin()) {
+            auto prev = std::prev(it);
+            if (prev->ordinal <= after_ordinal) {
+                account_begin = it;
+                break;
+            }
+            it = prev;
+            if (std::distance(it, account_log_.end()) > 32) {
+                account_begin = std::upper_bound(account_log_.begin(), it, after_ordinal,
+                    [](uint64_t ordinal, const NativeAccountObservation& account) {
+                        return ordinal < account.ordinal;
+                    });
+                break;
+            }
+        }
+        if (it == account_log_.begin()) account_begin = account_log_.begin();
+    }
+
+    const std::size_t command_count = static_cast<std::size_t>(std::distance(command_begin, history.end()));
+    const std::size_t driver_count = static_cast<std::size_t>(std::distance(driver_begin, driver_log_.end()));
+    const std::size_t account_count = static_cast<std::size_t>(std::distance(account_begin, account_log_.end()));
+
+    std::vector<NativeMarketEvent> out;
+    out.reserve(command_count + driver_count + account_count);
+
     for (auto it = command_begin; it != history.end(); ++it) {
         const auto& event = *it;
-        const uint64_t ordinal = std::visit([](const auto& p) { return p.ordinal; }, event);
-        NativeMarketEvent row;
-        row.kind = NativeEventKind::Command;
-        row.ordinal = ordinal;
-        row.command = event;
-        out.push_back(row);
+        const uint64_t ordinal = command_ordinal(event);
+        out.emplace_back(NativeMarketEvent{NativeEventKind::Command, ordinal, event, std::nullopt, std::nullopt});
     }
-    const auto driver_begin = std::upper_bound(driver_log_.begin(), driver_log_.end(), after_ordinal,
-        [](uint64_t ordinal, const NativeDriverPoint& point) {
-            return ordinal < point.coordinate.ordinal;
-        });
     for (auto it = driver_begin; it != driver_log_.end(); ++it) {
         const auto& point = *it;
-        NativeMarketEvent row;
-        row.kind = NativeEventKind::Driver;
-        row.ordinal = point.coordinate.ordinal;
-        row.driver = point;
-        out.push_back(row);
+        out.emplace_back(NativeMarketEvent{NativeEventKind::Driver, point.coordinate.ordinal, std::nullopt, point, std::nullopt});
     }
-    const auto account_begin = std::upper_bound(account_log_.begin(), account_log_.end(), after_ordinal,
-        [](uint64_t ordinal, const NativeAccountObservation& account) {
-            return ordinal < account.ordinal;
-        });
     for (auto it = account_begin; it != account_log_.end(); ++it) {
         const auto& account = *it;
-        NativeMarketEvent row;
-        row.kind = NativeEventKind::Account;
-        row.ordinal = account.ordinal;
-        row.account = account;
-        out.push_back(row);
+        out.emplace_back(NativeMarketEvent{NativeEventKind::Account, account.ordinal, std::nullopt, std::nullopt, account});
     }
-    std::sort(out.begin(), out.end(),
-              [](const NativeMarketEvent& a, const NativeMarketEvent& b) {
-                  if (a.ordinal != b.ordinal) return a.ordinal < b.ordinal;
-                  return static_cast<std::uint8_t>(a.kind) < static_cast<std::uint8_t>(b.kind);
-              });
+    const auto cmp = [](const NativeMarketEvent& a, const NativeMarketEvent& b) {
+        if (a.ordinal != b.ordinal) return a.ordinal < b.ordinal;
+        return static_cast<std::uint8_t>(a.kind) < static_cast<std::uint8_t>(b.kind);
+    };
+    if (account_count > 0) {
+        std::sort(out.begin(), out.end(), cmp);
+    } else if (driver_count > 0 && command_count > 0) {
+        std::inplace_merge(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(command_count), out.end(), cmp);
+    }
     return out;
 }
 

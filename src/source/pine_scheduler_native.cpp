@@ -537,14 +537,12 @@ void PineScheduler::bar(const Bar& value, const NativeDecisionContext& context, 
     publish_series(script_bar, host);
     std::optional<std::int64_t> next_script_open_ms;
     if (const auto state = host.native_state(); state.spec
-        && !state.spec->timeframe_undetected
-        && tf_ratio(state.spec->input_tf, state.spec->script_tf) == 1
-        && source_bar_count_ + 1 < static_cast<int>(retained_.bars.size())) {
-        next_script_open_ms = retained_.bars[
-            static_cast<std::size_t>(source_bar_count_ + 1)].timestamp;
-    }
-    if (const auto state = host.native_state(); state.spec
         && !state.spec->timeframe_undetected) {
+        if (tf_ratio(state.spec->input_tf, state.spec->script_tf) == 1
+            && source_bar_count_ + 1 < static_cast<int>(retained_.bars.size())) {
+            next_script_open_ms = retained_.bars[
+                static_cast<std::size_t>(source_bar_count_ + 1)].timestamp;
+        }
         host.scheduler_update_session_state(script_bar, next_script_open_ms);
     }
     const bool suppress_probe_tail = host.probe_suppress_tail_logic()

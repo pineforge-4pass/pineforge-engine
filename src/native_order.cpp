@@ -693,10 +693,16 @@ void WorkingRequestCore::seal_plan(MutationPlan& plan) {
     bind_plan(plan);
 }
 
+void WorkingRequestCore::reserve(std::size_t expected_events) {
+    if (expected_events > history_.capacity()) history_.reserve(expected_events);
+    if (expected_events > ordinal_index_.capacity()) ordinal_index_.reserve(expected_events);
+    if (live_.capacity() < 8) live_.reserve(8);
+}
+
 void WorkingRequestCore::reserve_plan(const MutationPlan& plan) {
     reserve_n(history_, plan.events.size());
     reserve_n(ordinal_index_, plan.events.size());
-    if (plan.live_change == kLivePush || plan.live_change == kLiveErasePush) reserve_n(live_, 1);
+    if (plan.live_change == kLivePush) reserve_n(live_, 1);
     if (plan.add_receipt) reserve_n(receipts_, 1);
 }
 
@@ -1023,8 +1029,14 @@ InstallResult WorkingRequestCore::commit(MutationPlan& plan) noexcept {
     } else if (plan.live_change == kLiveUpdate) {
         live_[plan.live_index] = std::move(plan.live_row);
     } else if (plan.live_change == kLiveErasePush) {
-        live_.erase(live_.begin() + static_cast<std::ptrdiff_t>(plan.live_index));
-        live_.push_back(std::move(plan.live_row));
+        if (plan.live_index + 1 == live_.size()) {
+            live_.back() = std::move(plan.live_row);
+        } else {
+            std::rotate(live_.begin() + static_cast<std::ptrdiff_t>(plan.live_index),
+                        live_.begin() + static_cast<std::ptrdiff_t>(plan.live_index + 1),
+                        live_.end());
+            live_.back() = std::move(plan.live_row);
+        }
     }
     if (plan.add_receipt) {
         receipts_.push_back(ReceiptKey{std::move(plan.receipt_cause), std::move(plan.receipt_recipient),
@@ -1438,6 +1450,15 @@ std::vector<RequestHandle> WorkingRequestCore::waiting_children(const RequestHan
     return handles;
 }
 
+bool WorkingRequestCore::has_waiting_children(const RequestHandle& parent) const noexcept {
+    for (const auto& live : live_) {
+        if (const auto* wait = std::get_if<Wait>(&live.authority)) {
+            if (wait->parent == parent) return true;
+        }
+    }
+    return false;
+}
+
 std::vector<RequestHandle> WorkingRequestCore::bound_close_handles() const {
     std::vector<RequestHandle> handles;
     for (const auto& live : live_) {
@@ -1734,36 +1755,62 @@ Allowance WorkingRequestCore::evaluated_allowance(const LiveRequest& live,
     return initialize_allowance(live.remaining, live.request().capacity, point);
 }
 
-bool WorkingRequestCore::refresh_cohort_allowance(
+void WorkingRequestCore::refresh_point_allowances(uint64_t point,
+                                                 const PositionIdentity& position) noexcept {
+    for (auto& live : live_) {
+        if (same_point_allowance(live.allowance, point)) continue;
+        if (const auto* close = std::get_if<BookClose>(&live.authority)) {
+            const auto* nonflat = std::get_if<PositionNonflat>(&position);
+            if (nonflat && nonflat->cycle == close->cycle && nonflat->side == close->side) {
+                live.allowance = evaluated_allowance(live, point);
+            }
+        }
+    }
+}
+
+bool WorkingRequestCore::refresh_allowance(
         const RequestHandle& target, const EvaluationContext& context,
         const TargetObservation& observation) {
     require_identity(identity_);
     std::size_t live_index = 0;
     if (classify(target, &live_index) != TargetKind::Live) return false;
     LiveRequest& live = live_[live_index];
-    if (!std::holds_alternative<CohortClose>(live.authority)
-        || std::holds_alternative<Wait>(live.authority)) {
+    if (std::holds_alternative<Wait>(live.authority)) return false;
+    const EligibilityFacts facts = eligibility_facts(live, context);
+    if (!facts.birth_ok || !facts.driver_ok) return false;
+    if (std::holds_alternative<CohortClose>(live.authority)) {
+        if (!context.cohort_side) return false;
+        bool has_live_member = false;
+        for (const auto& opening : observation.openings)
+            has_live_member = has_live_member || opening.has_live_matching_lot;
+        if (!has_live_member) return false;
+    } else if (const auto* close = std::get_if<BookClose>(&live.authority)) {
+        if (!book_close_alive(observation, *close)) return false;
+    } else if (const auto* close = std::get_if<OpeningClose>(&live.authority)) {
+        if (!opening_close_alive(observation, *close)) return false;
+    } else if (const auto* close = std::get_if<OpeningsClose>(&live.authority)) {
+        std::size_t live_count = 0;
+        if (observe_openings(observation, *close, &live_count) || live_count == 0) return false;
+    } else if (std::holds_alternative<UnboundBookClose>(live.authority)) {
         return false;
     }
-    const EligibilityFacts facts = eligibility_facts(live, context);
-    if (!facts.birth_ok || !facts.driver_ok || !context.cohort_side) return false;
-    bool has_live_member = false;
-    for (const auto& opening : observation.openings)
-        has_live_member = has_live_member || opening.has_live_matching_lot;
-    if (!has_live_member || same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
+    if (same_point_allowance(live.allowance, context.cursor.point.ordinal)) {
         return false;
     }
     if (epoch_ > std::numeric_limits<uint64_t>::max() - 2U) {
         throw std::overflow_error("native working-request epoch exhausted");
     }
     live.allowance = evaluated_allowance(live, context.cursor.point.ordinal);
-    // prepare_evaluation seals then commits its no-event update, advancing the
-    // token epoch twice. Retain that invalidation contract for outstanding
-    // preparations without adding a history record.
     if (!bump_epoch() || !bump_epoch()) {
         throw std::overflow_error("native working-request epoch exhausted");
     }
     return true;
+}
+
+bool WorkingRequestCore::refresh_cohort_allowance(
+        const RequestHandle& target, const EvaluationContext& context,
+        const TargetObservation& observation) {
+    return refresh_allowance(target, context, observation);
 }
 
 bool WorkingRequestCore::effective_host_units(const PendingAdjustments& pending,
