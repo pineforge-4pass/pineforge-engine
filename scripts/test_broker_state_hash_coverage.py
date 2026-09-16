@@ -100,14 +100,5 @@ class Coverage(unittest.TestCase):
         self.assertEqual(result, 1, output)
         self.assertIn("frozen_reversal_transaction", output)
 
-    def test_pinned_sibling_debt_must_be_removed_explicitly(self):
-        result, output = self.check(((
-            "src/source/pine_state_hash.cpp",
-            "(void)source_last_bar_index_;",
-            "f.i(source_last_bar_index_);"),))
-        self.assertEqual(result, 1, output)
-        self.assertIn("debt", output)
-
-
 if __name__ == "__main__":
     unittest.main()

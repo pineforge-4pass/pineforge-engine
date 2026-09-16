@@ -45,3 +45,4 @@ source_last_bar_index_ # derived script-input horizon, not broker state: a prefi
 event_high_water_reader_ # Immutable callback binding to the host's native event watermark, not mutable broker state.
 terminal_receipt_high_water_reader_ # Immutable callback binding to the host's terminal-receipt watermark, not mutable broker state.
 source_pending_view_cache_ # Read-only test projection cache rebuilt from adapter state and never consumed by execution.
+bar_magnifier_ # install-time fact mirrored from the scheduler (retained_.bar_magnifier is already folded); not evolving broker state (L8h A41(5))

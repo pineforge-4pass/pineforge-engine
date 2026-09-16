@@ -9704,13 +9704,15 @@ bool PineExecutionAdapter::schedule_margin_call_path(
                     && (found->second.family == PineOrderFamily::Entry
                         || found->second.family == PineOrderFamily::Order);
             });
-        // ab9714be pine_fills.cpp:2154: only a margin event already applied
-        // on this script bar suppresses a competing schedule. Exit comments
-        // are user-writable report data and never form policy state.
-        if (competing_entry
-            && last_margin_call_script_bar_ == context.script_bar_open_ms) {
-            return false;
-        }
+        // ab9714be tests/test_carried_pooc_short_margin_state.cpp:109 ("a
+        // competing pending ENTRY keeps its established transaction
+        // scheduling"): once a margin slice has been applied in this run, a
+        // live competing entry-like order suppresses further path slices.
+        // The L4a lowering read that fact from "Margin call" exit comments;
+        // A39(6) requires the margin EVENT latch instead (report data is
+        // user-writable and never policy state). last_margin_call_event_ordinal_
+        // is set by every applied margin slice and cleared only per run.
+        if (competing_entry && last_margin_call_event_ordinal_ != 0) return false;
     }
     // ab9714be pine_fills.cpp:1025-1063, :1314-1339: an entry-bar margin
     // pass sees only the OHLC suffix after the actual opening point. Later

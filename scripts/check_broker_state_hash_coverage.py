@@ -38,9 +38,7 @@ NESTED_STRUCTS = {
 # reject every *new* void/constant/out-of-region fold now and fail closed as
 # soon as the sibling repair removes one (the integration merge then deletes
 # the stale debt row rather than silently preserving it).
-PINNED_HASH_DEBT = {
-    "run_counter_", "source_last_bar_index_", "terminal_receipt_cursor_",
-}
+PINNED_HASH_DEBT: set[str] = set()  # L8g settled the three sibling-lane debts (A41(2)); keep empty
 
 GENERIC_HEADERS = ("include/pineforge/engine.hpp",)
 SOURCE_HEADERS = (
@@ -238,16 +236,7 @@ def main(root: Path = ROOT) -> int:
             field for field in nested
             if not re.search(rf"\.{re.escape(field)}\b", source_hash)
         )
-        debt_errors = []
-        if "(void)source_last_bar_index_;" not in clean(source_hash_raw):
-            debt_errors.append("source_last_bar_index_ pinned debt changed")
-        epoch = re.search(
-            r"void hash_source_run_epoch\([^)]*run_counter[^)]*\)\s*\{(.*?)\n\}",
-            clean(source_hash_raw), re.S)
-        if not epoch or "(void)run_counter;" not in epoch.group(1) or "f.u(0);" not in epoch.group(1):
-            debt_errors.append("run_counter_ pinned constant-fold debt changed")
-        if re.search(r"\bterminal_receipt_cursor_\b", source_hash):
-            debt_errors.append("terminal_receipt_cursor_ debt is stale; remove its pin")
+        debt_errors: list[str] = []  # the L8d sibling-lane pins were settled by L8g (A41(2)) and removed at MERGE-L8
         if missing or unknown or redundant or nested_missing or debt_errors:
             print("check_broker_state_hash_coverage: "
                   f"missing={missing}, unknown_waivers={unknown}, redundant_waivers={redundant}",
