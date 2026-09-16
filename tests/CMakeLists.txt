@@ -8,6 +8,7 @@ set(TEST_SOURCES
     test_l9b_open_marketable_order
     test_l9b_open_marketable_shapes
     test_l9g_same_bar_exit_sibling_parents
+    test_l10e_opposite_entry_close_same_pass
     test_l9e_zero_price_presence
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
