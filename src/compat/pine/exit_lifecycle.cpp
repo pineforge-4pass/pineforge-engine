@@ -1,5 +1,7 @@
 #include <pineforge/compat/pine/exit_lifecycle.hpp>
 
+#include "../../engine_internal.hpp"
+
 #include <cmath>
 
 namespace pineforge::compat::pine {
@@ -16,10 +18,13 @@ std::optional<exit_legs::Operation> select_exit_suspension(
     if (has_trail) {
         window.best = window.prefix = context.prior_best;
         double activation = prices.trail_price;
-        if (!std::isnan(prices.trail_points) && std::isfinite(context.tick) && context.tick > 0.0) {
-            const double offset = prices.trail_points * context.tick;
-            activation = context.direction > 0 ? context.position_entry_price + offset
-                                               : context.position_entry_price - offset;
+        if (!std::isnan(prices.trail_points)) {
+            const double ticks = internal::trail_points_to_ticks(prices.trail_points);
+            activation = internal::snap_trail_level_to_tick_grid(
+                context.direction > 0
+                    ? context.position_entry_price + ticks * context.tick
+                    : context.position_entry_price - ticks * context.tick,
+                context.tick);
         }
         if (std::isfinite(activation) && std::isfinite(context.open)
             && (context.direction > 0 ? context.open >= activation : context.open <= activation)) {
