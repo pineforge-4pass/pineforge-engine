@@ -11,6 +11,7 @@ set(TEST_SOURCES
     test_l10b_excursion_parity
     test_l10e_opposite_entry_close_same_pass
     test_l10d_entry_bar_excursion_masks
+    test_l10h_corpus_parity
     test_l9e_zero_price_presence
     test_l10f_sizing_basis_stop_limit
     test_l10g_oca_reduce_deferred_flip

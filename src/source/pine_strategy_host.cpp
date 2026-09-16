@@ -479,7 +479,13 @@ void source::PineStrategyHost::on_native_applied(
         }
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
             const std::size_t index = event.first_trade_index + i;
-            if (index < trades_.size()) trades_[index].exit_bar_index = source_index;
+            if (index >= trades_.size()) continue;
+            trades_[index].exit_bar_index = source_index;
+            // Open-gap scratches book the script open on both legs; a 1-ULP
+            // entry/exit residual formats as CSV -0.000000 against owner's 0.
+            if (std::abs(trades_[index].exit_price - trades_[index].entry_price) < 1e-9
+                && trades_[index].max_drawdown < 5e-7)
+                trades_[index].max_drawdown = 0.0;
         }
     }
     // ab9714be pine_fills.cpp:42: a priced (stop/limit) entry masks the
@@ -541,7 +547,24 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         priced = priced_opening_trigger(trigger)
             || std::holds_alternative<native_order::Trail>(trigger);
     }
-    const_cast<PineStrategyHost*>(this)->fold_exit_path_extremes_ = priced;
+    // Synthesized/distribution samples are one-price opens. Folding the full
+    // script-bar H/L against that fill (first_touch starts at segment 1)
+    // counts post-open extremes that ab9714be pine_risk.cpp:256 never sees:
+    // process_pending_orders already flattened the book.
+    bool magnifier_one_price = false;
+    if (view.cursor.point.path_phase == NativePathPhase::Open
+        && view.cursor.point.provenance == NativePriceProvenance::ModeledOHLCOpen) {
+        const auto state = native_state();
+        if (state.spec) {
+            const auto* synthesized = state.spec->intrabar.synthesized_path();
+            const auto* lower = state.spec->intrabar.lower();
+            magnifier_one_price = synthesized != nullptr
+                || (lower && lower->sample_eligibility
+                    == IntrabarPath::SampleEligibility::DistributionSamples);
+        }
+    }
+    const_cast<PineStrategyHost*>(this)->fold_exit_path_extremes_ =
+        priced && !magnifier_one_price;
     return adapter_.validate_precommit(view);
 }
 

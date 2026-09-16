@@ -4,7 +4,7 @@
 // averaging-strategy registers 15/30/5 request.security evaluators on a 15m
 // chart, including the 5m lookahead_on shape.  H12/H15 use the observed
 // NYSE:F split-feed and COOF routing shapes.  H05 preserves the legacy
-// directional tick result (1804.94) and the A21 one-price sample gap price.
+// directional tick result (1804.94) on both the ordinary and magnifier paths.
 
 #include <pineforge/source/pine_adapter.hpp>
 #include <pineforge/source/pine_strategy_host.hpp>
@@ -192,17 +192,18 @@ void test_h05_trigger_level_uses_legacy_directional_tick_price() {
     CHECK(std::abs(probe.get_trade(0).exit_price - 1804.94) < 1e-9);
 }
 
-void test_h05_sampled_gap_keeps_the_a21_one_price_fill() {
+void test_h05_sampled_path_cross_books_the_stop_level() {
     H05StopProbe probe;
     auto bars = h05_bars();
     probe.set_syminfo_mintick(0.01);
-    // A sampled ENDPOINTS low of 1792.60 gaps through 1804.945. A21 requires
-    // this to remain the sample's tick price, not a trigger-level fill.
+    // ab9714be pine_scheduler.cpp:911-916: the script-bar open 1822.93 is
+    // not through 1804.945, so the 1792.60 ENDPOINTS low is a path cross
+    // at the stop (1804.94), not a one-price gap at the sample.
     probe.run(bars.data(), static_cast<int>(bars.size()), "15", "15", true, 4,
               MagnifierDistribution::ENDPOINTS);
     CHECK(probe.last_error().empty());
     CHECK(probe.trade_count() == 1);
-    CHECK(std::abs(probe.get_trade(0).exit_price - 1792.60) < 1e-9);
+    CHECK(std::abs(probe.get_trade(0).exit_price - 1804.94) < 1e-9);
 }
 
 void test_h05_host_sized_market_slippage_is_applied_once() {
@@ -252,7 +253,7 @@ int main() {
     test_h12_uncovered_auxiliary_chart_slot_is_a_gap_not_a_refusal();
     test_h15_coof_uses_the_native_chart_coordinate_for_auxiliary_routing();
     test_h05_trigger_level_uses_legacy_directional_tick_price();
-    test_h05_sampled_gap_keeps_the_a21_one_price_fill();
+    test_h05_sampled_path_cross_books_the_stop_level();
     test_h05_host_sized_market_slippage_is_applied_once();
     test_h05_source_projection_uses_legacy_volume_weighted_cap();
     std::puts("test_l4f_security_magnifier: OK");
