@@ -676,6 +676,8 @@ public:
         const native_order::ExecutionAppliedEvent&,
         const NativeDecisionContext&) const noexcept;
 
+    std::uint64_t command_sequence_for_exit(const SourceId& exit_id,
+                                            const SourceId& from_entry = {}) const noexcept;
     void hash_state(BrokerStateHashSink&) const;
 
     // Retained for the untouched legacy source host. New fixture state is
@@ -913,7 +915,7 @@ private:
     double default_sizing_units(const PineSizingSnapshot&) const noexcept;
     native_order::Trigger trigger_for(double limit_price, double stop_price,
                                       double trail_offset, double trail_price) const;
-    native_order::Group group_for(const std::string&, int) const;
+    native_order::Group group_for(const std::string&, int, std::int64_t = 0) const;
     PineSizingSnapshot sizing_snapshot() const;
     std::uint64_t key_for(const SourceId&, const SourceId& = {}) const noexcept;
     void refresh_pending_view() noexcept;
