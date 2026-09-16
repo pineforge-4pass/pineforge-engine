@@ -16,6 +16,7 @@ set(TEST_SOURCES
     test_l10f_sizing_basis_stop_limit
     test_l10g_oca_reduce_deferred_flip
     test_l10j_corpus_parity
+    test_l10m_corpus_parity
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a
