@@ -528,7 +528,7 @@ void v3_rejection_precedence() {
     expect_reject(h, qty_then_trig, no::RequestRejectReason::InvalidQuantity);
 
     auto trig_then_owner = tx(1, "trig-first");
-    trig_then_owner.trigger = no::Stop{0};
+    trig_then_owner.trigger = no::Stop{-1.0};
     trig_then_owner.owner = no::WaitForApplied{no::RequestHandle{{"V3-precedence", 1}, 0}};
     expect_reject(h, trig_then_owner, no::RequestRejectReason::InvalidTrigger);
 
@@ -586,24 +586,24 @@ void v4_self_wait_and_invalid_trigger_preserve_dependents() {
     CHECK(owner_reject.back().target() == parent);
 
     auto bad_trig = tx(1, "bad-stop");
-    bad_trig.trigger = no::Stop{0};
+    bad_trig.trigger = no::Stop{-1.0};
     const auto trig = h.replace(parent, bad_trig);
     CHECK(trig.status == no::ReplaceStatus::ReplaceRejected);
     CHECK(trig.reason == no::RequestRejectReason::InvalidTrigger);
     CHECK(!trig.successor);
 
     auto still_parent = tx(1, "still-live");
-    still_parent.trigger = no::Stop{0};
+    still_parent.trigger = no::Stop{-1.0};
     const auto parent_probe = h.replace(parent, still_parent);
     CHECK(parent_probe.status == no::ReplaceStatus::ReplaceRejected);
     CHECK(parent_probe.reason == no::RequestRejectReason::InvalidTrigger);
     auto still_child = tx(-1, "child-live");
-    still_child.trigger = no::Stop{0};
+    still_child.trigger = no::Stop{-1.0};
     const auto child_probe = h.replace(child, still_child);
     CHECK(child_probe.status == no::ReplaceStatus::ReplaceRejected);
     CHECK(child_probe.reason == no::RequestRejectReason::InvalidTrigger);
     auto still_grand = reduce(1, "grand-live");
-    still_grand.trigger = no::Stop{0};
+    still_grand.trigger = no::Stop{-1.0};
     const auto grand_probe = h.replace(grandchild, still_grand);
     CHECK(grand_probe.status == no::ReplaceStatus::ReplaceRejected);
     CHECK(grand_probe.reason == no::RequestRejectReason::InvalidTrigger);
@@ -621,7 +621,7 @@ void v4_foreign_invalid_nonworking_beat_candidate() {
     live_req.trigger = no::Limit{far_open(1)};
     const auto live = put(h, live_req);
     auto bad = tx(1, "candidate");
-    bad.trigger = no::Stop{0};
+    bad.trigger = no::Stop{-1.0};
 
     no::RequestHandle foreign{{"other-run", 1}, live.incarnation};
     const auto foreign_result = h.replace(foreign, bad);

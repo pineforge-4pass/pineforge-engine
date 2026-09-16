@@ -252,8 +252,12 @@ void validation_matrix_and_market_defaults() {
     flatten_budget.capacity = PointBudget{1.0};
     CHECK(core.submit(flatten_budget, 1, inc, ord).reason == RequestRejectReason::InvalidCapacity);
 
+    Request zero_trig{Transact{1.0}, "bt0", ""};
+    zero_trig.trigger = Stop{0.0};
+    CHECK(core.submit(zero_trig, 1, inc, ord).status == SubmitStatus::Accepted);
+
     Request bad_trig{Transact{1.0}, "bt", ""};
-    bad_trig.trigger = Stop{0.0};
+    bad_trig.trigger = Stop{-1.0};
     CHECK(core.submit(bad_trig, 1, inc, ord).reason == RequestRejectReason::InvalidTrigger);
 
     Request bad_group{Transact{1.0}, "bg", ""};
