@@ -20,6 +20,7 @@ from cpp_abi_pairing import PairingError, enforce_receipt_mode, load_frozen_v16
 # the follow-up kernel lane lowers this constant toward that floor. The workload
 # and the ab9714be side are frozen; only this constant may move, by root.
 LIMIT = 12.0
+SAMPLES = 5  # best-of-N per side (A40 rev 4)
 TIMING = re.compile(r"^PF_RUNTIME_SECONDS=(\d+(?:\.\d+)?)$", re.M)
 
 
@@ -111,8 +112,15 @@ def main() -> int:
             baseline_binary = compile_baseline(args, Path(directory))
             # Run baseline second so both binaries observe the same warm host;
             # repeat each and take the minimum to discount scheduler noise.
-            baseline = min(run_sample(baseline_binary), run_sample(baseline_binary))
-            candidate = min(candidate, run_sample(args.candidate))
+            # Best-of-N, interleaved: shared CI runners (GitHub macOS/ubuntu)
+            # scatter a single 0.05 s replay by 30 % or more, which moved the
+            # ratio from 9x (local) to 10.2x and 13.3x on single shots. The
+            # minimum of five alternating runs per side removes scheduler noise
+            # without touching the workload or the ceiling.
+            baseline = run_sample(baseline_binary)
+            for _ in range(SAMPLES - 1):
+                baseline = min(baseline, run_sample(baseline_binary))
+                candidate = min(candidate, run_sample(args.candidate))
         ratio = enforce_ratio(candidate, baseline)
         print(f"runtime budget: candidate={candidate:.6f}s ab9714be={baseline:.6f}s "
               f"ratio={ratio:.3f}x limit={LIMIT:.3f}x")
