@@ -1901,10 +1901,11 @@ protected:
     enum class StreamPhase { IDLE, REALTIME, ENDED };
     StreamPhase stream_phase_ = StreamPhase::IDLE;
     bool stream_warmup_mode_ = false;
-    // Source-route hosts set this for the handle lifetime so
+    // A host that keeps the legacy no-op refusal for in-run C-ABI setters
+    // sets this for the handle lifetime so
     // guard_native_mutation stays a no-op (ab9714be LegacyCompatibilityConsumer::refuse).
     // Native hosts leave it false; their in-run setter still throws.
-    bool source_route_mutation_inert_ = false;
+    bool host_mutation_guard_inert_ = false;
     int64_t stream_input_tf_ms_ = 0;
     int64_t stream_next_input_open_ms_ = 0;
     int64_t stream_clock_ms_ = 0;

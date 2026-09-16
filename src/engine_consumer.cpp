@@ -43,11 +43,11 @@ void BacktestEngine::guard_native_mutation(const char* operation) {
     // ab9714be:src/engine_consumer.cpp LegacyCompatibilityConsumer::refuse
     // was a no-op on the source-route handle. L8h made this guard inert only
     // while stream_warmup_mode_ is set (cleared on the first realtime tick).
-    // Source hosts also set source_route_mutation_inert_ for the handle
+    // Source hosts also set host_mutation_guard_inert_ for the handle
     // lifetime so a C-ABI FX setter after the first realtime tick still
     // returns false without latching UnsupportedSource. Native hosts never
     // set either flag, so their in-run setter still throws (P1-22).
-    if (stream_warmup_mode_ || source_route_mutation_inert_) return;
+    if (stream_warmup_mode_ || host_mutation_guard_inert_) return;
     execution_consumer().refuse_source_mutation(operation);
 }
 

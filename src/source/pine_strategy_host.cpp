@@ -88,7 +88,7 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       _src_hlcc4_(scheduler_.language()._src_hlcc4_),
       is_last_tick_(scheduler_.language().is_last_tick_) {
     // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
-    source_route_mutation_inert_ = true;
+    host_mutation_guard_inert_ = true;
 }
 
 std::uint64_t source::PineStrategyHost::adapter_event_high_water(
