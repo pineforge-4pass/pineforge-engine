@@ -4756,24 +4756,48 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
         present_refusal(engine, "native input is not aligned");
         return false;
     }
-    if (!legacy_tolerant_slot_labels()
+    const bool realtime_labels = running
+        && running->phase == NativeRunPhase::Realtime;
+    const bool canonical_labels = !legacy_tolerant_slot_labels()
+        || realtime_labels;
+    if (canonical_labels
         && !native_confirmed_bar_label_admitted(*interval, bar.timestamp)) {
         processing_input_ = false;
         present_refusal(engine, "native confirmed bar timestamp is not a canonical slot label");
         return false;
     }
     if (last_accepted_input_) {
-        if (!legacy_tolerant_slot_labels()
+        if (canonical_labels
             && interval->open_ms <= last_accepted_input_->open_ms) {
             processing_input_ = false;
             present_refusal(engine, "native duplicate overlapping input slot");
             return false;
         }
-        if (!legacy_tolerant_slot_labels()
-            && running && running->phase != NativeRunPhase::Batch) {
-            auto expected = native_calendar::interval_containing(
-                calendar_, input_tf_, last_accepted_input_->next_input_open_ms);
-            if (!expected || expected->open_ms != interval->open_ms) {
+        if (canonical_labels && realtime_labels) {
+            int64_t expected_label = last_accepted_input_->next_input_open_ms;
+            if (expected_label <= last_accepted_input_->open_ms) {
+                int64_t unit_ms = 0;
+                switch (input_tf_.unit()) {
+                case native_calendar::TimeframeUnit::Second: unit_ms = 1000; break;
+                case native_calendar::TimeframeUnit::Minute: unit_ms = 60 * 1000; break;
+                case native_calendar::TimeframeUnit::Day: unit_ms = 24 * 60 * 60 * 1000; break;
+                case native_calendar::TimeframeUnit::Week:
+                    unit_ms = 7 * 24 * 60 * 60 * 1000;
+                    break;
+                case native_calendar::TimeframeUnit::Month: break;
+                }
+                const int64_t count = input_tf_.count();
+                if (unit_ms <= 0 || count <= 0
+                    || unit_ms > std::numeric_limits<int64_t>::max() / count
+                    || last_accepted_input_->open_ms
+                        > std::numeric_limits<int64_t>::max() - unit_ms * count) {
+                    processing_input_ = false;
+                    present_refusal(engine, "native confirmed bar timestamp overflows");
+                    return false;
+                }
+                expected_label = last_accepted_input_->open_ms + unit_ms * count;
+            }
+            if (bar.timestamp != expected_label) {
                 processing_input_ = false;
                 present_refusal(engine, "native stream has an in-session gap");
                 return false;

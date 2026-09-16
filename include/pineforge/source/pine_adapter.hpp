@@ -224,6 +224,9 @@ struct PlacementSnapshot {
     // Resolved absolute trail activation used by the source fill policy when
     // trail_points is lowered after its parent opening becomes live.
     double trail_activation_level = std::numeric_limits<double>::quiet_NaN();
+    // A source reissue that changes only trail_offset keeps the already-seen
+    // raw best while the generic request itself remains live.
+    double retained_trail_best = std::numeric_limits<double>::quiet_NaN();
     // Immutable source command observation used by the public admission
     // journal/mirror. It never owns or drives matching.
     MarketAdmissionDraft market_admission{};
@@ -582,14 +585,20 @@ public:
     // Called by the fixture scheduler after one source script evaluation so
     // re-priced carried bracket legs retain their original roster order before
     // newly pending-entry legs are appended.
-    void flush_pending_bracket_legs();
+    void flush_pending_bracket_legs(
+        native_order::RequestHandle just_applied = {});
     // Ordinary POOC same-direction adds are held until the source evaluation
     // closes, so a later close_all in that same evaluation settles first and
     // the add opens the next source position at the same close point.
     void flush_pending_entries();
-    void release_delayed_orders(bool explicit_brackets_only = false);
+    void release_delayed_orders(
+        bool explicit_brackets_only = false,
+        double current_open = std::numeric_limits<double>::quiet_NaN());
     void begin_coof_recalc(const NativeDecisionContext&, bool first_open);
     void end_coof_recalc() noexcept;
+    bool suppress_grouped_stop_recalc(
+        const native_order::ExecutionAppliedEvent&,
+        const NativeDecisionContext&) const noexcept;
 
     void hash_state(BrokerStateHashSink&) const;
 
@@ -634,6 +643,7 @@ private:
         PlacementSnapshot snapshot;
         SourceId replacement_key;
         std::uint64_t release_open_epoch = 0;
+        bool execute_at_open = false;
     };
 
     // The legacy same-bar MARKET transaction is a source-side command batch:
@@ -782,7 +792,8 @@ private:
     bool defer_coof_tail() const noexcept;
     double coof_next_waypoint() const noexcept;
     bool coof_remaining_recrosses(double level, bool long_position) const noexcept;
-    void flush_coof_tail(bool include_next_open = false);
+    void flush_coof_tail(bool openings_only = false,
+                         bool include_next_open = false);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
     void flush_pending_same_bar_commands();
@@ -901,6 +912,7 @@ private:
     bool source_margin_call_enabled_ = true;
     Bar policy_script_bar_{};
     bool policy_script_bar_valid_ = false;
+    std::unordered_map<std::uint64_t, NativeTrailState> trail_state_at_open_;
     bool stream_mode_ = false;
     SourceDayLedger day_ledger_{};
     PineRiskState risk_{};
