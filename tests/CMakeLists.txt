@@ -739,6 +739,7 @@ list(APPEND TEST_SOURCES
     test_short_seed_collision_percent_l4b
     test_source_fifo_endpoints_l4b
     test_native_p7d_l4b
+    test_l8a_adapter_policy_delta
 )
 
 find_package(Threads REQUIRED)
@@ -1004,6 +1005,24 @@ foreach(test_name ${TEST_SOURCES})
         target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
     endif()
     add_test(NAME ${test_name} COMMAND ${test_name})
+endforeach()
+
+# R4-D L8a: each Fable-delta finding remains an independently addressable
+# native-route witness while sharing one compile unit for the common host
+# fixtures.  The aggregate executable is also retained by TEST_SOURCES.
+foreach(l8a_case
+        drawdown_once
+        risk_latch_scope
+        cap_prefill
+        cap_stream_phase
+        direction_gate
+        explicit_percent_sizing
+        margin_call_latch
+        affordability_surplus
+        cap_residuals
+        product_day_key)
+    add_test(NAME test_l8a_${l8a_case}
+             COMMAND test_l8a_adapter_policy_delta ${l8a_case})
 endforeach()
 
 target_compile_definitions(test_l4g_runtime_budget PRIVATE

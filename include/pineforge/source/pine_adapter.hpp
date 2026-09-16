@@ -827,7 +827,8 @@ private:
     compat::pine::CapClock cap_clock(const NativeDecisionContext&) const;
     compat::pine::Calculation cap_calculation(const NativeDecisionContext&) const;
     compat::pine::MatchedAttempt cap_attempt(
-        const PlacementSnapshot&, std::uint64_t incarnation) const;
+        const PlacementSnapshot&, std::uint64_t incarnation,
+        const native_order::ExecutionAppliedEvent* applied = nullptr) const;
     bool cap_placement_denied(const NativeDecisionContext&);
     void observe_intraday_cap(const native_order::ExecutionAppliedEvent&,
                               const PlacementSnapshot&, const NativeDecisionContext&);
@@ -997,6 +998,12 @@ private:
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::uint64_t last_margin_call_event_ordinal_ = 0;
+    std::uint64_t last_margin_call_entry_incarnation_ = 0;
+    std::int64_t last_margin_call_position_cycle_ = 0;
+    bool last_margin_call_at_script_close_ = false;
+    double last_margin_call_closed_units_ = 0.0;
+    double last_margin_call_remaining_units_ = 0.0;
     std::int64_t risk_coof_direct_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t cap_latest_fill_ = 0;
     bool source_margin_call_enabled_ = true;

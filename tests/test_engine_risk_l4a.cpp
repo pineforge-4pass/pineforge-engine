@@ -121,13 +121,13 @@ void test_drawdown_latches_and_blocks_later_commands() {
     DrawdownHost host;
     host.run(tape, 5);
     CHECK(host.last_error().empty());
-    // D0 is the only accepted opening.  D1--D3 reach the source adapter
-    // after its measured drawdown has latched, while the close command is
-    // intentionally not permitted to reopen a new position.
-    CHECK(host.trade_count() == 0);
-    CHECK(near(host.position(), 1.0));
-    CHECK(host.lots() == 1);
-    CHECK(near(host.average(), 100.0));
+    // D0 is the only accepted opening. D1--D3 are refused after the
+    // close-mark drawdown latches, but the latch gates entries only:
+    // pine_risk.cpp:111-118 never refused the later close_all.
+    CHECK(host.trade_count() == 1);
+    CHECK(near(host.position(), 0.0));
+    CHECK(host.lots() == 0);
+    CHECK(near(host.average(), 0.0));
 }
 
 class IntradayLossHost final : public RiskHost {

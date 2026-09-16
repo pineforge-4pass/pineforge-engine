@@ -65,11 +65,22 @@ public:
     void set_bar_timestamp(int64_t ts_ms) {
         current_bar_.timestamp = ts_ms;
     }
+    void stage_chart_timezone(const std::string& timezone) {
+        set_chart_timezone(timezone);
+        const Bar bars[] = {
+            {100.0, 100.0, 100.0, 100.0, 1.0, 0},
+            {100.0, 100.0, 100.0, 100.0, 1.0, 60'000},
+        };
+        run(bars, 2);
+    }
     using BacktestEngine::_bar_hour;
     using BacktestEngine::_bar_dayofmonth;
     using BacktestEngine::_bar_month;
     using BacktestEngine::_decompose_bar_time;
     BarTime chart_time() const { return fixture_chart_time(current_bar_.timestamp); }
+    std::int64_t chart_day_key() const {
+        return fixture_chart_day_key(current_bar_.timestamp);
+    }
 };
 
 // Unix ms timestamps used as fixtures. All keyed off 2025-03-31 to
@@ -137,11 +148,11 @@ void test_chart_tz_rollover_at_16_utc_for_taipei() {
     // 16:00 UTC (= 00:00 Taipei, day 1):   rolled to chart day 1 (April).
     std::printf("test_chart_tz_rollover_at_16_utc_for_taipei\n");
     TimeProbeEngine eng;
-    eng.set_chart_timezone("Asia/Taipei");
+    eng.stage_chart_timezone("Asia/Taipei");
 
     eng.set_bar_timestamp(kUtc_1530);
     auto pre = eng.chart_time();
-    int pre_key = pre.dayofmonth * 100 + pre.month;
+    const std::int64_t pre_key = eng.chart_day_key();
     CHECK(pre.dayofmonth == 31);
     CHECK(pre.month == 3);
     CHECK(pre.hour == 23);
@@ -149,7 +160,7 @@ void test_chart_tz_rollover_at_16_utc_for_taipei() {
 
     eng.set_bar_timestamp(kUtc_1600);
     auto post = eng.chart_time();
-    int post_key = post.dayofmonth * 100 + post.month;
+    const std::int64_t post_key = eng.chart_day_key();
     CHECK(post.dayofmonth == 1);
     CHECK(post.month == 4);
     CHECK(post.hour == 0);
@@ -189,11 +200,13 @@ void test_chart_tz_late_evening_utc_is_next_chart_day() {
     CHECK(utc.month == 3);
     CHECK(utc.hour == 17);
 
-    eng.set_chart_timezone("Asia/Taipei");
+    eng.stage_chart_timezone("Asia/Taipei");
+    eng.set_bar_timestamp(kUtc_1700_prior);
     auto ctz = eng.chart_time();
     CHECK(ctz.dayofmonth == 31);
     CHECK(ctz.month == 3);
     CHECK(ctz.hour == 1);
+    CHECK(eng.chart_day_key() == 3103);
 }
 
 void test_bare_var_form_unaffected_by_chart_tz() {

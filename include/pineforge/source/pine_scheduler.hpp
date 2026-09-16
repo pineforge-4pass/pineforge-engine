@@ -3,6 +3,7 @@
 #include <pineforge/native_host.hpp>
 #include <pineforge/source/pine_language_state.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -67,6 +68,13 @@ public:
         NativePathOrder) const noexcept;
     const Bar* current_script_bar() const noexcept {
         return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
+    }
+    std::optional<Bar> broker_bar(const NativeDecisionContext& context) const {
+        const auto found = std::find_if(retained_.bars.begin(), retained_.bars.end(),
+            [&](const Bar& bar) { return bar.timestamp == context.sub_bar_open_ms; });
+        if (found != retained_.bars.end()) return *found;
+        return current_script_bar_valid_ ? std::optional<Bar>{current_script_bar_}
+                                         : std::nullopt;
     }
 
     void hash_state(BrokerStateHashSink&) const;
