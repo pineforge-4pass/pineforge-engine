@@ -7933,9 +7933,34 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             ? source.exit_levels.trail_price : source.exit_levels.stop;
         const double level = finite_positive(source_level) ? source_level
             : (facts.trigger_level ? *facts.trigger_level : facts.default_resolved_price);
+        // ab9714be pine_scheduler.cpp:911-916 keeps current_bar_.open as the
+        // script-bar open while magnifier samples only update H/L/C, so
+        // try_exit_open_gap_fill (engine_path_resolve.cpp:905-927) tests that
+        // script open. Synthesized/distribution samples arrive as one-price
+        // opens; a later sample through the stop is a path cross at the stop
+        // level, not a fresh gap at the sample quote.
+        double open_px = facts.raw_price;
+        if (policy_script_bar_valid_
+            && facts.cursor.point.path_phase == NativePathPhase::Open
+            && facts.cursor.point.provenance == NativePriceProvenance::ModeledOHLCOpen
+            && host_state.spec) {
+            const auto* synthesized = host_state.spec->intrabar.synthesized_path();
+            const auto* lower = host_state.spec->intrabar.lower();
+            const bool one_price = synthesized != nullptr
+                || (lower && lower->sample_eligibility
+                    == IntrabarPath::SampleEligibility::DistributionSamples);
+            if (one_price) open_px = policy_script_bar_.open;
+        }
         const bool open_gapped = !non_open && std::isfinite(level)
-            && (facts.is_buy ? facts.raw_price >= level : facts.raw_price <= level);
-        return open_gapped ? source_bar_fill() : source_stop_fill();
+            && (facts.is_buy ? open_px >= level : open_px <= level);
+        if (!open_gapped) return source_stop_fill();
+        // ab9714be try_exit_open_gap_fill books bar.open (the script-bar
+        // open), even when the matching sample is a later one-price tick.
+        const double rounded = source_bar_fill_tick(
+            open_px, staged_.syminfo.mintick);
+        const double slipped = rounded + (facts.is_buy ? 1.0 : -1.0)
+            * config_.slippage * staged_.syminfo.mintick;
+        return directional_tick(slipped, staged_.syminfo.mintick, facts.is_buy);
     };
     const auto source_limit_fill = [&]() {
         // ab9714be pine_fills.cpp:7733-8072 + pine_policy_members.cpp:55-58:
