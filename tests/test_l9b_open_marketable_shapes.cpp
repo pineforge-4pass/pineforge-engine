@@ -95,6 +95,58 @@ void expect(int variant, int shape, Expectation row) {
     CHECK(t.exit_comment.empty());
 }
 
+class PoocShapeHost : public source::PineStrategyHost {
+public:
+    int variant = 0;
+    explicit PoocShapeHost(int v, int pyr) : variant(v) {
+        source::PineStrategyConfig c;
+        c.initial_capital = 100000;
+        c.default_qty_type = static_cast<int>(QtyType::FIXED);
+        c.default_qty_value = 1.0;
+        c.pyramiding = pyr;
+        c.process_orders_on_close = true;
+        configure_pine_strategy(c);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() != 0) return;
+        if (variant == 0) {
+            strategy_entry("S1", false, kNaN, 4.5);
+            strategy_entry("A", true, kNaN, 3.5);
+            strategy_entry("S2", false, kNaN, 1.0);
+        }
+        if (variant == 1) {
+            strategy_entry("Short", false, kNaN, 4.5);
+            strategy_entry("Long", true, kNaN, 3.5);
+        }
+        if (variant == 2) {
+            strategy_entry("S1", false, kNaN, 4.5);
+            strategy_entry("A", true, kNaN, 3.5);
+            strategy_entry("S2", false, kNaN, 2.5);
+        }
+    }
+};
+
+void expect_pooc(const char* tag, int variant, int pyr, double pos,
+                 const char* entry, const char* exit, double exit_price) {
+    PoocShapeHost host(variant, pyr);
+    // ab9714be l9b probe.cpp bars (P0-N3 POOC rows)
+    std::vector<Bar> bars = {
+        mk(1000, 4, 4, 4, 4), mk(2000, 4, 6, 2, 4), mk(3000, 4, 4.2, 3.8, 4),
+        mk(4000, 4, 4.2, 0.5, 4), mk(5000, 4, 4, 4, 4)};
+    host.run(bars.data(), static_cast<int>(bars.size()));
+    std::printf("%s\n", tag);
+    CHECK(host.last_error().empty());
+    CHECK(host.trade_count() == 1);
+    CHECK(near(host.live_position_size(), pos));
+    if (host.trade_count() < 1) return;
+    const auto& t = host.get_trade(0);
+    CHECK(t.entry_id == entry);
+    CHECK(t.exit_id == exit);
+    CHECK(near(t.qty, 1.0));
+    CHECK(near(t.exit_price, exit_price));
+    CHECK(t.exit_comment.empty());
+}
+
 } // namespace
 
 int main() {
@@ -117,6 +169,13 @@ int main() {
     expect(5, 0, {"Long", "Short", 4.0});
     expect(5, 1, {"Long", "Short", 4.0});
     expect(5, 2, {"Long", "Short", 4.0});
+    // ab9714be l9b/base.txt POOC rows (P0-N3)
+    expect_pooc("S1,A,S2@1(untouched) pyr1 pooc", 0, 1, -1.0, "A", "S1", 4.0);
+    expect_pooc("S1,A,S2@1(untouched) pyr3 pooc", 0, 3, -1.0, "A", "S1", 4.0);
+    expect_pooc("P0-B v5 pyr1 pooc", 1, 1, 0.0, "Long", "Short", 4.0);
+    expect_pooc("P0-B v5 pyr3 pooc", 1, 3, 0.0, "Long", "Short", 4.0);
+    expect_pooc("S1,A,S2@2.5(touched) pyr1 pooc", 2, 1, -1.0, "A", "S2", 2.5);
+    expect_pooc("S1,A,S2@2.5(touched) pyr3 pooc", 2, 3, -1.0, "A", "S2", 2.5);
     std::printf("test_l9b_open_marketable_shapes: %d passed, %d failed\n", passed, failed);
     return failed == 0 ? 0 : 1;
 }

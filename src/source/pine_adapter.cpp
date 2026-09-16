@@ -8566,7 +8566,9 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
         // ab9714be pine_fills.cpp:7483-7537: priced (stop/limit) entries are
         // throttled to one opening from flat per bar after an earlier entry
         // fill. A same-direction pyramid while still in position is the
-        // exception and is admitted below by the not-flat check.
+        // exception and is admitted below by the not-flat check. Not gated on
+        // process_orders_on_close (the owner applies it at the POOC fill
+        // point too); COOF and stream stay excluded.
         const bool leftover_flat_stop = view.definition
             && std::holds_alternative<native_order::Stop>(view.definition->request.trigger)
             && !finite_positive(source.exit_levels.limit);
@@ -8577,7 +8579,6 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             && view.cursor.point.interval_index == entry_openings_interval_index_
             && leftover_flat_stop
             && !config_.calc_on_order_fills
-            && !config_.process_orders_on_close
             && !stream_mode_) {
             return NativePrecommitVerdict::Refuse;
         }
@@ -10509,14 +10510,17 @@ void PineExecutionAdapter::apply_open_market_admission(
 }
 
 void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
-    if (config_.calc_on_order_fills || config_.process_orders_on_close || stream_mode_)
+    if (config_.calc_on_order_fills || stream_mode_)
         return;
     if (require_host().physical_position().signed_units != 0.0) return;
     const auto native = require_host().native_state();
     const NativePathOrder path_order = native.spec ? native.spec->path_order
                                                    : NativePathOrder::Auto;
     const bool high_first = source_path_high_first(bar, path_order);
-    const double open_price = bar.open;
+    // ab9714be pine_fills.cpp:3687-3860 is not gated on process_orders_on_close.
+    // Under POOC the fill point of a marketable order is the bar close
+    // (pine_fills.cpp:7964-7965), not the open.
+    const double fill_point_price = config_.process_orders_on_close ? bar.close : bar.open;
     struct Candidate {
         native_order::RequestHandle handle;
         const PlacementSnapshot* snapshot = nullptr;
@@ -10541,7 +10545,7 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
         Candidate row;
         row.handle = handle;
         row.snapshot = &snapshot;
-        row.open_marketable = pure_stop_entry_marketable_at(snapshot, open_price);
+        row.open_marketable = pure_stop_entry_marketable_at(snapshot, fill_point_price);
         row.touched = internal::entry_stop_first_touch(
             bar, high_first, snapshot.exit_levels.stop, snapshot.is_long,
             &row.path_position);
@@ -10586,7 +10590,7 @@ void PineExecutionAdapter::defer_open_marketable_sells(const Bar& bar) {
         DeferredOpenMarketableSell row;
         row.snapshot = *sell.snapshot;
         row.replacement_key = sell.snapshot->source_id;
-        row.fill_price = sell.open_marketable ? open_price : sell.snapshot->exit_levels.stop;
+        row.fill_price = sell.open_marketable ? fill_point_price : sell.snapshot->exit_levels.stop;
         row.path_position = sell.path_position;
         row.open_marketable = sell.open_marketable;
         const auto result = require_host().cancel(sell.handle);
