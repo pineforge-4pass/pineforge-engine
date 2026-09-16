@@ -834,6 +834,8 @@ private:
         const Bar&, const NativeDecisionContext&);
     bool schedule_tv_money_long_margin_before_trail(
         const Bar&, const NativeDecisionContext&);
+    bool market_orders_pending_at_close(const NativeDecisionContext& context,
+                                        std::uint64_t except_incarnation = 0) const;
     bool carried_pooc_short_margin_before_script_scope(
         const NativeDecisionContext&) const;
     bool carried_pooc_short_priced_exit_after_adverse_scope(
@@ -1033,6 +1035,9 @@ private:
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    // Close-time carried-POOC-short checkpoint deferred behind this bar's
+    // market fills (ab9714be pine_scheduler.cpp:260 before :278).
+    std::int64_t pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     std::int32_t signal_close_mc_event_bar_ = -1;
     std::int64_t signal_close_mc_position_cycle_ = 0;
     std::uint64_t signal_close_mc_entry_incarnation_ = 0;

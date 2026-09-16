@@ -1025,6 +1025,7 @@ void PineExecutionAdapter::reset_for_run() {
     position_open_phase_ = NativePathPhase::None;
     position_open_priced_ = false;
     last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
     signal_close_mc_event_bar_ = -1;
     signal_close_mc_position_cycle_ = 0;
     signal_close_mc_entry_incarnation_ = 0;
@@ -9563,6 +9564,25 @@ bool PineExecutionAdapter::schedule_tv_money_long_margin_before_trail(
         "__tv_money_margin_path__"));
 }
 
+bool PineExecutionAdapter::market_orders_pending_at_close(
+        const NativeDecisionContext& context, std::uint64_t except_incarnation) const {
+    for (const auto& handle : live_handles_) {
+        if (handle.incarnation == except_incarnation) continue;
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& row = found->second;
+        const bool market_family = row.family == PineOrderFamily::Entry
+            || row.family == PineOrderFamily::Order
+            || row.family == PineOrderFamily::Close
+            || row.family == PineOrderFamily::CloseAll;
+        if (!market_family) continue;
+        if (std::isfinite(row.exit_levels.limit) || std::isfinite(row.exit_levels.stop)) continue;
+        if (row.projection_created_bar != context.coordinate.interval_index) continue;
+        return true;
+    }
+    return false;
+}
+
 bool PineExecutionAdapter::carried_pooc_short_margin_before_script_scope(
         const NativeDecisionContext& context) const {
     const auto position = require_host().physical_position();
@@ -9711,15 +9731,16 @@ bool PineExecutionAdapter::schedule_margin_call_path(
                     && (found->second.family == PineOrderFamily::Entry
                         || found->second.family == PineOrderFamily::Order);
             });
-        // ab9714be tests/test_carried_pooc_short_margin_state.cpp:109 ("a
-        // competing pending ENTRY keeps its established transaction
-        // scheduling"): once a margin slice has been applied in this run, a
-        // live competing entry-like order suppresses further path slices.
-        // The L4a lowering read that fact from "Margin call" exit comments;
-        // A39(6) requires the margin EVENT latch instead (report data is
-        // user-writable and never policy state). last_margin_call_event_ordinal_
-        // is set by every applied margin slice and cleared only per run.
-        if (competing_entry && last_margin_call_event_ordinal_ != 0) return false;
+        // ab9714be pine_fills.cpp:1172-1230 / :2462-2523 (executed on both
+        // libraries, Fable delta-2 P0-A): while a competing pending entry-like
+        // order exists, a carried POOC short takes no open/path margin slice
+        // on that bar at all — the slice lands at the close checkpoint after
+        // the script instead (base bar-1 view -12.60172 with a parked entry,
+        // -12.44432 without). Neither a prior margin event (A42's latch) nor
+        // an exit-comment scan (L4a) is part of the legacy predicate.
+        // The legacy sites are the carried POOC *short* checkpoints; a long
+        // position keeps the ordinary path slice (L8a margin_call_latch).
+        if (competing_entry && position.signed_units < 0.0) return false;
     }
     // ab9714be pine_fills.cpp:1025-1063, :1314-1339: an entry-bar margin
     // pass sees only the OHLC suffix after the actual opening point. Later
@@ -11023,6 +11044,16 @@ void PineExecutionAdapter::on_bar_close(
         && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
         && position_open_script_bar_ != context.script_bar_open_ms;
     if (carried_pooc_short && finite_positive(bar.high)) {
+        // ab9714be pine_scheduler.cpp:260-278: the script's new market orders
+        // fill at the close (step 4) before process_margin_call runs. While
+        // such an order is live the checkpoint is deferred to the last of
+        // those fills (on_applied) so it evaluates the post-fill book
+        // (executed on both libraries: a reversal entry consumes the carried
+        // short with no close slice, Fable delta-2 P0-A).
+        if (market_orders_pending_at_close(context)) {
+            pooc_close_checkpoint_deferred_ms_ = context.script_bar_open_ms;
+            return;
+        }
         (void)submit_margin_call_slice(bar.high, context, true);
     }
     // Ordinary price-path slices are born at the native open/applied points
@@ -11959,6 +11990,24 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 // uses A35 remaining-path eligibility and sizes from the
                 // already-reduced physical book.
                 (void)schedule_margin_call_path(policy_script_bar_, context);
+            }
+        }
+        if (pooc_close_checkpoint_deferred_ms_ == context.script_bar_open_ms
+            && context.coordinate.path_phase == NativePathPhase::Close
+            && placement_snapshot->family != PineOrderFamily::Margin
+            && !market_orders_pending_at_close(context, event.handle().incarnation)) {
+            // Last of this bar's close market fills: run the deferred
+            // carried-POOC-short checkpoint on the post-fill book.
+            pooc_close_checkpoint_deferred_ms_ = std::numeric_limits<std::int64_t>::min();
+            const auto after_fill = require_host().physical_position();
+            if (after_fill.signed_units < 0.0
+                && position_open_script_bar_ != std::numeric_limits<std::int64_t>::min()
+                && position_open_script_bar_ != context.script_bar_open_ms
+                && last_margin_call_script_bar_ != context.script_bar_open_ms
+                && policy_script_bar_valid_
+                && policy_script_bar_.timestamp == context.script_bar_open_ms
+                && finite_positive(policy_script_bar_.high)) {
+                (void)submit_margin_call_slice(policy_script_bar_.high, context, true);
             }
         }
         if (placement_snapshot->family == PineOrderFamily::Risk
