@@ -328,6 +328,7 @@ private:
     void scheduler_finish_security_sequence();
     void scheduler_record_range_end(const Bar&);
     void scheduler_record_broker_hash();
+    void capture_script_continuation_hash();
     void scheduler_update_session_state(
         const Bar&, std::optional<std::int64_t> next_script_open_ms);
     void scheduler_set_session_bar_state(bool in_session,

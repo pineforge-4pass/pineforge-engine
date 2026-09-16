@@ -41,14 +41,13 @@ int BacktestEngine::execution_contract() const {
 
 void BacktestEngine::guard_native_mutation(const char* operation) {
     // ab9714be:src/engine_consumer.cpp LegacyCompatibilityConsumer::refuse
-    // was a no-op on the source-route handle. After stream_begin the switched
-    // source host keeps stream_warmup_mode_ set until the first realtime
-    // input (pine_scheduler_native.cpp run_begin); that is the window where
-    // ab9714be accepted push_tick/advance_time/stream_end after the FX API
-    // refusal. Keep the call site first (P1-22) but do not latch
-    // UnsupportedSource in that window. Native hosts never set the flag, so
-    // their in-run FX setter still throws.
-    if (stream_warmup_mode_) return;
+    // was a no-op on the source-route handle. L8h made this guard inert only
+    // while stream_warmup_mode_ is set (cleared on the first realtime tick).
+    // Source hosts also set source_route_mutation_inert_ for the handle
+    // lifetime so a C-ABI FX setter after the first realtime tick still
+    // returns false without latching UnsupportedSource. Native hosts never
+    // set either flag, so their in-run setter still throws (P1-22).
+    if (stream_warmup_mode_ || source_route_mutation_inert_) return;
     execution_consumer().refuse_source_mutation(operation);
 }
 

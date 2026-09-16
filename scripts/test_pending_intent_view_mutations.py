@@ -46,6 +46,18 @@ class ProjectionCoverage(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("created_bar", diagnostic)
 
+    def test_named_constant_fold_is_rejected(self):
+        result, diagnostic = self.check(((
+            "src/source/pine_adapter.cpp",
+            "constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();",
+            "constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();\n"
+            "constexpr std::uint32_t kZero = 0U;"),
+            ("src/source/pine_adapter.cpp",
+             "out->created_bar = snapshot.projection_created_bar;",
+             "out->created_bar = kZero;"),))
+        self.assertIsNone(result)
+        self.assertIn("created_bar", diagnostic)
+
     def test_dead_branch_does_not_count_as_a_projection(self):
         result, diagnostic = self.check(((
             "src/source/pine_adapter.cpp",

@@ -893,6 +893,12 @@ protected:
     // loop's safe point (finish_intraday_loss_cancel); the loop itself
     // removes every order it has not yet applied.
     // @broker-state end
+    // Continuation digest at the last script point. Native batch teardown
+    // moves the consumer into Completed and would otherwise change the scalar
+    // relative to the recorded array; source state is still folded live so
+    // post-run mutations remain visible.
+    uint64_t last_script_continuation_hash_ = 0;
+    bool last_script_continuation_valid_ = false;
     // --- Per-trade extreme tracking ---
     execution::Result settle_native_execution_at(
         const execution::Action& action, const execution::Fill& fill,
@@ -1895,6 +1901,10 @@ protected:
     enum class StreamPhase { IDLE, REALTIME, ENDED };
     StreamPhase stream_phase_ = StreamPhase::IDLE;
     bool stream_warmup_mode_ = false;
+    // Source-route hosts set this for the handle lifetime so
+    // guard_native_mutation stays a no-op (ab9714be LegacyCompatibilityConsumer::refuse).
+    // Native hosts leave it false; their in-run setter still throws.
+    bool source_route_mutation_inert_ = false;
     int64_t stream_input_tf_ms_ = 0;
     int64_t stream_next_input_open_ms_ = 0;
     int64_t stream_clock_ms_ = 0;

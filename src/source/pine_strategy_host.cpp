@@ -86,7 +86,10 @@ source::PineStrategyHost::PineStrategyHost(compat::pine::CapAttachment cap)
       _src_hlc3_(scheduler_.language()._src_hlc3_),
       _src_ohlc4_(scheduler_.language()._src_ohlc4_),
       _src_hlcc4_(scheduler_.language()._src_hlcc4_),
-      is_last_tick_(scheduler_.language().is_last_tick_) {}
+      is_last_tick_(scheduler_.language().is_last_tick_) {
+    // ab9714be LegacyCompatibilityConsumer::refuse was a no-op on this handle.
+    source_route_mutation_inert_ = true;
+}
 
 std::uint64_t source::PineStrategyHost::adapter_event_high_water(
         const NativeStrategyHost& base) noexcept {
@@ -103,15 +106,14 @@ std::uint64_t source::PineStrategyHost::adapter_terminal_receipt_high_water(
 }
 
 std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
-    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
-        // The scalar is the final recorded script-point fingerprint. Native
-        // batch teardown and live input-clock advancement may move transport
-        // cursors after that callback; the recorded value already folded the
-        // kernel continuation at the broker decision it represents.
-        return broker_state_hashes_.back();
-    }
-    return broker_state_hash_from_execution_hash(
-        execution_consumer().continuation_hash());
+    // Fold current source/generic state with the last script-point
+    // continuation. Recording only controls whether the per-bar array is
+    // retained; the continuation snapshot keeps the scalar independent of
+    // that switch and of NativeCompleted teardown.
+    const std::uint64_t execution = last_script_continuation_valid_
+        ? last_script_continuation_hash_
+        : execution_consumer().continuation_hash();
+    return broker_state_hash_from_execution_hash(execution);
 }
 
 double source::PineStrategyHost::margin_liquidation_price() const {
@@ -283,12 +285,24 @@ void source::PineStrategyHost::on_native_run_begin() {
     }
 }
 
+void source::PineStrategyHost::capture_script_continuation_hash() {
+    last_script_continuation_hash_ = execution_consumer().continuation_hash();
+    last_script_continuation_valid_ = true;
+    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
+        broker_state_hashes_.back() = broker_state_hash();
+    }
+}
+
 void source::PineStrategyHost::on_native_input(
         const Bar& bar, const NativeInputContext& context) {
     if (source_prepare_failed_) return;
     if (native_state().phase == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
     scheduler_.input(bar, context, *this);
+    // Aggregation can deliver leftover input after the last script callback.
+    // Refresh the last recorded row (and the continuation snapshot) so the
+    // scalar stays the same fold with or without recording.
+    if (scheduler_.terminal_source_bar()) capture_script_continuation_hash();
 }
 
 void source::PineStrategyHost::on_native_tick(
@@ -327,12 +341,18 @@ void source::PineStrategyHost::on_native_bar(
         && context.coordinate.interval_index == source_last_bar_index_) {
         scheduler_record_range_end(bar);
     }
-    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
+    const bool recording = broker_state_hash_recording_ && !broker_state_hashes_.empty();
+    const bool last_batch = context.is_terminal_sub_bar
+        && context.coordinate.interval_index == source_last_bar_index_;
+    const bool stream_script = context.is_terminal_sub_bar
+        && stream_phase_ == StreamPhase::REALTIME;
+    if (recording || last_batch || stream_script) {
         // ab9714be pine_scheduler.cpp:1753/:1875 records after dispatch_bar,
         // including the terminal source policy updates.  The native hook
         // returns through adapter_.on_bar_close after the scheduler callback,
-        // so refresh the just-appended row at that equivalent boundary.
-        broker_state_hashes_.back() = broker_state_hash();
+        // so refresh the continuation snapshot (and the just-appended row)
+        // at that boundary.
+        capture_script_continuation_hash();
     }
 }
 
@@ -1160,10 +1180,10 @@ void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar)
 }
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {
-    if (broker_state_hash_recording_) {
-        broker_state_hashes_.push_back(broker_state_hash_from_execution_hash(
-            execution_consumer().continuation_hash()));
-    }
+    if (!broker_state_hash_recording_) return;
+    last_script_continuation_hash_ = execution_consumer().continuation_hash();
+    last_script_continuation_valid_ = true;
+    broker_state_hashes_.push_back(broker_state_hash());
 }
 
 void source::PineStrategyHost::scheduler_set_session_bar_state(

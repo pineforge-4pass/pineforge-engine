@@ -17,6 +17,15 @@ KINDS = {
 CONSTANT = re.compile(
     r"^\s*(?:0(?:\.0)?(?:U|ULL|L)?|-1|kNaN|"
     r"std::numeric_limits<double>::quiet_NaN\(\)|false|true|nullptr|\{\})\s*$")
+IDENT = re.compile(r"^(?:[A-Za-z_]\w*::)*([A-Za-z_]\w*)$")
+CONSTEXPR_NAME = re.compile(
+    r"\bconstexpr\b[^;{=]*\b([A-Za-z_]\w*)\s*[={;]")
+CONST_OBJECT = re.compile(
+    r"\b(?:static\s+)?const\b(?!\s*expr\b)([^;=]*?)\b([A-Za-z_]\w*)\s*=\s*([^;]+);")
+ENUM_BLOCK = re.compile(
+    r"\benum\b(?:\s+class|\s+struct)?(?:\s+\w+)?\s*(?::[^{]+)?\{([^}]*)\}", re.S)
+ENUM_MEMBER = re.compile(r"(?:^|,)\s*([A-Za-z_]\w*)\b")
+STATIC_CAST = re.compile(r"^static_cast\s*<[^>]+>\s*\((.*)\)$")
 SOURCE_TOKEN = re.compile(r"(?:::)?([A-Za-z_]\w+)(?=::|\b)")
 
 
@@ -72,7 +81,33 @@ def remove_false_blocks(text: str) -> str:
     return "".join(result)
 
 
-def projection_kind(body: str, field: str) -> str:
+def named_constants(text: str) -> set[str]:
+    names = set(CONSTEXPR_NAME.findall(text))
+    for decl, name, initial in CONST_OBJECT.findall(text):
+        if "&" in decl:
+            continue
+        initial = initial.strip()
+        if CONSTANT.fullmatch(initial) or IDENT.fullmatch(initial):
+            names.add(name)
+    for block in ENUM_BLOCK.findall(text):
+        names.update(ENUM_MEMBER.findall(block))
+    return names
+
+
+def rhs_is_compile_time_constant(rhs: str, constants: set[str]) -> bool:
+    value = rhs.strip()
+    while True:
+        cast = STATIC_CAST.match(value)
+        if not cast:
+            break
+        value = cast.group(1).strip()
+    if CONSTANT.fullmatch(value):
+        return True
+    ident = IDENT.fullmatch(value)
+    return bool(ident and ident.group(1) in constants)
+
+
+def projection_kind(body: str, field: str, constants: set[str]) -> str:
     occurrences = list(re.finditer(r"out->" + re.escape(field) + r"\b", body))
     dynamic = False
     for match in occurrences:
@@ -88,7 +123,7 @@ def projection_kind(body: str, field: str) -> str:
         rhs = body[rhs_start:semicolon].strip()
         if re.match(r"^false\s*\?", rhs):
             continue
-        if not CONSTANT.fullmatch(rhs):
+        if not rhs_is_compile_time_constant(rhs, constants):
             dynamic = True
     return "dynamic" if dynamic else "constant"
 
@@ -153,10 +188,12 @@ def check(root: Path = ROOT) -> dict[str, int]:
     body = remove_false_blocks(function_body(
         projection_text, "int PendingIntentView::copy_v1("))
     body = re.sub(r"\(\s*void\s*\)\s*out->[A-Za-z_]\w*\s*;", "", body)
+    constants = named_constants(projection_text)
     mirror = (root / "include/pineforge/pending_order_mirror.hpp").read_text()
     fields = [row[0] for row in _struct_fields(mirror)]
     if len(fields) != 406: die(f"frozen mirror field count changed: {len(fields)}")
-    constant = {field for field in fields if projection_kind(body, field) == "constant"}
+    constant = {field for field in fields
+                if projection_kind(body, field, constants) == "constant"}
     debt = load_debt(root)
     unknown = sorted(debt - set(fields))
     unexpected = sorted(constant - debt)

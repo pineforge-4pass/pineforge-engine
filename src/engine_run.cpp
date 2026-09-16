@@ -222,6 +222,8 @@ void BacktestEngine::reset_run_state() {
     bars_in_market_ = 0;
     first_bar_open_ = std::numeric_limits<double>::quiet_NaN();
     broker_state_hashes_.clear();    // ABI v4 task 6: retain capacity like equity_curve_
+    last_script_continuation_hash_ = 0;
+    last_script_continuation_valid_ = false;
 
     // Generic risk-adjacent lifecycle state.
     position_close_obligation_ = {};
