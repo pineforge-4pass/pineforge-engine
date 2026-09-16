@@ -8861,10 +8861,28 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                 }
                 const auto created = static_cast<PositionSide>(
                     prior.projection_position_side);
-                if (created == PositionSide::FLAT
-                    || (created == PositionSide::LONG) == prior.is_long) {
+                // ab9714be pine_fills.cpp:3687-3788 / 7470-7516: the pending
+                // scan is book order, not path order. An older same-direction
+                // stop that this bar also touches fills first, including a
+                // leftover flat-armed leg (probe 80 morning LE then afternoon
+                // LE2). Same-side-created pyramid adds are not leftovers.
+                if (created != PositionSide::FLAT
+                    && (created == PositionSide::LONG) == prior.is_long) {
                     continue;
                 }
+                // Same-bar siblings keep fill_phase (open-tick vs path). A
+                // leftover from an earlier bar that this bar also touches
+                // is the book-order override (LE then LE2).
+                if (prior.projection_created_bar == source.projection_created_bar) {
+                    continue;
+                }
+                const bool source_open_mkt = source.is_long
+                    ? policy_script_bar_.open >= source.exit_levels.stop
+                    : policy_script_bar_.open <= source.exit_levels.stop;
+                const bool prior_open_mkt = prior.is_long
+                    ? policy_script_bar_.open >= prior.exit_levels.stop
+                    : policy_script_bar_.open <= prior.exit_levels.stop;
+                if (source_open_mkt != prior_open_mkt) continue;
                 const bool prior_touched = prior.is_long
                     ? policy_script_bar_.high >= prior.exit_levels.stop
                     : policy_script_bar_.low <= prior.exit_levels.stop;
@@ -11534,6 +11552,7 @@ void PineExecutionAdapter::on_tick(
 void PineExecutionAdapter::rearm_throttled_reopens() {
     auto queued = std::move(throttled_reopen_rearm_);
     throttled_reopen_rearm_.clear();
+    const auto physical = require_host().physical_position();
     for (auto& snapshot : queued) {
         native_order::Request request;
         if (snapshot.deferred_cohort || !std::isfinite(snapshot.requested_qty)) {
@@ -11548,12 +11567,27 @@ void PineExecutionAdapter::rearm_throttled_reopens() {
         request.comment = snapshot.comment;
         request.trigger = native_order::Stop{snapshot.exit_levels.stop};
         request.group = group_for(snapshot.oca_name, snapshot.oca_type);
-        snapshot.forced_execution_price = kNaN;
+        const bool same_dir = physical.signed_units != 0.0
+            && ((physical.signed_units > 0.0) == snapshot.is_long);
+        const bool already_touched = policy_script_bar_valid_
+            && finite_positive(snapshot.exit_levels.stop)
+            && (snapshot.is_long
+                ? policy_script_bar_.high >= snapshot.exit_levels.stop
+                : policy_script_bar_.low <= snapshot.exit_levels.stop);
+        // The kernel already walked past the nearer stop. Keep the owner's
+        // fill price (the stop level) instead of the current path quote.
+        snapshot.forced_execution_price = (same_dir && already_touched)
+            ? snapshot.exit_levels.stop : kNaN;
         snapshot.projection_after_close = false;
         snapshot.cancellation = {};
         snapshot.market_admission = {};
         const SourceId key = snapshot.source_id;
-        (void)submit_or_replace(std::move(request), std::move(snapshot), true, key);
+        const auto accepted = submit_or_replace(
+            std::move(request), std::move(snapshot), true, key);
+        if (accepted && same_dir && already_touched) {
+            (void)require_host().execute_current(
+                {*accepted, NativeCurrentPriceRule::NearestTick});
+        }
     }
 }
 
@@ -11837,13 +11871,8 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Entry
         && std::abs(event.opened_units) > 0.0) {
         entry_openings_this_interval_ += 1;
-        const auto created = static_cast<PositionSide>(
-            placement_snapshot->projection_position_side);
-        if (created != PositionSide::FLAT
-            && (created == PositionSide::LONG) != placement_snapshot->is_long
-            && !throttled_reopen_rearm_.empty()) {
+        if (!throttled_reopen_rearm_.empty())
             rearm_throttled_reopens();
-        }
     }
     const double live_position = require_host().physical_position().signed_units;
     const int next_sign = live_position > 0.0 ? 1 : (live_position < 0.0 ? -1 : 0);
