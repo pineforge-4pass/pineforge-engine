@@ -547,6 +547,10 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         priced = priced_opening_trigger(trigger)
             || std::holds_alternative<native_order::Trail>(trigger);
     }
+    // L10j: an exit leg carrying priced stop/limit/trailing terms folds its
+    // pre-fill path extremes too; the magnifier one-price gate below applies
+    // to it as well (L10h), which the former adapter-side override bypassed.
+    priced = priced || adapter_.source_priced_exit(view.target.incarnation);
     // Synthesized/distribution samples are one-price opens. Folding the full
     // script-bar H/L against that fill (first_touch starts at segment 1)
     // counts post-open extremes that ab9714be pine_risk.cpp:256 never sees:

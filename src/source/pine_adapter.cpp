@@ -8872,23 +8872,24 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     return result;
 }
 
+bool PineExecutionAdapter::source_priced_exit(std::uint64_t incarnation) const noexcept {
+    const auto snapshot = placement_.find(incarnation);
+    if (snapshot == placement_.end()) return false;
+    const auto& source = snapshot->second;
+    return (source.family == PineOrderFamily::ExitLimit
+            || source.family == PineOrderFamily::ExitStop
+            || source.family == PineOrderFamily::ExitTrail)
+        && (std::isfinite(source.exit_levels.limit)
+            || std::isfinite(source.exit_levels.stop)
+            || std::isfinite(source.exit_levels.trail_points)
+            || std::isfinite(source.exit_levels.trail_price)
+            || std::isfinite(source.exit_levels.trail_offset));
+}
+
 NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrecommitView& view) const {
     const auto snapshot = placement_.find(view.target.incarnation);
     if (snapshot != placement_.end()) {
         const auto& source = snapshot->second;
-        const bool source_priced_exit =
-            (source.family == PineOrderFamily::ExitLimit
-             || source.family == PineOrderFamily::ExitStop
-             || source.family == PineOrderFamily::ExitTrail)
-            && (std::isfinite(source.exit_levels.limit)
-                || std::isfinite(source.exit_levels.stop)
-                || std::isfinite(source.exit_levels.trail_points)
-                || std::isfinite(source.exit_levels.trail_price)
-                || std::isfinite(source.exit_levels.trail_offset));
-        if (source_priced_exit) {
-            if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host()))
-                pine_host->fold_exit_path_extremes_ = true;
-        }
         const auto physical = require_host().physical_position();
         // ab9714be pine_fills.cpp:7483-7537: priced (stop/limit) entries are
         // throttled to one opening from flat per bar after an earlier entry

@@ -566,6 +566,9 @@ public:
 
     native_order::ExecutionTerms resolve_terms(const NativeExecutionTermsFacts&) const;
     NativePrecommitVerdict validate_precommit(const NativePrecommitView&) const;
+    // True when the request is a source exit leg carrying priced stop, limit
+    // or trailing terms (L10j): its trade row folds the pre-fill path extremes.
+    bool source_priced_exit(std::uint64_t incarnation) const noexcept;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
     void on_tick(const Bar&, const NativeTickContext&);
     // Called from the generic calculation callback after the source script
