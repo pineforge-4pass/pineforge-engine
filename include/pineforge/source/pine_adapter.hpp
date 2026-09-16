@@ -677,6 +677,7 @@ private:
         SourceId replacement_key;
         bool opening = false;
         std::uint64_t family_key = 0;
+        bool next_open = false;
     };
 
     struct PendingMarginRevival {
@@ -779,7 +780,9 @@ private:
     void stage_flat_children_before_parent(const SourceId&, std::int32_t,
                                            std::int64_t);
     bool defer_coof_tail() const noexcept;
-    void flush_coof_tail();
+    double coof_next_waypoint() const noexcept;
+    bool coof_remaining_recrosses(double level, bool long_position) const noexcept;
+    void flush_coof_tail(bool include_next_open = false);
     native_order::Owner owner_for_close(const SourceId&, bool dynamic) const;
     bool same_bar_market_tx_scope() const;
     void flush_pending_same_bar_commands();

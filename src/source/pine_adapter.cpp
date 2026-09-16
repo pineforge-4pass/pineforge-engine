@@ -259,6 +259,21 @@ OrderBirth PineExecutionAdapter::capture_order_birth() const {
                                   : BirthCursorDomain::HistoricalPath;
     const int count = magnified ? std::max(1, point->decision.sub_count) : 4;
     int index = magnified ? point->decision.sub_index : 0;
+    if (!magnified) {
+        bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
+            < std::abs(coof_script_bar_.open - coof_script_bar_.low);
+        if (const auto state = require_host().native_state(); state.spec) {
+            if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
+            else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
+        }
+        switch (point->decision.coordinate.path_phase) {
+        case NativePathPhase::Open: index = 0; break;
+        case NativePathPhase::High: index = high_first ? 1 : 2; break;
+        case NativePathPhase::Low: index = high_first ? 2 : 1; break;
+        case NativePathPhase::Close: index = 3; break;
+        case NativePathPhase::None: index = 0; break;
+        }
+    }
     index = std::max(0, std::min(index, count - 1));
     const auto cursor = BirthCursor::point(domain, index, count);
     const std::uint64_t ordinal = std::max<std::uint64_t>(1, last_applied_ordinal_);
@@ -1672,8 +1687,11 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
     }
     const auto& accepted_snapshot = placement_.at(accepted->incarnation);
     if (coof_recalc_active_
-        && (coof_first_open_ || finite_positive(accepted_snapshot.forced_execution_price))
-        && std::holds_alternative<native_order::Market>(request.trigger)
+        && ((std::holds_alternative<native_order::Market>(request.trigger)
+             && (coof_first_open_
+                 || finite_positive(accepted_snapshot.forced_execution_price)))
+            || (coof_first_open_
+                && finite_positive(accepted_snapshot.forced_execution_price)))
         && std::holds_alternative<native_order::ImmediateRemaining>(request.capacity)
         && host.current_execution_point()) {
         first_open_newborns_.push_back(*accepted);
@@ -2688,15 +2706,119 @@ bool PineExecutionAdapter::defer_coof_tail() const noexcept {
     if (!coof_recalc_active_ || coof_first_open_) return false;
     const auto state = require_host().native_state();
     if (state.spec && state.spec->intrabar.lower()) return false;
-    return coof_context_.coordinate.path_phase == NativePathPhase::Low
-        || coof_context_.coordinate.path_phase == NativePathPhase::Close
-        || coof_context_.coordinate.path_phase == NativePathPhase::None;
+    const auto phase = coof_context_.coordinate.path_phase;
+    if (phase == NativePathPhase::Close || phase == NativePathPhase::None)
+        return true;
+    if (!coof_script_bar_valid_) return false;
+    bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
+        < std::abs(coof_script_bar_.open - coof_script_bar_.low);
+    if (state.spec) {
+        if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
+        else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
+    }
+    const NativePathPhase second = high_first
+        ? NativePathPhase::Low : NativePathPhase::High;
+    const double endpoint = high_first
+        ? coof_script_bar_.low : coof_script_bar_.high;
+    const auto point = require_host().current_execution_point();
+    return phase == second && point && point->price == endpoint;
 }
 
-void PineExecutionAdapter::flush_coof_tail() {
+double PineExecutionAdapter::coof_next_waypoint() const noexcept {
+    if (!coof_recalc_active_ || !coof_script_bar_valid_) return kNaN;
+    const auto state = require_host().native_state();
+    if (state.spec && state.spec->intrabar.lower()) {
+        if (const auto* pine_host = dynamic_cast<const PineStrategyHost*>(&require_host())) {
+            const auto point = require_host().current_execution_point();
+            const auto next = pine_host->scheduler_.next_input_waypoint(
+                coof_context_, point ? point->price : kNaN,
+                state.spec->path_order);
+            if (next) return *next;
+        }
+    }
+    bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
+        < std::abs(coof_script_bar_.open - coof_script_bar_.low);
+    if (state.spec) {
+        if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
+        else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
+    }
+    const NativePathPhase path_phase[] = {
+        NativePathPhase::Open,
+        high_first ? NativePathPhase::High : NativePathPhase::Low,
+        high_first ? NativePathPhase::Low : NativePathPhase::High,
+        NativePathPhase::Close,
+    };
+    const double path_price[] = {
+        coof_script_bar_.open,
+        high_first ? coof_script_bar_.high : coof_script_bar_.low,
+        high_first ? coof_script_bar_.low : coof_script_bar_.high,
+        coof_script_bar_.close,
+    };
+    for (int index = 0; index < 4; ++index) {
+        if (path_phase[index] != coof_context_.coordinate.path_phase) continue;
+        const auto point = require_host().current_execution_point();
+        if (index > 0 && point && finite_positive(point->price)
+            && point->price != path_price[index]) {
+            return path_price[index];
+        }
+        return index < 3 ? path_price[index + 1] : kNaN;
+    }
+    return kNaN;
+}
+
+bool PineExecutionAdapter::coof_remaining_recrosses(
+        double level, bool long_position) const noexcept {
+    if (!finite_positive(level) || !coof_recalc_active_ || !coof_script_bar_valid_)
+        return false;
+    bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
+        < std::abs(coof_script_bar_.open - coof_script_bar_.low);
+    if (const auto state = require_host().native_state(); state.spec) {
+        if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
+        else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
+    }
+    const NativePathPhase path_phase[] = {
+        NativePathPhase::Open,
+        high_first ? NativePathPhase::High : NativePathPhase::Low,
+        high_first ? NativePathPhase::Low : NativePathPhase::High,
+        NativePathPhase::Close,
+    };
+    const double path_price[] = {
+        coof_script_bar_.open,
+        high_first ? coof_script_bar_.high : coof_script_bar_.low,
+        high_first ? coof_script_bar_.low : coof_script_bar_.high,
+        coof_script_bar_.close,
+    };
+    for (int index = 0; index < 4; ++index) {
+        if (path_phase[index] != coof_context_.coordinate.path_phase) continue;
+        const auto point = require_host().current_execution_point();
+        int first = index + 1;
+        if (index > 0 && point && finite_positive(point->price)
+            && point->price != path_price[index]) {
+            first = index;
+        }
+        bool crossed_adverse = false;
+        for (int cursor = first; cursor < 4; ++cursor) {
+            if (long_position) {
+                if (path_price[cursor] < level) crossed_adverse = true;
+                else if (crossed_adverse && path_price[cursor] >= level) return true;
+            } else {
+                if (path_price[cursor] > level) crossed_adverse = true;
+                else if (crossed_adverse && path_price[cursor] <= level) return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+void PineExecutionAdapter::flush_coof_tail(bool include_next_open) {
     auto queued = std::move(pending_coof_requests_);
     pending_coof_requests_.clear();
     for (auto& pending : queued) {
+        if (pending.next_open && !include_next_open) {
+            pending_coof_requests_.push_back(std::move(pending));
+            continue;
+        }
         const auto accepted = submit_or_replace(std::move(pending.request), std::move(pending.snapshot),
                                                 pending.opening, pending.replacement_key);
         if (accepted && pending.family_key != 0)
@@ -2765,8 +2887,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     }
     bool close_precedes_entry = pending_same_bar_close_qty_ > 0.0;
     const double preceding_close_qty = pending_same_bar_close_qty_;
-    if (!close_precedes_entry && source_point) {
-        for (const auto& handle : live_handles_) {
+    native_order::RequestHandle preceding_close_request{};
+    if (source_point) {
+        for (auto it = live_handles_.rbegin(); it != live_handles_.rend(); ++it) {
+            const auto& handle = *it;
             const auto prior = placement_.find(handle.incarnation);
             if (prior == placement_.end()) continue;
             const auto& row = prior->second;
@@ -2776,6 +2900,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 && row.placement_script_open_ms
                     == source_point->decision.script_bar_open_ms) {
                 close_precedes_entry = true;
+                preceding_close_request = handle;
                 break;
             }
         }
@@ -2794,6 +2919,39 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         // outside the core. Publish it before the later priced entry so the
         // native book receives the legacy source statement order.
         flush_pending_same_bar_commands();
+        if (source_point) {
+            for (auto it = live_handles_.rbegin(); it != live_handles_.rend(); ++it) {
+                const auto prior = placement_.find(it->incarnation);
+                if (prior == placement_.end()
+                    || prior->second.family != PineOrderFamily::Close
+                    || prior->second.placement_script_open_ms
+                        != source_point->decision.script_bar_open_ms) {
+                    continue;
+                }
+                preceding_close_request = *it;
+                break;
+            }
+        }
+    }
+    if (config_.calc_on_order_fills && priced && !coof_recalc_active_
+        && source_point && current != 0.0 && ((current > 0.0) == is_long)) {
+        std::vector<native_order::RequestHandle> stale_recalc_entries;
+        for (const auto& handle : live_handles_) {
+            const auto prior = placement_.find(handle.incarnation);
+            if (prior == placement_.end()) continue;
+            const auto& row = prior->second;
+            if (row.opening && row.family == PineOrderFamily::Entry
+                && row.is_long == is_long && row.projection_created_during_coof
+                && row.projection_created_bar
+                    == source_point->decision.coordinate.interval_index) {
+                stale_recalc_entries.push_back(handle);
+            }
+        }
+        for (const auto& handle : stale_recalc_entries) {
+            const auto cancelled = require_host().cancel(handle);
+            if (cancelled.status == native_order::CancelStatus::Cancelled)
+                retire(handle);
+        }
     }
     // Explicit entry quantities have a source placement-time admission
     // boundary.  In particular, non-finite units and finite values whose
@@ -2879,8 +3037,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             existing->second.pooc_global_full_exit_tracks_bound_adds = false;
         }
     }
-    const bool short_seed_final_candidate = !config_.process_orders_on_close
-        && current < 0.0 && !is_long
+    const bool short_seed_final_candidate = current < 0.0 && !is_long
         && short_seed_long_candidate_.incarnation != 0;
     const bool opposite_opening_pending = std::any_of(live_handles_.begin(), live_handles_.end(),
         [&](const native_order::RequestHandle& handle) {
@@ -2993,6 +3150,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     const auto current_point = source_point;
     const bool close_all_precedes = current_point
         && close_all_pending_script_bar_ == current_point->decision.script_bar_open_ms;
+    native_order::RequestHandle preceding_close_all{};
     const bool reverses = current != 0.0 && ((current > 0.0) != is_long) && !close_all_precedes;
     // Default-sized reversal requests are HostSized already; they can carry a
     // fill-time close-only shape without changing explicit F7/F8 transaction
@@ -3078,6 +3236,26 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         request.intent = native_order::Transact{is_long ? transaction : -transaction};
     }
     request.label = id; request.comment = comment;
+    const auto coof_native_state = require_host().native_state();
+    const bool coof_lower_path = coof_native_state.spec
+        && coof_native_state.spec->intrabar.lower();
+    bool coof_market_next_open = false;
+    if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && !priced) {
+        bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
+            < std::abs(coof_script_bar_.open - coof_script_bar_.low);
+        if (coof_native_state.spec) {
+            if (coof_native_state.spec->path_order == NativePathOrder::HighFirst)
+                high_first = true;
+            else if (coof_native_state.spec->path_order == NativePathOrder::LowFirst)
+                high_first = false;
+        }
+        const NativePathPhase second = high_first
+            ? NativePathPhase::Low : NativePathPhase::High;
+        const double endpoint = high_first ? coof_script_bar_.low : coof_script_bar_.high;
+        const auto point = require_host().current_execution_point();
+        coof_market_next_open = coof_context_.coordinate.path_phase == second
+            && point && point->price == endpoint;
+    }
     double native_limit = limit_price;
     double native_stop = stop_price;
     if (finite_positive(limit_price) && !finite_positive(stop_price)) {
@@ -3089,35 +3267,30 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             stop_price, staged_.syminfo.mintick, is_long, false);
     }
     request.trigger = trigger_for(native_limit, native_stop, kNaN, kNaN);
-    if (coof_recalc_active_ && !coof_first_open_ && coof_script_bar_valid_
+    double coof_market_fill = kNaN;
+    if (coof_recalc_active_ && !coof_first_open_ && !coof_market_next_open
+        && coof_script_bar_valid_
         && std::holds_alternative<native_order::Market>(request.trigger) && !defer_coof_tail()) {
-        const auto phase = coof_context_.coordinate.path_phase;
         // ab9714be pine_scheduler.cpp:398-619: a MARKET request born by a
         // non-first-open fill recalc waits for the next unconsumed waypoint.
-        // At O that waypoint is the nearer extreme; after an extreme it is
-        // the opposite extreme.  Encoding that source cadence as a priced
-        // request lets the generic matcher remain the sole path owner.
-        const bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
-            < std::abs(coof_script_bar_.open - coof_script_bar_.low);
-        const double next_extreme = phase == NativePathPhase::Open
-            ? (high_first ? coof_script_bar_.high : coof_script_bar_.low)
-            : (phase == NativePathPhase::High ? coof_script_bar_.low
-                : (phase == NativePathPhase::Low ? coof_script_bar_.high : kNaN));
+        // A mid-segment fill retains that segment's endpoint; an endpoint
+        // fill advances to the following waypoint.
+        const double next_extreme = coof_next_waypoint();
         const auto point = require_host().current_execution_point();
         const double current_quote = point ? point->price : kNaN;
-        const double next_fill = nearest_tick(
-            next_extreme + (is_long ? 1.0 : -1.0) * config_.slippage
-                * staged_.syminfo.mintick,
-            staged_.syminfo.mintick);
-        if (finite_positive(next_fill) && finite_positive(current_quote)
-            && next_fill != current_quote) {
-            const bool falling = next_fill < current_quote;
+        coof_market_fill = source_bar_fill_tick(
+            next_extreme, staged_.syminfo.mintick)
+            + (is_long ? 1.0 : -1.0) * config_.slippage
+                * staged_.syminfo.mintick;
+        if (finite_positive(next_extreme) && finite_positive(current_quote)
+            && next_extreme != current_quote) {
+            const bool falling = next_extreme < current_quote;
             if (is_long) {
-                request.trigger = falling ? native_order::Trigger{native_order::Limit{next_fill}}
-                                          : native_order::Trigger{native_order::Stop{next_fill}};
+                request.trigger = falling ? native_order::Trigger{native_order::Limit{next_extreme}}
+                                          : native_order::Trigger{native_order::Stop{next_extreme}};
             } else {
-                request.trigger = falling ? native_order::Trigger{native_order::Stop{next_fill}}
-                                          : native_order::Trigger{native_order::Limit{next_fill}};
+                request.trigger = falling ? native_order::Trigger{native_order::Stop{next_extreme}}
+                                          : native_order::Trigger{native_order::Limit{next_extreme}};
             }
         }
     }
@@ -3150,6 +3323,24 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
     }
     request.group = group_for(oca_name, oca_type);
+    if (close_all_precedes && !priced && current_point) {
+        for (auto it = live_handles_.rbegin(); it != live_handles_.rend(); ++it) {
+            const auto close = placement_.find(it->incarnation);
+            if (close == placement_.end()
+                || close->second.family != PineOrderFamily::CloseAll
+                || close->second.placement_script_open_ms
+                    != current_point->decision.script_bar_open_ms) {
+                continue;
+            }
+            preceding_close_all = *it;
+            break;
+        }
+    }
+    const bool sequenced_close_entry = pure_stop_entry
+        || (!priced && (!staged_.quantity_grid || *staged_.quantity_grid < 1.0));
+    if (preceding_close_all.incarnation == 0 && sequenced_close_entry
+        && current != 0.0 && ((current > 0.0) != is_long))
+        preceding_close_all = preceding_close_request;
     PlacementSnapshot snapshot;
     snapshot.family = PineOrderFamily::Entry;
     snapshot.source_id = id;
@@ -3158,6 +3349,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     snapshot.oca_type = oca_type; snapshot.qty_type = qty_type;
     snapshot.requested_qty = normalized_qty; snapshot.is_long = is_long;
     snapshot.opening = true;
+    snapshot.paired_reversal_parent = preceding_close_all;
     snapshot.command_ordinal = ++command_ordinal_;
     snapshot.direction_gate = direction_blocked;
     snapshot.deferred_cohort = default_sized;
@@ -3192,6 +3384,30 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     snapshot.reverse_to = reverses || paired_all_in_reentry;
     snapshot.projection_after_close = close_precedes_entry;
     snapshot.sizing = sizing_snapshot();
+    if (finite_positive(coof_market_fill))
+        snapshot.forced_execution_price = coof_market_fill;
+    if (coof_recalc_active_ && !coof_first_open_ && !coof_lower_path && priced) {
+        const auto point = require_host().current_execution_point();
+        const double birth = point ? point->price : kNaN;
+        const double waypoint = coof_next_waypoint();
+        bool reached = false;
+        bool limit_route = false;
+        if (finite_positive(stop_price)) {
+            reached = is_long ? (waypoint >= stop_price && birth < stop_price)
+                              : (waypoint <= stop_price && birth > stop_price);
+        } else if (finite_positive(limit_price)) {
+            limit_route = true;
+            reached = is_long ? (waypoint <= limit_price && birth > limit_price)
+                              : (waypoint >= limit_price && birth < limit_price);
+        }
+        if (reached) {
+            const double slipped = waypoint + (limit_route ? 0.0
+                : (is_long ? 1.0 : -1.0) * config_.slippage
+                    * staged_.syminfo.mintick);
+            snapshot.forced_execution_price = nearest_tick(
+                slipped, staged_.syminfo.mintick);
+        }
+    }
     if (current == 0.0 && priced && current_point) {
         const auto is_opposite_market_predecessor = [&](const PlacementSnapshot& prior) {
             return prior.opening && prior.family == PineOrderFamily::Entry
@@ -3556,6 +3772,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             }
         }
     }
+    if (preceding_close_all.incarnation != 0) {
+        pending_entries_.push_back({std::move(request), std::move(snapshot), id});
+        return;
+    }
     const bool source_same_side_market_add = default_sized
         && config_.default_qty_type == static_cast<int>(QtyType::FIXED)
         && !config_.calc_on_order_fills
@@ -3648,6 +3868,11 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         && priced && !coof_recalc_active_ && oca_name.empty();
     if (coof_flat_priced) {
         pending_entries_.push_back({std::move(request), std::move(snapshot), id});
+        return;
+    }
+    if (coof_market_next_open) {
+        pending_coof_requests_.push_back(
+            {std::move(request), std::move(snapshot), id, true, 0, true});
         return;
     }
     if (defer_coof_tail()) {
@@ -3760,32 +3985,28 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         request.intent = native_order::Flatten{};
         request.label = "__pine_close_all";
         request.comment = comment;
-        if (coof_recalc_active_ && !coof_first_open_ && coof_script_bar_valid_) {
-            const auto phase = coof_context_.coordinate.path_phase;
-            const bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
-                < std::abs(coof_script_bar_.open - coof_script_bar_.low);
-            const double next_extreme = phase == NativePathPhase::Open
-                ? (high_first ? coof_script_bar_.high : coof_script_bar_.low)
-                : phase == NativePathPhase::High ? coof_script_bar_.low
-                : (phase == NativePathPhase::Low ? coof_script_bar_.high : kNaN);
+        double coof_close_all_fill = kNaN;
+        if (coof_recalc_active_ && !coof_first_open_ && !immediately
+            && coof_script_bar_valid_) {
+            const double next_extreme = coof_next_waypoint();
             const auto point = require_host().current_execution_point();
             const double current_quote = point ? point->price : kNaN;
             const bool buy = require_host().physical_position().signed_units < 0.0;
-            const double next_fill = nearest_tick(
-                next_extreme + (buy ? 1.0 : -1.0) * config_.slippage
-                    * staged_.syminfo.mintick,
-                staged_.syminfo.mintick);
-            if (finite_positive(next_fill) && finite_positive(current_quote)
-                && next_fill != current_quote) {
-                const bool falling = next_fill < current_quote;
+            coof_close_all_fill = source_bar_fill_tick(
+                next_extreme, staged_.syminfo.mintick)
+                + (buy ? 1.0 : -1.0) * config_.slippage
+                    * staged_.syminfo.mintick;
+            if (finite_positive(next_extreme) && finite_positive(current_quote)
+                && next_extreme != current_quote) {
+                const bool falling = next_extreme < current_quote;
                 if (buy) {
                     request.trigger = falling
-                        ? native_order::Trigger{native_order::Limit{next_fill}}
-                        : native_order::Trigger{native_order::Stop{next_fill}};
+                        ? native_order::Trigger{native_order::Limit{next_extreme}}
+                        : native_order::Trigger{native_order::Stop{next_extreme}};
                 } else {
                     request.trigger = falling
-                        ? native_order::Trigger{native_order::Stop{next_fill}}
-                        : native_order::Trigger{native_order::Limit{next_fill}};
+                        ? native_order::Trigger{native_order::Stop{next_extreme}}
+                        : native_order::Trigger{native_order::Limit{next_extreme}};
                 }
             }
         }
@@ -3794,12 +4015,18 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.source_id = request.label;
         snapshot.comment = comment;
         snapshot.command_ordinal = command_ordinal;
+        snapshot.immediately = immediately;
         snapshot.sizing = sizing_snapshot();
+        snapshot.forced_execution_price = coof_close_all_fill;
         (void)qty;
         (void)qty_percent;
-        (void)immediately;
         (void)callsite_token;
-        submit_or_replace(std::move(request), std::move(snapshot), false, "__pine_close_all");
+        const auto accepted = submit_or_replace(
+            std::move(request), std::move(snapshot), false, "__pine_close_all");
+        if (immediately && accepted) {
+            (void)require_host().execute_current(
+                {*accepted, NativeCurrentPriceRule::NearestTick});
+        }
         return;
     }
     const auto openings = openings_for(id);
@@ -4022,6 +4249,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.frozen_market_transaction_units = frozen_qty;
         snapshot.frozen_market_targeted_close = true;
         snapshot.frozen_market_target_was_long = current > 0.0;
+        snapshot.birth = capture_order_birth();
         snapshot.sizing = sizing_snapshot();
         if (const auto point = require_host().current_execution_point()) {
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
@@ -4048,6 +4276,52 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // PlacementSnapshot keeps the public source id for cohorts/readback.
     request.label = "__close__" + id;
     request.comment = comment;
+    double coof_close_fill = kNaN;
+    bool coof_close_next_open = false;
+    if (coof_recalc_active_ && !coof_first_open_ && !immediately) {
+        const auto state = require_host().native_state();
+        const bool lower_path = state.spec && state.spec->intrabar.lower();
+        if (!lower_path) {
+            bool high_first = std::abs(coof_script_bar_.high - coof_script_bar_.open)
+                < std::abs(coof_script_bar_.open - coof_script_bar_.low);
+            if (state.spec) {
+                if (state.spec->path_order == NativePathOrder::HighFirst) high_first = true;
+                else if (state.spec->path_order == NativePathOrder::LowFirst) high_first = false;
+            }
+            const NativePathPhase second = high_first
+                ? NativePathPhase::Low : NativePathPhase::High;
+            const double endpoint = high_first
+                ? coof_script_bar_.low : coof_script_bar_.high;
+            const auto point = require_host().current_execution_point();
+            coof_close_next_open = coof_context_.coordinate.path_phase == second
+                && point && point->price == endpoint;
+        }
+    }
+    if (coof_recalc_active_ && !coof_first_open_ && !immediately
+        && !coof_close_next_open
+        && coof_script_bar_valid_) {
+        const double next_waypoint = coof_next_waypoint();
+        const auto point = require_host().current_execution_point();
+        const double current_quote = point ? point->price : kNaN;
+        const bool buy = current < 0.0;
+        coof_close_fill = source_bar_fill_tick(
+            next_waypoint, staged_.syminfo.mintick)
+            + (buy ? 1.0 : -1.0) * config_.slippage
+                * staged_.syminfo.mintick;
+        if (finite_positive(next_waypoint) && finite_positive(current_quote)
+            && next_waypoint != current_quote) {
+            const bool falling = next_waypoint < current_quote;
+            if (buy) {
+                request.trigger = falling
+                    ? native_order::Trigger{native_order::Limit{next_waypoint}}
+                    : native_order::Trigger{native_order::Stop{next_waypoint}};
+            } else {
+                request.trigger = falling
+                    ? native_order::Trigger{native_order::Stop{next_waypoint}}
+                    : native_order::Trigger{native_order::Limit{next_waypoint}};
+            }
+        }
+    }
     // ab9714be pine_strategy_commands.cpp:2222-2278 and :2522-2590:
     // the default close-entries rule freezes the id's logical quantity, then
     // drains the physical book in FIFO order.  It is deliberately not bound
@@ -4071,6 +4345,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     snapshot.projection_remaining_qty = frozen_qty;
     snapshot.command_ordinal = command_ordinal;
     snapshot.is_long = false;
+    snapshot.forced_execution_price = coof_close_fill;
     snapshot.immediately = immediately; snapshot.deferred_cohort = host_sized; snapshot.sizing = sizing_snapshot();
     if (paired_reversal_parent && !paired_reversal_whole_drop)
         snapshot.paired_reversal_parent = *paired_reversal_parent;
@@ -4079,10 +4354,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // candidate: if the re-entry is refused, the legacy close is suppressed
     // rather than flattening the carried seed on its own.
     const bool all_in_percent = std::isnan(effective_qty)
+        && requested_percent >= 100.0 - 1e-9
         && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
         && config_.default_qty_value >= 100.0;
     bool opposite_reversal_pair = false;
-    if (all_in_percent && current != 0.0) {
+    if (all_in_percent && current != 0.0 && !staged_.quantity_grid) {
         const bool held_long = current > 0.0;
         const auto point = require_host().current_execution_point();
         const auto same_bar = [&](const PlacementSnapshot& candidate) {
@@ -4123,14 +4399,11 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 if (found == placement_.end() || !found->second.opening
                     || found->second.family != PineOrderFamily::Entry
                     || found->second.placement_script_open_ms
-                        != point->decision.script_bar_open_ms) {
+                        != point->decision.script_bar_open_ms
+                    || found->second.source_id != id) {
                     continue;
                 }
-                const bool held_long = current > 0.0;
-                if (found->second.source_id == id
-                    || found->second.is_long != held_long) {
-                    reentry = handle;
-                }
+                reentry = handle;
             }
             if (reentry) {
                 request.owner = native_order::WaitForApplied{*reentry};
@@ -4143,12 +4416,21 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // Independent close statements in one evaluation must coexist (P1/P2).
     const SourceId replacement_key = callsite_token == 0
         ? SourceId{} : id + "#close#" + std::to_string(callsite_token);
+    if (coof_close_next_open) {
+        snapshot.forced_execution_price = kNaN;
+        request.trigger = native_order::Market{};
+        pending_coof_requests_.push_back({
+            std::move(request), std::move(snapshot), replacement_key,
+            false, 0, true});
+        return;
+    }
     const PlacementSnapshot shadow_snapshot = snapshot;
     const auto accepted = submit_or_replace(std::move(request), std::move(snapshot), false, replacement_key);
     if (!accepted && all_in_dependent_close) {
         source_shadow_pending_.push_back({shadow_snapshot, "__close__" + id});
     }
     const bool pooc_immediate_fifo = config_.process_orders_on_close
+        && !coof_recalc_active_
         && !config_.close_entries_rule_any && closes_full_position
         && !reversal_pair;
     if ((immediately || (config_.process_orders_on_close
@@ -4181,6 +4463,7 @@ void PineExecutionAdapter::close_all() {
         for (const auto& handle : live_handles_) {
             const auto placement = placement_.find(handle.incarnation);
             if (placement != placement_.end() && placement->second.opening
+                && placement->second.family == PineOrderFamily::Entry
                 && placement->second.placement_script_open_ms == script_open) {
                 newborns.push_back(handle);
             }
@@ -4311,7 +4594,30 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     const double tick = staged_.syminfo.mintick;
     bool parent_long = physical.signed_units > 0.0;
     bool known_parent_level = physical.signed_units != 0.0;
+    const auto observe_staged_parent = [&](const PlacementSnapshot& parent) {
+        if (!parent.opening || parent.family != PineOrderFamily::Entry
+            || parent.source_id != from_entry) {
+            return;
+        }
+        parent_long = parent.is_long;
+        known_parent_level = finite_positive(parent.exit_levels.limit);
+        if (known_parent_level) entry_price = parent.exit_levels.limit;
+    };
+    for (const auto& parent : pending_same_bar_commands_)
+        observe_staged_parent(parent.snapshot);
+    for (const auto& parent : pending_entries_)
+        observe_staged_parent(parent.snapshot);
+    for (const auto& parent : pending_coof_requests_)
+        observe_staged_parent(parent.snapshot);
     const auto cohort = cohorts_by_id_.find(from_entry);
+    for (const auto& handle : live_handles_) {
+        const auto parent = placement_.find(handle.incarnation);
+        const bool already_opened = cohort != cohorts_by_id_.end()
+            && std::find(cohort->second.opened.begin(), cohort->second.opened.end(), handle)
+                != cohort->second.opened.end();
+        if (parent != placement_.end() && !already_opened)
+            observe_staged_parent(parent->second);
+    }
     if (cohort != cohorts_by_id_.end()) {
         for (auto it = cohort->second.origins.rbegin();
              it != cohort->second.origins.rend(); ++it) {
@@ -4642,9 +4948,45 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                                     profit_ticks, loss_ticks};
             snapshot.trail_activation_level = trail_price;
             snapshot.sizing = exit_sizing;
+            if (coof_recalc_active_ && !coof_first_open_
+                && family == PineOrderFamily::ExitStop
+                && finite_positive(stop_price)) {
+                const auto point = require_host().current_execution_point();
+                const double birth = point ? point->price : kNaN;
+                const double waypoint = coof_next_waypoint();
+                const bool long_position = physical.signed_units > 0.0;
+                const bool reached_on_next_leg = long_position
+                    ? (birth > stop_price && waypoint <= stop_price)
+                    : (birth < stop_price && waypoint >= stop_price);
+                if (reached_on_next_leg) {
+                    snapshot.forced_execution_price = source_bar_fill_tick(
+                        waypoint, staged_.syminfo.mintick)
+                        + (long_position ? -1.0 : 1.0) * config_.slippage
+                            * staged_.syminfo.mintick;
+                }
+            }
             const double source_position = std::abs(require_host().physical_position().signed_units);
             if (std::isfinite(reserved_exit_qty)) {
                 snapshot.projection_remaining_qty = reserved_exit_qty;
+                const bool foreign_pending_opening = std::any_of(
+                    live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+                        const auto candidate = placement_.find(handle.incarnation);
+                        return candidate != placement_.end()
+                            && candidate->second.opening
+                            && candidate->second.source_id != from_entry;
+                    }) || std::any_of(
+                    pending_entries_.begin(), pending_entries_.end(),
+                    [&](const PendingEntry& candidate) {
+                        return candidate.snapshot.opening
+                            && candidate.snapshot.source_id != from_entry;
+                    });
+                const double percent = std::isfinite(snapshot.qty_percent)
+                    ? snapshot.qty_percent : 100.0;
+                snapshot.fixed_exit_reservation = !binds_pending_reversal_entry
+                    && physical.signed_units != 0.0
+                    && (percent < 100.0 - 1e-9
+                        || reserved_exit_qty < live_reservation_basis - 1e-9
+                        || foreign_pending_opening);
             } else if (!binds_pending_reversal_entry && host_sized
                        && !std::isfinite(snapshot.requested_qty)
                        && source_position > 0.0) {
@@ -4702,6 +5044,64 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                 if (!(requested > 0.0)) return;
                 snapshot.projection_remaining_qty = requested;
             }
+            if (coof_recalc_active_ && physical.signed_units != 0.0) {
+                const auto point = require_host().current_execution_point();
+                const double birth = point ? point->price : kNaN;
+                const bool long_position = physical.signed_units > 0.0;
+                const bool wrong_stop = family == PineOrderFamily::ExitStop
+                    && finite_positive(stop_price)
+                    && (long_position ? stop_price > birth : stop_price < birth);
+                const bool wrong_limit = family == PineOrderFamily::ExitLimit
+                    && finite_positive(limit_price)
+                    && (long_position ? limit_price < birth : limit_price > birth);
+                const bool limit_recross = wrong_limit
+                    && coof_remaining_recrosses(limit_price, long_position);
+                const PlacementSnapshot* parent = nullptr;
+                native_order::RequestHandle parent_handle{};
+                if (const auto cohort = cohorts_by_id_.find(from_entry);
+                    cohort != cohorts_by_id_.end() && !cohort->second.opened.empty()) {
+                    parent_handle = cohort->second.opened.back();
+                    const auto found = placement_.find(parent_handle.incarnation);
+                    if (found != placement_.end()) parent = &found->second;
+                }
+                const bool plain_market_parent = parent
+                    && parent->family == PineOrderFamily::Entry
+                    && !finite_positive(parent->exit_levels.limit)
+                    && !finite_positive(parent->exit_levels.stop)
+                    && !finite_positive(parent->exit_levels.trail_offset)
+                    && !finite_positive(parent->exit_levels.trail_price);
+                const bool competing_opening = std::any_of(
+                    live_handles_.begin(), live_handles_.end(), [&](const auto& handle) {
+                        if (handle == parent_handle) return false;
+                        const auto candidate = placement_.find(handle.incarnation);
+                        return candidate != placement_.end()
+                            && candidate->second.opening;
+                    });
+                const bool direct_partial = point && std::any_of(
+                    placement_.begin(), placement_.end(), [&](const auto& row) {
+                        return row.second.family == PineOrderFamily::Close
+                            && row.second.immediately
+                            && row.second.projection_created_bar
+                                == point->decision.coordinate.interval_index;
+                    });
+                const double next_waypoint = coof_next_waypoint();
+                const bool reachable_stop = finite_positive(stop_price)
+                    && (long_position
+                        ? (next_waypoint <= stop_price
+                           || coof_script_bar_.close <= stop_price)
+                        : (next_waypoint >= stop_price
+                           || coof_script_bar_.close >= stop_price));
+                const bool qualified_recross = limit_recross && plain_market_parent
+                    && !competing_opening && !direct_partial && !reachable_stop;
+                if ((wrong_stop || wrong_limit)
+                    && (coof_first_open_ || wrong_stop || !qualified_recross)) {
+                    snapshot.defer_until_post_parent_calculation = true;
+                    delayed_market_orders_.push_back({
+                        std::move(request), std::move(snapshot), replacement_key,
+                        broker_open_epoch_ + 1U});
+                    return;
+                }
+            }
             if (auto queued = std::find_if(
                     pending_bracket_legs_.begin(), pending_bracket_legs_.end(),
                     [&](const PendingBracketLeg& row) {
@@ -4727,7 +5127,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
             if (defer_coof_tail()) {
                 pending_coof_requests_.push_back({std::move(request), std::move(snapshot), replacement_key,
-                                                  false, family_key});
+                                                  false, family_key, true});
                 return;
             }
             if (snapshot.reservation_deferred_to_pending_entry
@@ -4951,7 +5351,14 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             }
         }
         if (trail_one_shot) {
-            submit_leg(PineOrderFamily::ExitTrail, native_order::Limit{native_trail_price});
+            double one_shot_level = native_trail_price;
+            if (!std::isfinite(source_trail_offset)) {
+                const double slipped = one_shot_level
+                    + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
+                one_shot_level = directional_tick(slipped, tick, exit_is_buy);
+            }
+            submit_leg(PineOrderFamily::ExitTrail,
+                       native_order::Limit{one_shot_level});
         } else if (native_trail_offset) {
             std::optional<double> native_arm_price = native_trail_price;
             if (zero_distance && trail_already_reached)
@@ -5252,8 +5659,9 @@ void PineExecutionAdapter::release_delayed_orders(bool explicit_brackets_only) {
     delayed_market_orders_.clear();
     for (auto& order : delayed) {
         const auto family = order.snapshot.family;
-        const bool explicit_bracket = std::isfinite(order.snapshot.requested_qty)
-            && order.snapshot.bracket_origin.incarnation != 0
+        const bool explicit_bracket = (order.snapshot.defer_until_post_parent_calculation
+            || (std::isfinite(order.snapshot.requested_qty)
+                && order.snapshot.bracket_origin.incarnation != 0))
             && (family == PineOrderFamily::ExitLimit
                 || family == PineOrderFamily::ExitStop);
         if (order.release_open_epoch <= broker_open_epoch_
@@ -5280,6 +5688,19 @@ void PineExecutionAdapter::flush_pending_entries() {
     flush_pending_same_bar_commands();
     auto queued = std::move(pending_entries_);
     pending_entries_.clear();
+    auto deferred = std::remove_if(queued.begin(), queued.end(), [&](PendingEntry& entry) {
+        const auto parent = entry.snapshot.paired_reversal_parent;
+        if (parent.incarnation == 0) return false;
+        const auto found = placement_.find(parent.incarnation);
+        if (found == placement_.end()
+            || (found->second.family != PineOrderFamily::Close
+                && found->second.family != PineOrderFamily::CloseAll)) {
+            return false;
+        }
+        pending_entries_.push_back(std::move(entry));
+        return true;
+    });
+    queued.erase(deferred, queued.end());
     const bool recreated_parent = std::any_of(queued.begin(), queued.end(),
         [](const PendingEntry& entry) {
             return entry.snapshot.retained_parent_topology;
@@ -5850,6 +6271,7 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     }
     native_order::Request request;
     double risk_coof_forced_price = kNaN;
+    double coof_market_fill = kNaN;
     bool delay_after_default_pair = false;
     limit_price = source_level_on_price_grid(limit_price, staged_.syminfo.mintick);
     stop_price = source_level_on_price_grid(stop_price, staged_.syminfo.mintick);
@@ -5877,8 +6299,38 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
             stop_price, staged_.syminfo.mintick, is_long, false);
     }
     request.trigger = trigger_for(native_limit, native_stop, kNaN, kNaN);
+    if (coof_recalc_active_ && coof_first_open_) {
+        const auto point = require_host().current_execution_point();
+        if (point && finite_positive(limit_price)
+            && (is_long ? limit_price >= point->price
+                        : limit_price <= point->price)) {
+            coof_market_fill = source_bar_fill_tick(
+                point->price, staged_.syminfo.mintick);
+        }
+    }
     if (std::holds_alternative<native_order::Market>(request.trigger)) {
         const auto point = require_host().current_execution_point();
+        if (coof_recalc_active_ && !coof_first_open_) {
+            const double next_waypoint = coof_next_waypoint();
+            const double current_quote = point ? point->price : kNaN;
+            coof_market_fill = source_bar_fill_tick(
+                next_waypoint, staged_.syminfo.mintick)
+                + (is_long ? 1.0 : -1.0) * config_.slippage
+                    * staged_.syminfo.mintick;
+            if (finite_positive(next_waypoint) && finite_positive(current_quote)
+                && next_waypoint != current_quote) {
+                const bool falling = next_waypoint < current_quote;
+                if (is_long) {
+                    request.trigger = falling
+                        ? native_order::Trigger{native_order::Limit{next_waypoint}}
+                        : native_order::Trigger{native_order::Stop{next_waypoint}};
+                } else {
+                    request.trigger = falling
+                        ? native_order::Trigger{native_order::Stop{next_waypoint}}
+                        : native_order::Trigger{native_order::Limit{next_waypoint}};
+                }
+            }
+        }
         if (coof_recalc_active_ && !coof_first_open_
             && risk_.max_intraday_loss > 0.0) {
             double target = kNaN;
@@ -5948,7 +6400,8 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
     snapshot.is_long = is_long;
     snapshot.exit_levels.limit = limit_price;
     snapshot.exit_levels.stop = stop_price;
-    snapshot.forced_execution_price = risk_coof_forced_price;
+    snapshot.forced_execution_price = finite_positive(risk_coof_forced_price)
+        ? risk_coof_forced_price : coof_market_fill;
     if (source_command_sequence_ == std::numeric_limits<std::uint64_t>::max()) {
         throw std::overflow_error("Pine source command sequence exhausted");
     }
@@ -6161,7 +6614,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             && non_open)
             return directional_tick(*facts.trigger_level, staged_.syminfo.mintick,
                                     !facts.is_buy);
-        if (!non_open) return source_bar_fill_tick(
+        const bool deferred_open_gap = source.defer_until_post_parent_calculation
+            && facts.cursor.point.provenance == NativePriceProvenance::Confirmed;
+        if (!non_open || deferred_open_gap) return source_bar_fill_tick(
             facts.raw_price, staged_.syminfo.mintick);
         const double level = finite_positive(source.exit_levels.limit)
             ? source.exit_levels.limit
@@ -6183,16 +6638,18 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             result.resolved_price = non_open ? source_stop_fill() : source_bar_fill();
         }
         if (finite_positive(source.forced_execution_price)) {
-            result.resolved_price = nearest_tick(source.forced_execution_price,
-                                                 staged_.syminfo.mintick);
+            result.resolved_price = source_bar_fill_tick(
+                source.forced_execution_price, staged_.syminfo.mintick);
         }
         if (source.family == PineOrderFamily::ExitLimit && facts.trigger_level
             && facts.cursor.point.path_phase != NativePathPhase::Open) {
             result.resolved_price = directional_tick(
                 result.resolved_price, staged_.syminfo.mintick, !facts.is_buy);
+            const double constraint = finite_positive(source.exit_levels.limit)
+                ? source.exit_levels.limit : *facts.trigger_level;
             result.resolved_price = facts.is_buy
-                ? std::min(result.resolved_price, *facts.trigger_level)
-                : std::max(result.resolved_price, *facts.trigger_level);
+                ? std::min(result.resolved_price, constraint)
+                : std::max(result.resolved_price, constraint);
         } else if ((source.family == PineOrderFamily::ExitStop
                     || source.family == PineOrderFamily::ExitTrail)
                    && facts.trigger_level
@@ -6227,8 +6684,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         result.resolved_price = source_limit_fill();
     }
     if (finite_positive(source.forced_execution_price)) {
-        result.resolved_price = nearest_tick(source.forced_execution_price,
-                                             staged_.syminfo.mintick);
+        result.resolved_price = source_bar_fill_tick(
+            source.forced_execution_price, staged_.syminfo.mintick);
     }
     // Source stop/trail exits crossed inside a modeled path settle at their
     // armed level, whereas an open gap retains the presented open quote.  The
@@ -6244,8 +6701,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         } else if (const auto source_price = zero_trail_source_price()) {
             result.resolved_price = *source_price;
         } else if (trail_limit_one_shot) {
-            result.resolved_price = directional_tick(
-                facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
+            result.resolved_price = source_limit_fill();
         } else if (explicit_zero_trail) {
             if (zero_trail_first_activation) {
                 result.resolved_price = directional_tick(
@@ -6256,9 +6712,11 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                 result.resolved_price = directional_tick(
                     best, staged_.syminfo.mintick, facts.is_buy);
             }
+        } else if (source.family == PineOrderFamily::ExitStop
+                   && facts.cursor.point.path_phase == NativePathPhase::Open) {
+            result.resolved_price = source_bar_fill();
         } else if (source.family == PineOrderFamily::ExitLimit) {
-            result.resolved_price = nearest_tick(
-                facts.default_resolved_price, staged_.syminfo.mintick);
+            result.resolved_price = source_limit_fill();
         } else if (source.family == PineOrderFamily::ExitTrail) {
             result.resolved_price = directional_tick(
                 facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
@@ -6275,8 +6733,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     } else if (const auto source_price = zero_trail_source_price()) {
         result.resolved_price = *source_price;
     } else if (trail_limit_one_shot && facts.trigger_level && !sampled_one_price_gap) {
-        result.resolved_price = directional_tick(
-            facts.default_resolved_price, staged_.syminfo.mintick, facts.is_buy);
+        result.resolved_price = source_limit_fill();
     } else if (explicit_zero_trail && facts.trigger_level && !sampled_one_price_gap) {
         // Native's positive sentinel offset keeps the generic trail alive;
         // source settlement prints the carried raw best on the directional
@@ -6288,7 +6745,10 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                                staged_.syminfo.mintick, facts.is_buy);
     } else if (source.family == PineOrderFamily::ExitStop && facts.trigger_level
                && facts.price_kind == native_order::NativeCandidatePriceKind::PointPrice
-               && facts.cursor.point.path_phase == NativePathPhase::Open) {
+               && (facts.cursor.point.path_phase == NativePathPhase::Open
+                   || (source.defer_until_post_parent_calculation
+                       && facts.cursor.point.provenance
+                           == NativePriceProvenance::Confirmed))) {
         // A resting stop crossed by an adverse opening gap books the raw
         // opening print, then applies the ordinary nearest chart-tick print
         // projection (distinct from a non-gap trigger-level fill).
@@ -6302,10 +6762,12 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // generic trigger level remains raw for reachability; only the booked
         // source fill receives this directional limit snap.
         result.resolved_price = directional_tick(
-            facts.default_resolved_price, staged_.syminfo.mintick, !facts.is_buy);
+            result.resolved_price, staged_.syminfo.mintick, !facts.is_buy);
+        const double constraint = finite_positive(source.exit_levels.limit)
+            ? source.exit_levels.limit : *facts.trigger_level;
         result.resolved_price = facts.is_buy
-            ? std::min(result.resolved_price, *facts.trigger_level)
-            : std::max(result.resolved_price, *facts.trigger_level);
+            ? std::min(result.resolved_price, constraint)
+            : std::max(result.resolved_price, constraint);
     }
     if (source.family == PineOrderFamily::ExitTrail
         && std::isfinite(source.exit_levels.trail_offset)
@@ -6338,12 +6800,14 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     if ((std::holds_alternative<native_order::Stop>(trigger)
          || std::holds_alternative<native_order::Trail>(trigger)
          || source.family == PineOrderFamily::Margin)
-        && facts.trigger_level && !explicit_zero_trail && !trail_limit_one_shot) {
+        && facts.trigger_level && !explicit_zero_trail && !trail_limit_one_shot
+        && !(source.defer_until_post_parent_calculation
+             && facts.cursor.point.provenance == NativePriceProvenance::Confirmed)) {
         result.resolved_price = non_open ? source_stop_fill() : source_bar_fill();
     }
     if (finite_positive(source.forced_execution_price)) {
-        result.resolved_price = nearest_tick(source.forced_execution_price,
-                                             staged_.syminfo.mintick);
+        result.resolved_price = source_bar_fill_tick(
+            source.forced_execution_price, staged_.syminfo.mintick);
     }
     if (source.family == PineOrderFamily::Close || source.family == PineOrderFamily::ExitLimit
         || source.family == PineOrderFamily::ExitStop || source.family == PineOrderFamily::ExitTrail
@@ -6395,7 +6859,8 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         // 100% HostSized close through the multiply/divide and quantity-grid
         // path: after an earlier margin slice that can floor one extra step
         // and leave a dust lot behind.
-        if (source.deferred_cohort && !source.frozen_market_instruction
+        if (source.deferred_cohort && !source.fixed_exit_reservation
+            && !source.frozen_market_instruction
             && !std::isfinite(source.requested_qty)
             && (std::isnan(source.qty_percent) || source.qty_percent >= 100.0)) {
             result.units = facts.scope_exposure_units;
@@ -6533,16 +6998,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         result.units = finite_positive(equity) && finite_positive(denominator)
             ? floor_quantity_grid(cash / denominator, staged_.quantity_grid) : 0.0;
     }
-    const bool priced_entry = source.family == PineOrderFamily::Entry
-        && (finite_positive(source.exit_levels.limit)
-            || finite_positive(source.exit_levels.stop));
     const auto created_side = static_cast<PositionSide>(source.projection_position_side);
-    if (priced_entry && result.units && facts.position.signed_units == 0.0
-        && finite_positive(source.projection_tv_carry_qty)
-        && created_side != PositionSide::FLAT
-        && ((created_side == PositionSide::LONG) != source.is_long)) {
-        result.units = std::abs(*result.units) + source.projection_tv_carry_qty;
-    }
     if (source.family == PineOrderFamily::Entry) {
         const bool opposite = facts.position.signed_units != 0.0
             && ((facts.position.signed_units > 0.0) != source.is_long);
@@ -6762,7 +7218,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     }
     if (opposite_at_fill) {
         const bool source_close_precedes = source.projection_after_close;
-        const bool replacement_transaction = source.replaced_opening
+        const bool replacement_transaction = source.reverse_to
+            && !std::isfinite(source.requested_qty)
+            && source.replaced_opening
             && source.replacement_predecessor_market && !source.is_long;
         const bool flat_dual_stop = source.projection_position_side
                 == static_cast<std::int32_t>(PositionSide::FLAT)
@@ -6819,9 +7277,12 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             const bool restored_after_margin = source.legs.last_action()
                 && source.legs.last_action()->cause.phase == exit_legs::Phase::AfterMargin
                 && !source.legs.dormant();
-            if (source.legs.dormant()
-                || (!restored_after_margin
-                    && follows_same_bar_declined_reversal(source, view))) {
+            const bool retained_trail = source.family == PineOrderFamily::ExitTrail
+                && !source.legs.retired(exit_legs::Leg::Trail);
+            if (!retained_trail
+                && (source.legs.dormant()
+                    || (!restored_after_margin
+                        && follows_same_bar_declined_reversal(source, view)))) {
                 return NativePrecommitVerdict::Refuse;
             }
         }
@@ -6954,8 +7415,19 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             * staged_.syminfo.pointvalue * fx * margin / 100.0;
         const double equity = source.sizing.equity;
         const double guard = std::max(1e-9, std::abs(equity) * 1e-12);
+        const bool nested_price_gap_affordable = margin == 100.0
+            && staged_.quantity_grid && *staged_.quantity_grid > 0.0
+            && *staged_.quantity_grid < 1.0
+            && staged_.syminfo.pointvalue == 1.0 && source.sizing.fx == 1.0
+            && staged_.account_fx_effective_from_ms.empty()
+            && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+            && config_.commission_value == 0.0 && config_.slippage == 0
+            && !config_.process_orders_on_close && !config_.calc_on_order_fills
+            && !stream_mode_ && view.resolved_price > source.sizing.price
+            && source_money_round(source_money_round(equity)
+                / source.sizing.frozen_units) >= view.resolved_price;
         if (!std::isfinite(required) || !std::isfinite(equity)
-            || required > equity + guard) {
+            || (required > equity + guard && !nested_price_gap_affordable)) {
             return NativePrecommitVerdict::Refuse;
         }
     }
@@ -7063,6 +7535,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             const bool true_flat_gap_scope = source.family == PineOrderFamily::Entry
                 && source.projection_position_side
                     == static_cast<std::int32_t>(PositionSide::FLAT)
+                && !source.projection_after_close
                 && physical.signed_units == 0.0
                 && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
                 && config_.default_qty_value == 100.0
@@ -8784,7 +9257,7 @@ void PineExecutionAdapter::on_bar_open(const Bar& bar, const NativeDecisionConte
             }
         }
     }
-    flush_coof_tail();
+    flush_coof_tail(/*include_next_open=*/true);
     suspend_coof_declined_reversal_at_open(bar, context);
     if (close_all_pending_script_bar_ != context.script_bar_open_ms)
         close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
@@ -9008,6 +9481,36 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     found->second.legs.revision(), found->second.requested_qty, kNaN};
             }
             retire(handle);
+        }
+    }
+    if (placement_snapshot
+        && (placement_snapshot->family == PineOrderFamily::Close
+            || placement_snapshot->family == PineOrderFamily::CloseAll)
+        && event.closed_units > 0.0) {
+        std::vector<PendingEntry> remaining;
+        std::vector<PendingEntry> after_close;
+        remaining.reserve(pending_entries_.size());
+        after_close.reserve(pending_entries_.size());
+        for (auto& entry : pending_entries_) {
+            if (entry.snapshot.paired_reversal_parent == event.handle()) {
+                after_close.push_back(std::move(entry));
+            } else {
+                remaining.push_back(std::move(entry));
+            }
+        }
+        pending_entries_ = std::move(remaining);
+        for (auto& entry : after_close) {
+            entry.snapshot.paired_reversal_parent = {};
+            entry.snapshot.forced_execution_price = event.resolved_price;
+            entry.request.owner = native_order::Independent{};
+            const auto accepted = submit_or_replace(
+                std::move(entry.request), std::move(entry.snapshot), true,
+                entry.replacement_key);
+            if (accepted) {
+                const auto outcome = require_host().execute_current(
+                    {*accepted, NativeCurrentPriceRule::NearestTick});
+                (void)outcome;
+            }
         }
     }
     bool preclose_intraday_loss = false;
@@ -10162,7 +10665,9 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
     std::memset(out, 0, sizeof(*out));
     out->struct_version = 1;
     out->size = static_cast<std::uint32_t>(sizeof(*out));
-    copy_pending_string(snapshot.source_id, out->id, &out->id_truncated, &out->id_hash64);
+    const std::string projected_id = snapshot.family == PineOrderFamily::Close
+        ? "__close__" + snapshot.source_id : snapshot.source_id;
+    copy_pending_string(projected_id, out->id, &out->id_truncated, &out->id_hash64);
     copy_pending_string(snapshot.from_entry, out->from_entry, &out->from_entry_truncated,
                         &out->from_entry_hash64);
     copy_pending_string(snapshot.oca_name, out->oca_name, &out->oca_name_truncated,

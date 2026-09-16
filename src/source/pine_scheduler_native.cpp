@@ -142,11 +142,43 @@ int PineScheduler::source_bar_index_for(const NativeDecisionContext& context) co
     // to the already-published source index.  This is the same cadence the
     // legacy aggregation loop used for Trade.entry_bar_index/exit_bar_index.
     const bool published = current_script_bar_valid_
-        && current_script_bar_.timestamp == context.script_bar_open_ms;
+        && current_script_bar_.timestamp == context.script_bar_open_ms
+        && language_.coof_checkpoint_contains_current_bar_;
     const bool coof_published = coof_callback_script_open_ == context.script_bar_open_ms;
     if (published || coof_published)
         return std::max(0, source_bar_count_ - 1);
     return source_bar_count_;
+}
+
+std::optional<double> PineScheduler::next_input_waypoint(
+        const NativeDecisionContext& context, double current_price,
+        NativePathOrder order) const noexcept {
+    const auto found = std::find_if(retained_.bars.begin(), retained_.bars.end(),
+        [&](const Bar& bar) { return bar.timestamp == context.sub_bar_open_ms; });
+    if (found == retained_.bars.end()) return std::nullopt;
+    bool high_first = std::abs(found->high - found->open)
+        < std::abs(found->open - found->low);
+    if (order == NativePathOrder::HighFirst) high_first = true;
+    else if (order == NativePathOrder::LowFirst) high_first = false;
+    const NativePathPhase phase[] = {
+        NativePathPhase::Open,
+        high_first ? NativePathPhase::High : NativePathPhase::Low,
+        high_first ? NativePathPhase::Low : NativePathPhase::High,
+        NativePathPhase::Close,
+    };
+    const double price[] = {
+        found->open,
+        high_first ? found->high : found->low,
+        high_first ? found->low : found->high,
+        found->close,
+    };
+    for (int index = 0; index < 4; ++index) {
+        if (phase[index] != context.coordinate.path_phase) continue;
+        if (index > 0 && current_price != price[index]) return price[index];
+        if (index < 3) return price[index + 1];
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 void PineScheduler::publish_series(const Bar& bar, PineStrategyHost& host) {
@@ -547,8 +579,8 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     if (!host.scheduler_coof_enabled()) return;
     if (host.config_.process_orders_on_close
         && (context.coordinate.provenance == NativePriceProvenance::Calculation
-            || context.coordinate.path_phase == NativePathPhase::None
-            || context.coordinate.path_phase == NativePathPhase::Close)) {
+            || context.coordinate.provenance == NativePriceProvenance::AfterCalculationClose
+            || context.coordinate.path_phase == NativePathPhase::None)) {
         // ab9714be pine_scheduler.cpp terminal POOC dispatch: a fill at the
         // already-consumed close is final for that script bar and does not
         // schedule a calc_on_order_fills source callback.
@@ -576,7 +608,6 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         !language_.coof_checkpoint_contains_current_bar_;
     publish_series(callback_bar, host);
     host.adapter_.begin_coof_recalc(context, first_open);
-    const bool drain_risk_recalc = host.adapter_.risk_.max_intraday_loss > 0.0;
     try {
         host.scheduler_publish_source_bar(
             callback_bar, true, callback_advances_source_bar);
@@ -585,7 +616,7 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
         // that source queue while the fill coordinate is still current; the
         // accepted MARKET newborns below then execute at this same broker
         // point, matching calc_on_order_fills chronology.
-        if (drain_risk_recalc) host.adapter_.flush_coof_tail();
+        host.adapter_.flush_coof_tail();
     } catch (...) {
         host.adapter_.end_coof_recalc();
         throw;
