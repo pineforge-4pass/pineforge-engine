@@ -11,7 +11,6 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -19,51 +18,6 @@ namespace pineforge {
 using namespace internal;
 
 namespace {
-// Existing source FIFO endpoint policy; never a native quantity tolerance.
-// Keep the R2 stop/whole-lot interpretation at 1e-10 in this adapter.
-constexpr double kSourceFifoEndpointEpsilon = kQtyEpsilon;
-
-std::optional<execution::SelectedOpeningSet> source_fifo_prefix_membership(
-        const std::vector<PyramidEntry>& lots, double qty_limit,
-        int64_t cycle) {
-    if (cycle <= 0 || !std::isfinite(qty_limit) || qty_limit <= 0.0)
-        return std::nullopt;
-
-    double qty_closed = 0.0;
-    size_t prefix_size = 0;
-    for (const auto& lot : lots) {
-        // Match the source's original accumulation and endpoint ordering.
-        // Once at the endpoint, even a tiny next sibling stays unselected.
-        if (qty_closed >= qty_limit - kSourceFifoEndpointEpsilon) break;
-        if (!std::isfinite(lot.qty) || lot.qty <= 0.0) return std::nullopt;
-        const double close_qty = std::min(lot.qty, qty_limit - qty_closed);
-        const double keep_qty = lot.qty - close_qty;
-        if (keep_qty > kSourceFifoEndpointEpsilon) return std::nullopt;
-        ++prefix_size;
-        qty_closed += close_qty;
-    }
-    if (prefix_size == 0 || prefix_size == lots.size()) return std::nullopt;
-
-    execution::SelectedOpeningSet selection{cycle, {}};
-    std::unordered_set<uint64_t> included;
-    double selected_qty = 0.0;
-    for (size_t index = 0; index < prefix_size; ++index) {
-        const auto& lot = lots[index];
-        if (lot.entry_incarnation == 0) return std::nullopt;
-        if (included.insert(lot.entry_incarnation).second)
-            selection.incarnations.push_back(lot.entry_incarnation);
-        selected_qty += lot.qty;
-        if (!std::isfinite(selected_qty)) return std::nullopt;
-    }
-    // An opening identity may have multiple physical fragments, but all of
-    // its live fragments must belong to this prefix. Otherwise use Reduce.
-    for (size_t index = prefix_size; index < lots.size(); ++index) {
-        if (included.count(lots[index].entry_incarnation) != 0)
-            return std::nullopt;
-    }
-    return selection;
-}
-
 // Source predicates are resolved here, never retained by native settlement.
 // Every fragment of an opening must agree with the selected source predicate.
 template<class Predicate>
@@ -188,38 +142,6 @@ std::vector<uint64_t> source_opening_membership(
 // skipped.
 
 
-
-// FIFO-drain up to qty_limit from pyramid_entries_, optionally restricted to a
-// single from_entry id. See engine.hpp for the contract. Mirrors TradingView's
-// per-pyramid trade reporting: one Trade per drained slice. Returns total qty
-// drained so callers can assert / log if needed.
-// Retained private ABI helper. Production close paths below use explicit
-// source actions; this compatibility entry point also consumes the sole book.
-double BacktestEngine::fifo_drain(const std::string* from_entry, double qty_limit,
-                                  double fill_price, bool was_long) {
-    (void)was_long; // physical orientation belongs to the authoritative book
-    const int pre_count = position_entry_count_;
-    execution::Result result;
-    if (from_entry) {
-        const auto incarnations = source_opening_membership(pyramid_entries_,
-            [&](const PyramidEntry& lot) { return lot.entry_id == *from_entry; });
-        if (incarnations.empty()) return 0.0;
-        const execution::SelectedOpeningSet selection{position_cycle_seq_, incarnations};
-        result = settle_execution_selected_with_lifecycle(
-            order_action::Reduce{qty_limit}, execution::Fill{fill_price, {}, {}, 0}, {}, selection);
-    } else {
-        result = settle_resolved_execution(
-            order_action::Reduce{qty_limit}, execution::Fill{fill_price, {}, {}, 0});
-    }
-    if (result.status != execution::Status::Applied
-        && result.status != execution::Status::NoEffect)
-        throw std::runtime_error("invalid resolved compatibility drain settlement");
-    // Old callers chose the later source slot policy themselves. Preserve
-    // that interface without retaining its former physical FIFO/fee loop.
-    if (result.status == execution::Status::Applied && position_side_ != PositionSide::FLAT)
-        position_entry_count_ = pre_count;
-    return result.closed_units;
-}
 
 // Internal helper: execute a partial exit (reduce position by qty, create trade records)
 // TradingView creates individual trade records for each partial exit.

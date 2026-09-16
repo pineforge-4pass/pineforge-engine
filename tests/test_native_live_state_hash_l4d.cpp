@@ -32,6 +32,8 @@ int main() {
     HashProbe same_b("A");
     HashProbe changed("B");
     strategy_set_broker_state_hash_recording(&same_a, 1);
+    strategy_set_broker_state_hash_recording(&same_b, 1);
+    strategy_set_broker_state_hash_recording(&changed, 1);
     same_a.run(bars.data(), static_cast<int>(bars.size()));
     same_b.run(bars.data(), static_cast<int>(bars.size()));
     changed.run(bars.data(), static_cast<int>(bars.size()));

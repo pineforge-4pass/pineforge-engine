@@ -114,6 +114,12 @@ NativeInputPreflightResult preflight_native_inputs(
                 out.index = i;
                 return out;
             }
+            if (i > 0
+                && timestamp_delta_overflows(bars[i - 1].timestamp, bar.timestamp)) {
+                out.error = NativeInputPreflightError::TimestampDeltaOverflow;
+                out.index = i;
+                return out;
+            }
             auto interval = native_calendar::interval_containing(
                 *parsed_session, *parsed_tf, bar.timestamp);
             if (!interval) {
@@ -130,11 +136,6 @@ NativeInputPreflightResult preflight_native_inputs(
                 const std::int64_t earlier = bars[i - 1].timestamp;
                 if (bar.timestamp <= earlier) {
                     out.error = NativeInputPreflightError::NotStrictlyIncreasing;
-                    out.index = i;
-                    return out;
-                }
-                if (timestamp_delta_overflows(earlier, bar.timestamp)) {
-                    out.error = NativeInputPreflightError::TimestampDeltaOverflow;
                     out.index = i;
                     return out;
                 }
@@ -170,13 +171,6 @@ NativeInputPreflightResult preflight_native_inputs(
             const std::int64_t previous = bars[i - 1].timestamp;
             if (bar.timestamp <= previous) {
                 out.error = NativeInputPreflightError::NotStrictlyIncreasing;
-                out.index = i;
-                return out;
-            }
-            // Match the legacy chart-bar validator before any downstream
-            // timeframe/calendar arithmetic can form this delta.
-            if (timestamp_delta_overflows(previous, bar.timestamp)) {
-                out.error = NativeInputPreflightError::TimestampDeltaOverflow;
                 out.index = i;
                 return out;
             }

@@ -105,8 +105,8 @@ struct PendingRemoval {
     uint64_t expected_revision = 0;
 };
 
-// Transient, stack-local effects for one settle_execution_with_lifecycle
-// call. Not stored, hashed, replayed, or reusable execution authority.
+// Transient, stack-local effects for one native settlement preparation. Not
+// stored, hashed, replayed, or reusable execution authority.
 struct LifecycleEffects {
     std::optional<LifecycleBatch> pre_close;
     std::vector<PendingRemoval> removals;

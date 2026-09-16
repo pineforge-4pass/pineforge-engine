@@ -64,10 +64,12 @@ int main() {
     const auto final_short = latest(host, "Short");
     const auto materialize = latest(host, "__close__Short");
     CHECK(long_entry && final_short && materialize);
+    // Formation alone is not role authority; the finite tape ends before the
+    // next-open qualification can select and use this plan.
     if (long_entry && final_short && materialize) {
-        CHECK(host.short_seed_collision_role_v1(*long_entry) == 1);
-        CHECK(host.short_seed_collision_role_v1(*materialize) == 2);
-        CHECK(host.short_seed_collision_role_v1(*final_short) == 3);
+        CHECK(host.short_seed_collision_role_v1(*long_entry) == 0);
+        CHECK(host.short_seed_collision_role_v1(*materialize) == 0);
+        CHECK(host.short_seed_collision_role_v1(*final_short) == 0);
     }
     std::printf("R4-D native percent ShortSeed roles: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

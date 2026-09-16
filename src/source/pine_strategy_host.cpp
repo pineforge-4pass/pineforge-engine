@@ -103,18 +103,15 @@ std::uint64_t source::PineStrategyHost::adapter_terminal_receipt_high_water(
 }
 
 std::uint64_t source::PineStrategyHost::broker_state_hash_projection() const {
-    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()
-        && native_state().kind == NativeLifecycleKind::Completed) {
-        // ab9714be test_live_state_hash_recording: after a batch completes,
-        // the scalar is the final per-script-bar fingerprint.  Native batch
-        // teardown may still advance input-transport cursors after that last
-        // source callback; those are not a later broker decision.
+    if (broker_state_hash_recording_ && !broker_state_hashes_.empty()) {
+        // The scalar is the final recorded script-point fingerprint. Native
+        // batch teardown and live input-clock advancement may move transport
+        // cursors after that callback; the recorded value already folded the
+        // kernel continuation at the broker decision it represents.
         return broker_state_hashes_.back();
     }
-    // Native run generations reject stale native handles, but they were not
-    // part of the source broker state before lowering. The adapter hashes its
-    // current logical request state below with those generations canonicalized.
-    return broker_state_hash_from_execution_hash(0);
+    return broker_state_hash_from_execution_hash(
+        execution_consumer().continuation_hash());
 }
 
 double source::PineStrategyHost::margin_liquidation_price() const {
@@ -1163,7 +1160,10 @@ void source::PineStrategyHost::scheduler_publish_suppressed_tail(const Bar& bar)
 }
 
 void source::PineStrategyHost::scheduler_record_broker_hash() {
-    if (broker_state_hash_recording_) broker_state_hashes_.push_back(broker_state_hash());
+    if (broker_state_hash_recording_) {
+        broker_state_hashes_.push_back(broker_state_hash_from_execution_hash(
+            execution_consumer().continuation_hash()));
+    }
 }
 
 void source::PineStrategyHost::scheduler_set_session_bar_state(

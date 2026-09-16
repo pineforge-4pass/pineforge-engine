@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <string>
 #include <vector>
 
 using namespace pineforge;
@@ -117,16 +118,17 @@ std::vector<Bar> h05_bars() {
     };
 }
 
-void test_h11_plain_request_security_ltf_lookahead_routes() {
+void test_h11_plain_request_security_ltf_is_refused_at_validation() {
     H11Probe probe;
     const Bar bars[] = {
         {1855.88, 1862.18, 1854.03, 1859.99, 46681.148, 1743571800000LL},
         {1859.99, 1863.69, 1854.10, 1855.08, 53916.625, 1743572700000LL},
     };
     probe.run(bars, 2, "15", "15", false, 4, MagnifierDistribution::ENDPOINTS);
-    CHECK(probe.last_error().empty());
-    CHECK(probe.source_callbacks == 2);
-    CHECK(probe.lower_tf_completions == 6);
+    CHECK(probe.last_error().find(
+        "Use request.security_lower_tf for sub-input timeframes") != std::string::npos);
+    CHECK(probe.source_callbacks == 0);
+    CHECK(probe.lower_tf_completions == 0);
 }
 
 void test_h12_uncovered_auxiliary_chart_slot_is_a_gap_not_a_refusal() {
@@ -246,7 +248,7 @@ void test_h05_source_projection_uses_legacy_volume_weighted_cap() {
 } // namespace
 
 int main() {
-    test_h11_plain_request_security_ltf_lookahead_routes();
+    test_h11_plain_request_security_ltf_is_refused_at_validation();
     test_h12_uncovered_auxiliary_chart_slot_is_a_gap_not_a_refusal();
     test_h15_coof_uses_the_native_chart_coordinate_for_auxiliary_routing();
     test_h05_trigger_level_uses_legacy_directional_tick_price();

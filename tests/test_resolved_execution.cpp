@@ -33,8 +33,15 @@ public:
     execution::Result settle(execution::Action action, double price = 120,
                              const char* id = "N", uint64_t incarnation = 100,
                              std::optional<double> commission_account = {}) {
-        return settle_resolved_execution(action,
-            execution::Fill{price,id,"native",incarnation,commission_account});
+        execution::PhysicalExecutionContext context;
+        context.effective_time_ms = current_bar_.timestamp;
+        context.interval_index = bar_index_;
+        context.preceding_exit_path_prefix = fold_exit_path_extremes_;
+        if (!std::isnan(fold_exit_trail_peak_))
+            context.preceding_exit_trail_peak = fold_exit_trail_peak_;
+        return settle_native_execution_at(
+            action, execution::Fill{price,id,"native",incarnation,commission_account},
+            context);
     }
     void exhaust_cycles(int64_t next = std::numeric_limits<int64_t>::max()) {
         next_position_cycle_seq_ = next;

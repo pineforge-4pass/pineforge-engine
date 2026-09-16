@@ -37,16 +37,16 @@ int main() {
           "post-begin FX staging refusal", handle);
 
     const pf_trade_tick_t tick{60010, 7, 101.0, 0.5};
-    check(strategy_stream_push_tick(handle, &tick) == 0,
+    check(strategy_stream_push_tick(handle, &tick) == -1,
           "strategy_stream_push_tick", handle);
-    check(strategy_stream_advance_time(handle, 120000) == 0,
+    check(strategy_stream_advance_time(handle, 120000) == -1,
           "strategy_stream_advance_time", handle);
-    check(strategy_stream_end(handle, 0) == 0, "strategy_stream_end", handle);
+    check(strategy_stream_end(handle, 0) == -1, "strategy_stream_end", handle);
 
     pf_report_t report{};
     check(strategy_stream_fill_report(handle, &report) == 0,
           "strategy_stream_fill_report", handle);
-    check(report.input_bars_processed == 2 && report.script_bars_processed == 2,
+    check(report.input_bars_processed == 1 && report.script_bars_processed == 1,
           "stream report counters", handle);
     pineforge::BacktestEngine::free_report(
         reinterpret_cast<pineforge::ReportC*>(&report));

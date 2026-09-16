@@ -1,6 +1,6 @@
-// Native-route ShortSeed role witness for the L0 finding-272 command shape.
-// It drives the same prior-short / Long / Short / close(Long) / close(Short)
-// sequence through PineNativeHost and checks all four projected role codes.
+// Native-route ShortSeed role-lifetime witness for the L0 finding-272 command
+// shape. A plan that has not reached and been used at its qualifying broker
+// open is not allowed to project executable role codes.
 #include <pineforge/source/pine_native_host.hpp>
 
 #include "oracle_fixture_config_shim.hpp"
@@ -68,9 +68,9 @@ int main() {
     CHECK(final_short.has_value());
     CHECK(materialize.has_value());
     if (long_entry && final_short && materialize) {
-        CHECK(host.short_seed_collision_role_v1(*long_entry) == 1);
-        CHECK(host.short_seed_collision_role_v1(*materialize) == 2);
-        CHECK(host.short_seed_collision_role_v1(*final_short) == 3);
+        CHECK(host.short_seed_collision_role_v1(*long_entry) == 0);
+        CHECK(host.short_seed_collision_role_v1(*materialize) == 0);
+        CHECK(host.short_seed_collision_role_v1(*final_short) == 0);
     }
     const auto unrelated = latest_label(host, "__close__Long");
     if (unrelated) CHECK(host.short_seed_collision_role_v1(*unrelated) == 0);

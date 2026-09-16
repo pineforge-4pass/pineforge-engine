@@ -64,15 +64,15 @@ void test_security_htf_accept() {
     std::cout << "test_security_htf_accept passed.\n";
 }
 
-// 2. Plain request.security with an integer-divisor lower timeframe uses the
-// legacy scalar-emulation route. request.security_lower_tf remains the array
-// API with its separate validation below.
-void test_security_finer_integer_divisor_accepts_scalar_emulation() {
+// 2. request.security finer-than-input — reject with hint
+void test_security_finer_rejected_with_hint() {
     ValidationHarness strat;
     strat.add_security("5", "15");
     auto err = run_with(strat, "15");
-    assert(err.empty() && "Scalar request.security should emulate an integer-divisor LTF");
-    std::cout << "test_security_finer_integer_divisor_accepts_scalar_emulation passed.\n";
+    assert(!err.empty());
+    expect_contains(err, "Use request.security_lower_tf for sub-input timeframes",
+                    "test_security_finer_rejected_with_hint");
+    std::cout << "test_security_finer_rejected_with_hint passed.\n";
 }
 
 // 3. request.security_lower_tf with non-integer divisor — reject
@@ -133,7 +133,7 @@ void test_security_same_tf_accept() {
 
 int main() {
     test_security_htf_accept();
-    test_security_finer_integer_divisor_accepts_scalar_emulation();
+    test_security_finer_rejected_with_hint();
     test_security_lower_tf_non_divisor_rejected();
     test_security_lower_tf_divisor_accept();
     test_security_lower_tf_not_finer_rejected();
