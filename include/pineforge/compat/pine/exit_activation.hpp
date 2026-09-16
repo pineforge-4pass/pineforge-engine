@@ -1,10 +1,14 @@
 #pragma once
 
+#include <pineforge/bar.hpp>
+#include <pineforge/compat/pine/order_birth.hpp>
 #include <pineforge/leg_activation.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace pineforge::compat::pine {
@@ -48,6 +52,10 @@ struct ExitActivationRequest {
     bool full_quantity = true;
     bool from_fill = false;
     bool has_from_entry = false;
+    HistoricalBirthReach birth_reach = HistoricalBirthReach::Standard;
+    std::string_view from_entry{};
+    std::string_view oca_name{};
+    double quantity = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct ExitActivationContext {
@@ -68,6 +76,22 @@ struct ExitActivationContext {
     bool at_extreme = false;
     int historical_point = 0;
     std::uint64_t current_fill = 0;
+    Bar bar{};
+    int position_entry_count = 0;
+    double position_quantity = 0.0;
+    int pyramiding = 0;
+    std::size_t lot_count = 0;
+    std::string_view first_lot_id{};
+    std::uint64_t first_lot_incarnation = 0;
+    std::uint64_t market_recalc_incarnation = 0;
+    std::uint64_t market_recalc_fill = 0;
+    bool pending_empty = false;
+    int slippage = 0;
+    double pointvalue = 1.0;
+    double account_fx = 1.0;
+    bool fx_series_empty = true;
+    bool bar_path_high_first = false;
+    double tick_high = std::numeric_limits<double>::quiet_NaN();
 };
 
 ExitActivationPolicy select_exit_activation(const ExitActivationRequest& request,

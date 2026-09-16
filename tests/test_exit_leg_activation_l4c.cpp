@@ -57,6 +57,7 @@ void policy_contract() {
     ExitActivationContext context{7, 2, 2, 1, 100, true, true, false, false,
                                   false, true, true, 0, false, false, 0, 9};
     ExitActivationRequest request{false, true, false, true};
+    request.birth_reach = HistoricalBirthReach::ExtremeWaypoints;
     const auto stop = select_exit_activation(request, 105, na, context);
     CHECK(stop.evidence().has_value());
     CHECK(stop.holds_stop());

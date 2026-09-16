@@ -51,18 +51,34 @@ ExitActivationPolicy select_exit_activation(const ExitActivationRequest& request
         && (context.direction > 0 ? context.cursor_price >= limit
                                   : context.cursor_price <= limit);
     std::optional<LimitContinuation> continuation;
-    if (!context.magnifier && !request.requested_trailing && request.has_from_entry
-        && request.full_quantity && !request.from_fill && context.after_first_open_fill
+    const bool historical_reach = historical_cascade_reach(request.birth_reach);
+    if (!context.magnifier && historical_reach
+        && context.after_first_open_fill
         && context.recalc_leg == 0 && (!std::isnan(stop) || !std::isnan(limit))
-        && limit_marketable) {
+        && !request.requested_trailing && limit_marketable) {
         continuation = LimitContinuation{LimitContinuationCause::LaterSameOpen,
                                          context.current_fill};
     } else if (!context.magnifier && !context.process_on_close && !context.warmup
-               && context.stream_idle && request.has_from_entry
+               && context.stream_idle && historical_reach
                && request.full_quantity && !request.requested_trailing
                && !context.historical_segment && context.at_extreme
                && context.historical_point == 1 && context.recalc_leg == 1
-               && context.direction > 0 && limit_marketable) {
+               && context.market_recalc_incarnation != 0
+               && context.market_recalc_fill == context.current_fill
+               && context.direction > 0 && context.position_entry_count == 1
+               && context.pyramiding == 0 && context.lot_count == 1
+               && context.first_lot_incarnation == context.market_recalc_incarnation
+               && request.has_from_entry
+               && request.from_entry == context.first_lot_id
+               && std::isfinite(request.quantity)
+               && std::abs(request.quantity - context.position_quantity) <= 1e-9
+               && context.pending_empty && request.oca_name.empty()
+               && context.slippage == 0 && context.pointvalue == 1.0
+               && context.account_fx == 1.0 && context.fx_series_empty
+               && limit_marketable && context.bar_path_high_first
+               && context.cursor_price == context.tick_high
+               && context.bar.low < limit && limit < context.bar.high
+               && (std::isnan(stop) || stop < context.bar.low)) {
         continuation = LimitContinuation{LimitContinuationCause::FirstHighRecross,
                                          context.current_fill};
     }

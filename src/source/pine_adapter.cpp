@@ -6,6 +6,7 @@
 
 #include <pineforge/timeframe.hpp>
 
+#include "../engine_internal.hpp"
 #include "../timezone.hpp"
 
 #include <algorithm>
@@ -362,10 +363,11 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
         snapshot.exit_levels.trail_points, snapshot.exit_levels.trail_price,
         snapshot.exit_levels.trail_offset, snapshot.exit_levels.profit_ticks,
         snapshot.exit_levels.loss_ticks};
-    if (!snapshot.legs.target().incarnation) {
+    if (!snapshot.legs.target().incarnation && handle.incarnation != 0) {
         snapshot.legs.set_prices(prices);
         snapshot.legs.attach(handle.incarnation, std::max<std::int64_t>(0, snapshot.placement_cycle));
-    } else if (snapshot.legs.target().incarnation != handle.incarnation) {
+    } else if (handle.incarnation != 0
+               && snapshot.legs.target().incarnation != handle.incarnation) {
         snapshot.legs.fork(handle.incarnation, std::max<std::int64_t>(0, snapshot.placement_cycle));
         snapshot.legs.set_prices(prices);
     }
@@ -374,34 +376,123 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
     if (physical.signed_units == 0.0 || snapshot.projection_created_bar < 0) return;
     const int direction = physical.signed_units > 0.0 ? 1 : -1;
     const auto point = require_host().current_execution_point();
-    const compat::pine::ExitActivationContext context{
-        current_position_cycle_, snapshot.projection_created_bar, snapshot.projection_created_bar,
-        direction, point ? point->price : snapshot.sizing.price, coof_recalc_active_,
-        true, point && point->decision.sub_count > 1, config_.process_orders_on_close,
-        false, true, coof_first_open_, 0, false, false, 0, last_applied_ordinal_};
-    const compat::pine::ExitActivationRequest request{
-        trailing, !std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0,
-        snapshot.birth.from_fill(), !snapshot.from_entry.empty()};
+    const Bar activation_bar = coof_script_bar_valid_ ? coof_script_bar_
+                                                       : policy_script_bar_;
+    bool path_high_first = std::abs(activation_bar.high - activation_bar.open)
+        < std::abs(activation_bar.open - activation_bar.low);
+    if (const auto state = require_host().native_state(); state.spec) {
+        if (state.spec->path_order == NativePathOrder::HighFirst) path_high_first = true;
+        else if (state.spec->path_order == NativePathOrder::LowFirst) path_high_first = false;
+    }
+    int historical_point = 0;
+    double waypoint = activation_bar.open;
+    if (point) {
+        switch (point->decision.coordinate.path_phase) {
+        case NativePathPhase::Open:
+            historical_point = 0; waypoint = activation_bar.open; break;
+        case NativePathPhase::High:
+            historical_point = path_high_first ? 1 : 2; waypoint = activation_bar.high; break;
+        case NativePathPhase::Low:
+            historical_point = path_high_first ? 2 : 1; waypoint = activation_bar.low; break;
+        case NativePathPhase::Close:
+            historical_point = 3; waypoint = activation_bar.close; break;
+        case NativePathPhase::None:
+            historical_point = 0; waypoint = point->price; break;
+        }
+    }
+    const bool at_waypoint = point && same_double_bits(point->price, waypoint);
+    const bool historical_segment = point && historical_point > 0 && !at_waypoint;
+    const int recalc_leg = historical_segment
+        ? std::max(0, historical_point - 1) : historical_point;
+
+    std::string_view first_lot_id;
+    std::uint64_t first_lot_incarnation = 0;
+    for (const auto& id : cohort_order_) {
+        const auto cohort = cohorts_by_id_.find(id);
+        if (cohort == cohorts_by_id_.end()) continue;
+        for (const auto& opening : cohort->second.opened) {
+            const auto units = cohort->second.live_units_by_origin.find(opening.incarnation);
+            if (units == cohort->second.live_units_by_origin.end()
+                || !(units->second > 0.0)) {
+                continue;
+            }
+            first_lot_id = id;
+            first_lot_incarnation = opening.incarnation;
+            break;
+        }
+        if (first_lot_incarnation != 0) break;
+    }
+
+    const double activation_quantity = std::isfinite(snapshot.projection_remaining_qty)
+        ? snapshot.projection_remaining_qty : snapshot.requested_qty;
+    const bool full_quantity = (!std::isfinite(snapshot.qty_percent)
+            || snapshot.qty_percent >= 100.0 - 1e-9)
+        && (!std::isfinite(activation_quantity)
+            || activation_quantity >= std::abs(physical.signed_units) - 1e-9);
+    compat::pine::ExitActivationContext context;
+    context.cycle = current_position_cycle_;
+    context.bar_index = snapshot.projection_created_bar;
+    context.position_open_bar = position_open_bar_index_;
+    context.direction = direction;
+    context.cursor_price = point ? point->price : snapshot.sizing.price;
+    context.fill_recalc = coof_recalc_active_;
+    context.scheduler = config_.calc_on_order_fills;
+    context.magnifier = point && point->decision.sub_count > 1;
+    context.process_on_close = config_.process_orders_on_close;
+    context.warmup = require_host().native_state().phase == NativeRunPhase::Warmup;
+    context.stream_idle = !stream_mode_;
+    context.after_first_open_fill = coof_recalc_active_ && !coof_first_open_
+        && point && point->decision.coordinate.path_phase == NativePathPhase::Open;
+    context.recalc_leg = recalc_leg;
+    context.historical_segment = historical_segment;
+    context.at_extreme = at_waypoint
+        && (historical_point == 1 || historical_point == 2);
+    context.historical_point = historical_point;
+    context.current_fill = coof_current_fill_seq_;
+    context.bar = activation_bar;
+    context.position_entry_count = static_cast<int>(physical.lot_count);
+    context.position_quantity = std::abs(physical.signed_units);
+    context.pyramiding = config_.pyramiding;
+    context.lot_count = physical.lot_count;
+    context.first_lot_id = first_lot_id;
+    context.first_lot_incarnation = first_lot_incarnation;
+    context.market_recalc_incarnation = coof_market_entry_recalc_incarnation_;
+    context.market_recalc_fill = coof_market_entry_recalc_fill_seq_;
+    context.pending_empty = live_handles_.empty() && pending_entries_.empty()
+        && pending_bracket_legs_.empty() && pending_same_bar_commands_.empty()
+        && pending_coof_requests_.empty();
+    context.slippage = config_.slippage;
+    context.pointvalue = staged_.syminfo.pointvalue;
+    context.account_fx = point ? active_staged_fx(point->decision.sub_bar_open_ms)
+                               : staged_.account_fx;
+    context.fx_series_empty = staged_.account_fx_effective_from_ms.empty();
+    context.bar_path_high_first = path_high_first;
+    context.tick_high = source_bar_fill_tick(activation_bar.high, staged_.syminfo.mintick);
+    compat::pine::ExitActivationRequest request;
+    request.requested_trailing = trailing;
+    request.full_quantity = full_quantity;
+    request.from_fill = snapshot.birth.from_fill();
+    request.has_from_entry = !snapshot.from_entry.empty();
+    request.birth_reach = snapshot.birth_reach;
+    request.from_entry = snapshot.from_entry;
+    request.oca_name = snapshot.oca_name;
+    request.quantity = activation_quantity;
     snapshot.exit_activation = compat::pine::select_exit_activation(
         request, snapshot.exit_levels.stop, snapshot.exit_levels.limit, context);
     if (snapshot.exit_activation.evidence()) {
         snapshot.leg_activation.bind(snapshot.exit_activation.resolve(
-            current_position_cycle_, snapshot.projection_created_bar));
+            current_position_cycle_, position_open_bar_index_));
     }
 
-    // P-DA1 already makes deferred cohort exits grow at match time.  The
-    // source receipt is limited to the exact POOC global-full-exit shape with
-    // one or more same-side MARKET adds already staged in this evaluation.
-    // Any priced/raw/opposite/cap-blocked companion stays a finite ordinary
-    // reservation.
+    // ab9714be reservation_expansion.cpp:7-27 and
+    // pine_strategy_commands.cpp:1891-1924: only an ordinary same-bar MARKET
+    // population can grow a global full POOC exit. The immutable source birth
+    // and placement facts select that population; the native cohort remains
+    // the execution authority.
     const bool full_global = config_.process_orders_on_close && snapshot.from_entry.empty()
         && !std::isfinite(snapshot.requested_qty)
         && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0)
         && physical.signed_units != 0.0;
-    bool qualified_adds = full_global
-        && (config_.pyramiding <= 0
-            || physical.lot_count < static_cast<std::size_t>(config_.pyramiding));
-    bool saw_qualifying_add = false;
     const bool side = physical.signed_units > 0.0;
     const auto is_unpriced_market_add = [](const PlacementSnapshot& candidate) {
         return !finite_positive(candidate.exit_levels.limit)
@@ -413,54 +504,54 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
         return candidate.opening && (candidate.family == PineOrderFamily::Entry
                                      || candidate.family == PineOrderFamily::Order);
     };
-    const auto is_current = [&](const PlacementSnapshot& candidate) {
-        return !point || candidate.placement_script_open_ms == point->decision.script_bar_open_ms;
+    struct CandidateRef {
+        PlacementSnapshot* snapshot = nullptr;
+        std::uint64_t incarnation = 0;
     };
-    const auto is_qualifying = [&](const PlacementSnapshot& candidate) {
-        return candidate.family == PineOrderFamily::Entry && candidate.is_long == side
-            && candidate.oca_name.empty() && is_unpriced_market_add(candidate);
+    std::vector<compat::pine::ReservationGrowthCandidate> candidates;
+    std::vector<CandidateRef> candidate_refs;
+    const auto collect = [&](PlacementSnapshot& candidate,
+                             std::uint64_t incarnation) {
+        if (!is_entry_like(candidate)) return;
+        compat::pine::ReservationGrowthCandidate fact;
+        fact.incarnation = incarnation;
+        fact.source_id = candidate.source_id;
+        fact.market_entry = candidate.family == PineOrderFamily::Entry
+            && is_unpriced_market_add(candidate);
+        fact.from_fill = candidate.birth.from_fill();
+        fact.at_entry_capacity = candidate.projection_over_pyramiding;
+        fact.is_long = candidate.is_long;
+        fact.created_position_side =
+            static_cast<PositionSide>(candidate.projection_position_side);
+        fact.created_bar = candidate.projection_created_bar;
+        candidates.push_back(std::move(fact));
+        candidate_refs.push_back({&candidate, incarnation});
     };
-    if (qualified_adds) {
-        for (const auto& pending : pending_entries_) {
-            if (!is_entry_like(pending.snapshot)) continue;
-            if (!is_current(pending.snapshot) || !is_qualifying(pending.snapshot)
-                || !std::holds_alternative<native_order::Market>(pending.request.trigger)) {
-                qualified_adds = false;
-                break;
-            }
-            saw_qualifying_add = true;
-        }
+    for (auto& pending : pending_entries_) collect(pending.snapshot, 0);
+    for (auto& pending : pending_same_bar_commands_) collect(pending.snapshot, 0);
+    for (const auto& live : live_handles_) {
+        const auto existing = placement_.find(live.incarnation);
+        if (existing != placement_.end()) collect(existing->second, live.incarnation);
     }
-    if (qualified_adds) {
-        for (const auto& handle : live_handles_) {
-            const auto existing = placement_.find(handle.incarnation);
-            if (existing == placement_.end() || !is_entry_like(existing->second)) continue;
-            if (!is_current(existing->second) || !is_qualifying(existing->second)) {
-                qualified_adds = false;
-                break;
-            }
-            saw_qualifying_add = true;
-        }
-    }
-    qualified_adds = qualified_adds && saw_qualifying_add;
-    if (qualified_adds) {
-        for (const auto& live : live_handles_) {
-            const auto existing = placement_.find(live.incarnation);
-            if (existing == placement_.end()) continue;
-            const auto& prior = existing->second;
-            const bool global_exit = prior.from_entry.empty()
-                && (prior.family == PineOrderFamily::ExitLimit
-                    || prior.family == PineOrderFamily::ExitStop
-                    || prior.family == PineOrderFamily::ExitTrail);
-            if (global_exit && prior.source_id != snapshot.source_id) {
-                qualified_adds = false;
-                break;
-            }
-        }
-    }
+    const double percent = std::isfinite(snapshot.qty_percent)
+        ? snapshot.qty_percent : 100.0;
+    const auto selected = full_global
+        ? compat::pine::select_reservation_growth_sources(
+              candidates, snapshot.from_entry, config_.process_orders_on_close,
+              physical.signed_units == 0.0, percent,
+              snapshot.projection_created_bar,
+              side ? PositionSide::LONG : PositionSide::SHORT)
+        : std::vector<std::uint64_t>{};
+    const bool partial = percent < 100.0 - 1e-9
+        || (std::isfinite(snapshot.projection_remaining_qty)
+            && snapshot.projection_remaining_qty
+                < std::abs(physical.signed_units) - 1e-9);
+    const bool qualified_adds = compat::pine::admits_reservation_expansion(
+        selected, partial, snapshot.projection_remaining_qty,
+        std::abs(physical.signed_units));
     snapshot.pooc_global_full_exit_dynamic_qty = qualified_adds;
     snapshot.pooc_global_full_exit_tracks_bound_adds = qualified_adds;
-    if (qualified_adds) {
+    if (qualified_adds && handle.incarnation != 0) {
         try {
             snapshot.reservation_expansion.capture(handle.incarnation, current_position_cycle_,
                                                    direction > 0 ? PositionSide::LONG
@@ -468,6 +559,21 @@ void PineExecutionAdapter::initialize_l4c_policy(PlacementSnapshot& snapshot,
                                                    std::abs(physical.signed_units));
         } catch (const std::invalid_argument&) {
             // A replacement carries its existing immutable capture.
+        }
+        for (const auto& selected_source : candidate_refs) {
+            auto* candidate = selected_source.snapshot;
+            if (!candidate) continue;
+            candidate->reservation_growth_owner_incarnation = handle.incarnation;
+            if (selected_source.incarnation != 0
+                && selected_source.incarnation != handle.incarnation) {
+                try {
+                    candidate->reservation_growth_source.assign_capture(
+                        selected_source.incarnation, handle.incarnation);
+                    candidate->pooc_global_full_exit_bound_add = true;
+                } catch (const std::invalid_argument&) {
+                    // This exact source already owns the capture receipt.
+                }
+            }
         }
     }
 }
@@ -901,6 +1007,9 @@ void PineExecutionAdapter::reset_for_run() {
     source_batch_mutated_ = false;
     coof_recalc_active_ = false;
     coof_first_open_ = false;
+    coof_market_entry_recalc_incarnation_ = 0;
+    coof_market_entry_recalc_fill_seq_ = 0;
+    coof_current_fill_seq_ = 0;
     coof_context_ = {};
     coof_script_bar_ = {};
     coof_script_bar_valid_ = false;
@@ -910,9 +1019,16 @@ void PineExecutionAdapter::reset_for_run() {
     close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     last_fx_rate_ = kNaN;
     position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    position_open_bar_index_ = -1;
     position_open_phase_ = NativePathPhase::None;
     position_open_priced_ = false;
     last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    signal_close_mc_event_bar_ = -1;
+    signal_close_mc_position_cycle_ = 0;
+    signal_close_mc_entry_incarnation_ = 0;
+    signal_close_mc_fill_seq_ = 0;
+    signal_close_mc_before_qty_ = kNaN;
+    signal_close_mc_remaining_qty_ = kNaN;
     risk_coof_direct_script_bar_ = std::numeric_limits<std::int64_t>::min();
     cap_latest_fill_ = 0;
     day_ledger_ = {};
@@ -1209,6 +1325,12 @@ native_order::Group PineExecutionAdapter::group_for(const std::string& name, int
 
 void PineExecutionAdapter::remember(const native_order::RequestHandle& handle,
                                     PlacementSnapshot snapshot) {
+    if (snapshot.reservation_growth_owner_incarnation != 0
+        && snapshot.reservation_growth_owner_incarnation != handle.incarnation) {
+        snapshot.reservation_growth_source.assign_capture(
+            handle.incarnation, snapshot.reservation_growth_owner_incarnation);
+        snapshot.pooc_global_full_exit_bound_add = true;
+    }
     initialize_l4c_policy(snapshot, handle);
     // Every accepted request receives a fresh incarnation. Construct its
     // immutable placement evidence directly in the hash table rather than
@@ -1289,7 +1411,10 @@ bool PineExecutionAdapter::qualify_short_seed_plan(const ShortSeedPlan& plan) co
         return row.placement_open_epoch + 1U == broker_open_epoch_
             && row.projection_position_side == static_cast<std::int32_t>(PositionSide::SHORT)
             && !row.replaced_opening && row.projection_predecessor == 0
-            && !row.projection_created_during_coof && row.oca_name.empty() && row.oca_type == 0;
+            && !row.projection_created_during_coof
+            && !compat::pine::historical_cascade_reach(row.birth_reach)
+            && !row.reservation_expansion.capture()
+            && row.oca_name.empty() && row.oca_type == 0;
     };
     const bool fixed_default = config_.default_qty_type == static_cast<int>(QtyType::FIXED);
     const auto pure_default_market_entry = [&](const PlacementSnapshot& row) {
@@ -1448,7 +1573,8 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             named_entry_cancel_tokens_.erase(token);
         }
     }
-    snapshot.birth = capture_order_birth();
+    if (snapshot.birth.cause() == OrderBirthCause::Unattributed)
+        snapshot.birth = capture_order_birth();
     snapshot.coof_cascade_seg_i = coof_recalc_active_
         ? coof_context_.coordinate.interval_index : -1;
     snapshot.coof_cascade_inflight_fires = coof_recalc_active_;
@@ -1465,8 +1591,6 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         ? config_.margin_long : config_.margin_short;
     snapshot.paired_flat_market_signal_pointvalue = staged_.syminfo.pointvalue;
     snapshot.paired_flat_market_signal_fx = snapshot.sizing.fx;
-    snapshot.signal_close_mc_bar = snapshot.projection_created_bar;
-    snapshot.signal_close_mc_remaining_qty = std::abs(physical.signed_units);
     snapshot.pooc_global_full_exit_dynamic_qty = config_.process_orders_on_close
         && !opening && !std::isfinite(snapshot.requested_qty)
         && (!std::isfinite(snapshot.qty_percent) || snapshot.qty_percent >= 100.0);
@@ -1475,6 +1599,20 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
         snapshot.projection_created_bar = point->decision.coordinate.interval_index;
         snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
         snapshot.placement_sub_open_ms = point->decision.sub_bar_open_ms;
+    }
+    if (snapshot.opening && snapshot.family == PineOrderFamily::Entry
+        && !snapshot.is_long && snapshot.rounded_signal_cost_close_only
+        && snapshot.affordability_close_only
+        && signal_close_mc_event_bar_ == snapshot.projection_created_bar
+        && signal_close_mc_position_cycle_ == snapshot.placement_cycle
+        && signal_close_mc_entry_incarnation_ != 0
+        && signal_close_mc_fill_seq_ != 0) {
+        snapshot.signal_close_mc_bar = signal_close_mc_event_bar_;
+        snapshot.signal_close_mc_entry_incarnation =
+            signal_close_mc_entry_incarnation_;
+        snapshot.signal_close_mc_fill_seq = signal_close_mc_fill_seq_;
+        snapshot.signal_close_mc_remaining_qty = signal_close_mc_remaining_qty_;
+        snapshot.projection_tv_carry_qty = signal_close_mc_before_qty_;
     }
     snapshot.placement_open_epoch = broker_open_epoch_;
     if (snapshot.command_ordinal == 0) snapshot.command_ordinal = ++command_ordinal_;
@@ -2843,15 +2981,32 @@ void PineExecutionAdapter::stage_flat_children_before_parent(
     refresh_pending_view();
 }
 
-void PineExecutionAdapter::begin_coof_recalc(const NativeDecisionContext& context, bool first_open) {
+void PineExecutionAdapter::begin_coof_recalc(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context, bool first_open,
+        std::uint64_t source_fill_sequence) {
     coof_recalc_active_ = true;
     coof_first_open_ = first_open;
+    coof_current_fill_seq_ = source_fill_sequence;
+    coof_market_entry_recalc_fill_seq_ = source_fill_sequence;
+    coof_market_entry_recalc_incarnation_ = 0;
+    if (event.opened_units != 0.0
+        && std::holds_alternative<native_order::Market>(event.request().trigger)) {
+        const auto placement = placement_.find(event.handle().incarnation);
+        if (placement != placement_.end()
+            && placement->second.family == PineOrderFamily::Entry) {
+            coof_market_entry_recalc_incarnation_ = event.handle().incarnation;
+        }
+    }
     coof_context_ = context;
 }
 
 void PineExecutionAdapter::end_coof_recalc() noexcept {
     coof_recalc_active_ = false;
     coof_first_open_ = false;
+    coof_market_entry_recalc_incarnation_ = 0;
+    coof_market_entry_recalc_fill_seq_ = 0;
+    coof_current_fill_seq_ = 0;
     coof_context_ = {};
 }
 
@@ -3649,6 +3804,9 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
     // level before that parent is applied.
     snapshot.exit_levels.limit = limit_price;
     snapshot.exit_levels.stop = stop_price;
+    snapshot.birth = capture_order_birth();
+    snapshot.birth_reach = compat::pine::select_historical_birth_reach(
+        snapshot.birth, false);
     snapshot.reverse_to = reverses || paired_all_in_reentry;
     snapshot.projection_after_close = close_precedes_entry;
     snapshot.sizing = sizing_snapshot();
@@ -3817,9 +3975,10 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             * staged_.syminfo.pointvalue * snapshot.sizing.fx;
         const double rounded_cost = source_money_round(notional_per_price * snapshot.sizing.price);
         if (snapshot.sizing.equity + 1e-9 < rounded_cost) {
-            if (reverses && !snapshot.projection_after_close)
+            if (reverses && !snapshot.projection_after_close) {
                 snapshot.affordability_close_only = true;
-            else if (reverses)
+                snapshot.rounded_signal_cost_close_only = true;
+            } else if (reverses)
                 snapshot.affordability_close_only = false;
             else return;
         } else if (!snapshot.projection_after_close) {
@@ -5557,6 +5716,11 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         return;
     }
     const auto source_point = require_host().current_execution_point();
+    const OrderBirth exit_birth = capture_order_birth();
+    const auto exit_birth_reach = compat::pine::select_historical_birth_reach(
+        exit_birth, has_trail_request);
+    const bool historical_cascade =
+        compat::pine::historical_cascade_reach(exit_birth_reach);
     const bool pooc_short_tick_scope = source_point
         && config_.process_orders_on_close && !config_.calc_on_order_fills
         && !stream_mode_ && source_point->decision.sub_count <= 1
@@ -5584,7 +5748,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         bool coof_limit_waypoint_qualified = false;
         double coof_limit_waypoint_price = kNaN;
         double coof_stop_waypoint_price = kNaN;
-        if (coof_recalc_active_ && !coof_first_open_ && coof_script_bar_valid_) {
+        if (coof_recalc_active_ && !coof_first_open_ && historical_cascade
+            && coof_script_bar_valid_) {
             const auto native = require_host().native_state();
             const bool ordinary_path = !native.spec || native.spec->intrabar.is_none();
             const auto point = require_host().current_execution_point();
@@ -5691,13 +5856,29 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.exit_levels = {limit_price, stop_price, source_trail_points,
                                     source_trail_offset, source_trail_price,
                                     profit_ticks, loss_ticks};
+            snapshot.birth = exit_birth;
+            snapshot.birth_reach = exit_birth_reach;
             snapshot.trail_activation_level = trail_price;
             snapshot.sizing = exit_sizing;
+            snapshot.placement_cycle = current_position_cycle_;
+            if (source_point) {
+                snapshot.projection_created_bar =
+                    source_point->decision.coordinate.interval_index;
+                snapshot.projection_position_side = physical.signed_units > 0.0
+                    ? static_cast<std::int32_t>(PositionSide::LONG)
+                    : (physical.signed_units < 0.0
+                        ? static_cast<std::int32_t>(PositionSide::SHORT)
+                        : static_cast<std::int32_t>(PositionSide::FLAT));
+                snapshot.placement_script_open_ms =
+                    source_point->decision.script_bar_open_ms;
+                snapshot.placement_sub_open_ms = source_point->decision.sub_bar_open_ms;
+            }
+            initialize_l4c_policy(snapshot, {});
             if (finite_positive(coof_limit_waypoint_price))
                 snapshot.forced_execution_price = coof_limit_waypoint_price;
             else if (finite_positive(coof_stop_waypoint_price))
                 snapshot.forced_execution_price = coof_stop_waypoint_price;
-            if (coof_recalc_active_ && !coof_first_open_
+            if (coof_recalc_active_ && !coof_first_open_ && historical_cascade
                 && family == PineOrderFamily::ExitStop
                 && finite_positive(stop_price)) {
                 const auto point = require_host().current_execution_point();
@@ -9808,6 +9989,126 @@ void PineExecutionAdapter::source_batch_end() {
     cap.source_batch_end();
 }
 
+void PineExecutionAdapter::record_market_review(
+        admission::Checkpoint checkpoint, int bar,
+        const std::vector<native_order::RequestHandle>& handles) {
+    std::vector<native_order::RequestHandle> selected;
+    selected.reserve(handles.size());
+    for (const auto& handle : handles) {
+        const auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        const auto& draft = found->second.market_admission;
+        if (!draft.observation() || draft.review()) continue;
+        const bool belongs = checkpoint == admission::Checkpoint::TerminalGross
+            || (checkpoint == admission::Checkpoint::DefaultGross
+                && compat::pine::awaits_default_review(draft))
+            || (checkpoint == admission::Checkpoint::ExplicitPair
+                && compat::pine::awaits_pair_review(draft));
+        if (belongs) selected.push_back(handle);
+    }
+    if (selected.empty()) return;
+
+    auto allocation = admission_journal.reserve();
+    admission::ReviewEvent review;
+    review.receipt = {allocation.sequence(), checkpoint, bar, 0};
+    review.open_price = policy_script_bar_valid_ ? policy_script_bar_.open : kNaN;
+    const auto physical = require_host().physical_position();
+    review.position_side = physical.signed_units > 0.0
+        ? static_cast<int>(PositionSide::LONG)
+        : (physical.signed_units < 0.0 ? static_cast<int>(PositionSide::SHORT)
+                                       : static_cast<int>(PositionSide::FLAT));
+    review.position_cycle = current_position_cycle_;
+    for (const auto& handle : selected) {
+        auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        auto& snapshot = found->second;
+        const auto& origin = snapshot.market_admission.observation();
+        if (!origin) continue;
+        admission::BookObservation book;
+        book.incarnation = handle.incarnation;
+        book.priority = static_cast<std::int64_t>(snapshot.source_sequence);
+        book.bar = snapshot.projection_created_bar;
+        book.type = snapshot.family == PineOrderFamily::Order ? 3 : 0;
+        book.placement_side = snapshot.projection_position_side;
+        book.buy = snapshot.is_long;
+        book.id = snapshot.source_id;
+        book.oca_name = snapshot.oca_name;
+        book.oca_type = snapshot.oca_type;
+        book.birth = snapshot.birth;
+        book.prices = {snapshot.exit_levels.limit, snapshot.exit_levels.stop,
+                       snapshot.exit_levels.trail_points,
+                       snapshot.exit_levels.trail_price,
+                       snapshot.exit_levels.trail_offset};
+        book.draft = snapshot.market_admission;
+        review.book.push_back(book);
+        review.reviewed.push_back(book);
+        snapshot.market_admission.reviewed(
+            {allocation.sequence(), checkpoint, bar, origin->command});
+        if (review.reviewed.size() == 1U) review.configuration = origin->configuration;
+    }
+    admission_journal.append(std::move(review));
+}
+
+void PineExecutionAdapter::refresh_pending_sizing_after_margin(
+        const native_order::ExecutionAppliedEvent& event,
+        const NativeDecisionContext& context) {
+    const double mark = policy_script_bar_valid_
+        ? policy_script_bar_.close : event.resolved_price;
+    const double marked_equity = percent_commission_live_equity(
+        nearest_tick(mark, staged_.syminfo.mintick));
+    const double active_fx = active_staged_fx(context.sub_bar_open_ms);
+    const std::uint64_t cause_fill =
+        static_cast<PineStrategyHost&>(require_host()).broker_fill_event_seq_;
+    for (const auto& handle : live_handles_) {
+        auto found = placement_.find(handle.incarnation);
+        if (found == placement_.end()) continue;
+        auto& snapshot = found->second;
+        if (snapshot.projection_created_bar != context.coordinate.interval_index
+            || !snapshot.market_admission.observation()) {
+            continue;
+        }
+        const admission::SizingObservation before{
+            snapshot.sizing.frozen_units, snapshot.sizing.equity,
+            snapshot.sizing.price, snapshot.sizing.mark, snapshot.sizing.fx};
+        const double affordability_before = snapshot.projection_affordability_equity;
+        bool revised = false;
+        const bool market_entry = snapshot.opening
+            && (snapshot.family == PineOrderFamily::Entry
+                || snapshot.family == PineOrderFamily::Order)
+            && !finite_positive(snapshot.exit_levels.limit)
+            && !finite_positive(snapshot.exit_levels.stop);
+        if (market_entry && std::isfinite(snapshot.sizing.frozen_units)) {
+            snapshot.sizing.equity = marked_equity;
+            snapshot.sizing.fx = active_fx;
+            snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
+            revised = true;
+        }
+        if (market_entry
+            && std::isfinite(snapshot.projection_affordability_equity)) {
+            snapshot.projection_affordability_equity =
+                require_host().native_marked_equity(mark);
+            revised = true;
+        }
+        if (!revised || cause_fill == 0) continue;
+
+        const auto& origin = snapshot.market_admission.observation();
+        auto allocation = admission_journal.reserve();
+        admission::SizingEvent sizing;
+        sizing.receipt = {allocation.sequence(), cause_fill,
+                          context.coordinate.interval_index, origin->command};
+        sizing.incarnation = handle.incarnation;
+        sizing.before = before;
+        sizing.after = {snapshot.sizing.frozen_units, snapshot.sizing.equity,
+                        snapshot.sizing.price, snapshot.sizing.mark,
+                        snapshot.sizing.fx};
+        sizing.affordability_equity_before = affordability_before;
+        sizing.affordability_equity_after =
+            snapshot.projection_affordability_equity;
+        snapshot.market_admission.sizing_revised(sizing.receipt);
+        admission_journal.append(std::move(sizing));
+    }
+}
+
 void PineExecutionAdapter::apply_open_market_admission(
         const NativeDecisionContext& context) {
     const bool began_flat = require_host().physical_position().signed_units == 0.0;
@@ -9842,7 +10143,9 @@ void PineExecutionAdapter::apply_open_market_admission(
             && !finite_positive(snapshot.exit_levels.stop)
             && !finite_positive(snapshot.exit_levels.trail_points)
             && !finite_positive(snapshot.exit_levels.trail_price)
-            && !finite_positive(snapshot.exit_levels.trail_offset);
+            && !finite_positive(snapshot.exit_levels.trail_offset)
+            && !snapshot.birth.from_fill() && !snapshot.birth.at_terminal_fill()
+            && !compat::pine::historical_cascade_reach(snapshot.birth_reach);
         if (unpriced_entry) {
             market.push_back({handle, &snapshot});
             continue;
@@ -9855,7 +10158,8 @@ void PineExecutionAdapter::apply_open_market_admission(
             && !finite_positive(snapshot.exit_levels.trail_points)
             && !finite_positive(snapshot.exit_levels.trail_price)
             && !finite_positive(snapshot.exit_levels.trail_offset)
-            && !snapshot.birth.from_fill() && !snapshot.birth.at_terminal_fill();
+            && !snapshot.birth.from_fill() && !snapshot.birth.at_terminal_fill()
+            && !compat::pine::historical_cascade_reach(snapshot.birth_reach);
         if (!same_bar_unpriced_close) foreign_live_order = true;
     }
     const bool family_s_command_order =
@@ -9940,6 +10244,13 @@ void PineExecutionAdapter::apply_open_market_admission(
         }
         if (!earlier_opposite) cancel_later(market[index].handle);
     }
+    std::vector<native_order::RequestHandle> review_handles;
+    review_handles.reserve(market.size());
+    for (const auto& candidate : market) review_handles.push_back(candidate.handle);
+    record_market_review(admission::Checkpoint::DefaultGross,
+                         context.coordinate.interval_index, review_handles);
+    record_market_review(admission::Checkpoint::ExplicitPair,
+                         context.coordinate.interval_index, review_handles);
     for (const auto& handle : cancellations) {
         const auto result = require_host().cancel(handle);
         if (result.status == native_order::CancelStatus::Cancelled) retire(handle);
@@ -10201,7 +10512,9 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
             || !finite_positive(row.requested_qty)
             || finite_positive(row.exit_levels.limit)
             || finite_positive(row.exit_levels.stop)
-            || !row.oca_name.empty() || row.oca_type != 0) {
+            || !row.oca_name.empty() || row.oca_type != 0
+            || row.birth.from_fill() || row.birth.at_terminal_fill()
+            || compat::pine::historical_cascade_reach(row.birth_reach)) {
             continue;
         }
         const PlacementSnapshot* origin = &row;
@@ -10220,6 +10533,10 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
             if (left.priority != right.priority) return left.priority < right.priority;
             return left.snapshot.source_sequence < right.snapshot.source_sequence;
         });
+    std::vector<native_order::RequestHandle> terminal_review_handles;
+    terminal_review_handles.reserve(candidates.size());
+    for (const auto& candidate : candidates)
+        terminal_review_handles.push_back(candidate.handle);
 
     const auto& first = candidates[0].snapshot;
     const auto& second = candidates[1].snapshot;
@@ -10248,6 +10565,9 @@ void PineExecutionAdapter::apply_terminal_explicit_market_policy(
             candidates.resize(1);
         }
     }
+    record_market_review(admission::Checkpoint::TerminalGross,
+                         context.coordinate.interval_index,
+                         terminal_review_handles);
 
     // ab9714be pine_fills.cpp:3023-3270 and pine_orders.cpp:193-276:
     // outside the exact gross-decline book, explicit opposite entry calls
@@ -10723,6 +11043,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     if (next_sign != 0 && (current_position_sign_ == 0 || current_position_sign_ != next_sign)) {
         ++current_position_cycle_;
         position_open_script_bar_ = context.script_bar_open_ms;
+        position_open_bar_index_ = context.coordinate.interval_index;
         position_open_phase_ = context.coordinate.path_phase;
         position_open_priced_ = placement_snapshot
             && (finite_positive(placement_snapshot->exit_levels.limit)
@@ -11057,7 +11378,12 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const bool bound_preexit_add = placement_snapshot
                 && placement_snapshot->opening && event.opened_units > 0.0
                 && placement_snapshot->command_sequence < candidate.command_sequence;
+            const bool selected_growth_source = placement_snapshot
+                && placement_snapshot->reservation_growth_source.reservation_owner()
+                && *placement_snapshot->reservation_growth_source.reservation_owner()
+                    == handle.incarnation;
             if (candidate.reservation_expansion.capture() && handle != event.handle()
+                && selected_growth_source
                 && (candidate.reservation_expansion.population_open() || bound_preexit_add)) {
                 if (bound_preexit_add && std::isfinite(candidate.projection_remaining_qty)) {
                     candidate.projection_remaining_qty += std::abs(event.opened_units);
@@ -11066,13 +11392,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                     candidate.pooc_global_full_exit_dynamic_qty = false;
                     candidate.pooc_global_full_exit_tracks_bound_adds = false;
                     candidate.reservation_expansion.close_population(event.handle().incarnation);
-                    try {
-                        candidate.reservation_growth_source.assign_capture(
-                            event.handle().incarnation, handle.incarnation);
-                        candidate.pooc_global_full_exit_bound_add = bound_preexit_add;
-                    } catch (const std::invalid_argument&) {
-                        // The receipt is already bound to this exact live origin.
-                    }
+                    candidate.pooc_global_full_exit_bound_add = bound_preexit_add;
                 }
             }
         }
@@ -11084,6 +11404,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
     }
     if (placement_snapshot && placement_snapshot->family == PineOrderFamily::Margin
         && event.closed_units > 0.0) {
+        refresh_pending_sizing_after_margin(event, context);
         // pine_fills.cpp:6399-6434's narrow MC-surplus receipt.  It is not
         // inferred from an arbitrary requested-minus-live quantity: the
         // source entry must have been reduced by this one-unit margin event
@@ -11091,6 +11412,41 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
         // sole live long lot.  Snapshot mutation at an Applied boundary is a
         // pinned P5 write boundary.
         const auto physical = require_host().physical_position();
+        std::uint64_t sole_live_entry_incarnation = 0;
+        std::size_t live_entry_count = 0;
+        for (const auto& id : cohort_order_) {
+            const auto cohort = cohorts_by_id_.find(id);
+            if (cohort == cohorts_by_id_.end()) continue;
+            for (const auto& opening : cohort->second.opened) {
+                const auto units = cohort->second.live_units_by_origin.find(
+                    opening.incarnation);
+                if (units == cohort->second.live_units_by_origin.end()
+                    || !(units->second > 0.0)) {
+                    continue;
+                }
+                sole_live_entry_incarnation = opening.incarnation;
+                ++live_entry_count;
+            }
+        }
+        const std::uint64_t source_fill_sequence =
+            static_cast<PineStrategyHost&>(require_host()).broker_fill_event_seq_;
+        if (live_entry_count == 1U && sole_live_entry_incarnation != 0
+            && physical.signed_units > 0.0 && physical.lot_count == 1U
+            && std::abs(event.closed_units - 1.0) < 1e-6
+            && config_.default_qty_type
+                == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
+            && std::abs(config_.default_qty_value - 100.0) < 1e-12
+            && config_.commission_type == static_cast<int>(CommissionType::PERCENT)
+            && config_.commission_value == 0.0 && config_.slippage == 0
+            && source_fill_sequence != 0) {
+            signal_close_mc_event_bar_ = context.coordinate.interval_index;
+            signal_close_mc_position_cycle_ = current_position_cycle_;
+            signal_close_mc_entry_incarnation_ = sole_live_entry_incarnation;
+            signal_close_mc_fill_seq_ = source_fill_sequence;
+            signal_close_mc_remaining_qty_ = std::abs(physical.signed_units);
+            signal_close_mc_before_qty_ = signal_close_mc_remaining_qty_
+                + std::abs(event.closed_units);
+        }
         for (const auto& handle : live_handles_) {
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) continue;
@@ -11099,13 +11455,24 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 - std::abs(physical.signed_units);
             const bool exact_margin_receipt = candidate.family == PineOrderFamily::Entry
                 && candidate.affordability_close_only && !candidate.is_long
+                && candidate.rounded_signal_cost_close_only
                 && candidate.deferred_cohort
                 && config_.default_qty_type == static_cast<int>(QtyType::PERCENT_OF_EQUITY)
                 && candidate.placement_cycle == current_position_cycle_
                 && physical.signed_units > 0.0 && physical.lot_count == 1U
                 && std::isfinite(close_surplus) && std::abs(close_surplus - 1.0) < 1e-6
                 && std::abs(event.closed_units - 1.0) < 1e-6;
-            if (exact_margin_receipt) candidate.affordability_keep_mc_close_surplus = true;
+            if (exact_margin_receipt) {
+                candidate.affordability_keep_mc_close_surplus = true;
+                if (live_entry_count == 1U && sole_live_entry_incarnation != 0) {
+                    candidate.signal_close_mc_bar = candidate.projection_created_bar;
+                    candidate.signal_close_mc_entry_incarnation =
+                        sole_live_entry_incarnation;
+                    candidate.signal_close_mc_fill_seq = source_fill_sequence;
+                    candidate.signal_close_mc_remaining_qty =
+                        std::abs(physical.signed_units);
+                }
+            }
         }
         revive_brackets_after_margin(event, context);
     }
@@ -11253,6 +11620,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             if (!pending_parent(owner)) cancel_exit_orders_for_full_close(owner);
         }
         position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+        position_open_bar_index_ = -1;
         position_open_phase_ = NativePathPhase::None;
         position_open_priced_ = false;
         open_entry_fees_.clear();
@@ -11998,12 +12366,14 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
     const auto& snapshot = *row;
     const double tick = owner_->staged_.syminfo.mintick;
     const auto physical = owner_->require_host().physical_position();
-    const bool long_side = physical.signed_units != 0.0 ? physical.signed_units > 0.0
-                                                         : snapshot.is_long;
+    const bool long_side = physical.signed_units > 0.0;
     const double entry = owner_->require_host().position_avg_price();
     *stop = snapshot.exit_levels.stop;
     *limit = snapshot.exit_levels.limit;
     double trail_points = snapshot.exit_levels.trail_points;
+    double trail_price = snapshot.exit_levels.trail_price;
+    double profit_ticks = snapshot.exit_levels.profit_ticks;
+    double loss_ticks = snapshot.exit_levels.loss_ticks;
     for (int raw = 0; raw < owner_->projected_raw_pending_size(); ++raw) {
         const PlacementSnapshot* sibling = nullptr;
         native_order::RequestHandle sibling_handle;
@@ -12015,25 +12385,41 @@ int PendingIntentView::effective_levels(int index, double* stop, double* limit,
         if (!std::isnan(sibling->exit_levels.limit)) *limit = sibling->exit_levels.limit;
         if (!std::isnan(sibling->exit_levels.trail_points))
             trail_points = sibling->exit_levels.trail_points;
+        if (!std::isnan(sibling->exit_levels.trail_price))
+            trail_price = sibling->exit_levels.trail_price;
+        if (!std::isnan(sibling->exit_levels.profit_ticks))
+            profit_ticks = sibling->exit_levels.profit_ticks;
+        if (!std::isnan(sibling->exit_levels.loss_ticks))
+            loss_ticks = sibling->exit_levels.loss_ticks;
     }
     // The legacy C observer reports the executable levels, not merely the
     // raw tick offsets retained at the command.  Keep the source tick
     // derivation at the projection boundary where it is observable.
-    if (!finite_positive(*limit) && finite_positive(snapshot.exit_levels.profit_ticks)
-        && finite_positive(entry) && finite_positive(tick)) {
-        *limit = entry + (long_side ? 1.0 : -1.0)
-            * snapshot.exit_levels.profit_ticks * tick;
+    const bool position_live = physical.signed_units != 0.0 && std::isfinite(entry);
+    const bool resolved = position_live && level_resolved(index) == 1;
+    const double direction = long_side ? 1.0 : -1.0;
+    if ((snapshot.family == PineOrderFamily::ExitLimit
+         || snapshot.family == PineOrderFamily::ExitStop
+         || snapshot.family == PineOrderFamily::ExitTrail)
+        && resolved) {
+        if (std::isnan(*limit) && !std::isnan(profit_ticks)) {
+            *limit = source_level_on_price_grid(
+                entry + direction * profit_ticks * tick, tick);
+        }
+        if (std::isnan(*stop) && !std::isnan(loss_ticks)) {
+            *stop = source_level_on_price_grid(
+                entry - direction * loss_ticks * tick, tick);
+        }
     }
-    if (!finite_positive(*stop) && finite_positive(snapshot.exit_levels.loss_ticks)
-        && finite_positive(entry) && finite_positive(tick)) {
-        *stop = entry - (long_side ? 1.0 : -1.0)
-            * snapshot.exit_levels.loss_ticks * tick;
-    }
-    *trail_activation = snapshot.exit_levels.trail_price;
-    if (!finite_positive(*trail_activation) && finite_positive(trail_points)
-        && finite_positive(entry) && finite_positive(tick)) {
-        *trail_activation = entry + (long_side ? 1.0 : -1.0)
-            * trail_points * tick;
+    *trail_activation = kNaN;
+    if (!std::isnan(trail_points)) {
+        if (resolved) {
+            const double ticks = internal::trail_points_to_ticks(trail_points);
+            *trail_activation = internal::snap_trail_level_to_tick_grid(
+                entry + direction * ticks * tick, tick);
+        }
+    } else {
+        *trail_activation = trail_price;
     }
     return 0;
 }
@@ -12165,7 +12551,7 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
     out->affordability_signal_price = snapshot.projection_affordability_signal_price;
     out->affordability_held_qty = snapshot.projection_affordability_held_qty;
     out->affordability_close_only = snapshot.affordability_close_only ? 1U : 0U;
-    out->rounded_signal_cost_close_only = snapshot.affordability_keep_mc_close_surplus ? 1U : 0U;
+    out->rounded_signal_cost_close_only = snapshot.rounded_signal_cost_close_only ? 1U : 0U;
     // The source command boundary itself is the truthful placement
     // observation after the legacy admission draft owner was retired.  Its
     // original sizing tuple is the immutable adapter snapshot captured by
@@ -12252,7 +12638,8 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
     out->pine_frozen_market_instruction_own_units = snapshot.frozen_market_own_units;
     out->pine_frozen_market_instruction_transaction_units =
         snapshot.frozen_market_transaction_units;
-    copy_pending_string(snapshot.frozen_market_targeted_close ? snapshot.source_id : std::string{},
+    copy_pending_string(snapshot.frozen_market_targeted_close
+                            ? std::string_view(snapshot.source_id) : std::string_view{},
                         out->pine_frozen_market_instruction_target_id,
                         &out->pine_frozen_market_instruction_target_id_truncated,
                         &out->pine_frozen_market_instruction_target_id_hash64);
@@ -12373,7 +12760,72 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
         out->legs_suspension_hold_target_owner = hold.target.owner;
         out->legs_suspension_hold_revision = hold.revision;
     }
+    out->legs_suspension_revival_definition_limit_price = kNaN;
+    out->legs_suspension_revival_definition_stop_price = kNaN;
+    out->legs_suspension_revival_definition_trail_points = kNaN;
+    out->legs_suspension_revival_definition_trail_price = kNaN;
+    out->legs_suspension_revival_definition_trail_offset = kNaN;
+    out->legs_suspension_revival_definition_profit_ticks = kNaN;
+    out->legs_suspension_revival_definition_loss_ticks = kNaN;
+    const auto* revival = suspension && suspension->revival_definition
+        ? &*suspension->revival_definition : nullptr;
+    out->legs_suspension_revival_definition_present = revival ? 1U : 0U;
+    if (revival) {
+        out->legs_suspension_revival_definition_incarnation = revival->incarnation();
+        out->legs_suspension_revival_definition_revision = revival->revision();
+        out->legs_suspension_revival_definition_value_present = revival->has_value() ? 1U : 0U;
+        if (revival->has_value()) {
+            const auto& prices = revival->prices();
+            out->legs_suspension_revival_definition_limit_price = prices.limit_price;
+            out->legs_suspension_revival_definition_stop_price = prices.stop_price;
+            out->legs_suspension_revival_definition_trail_points = prices.trail_points;
+            out->legs_suspension_revival_definition_trail_price = prices.trail_price;
+            out->legs_suspension_revival_definition_trail_offset = prices.trail_offset;
+            out->legs_suspension_revival_definition_profit_ticks = prices.profit_ticks;
+            out->legs_suspension_revival_definition_loss_ticks = prices.loss_ticks;
+        }
+    }
+    out->legs_suspension_replacement_revival_definition_limit_price = kNaN;
+    out->legs_suspension_replacement_revival_definition_stop_price = kNaN;
+    out->legs_suspension_replacement_revival_definition_trail_points = kNaN;
+    out->legs_suspension_replacement_revival_definition_trail_price = kNaN;
+    out->legs_suspension_replacement_revival_definition_trail_offset = kNaN;
+    out->legs_suspension_replacement_revival_definition_profit_ticks = kNaN;
+    out->legs_suspension_replacement_revival_definition_loss_ticks = kNaN;
+    const auto* replacement = suspension && suspension->replacement
+        ? &*suspension->replacement : nullptr;
+    out->legs_suspension_replacement_present = replacement ? 1U : 0U;
+    if (replacement) {
+        out->legs_suspension_replacement_queue_predecessor = replacement->queue_predecessor;
+        const auto& definition = replacement->revival_definition;
+        out->legs_suspension_replacement_revival_definition_incarnation = definition.incarnation();
+        out->legs_suspension_replacement_revival_definition_revision = definition.revision();
+        out->legs_suspension_replacement_revival_definition_value_present =
+            definition.has_value() ? 1U : 0U;
+        if (definition.has_value()) {
+            const auto& prices = definition.prices();
+            out->legs_suspension_replacement_revival_definition_limit_price = prices.limit_price;
+            out->legs_suspension_replacement_revival_definition_stop_price = prices.stop_price;
+            out->legs_suspension_replacement_revival_definition_trail_points = prices.trail_points;
+            out->legs_suspension_replacement_revival_definition_trail_price = prices.trail_price;
+            out->legs_suspension_replacement_revival_definition_trail_offset = prices.trail_offset;
+            out->legs_suspension_replacement_revival_definition_profit_ticks = prices.profit_ticks;
+            out->legs_suspension_replacement_revival_definition_loss_ticks = prices.loss_ticks;
+        }
+        const auto& release = replacement->release;
+        out->legs_suspension_replacement_release_requested_event = release.requested.event;
+        out->legs_suspension_replacement_release_requested_bar = release.requested.bar;
+        out->legs_suspension_replacement_release_requested_domain =
+            static_cast<std::uint32_t>(release.requested.domain);
+        out->legs_suspension_replacement_release_requested_phase =
+            static_cast<std::uint32_t>(release.requested.phase);
+        out->legs_suspension_replacement_release_target_incarnation = release.target.incarnation;
+        out->legs_suspension_replacement_release_target_owner = release.target.owner;
+        out->legs_suspension_replacement_release_revision = release.revision;
+    }
     out->legs_suspension_window_present = suspension && suspension->window ? 1U : 0U;
+    out->legs_suspension_window_best = kNaN;
+    out->legs_suspension_window_prefix = kNaN;
     if (suspension && suspension->window) {
         const auto& window = *suspension->window;
         out->legs_suspension_window_excluded_event = window.excluded.event;
@@ -12385,6 +12837,29 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
     }
     const auto& last = snapshot.legs.last_action();
     out->legs_last_present = last ? 1U : 0U;
+    out->legs_last_suspend_legs_item0 = UINT32_MAX;
+    out->legs_last_suspend_legs_item1 = UINT32_MAX;
+    out->legs_last_suspend_legs_item2 = UINT32_MAX;
+    out->legs_last_suspend_window_best = kNaN;
+    out->legs_last_suspend_window_prefix = kNaN;
+    out->legs_last_suspend_retire_item0 = UINT32_MAX;
+    out->legs_last_suspend_retire_item1 = UINT32_MAX;
+    out->legs_last_suspend_retire_item2 = UINT32_MAX;
+    out->legs_last_stage_revival_definition_limit_price = kNaN;
+    out->legs_last_stage_revival_definition_stop_price = kNaN;
+    out->legs_last_stage_revival_definition_trail_points = kNaN;
+    out->legs_last_stage_revival_definition_trail_price = kNaN;
+    out->legs_last_stage_revival_definition_trail_offset = kNaN;
+    out->legs_last_stage_revival_definition_profit_ticks = kNaN;
+    out->legs_last_stage_revival_definition_loss_ticks = kNaN;
+    out->legs_last_restore_legs_item0 = UINT32_MAX;
+    out->legs_last_restore_legs_item1 = UINT32_MAX;
+    out->legs_last_restore_legs_item2 = UINT32_MAX;
+    out->legs_last_observe_high = kNaN;
+    out->legs_last_observe_low = kNaN;
+    out->legs_last_cancel_legs_item0 = UINT32_MAX;
+    out->legs_last_cancel_legs_item1 = UINT32_MAX;
+    out->legs_last_cancel_legs_item2 = UINT32_MAX;
     if (last) {
         out->legs_last_target_incarnation = last->target.incarnation;
         out->legs_last_target_owner = last->target.owner;
@@ -12394,6 +12869,126 @@ int PendingIntentView::copy_v1(int index, pf_pending_order_v1_t* out) const noex
         out->legs_last_cause_domain = static_cast<std::uint32_t>(last->cause.domain);
         out->legs_last_cause_phase = static_cast<std::uint32_t>(last->cause.phase);
         out->legs_last_operation = static_cast<std::uint32_t>(last->operation.index());
+        if (const auto* bind = std::get_if<exit_legs::BindOwner>(&last->operation)) {
+            out->legs_last_bind_owner = bind->owner;
+        } else if (const auto* suspended = std::get_if<exit_legs::Suspend>(&last->operation)) {
+            const auto copy_leg = [](const std::vector<exit_legs::Leg>& legs,
+                                     std::size_t index) -> std::uint32_t {
+                return index < legs.size() ? static_cast<std::uint32_t>(legs[index])
+                                           : UINT32_MAX;
+            };
+            out->legs_last_suspend_legs_count =
+                static_cast<std::uint32_t>(suspended->legs.size());
+            out->legs_last_suspend_legs_item0 = copy_leg(suspended->legs, 0);
+            out->legs_last_suspend_legs_item1 = copy_leg(suspended->legs, 1);
+            out->legs_last_suspend_legs_item2 = copy_leg(suspended->legs, 2);
+            out->legs_last_suspend_hold_present = suspended->hold ? 1U : 0U;
+            if (suspended->hold) {
+                const auto& hold = *suspended->hold;
+                out->legs_last_suspend_hold_requested_event = hold.requested.event;
+                out->legs_last_suspend_hold_requested_bar = hold.requested.bar;
+                out->legs_last_suspend_hold_requested_domain =
+                    static_cast<std::uint32_t>(hold.requested.domain);
+                out->legs_last_suspend_hold_requested_phase =
+                    static_cast<std::uint32_t>(hold.requested.phase);
+                out->legs_last_suspend_hold_target_incarnation = hold.target.incarnation;
+                out->legs_last_suspend_hold_target_owner = hold.target.owner;
+                out->legs_last_suspend_hold_revision = hold.revision;
+            }
+            out->legs_last_suspend_window_present = suspended->window ? 1U : 0U;
+            if (suspended->window) {
+                const auto& window = *suspended->window;
+                out->legs_last_suspend_window_excluded_event = window.excluded.event;
+                out->legs_last_suspend_window_excluded_bar = window.excluded.bar;
+                out->legs_last_suspend_window_excluded_domain =
+                    static_cast<std::uint32_t>(window.excluded.domain);
+                out->legs_last_suspend_window_excluded_phase =
+                    static_cast<std::uint32_t>(window.excluded.phase);
+                out->legs_last_suspend_window_best = window.best;
+                out->legs_last_suspend_window_prefix = window.prefix;
+            }
+            out->legs_last_suspend_retire_count =
+                static_cast<std::uint32_t>(suspended->retire.size());
+            out->legs_last_suspend_retire_item0 = copy_leg(suspended->retire, 0);
+            out->legs_last_suspend_retire_item1 = copy_leg(suspended->retire, 1);
+            out->legs_last_suspend_retire_item2 = copy_leg(suspended->retire, 2);
+        } else if (const auto* stage =
+                       std::get_if<exit_legs::StageReplacement>(&last->operation)) {
+            const auto& relation = stage->relation;
+            out->legs_last_stage_queue_predecessor = relation.queue_predecessor;
+            const auto& definition = relation.revival_definition;
+            out->legs_last_stage_revival_definition_incarnation = definition.incarnation();
+            out->legs_last_stage_revival_definition_revision = definition.revision();
+            out->legs_last_stage_revival_definition_value_present =
+                definition.has_value() ? 1U : 0U;
+            if (definition.has_value()) {
+                const auto& prices = definition.prices();
+                out->legs_last_stage_revival_definition_limit_price = prices.limit_price;
+                out->legs_last_stage_revival_definition_stop_price = prices.stop_price;
+                out->legs_last_stage_revival_definition_trail_points = prices.trail_points;
+                out->legs_last_stage_revival_definition_trail_price = prices.trail_price;
+                out->legs_last_stage_revival_definition_trail_offset = prices.trail_offset;
+                out->legs_last_stage_revival_definition_profit_ticks = prices.profit_ticks;
+                out->legs_last_stage_revival_definition_loss_ticks = prices.loss_ticks;
+            }
+            const auto& release = relation.release;
+            out->legs_last_stage_release_requested_event = release.requested.event;
+            out->legs_last_stage_release_requested_bar = release.requested.bar;
+            out->legs_last_stage_release_requested_domain =
+                static_cast<std::uint32_t>(release.requested.domain);
+            out->legs_last_stage_release_requested_phase =
+                static_cast<std::uint32_t>(release.requested.phase);
+            out->legs_last_stage_release_target_incarnation = release.target.incarnation;
+            out->legs_last_stage_release_target_owner = release.target.owner;
+            out->legs_last_stage_release_revision = release.revision;
+        } else if (const auto* restore = std::get_if<exit_legs::Restore>(&last->operation)) {
+            out->legs_last_restore_legs_count =
+                static_cast<std::uint32_t>(restore->legs.size());
+            const auto copy_leg = [&](std::size_t index) -> std::uint32_t {
+                return index < restore->legs.size()
+                    ? static_cast<std::uint32_t>(restore->legs[index]) : UINT32_MAX;
+            };
+            out->legs_last_restore_legs_item0 = copy_leg(0);
+            out->legs_last_restore_legs_item1 = copy_leg(1);
+            out->legs_last_restore_legs_item2 = copy_leg(2);
+        } else if (const auto* complete =
+                       std::get_if<exit_legs::CompleteBarrier>(&last->operation)) {
+            out->legs_last_complete_completed_event = complete->completed.event;
+            out->legs_last_complete_completed_bar = complete->completed.bar;
+            out->legs_last_complete_completed_domain =
+                static_cast<std::uint32_t>(complete->completed.domain);
+            out->legs_last_complete_completed_phase =
+                static_cast<std::uint32_t>(complete->completed.phase);
+            out->legs_last_complete_requested_present = complete->requested ? 1U : 0U;
+            if (complete->requested) {
+                const auto& requested = *complete->requested;
+                out->legs_last_complete_requested_requested_event = requested.requested.event;
+                out->legs_last_complete_requested_requested_bar = requested.requested.bar;
+                out->legs_last_complete_requested_requested_domain =
+                    static_cast<std::uint32_t>(requested.requested.domain);
+                out->legs_last_complete_requested_requested_phase =
+                    static_cast<std::uint32_t>(requested.requested.phase);
+                out->legs_last_complete_requested_target_incarnation =
+                    requested.target.incarnation;
+                out->legs_last_complete_requested_target_owner = requested.target.owner;
+                out->legs_last_complete_requested_revision = requested.revision;
+            }
+        } else if (const auto* observe = std::get_if<exit_legs::Observe>(&last->operation)) {
+            out->legs_last_observe_high = observe->high;
+            out->legs_last_observe_low = observe->low;
+            out->legs_last_observe_direction = observe->direction;
+            out->legs_last_observe_fold = static_cast<std::uint32_t>(observe->fold);
+        } else if (const auto* cancel = std::get_if<exit_legs::Cancel>(&last->operation)) {
+            out->legs_last_cancel_legs_count =
+                static_cast<std::uint32_t>(cancel->legs.size());
+            const auto copy_leg = [&](std::size_t index) -> std::uint32_t {
+                return index < cancel->legs.size()
+                    ? static_cast<std::uint32_t>(cancel->legs[index]) : UINT32_MAX;
+            };
+            out->legs_last_cancel_legs_item0 = copy_leg(0);
+            out->legs_last_cancel_legs_item1 = copy_leg(1);
+            out->legs_last_cancel_legs_item2 = copy_leg(2);
+        }
     }
     const auto& admission = snapshot.market_admission;
     const auto& observation = admission.observation();

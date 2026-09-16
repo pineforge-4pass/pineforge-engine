@@ -616,7 +616,8 @@ void PineScheduler::applied(const native_order::ExecutionAppliedEvent& event,
     language_.history_slot_is_new_ =
         !language_.coof_checkpoint_contains_current_bar_;
     publish_series(callback_bar, host);
-    host.adapter_.begin_coof_recalc(context, first_open);
+    host.adapter_.begin_coof_recalc(
+        event, context, first_open, host.broker_fill_event_seq_);
     try {
         host.scheduler_publish_source_bar(
             callback_bar, true, callback_advances_source_bar);

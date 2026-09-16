@@ -361,6 +361,11 @@ set(TEST_SOURCES
     test_native_l4c_coof_literals
     test_native_l4c_pending_mirror
     test_native_l4c_oracle_reversal_literals
+    test_l8b_exit_activation
+    test_l8b_trail_lifecycle
+    test_l8b_reservation_birth
+    test_l8b_pending_mirror
+    test_l8b_exact_reversal_literals
     test_live_pending_order_mirror
     test_oracle_coof_first_open
     test_oracle_reversal

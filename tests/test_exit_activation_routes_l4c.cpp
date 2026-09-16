@@ -31,6 +31,10 @@ void policy_routes() {
     context.after_first_open_fill = true;
     context.current_fill = 11;
     ExitActivationRequest request{false, true, false, true};
+    // The legacy LaterSameOpen route is born by a later fill callback; the
+    // restored selector consumes that causal reach instead of inferring it
+    // from the raw from_fill bit alone.
+    request.birth_reach = HistoricalBirthReach::ExtremeWaypoints;
     CHECK(context.cycle == 7);
     CHECK(context.position_open_bar == context.bar_index);
     CHECK(request.full_quantity);

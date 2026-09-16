@@ -51,6 +51,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.frozen_market_targeted_close); f.b(value.frozen_market_target_was_long);
     f.b(value.direction_gate); f.b(value.affordability_policy_active);
     f.b(value.affordability_close_only);
+    f.b(value.rounded_signal_cost_close_only);
     f.b(value.affordability_keep_mc_close_surplus);
     f.b(value.reverse_to); f.b(value.replaced_opening); f.b(value.replacement_predecessor_market);
     f.b(value.terms_priced_reverse);
@@ -136,6 +137,7 @@ void hash_placement(BrokerStateHashSink& f, const source::PlacementSnapshot& val
     f.b(value.reservation_growth_source.reservation_owner().has_value());
     if (value.reservation_growth_source.reservation_owner())
         f.u(*value.reservation_growth_source.reservation_owner());
+    f.u(value.reservation_growth_owner_incarnation);
     f.b(value.stop_limit_activated); f.i(value.coof_cascade_seg_i);
     f.b(value.coof_cascade_inflight_fires); f.b(value.paired_flat_market_candidate);
     f.d(value.paired_flat_market_own_qty); f.d(value.paired_flat_market_signal_close);
@@ -390,6 +392,8 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     f.u(next_sequential_group_);
     f.b(source_batch_mutated_);
     f.b(coof_recalc_active_); f.b(coof_first_open_);
+    f.u(coof_market_entry_recalc_incarnation_);
+    f.u(coof_market_entry_recalc_fill_seq_); f.u(coof_current_fill_seq_);
     const auto& coof_coord = coof_context_.coordinate;
     f.u(coof_coord.ordinal); f.i(coof_coord.interval_index); f.i(coof_coord.open_ms);
     f.i(coof_coord.eligible_open_ms); f.i(coof_coord.last_traded_close_ms);
@@ -420,10 +424,13 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     std::sort(pooc_basis_keys.begin(), pooc_basis_keys.end()); f.u(pooc_basis_keys.size());
     for (const auto key : pooc_basis_keys) { f.i(key); f.d(pooc_close_basis_by_script_bar_.at(key)); }
     f.d(pooc_open_basis_); f.i(pooc_open_script_bar_); f.i(close_all_pending_script_bar_);
-    f.d(last_fx_rate_); f.i(position_open_script_bar_);
+    f.d(last_fx_rate_); f.i(position_open_script_bar_); f.i(position_open_bar_index_);
     f.u(static_cast<std::uint64_t>(position_open_phase_));
     f.b(position_open_priced_);
-    f.i(last_margin_call_script_bar_); f.i(risk_coof_direct_script_bar_);
+    f.i(last_margin_call_script_bar_); f.i(signal_close_mc_event_bar_);
+    f.i(signal_close_mc_position_cycle_); f.u(signal_close_mc_entry_incarnation_);
+    f.u(signal_close_mc_fill_seq_); f.d(signal_close_mc_before_qty_);
+    f.d(signal_close_mc_remaining_qty_); f.i(risk_coof_direct_script_bar_);
     f.u(cap_latest_fill_);
     f.b(source_margin_call_enabled_);
     f.d(policy_script_bar_.open); f.d(policy_script_bar_.high);

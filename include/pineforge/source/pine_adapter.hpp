@@ -160,6 +160,7 @@ struct PlacementSnapshot {
     bool direction_gate = false;
     bool affordability_policy_active = false;
     bool affordability_close_only = false;
+    bool rounded_signal_cost_close_only = false;
     bool affordability_keep_mc_close_surplus = false;
     bool reverse_to = false;
     bool replaced_opening = false;
@@ -254,6 +255,7 @@ struct PlacementSnapshot {
     bool restored_after_margin = false;
     ReservationExpansion reservation_expansion{};
     ReservationGrowthSource reservation_growth_source{};
+    std::uint64_t reservation_growth_owner_incarnation = 0;
     bool stop_limit_activated = false;
     std::int32_t coof_cascade_seg_i = -1;
     bool coof_cascade_inflight_fires = false;
@@ -644,7 +646,9 @@ public:
     void release_delayed_orders(
         bool explicit_brackets_only = false,
         double current_open = std::numeric_limits<double>::quiet_NaN());
-    void begin_coof_recalc(const NativeDecisionContext&, bool first_open);
+    void begin_coof_recalc(const native_order::ExecutionAppliedEvent&,
+                           const NativeDecisionContext&, bool first_open,
+                           std::uint64_t source_fill_sequence);
     void end_coof_recalc() noexcept;
     bool suppress_grouped_stop_recalc(
         const native_order::ExecutionAppliedEvent&,
@@ -914,6 +918,10 @@ private:
     static bool same_projected_order(const PlacementSnapshot& left,
                                      const PlacementSnapshot& right) noexcept;
     void apply_open_market_admission(const NativeDecisionContext&);
+    void record_market_review(admission::Checkpoint, int,
+                              const std::vector<native_order::RequestHandle>&);
+    void refresh_pending_sizing_after_margin(
+        const native_order::ExecutionAppliedEvent&, const NativeDecisionContext&);
     void apply_reversal_gap_bracket_policy(
         const Bar&, const NativeDecisionContext&, bool defer_trails = false);
     void apply_terminal_explicit_market_policy(const NativeDecisionContext&);
@@ -985,6 +993,9 @@ private:
     bool source_batch_mutated_ = false;
     bool coof_recalc_active_ = false;
     bool coof_first_open_ = false;
+    std::uint64_t coof_market_entry_recalc_incarnation_ = 0;
+    std::uint64_t coof_market_entry_recalc_fill_seq_ = 0;
+    std::uint64_t coof_current_fill_seq_ = 0;
     NativeDecisionContext coof_context_{};
     Bar coof_script_bar_{};
     bool coof_script_bar_valid_ = false;
@@ -994,9 +1005,16 @@ private:
     std::int64_t close_all_pending_script_bar_ = std::numeric_limits<std::int64_t>::min();
     double last_fx_rate_ = std::numeric_limits<double>::quiet_NaN();
     std::int64_t position_open_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int32_t position_open_bar_index_ = -1;
     NativePathPhase position_open_phase_ = NativePathPhase::None;
     bool position_open_priced_ = false;
     std::int64_t last_margin_call_script_bar_ = std::numeric_limits<std::int64_t>::min();
+    std::int32_t signal_close_mc_event_bar_ = -1;
+    std::int64_t signal_close_mc_position_cycle_ = 0;
+    std::uint64_t signal_close_mc_entry_incarnation_ = 0;
+    std::uint64_t signal_close_mc_fill_seq_ = 0;
+    double signal_close_mc_before_qty_ = std::numeric_limits<double>::quiet_NaN();
+    double signal_close_mc_remaining_qty_ = std::numeric_limits<double>::quiet_NaN();
     std::int64_t risk_coof_direct_script_bar_ = std::numeric_limits<std::int64_t>::min();
     std::uint64_t cap_latest_fill_ = 0;
     bool source_margin_call_enabled_ = true;
