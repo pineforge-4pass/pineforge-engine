@@ -35,6 +35,21 @@ class PairingError(RuntimeError):
     """The ABI evidence is absent, unauthenticated, or has the wrong result."""
 
 
+def enforce_receipt_mode(receipts: Iterable[Path | None], *, skip: bool,
+                         require: bool, label: str) -> int | None:
+    """Apply the manual-skip/CI-required contract to receipt inputs."""
+    missing = [Path(value) for value in receipts
+               if value is not None and not Path(value).exists()]
+    if not missing:
+        return None
+    if skip:
+        print(f"SKIP: receipt missing: {missing[0]} (prepared by scripts/ci_verify.py)")
+        return 77
+    if require:
+        raise PairingError(f"{label} required receipt missing: {missing[0]}")
+    return None
+
+
 @dataclass(frozen=True)
 class FrozenProvider:
     archive: Path

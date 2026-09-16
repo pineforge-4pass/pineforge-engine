@@ -106,6 +106,13 @@ class Scripted:
         if argv[0] in {'cmake', 'ctest', 'git'} and '--version' in argv:
             return default_runner(argv, extra_env=None, timeout=timeout,
                                   combine_stderr=True, stream_output=False)
+        if argv[0] == 'git' and 'submodule' in argv:
+            if 'update' in argv:
+                return Completed(int(self.exits.get('corpus-submodule-init', 0)),
+                                 b'corpus initialized\n', b'')
+            if 'status' in argv:
+                prefix = str(self.exits.get('corpus-submodule-prefix', ' '))
+                return Completed(0, (prefix + 'b46cd80c247a53b19e23cb0c12c4451d624ce9a6 corpus\n').encode(), b'')
         if argv[0] == 'git' and 'cat-file' in argv:
             if V16_FROZEN_COMMIT + '^{commit}' in argv:
                 key = 'v16-frozen-cat-file'
@@ -196,6 +203,7 @@ class Scripted:
             'PINEFORGE_BUILD_TUTORIAL': tutorial,
             'PINEFORGE_BUILD_LIVE_RUNNER': live,
             'PINEFORGE_ENABLE_SANITIZERS': sanitizers,
+            'PINEFORGE_REQUIRE_ABI_RECEIPTS': 'ON',
             'PINEFORGE_VERSION_SOURCE': 'FILE',
             'Python3_EXECUTABLE': self.exits.get('cache_python', sys.executable),
         }
@@ -424,6 +432,7 @@ class ProfileOptions(unittest.TestCase):
         self.assertEqual(values['PINEFORGE_BUILD_LIVE_RUNNER'], 'OFF')
         self.assertEqual(values['PINEFORGE_ENABLE_SANITIZERS'], 'OFF')
         self.assertEqual(values['PINEFORGE_BUILD_TESTS'], 'ON')
+        self.assertEqual(values['PINEFORGE_REQUIRE_ABI_RECEIPTS'], 'ON')
         self.assertEqual(values['PINEFORGE_VERSION_SOURCE'], 'FILE')
         self.assertIn('-DPINEFORGE_VERSION_SOURCE=FILE', argv)
         self.assertNotIn('AUTO', ''.join(argv))
@@ -817,6 +826,20 @@ class DriverOrderingAndAggregation(unittest.TestCase):
                 result = default_runner(argv, extra_env=None, timeout=120,
                                         combine_stderr=True, stream_output=False)
                 self.assertEqual(result.returncode, 0, result.stdout[-2000:])
+
+    def test_corpus_submodule_is_initialized_before_source_guards(self):
+        code, summary, scripted, _ = self.run_profile()
+        self.assertEqual(code, 0, summary['failures'])
+        names = stage_names(summary)
+        self.assertLess(names.index('corpus-submodule-init'),
+                        names.index('source-guard-c-abi'))
+        self.assertIn('corpus-submodule-pin', names)
+
+    def test_uninitialized_corpus_status_fails_before_configure(self):
+        code, summary, scripted, _ = self.run_profile(**{'corpus-submodule-prefix': '-'})
+        self.assertEqual(code, 1)
+        self.assertIn('corpus-submodule-pin', failure_stages(summary))
+        self.assertFalse(any(argv[0] == 'cmake' and '-S' in argv for argv in scripted.calls))
 
     def test_build_failure_skips_ctest_and_install(self):
         code, summary, scripted, _ = self.run_profile(build=1)

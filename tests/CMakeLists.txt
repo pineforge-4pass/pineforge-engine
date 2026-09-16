@@ -760,6 +760,10 @@ add_test(
 )
 
 set(_pf_script_cpp_abi_flags)
+set(_pf_abi_receipt_mode --skip-if-receipt-missing)
+if(PINEFORGE_REQUIRE_ABI_RECEIPTS)
+    set(_pf_abi_receipt_mode --require-receipts)
+endif()
 if(PINEFORGE_ENABLE_SANITIZERS)
     list(APPEND _pf_script_cpp_abi_flags --extra-flag=-fsanitize=address,undefined)
 endif()
@@ -780,7 +784,7 @@ add_test(
             --generated-include ${PROJECT_BINARY_DIR}/include
             --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
             --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
-            --skip-if-receipt-missing
+            ${_pf_abi_receipt_mode}
             ${_pf_script_cpp_abi_flags}
 )
 set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
@@ -849,7 +853,7 @@ add_test(NAME test_settlement_cpp_abi
         --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
         --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
-        --skip-if-receipt-missing
+        ${_pf_abi_receipt_mode}
         ${_pf_script_cpp_abi_flags})
 set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
 add_test(NAME test_settlement_cpp_abi_tooling
@@ -862,7 +866,7 @@ add_test(NAME test_aggregate_cpp_versions_runtime
         --generated-include ${PROJECT_BINARY_DIR}/include
         --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
-        --skip-if-receipt-missing
+        ${_pf_abi_receipt_mode}
         ${_pf_script_cpp_abi_flags})
 set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
 
@@ -882,6 +886,11 @@ add_test(
     NAME test_run_corpus
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/run_corpus_self_test.py
+)
+add_test(
+    NAME test_regen_corpus_cpp_pin
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_regen_corpus_cpp_pin.py
 )
 
 add_test(
@@ -959,6 +968,11 @@ add_test(
     COMMAND ${Python3_EXECUTABLE}
             ${PROJECT_SOURCE_DIR}/scripts/test_pending_intent_view.py
 )
+add_test(
+    NAME test_pending_intent_view_mutations
+    COMMAND ${Python3_EXECUTABLE}
+            ${PROJECT_SOURCE_DIR}/scripts/test_pending_intent_view_mutations.py
+)
 
 # Spec §3.4's reflection gate: every hashed-region struct member must be
 # either hashed by engine_state_hash.cpp or explicitly waived. Previously
@@ -1003,12 +1017,31 @@ foreach(test_name ${TEST_SOURCES})
     if(PINEFORGE_ENABLE_COVERAGE)
         target_compile_options(${test_name} PRIVATE ${_pf_cov_test_flags})
     endif()
-    add_test(NAME ${test_name} COMMAND ${test_name})
+    if(NOT test_name STREQUAL "test_l4g_runtime_budget")
+        add_test(NAME ${test_name} COMMAND ${test_name})
+    endif()
 endforeach()
 
 target_compile_definitions(test_l4g_runtime_budget PRIVATE
     PINEFORGE_L4G_TUTORIAL_CSV="${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv")
-set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 30)
+set(_pf_runtime_budget_mode)
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(_pf_runtime_budget_mode --candidate-only)
+endif()
+add_test(NAME test_l4g_runtime_budget
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/check_runtime_budget.py
+        --candidate $<TARGET_FILE:test_l4g_runtime_budget>
+        --source ${CMAKE_CURRENT_SOURCE_DIR}/test_l4g_runtime_budget.cpp
+        --csv ${PROJECT_SOURCE_DIR}/tutorial/data/btcusdt_15m_7d.csv
+        --compiler ${CMAKE_CXX_COMPILER}
+        --generated-include ${PROJECT_BINARY_DIR}/include
+        --compile-commands ${PROJECT_BINARY_DIR}/compile_commands.json
+        --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
+        ${_pf_abi_receipt_mode}
+        ${_pf_runtime_budget_mode})
+set_tests_properties(test_l4g_runtime_budget PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+add_test(NAME test_l4g_runtime_budget_mutations
+    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_runtime_budget.py)
 
 # R4-D L0 captures literal values from the ab9714be legacy source route in
 # dedicated translation units.  They intentionally live outside the ordinary

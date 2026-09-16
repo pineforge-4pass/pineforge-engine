@@ -11,6 +11,8 @@ import argparse
 import json
 from pathlib import Path
 
+from test_pending_intent_view import check as check_intent_projection
+
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "scripts" / "pending_intent_view.json"
 HEADER = ROOT / "include" / "pineforge" / "pending_order_mirror.hpp"
@@ -38,6 +40,12 @@ def check() -> None:
             raise SystemExit("intent-view declaration is incomplete: " + required)
     if "int PendingIntentView::copy_v1(" not in implementation:
         raise SystemExit("intent-view C projection implementation is missing")
+    # The generator/check entry point is a ci_verify source guard. Keep it
+    # fail-closed over all 406 value projections, not merely the declaration.
+    try:
+        check_intent_projection(ROOT)
+    except (OSError, ValueError) as error:
+        raise SystemExit(str(error)) from error
 
 
 def main() -> int:

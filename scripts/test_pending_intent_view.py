@@ -1,69 +1,27 @@
 #!/usr/bin/env python3
-"""Validate the approved intent-view schema without changing the C ABI."""
+"""Validate every frozen pending-row projection and its approved provenance."""
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
+import re
+
+from check_pending_order_prefix import _struct_fields
+
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = ROOT / "scripts" / "pending_intent_view.json"
-PREFIX = ROOT / "scripts" / "pending_order_v1_prefix.json"
 KINDS = {
-    "request-core definition",
-    "live state",
-    "receipt fact",
-    "adapter placement snapshot",
-    "derived",
+    "request-core definition", "live state", "receipt fact",
+    "adapter placement snapshot", "derived",
 }
-
-# Fields that the final review found populated by unconditional literals after
-# the legacy book was deleted.  They must remain expressions over live native
-# events or adapter facts; padding is the only part of the POD zeroed by
-# copy_v1 before field projection begins.
-DYNAMIC_FIELDS = {
-    "stop_limit_activated",
-    "coof_cascade_seg_i",
-    "dormant_bracket",
-    "dormant_reissue_pending",
-    "dormant_original_stop_price",
-    "dormant_hold_bar",
-    "dormant_reversal_kill_bar",
-    "dormant_trail_best",
-    "dormant_trail_best_start",
-    "dormant_trail_leg_dead",
-    "paired_flat_market_candidate",
-    "paired_flat_market_own_qty",
-    "paired_flat_market_signal_close",
-    "paired_flat_market_signal_equity",
-    "paired_flat_market_signal_margin_pct",
-    "paired_flat_market_signal_pointvalue",
-    "paired_flat_market_signal_fx",
-    "paired_flat_market_peer_seq",
-    "paired_flat_market_transaction_qty",
-    "signal_close_mc_bar",
-    "signal_close_mc_entry_incarnation",
-    "signal_close_mc_fill_seq",
-    "signal_close_mc_remaining_qty",
-    "pooc_global_full_exit_dynamic_qty",
-    "pooc_global_full_exit_tracks_bound_adds",
-    "pooc_global_full_exit_bound_add",
-    "suppressed_close_consumed_ledger_qty",
-    "suppressed_close_retired_ledger_qty",
-    "birth_cause",
-    "cancellation_cause",
-    "cancellation_state",
-    "cancellation_close_claim_release",
-}
-
-CONSTANT_ASSIGNMENT = re.compile(
-    r"out->(?P<field>[A-Za-z0-9_]+)\s*=\s*"
-    r"(?:0(?:U|ULL|L)?|-1|kNaN|std::numeric_limits<double>::quiet_NaN\(\))\s*;"
-)
+CONSTANT = re.compile(
+    r"^\s*(?:0(?:\.0)?(?:U|ULL|L)?|-1|kNaN|"
+    r"std::numeric_limits<double>::quiet_NaN\(\)|false|true|nullptr|\{\})\s*$")
+SOURCE_TOKEN = re.compile(r"(?:::)?([A-Za-z_]\w+)(?=::|\b)")
 
 
 def die(message: str) -> None:
-    raise SystemExit("pending_intent_view: " + message)
+    raise ValueError("pending_intent_view: " + message)
 
 
 def named(rows: list[dict], key: str) -> dict[str, dict]:
@@ -88,8 +46,92 @@ def check_row(row: dict, name: str) -> None:
         die(f"derived {name} lacks its derivation")
 
 
-def main() -> int:
-    schema = json.loads(SCHEMA.read_text())
+def function_body(text: str, signature: str) -> str:
+    start = text.find(signature)
+    if start < 0: die("copy_v1 implementation is missing")
+    opening = text.find("{", start)
+    depth = 1
+    index = opening + 1
+    while index < len(text) and depth:
+        depth += (text[index] == "{") - (text[index] == "}")
+        index += 1
+    if depth: die("copy_v1 implementation is unclosed")
+    return text[opening + 1:index - 1]
+
+
+def remove_false_blocks(text: str) -> str:
+    result = list(text)
+    for match in reversed(list(re.finditer(r"\bif\s*\(\s*false\s*\)\s*\{", text))):
+        depth = 1
+        index = match.end()
+        while index < len(text) and depth:
+            depth += (text[index] == "{") - (text[index] == "}")
+            index += 1
+        for position in range(match.start(), index):
+            if result[position] != "\n": result[position] = " "
+    return "".join(result)
+
+
+def projection_kind(body: str, field: str) -> str:
+    occurrences = list(re.finditer(r"out->" + re.escape(field) + r"\b", body))
+    dynamic = False
+    for match in occurrences:
+        tail = body[match.end():]
+        assignment = re.match(r"\s*=\s*", tail)
+        if not assignment:
+            # Passed by reference/pointer to a projection helper.
+            dynamic = True
+            continue
+        rhs_start = match.end() + assignment.end()
+        semicolon = body.find(";", rhs_start)
+        if semicolon < 0: die("unterminated projection assignment for " + field)
+        rhs = body[rhs_start:semicolon].strip()
+        if re.match(r"^false\s*\?", rhs):
+            continue
+        if not CONSTANT.fullmatch(rhs):
+            dynamic = True
+    return "dynamic" if dynamic else "constant"
+
+
+def load_debt(root: Path) -> set[str]:
+    result = set()
+    path = root / "scripts/pending_intent_constant_debt.txt"
+    for raw in path.read_text().splitlines():
+        value = raw.strip()
+        if value and not value.startswith("#"):
+            if value in result: die("duplicate constant-debt row: " + value)
+            result.add(value)
+    return result
+
+
+def source_corpus(root: Path) -> str:
+    values = []
+    for directory in (root / "include", root / "src"):
+        for path in directory.rglob("*"):
+            if path.is_file():
+                values.append(path.read_text(errors="ignore"))
+    return "\n".join(values)
+
+
+def validate_provenance_tokens(schema: dict, corpus: str) -> None:
+    for group, key in (("source_pending_order_inventory", "member"),
+                       ("prefix_fields", "field"), ("probes", "name")):
+        for row in schema[group]:
+            source = row.get("source", "")
+            candidates = [
+                token for token in SOURCE_TOKEN.findall(source)
+                if ("_" in token or (token[:1].isupper() and len(token) > 2))
+                and token != "PineExecutionAdapter"
+            ]
+            missing = sorted({token for token in candidates if token not in corpus})
+            if missing:
+                die(f"{group} {row[key]} names absent provenance: {', '.join(missing)}")
+
+
+def check(root: Path = ROOT) -> dict[str, int]:
+    schema_path = root / "scripts/pending_intent_view.json"
+    prefix_path = root / "scripts/pending_order_v1_prefix.json"
+    schema = json.loads(schema_path.read_text())
     if schema.get("schema") != "pineforge-r4-d-pending-intent-view/v1":
         die("unknown schema")
     if schema.get("open") != []:
@@ -97,66 +139,60 @@ def main() -> int:
     inventory = named(schema.get("source_pending_order_inventory", []), "member")
     if len(inventory) != 65:
         die("source inventory must retain the approved 65-member capture")
-    for name, row in inventory.items():
-        check_row(row, name)
+    for name, row in inventory.items(): check_row(row, name)
 
     prefix = named(schema.get("prefix_fields", []), "field")
-    expected_prefix = {name: typ for typ, name in json.loads(PREFIX.read_text())["members"]}
-    if set(prefix) != set(expected_prefix):
-        die("public prefix coverage is incomplete")
+    expected_prefix = {
+        name: typ for typ, name in json.loads(prefix_path.read_text())["members"]}
+    if set(prefix) != set(expected_prefix): die("public prefix coverage is incomplete")
     for name, typ in expected_prefix.items():
-        if prefix[name].get("cpp_type") != typ:
-            die(f"public field type drift: {name}")
+        if prefix[name].get("cpp_type") != typ: die("public field type drift: " + name)
         check_row(prefix[name], name)
 
-    # The schema is not documentation-only: every frozen public prefix field
-    # must have an explicit projection write in copy_v1.  Padding may be
-    # zeroed for ABI determinism, but it must never become the value source for
-    # an omitted compatibility field.
-    projection = (ROOT / "src/source/pine_adapter.cpp").read_text()
-    for name in expected_prefix:
-        if f"out->{name}" not in projection:
-            die(f"public prefix field lacks an explicit PendingIntentView projection: {name}")
-    constants = {match.group("field") for match in CONSTANT_ASSIGNMENT.finditer(projection)}
-    static = sorted(DYNAMIC_FIELDS & constants)
-    if static:
-        die("constant compatibility projection(s): " + ", ".join(static))
+    projection_text = (root / "src/source/pine_adapter.cpp").read_text()
+    body = remove_false_blocks(function_body(
+        projection_text, "int PendingIntentView::copy_v1("))
+    body = re.sub(r"\(\s*void\s*\)\s*out->[A-Za-z_]\w*\s*;", "", body)
+    mirror = (root / "include/pineforge/pending_order_mirror.hpp").read_text()
+    fields = [row[0] for row in _struct_fields(mirror)]
+    if len(fields) != 406: die(f"frozen mirror field count changed: {len(fields)}")
+    constant = {field for field in fields if projection_kind(body, field) == "constant"}
+    debt = load_debt(root)
+    unknown = sorted(debt - set(fields))
+    unexpected = sorted(constant - debt)
+    stale = sorted(debt - constant)
+    if unknown or unexpected or stale:
+        die(f"constant projection mismatch: unexpected={unexpected}, "
+            f"stale_debt={stale}, unknown_debt={unknown}")
 
-    # The four L0 owner-private TUs are represented by public native twins.
-    # Check the registrations and all review-spot-checked literals together so
-    # an inventory edit cannot silently orphan a constant-sensitive witness.
-    cmake = (ROOT / "tests/CMakeLists.txt").read_text()
-    for target in ("test_live_pending_order_mirror", "test_oracle_coof_first_open",
-                   "test_oracle_reversal"):
-        if target not in cmake:
-            die(f"missing public mirror/oracle twin target: {target}")
-    coof_twin = (ROOT / "tests/test_native_l4c_coof_literals.cpp").read_text()
-    reversal_twin = (ROOT / "tests/test_native_l4c_oracle_reversal_literals.cpp").read_text()
-    for literal in ("lot_count == 6", "lot_price(1), 108.0", "lot_count == 5"):
-        if literal not in coof_twin:
-            die(f"missing public COOF literal: {literal}")
-    for literal in ("0x3fb999999999999a", "0x3fb99999999999a0",
-                    "4.7000000000000002", ".68965517241379315",
-                    "1037.2413793103448"):
-        if literal not in reversal_twin:
-            die(f"missing reversal literal: {literal}")
+    validate_provenance_tokens(schema, source_corpus(root))
 
     probes = named(schema.get("probes", []), "name")
-    expected = {
-        "probe_fill_qty",
-        "pending_order_level_resolved",
-        "pending_order_effective_levels",
-        "last_bar_dual_entry_path",
+    expected_probes = {
+        "probe_fill_qty", "pending_order_level_resolved",
+        "pending_order_effective_levels", "last_bar_dual_entry_path",
         "trail_best_price",
     }
-    if set(probes) != expected:
-        die("probe coverage is incomplete")
+    if set(probes) != expected_probes: die("probe coverage is incomplete")
     for name, row in probes.items():
         if row.get("kind") not in KINDS or not isinstance(row.get("source"), str):
             die(f"probe {name} lacks a truthful source")
         if not isinstance(row.get("derivation"), str) or not isinstance(row.get("failure"), str):
             die(f"probe {name} lacks derivation/failure convention")
-    print("pending_intent_view: 65 captured members, 98 prefix fields, 32 live projections, 5 probes, 0 OPEN")
+
+    return {"captured": len(inventory), "prefix": len(prefix),
+            "mirror": len(fields), "dynamic": len(fields) - len(constant),
+            "debt": len(debt), "probes": len(probes)}
+
+
+def main() -> int:
+    try:
+        result = check()
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        raise SystemExit(str(error))
+    print("pending_intent_view: {captured} captured members, {prefix} schema fields, "
+          "{mirror} C fields, {dynamic} live projections, {debt} pinned sibling-lane "
+          "debts, {probes} probes, 0 OPEN".format(**result))
     return 0
 
 

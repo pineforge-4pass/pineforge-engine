@@ -12,7 +12,10 @@ import argparse
 import json
 from pathlib import Path
 
-from cpp_abi_pairing import PairingError, audit_prepared_receipt, execute_v16_v17_pair
+from cpp_abi_pairing import (
+    PairingError, audit_prepared_receipt, enforce_receipt_mode,
+    execute_v16_v17_pair,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests/fixtures/native_cpp_abi/host-ab9714b/relocation-manifest-v16-v17.json"
@@ -108,17 +111,18 @@ def main() -> int:
     parser.add_argument("--v16-frozen-receipt", type=Path, required=True)
     parser.add_argument("--extra-flag", action="append", default=[])
     parser.add_argument("--receipt", type=Path, required=True)
-    parser.add_argument("--skip-if-receipt-missing", action="store_true")
+    receipt_mode = parser.add_mutually_exclusive_group()
+    receipt_mode.add_argument("--skip-if-receipt-missing", action="store_true")
+    receipt_mode.add_argument("--require-receipts", action="store_true")
     args = parser.parse_args()
-    if args.skip_if_receipt_missing:
-        for dest in vars(args):
-            if not dest.endswith("_receipt"):
-                continue
-            value = getattr(args, dest)
-            if value is not None and not Path(value).exists():
-                print(f"SKIP: receipt missing: {value} (prepared by scripts/ci_verify.py)")
-                return 77
     try:
+        mode = enforce_receipt_mode(
+            (args.base_receipt, args.prior_receipt, args.v13_receipt,
+             args.v14_receipt, args.v15_frozen_receipt, args.v16_frozen_receipt),
+            skip=args.skip_if_receipt_missing, require=args.require_receipts,
+            label="settlement C++ ABI")
+        if mode is not None:
+            return mode
         result = verify_pair(args)
     except PairingError as error:
         raise SystemExit("settlement C++ ABI: " + str(error))

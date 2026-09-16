@@ -40,3 +40,6 @@ syminfo_ # Metadata transport; provider copies symbol/session/timezone facts int
 syminfo_metadata_ # Staged metadata map; it is consumed at begin and does not evolve as broker state during a run.
 syminfo_mintick_ # Metadata convenience scalar; executable levels/terms retain their snapped native values.
 trade_start_time_ # Configured execution-window boundary; native admission receives the projected boundary before requests exist.
+event_high_water_reader_ # Immutable callback binding to the host's native event watermark, not mutable broker state.
+terminal_receipt_high_water_reader_ # Immutable callback binding to the host's terminal-receipt watermark, not mutable broker state.
+source_pending_view_cache_ # Read-only test projection cache rebuilt from adapter state and never consumed by execution.

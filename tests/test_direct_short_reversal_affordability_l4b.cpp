@@ -26,6 +26,14 @@ int failures = 0;
     if (!(value)) { ++failures;                                                 \
         std::printf("FAIL %s:%d %s\\n", __FILE__, __LINE__, #value); }        \
 } while (0)
+#define CHECK_NEAR(actual, expected, tolerance) do {                            \
+    ++checks;                                                                   \
+    if (!near((actual), (expected), (tolerance))) {                             \
+        ++failures;                                                             \
+        std::printf("FAIL %s:%d %s == %.12f, expected %.12f\\n",             \
+                    __FILE__, __LINE__, #actual, (actual), (expected));          \
+    }                                                                           \
+} while (0)
 
 bool near(double left, double right, double tolerance = 1e-8) {
     return std::abs(left - right) <= tolerance;
@@ -208,11 +216,11 @@ void public_default_reversal_observes_margin_slice_contract() {
     CHECK(probe.margins() <= probe.trade_count());
     CHECK(std::isfinite(probe.position()));
     CHECK(probe.owner_cleared());
-    CHECK(probe.first_margin_qty() == probe.first_margin_qty()
-          || std::isnan(probe.first_margin_qty()));
-    CHECK(probe.first_margin_price() == probe.first_margin_price()
-          || std::isnan(probe.first_margin_price()));
-    CHECK(near(std::abs(probe.position()), std::abs(probe.position())));
+    CHECK(probe.margins() == 0 || (std::isfinite(probe.first_margin_qty())
+                                   && probe.first_margin_qty() > 0.0));
+    CHECK(probe.margins() == 0 || (std::isfinite(probe.first_margin_price())
+                                   && probe.first_margin_price() > 0.0));
+    CHECK(std::abs(probe.position()) <= 10'000.0);
 }
 
 void explicit_and_default_reversal_keep_public_close_results() {
@@ -267,6 +275,10 @@ void exact_legacy_margin_literals_use_three_public_probes() {
     CHECK(retry_price.size() == 2U);
     CHECK(retry_qty.size() == 2U && near(retry_qty[0], 0.0376, 1e-9));
     CHECK(retry_price.size() == 2U && near(retry_price[0], 3145.01, 1e-9));
+    if (retry_qty.size() == 2U && retry_price.size() == 2U) {
+        CHECK_NEAR(retry_qty[1], 0.6204, 1e-9);
+        CHECK_NEAR(retry_price[1], 3154.20, 1e-9);
+    }
     CHECK(near(retry.position(), -30.8219, 1e-9));
     CHECK(retry.has_short() && retry.owner_cleared());
 
@@ -288,10 +300,15 @@ void exact_legacy_margin_literals_use_three_public_probes() {
     CHECK(floor_qty.size() == 2U && near(floor_qty[0], 0.0392, 1e-9));
     CHECK(floor_price.size() == 2U && near(floor_price[0], 4514.70, 1e-9));
     CHECK(floor_qty.size() == 2U && near(floor_qty[1], 1.0, 1e-9));
+    if (floor_price.size() == 2U) CHECK_NEAR(floor_price[1], 4539.00, 1e-9);
     CHECK(near(one_contract.position(), -1.7346, 1e-9));
     CHECK(one_contract.has_short() && one_contract.owner_cleared());
     CHECK(near(full_residual.position(), -1.7346, 1e-9)
           && full_residual.has_short() && full_residual.owner_cleared());
+    const auto full_residual_price = full_residual.margin_prices();
+    CHECK(full_residual_price.size() == 2U);
+    if (full_residual_price.size() == 2U)
+        CHECK_NEAR(full_residual_price[1], 4539.00, 1e-9);
 
     TrueFlatPublic flat;
     const std::vector<Bar> flat_bars = {

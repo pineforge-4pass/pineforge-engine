@@ -1,41 +1,74 @@
-// A29 native-route twin for test_pending_order_identity.cpp.
-//
-// The deleted owner helper APIs are not reintroduced.  This executable drives
-// same-id replacement through source commands and requires a live ABI-v4 row.
-#include "l4d_native_route_guard.hpp"
-#include "oracle_fixture_config_shim.hpp"
-#define PineStrategyHost L4dPineHost
+// A29/A39 native-route replacement for the 97-REQUIRE owner fixture.
+#include "l8d_twin_support.hpp"
 
-#include <pineforge/bar.hpp>
-#include <pineforge/pineforge.h>
-#include <pineforge/source/pine_strategy_host.hpp>
-
-#include <cmath>
-#include <limits>
+#include <cstdio>
+#include <stdexcept>
 
 using namespace pineforge;
+using namespace pineforge::l8d_test;
 
 namespace {
-class Probe final : public pineforge::source::PineStrategyHost {
+int failures = 0;
+#define REQUIRE(x) do { if (!(x)) { ++failures; std::fprintf(stderr, "FAIL %d %s\n", __LINE__, #x); } } while (0)
+
+class IdentityProbe final : public source::L4dPineHost {
 public:
+    using BacktestEngine::open_trade_entry_id;
+    IdentityProbe() { configure_pine_strategy(fixed_config(100'000.0, 1.0, 10)); }
+    std::size_t open_lot_count() const { return physical_position().lot_count; }
+    std::vector<pf_pending_order_v1_t> after_placement;
+    std::vector<std::string> callback_ids;
+    std::uint64_t a_incarnation = 0;
+    std::uint64_t c_incarnation = 0;
+    int flat_callbacks = 0;
+
     void on_source_bar(const Bar&) override {
-        const double missing = std::numeric_limits<double>::quiet_NaN();
-        if (bar_index_ == 0) {
-            strategy_entry("E", true, missing, 110.0, 1.0);
-            strategy_entry("E", true, missing, 111.0, 2.0);
+        if (pine_bar_index() == 0) {
+            strategy_order("seed", true, 2.0);
+        } else if (pine_bar_index() == 1) {
+            strategy_order("B", true, 1.0, missing, 120.0, "G", 1);
+            strategy_order("A", false, 2.0, 110.0, missing, "G", 1);
+            strategy_order("C", true, 7.0, 80.0);
+            after_placement = pending_rows(this);
+            if (const auto* row = find(after_placement, "A")) a_incarnation = row->incarnation;
+            if (const auto* row = find(after_placement, "C")) c_incarnation = row->incarnation;
+        } else if (pine_bar_index() == 2) {
+            if (physical_position().signed_units == 0.0) ++flat_callbacks;
+            for (const auto& row : pending_rows(this)) callback_ids.emplace_back(row.id);
         }
     }
 };
-}  // namespace
+} // namespace
 
 int main() {
-    const Bar bar{100, 101, 99, 100, 1, 0};
-    Probe probe;
-    probe.run(&bar, 1);
-    pf_pending_order_v1_t row{};
-    return strategy_pending_order_get(&probe, 0, &row, sizeof row) == 0
-        && row.incarnation != 0 && row.replaced_order_incarnation != 0
-        ? 0 : 1;
+    const Bar bars[] = {
+        point(100, 0), point(100, 60'000),
+        {100, 115, 100, 115, 1, 120'000},
+        {115, 120, 75, 80, 1, 180'000}, point(80, 240'000),
+    };
+    IdentityProbe probe; probe.run(bars, 5, "1", "1");
+    REQUIRE(probe.last_error().empty());
+    REQUIRE(probe.a_incarnation != 0);
+    REQUIRE(probe.c_incarnation != 0);
+    REQUIRE(probe.a_incarnation != probe.c_incarnation);
+    REQUIRE(probe.after_placement.size() == 3);
+    REQUIRE(find(probe.after_placement, "A") != nullptr);
+    REQUIRE(find(probe.after_placement, "B") != nullptr);
+    REQUIRE(find(probe.after_placement, "C") != nullptr);
+    REQUIRE(find(probe.after_placement, "A")->oca_type == 1);
+    REQUIRE(std::strcmp(find(probe.after_placement, "A")->oca_name, "G") == 0);
+    REQUIRE(find(probe.after_placement, "A")->created_seq != 0);
+    REQUIRE(find(probe.after_placement, "C")->created_seq != 0);
+    REQUIRE(probe.trade_count() == 1);
+    REQUIRE(probe.get_trade(0).entry_id == "seed");
+    REQUIRE(probe.get_trade(0).exit_id == "A");
+    REQUIRE(probe.get_trade(0).qty == 2.0);
+    REQUIRE(probe.get_trade(0).exit_price == 110.0);
+    REQUIRE(probe.get_trade(0).entry_incarnation != 0);
+    REQUIRE(probe.live_position_size() == 7.0);
+    REQUIRE(probe.open_lot_count() == 1);
+    REQUIRE(probe.open_trade_entry_id(0) == "C");
+    REQUIRE(strategy_pending_orders_len(&probe) == 0);
+    REQUIRE(probe.broker_state_hash() != 0);
+    return failures == 0 ? 0 : 1;
 }
-
-#undef PineStrategyHost
