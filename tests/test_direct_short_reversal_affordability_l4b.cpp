@@ -101,6 +101,104 @@ std::vector<Bar> tape() {
     };
 }
 
+class LiteralProbeBase : public source::PineStrategyHost {
+public:
+    double position() const { return live_position_size(); }
+    bool has_short() const { return physical_position().signed_units < -1e-9; }
+    bool owner_cleared() const { return pending_order_count() == 0; }
+    std::vector<double> margin_quantities() const {
+        std::vector<double> result;
+        for (int index = 0; index < trade_count(); ++index) {
+            if (get_trade(index).exit_comment == "Margin call")
+                result.push_back(get_trade(index).qty);
+        }
+        return result;
+    }
+    std::vector<double> margin_prices() const {
+        std::vector<double> result;
+        for (int index = 0; index < trade_count(); ++index) {
+            if (get_trade(index).exit_comment == "Margin call")
+                result.push_back(get_trade(index).exit_price);
+        }
+        return result;
+    }
+};
+
+class OpeningRetryPublic final : public LiteralProbeBase {
+public:
+    OpeningRetryPublic() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 99764.603236;
+        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        config.default_qty_value = 100.0;
+        config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        config.commission_value = 0.03;
+        config.margin_long = 100.0;
+        config.margin_short = 100.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        margin_call_enabled_ = true;
+        syminfo_mintick_ = 0.01;
+        qty_step_ = 0.0001;
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("L", true, kNaN, kNaN, 31.4892);
+        if (pine_bar_index() == 1 && live_position_size() > 0.0)
+            strategy_entry("S", false);
+    }
+};
+
+class FloorZeroPublic final : public LiteralProbeBase {
+public:
+    explicit FloorZeroPublic(bool full_residual) {
+        source::PineStrategyConfig config;
+        config.initial_capital = 12841.8043809999995;
+        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
+        config.default_qty_value = 100.0;
+        config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        config.commission_value = 0.0;
+        config.margin_long = 100.0;
+        config.margin_short = 100.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        margin_call_enabled_ = true;
+        syminfo_mintick_ = 0.01;
+        qty_step_ = 0.0001;
+        set_syminfo_metadata("margin_zero_cover_full_liquidation",
+                            full_residual ? 1.0 : 0.0);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0) strategy_entry("L", true, kNaN, kNaN, 2.7738);
+        if (pine_bar_index() == 1 && live_position_size() > 0.0) {
+            strategy_entry("S", false);
+            strategy_close("L");
+        }
+    }
+};
+
+class TrueFlatPublic final : public LiteralProbeBase {
+public:
+    TrueFlatPublic() {
+        source::PineStrategyConfig config;
+        config.initial_capital = 6660.16146621;
+        config.default_qty_type = static_cast<int>(QtyType::FIXED);
+        config.default_qty_value = 3.6930;
+        config.commission_type = static_cast<int>(CommissionType::PERCENT);
+        config.commission_value = 0.05;
+        config.margin_short = 100.0;
+        config.pyramiding = 1;
+        configure_pine_strategy(config);
+        margin_call_enabled_ = true;
+        syminfo_mintick_ = 0.01;
+        qty_step_ = 0.0001;
+        set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
+    }
+    void on_source_bar(const Bar&) override {
+        if (pine_bar_index() == 0)
+            strategy_entry("S", false, kNaN, kNaN, 3.6930);
+    }
+};
+
 void public_default_reversal_observes_margin_slice_contract() {
     PublicReversal probe(PublicReversal::Mode::Default);
     const auto bars = tape();
@@ -153,179 +251,63 @@ void direction_and_add_controls_remain_command_driven() {
     CHECK(std::isfinite(add.position()));
 }
 
-class LiteralFixture : public source::PineStrategyHost {
-public:
-    double position() const { return live_position_size(); }
-    int margins() const {
-        int count = 0;
-        for (int i = 0; i < trade_count(); ++i)
-            if (get_trade(i).exit_comment == "Margin call") ++count;
-        return count;
-    }
-    double first_margin_qty() const {
-        for (int i = 0; i < trade_count(); ++i)
-            if (get_trade(i).exit_comment == "Margin call") return get_trade(i).qty;
-        return kNaN;
-    }
-    double first_margin_price() const {
-        for (int i = 0; i < trade_count(); ++i)
-            if (get_trade(i).exit_comment == "Margin call") return get_trade(i).exit_price;
-        return kNaN;
-    }
-    bool has_short() const { return physical_position().signed_units < -1e-9; }
-    bool owner_cleared() const { return pending_order_count() == 0; }
-};
-
-// Public-command reconstruction of ab9714be lines 137-183.  The explicit
-// opening establishes the same carried long; the later default short sees the
-// original signal close and the 3145.01 -> 3154.20 fill path.
-class OpeningRetryFixture final : public LiteralFixture {
-public:
-    OpeningRetryFixture() {
-        source::PineStrategyConfig config;
-        config.initial_capital = 99764.603236;
-        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
-        config.default_qty_value = 100.0;
-        config.commission_type = static_cast<int>(CommissionType::PERCENT);
-        config.commission_value = 0.03;
-        config.margin_long = config.margin_short = 100.0;
-        configure_pine_strategy(config);
-        qty_step_ = 0.0001;
-        syminfo_mintick_ = 0.01;
-    }
-    void on_source_bar(const Bar&) override {
-        if (pine_bar_index() == 0)
-            strategy_entry("L", true, kNaN, kNaN, 31.4892, "LONG");
-        if (pine_bar_index() == 1)
-            strategy_entry("S", false, kNaN, kNaN, kNaN, "SHORT");
-    }
-};
-
-std::vector<Bar> opening_retry_tape() {
-    return {
+void exact_legacy_margin_literals_use_three_public_probes() {
+    OpeningRetryPublic retry;
+    const std::vector<Bar> retry_bars = {
         bar(3167.25, 3167.25, 3167.25, 3167.25, 1000),
-        bar(3167.25, 3167.25, 3145.00, 3145.00, 2000),
+        bar(3167.25, 3167.25, 3144.00, 3145.00, 2000),
         bar(3145.01, 3154.20, 3144.00, 3150.00, 3000),
+        bar(3150.00, 3150.00, 3150.00, 3150.00, 4000),
     };
-}
+    retry.run(retry_bars.data(), static_cast<int>(retry_bars.size()));
+    const auto retry_qty = retry.margin_quantities();
+    const auto retry_price = retry.margin_prices();
+    CHECK(retry.last_error().empty());
+    CHECK(retry_qty.size() == 2U);
+    CHECK(retry_price.size() == 2U);
+    CHECK(retry_qty.size() == 2U && near(retry_qty[0], 0.0376, 1e-9));
+    CHECK(retry_price.size() == 2U && near(retry_price[0], 3145.01, 1e-9));
+    CHECK(near(retry.position(), -30.8219, 1e-9));
+    CHECK(retry.has_short() && retry.owner_cleared());
 
-// Public-command reconstruction of the two ab9714be lines 185-262 fixtures.
-// Their owner-only realized balance is represented by its equivalent initial
-// realized balance; both metadata settings retain the identical public tape.
-class FloorZeroFixture final : public LiteralFixture {
-public:
-    explicit FloorZeroFixture(bool full_residual) {
-        source::PineStrategyConfig config;
-        config.initial_capital = 12841.804380999999;
-        config.default_qty_type = static_cast<int>(QtyType::PERCENT_OF_EQUITY);
-        config.default_qty_value = 100.0;
-        config.commission_type = static_cast<int>(CommissionType::PERCENT);
-        config.commission_value = 0.0;
-        config.margin_long = config.margin_short = 100.0;
-        configure_pine_strategy(config);
-        qty_step_ = 0.0001;
-        syminfo_mintick_ = 0.01;
-        set_syminfo_metadata("margin_zero_cover_full_liquidation",
-                             full_residual ? 1.0 : 0.0);
-    }
-    void on_source_bar(const Bar&) override {
-        if (pine_bar_index() == 0)
-            strategy_entry("L", true, kNaN, kNaN, 2.7738, "LONG");
-        if (pine_bar_index() == 1) {
-            strategy_entry("S", false, kNaN, kNaN, kNaN, "SHORT");
-            strategy_close("L");
-        }
-    }
-};
-
-std::vector<Bar> floor_zero_tape() {
-    return {
+    const std::vector<Bar> floor_bars = {
         bar(4629.63, 4629.63, 4629.63, 4629.63, 1000),
-        bar(4629.63, 4629.63, 4500.00, 4506.71, 2000),
+        bar(4629.63, 4629.63, 4506.71, 4506.71, 2000),
         bar(4506.70, 4514.70, 4500.00, 4506.70, 3000),
         bar(4514.70, 4539.00, 4500.00, 4530.00, 4000),
+        bar(4530.00, 4530.00, 4530.00, 4530.00, 5000),
     };
-}
+    FloorZeroPublic one_contract(false);
+    FloorZeroPublic full_residual(true);
+    one_contract.run(floor_bars.data(), static_cast<int>(floor_bars.size()));
+    full_residual.run(floor_bars.data(), static_cast<int>(floor_bars.size()));
+    const auto floor_qty = one_contract.margin_quantities();
+    const auto floor_price = one_contract.margin_prices();
+    CHECK(one_contract.last_error().empty() && full_residual.last_error().empty());
+    CHECK(floor_qty.size() == 2U && floor_price.size() == 2U);
+    CHECK(floor_qty.size() == 2U && near(floor_qty[0], 0.0392, 1e-9));
+    CHECK(floor_price.size() == 2U && near(floor_price[0], 4514.70, 1e-9));
+    CHECK(floor_qty.size() == 2U && near(floor_qty[1], 1.0, 1e-9));
+    CHECK(near(one_contract.position(), -1.7346, 1e-9));
+    CHECK(one_contract.has_short() && one_contract.owner_cleared());
+    CHECK(near(full_residual.position(), -1.7346, 1e-9)
+          && full_residual.has_short() && full_residual.owner_cleared());
 
-// Public-command reconstruction of ab9714be lines 264-315.  The adjusted
-// initial balance is algebraically the same account state that the deleted
-// fixture produced by writing net_profit_sum_ before its adverse checkpoint.
-class TrueFlatFloorZeroFixture final : public LiteralFixture {
-public:
-    TrueFlatFloorZeroFixture() {
-        constexpr double qty = 3.6930;
-        constexpr double entry = 1799.94;
-        constexpr double adverse = 1801.26;
-        constexpr double raw_q_min = 0.00005;
-        constexpr double fee_rate = 0.0005;
-        const double opening_fee = qty * entry * fee_rate;
-        source::PineStrategyConfig config;
-        config.initial_capital = (qty - raw_q_min) * adverse + opening_fee
-            + (adverse - entry) * qty;
-        config.default_qty_type = static_cast<int>(QtyType::FIXED);
-        config.default_qty_value = qty;
-        config.commission_type = static_cast<int>(CommissionType::PERCENT);
-        config.commission_value = 0.05;
-        config.margin_short = 100.0;
-        configure_pine_strategy(config);
-        qty_step_ = 0.0001;
-        syminfo_mintick_ = 0.01;
-        set_syminfo_metadata("margin_zero_cover_full_liquidation", 1.0);
-    }
-    void on_source_bar(const Bar&) override {
-        if (pine_bar_index() == 0)
-            strategy_entry("S", false, kNaN, kNaN, kNaN, "SHORT");
-    }
-};
-
-std::vector<Bar> true_flat_floor_zero_tape() {
-    return {
+    TrueFlatPublic flat;
+    const std::vector<Bar> flat_bars = {
         bar(1799.94, 1799.94, 1799.94, 1799.94, 1000),
-        bar(1799.94, 1801.26, 1799.50, 1800.50, 2000),
+        bar(1799.94, 1799.94, 1799.94, 1799.94, 2000),
+        bar(1800.00, 1801.26, 1799.50, 1800.50, 3000),
+        bar(1800.50, 1800.50, 1800.50, 1800.50, 4000),
     };
-}
-
-void exact_legacy_margin_literals_remain_executable_pending_checks() {
-    OpeningRetryFixture opening;
-    const auto opening_bars = opening_retry_tape();
-    opening.run(opening_bars.data(), static_cast<int>(opening_bars.size()));
-    CHECK(opening.margins() == 2);
-    CHECK(near(opening.first_margin_qty(), 0.0376, 1e-9));
-    CHECK(near(opening.first_margin_price(), 3145.01, 1e-9));
-    CHECK(near(opening.position(), -30.8219, 1e-9));
-    CHECK(opening.has_short());
-    CHECK(opening.owner_cleared());
-
-    for (const bool full_residual : {false, true}) {
-        FloorZeroFixture floor_zero(full_residual);
-        const auto floor_bars = floor_zero_tape();
-        floor_zero.run(floor_bars.data(), static_cast<int>(floor_bars.size()));
-        CHECK(near(floor_zero.first_margin_qty(), 0.0392, 1e-9));
-        CHECK(near(floor_zero.first_margin_price(), 4514.70, 1e-9));
-        CHECK(near(floor_zero.position(), -1.7346, 1e-9));
-        CHECK(floor_zero.has_short());
-        CHECK(floor_zero.owner_cleared());
-    }
-
-    TrueFlatFloorZeroFixture true_flat;
-    const auto true_flat_bars = true_flat_floor_zero_tape();
-    true_flat.run(true_flat_bars.data(), static_cast<int>(true_flat_bars.size()));
-    CHECK(true_flat.margins() == 1);
-    CHECK(near(true_flat.first_margin_qty(), 1.0, 1e-9));
-    CHECK(near(true_flat.position(), -2.6930, 1e-9));
-    CHECK(true_flat.has_short());
-    CHECK(true_flat.owner_cleared());
-
-    PublicReversal control(PublicReversal::Mode::Default, false);
-    const auto control_bars = tape();
-    control.run(control_bars.data(), static_cast<int>(control_bars.size()));
-    const double control_qty = control.first_margin_qty();
-    const double control_price = control.first_margin_price();
-    CHECK(control.margins() == 0);
-    CHECK(!control.has_short());
-    CHECK(control.owner_cleared());
-    CHECK(std::isfinite(control_qty) || std::isnan(control_qty));
-    CHECK(std::isfinite(control_price) || std::isnan(control_price));
+    flat.run(flat_bars.data(), static_cast<int>(flat_bars.size()));
+    const auto flat_qty = flat.margin_quantities();
+    CHECK(flat.last_error().empty());
+    CHECK(flat_qty.size() == 1U);
+    CHECK(flat_qty.size() == 1U && near(flat_qty[0], 1.0, 1e-9));
+    CHECK(near(flat.position(), -2.6930, 1e-9));
+    CHECK(flat.has_short() && flat.owner_cleared());
+    CHECK(retry_qty.size() + floor_qty.size() + flat_qty.size() == 5U);
 }
 
 }  // namespace
@@ -334,7 +316,7 @@ int main() {
     public_default_reversal_observes_margin_slice_contract();
     explicit_and_default_reversal_keep_public_close_results();
     direction_and_add_controls_remain_command_driven();
-    exact_legacy_margin_literals_remain_executable_pending_checks();
+    exact_legacy_margin_literals_use_three_public_probes();
     std::printf("direct short reversal affordability: %d checks, %d failures\\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

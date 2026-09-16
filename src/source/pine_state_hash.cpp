@@ -288,6 +288,7 @@ void source::PineExecutionAdapter::hash_state(BrokerStateHashSink& f) const {
     for (const auto& pending : pending_coof_requests_) {
         hash_native_request(f, pending.request); hash_placement(f, pending.snapshot);
         f.s(pending.replacement_key); f.b(pending.opening); f.u(pending.family_key);
+        f.b(pending.next_open);
     }
     f.u(pending_margin_revivals_.size());
     for (const auto& pending : pending_margin_revivals_) {

@@ -1359,3 +1359,12 @@ set_tests_properties(
     test_script_run_prepare_l4d
     test_streaming_l4d
     PROPERTIES LABELS "")
+
+# R4-D L6b: the round-3c sizing/ShortSeed composition regressions and the
+# remaining COOF source-cadence rows are repaired on the fully merged tree.
+set_tests_properties(
+    test_calc_on_order_fills_l4c
+    test_coof_market_limit_recross_l4c
+    test_coof_open_recalc_context_l4c
+    test_direct_short_reversal_affordability_l4b
+    PROPERTIES LABELS "")

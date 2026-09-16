@@ -742,7 +742,9 @@ source::PineStrategyHost::source_pending_view() const {
             break;
         }
         FixtureIntentRow row;
-        row.id = snapshot.frozen_market_targeted_close ? label : snapshot.source_id;
+        row.id = snapshot.family == PineOrderFamily::Close
+            ? "__close__" + snapshot.source_id
+            : (snapshot.frozen_market_targeted_close ? label : snapshot.source_id);
         row.type = type;
         const bool default_stop = snapshot.family == PineOrderFamily::Entry
             && !std::isfinite(snapshot.exit_levels.limit)
@@ -831,7 +833,8 @@ source::PineStrategyHost::source_pending_view() const {
         // pending_orders_ observer therefore sees the two entry commands but
         // not that staged close during the source body.
         if (config_.process_orders_on_close
-            && command.snapshot.family == PineOrderFamily::Close) {
+            && command.snapshot.family == PineOrderFamily::Close
+            && !command.snapshot.birth.at_terminal_fill()) {
             continue;
         }
         append(command.snapshot, command.request.label);
@@ -851,7 +854,8 @@ source::PineStrategyHost::source_pending_view() const {
         if (found == adapter_.placement_.end()) continue;
         if (config_.process_orders_on_close
             && found->second.family == PineOrderFamily::Close
-            && found->second.projection_created_bar == source_bar_index_) {
+            && found->second.projection_created_bar == source_bar_index_
+            && !found->second.birth.at_terminal_fill()) {
             continue;
         }
         append(found->second, found->second.source_id);

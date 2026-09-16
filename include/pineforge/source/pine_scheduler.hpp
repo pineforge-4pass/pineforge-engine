@@ -62,6 +62,9 @@ public:
         return expected_source_bars_ > 0 && source_bar_count_ >= expected_source_bars_;
     }
     int source_bar_index_for(const NativeDecisionContext& context) const noexcept;
+    std::optional<double> next_input_waypoint(
+        const NativeDecisionContext&, double current_price,
+        NativePathOrder) const noexcept;
     const Bar* current_script_bar() const noexcept {
         return current_script_bar_valid_ ? &current_script_bar_ : nullptr;
     }
