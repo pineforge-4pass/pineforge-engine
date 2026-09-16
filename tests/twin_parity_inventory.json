@@ -197,7 +197,7 @@
       "baseAssertions": 56,
       "reason": "protected risk-latch reads are rewritten to public trade and position outcomes",
       "twin": "test_engine_risk_l4a.cpp",
-      "twinAssertionSha256": "96c4b3edc2c652a61824c376938d5ea619414c24c541c8a5c3555b18d3d134f7",
+      "twinAssertionSha256": "92c6c503e0558d1295705960c16e50d7226ae147f62271f8216a5f5c6284cd62",
       "twinAssertions": 36
     },
     "test_entry_bar_margin_path": {

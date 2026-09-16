@@ -35,8 +35,8 @@ class ProjectionCoverage(unittest.TestCase):
         result, diagnostic = self.check()
         self.assertIsNotNone(result, diagnostic)
         self.assertEqual(result["mirror"], 406)
-        self.assertEqual(result["dynamic"], 310)
-        self.assertEqual(result["debt"], 96)
+        self.assertEqual(result["dynamic"], 406)
+        self.assertEqual(result["debt"], 0)
 
     def test_arbitrary_field_cannot_be_folded_to_zero(self):
         result, diagnostic = self.check(((
@@ -63,9 +63,12 @@ class ProjectionCoverage(unittest.TestCase):
         self.assertIn("created_seq", diagnostic)
 
     def test_stale_debt_row_is_rejected_after_live_projection_lands(self):
+        # Integrated tree: every field is projected live, so a re-added debt
+        # row for a live field must be rejected as stale.
         result, diagnostic = self.check(((
             "scripts/pending_intent_constant_debt.txt",
-            "legs_last_bind_owner\n", ""),))
+            "# (empty since MERGE-L8",
+            "legs_last_bind_owner\n# (empty since MERGE-L8"),))
         self.assertIsNone(result)
         self.assertIn("legs_last_bind_owner", diagnostic)
 
