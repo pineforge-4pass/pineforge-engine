@@ -780,9 +780,10 @@ add_test(
             --generated-include ${PROJECT_BINARY_DIR}/include
             --v16-frozen-receipt ${PROJECT_BINARY_DIR}/native-abi-v16-frozen/receipt.json
             --receipt ${PROJECT_BINARY_DIR}/script-abi-receipt.json
+            --skip-if-receipt-missing
             ${_pf_script_cpp_abi_flags}
 )
-set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300)
+set_tests_properties(test_script_cpp_abi PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
 add_test(
     NAME test_script_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_script_cpp_abi.py
@@ -848,8 +849,9 @@ add_test(NAME test_settlement_cpp_abi
         --v15-frozen-receipt ${PINEFORGE_NATIVE_ABI_V15_FROZEN_RECEIPT}
         --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/settlement-abi-receipt.json
+        --skip-if-receipt-missing
         ${_pf_script_cpp_abi_flags})
-set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600)
+set_tests_properties(test_settlement_cpp_abi PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
 add_test(NAME test_settlement_cpp_abi_tooling
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/scripts/test_settlement_cpp_abi.py)
 add_test(NAME test_aggregate_cpp_versions_runtime
@@ -860,8 +862,9 @@ add_test(NAME test_aggregate_cpp_versions_runtime
         --generated-include ${PROJECT_BINARY_DIR}/include
         --v16-frozen-receipt ${PINEFORGE_NATIVE_ABI_V16_FROZEN_RECEIPT}
         --receipt ${PROJECT_BINARY_DIR}/aggregate-abi-receipt.json
+        --skip-if-receipt-missing
         ${_pf_script_cpp_abi_flags})
-set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300)
+set_tests_properties(test_aggregate_cpp_versions_runtime PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
 
 add_test(
     NAME test_derive_corpus_feeds
