@@ -401,9 +401,21 @@ struct PreparedImplStorage {
     }
 
 private:
+    // The recycled blocks are released when the thread-local scratch is
+    // destroyed; otherwise LeakSanitizer reports every block still parked in
+    // the freelist at process exit as a direct leak (CI sanitizers lane).
+    struct Recycled {
+        std::vector<void*> blocks;
+        Recycled() = default;
+        Recycled(const Recycled&) = delete;
+        Recycled& operator=(const Recycled&) = delete;
+        ~Recycled() {
+            for (void* block : blocks) ::operator delete(block);
+        }
+    };
     static std::vector<void*>& free_blocks() {
-        static thread_local std::vector<void*> recycled;
-        return recycled;
+        static thread_local Recycled recycled;
+        return recycled.blocks;
     }
 };
 
