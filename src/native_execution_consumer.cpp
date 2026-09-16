@@ -4698,6 +4698,58 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
                                                       int index, bool last) {
     (void)last;
     processing_input_ = true;
+    const auto* running = std::get_if<NativeRunning>(&state_);
+    const bool tolerant_realtime = legacy_tolerant_slot_labels() && running
+        && running->phase == NativeRunPhase::Realtime;
+    if (tolerant_realtime && last_accepted_input_) {
+        // LegacyTolerant preserves arbitrary historical labels, but the
+        // realtime confirmed-bar API still advances on the caller's raw label
+        // grid (ab9714be pine_stream.cpp:167-205).  Validate that boundary
+        // before any driver, digest, aggregation, or callback mutation.
+        std::int64_t unit_ms = 0;
+        switch (input_tf_.unit()) {
+        case native_calendar::TimeframeUnit::Second: unit_ms = 1000; break;
+        case native_calendar::TimeframeUnit::Minute: unit_ms = 60'000; break;
+        case native_calendar::TimeframeUnit::Day: unit_ms = 86'400'000; break;
+        case native_calendar::TimeframeUnit::Week: unit_ms = 604'800'000; break;
+        case native_calendar::TimeframeUnit::Month: break;
+        }
+        const auto count = static_cast<std::int64_t>(input_tf_.count());
+        if (!(unit_ms > 0) || !(count > 0)
+            || count > std::numeric_limits<std::int64_t>::max() / unit_ms) {
+            processing_input_ = false;
+            present_refusal(engine, "native confirmed bar timeframe is not a fixed grid");
+            return false;
+        }
+        const std::int64_t step = count * unit_ms;
+        const std::int64_t previous = last_accepted_input_->open_ms;
+        if (previous > std::numeric_limits<std::int64_t>::max() - step
+            || bar.timestamp > std::numeric_limits<std::int64_t>::max() - step) {
+            processing_input_ = false;
+            present_refusal(engine, "native confirmed bar timestamp overflows the input grid");
+            return false;
+        }
+        const std::int64_t expected = previous + step;
+        if (bar.timestamp < expected || (bar.timestamp - expected) % step != 0) {
+            processing_input_ = false;
+            present_refusal(engine,
+                "native confirmed bar timestamp is out of order or off the input grid");
+            return false;
+        }
+        for (std::int64_t missing = expected; missing < bar.timestamp;) {
+            if (native_calendar::in_session(calendar_, missing)) {
+                processing_input_ = false;
+                present_refusal(engine, "native stream has an in-session gap");
+                return false;
+            }
+            if (missing > std::numeric_limits<std::int64_t>::max() - step) {
+                processing_input_ = false;
+                present_refusal(engine, "native confirmed bar timestamp overflows the input grid");
+                return false;
+            }
+            missing += step;
+        }
+    }
     auto interval = input_interval_at(bar.timestamp);
     if (!interval) {
         processing_input_ = false;
@@ -4717,7 +4769,6 @@ bool NativeExecutionConsumer::consume_confirmed_input(BacktestEngine& engine, co
             present_refusal(engine, "native duplicate overlapping input slot");
             return false;
         }
-        const auto* running = std::get_if<NativeRunning>(&state_);
         if (!legacy_tolerant_slot_labels()
             && running && running->phase != NativeRunPhase::Batch) {
             auto expected = native_calendar::interval_containing(

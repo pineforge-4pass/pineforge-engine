@@ -63,7 +63,13 @@ public:
     }
     void on_source_bar(const Bar& bar) override {
         if (literal_shortfall_ && bar_index_ == 0) {
-            strategy_entry("Owned", true, na, na, qty, "ENTRY");
+            // The base fixture starts after high-level entry admission: it
+            // fabricates an already-open terminal-POOC lot and invokes the
+            // opening checkpoint directly.  Drive that same boundary through
+            // RAW strategy.order, whose fill is deliberately outside the
+            // high-level market-admission gate, so the native Applied event
+            // (rather than a retired owner write) creates the real deficit.
+            strategy_order("Owned", true, qty, na, na, "ENTRY");
         }
         if (bar_index_ == 0 && position_side_ == PositionSide::FLAT
             && trades_.empty() && !literal_shortfall_) {
@@ -91,16 +97,16 @@ public:
     const std::vector<Trade>& rows() const { return trades_; }
     double remaining() const { return position_qty_; }
     void literal_shortfall_at_entry() {
-        // Drive the same deficit through a public source command rather than
-        // fabricating a retired pending/position owner. The L4a opening-money
-        // policy determines the eventual margin receipt.
+        // Drive the base fixture's post-admission deficit through a public RAW
+        // command rather than re-running the distinct high-level POOC
+        // admission policy. The opening-money checkpoint determines the
+        // eventual margin receipt.
         initial_capital_ = qty * 1.13595 - 0.001;
         literal_shortfall_ = true;
         const Bar tape[] = {
             {1.13593, 1.13593, 1.13593, 1.13593, 1, 1000},
-            {1.13593, 1.13593, 1.13593, 1.13593, 1, 2000},
         };
-        run(tape, 2);
+        run(tape, 1);
     }
 };
 

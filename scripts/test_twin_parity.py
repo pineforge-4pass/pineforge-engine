@@ -55,6 +55,35 @@ class TwinParity(unittest.TestCase):
         with self.assertRaisesRegex(checker.ParityError, "CHECK parity mismatch"):
             checker.check_inventory(root=root, ev=ev, base_reader=lambda _: BASE)
 
+    def test_counted_owner_range_sums_to_base(self) -> None:
+        base = '''#define CHECK(x) do {} while (0)
+void test() {
+    CHECK(owner_private_a());
+    CHECK(owner_private_b());
+    CHECK(public_result());
+}
+'''
+        root, ev = self.fixture(
+            '#define CHECK(x) do {} while (0)\n'
+            'void test() { CHECK(public_result()); }\n',
+            '| tests/test_case.cpp:3-4 | 2 CHECKs | retired owner helper | '
+            'direct owner drive has no public projection | '
+            'tests/test_case_l4d.cpp:2 public result |\n')
+        self.assertEqual(checker.check_inventory(
+            root=root, ev=ev, base_reader=lambda _: base),
+            {"tests": 1, "base": 4, "twin": 2, "ledgered": 2})
+
+    def test_counted_owner_range_cannot_exceed_source_checks(self) -> None:
+        root, ev = self.fixture(
+            '#define CHECK(x) do {} while (0)\n'
+            'void test() { CHECK(public_result()); }\n',
+            '| tests/test_case.cpp:3-4 | 3 CHECKs | retired owner helper | '
+            'direct owner drive has no public projection | '
+            'tests/test_case_l4d.cpp:2 public result |\n')
+        with self.assertRaisesRegex(checker.ParityError,
+                                    "declares 3 CHECKs but contains only 2"):
+            checker.check_inventory(root=root, ev=ev, base_reader=lambda _: BASE)
+
     def test_scanner_ignores_strings_and_accepts_cpp_digit_separators(self) -> None:
         source = '''void test() {
             const char* message = "this is not CHECK(fake)";

@@ -1340,3 +1340,22 @@ set_tests_properties(
     test_percent_equity_open_entry_fee_l4b
     test_source_fifo_endpoints
     PROPERTIES LABELS "")
+
+# R4-D L6a: the merged-tree risk, margin, admission, stream-preflight and
+# verification-apparatus rows are complete.  Keep the explicit final override
+# adjacent to the earlier lane labels so every repaired witness is required.
+set_tests_properties(
+    test_bracket_lifecycle_declined_reversal_l4c
+    test_ci_verify
+    test_direct_short_reversal_affordability_l4b
+    test_dropped_reversal_mc_first_l4c
+    test_explicit_qty_fill_admission_l4b
+    test_famag_opening_money_l4b
+    test_high_value_fractional_money_margin_l4a
+    test_margin_call_gap_open_l4a
+    test_market_admission_commission_l4b
+    test_pooc_money_admission_l4b
+    test_pooc_open_money_event_l4b
+    test_script_run_prepare_l4d
+    test_streaming_l4d
+    PROPERTIES LABELS "")

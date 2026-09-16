@@ -3,11 +3,10 @@
 
 The base sources are deliberately read from the immutable ``ab9714be`` tree.
 For every inventory row, a current ``tests/<name>_l4*.cpp`` twin must retain
-each CHECK-family invocation unless the exact base literal has an Appendix 5
-row in the R4-D deletion ledger.  A ledger entry is deliberately narrow: it
-names one base source line, its normalized CHECK text, why that read is no
-longer observable without reviving the deleted owner, and the twin row that
-asserts the public behaviour instead.
+each CHECK-family invocation unless Appendix 5 records it as unobservable.
+The ordinary form names one exact literal.  A36 also permits a counted source
+range for a helper whose checks predominantly drive/read the deleted owner;
+the range still names the helper, reason, and real public covering twin rows.
 """
 from __future__ import annotations
 
@@ -27,11 +26,16 @@ BASE = "ab9714be"
 DEFAULT_EV = Path("/Users/haoliangwen/.pineforge/parity/native-engine-refactor-roadmap-20260912")
 APPENDIX_HEADING = "## Appendix 5 — CHECK-parity unobservable literal ledger"
 TABLE_HEADING = "| base file:line | CHECK text | reason unobservable | covering twin row |"
+RANGE_TABLE_HEADING = (
+    "| base file:range | CHECK count | helper/group | reason unobservable | "
+    "covering twin rows |")
 CHECK_NAME = re.compile(r"\b(CHECK(?:_[A-Za-z0-9_]+)?)\s*\(")
 DIRECTIVE = re.compile(r"^\s*#\s*define\b")
 TABLE_ROW = re.compile(r"^\|(?P<body>.*)\|\s*$")
 COVERING_ROW = re.compile(
     r"^(?P<path>tests/test_[A-Za-z0-9_]+_l4[A-Za-z0-9_]*\.cpp):(?P<line>\d+)(?:\s|$)")
+COVERING_ROWS = re.compile(
+    r"(?P<path>tests/test_[A-Za-z0-9_]+_l4[A-Za-z0-9_]*\.cpp):(?P<line>\d+)")
 
 # A24 keeps these behavioural tests registered unchanged in the ordinary
 # switched-route inventory. They are intentionally outside the removed-twin
@@ -79,6 +83,27 @@ class LedgerLiteral:
     text: str
     reason: str
     covering: str
+
+
+@dataclass(frozen=True)
+class LedgerRange:
+    path: str
+    start: int
+    end: int
+    count: int
+    group: str
+    reason: str
+    covering: str
+
+    @property
+    def location(self) -> str:
+        return f"{self.path}:{self.start}-{self.end}"
+
+
+@dataclass(frozen=True)
+class AppendixEvidence:
+    literals: dict[tuple[str, str], LedgerLiteral]
+    ranges: tuple[LedgerRange, ...]
 
 
 def normalize(value: str) -> str:
@@ -230,7 +255,7 @@ def split_markdown_cells(body: str) -> list[str]:
     return cells
 
 
-def read_appendix(ledger: Path) -> dict[tuple[str, str], LedgerLiteral]:
+def read_appendix(ledger: Path) -> AppendixEvidence:
     text = ledger.read_text()
     start = text.find(APPENDIX_HEADING)
     if start < 0:
@@ -242,12 +267,36 @@ def read_appendix(ledger: Path) -> dict[tuple[str, str], LedgerLiteral]:
     if TABLE_HEADING not in section:
         raise ParityError("Appendix 5 lacks the required column heading")
     rows: dict[tuple[str, str], LedgerLiteral] = {}
+    ranges: list[LedgerRange] = []
     for raw in section.splitlines():
         match = TABLE_ROW.match(raw.strip())
         if not match:
             continue
         cells = split_markdown_cells(match.group("body"))
-        if len(cells) != 4 or cells[0].lower() == "base file:line" or cells[0].startswith("---"):
+        if not cells or cells[0].startswith("---"):
+            continue
+        if len(cells) == 5:
+            if cells[0].lower() == "base file:range":
+                continue
+            location, count_text, group, reason, covering = cells
+            range_match = re.fullmatch(
+                r"(?P<path>tests/test_[A-Za-z0-9_]+\.cpp):(?P<start>\d+)-(?P<end>\d+)",
+                location)
+            count_match = re.fullmatch(r"(?P<count>\d+) CHECKs?", count_text)
+            if not range_match or not count_match:
+                raise ParityError("Appendix 5 has invalid range row: " + raw)
+            start = int(range_match.group("start"))
+            end = int(range_match.group("end"))
+            count = int(count_match.group("count"))
+            if start > end or count <= 0 or not group or not reason or not covering:
+                raise ParityError("Appendix 5 range row is incomplete: " + raw)
+            row = LedgerRange(range_match.group("path"), start, end, count,
+                              group, reason, covering)
+            if any(existing.location == row.location for existing in ranges):
+                raise ParityError("Appendix 5 duplicates range: " + row.location)
+            ranges.append(row)
+            continue
+        if len(cells) != 4 or cells[0].lower() == "base file:line":
             continue
         location, check, reason, covering = cells
         if not re.fullmatch(r"tests/test_[A-Za-z0-9_]+\.cpp:\d+", location):
@@ -258,7 +307,7 @@ def read_appendix(ledger: Path) -> dict[tuple[str, str], LedgerLiteral]:
         if key in rows:
             raise ParityError("Appendix 5 duplicates literal: " + location)
         rows[key] = LedgerLiteral(location, key[1], reason, covering)
-    return rows
+    return AppendixEvidence(rows, tuple(ranges))
 
 
 def inventory_names(inventory: Path, *, families: Iterable[str] | None = None) -> list[str]:
@@ -314,6 +363,24 @@ def validate_covering_row(root: Path, row: LedgerLiteral) -> None:
         raise ParityError("Appendix 5 covering line has no CHECK-family macro: " + row.covering)
 
 
+def validate_covering_rows(root: Path, row: LedgerRange) -> None:
+    """Require every cited range covering row to be a real twin CHECK."""
+    matches = list(COVERING_ROWS.finditer(row.covering))
+    if not matches:
+        raise ParityError("Appendix 5 range covering twin rows are invalid: " + row.covering)
+    for match in matches:
+        path = root / match.group("path")
+        if not path.is_file():
+            raise ParityError("Appendix 5 range covering twin is missing: "
+                              + match.group("path"))
+        line = int(match.group("line"))
+        calls = extract_checks(path.read_text(), match.group("path"),
+                               include_definitions=True)
+        if not any(call.line == line for call in calls):
+            raise ParityError("Appendix 5 range covering line has no CHECK-family macro: "
+                              + f"{match.group('path')}:{line}")
+
+
 def check_inventory(*, root: Path = ROOT, ev: Path = DEFAULT_EV,
                     base_reader: Callable[[str], str] | None = None,
                     names: Iterable[str] | None = None,
@@ -329,6 +396,7 @@ def check_inventory(*, root: Path = ROOT, ev: Path = DEFAULT_EV,
     reader = base_reader or git_base_source
     total_base = total_twin = total_ledgered = 0
     used_ledger: set[tuple[str, str]] = set()
+    used_ranges: set[str] = set()
     for name in selected:
         base_path = "tests/" + name + ".cpp"
         base_source = reader(name)
@@ -338,13 +406,31 @@ def check_inventory(*, root: Path = ROOT, ev: Path = DEFAULT_EV,
         twin_checks = extract_checks(twin.read_text(), "tests/" + twin.name,
                                      include_definitions=True)
         base_keys = {(item.location, item.text) for item in base_literals}
-        relevant = {key: row for key, row in appendix.items()
+        relevant = {key: row for key, row in appendix.literals.items()
                     if key[0].startswith(base_path + ":")}
         for key, row in relevant.items():
             if key not in base_keys:
                 raise ParityError("Appendix 5 literal does not match base CHECK: "
                                   + row.location + " " + row.text)
             validate_covering_row(root, row)
+        relevant_ranges = [row for row in appendix.ranges if row.path == base_path]
+        for index, row in enumerate(relevant_ranges):
+            covered = [item for item in base_literals
+                       if row.start <= item.line <= row.end]
+            if row.count > len(covered):
+                raise ParityError(
+                    f"Appendix 5 range {row.location} declares {row.count} CHECKs "
+                    f"but contains only {len(covered)}")
+            for literal in relevant.values():
+                line = int(literal.location.rsplit(":", 1)[1])
+                if row.start <= line <= row.end:
+                    raise ParityError("Appendix 5 range overlaps exact literal: "
+                                      + literal.location)
+            for other in relevant_ranges[index + 1:]:
+                if max(row.start, other.start) <= min(row.end, other.end):
+                    raise ParityError("Appendix 5 ranges overlap: "
+                                      + row.location + " and " + other.location)
+            validate_covering_rows(root, row)
         # A native twin may rewrite an owner-private read to a public
         # projection. The mechanical gate therefore checks the required count,
         # while Appendix 5 supplies exact-text evidence for any omitted row.
@@ -354,24 +440,33 @@ def check_inventory(*, root: Path = ROOT, ev: Path = DEFAULT_EV,
         for text in ledger_texts:
             if text not in base_texts:
                 raise ParityError("Appendix 5 CHECK text is absent from base: " + base_path)
-        if len(twin_texts) + len(ledger_texts) != len(base_texts):
+        range_count = sum(row.count for row in relevant_ranges)
+        if len(twin_texts) + len(ledger_texts) + range_count != len(base_texts):
             raise ParityError(
                 f"CHECK parity mismatch for {name}: base={len(base_texts)} "
-                f"twin={len(twin_texts)} ledgered={len(ledger_texts)}")
+                f"twin={len(twin_texts)} "
+                f"ledgered={len(ledger_texts) + range_count}")
         used_ledger.update(relevant)
+        used_ranges.update(row.location for row in relevant_ranges)
         total_base += len(base_checks)
         total_twin += len(twin_checks)
-        total_ledgered += len(relevant)
+        total_ledgered += len(relevant) + range_count
     # ``--name`` is a targeted development aid.  It must validate every row
     # for its selected test without rejecting Appendix 5 evidence belonging to
     # another selected-at-CI twin.  A full/default inventory still rejects any
     # row outside its A29 population.
     selected_paths = {"tests/" + name + ".cpp" for name in selected}
-    scoped_ledger = {key for key in appendix if key[0].rsplit(":", 1)[0] in selected_paths}
+    scoped_ledger = {key for key in appendix.literals
+                     if key[0].rsplit(":", 1)[0] in selected_paths}
     unused = scoped_ledger - used_ledger
     if unused:
         first = next(iter(sorted(unused)))
         raise ParityError("Appendix 5 contains a literal outside the checked inventory: " + first[0])
+    scoped_ranges = {row.location for row in appendix.ranges if row.path in selected_paths}
+    unused_ranges = scoped_ranges - used_ranges
+    if unused_ranges:
+        raise ParityError("Appendix 5 contains a range outside the checked inventory: "
+                          + next(iter(sorted(unused_ranges))))
     return {"tests": len(selected), "base": total_base, "twin": total_twin,
             "ledgered": total_ledgered}
 
