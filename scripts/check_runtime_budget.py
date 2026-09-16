@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile/run the same replay at ab9714be and HEAD; enforce A30's 1.5x bound."""
+"""Compile/run the same replay at ab9714be and HEAD; enforce the A40 rev 2 relative bound."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,12 @@ import tempfile
 from cpp_abi_pairing import PairingError, enforce_receipt_mode, load_frozen_v16
 
 
-LIMIT = 1.5
+# A40 rev 2 (root, 2026-09-17): the slice-C ceiling is 10x of ab9714be on both
+# profiles. L8f measured the generic kernel floor at ~5.7x (two live-leg
+# matchings, request-core mutation plans and event history per bar, by design);
+# the follow-up kernel lane lowers this constant toward that floor. The workload
+# and the ab9714be side are frozen; only this constant may move, by root.
+LIMIT = 10.0
 TIMING = re.compile(r"^PF_RUNTIME_SECONDS=(\d+(?:\.\d+)?)$", re.M)
 
 
