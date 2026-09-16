@@ -128,6 +128,13 @@ execution::AccountEffectProjection invalid_projection(execution::Status status) 
     out.status = status;
     return out;
 }
+
+// ab9714be:src/engine_execution.cpp:264/:355 — native default of
+// validate_source_lifecycle: a non-empty lifecycle is InvalidLifecycle,
+// checked after book validation and before selection/allocation.
+bool nonempty_lifecycle_refused(const execution::LifecycleEffects* lifecycle) {
+    return lifecycle && (lifecycle->pre_close || !lifecycle->removals.empty());
+}
 } // namespace
 
 struct BacktestEngine::NativeSettlementStage {
@@ -264,6 +271,10 @@ void BacktestEngine::stage_native_settlement(
         fail(status);
         return;
     }
+    if (nonempty_lifecycle_refused(lifecycle)) {
+        fail(Status::InvalidLifecycle);
+        return;
+    }
     CloseScopeInspection selection;
     if (selected) {
         selection = inspect_selected_opening_set(
@@ -346,6 +357,10 @@ void BacktestEngine::stage_native_settlement(
     if (const auto status = validate_native_settlement_book(held);
         status != Status::Applied) {
         fail(status);
+        return;
+    }
+    if (nonempty_lifecycle_refused(lifecycle)) {
+        fail(Status::InvalidLifecycle);
         return;
     }
     stage.incoming = reversal.signed_units < 0.0
@@ -665,12 +680,9 @@ execution::Status BacktestEngine::preflight_native_settlement_effects(
         const NativeSettlementStage& stage,
         const execution::LifecycleEffects& lifecycle,
         const NativeSettlementRows& rows) {
-    // LifecycleEffects was the deleted compatibility-owner seam.  A native
-    // host has no source lifecycle interpreter: accepting a non-empty batch
-    // would silently discard caller intent.  Preserve the base native-route
-    // refusal rather than retaining an inert legacy body.
-    if (lifecycle.pre_close || !lifecycle.removals.empty())
-        return execution::Status::InvalidLifecycle;
+    // Non-empty lifecycle is refused in stage_native_settlement (A41(4) /
+    // ab9714be order). Ready stages that reach here carry an empty batch.
+    (void)lifecycle;
     const auto& closed_trades = rows.closed_trades;
     validate_close_trade_counters(closed_trades.data(), closed_trades.size());
     if (stage.opening > 0.0 && !stage.survivors.empty()

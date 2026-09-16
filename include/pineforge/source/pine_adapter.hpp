@@ -521,7 +521,7 @@ public:
     void reset_for_run();
     void set_configuration(const PineStrategyConfig& config) noexcept;
     void set_staged_configuration(const StagedConfiguration& staged);
-    void set_begin_mode(bool is_stream) noexcept;
+    void set_begin_mode(bool is_stream, bool bar_magnifier = false) noexcept;
     void set_path_order(NativePathOrder path_order) noexcept;
 
     NativeRunSpec project(const PineStrategyConfig&, const StagedConfiguration&,
@@ -1056,6 +1056,10 @@ private:
         std::numeric_limits<std::int64_t>::min();
     PendingIntentView pending_view_{};
     // @source-state end
+    // Install-time magnifier fact from NativeBeginArgs. Scheduler already
+    // folds retained_.bar_magnifier; this copy is the host-kind-free query
+    // for qualify_short_seed_plan.
+    bool bar_magnifier_ = false;
 };
 
 } // namespace pineforge::source

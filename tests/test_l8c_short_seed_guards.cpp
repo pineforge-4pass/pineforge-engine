@@ -5,7 +5,6 @@
 #include <pineforge/source/pine_native_host.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -79,6 +78,13 @@ struct StreamModeTag {
 template struct PrivateAccess<StreamModeTag,
     &source::PineExecutionAdapter::stream_mode_>;
 
+struct BarMagnifierTag {
+    using type = bool source::PineExecutionAdapter::*;
+    friend type access(BarMagnifierTag);
+};
+template struct PrivateAccess<BarMagnifierTag,
+    &source::PineExecutionAdapter::bar_magnifier_>;
+
 constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 
 Bar bar(std::int64_t timestamp) {
@@ -148,19 +154,10 @@ public:
         baseline = (adapter_.*access(QualifyTag{}))(pending.plan);
 
         auto& placements = adapter_.*access(PlacementTag{});
-        bool restore_scheduler_begin = false;
         switch (which_) {
-        case QualificationCase::Magnifier: {
-            NativeBeginArgs args;
-            args.bars = fixture_bars_.data();
-            args.n = static_cast<int>(fixture_bars_.size());
-            args.input_tf = "1";
-            args.script_tf = "1";
-            args.bar_magnifier = true;
-            scheduler_.capture_begin(args);
-            restore_scheduler_begin = true;
+        case QualificationCase::Magnifier:
+            adapter_.*access(BarMagnifierTag{}) = true;
             break;
-        }
         case QualificationCase::StreamPhase:
             adapter_.*access(StreamModeTag{}) = true;
             break;
@@ -217,19 +214,10 @@ public:
             break;
         }
         qualified = (adapter_.*access(QualifyTag{}))(pending.plan);
-        if (restore_scheduler_begin) {
-            NativeBeginArgs args;
-            args.bars = fixture_bars_.data();
-            args.n = static_cast<int>(fixture_bars_.size());
-            args.input_tf = "1";
-            args.script_tf = "1";
-            scheduler_.capture_begin(args);
-        }
     }
 
 private:
     QualificationCase which_;
-    const std::array<Bar, 2> fixture_bars_{{bar(60'000), bar(120'000)}};
 };
 
 void run_qualification_case(QualificationCase which) {
