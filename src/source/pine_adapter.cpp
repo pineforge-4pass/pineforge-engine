@@ -2823,6 +2823,31 @@ void PineExecutionAdapter::schedule_preopen_margin_slice(
         const double margin = opening.is_long ? config_.margin_long : config_.margin_short;
         if (!finite_positive(fx) || !finite_positive(margin)) continue;
         const double units = opening.sizing.frozen_units;
+        // Owner sequencing: the source broker evaluates the adverse excursion
+        // only AFTER the opening is admitted, and an all-in marketable stop
+        // entry that cannot be funded at its own fill price is declined there
+        // (ab9714be src/source/pine_fills.cpp:4618
+        // stop_entry_margin_admission_declines consumes the fill at :4741:
+        // required = qty * round_to_mintick(fill) * pointvalue * fx * margin,
+        // refused when it exceeds realized equity plus the same
+        // max(1e-9, |equity|*1e-12) guard; a gap-through fill price is the
+        // rounded open).  Arming the deferred close for such a candidate
+        // leaves a stale Reduce that a LATER bar's different opening matches:
+        // OANDA:XAUUSD 2025-06-01 22:00 sizes 3.1872003125 units against
+        // equity 10525.244578, costs 3.1872003125 * 3303.415 = 10528.64 at
+        // the open, so the owner never opens there -- its all-in long fills on
+        // the 22:15 open (3.18228862 * 3307.24 = 10524.59) as ONE lot.  The
+        // ETH feed's admitted all-in short (4.08281952 * 2463.00 against
+        // equity 10055.984463, cost 10055.984463) keeps its legitimate
+        // same-bar slice.
+        const double admission_cost = units * entry * staged_.syminfo.pointvalue
+            * fx * margin / 100.0;
+        const double admission_guard = std::max(
+            1e-9, std::abs(opening.sizing.equity) * 1e-12);
+        if (!std::isfinite(admission_cost)
+            || admission_cost > opening.sizing.equity + admission_guard) {
+            continue;
+        }
         const double unrealized = (opening.is_long ? adverse - entry : entry - adverse)
             * units * staged_.syminfo.pointvalue * fx;
         const double marked_equity = opening.sizing.equity + unrealized;
