@@ -21,6 +21,7 @@ set(TEST_SOURCES
     test_l10l_corpus_parity
     test_l10n_exit_reissue_after_close_all
     test_l10w_zero_qty_entry
+    test_l10x_reissued_limit_touch_bar
     test_l10q_pyramid_terrace_exit
     test_l10s_pyramiding_same_bar_ids
     test_l10t_partial_exit_residual
