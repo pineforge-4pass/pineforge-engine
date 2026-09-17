@@ -522,6 +522,30 @@ void source::PineStrategyHost::on_native_applied(
         throw std::overflow_error("source broker fill sequence exhausted");
     ++broker_fill_event_seq_;
     fold_exit_path_extremes_ = false;
+    if (position_side_ != PositionSide::FLAT) {
+        bool changed = false;
+        for (auto it = pyramid_entries_.begin(); it != pyramid_entries_.end(); ) {
+            if (it->qty <= internal::kQtyEpsilon) {
+                it = pyramid_entries_.erase(it);
+                changed = true;
+            } else {
+                ++it;
+            }
+        }
+        if (pyramid_entries_.empty() || position_qty_ <= internal::kQtyEpsilon) {
+            reset_position_state_to_flat();
+        } else if (changed) {
+            double total_qty = 0.0;
+            double weighted_price = 0.0;
+            for (const auto& pe : pyramid_entries_) {
+                total_qty += pe.qty;
+                weighted_price += pe.price * pe.qty;
+            }
+            position_qty_ = total_qty;
+            position_entry_price_ = weighted_price / total_qty;
+            position_entry_count_ = static_cast<int>(pyramid_entries_.size());
+        }
+    }
     adapter_.on_applied(event, context);
     if (adapter_.take_intraday_loss_relabel(event.ordinal)) {
         for (std::size_t i = 0; i < event.closed_trade_count; ++i) {
