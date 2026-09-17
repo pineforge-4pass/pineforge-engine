@@ -4847,7 +4847,10 @@ void PineExecutionAdapter::flush_pending_closes() {
         }
 
         const auto physical = require_host().physical_position();
-        const bool closes_full = site.target >= std::abs(physical.signed_units);
+        if (std::abs(physical.signed_units) <= internal::kQtyEpsilon) continue;
+        const double available = std::abs(physical.signed_units);
+        const double target = std::min(site.target, available);
+        const bool closes_full = target >= available - internal::kQtyEpsilon;
         if (closes_full) {
             cancel_exit_orders_for_full_close(site.id);
             const bool held_long = physical.signed_units > 0.0;
@@ -4863,19 +4866,20 @@ void PineExecutionAdapter::flush_pending_closes() {
         }
 
         native_order::Request request;
-        request.intent = native_order::Transact{
-            physical.signed_units > 0.0 ? -site.target : site.target};
+        request.intent = closes_full
+            ? native_order::OrderIntent{native_order::Flatten{}}
+            : native_order::OrderIntent{native_order::Reduce{native_order::ExplicitUnits{target}}};
         request.label = "__close__" + site.id;
         request.comment = site.comment;
         request.owner = native_order::Independent{};
         PlacementSnapshot snapshot;
-        snapshot.family = PineOrderFamily::Order;
+        snapshot.family = PineOrderFamily::Close;
         snapshot.source_id = site.id;
         snapshot.comment = site.comment;
-        snapshot.requested_qty = site.target;
-        snapshot.projection_remaining_qty = site.target;
-        snapshot.qty_percent = 100.0;
-        snapshot.is_long = physical.signed_units < 0.0;
+        snapshot.requested_qty = closes_full ? kNaN : target;
+        snapshot.projection_remaining_qty = target;
+        snapshot.qty_percent = closes_full ? 100.0 : (target / available * 100.0);
+        snapshot.is_long = false;
         snapshot.sizing = sizing_snapshot();
         snapshot.close_callsite_token = site.token;
         snapshot.close_batch_calls = static_cast<std::uint32_t>(site.calls);
@@ -6928,7 +6932,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             immediate.projection_predecessor_exit = true;
             const auto accepted = submit_or_replace(
                 std::move(request), std::move(immediate), false,
-                exit_id + "\\x1f" + from_entry
+                exit_id + "\x1f" + from_entry
                     + std::to_string(static_cast<int>(selected.snapshot.family)));
             if (accepted) {
                 (void)require_host().execute_current(
