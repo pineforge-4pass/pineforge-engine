@@ -9955,7 +9955,7 @@ bool PineExecutionAdapter::submit_margin_call_slice(
     }
     if (!(units > 0.0) && staged_.quantity_grid
         && *staged_.quantity_grid <= 1.0
-        && raw_minimum > kSliceQtyEpsilon && raw_minimum < 1.0) {
+        && raw_minimum > internal::kQtyEpsilon && raw_minimum < 1.0) {
         const double candidate = std::min(1.0, held);
         const double rounded = floor_quantity_grid(candidate, staged_.quantity_grid);
         const double guard = std::max(1e-12, std::abs(candidate) * 1e-12);
@@ -9965,7 +9965,7 @@ bool PineExecutionAdapter::submit_margin_call_slice(
     units = std::min(held, units);
     // ab9714be pine_fills.cpp:1708: the final slice quantity carries the same
     // slack gate, so a floored-to-dust restore closes nothing at all.
-    if (!(units > kSliceQtyEpsilon) || !std::isfinite(units)) return false;
+    if (!(units > internal::kQtyEpsilon) || !std::isfinite(units)) return false;
 
     if (execute_current) {
         // ab9714be pine_fills.cpp:1712-1726 books the entry-bar margin-call
