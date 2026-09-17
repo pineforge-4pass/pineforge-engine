@@ -475,7 +475,6 @@ execution::Result BacktestEngine::settle_reversal_with_lifecycle_v1(
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = current_bar_.timestamp;
     context.interval_index = bar_index_;
-    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
     if (!std::isnan(fold_exit_trail_peak_)) {
         context.preceding_exit_trail_peak = fold_exit_trail_peak_;
     }
@@ -491,7 +490,6 @@ execution::Result BacktestEngine::settle_execution_selected_with_lifecycle(
     execution::PhysicalExecutionContext context;
     context.effective_time_ms = current_bar_.timestamp;
     context.interval_index = bar_index_;
-    context.preceding_exit_path_prefix = fold_exit_path_extremes_;
     if (!std::isnan(fold_exit_trail_peak_)) {
         context.preceding_exit_trail_peak = fold_exit_trail_peak_;
     }

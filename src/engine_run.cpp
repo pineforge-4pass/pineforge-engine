@@ -207,7 +207,7 @@ void BacktestEngine::reset_run_state() {
     next_position_cycle_seq_ = 1;
     // Request incarnations are report provenance scoped to one run.
     next_order_incarnation_ = 1;
-    fold_exit_path_extremes_ = false;
+    lot_excursion_hook_ = nullptr;
     fold_exit_trail_peak_ = std::numeric_limits<double>::quiet_NaN();
 
     // Equity + position-size extremes.

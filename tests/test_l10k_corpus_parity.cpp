@@ -1,7 +1,7 @@
 // R4-D L10k: dual-stop both-touch fills the older book stop first
 // (order-dual-stop-both-touch-priority-01 #34/#35), and
 // order-stop-entry-reversal-grouping-01 replays identical to ab9714be
-// (half-tick native excursion clamp is exact, not "up to" half a tick).
+// (the host owns excursion accounting, so the half-tick residual is gone).
 // Bars are embedded from corpus/data/derived/ohlcv_ETH-USDT-USDT_15m.csv —
 // this test must never open corpus files (CI has no corpus checkout).
 #include "l4a_native_route_guard.hpp"
@@ -57,7 +57,7 @@ void expect_trade(const char* tag, const Trade& t, bool is_long,
     CHECK(near(t.entry_price, entry_px));
     CHECK(near(t.exit_price, exit_px));
     CHECK(near(t.pnl, pnl));
-    CHECK(near(t.max_runup, fav, 6e-3) /* half-tick excursion residual, L11a */);
+    CHECK(near(t.max_runup, fav) /* exact: host owns excursion, L11a */);
     CHECK(near(t.max_drawdown, adv));
 }
 

@@ -581,6 +581,13 @@ void source::PineStrategyHost::hash_source_extension(BrokerStateHashSink& f) con
     f.u(aux_security_chart_end_.size());
     for (const auto value : aux_security_chart_end_) f.u(value);
 #endif
+    // The margin slice's sampling chronology is resolved once per pending
+    // slice in the precommit pass and read back by the host's own excursion
+    // sampler at settlement, so it is folded rather than waived.
+    f.b(excursion_margin_prefix_);
+    // The TRAIL peak basis is the precommit view's pre-slip matcher price,
+    // which no durable snapshot re-derives at settlement.
+    f.d(excursion_trail_raw_price_);
     adapter_.hash_state(f); scheduler_.hash_state(f);
 }
 

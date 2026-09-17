@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <stdexcept>
 #include <optional>
+#include <functional>
 #include <pineforge/execution_consumer.hpp>
 #include "na.hpp"
 #include "bar.hpp"
@@ -184,6 +185,41 @@ struct StreamOrderAction {
 namespace internal {
 enum class DualEntryStopPathWinner : int;
 }
+
+// ────────────────────────────────────────────────────────────────────
+// Host-owned per-lot excursion accounting (RULING A48, one generic
+// capability).  A host that declares ownership of a lot's favorable/adverse
+// excursion supplies the closed-lot result from its own sampler; the kernel
+// then neither samples excursion at matched trigger prices nor folds bar-path
+// extremes into the closing row.  Everything below is source-blind: the facts
+// are the lot's own booking coordinates plus the carried extremes, and the
+// result is the two price-difference x quantity magnitudes the row reports.
+// ────────────────────────────────────────────────────────────────────
+struct ClosedLotExcursionFacts {
+    uint64_t entry_incarnation = 0;
+    int64_t entry_time_ms = 0;
+    double entry_price = 0.0;
+    double lot_qty = 0.0;
+    double closed_qty = 0.0;
+    double fill_price = 0.0;
+    double carried_favorable = 0.0;
+    double carried_adverse = 0.0;
+    bool is_long = true;
+    int entry_bar_index = -1;
+    int exit_bar_index = -1;
+    // The lot's own entry-bar excursion masks (PyramidEntry): the booking
+    // facts of a priced intrabar fill, carried across the boundary so the
+    // owner never has to be reachable from the closing row.
+    bool entry_bar_high_masked = false;
+    bool entry_bar_low_masked = false;
+};
+
+struct ClosedLotExcursion {
+    double favorable = 0.0;
+    double adverse = 0.0;
+};
+
+using LotExcursionHook = std::function<ClosedLotExcursion(const ClosedLotExcursionFacts&)>;
 
 struct PyramidEntry {
     double price;
@@ -715,12 +751,6 @@ protected:
     // multiple native matching calls (bar magnifier) and dual-pass
     // opposing-stop resolution (see NativeExecutionConsumer).
 
-    // Transient: true only while applying a priced (stop/limit/trail) fill
-    // (apply_filled_order_to_state). emit_close_trade reads it to fold the
-    // pre-exit-fill portion of the current bar's OHLC path into the closing
-    // trade's excursion (per-bar sampling can't see the exit bar — the
-    // pyramid entry is gone before the next update_per_trade_extremes).
-    bool fold_exit_path_extremes_ = false;
     // Transient companion for TRAIL exits: the trail's best (peak) price at
     // fill time. The peak that armed the trailing stop is by definition a
     // pre-fill favorable excursion of the closing trade (TV reports
@@ -893,6 +923,10 @@ protected:
     // loop's safe point (finish_intraday_loss_cancel); the loop itself
     // removes every order it has not yet applied.
     // @broker-state end
+    // Host-installed excursion capability (RULING A48).  Transient run
+    // wiring, not durable broker state: reset_run_state clears it and the
+    // consumer reinstalls it once per run when the host declares ownership.
+    LotExcursionHook lot_excursion_hook_;
     // Continuation digest at the last script point. Native batch teardown
     // moves the consumer into Completed and would otherwise change the scalar
     // relative to the recorded array; source state is still folded live so

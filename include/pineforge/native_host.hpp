@@ -462,6 +462,18 @@ public:
         return NativePrecommitVerdict::Admit;
     }
 
+    // RULING A48 — the ONE generic per-lot excursion capability. A host that
+    // returns true here takes ownership of every open lot's favorable/adverse
+    // excursion: the consumer stops sampling excursion at matched trigger
+    // prices and the closing row takes both magnitudes from
+    // closed_lot_excursion(). Facts in, magnitudes out; nothing about the
+    // host's price model crosses the boundary in either direction.
+    virtual bool owns_lot_excursions() const noexcept { return false; }
+    virtual ClosedLotExcursion closed_lot_excursion(
+            const ClosedLotExcursionFacts&) const {
+        return {};
+    }
+
     std::optional<NativeCurrentPointView> current_execution_point() const;
     std::optional<NativeTrailState> trail_state(
         const native_order::RequestHandle& target) const;

@@ -1478,6 +1478,17 @@ bool NativeExecutionConsumer::begin_ready(BacktestEngine& engine, NativeRunPhase
         return false;
     }
     engine.reset_run_state();
+    // RULING A48: one generic capability, wired once per run. A host that
+    // declares ownership supplies the closing-row magnitudes; the kernel then
+    // keeps no excursion model of its own for this run.
+    if (auto* excursion_owner = dynamic_cast<NativeStrategyHost*>(&engine)) {
+        if (excursion_owner->owns_lot_excursions()) {
+            engine.lot_excursion_hook_ =
+                [excursion_owner](const ClosedLotExcursionFacts& facts) {
+                    return excursion_owner->closed_lot_excursion(facts);
+                };
+        }
+    }
     engine.diag_input_bars_processed_ = 0;
     engine.diag_script_bars_processed_ = 0;
     requests_.reset(spec.identity);
@@ -1752,6 +1763,11 @@ void NativeExecutionConsumer::reserve_driver_log(std::size_t expected_points) {
 }
 
 void NativeExecutionConsumer::apply_excursion(BacktestEngine& engine, double price) {
+    // RULING A48: a host that declared ownership of per-lot excursion
+    // accounting samples its own lots, so the kernel keeps no excursion
+    // model for this run — neither at a matched trigger price nor at any
+    // point of the delivered path.
+    if (engine.lot_excursion_hook_) return;
     if (!std::isfinite(price)) return;
     for (auto& lot : engine.pyramid_entries_) {
         const bool is_long = engine.position_side_ == PositionSide::LONG;

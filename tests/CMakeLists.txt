@@ -18,6 +18,7 @@ set(TEST_SOURCES
     test_l10j_corpus_parity
     test_l10m_corpus_parity
     test_l10k_corpus_parity
+    test_l11a_host_excursion
     test_l10l_corpus_parity
     test_l10n_exit_reissue_after_close_all
     test_l10w_zero_qty_entry

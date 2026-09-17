@@ -25,68 +25,35 @@ bool priced_opening_trigger(const native_order::Trigger& trigger) {
         || std::holds_alternative<native_order::StopLimit>(trigger);
 }
 
-// ab9714be pine_fills.cpp:35-43. first_touch of the booked fill can miss the
-// open by 1 ulp after mintick snap (lot.price sits just above bar.open) and
-// land on the later re-cross, which is what skips the first path extreme.
-double entry_fill_path_position(const Bar& bar, double fill_price, double snapped,
-                                const native_order::MatchCursor& cursor) {
+// ab9714be pine_fills.cpp:35-44: a priced entry masks the extreme traversed
+// before the fill position on the assumed OHLC path.
+void set_entry_fill_excursion_masks(PyramidEntry& pe, const Bar& bar, double fill_price) {
     double fill_pos = 0.0;
-    bool ok = internal::first_touch_position(bar, fill_price, &fill_pos);
-    double snap_pos = 0.0;
-    if (internal::first_touch_position(bar, snapped, &snap_pos)
-        && (!ok || snap_pos > fill_pos)) {
-        fill_pos = snap_pos;
-        ok = true;
-    }
-    const bool high_first = internal::bar_path_uses_high_first(bar);
-    double cursor_pos = std::numeric_limits<double>::quiet_NaN();
-    switch (cursor.point.path_phase) {
-    case NativePathPhase::Open:
-        cursor_pos = 0.0;
-        break;
-    case NativePathPhase::High:
-        cursor_pos = (high_first ? 0.0 : 1.0) + cursor.t;
-        break;
-    case NativePathPhase::Low:
-        cursor_pos = (high_first ? 1.0 : 0.0) + cursor.t;
-        break;
-    case NativePathPhase::Close:
-        cursor_pos = 2.0 + cursor.t;
-        break;
-    case NativePathPhase::None:
-        break;
-    }
-    if (std::isfinite(cursor_pos) && (!ok || cursor_pos > fill_pos)) {
-        fill_pos = cursor_pos;
-        ok = true;
-    }
-    return ok ? fill_pos : std::numeric_limits<double>::quiet_NaN();
-}
-
-void set_entry_fill_excursion_masks(PyramidEntry& pe, const Bar& bar, double fill_pos) {
+    if (!internal::first_touch_position(bar, fill_price, &fill_pos)) return;
     const bool high_first = internal::bar_path_uses_high_first(bar);
     const double high_pos = high_first ? 1.0 : 2.0;
-    const double low_pos = high_first ? 2.0 : 1.0;
+    const double low_pos  = high_first ? 2.0 : 1.0;
     pe.skip_entry_bar_high = (high_pos < fill_pos);
-    pe.skip_entry_bar_low = (low_pos < fill_pos);
+    pe.skip_entry_bar_low  = (low_pos < fill_pos);
 }
 
-// ab9714be pine_risk.cpp:256-292. Native apply_excursion samples the remaining
-// path after the lot exists, so a skipped first extreme can still land in
-// max_runup. Replace the entry-bar sample with the masked H/L/C walk.
-void sample_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, PositionSide side,
-                                      int bar_index, const Bar& bar) {
+// The kernel still samples the delivered path at every driver point, which
+// can book an entry-bar extreme the owner masks out (a gap-through stop is
+// filled 1 ulp beyond the open). On the entry bar of a masked lot the host's
+// own masked H/L/C walk is authoritative, so it replaces whatever the path
+// sampling carried.
+
+void replace_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, PositionSide side,
+                                       int bar_index, const Bar& bar) {
     if (side == PositionSide::FLAT || lots.empty()) return;
     if (!std::isfinite(bar.high) || !std::isfinite(bar.low) || !std::isfinite(bar.close))
         return;
     const bool is_long = (side == PositionSide::LONG);
     for (auto& pe : lots) {
         if (pe.entry_bar_index != bar_index) continue;
-        const bool masked = pe.skip_entry_bar_high || pe.skip_entry_bar_low;
-        double pe_hi = bar.high;
-        double pe_lo = bar.low;
-        if (pe.skip_entry_bar_high) pe_hi = pe.price;
-        if (pe.skip_entry_bar_low) pe_lo = pe.price;
+        if (!pe.skip_entry_bar_high && !pe.skip_entry_bar_low) continue;
+        const double pe_hi = pe.skip_entry_bar_high ? pe.price : bar.high;
+        const double pe_lo = pe.skip_entry_bar_low ? pe.price : bar.low;
         const double fav_px = is_long ? pe_hi : pe_lo;
         const double adv_px = is_long ? pe_lo : pe_hi;
         const double favorable = is_long ? (fav_px - pe.price) * pe.qty
@@ -95,13 +62,8 @@ void sample_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, PositionS
                                        : (adv_px - pe.price) * pe.qty;
         const double closing = is_long ? (bar.close - pe.price) * pe.qty
                                        : (pe.price - bar.close) * pe.qty;
-        if (masked) {
-            pe.max_runup = std::max(0.0, std::max(favorable, closing));
-            pe.max_drawdown = std::max(0.0, std::max(adverse, -closing));
-        } else {
-            pe.max_runup = std::max(pe.max_runup, std::max(0.0, std::max(favorable, closing)));
-            pe.max_drawdown = std::max(pe.max_drawdown, std::max(0.0, std::max(adverse, -closing)));
-        }
+        pe.max_runup = std::max(0.0, std::max(favorable, closing));
+        pe.max_drawdown = std::max(0.0, std::max(adverse, -closing));
     }
 }
 
@@ -397,6 +359,15 @@ void source::PineStrategyHost::on_native_tick(
     if (source_prepare_failed_) return;
     if (native_state().phase == NativeRunPhase::Realtime)
         stream_warmup_mode_ = false;
+    {
+        // ab9714be pine_stream.cpp:298/:450 samples the excursion at every
+        // realtime print (a price point: H == L == C == print).
+        const int sample_index = scheduler_.bar_magnifier_enabled()
+            ? scheduler_.source_bar_index_for(context.decision)
+            : context.decision.coordinate.interval_index;
+        sample_open_trade_extremes(
+            pyramid_entries_, position_side_, sample_index, tick);
+    }
     scheduler_.tick(tick, context, *this);
     adapter_.on_tick(tick, context);
 }
@@ -426,7 +397,9 @@ void source::PineStrategyHost::on_native_bar(
         const int sample_index = scheduler_.bar_magnifier_enabled()
             ? scheduler_.source_bar_index_for(context)
             : context.coordinate.interval_index;
-        sample_masked_entry_bar_extremes(
+        sample_open_trade_extremes(
+            pyramid_entries_, position_side_, sample_index, bar);
+        replace_masked_entry_bar_extremes(
             pyramid_entries_, position_side_, sample_index, bar);
     }
     scheduler_.bar(bar, context, *this);
@@ -486,11 +459,6 @@ void source::PineStrategyHost::on_native_applied(
             const std::size_t index = event.first_trade_index + i;
             if (index >= trades_.size()) continue;
             trades_[index].exit_bar_index = source_index;
-            // Open-gap scratches book the script open on both legs; a 1-ULP
-            // entry/exit residual formats as CSV -0.000000 against owner's 0.
-            if (std::abs(trades_[index].exit_price - trades_[index].entry_price) < 1e-9
-                && trades_[index].max_drawdown < 5e-7)
-                trades_[index].max_drawdown = 0.0;
         }
     }
     // ab9714be pine_fills.cpp:42: a priced (stop/limit) entry masks the
@@ -499,15 +467,19 @@ void source::PineStrategyHost::on_native_applied(
     const bool pine_priced = p != adapter_.placement_.end()
         && ((std::isfinite(p->second.exit_levels.stop) && p->second.exit_levels.stop > 0.0)
             || (std::isfinite(p->second.exit_levels.limit) && p->second.exit_levels.limit > 0.0));
-    if (event.opened_units != 0.0 && pine_priced) {
-        const Bar& mask_bar = current_bar_;
-        for (auto& lot : pyramid_entries_) {
-            if (lot.entry_incarnation != event.handle().incarnation) continue;
-            const double snapped = bar_fill_price(lot.price);
-            const double fill_pos = entry_fill_path_position(
-                mask_bar, lot.price, snapped, event.cursor);
-            if (std::isfinite(fill_pos))
-                set_entry_fill_excursion_masks(lot, mask_bar, fill_pos);
+    if (event.opened_units != 0.0) {
+        if (pine_priced) {
+            const Bar& mask_bar = current_bar_;
+            for (auto& lot : pyramid_entries_) {
+                if (lot.entry_incarnation != event.handle().incarnation) continue;
+                set_entry_fill_excursion_masks(lot, mask_bar, lot.price);
+            }
+        } else if (event.cursor.point.path_phase == NativePathPhase::Close) {
+            for (auto& lot : pyramid_entries_) {
+                if (lot.entry_incarnation != event.handle().incarnation) continue;
+                lot.skip_entry_bar_high = true;
+                lot.skip_entry_bar_low = true;
+            }
         }
     }
     // The legacy source observer counted one broker fill for every committed
@@ -521,7 +493,11 @@ void source::PineStrategyHost::on_native_applied(
     if (broker_fill_event_seq_ == std::numeric_limits<std::uint64_t>::max())
         throw std::overflow_error("source broker fill sequence exhausted");
     ++broker_fill_event_seq_;
-    fold_exit_path_extremes_ = false;
+    excursion_priced_fill_ = false;
+    excursion_margin_call_ = false;
+    excursion_margin_prefix_ = false;
+    excursion_trail_offset_ticks_ = std::numeric_limits<double>::quiet_NaN();
+    excursion_trail_raw_price_ = std::numeric_limits<double>::quiet_NaN();
     if (position_side_ != PositionSide::FLAT) {
         bool changed = false;
         for (auto it = pyramid_entries_.begin(); it != pyramid_entries_.end(); ) {
@@ -571,9 +547,9 @@ native_order::ExecutionTerms source::PineStrategyHost::resolve_execution_terms(
 
 NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
         const NativePrecommitView& view) const {
-    // ab9714be pine_fills.cpp:5741: fold_exit_path_extremes_ is true only while
-    // applying a priced fill. Native leaves PhysicalExecutionContext's optional
-    // empty, so the close-trade builder reads this transient member instead.
+    // ab9714be pine_fills.cpp:5741: the exit-bar path prefix belongs to the
+    // closing lot's excursion only while a priced fill is being applied. The
+    // host's own sampler consumes this cache in closed_lot_excursion().
     bool priced = false;
     if (view.definition) {
         const auto& trigger = view.definition->request.trigger;
@@ -584,25 +560,142 @@ NativePrecommitVerdict source::PineStrategyHost::validate_execution_precommit(
     // pre-fill path extremes too; the magnifier one-price gate below applies
     // to it as well (L10h), which the former adapter-side override bypassed.
     priced = priced || adapter_.source_priced_exit(view.target.incarnation);
-    // Synthesized/distribution samples are one-price opens. Folding the full
-    // script-bar H/L against that fill (first_touch starts at segment 1)
-    // counts post-open extremes that ab9714be pine_risk.cpp:256 never sees:
-    // process_pending_orders already flattened the book.
-    bool magnifier_one_price = false;
+    // When an opposite market entry or script close is pending at the bar open,
+    // the legacy owner models the exit as the market order (closing the trade
+    // at the open without folding the exit bar's path).
     if (view.cursor.point.path_phase == NativePathPhase::Open
-        && view.cursor.point.provenance == NativePriceProvenance::ModeledOHLCOpen) {
-        const auto state = native_state();
-        if (state.spec) {
-            const auto* synthesized = state.spec->intrabar.synthesized_path();
-            const auto* lower = state.spec->intrabar.lower();
-            magnifier_one_price = synthesized != nullptr
-                || (lower && lower->sample_eligibility
-                    == IntrabarPath::SampleEligibility::DistributionSamples);
-        }
+        && adapter_.has_pending_market_exit(view.cursor.point.interval_index)) {
+        priced = false;
     }
-    const_cast<PineStrategyHost*>(this)->fold_exit_path_extremes_ =
-        priced && !magnifier_one_price;
+    double trail_ticks = std::numeric_limits<double>::quiet_NaN();
+    if (const auto off = adapter_.source_trail_offset_ticks(view.target.incarnation)) {
+        trail_ticks = *off;
+    }
+    excursion_priced_fill_ = priced;
+    excursion_margin_call_ = adapter_.source_margin_exit(view.target.incarnation);
+    excursion_trail_offset_ticks_ = trail_ticks;
+    // ab9714be pine_fills.cpp:5766-5770: the peak a TRAIL fill retraces from is
+    // taken off the matcher's pre-slip price, which this view still carries; the
+    // booked facts.fill_price the sampler reads has already been slipped by
+    // resolve_terms.
+    excursion_trail_raw_price_ =
+        (!std::isnan(trail_ticks) && std::isfinite(view.raw_price)
+         && view.raw_price > 0.0)
+            ? view.raw_price
+            : std::numeric_limits<double>::quiet_NaN();
+    // The margin slice's sampling chronology is a book fact resolved in the
+    // adapter precommit pass; start clean for every request.
+    excursion_margin_prefix_ = false;
     return adapter_.validate_precommit(view);
+}
+
+ClosedLotExcursion source::PineStrategyHost::closed_lot_excursion(
+        const ClosedLotExcursionFacts& facts) const {
+    // ab9714be engine_orders.cpp:319 build_close_trade_with_costs, excursion
+    // half. Everything here is the owner's model: the carried per-lot extremes
+    // already hold every completed source bar's masked H/L/C walk
+    // (sample_open_trade_extremes), scaled to the closed slice; the exit fill
+    // itself always belongs to the trade; a TRAIL fill retrace contributes the
+    // peak that armed it; and for a priced exit the assumed OHLC path prefix
+    // the fill sits behind is folded in, honoring the entry-bar masks when the
+    // lot opened on this same bar.
+    const double slice =
+        (facts.lot_qty > 0.0) ? (facts.closed_qty / facts.lot_qty) : 1.0;
+    double fill_fav =
+        (facts.is_long ? (facts.fill_price - facts.entry_price)
+                       : (facts.entry_price - facts.fill_price))
+        * facts.closed_qty;
+    // Open-gap scratches book the script open on both legs; a 1-ULP
+    // entry/exit residual formats as CSV -0.000000 against owner's 0.
+    if (std::abs(facts.fill_price - facts.entry_price) < 1e-9) {
+        fill_fav = 0.0;
+    }
+    ClosedLotExcursion owned;
+    owned.favorable = std::max(facts.carried_favorable * slice, fill_fav);
+    owned.adverse = std::max(facts.carried_adverse * slice, -fill_fav);
+    // ab9714be pine_fills.cpp:5766-5770: a TRAIL fill retraces exactly the
+    // trailing offset from the peak that armed it, so that peak is a pre-fill
+    // favorable excursion no bar-boundary sample ever sees.
+    if (!std::isnan(excursion_trail_offset_ticks_)) {
+        const double off = excursion_trail_offset_ticks_ * syminfo_.mintick;
+        const double basis = std::isnan(excursion_trail_raw_price_)
+                                 ? facts.fill_price
+                                 : excursion_trail_raw_price_;
+        const double peak = facts.is_long ? (basis + off) : (basis - off);
+        const double peak_fav = (facts.is_long ? (peak - facts.entry_price)
+                                               : (facts.entry_price - peak))
+                                * facts.closed_qty;
+        owned.favorable = std::max(owned.favorable, peak_fav);
+    }
+    // A range-end report row is a projection at the terminal close: the owner
+    // folds no exit-bar path prefix there. A market fill lands on a bar
+    // boundary the sampler already walked, and under the bar magnifier a
+    // one-price open bar has no path left to fold.
+    if (excursion_range_end_projection_) return owned;
+    if (excursion_margin_call_) {
+        // ab9714be pine_risk.cpp:256-292: a margin-call liquidation at the
+        // adverse extreme owns the rest of the bar. Which part of the bar it
+        // owns is the slice's birth chronology: the non-POOC opening trim
+        // inherits the complete bar, while the POOC/pre-exit prefix routes
+        // sample only the traversed waypoint prefix.
+        const Bar sample_bar = margin_call_sample_bar(
+            current_bar_, facts.fill_price, excursion_margin_prefix_,
+            internal::bar_path_uses_high_first(current_bar_),
+            syminfo_.mintick, config_.slippage);
+        const bool margin_same_bar = facts.entry_bar_index == facts.exit_bar_index;
+        const double margin_high = (margin_same_bar && facts.entry_bar_high_masked)
+                                       ? facts.entry_price : sample_bar.high;
+        const double margin_low = (margin_same_bar && facts.entry_bar_low_masked)
+                                      ? facts.entry_price : sample_bar.low;
+        const double fav_px = facts.is_long ? margin_high : margin_low;
+        const double adv_px = facts.is_long ? margin_low : margin_high;
+        const double fav = (facts.is_long ? (fav_px - facts.entry_price)
+                                          : (facts.entry_price - fav_px))
+                           * facts.closed_qty;
+        const double adv = (facts.is_long ? (facts.entry_price - adv_px)
+                                          : (adv_px - facts.entry_price))
+                           * facts.closed_qty;
+        owned.favorable = std::max(owned.favorable, fav);
+        owned.adverse = std::max(owned.adverse, adv);
+        const double closing = (facts.is_long ? (sample_bar.close - facts.entry_price)
+                                              : (facts.entry_price - sample_bar.close))
+                               * facts.closed_qty;
+        owned.favorable = std::max(owned.favorable, closing);
+        owned.adverse = std::max(owned.adverse, -closing);
+        return owned;
+    }
+    if (!excursion_priced_fill_) return owned;
+    if (scheduler_.bar_magnifier_enabled()
+        && std::abs(facts.fill_price - current_bar_.open) < 1e-7) {
+        return owned;
+    }
+    const double touch_price = bar_fill_price(facts.fill_price);
+    double fill_pos = 0.0;
+    if (!internal::first_touch_position(current_bar_, touch_price, &fill_pos))
+        return owned;
+    const bool high_first = internal::bar_path_uses_high_first(current_bar_);
+    const double high_pos = high_first ? 1.0 : 2.0;
+    const double low_pos = high_first ? 2.0 : 1.0;
+    const bool same_bar = facts.entry_bar_index == facts.exit_bar_index;
+    const bool mask_high = same_bar && facts.entry_bar_high_masked;
+    const bool mask_low = same_bar && facts.entry_bar_low_masked;
+    if (high_pos < fill_pos && !mask_high) {
+        const double hi_fav = (facts.is_long
+                                   ? (current_bar_.high - facts.entry_price)
+                                   : (facts.entry_price - current_bar_.high))
+                              * facts.closed_qty;
+        owned.favorable = std::max(owned.favorable, hi_fav);
+        owned.adverse = std::max(owned.adverse, -hi_fav);
+    }
+    if (low_pos < fill_pos && !mask_low) {
+        const double lo_fav = (facts.is_long
+                                   ? (current_bar_.low - facts.entry_price)
+                                   : (facts.entry_price - current_bar_.low))
+                              * facts.closed_qty;
+        owned.favorable = std::max(owned.favorable, lo_fav);
+        owned.adverse = std::max(owned.adverse, -lo_fav);
+    }
+    return owned;
 }
 
 void source::PineStrategyHost::configure_pine_strategy(const PineStrategyConfig& config) {
@@ -911,7 +1004,12 @@ double source::PineStrategyHost::observe_trail_best_price_v1() const {
 
 void source::PineStrategyHost::adapter_label_bracket_trades(
         const native_order::ExecutionAppliedEvent& event, bool from_bracket,
-        bool normalize_resting_stop_drawdown) {
+        bool /*normalize_resting_stop_drawdown*/) {
+    // RULING A48: the resting-stop fill-based drawdown normalization the third
+    // argument used to request is carried by this host's own sampler now --
+    // closed_lot_excursion() books the closing lot's magnitudes after the fill
+    // and its per-bar walk stops with the lot, so a settled resting stop can no
+    // longer inherit a post-fill bar extreme that has to be capped away.
     // ab9714be pine_fills.cpp:6232-6252: every trade row emitted by a real
     // strategy.exit leg carries the bracket cause; strategy.close and
     // close_all requests remain script closes.
@@ -920,23 +1018,6 @@ void source::PineStrategyHost::adapter_label_bracket_trades(
         if (index >= trades_.size()) continue;
         auto& trade = trades_[index];
         trade.exit_from_bracket = from_bracket;
-        if (normalize_resting_stop_drawdown) {
-            const double adverse = (trade.is_long
-                ? trade.entry_price - trade.exit_price
-                : trade.exit_price - trade.entry_price)
-                * trade.qty * syminfo_.pointvalue * active_account_currency_fx();
-            // The legacy POOC pass settles an old bracket before the full-bar
-            // excursion update. Native confirms the complete waypoint first,
-            // so cap (rather than replace) the drawdown at the stop fill plus
-            // the already-paid entry commission; an earlier, larger adverse
-            // excursion remains authoritative.
-            const double exit_commission = calc_commission(
-                trade.exit_price, trade.qty);
-            const double entry_commission = trade.commission - exit_commission;
-            const double adverse_at_stop = std::max(
-                0.0, adverse + std::max(0.0, entry_commission));
-            trade.max_drawdown = std::min(trade.max_drawdown, adverse_at_stop);
-        }
     }
 }
 
@@ -1254,11 +1335,11 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     const auto saved_timestamp = current_bar_.timestamp;
     current_bar_.timestamp = equity_curve_.back().time_ms;
     double range_end_pnl = 0.0;
+    excursion_range_end_projection_ = true;
     for (const auto& lot : pyramid_entries_) {
         execution::PhysicalExecutionContext context;
         context.effective_time_ms = current_bar_.timestamp;
         context.interval_index = bar_index_;
-        context.preceding_exit_path_prefix = fold_exit_path_extremes_;
         if (!std::isnan(fold_exit_trail_peak_))
             context.preceding_exit_trail_peak = fold_exit_trail_peak_;
         Trade row = build_close_trade_with_costs(
@@ -1269,6 +1350,7 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
         range_end_pnl += row.pnl;
         range_end_trades_.push_back(std::move(row));
     }
+    excursion_range_end_projection_ = false;
     current_bar_.timestamp = saved_timestamp;
     auto& last = equity_curve_.back();
     last.open_profit = 0.0;

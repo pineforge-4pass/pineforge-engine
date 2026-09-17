@@ -477,6 +477,15 @@ struct PineRiskState {
     bool intraday_cancel_pending = false;
 };
 
+// ab9714be pine_risk.cpp:256-292 (update_per_trade_extremes): the source
+// host's per-lot excursion sampler. Folds one completed source bar's H/L/C
+// into every open lot, honoring the entry-bar masks. Shared by the bar-close
+// walk, the stream tick walk and the margin-call submit preload.
+void sample_open_trade_extremes(std::vector<PyramidEntry>& lots,
+                                PositionSide side, int bar_index, const Bar& bar);
+Bar margin_call_sample_bar(const Bar& bar, double fire_price, bool prefix_sample,
+                           bool high_first, double mintick = 0.0, int slippage = 0);
+
 class PineExecutionAdapter;
 
 // Allocation-free view facade for Appendix C's later C projection. L2 does
@@ -569,6 +578,9 @@ public:
     // True when the request is a source exit leg carrying priced stop, limit
     // or trailing terms (L10j): its trade row folds the pre-fill path extremes.
     bool source_priced_exit(std::uint64_t incarnation) const noexcept;
+    std::optional<double> source_trail_offset_ticks(std::uint64_t incarnation) const noexcept;
+    bool source_margin_exit(std::uint64_t incarnation) const noexcept;
+    bool has_pending_market_exit(int current_interval_index = -1) const noexcept;
     void on_bar_open(const Bar&, const NativeDecisionContext&);
     void on_tick(const Bar&, const NativeTickContext&);
     // Called from the generic calculation callback after the source script
