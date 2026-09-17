@@ -28,6 +28,7 @@ set(TEST_SOURCES
     test_l10s_pyramiding_same_bar_ids
     test_l10t_partial_exit_residual
     test_l10z_review_fixes
+    test_l10ae_allowance_refresh_liveness
     test_l10y_full_equity_entry_split
     test_l10ac_full_equity_single_lot
     test_l10r_dual_stop_same_bar_order
