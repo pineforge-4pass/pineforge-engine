@@ -4356,12 +4356,47 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 inspect_pending(prior->second);
             }
         }
-        const bool same_side = current != 0.0 && ((current > 0.0) == is_long);
+        std::size_t same_side_pending = 0;
+        for (const auto& pending : pending_same_bar_commands_) {
+            if (pending.opening && pending.snapshot.is_long == is_long
+                && pending.snapshot.source_id != id
+                && !pending.snapshot.projection_over_pyramiding) {
+                ++same_side_pending;
+            }
+        }
+        for (const auto& pending : pending_entries_) {
+            if (pending.snapshot.opening && pending.snapshot.is_long == is_long
+                && pending.snapshot.source_id != id
+                && !pending.snapshot.projection_over_pyramiding) {
+                ++same_side_pending;
+            }
+        }
+        if (const auto point = require_host().current_execution_point()) {
+            for (const auto& handle : live_handles_) {
+                const auto prior = placement_.find(handle.incarnation);
+                if (prior == placement_.end()
+                    || prior->second.placement_script_open_ms
+                        != point->decision.script_bar_open_ms) {
+                    continue;
+                }
+                if (prior->second.opening && prior->second.is_long == is_long
+                    && prior->second.source_id != id
+                    && !prior->second.projection_over_pyramiding) {
+                    ++same_side_pending;
+                }
+            }
+        }
+        const bool same_side = (current != 0.0 && ((current > 0.0) == is_long))
+            || (current == 0.0 && same_side_pending > 0);
+        const std::size_t current_lots =
+            (current != 0.0 && ((current > 0.0) == is_long))
+                ? require_host().physical_position().lot_count
+                : 0U;
+        const std::size_t total_entries = current_lots + same_side_pending;
         const bool over_cap = same_side
-            && (config_.pyramiding == 0
+            && ((config_.pyramiding == 0 && total_entries >= 1U)
                 || (config_.pyramiding > 0
-                    && require_host().physical_position().lot_count
-                        >= static_cast<std::size_t>(config_.pyramiding)));
+                    && total_entries >= static_cast<std::size_t>(config_.pyramiding)));
         snapshot.projection_over_pyramiding = over_cap;
         if (current == 0.0) {
             for (const auto& handle : live_handles_) {
