@@ -1842,6 +1842,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             named_entry_cancel_tokens_.erase(token);
         }
     }
+    // ab9714be pine_strategy_commands.cpp:497: order records created_position_cycle_seq from current cycle
     if (snapshot.placement_cycle == 0)
         snapshot.placement_cycle = current_position_cycle_;
     if (snapshot.birth.cause() == OrderBirthCause::Unattributed)
@@ -2207,6 +2208,7 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                             retained_source_sequence = predecessor_snapshot->source_sequence;
                         }
                     }
+                    // ab9714be pine_strategy_commands.cpp:482: same-id entry replacement preserves created_seq (preserved_seq > 0)
                     if ((family == PineOrderFamily::Entry && snapshot.family == PineOrderFamily::Entry)
                         || (family == PineOrderFamily::Order && snapshot.family == PineOrderFamily::Order)) {
                         retained_source_sequence = predecessor_snapshot->source_sequence;
@@ -2439,6 +2441,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
             || snapshot.family == PineOrderFamily::ExitTrail
             || snapshot.family == PineOrderFamily::Close;
         if (!exit || snapshot.from_entry != from_entry) return;
+        // ab9714be pine_orders.cpp:599-602: close reservations only apply to positions matching active position_cycle_seq_
         if (snapshot.family == PineOrderFamily::Close
             && snapshot.placement_cycle != 0
             && snapshot.placement_cycle < current_position_cycle_) {
@@ -3306,6 +3309,7 @@ void PineExecutionAdapter::retire_in_position_exits_at_flat(
 // minimum is kept as a documented fallback for a re-issued exit whose row was
 // bound to no entry (it preserves the historical ordering of those rows);
 // UINT64_MAX is returned only when the exit id has no placement row at all.
+// ab9714be pine_fills.cpp:664-670: candidate exit fills tie-break by order creation sequence created_seq
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
         const SourceId& exit_id, const SourceId& from_entry) const noexcept {
     std::uint64_t paired = std::numeric_limits<std::uint64_t>::max();
@@ -4026,6 +4030,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
         }
         for (const auto& handle : live_handles_) {
             const auto placement = placement_.find(handle.incarnation);
+            // ab9714be pine_strategy_commands.cpp:446-464: remove_same_id_pending_orders excludes replaced id before pyramiding check
             if (placement != placement_.end() && placement->second.opening
                 && placement->second.source_id != id
                 && placement->second.is_long == is_long) ++accepted_in_cycle;
@@ -4139,6 +4144,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             ? nearest_tick(source_point->price, staged_.syminfo.mintick) : kNaN;
         const bool marketable = finite_positive(signal)
             && (is_long ? stop_price <= signal : stop_price >= signal);
+        // ab9714be pine_strategy_commands.cpp:325-328: pure stop placement sizing price includes directional slippage ticks
         const double slip = (is_long ? 1.0 : -1.0) * config_.slippage * staged_.syminfo.mintick;
         default_stop_sizing_price = (marketable ? signal : stop_price) + slip;
     }
@@ -4370,6 +4376,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 return prior != placement_.end()
                     && is_opposite_market_predecessor(prior->second);
             });
+        // ab9714be pine_pending_intent.hpp:507-537: placement_has_opposite_market_predecessor reverses against same-bar predecessor
         if (snapshot.projection_opposite_market_predecessor) {
             request.intent = native_order::HostSized{native_order::HostSizedKind::Open,
                 is_long ? native_order::Side::Long : native_order::Side::Short};
@@ -4462,6 +4469,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             || config_.default_qty_type == static_cast<int>(QtyType::CASH)) {
             snapshot.sizing.frozen_units = default_sizing_units(snapshot.sizing);
         }
+        // ab9714be pine_fills.cpp:7139: non-pure-stop priced entries size at fill time using calc_qty(fill_price)
         snapshot.sizing.at_fill = (config_.calc_on_order_fills && coof_recalc_active_)
             || (priced && !default_stop_scope);
     }
@@ -4700,6 +4708,7 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
             (current != 0.0 && ((current > 0.0) == is_long))
                 ? require_host().physical_position().lot_count
                 : 0U;
+        // ab9714be pine_orders.cpp:737-740: add_to_pyramid_market rejects entry when position_entry_count_ >= pyramiding
         const std::size_t total_entries = current_lots + same_side_pending;
         const bool over_cap = same_side
             && ((config_.pyramiding == 0 && total_entries >= 1U)
@@ -5151,9 +5160,11 @@ void PineExecutionAdapter::flush_pending_closes() {
         }
 
         const auto physical = require_host().physical_position();
+        // ab9714be pine_strategy_commands.cpp:694-696: strategy_close returns immediately when position is flat (<= kQtyEpsilon)
         if (std::abs(physical.signed_units) <= internal::kQtyEpsilon) continue;
         const double available = std::abs(physical.signed_units);
         const double target = std::min(site.target, available);
+        // ab9714be pine_orders.cpp:344: close within kQtyEpsilon of held position executes Flatten action
         const bool closes_full = target >= available - internal::kQtyEpsilon;
         if (closes_full) {
             cancel_exit_orders_for_full_close(site.id);
@@ -5296,6 +5307,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
     // strategy.close form.  It is not a cohort lookup (there is no empty
     // entry-id cohort), and it retains its caller-supplied report comment.
     if (id.empty()) {
+        // ab9714be pine_strategy_commands.cpp:694-696: strategy_close returns immediately when physical position is flat
         if (require_host().physical_position().signed_units == 0.0) return;
         const std::uint64_t command_ordinal = ++command_ordinal_;
         if (const auto point = require_host().current_execution_point()) {
@@ -5433,6 +5445,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
                 const auto found = placement_.find(handle.incarnation);
                 if (found == placement_.end()) continue;
                 PlacementSnapshot entry_snapshot = found->second;
+                // ab9714be pine_fills.cpp:3848-3856: full market close processes before opposite entry so entry executes after close
                 entry_snapshot.paired_reversal_parent = *accepted;
                 entry_snapshot.market_admission = {};
                 const auto result = require_host().cancel(handle);
@@ -5481,6 +5494,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         || std::any_of(
         pending_same_bar_commands_.begin(), pending_same_bar_commands_.end(),
         [&](const PendingSameBarCommand& pc) { return pc.snapshot.source_id == id; });
+    // ab9714be pine_strategy_commands.cpp:2254-2256: compute_close_target_qty drops close when target unclosed quantity is zero
     if (!config_.process_orders_on_close && !id.empty() && !(cohort_exposure_for(id) > 0.0)
         && !has_pending_entry) {
         record_dropped_close(id, comment, qty, qty_percent, immediately, callsite_token);
@@ -5714,6 +5728,7 @@ void PineExecutionAdapter::close(const SourceId& id, const std::string& comment,
         snapshot.frozen_market_target_was_long = current > 0.0;
         snapshot.birth = capture_order_birth();
         snapshot.sizing = sizing_snapshot();
+        // ab9714be pine_orders.cpp:599-601: exit/close orders bind owner to active position_cycle_seq_
         snapshot.placement_cycle = current_position_cycle_;
         if (const auto point = require_host().current_execution_point()) {
             snapshot.placement_script_open_ms = point->decision.script_bar_open_ms;
@@ -6038,6 +6053,7 @@ void PineExecutionAdapter::close_all() {
                 const auto found = placement_.find(handle.incarnation);
                 if (found == placement_.end()) continue;
                 PlacementSnapshot entry_snapshot = found->second;
+                // ab9714be pine_fills.cpp:3848-3856: full market close processes before opposite entry so entry executes after close
                 entry_snapshot.paired_reversal_parent = *accepted;
                 entry_snapshot.market_admission = {};
                 const auto result = require_host().cancel(handle);
@@ -6628,6 +6644,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             snapshot.birth_reach = exit_birth_reach;
             snapshot.trail_activation_level = trail_price;
             snapshot.sizing = exit_sizing;
+            // ab9714be pine_fills.cpp:2680-2696: update_trail_best_for_bar_open initializes running extreme from placement bar close
             if (family == PineOrderFamily::ExitTrail && std::isfinite(exit_sizing.price))
                 snapshot.retained_trail_best = exit_sizing.price;
             snapshot.placement_cycle = current_position_cycle_;
@@ -7068,6 +7085,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             native_order::Owner owner = !config_.close_entries_rule_any && origin_opened
                 ? native_order::Owner{native_order::Independent{}}
                 : native_order::Owner{native_order::BindCohort{cohort}};
+            // ab9714be pine_orders.cpp:483-488: cancel_oca_group scopes cancellation strictly to matching oca_name group
             submit_one(std::move(owner), true, replacement_key,
                        group_for(group_name, 1, static_cast<std::int64_t>(family)),
                        !has_live_leg, origin);
@@ -7120,6 +7138,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             && std::isfinite(source_trail_offset)
             && std::floor(source_trail_offset) == 0.0;
         if (finite_positive(tick)) {
+            // ab9714be pine_fills.cpp:4592-4593: exit direction uses physical position side or exit intent direction
             const bool buy_close = physical.signed_units != 0.0
                 ? physical.signed_units < 0.0 : exit_is_buy;
             const auto point = require_host().current_execution_point();
@@ -7167,6 +7186,8 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // (zz-pop-stevenygabbyperez-fast-scalper-with-stops short exit
             // 2025-04-02 22:00Z, activation 1870.0 - 3741 * 0.01: owner
             // 1832.5900000000001, re-spelled 1832.59).
+            // ab9714be pine_fills.cpp:4607-4610: snap_trail_level_to_tick_grid
+            // aligns the trail level to the tick grid (sell one-shot).
             if (!exit_is_buy) {
                 one_shot_level = source_level_on_price_grid(one_shot_level, tick);
             }
@@ -7174,11 +7195,13 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                        native_order::Limit{one_shot_level});
         } else if (native_trail_offset) {
             std::optional<double> native_arm_price = native_trail_price;
+            // ab9714be engine_path_resolve.cpp:464-479: trailing exit already reached at placement arms immediately
             if (trail_already_reached)
                 native_arm_price.reset();
             submit_leg(PineOrderFamily::ExitTrail, native_order::Trail{
                 *native_trail_offset, native_arm_price});
         } else if (trail_already_reached) {
+            // ab9714be engine_path_resolve.cpp:634-639: omitted-offset trail already active at placement is marketable at next open
             // An omitted offset that was already activated at placement is
             // marketable at the next open.
             submit_leg(PineOrderFamily::ExitTrail, native_order::Market{});
@@ -8192,10 +8215,12 @@ void PineExecutionAdapter::order(const SourceId& id, bool is_long, double qty,
         point && cap_placement_denied(point->decision)) {
         return;
     }
+    // ab9714be pine_strategy_commands.cpp:2120-2203: strategy.order appends to pending book after earlier script commands
     if (!pending_same_bar_commands_.empty()) {
         source_batch_mutated_ = true;
         flush_pending_same_bar_commands();
     }
+    // ab9714be pine_strategy_commands.cpp:2120-2203: strategy.order commits after preceding pending entries in source order
     if (!pending_entries_.empty()) {
         flush_pending_entries();
     }
@@ -8426,6 +8451,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         && std::holds_alternative<native_order::Limit>(facts.definition->request.trigger);
     const auto* trail_active = std::get_if<native_order::TrailActive>(&facts.trigger_state);
     const auto retained_trail_source_price = [&]() -> std::optional<double> {
+        // ab9714be engine_path_resolve.cpp:494-510: explicit zero trail rides running best and does not offset trigger level
         if (!std::isfinite(source.retained_trail_best)
             || !std::isfinite(source.exit_levels.trail_offset)
             || source.exit_levels.trail_offset < 0.0
@@ -8677,6 +8703,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             && non_open) {
             const double ticked = directional_tick(*facts.trigger_level, staged_.syminfo.mintick,
                                                    !facts.is_buy);
+            // ab9714be pine_fills.cpp:7970-7988: limit fill is unslipped limit-or-better clamped to trigger to preserve limit invariant
             return facts.is_buy ? std::min(ticked, *facts.trigger_level)
                                 : std::max(ticked, *facts.trigger_level);
         }
@@ -8690,6 +8717,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             }
             return source_bar_fill_tick(facts.raw_price, staged_.syminfo.mintick);
         }
+        // ab9714be engine_path_resolve.cpp:365-367: stop-limit fills at unslipped stop activation price when marketable against limit
         if (std::holds_alternative<native_order::StopLimit>(trigger)) {
             return directional_tick(facts.raw_price, staged_.syminfo.mintick,
                                     !facts.is_buy);
@@ -8739,6 +8767,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             result.resolved_price = source_bar_fill();
         } else if (limit_fill) {
             result.resolved_price = source_limit_fill();
+        // ab9714be pine_fills.cpp:8004-8020: Order-family stop triggers resolve fill price via source stop resolution
         } else if ((source.family == PineOrderFamily::Entry
                     || source.family == PineOrderFamily::Order)
                    && std::holds_alternative<native_order::Stop>(trigger)
@@ -9164,6 +9193,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         sizing.fx = fx;
         sizing.mark = price;
         sizing.equity = equity;
+        // ab9714be pine_policy_members.cpp:282: default sizing units divides equity by price, pointvalue, and currency fx
         result.units = default_sizing_units(sizing);
     }
     const auto created_side = static_cast<PositionSide>(source.projection_position_side);
@@ -9465,6 +9495,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
     return result;
 }
 
+// ab9714be pine_fills.cpp:5736-5744: priced exit fills flag fold_exit_path_extremes_ to fold pre-fill path excursion
 bool PineExecutionAdapter::source_priced_exit(std::uint64_t incarnation) const noexcept {
     const auto snapshot = placement_.find(incarnation);
     if (snapshot == placement_.end()) return false;
@@ -9610,6 +9641,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     || prior.is_long != source.is_long
                     || !finite_positive(prior.exit_levels.stop)
                     || finite_positive(prior.exit_levels.limit)
+                    // ab9714be pine_fills.cpp:3895-3899: stable_sort orders touched entry stops by created_seq (source_sequence)
                     || prior.source_sequence >= source.source_sequence) {
                     continue;
                 }
@@ -12384,6 +12416,7 @@ void PineExecutionAdapter::rearm_throttled_reopens() {
                 : policy_script_bar_.low <= snapshot.exit_levels.stop);
         // The kernel already walked past the nearer stop. Keep the owner's
         // fill price (the stop level) instead of the current path quote.
+        // ab9714be pine_fills.cpp:8008-8018: round_to_mintick_directional rounds touched stop execution price to tick
         snapshot.forced_execution_price = (same_dir && already_touched)
             ? (finite_positive(staged_.syminfo.mintick)
                 ? directional_tick(snapshot.exit_levels.stop, staged_.syminfo.mintick, snapshot.is_long)
@@ -12952,6 +12985,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail)
         && event.closed_units > 0.0 && live_position != 0.0
+        // ab9714be pine_orders.cpp:330-337: execute_partial_exit_qty recognizes explicit requested quantity reductions
         && ((std::isfinite(placement_snapshot->requested_qty) && placement_snapshot->requested_qty > 0.0)
             || (std::isfinite(placement_snapshot->qty_percent) && placement_snapshot->qty_percent < 100.0 - 1e-9))) {
         const bool sibling_leg_still_live = std::any_of(
@@ -13636,6 +13670,7 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             const auto found = placement_.find(handle.incarnation);
             if (found == placement_.end()) continue;
             const auto family = found->second.family;
+            // ab9714be pine_orders.cpp:530-534: purge_exit_orders retires all exit and close orders when position flattens
             if (family == PineOrderFamily::ExitLimit
                 || family == PineOrderFamily::ExitStop
                 || family == PineOrderFamily::ExitTrail

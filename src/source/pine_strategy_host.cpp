@@ -414,6 +414,7 @@ void source::PineStrategyHost::on_native_bar(
                         && std::isfinite(snap.exit_levels.stop) && snap.exit_levels.stop > 0.0
                         && !std::isfinite(snap.exit_levels.limit);
                     if (pure_stop_entry) {
+                        // ab9714be pine_risk.cpp:276-282: update_per_trade_extremes measures adverse excursion against opposite extreme
                         if (lot.price > bar.high && std::isfinite(bar.low) && bar.low > 0.0) {
                             lot.max_drawdown = std::max(lot.max_drawdown, (lot.price - bar.low) * lot.qty);
                         } else if (lot.price < bar.low && std::isfinite(bar.high) && bar.high > 0.0) {
@@ -499,6 +500,7 @@ void source::PineStrategyHost::on_native_applied(
     excursion_trail_offset_ticks_ = std::numeric_limits<double>::quiet_NaN();
     excursion_trail_raw_price_ = std::numeric_limits<double>::quiet_NaN();
     if (position_side_ != PositionSide::FLAT) {
+        // ab9714be engine_orders.cpp:531-541: settle_position_after_partial_exit resets to flat when position_qty_ <= kQtyEpsilon or empty
         bool changed = false;
         for (auto it = pyramid_entries_.begin(); it != pyramid_entries_.end(); ) {
             if (it->qty <= internal::kQtyEpsilon) {
@@ -1376,6 +1378,7 @@ void source::PineStrategyHost::scheduler_record_range_end(const Bar& terminal_ba
     current_bar_ = saved;
 }
 
+// ab9714be pine_fills.cpp:664-670: same-bar bracket exit trades sort by script command sequence created_seq
 static void sort_same_bar_exit_trades(std::vector<Trade>& trades,
                                       const source::PineExecutionAdapter& adapter) {
     if (trades.size() < 2) return;
