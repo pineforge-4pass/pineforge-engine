@@ -82,7 +82,7 @@ void sample_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, PositionS
     const bool is_long = (side == PositionSide::LONG);
     for (auto& pe : lots) {
         if (pe.entry_bar_index != bar_index) continue;
-        if (!pe.skip_entry_bar_high && !pe.skip_entry_bar_low) continue;
+        const bool masked = pe.skip_entry_bar_high || pe.skip_entry_bar_low;
         double pe_hi = bar.high;
         double pe_lo = bar.low;
         if (pe.skip_entry_bar_high) pe_hi = pe.price;
@@ -95,8 +95,13 @@ void sample_masked_entry_bar_extremes(std::vector<PyramidEntry>& lots, PositionS
                                        : (adv_px - pe.price) * pe.qty;
         const double closing = is_long ? (bar.close - pe.price) * pe.qty
                                        : (pe.price - bar.close) * pe.qty;
-        pe.max_runup = std::max(0.0, std::max(favorable, closing));
-        pe.max_drawdown = std::max(0.0, std::max(adverse, -closing));
+        if (masked) {
+            pe.max_runup = std::max(0.0, std::max(favorable, closing));
+            pe.max_drawdown = std::max(0.0, std::max(adverse, -closing));
+        } else {
+            pe.max_runup = std::max(pe.max_runup, std::max(0.0, std::max(favorable, closing)));
+            pe.max_drawdown = std::max(pe.max_drawdown, std::max(0.0, std::max(adverse, -closing)));
+        }
     }
 }
 
@@ -490,7 +495,11 @@ void source::PineStrategyHost::on_native_applied(
     }
     // ab9714be pine_fills.cpp:42: a priced (stop/limit) entry masks the
     // assumed-OHLC extreme the path reaches BEFORE the fill.
-    if (event.opened_units != 0.0 && priced_opening_trigger(event.request().trigger)) {
+    const auto p = adapter_.placement_.find(event.handle().incarnation);
+    const bool pine_priced = p != adapter_.placement_.end()
+        && ((std::isfinite(p->second.exit_levels.stop) && p->second.exit_levels.stop > 0.0)
+            || (std::isfinite(p->second.exit_levels.limit) && p->second.exit_levels.limit > 0.0));
+    if (event.opened_units != 0.0 && pine_priced) {
         const Bar& mask_bar = current_bar_;
         for (auto& lot : pyramid_entries_) {
             if (lot.entry_incarnation != event.handle().incarnation) continue;
