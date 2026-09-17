@@ -2369,7 +2369,14 @@ void PineExecutionAdapter::record_dropped_close(
 double PineExecutionAdapter::quantize_close_units(double basis, double percent) const noexcept {
     if (!std::isfinite(basis) || basis <= 0.0 || !std::isfinite(percent) || percent <= 0.0)
         return 0.0;
-    if (percent == 100.0) return basis;
+    // ab9714be pine_fills.cpp:6893-6896: `is_partial` is decided by
+    // `qp < 100.0 - kFullPercentEps`, so a reservation percentage that only
+    // misses 100 by the binary64 rounding of `reserved / live_basis * 100`
+    // (pine_fills.cpp:7124) is a FULL exit and books the whole live basis.
+    // Sizing it through the multiply/grid floor instead leaves a sub-lot dust
+    // remainder that never flattens (ab9714be pine_fills.cpp:1618 spells the
+    // same whole-position coverage as `qty - kQtyEpsilon`).
+    if (percent >= 100.0 - internal::kFullPercentEps) return basis;
     double units = basis * percent / 100.0;
     if (!std::isfinite(units) || units <= 0.0) return 0.0;
     return quantize_percent_exit_units(units, basis);
@@ -2496,7 +2503,7 @@ bool PineExecutionAdapter::compute_exit_reservation(
         // that exposure by 100/100 can round down by one binary64 step and
         // turn the legacy execute_market_exit branch into a dust reduction
         // (ab9714be:src/source/pine_fills.cpp:6893-6932; A33).
-        double requested = qty_percent == 100.0
+        double requested = qty_percent >= 100.0 - kFullPercentEpsilon
             ? live_basis : live_basis * qty_percent / 100.0;
         if (qty_percent < 100.0 - kFullPercentEpsilon) {
             requested = quantize_percent_exit_units(requested, available);
@@ -2662,7 +2669,14 @@ void PineExecutionAdapter::reconcile_deferred_exit_reservations(
             && std::isfinite(family.existing)) {
             units = std::min(family.existing, available);
         } else {
-            double requested = live_basis * family.percent / 100.0;
+            // ab9714be pine_fills.cpp:6893-6896: a reservation percentage
+            // inside kFullPercentEps of 100 is a FULL exit, so it owns the
+            // exact live exposure. Recomputing `live_basis * 100 / 100` can
+            // land one binary64 step low and strand a sub-lot dust remainder
+            // that never flattens (ab9714be pine_fills.cpp:1618 spells the
+            // same whole-position coverage as `qty - kQtyEpsilon`).
+            double requested = family.percent >= 100.0 - kFullPercentEpsilon
+                ? live_basis : live_basis * family.percent / 100.0;
             if (family.percent < 100.0 - kFullPercentEpsilon) {
                 requested = quantize_percent_exit_units(requested, available);
             }
@@ -8801,11 +8815,41 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             result.units = 0.0;
             return result;
         }
+        // ab9714be pine_fills.cpp:1618: whole-position coverage is spelled
+        // `qty - kQtyEpsilon`, and pine_fills.cpp:1717-1723 then routes that
+        // covered residual through the WHOLE-position exit rather than a
+        // sized reduction.  A reservation subtracted from the live basis in
+        // binary64 can overshoot the exposure that actually remains at fill
+        // time by a few ULPs; without this snap the leg is over-sized
+        // against its scope, never fills, and strands a sub-lot remainder
+        // that the 1x-margin path later fragments.
+        const auto cover_full_scope = [&](double units) {
+            if (facts.scope_exposure_units > 0.0
+                && units >= facts.scope_exposure_units - internal::kQtyEpsilon) {
+                // The covered residual IS the literal selected exposure, which
+                // an earlier percentage close can have left a few binary64
+                // steps off the run's quantity grid.  The owner books such an
+                // exit through the whole-position path without re-quantizing
+                // it, so authenticate the literal units for the pure reduction
+                // instead of letting the grid reject the leg and strand the
+                // dust (ab9714be pine_fills.cpp:1717-1723).
+                if (const auto* host_close = std::get_if<native_order::HostSized>(
+                        &facts.definition->request.intent);
+                    host_close
+                    && host_close->kind == native_order::HostSizedKind::Close) {
+                    result.grid_policy =
+                        native_order::ExecutionGridPolicy::ExplicitUnits;
+                }
+                return facts.scope_exposure_units;
+            }
+            return units;
+        };
         const bool has_projected_remaining =
             (source.from_entry.empty() || source.fixed_exit_reservation)
             && std::isfinite(source.projection_remaining_qty);
         if (has_projected_remaining) {
-            result.units = std::max(0.0, source.projection_remaining_qty);
+            result.units = cover_full_scope(
+                std::max(0.0, source.projection_remaining_qty));
             if ((source.family == PineOrderFamily::ExitLimit
                  || source.family == PineOrderFamily::ExitStop
                  || source.family == PineOrderFamily::ExitTrail)
@@ -8818,7 +8862,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
                     || source.from_entry.empty();
                 if (whole_scope_owner) result.units = std::isfinite(source.requested_qty)
                     ? std::min(*result.units, facts.scope_exposure_units)
-                    : facts.scope_exposure_units;
+                    : cover_full_scope(facts.scope_exposure_units);
             }
             return result;
         }
@@ -8839,7 +8883,7 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
             && !source.frozen_market_instruction
             && !std::isfinite(source.requested_qty)
             && (std::isnan(source.qty_percent) || source.qty_percent >= 100.0)) {
-            result.units = facts.scope_exposure_units;
+            result.units = cover_full_scope(facts.scope_exposure_units);
             return result;
         }
         if (finite_positive(source.requested_qty)) {
@@ -8854,8 +8898,9 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
              || source.family == PineOrderFamily::ExitTrail)
             && std::holds_alternative<native_order::SelectedExposure>(facts.scope);
         result.units = selected_exit && percent == 100.0
-            ? facts.scope_exposure_units
-            : quantize_close_units(facts.scope_exposure_units, percent);
+            ? cover_full_scope(facts.scope_exposure_units)
+            : cover_full_scope(
+                  quantize_close_units(facts.scope_exposure_units, percent));
         return result;
     }
     if (source.family == PineOrderFamily::Order && std::isfinite(source.requested_qty)) {
@@ -12346,9 +12391,24 @@ void PineExecutionAdapter::flush_pooc_marketable_exit_fills(
             ? std::max(0.0, row.projection_remaining_qty)
             : (std::isfinite(row.requested_qty) ? std::abs(row.requested_qty) : 0.0);
         if (!(units > 0.0)) continue;
+        // ab9714be pine_fills.cpp:1618 and pine_fills.cpp:1708-1723 spell
+        // full-position coverage as `qty - kQtyEpsilon`, cap the quantity at
+        // the whole position, and then book it through the WHOLE-position exit
+        // instead of a sized reduction.  Earlier same-bar reissues in this pass
+        // have already reduced the book, so the test reads the position fresh.
+        // Submitting the reservation's stale binary64 residual as a sized
+        // reduction instead is refused off-grid, and the sub-lot remainder it
+        // strands is what the 1x-margin path later fragments.
+        const double live_held_units =
+            std::abs(require_host().physical_position().signed_units);
+        const bool covers_live_book = live_held_units > 0.0
+            && units >= live_held_units - internal::kQtyEpsilon;
         cancel_bracket_siblings(selected.handle);
         native_order::Request request;
-        request.intent = native_order::Reduce{native_order::ExplicitUnits{units}};
+        request.intent = covers_live_book
+            ? native_order::OrderIntent{native_order::Flatten{}}
+            : native_order::OrderIntent{
+                native_order::Reduce{native_order::ExplicitUnits{units}}};
         request.label = row.source_id;
         request.comment = row.comment;
         request.trigger = native_order::Market{};

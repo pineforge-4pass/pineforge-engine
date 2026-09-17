@@ -35,6 +35,7 @@ set(TEST_SOURCES
     test_l10ad_tick_bracket_stuck_entry
     test_l10ab_same_bar_reentry_exit_level
     test_l10ag_reversal_close_cycle
+    test_l10aj_margin_full_exit_flat
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a
