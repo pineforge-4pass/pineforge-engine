@@ -506,6 +506,7 @@ void source::PineScheduler::hash_state(BrokerStateHashSink& f) const {
     f.i(retained_.magnifier_samples); f.i(static_cast<std::int64_t>(retained_.distribution));
     f.b(retained_.volume_weighted); f.i(retained_.volume_weighted_min_samples);
     f.i(retained_.volume_weighted_max_samples); f.b(retained_.is_stream); f.i(retained_.warmup_n);
+    f.b(retained_.simple_run);
     f.i(language_.pos_view_freeze_bar_); f.i(static_cast<std::int64_t>(language_.pos_view_frozen_side_));
     f.d(language_.pos_view_frozen_qty_); hash_str_double_map(f, language_.pos_view_frozen_entry_qty_);
     f.b(language_._src_series_active_); hash_source_series(f, language_._src_open_);
