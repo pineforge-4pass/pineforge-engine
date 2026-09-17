@@ -383,6 +383,22 @@ NativeOpenDirections directions_for(int direction) noexcept {
     return NativeOpenDirections::Both;
 }
 
+// R4-D L10z review fix 1: one throttled re-arm per refused source identity.
+// A throttled opening can be refused at two driver points within the same bar;
+// the bar-close re-arm must resubmit it exactly once, so the queue is deduped
+// on the placement identity (source id + source sequence) of the refused row.
+bool throttled_rearm_already_queued(
+        const std::vector<PlacementSnapshot>& queue,
+        const PlacementSnapshot& source) noexcept {
+    for (const auto& queued : queue) {
+        if (queued.source_id == source.source_id
+            && queued.source_sequence == source.source_sequence) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 PineExecutionAdapter::PineExecutionAdapter(compat::pine::CapAttachment attachment)
@@ -3024,16 +3040,25 @@ void PineExecutionAdapter::cancel_exit_orders_for_full_close(
     refresh_pending_view();
 }
 
+// R4-D L10z review fix 6: the exit's placement row is selected by the
+// (exit id, from_entry) pair, so two exits sharing a source id over different
+// entries no longer tie-break on the wrong command sequence.  The pair-less
+// minimum is kept as a documented fallback for a re-issued exit whose row was
+// bound to no entry (it preserves the historical ordering of those rows);
+// UINT64_MAX is returned only when the exit id has no placement row at all.
 std::uint64_t PineExecutionAdapter::command_sequence_for_exit(
-        const SourceId& exit_id, const SourceId& /*from_entry*/) const noexcept {
-    std::uint64_t seq = std::numeric_limits<std::uint64_t>::max();
+        const SourceId& exit_id, const SourceId& from_entry) const noexcept {
+    std::uint64_t paired = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t any_row = std::numeric_limits<std::uint64_t>::max();
     for (const auto& row : placement_) {
         const auto& snapshot = row.second;
-        if (snapshot.source_id == exit_id) {
-            seq = std::min(seq, snapshot.command_sequence);
+        if (snapshot.source_id != exit_id) continue;
+        any_row = std::min(any_row, snapshot.command_sequence);
+        if (snapshot.from_entry == from_entry) {
+            paired = std::min(paired, snapshot.command_sequence);
         }
     }
-    return seq;
+    return paired != std::numeric_limits<std::uint64_t>::max() ? paired : any_row;
 }
 
 void PineExecutionAdapter::observe_terminal_receipts() {
@@ -4383,9 +4408,13 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                         != point->decision.script_bar_open_ms) {
                     continue;
                 }
+                // R4-D L10z review fix 2: a live row whose cancellation was
+                // already recorded no longer competes for the pyramiding cap.
                 if (prior->second.opening && prior->second.is_long == is_long
                     && prior->second.source_id != id
-                    && !prior->second.projection_over_pyramiding) {
+                    && !prior->second.projection_over_pyramiding
+                    && prior->second.cancellation.cause
+                        == PineCancellationCause::None) {
                     ++same_side_pending;
                 }
             }
@@ -9101,7 +9130,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     ? policy_script_bar_.high >= prior.exit_levels.stop
                     : policy_script_bar_.low <= prior.exit_levels.stop;
                 if (!prior_touched) continue;
-                throttled_reopen_rearm_.push_back(source);
+                if (!throttled_rearm_already_queued(throttled_reopen_rearm_, source))
+                    throttled_reopen_rearm_.push_back(source);
                 return NativePrecommitVerdict::Refuse;
             }
         }
@@ -9116,7 +9146,8 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
             // The legacy throttle is OrderEligibility::Skip for the bar; the
             // order keeps resting. A generic Refuse is terminal, so re-arm the
             // original stop at the bar close (L9g).
-            throttled_reopen_rearm_.push_back(source);
+            if (!throttled_rearm_already_queued(throttled_reopen_rearm_, source))
+                throttled_reopen_rearm_.push_back(source);
             return NativePrecommitVerdict::Refuse;
         }
         const bool opposite_entry = source.family == PineOrderFamily::Entry

@@ -202,6 +202,22 @@ private:
         native_order::TargetObservation target{};
     };
 
+    // R4-D L10z review fix 4: the interval lookup cache is per-consumer state,
+    // not per-thread state. Two engines sharing a thread have independent
+    // calendars/timeframes, so a timestamp-keyed cache must not be shared.
+    struct IntervalCache {
+        std::int64_t input_ts = std::numeric_limits<std::int64_t>::min();
+        std::optional<native_calendar::NativeInterval> input_interval;
+        std::int64_t script_ts = std::numeric_limits<std::int64_t>::min();
+        std::optional<native_calendar::NativeInterval> script_interval;
+        void clear() noexcept {
+            input_ts = std::numeric_limits<std::int64_t>::min();
+            input_interval.reset();
+            script_ts = std::numeric_limits<std::int64_t>::min();
+            script_interval.reset();
+        }
+    };
+
     bool failed() const noexcept;
     bool recoverable_abort() const noexcept;
     void latch_failure(NativeFailure failure) noexcept;
@@ -390,6 +406,8 @@ private:
     uint64_t terminal_receipt_high_water_ = 0;
     std::array<CohortTargetCacheEntry, 16> cohort_target_cache_{};
     std::size_t cohort_target_cache_size_ = 0;
+    // Derived calendar lookup cache, cleared at staged ingress (L10c).
+    mutable IntervalCache interval_cache_{};
     mutable AppendDigest history_digest_{};
     mutable AppendDigest driver_digest_{};
     mutable AppendDigest account_digest_{};

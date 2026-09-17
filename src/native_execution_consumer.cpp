@@ -766,22 +766,6 @@ CommissionType fee_to_commission(NativeFeeKind kind) {
     return CommissionType::PERCENT;
 }
 
-namespace {
-struct IntervalCache {
-    std::int64_t input_ts = std::numeric_limits<std::int64_t>::min();
-    std::optional<native_calendar::NativeInterval> input_interval;
-    std::int64_t script_ts = std::numeric_limits<std::int64_t>::min();
-    std::optional<native_calendar::NativeInterval> script_interval;
-    void clear() noexcept {
-        input_ts = std::numeric_limits<std::int64_t>::min();
-        input_interval.reset();
-        script_ts = std::numeric_limits<std::int64_t>::min();
-        script_interval.reset();
-    }
-};
-thread_local IntervalCache s_interval_cache;
-}
-
 uint64_t command_ordinal(const native_order::CommandEvent& event) {
     return std::visit([](const auto& payload) { return payload.ordinal; }, event);
 }
@@ -886,7 +870,7 @@ bool NativeExecutionConsumer::apply_staged_ingress(BacktestEngine& engine) {
 
 bool NativeExecutionConsumer::prepare_public_begin(
         BacktestEngine& engine, const NativeBeginArgs& args) {
-    s_interval_cache.clear();
+    interval_cache_.clear();
     if (preparing_begin_) {
         fail(engine, NativeFailure{NativeFailureCode::Contract, NativeFailureOperation::Begin});
         render(engine, "native prepare_native_begin cannot reenter");
@@ -1217,27 +1201,27 @@ native_calendar::NativeInterval NativeExecutionConsumer::timestamp_partition(
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::input_interval_at(std::int64_t timestamp) const {
-    if (s_interval_cache.input_ts == timestamp) {
-        return s_interval_cache.input_interval;
+    if (interval_cache_.input_ts == timestamp) {
+        return interval_cache_.input_interval;
     }
     if (uses_raw_label_partition()) return timestamp_partition(timestamp);
     auto interval = native_calendar::interval_containing(calendar_, input_tf_, timestamp);
     if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
-    s_interval_cache.input_ts = timestamp;
-    s_interval_cache.input_interval = interval;
+    interval_cache_.input_ts = timestamp;
+    interval_cache_.input_interval = interval;
     return interval;
 }
 
 std::optional<native_calendar::NativeInterval>
 NativeExecutionConsumer::script_interval_at(std::int64_t timestamp) const {
-    if (s_interval_cache.script_ts == timestamp) {
-        return s_interval_cache.script_interval;
+    if (interval_cache_.script_ts == timestamp) {
+        return interval_cache_.script_interval;
     }
     if (uses_raw_label_partition()) return timestamp_partition(timestamp);
     auto interval = native_calendar::interval_containing(calendar_, script_tf_, timestamp);
     if (!interval && legacy_tolerant_slot_labels()) interval = timestamp_partition(timestamp);
-    s_interval_cache.script_ts = timestamp;
-    s_interval_cache.script_interval = interval;
+    interval_cache_.script_ts = timestamp;
+    interval_cache_.script_interval = interval;
     return interval;
 }
 
@@ -5740,7 +5724,9 @@ NativePhysicalPosition NativeExecutionConsumer::position(const BacktestEngine& e
     if (n == 1) {
         const auto& lot = engine.pyramid_entries_[0];
         out.signed_units = engine.position_side_ == PositionSide::SHORT ? -lot.qty : lot.qty;
-        out.average_price = lot.price;
+        // R4-D L10z review fix 5: the single-lot fast path keeps the weighted
+        // path's zero-quantity guard, so an empty lot reports no average.
+        out.average_price = lot.qty > 0.0 ? lot.price : 0.0;
         return out;
     }
     double qty = 0.0;
