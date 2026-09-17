@@ -9370,6 +9370,24 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     || pre_exit_chronology;
             }
         }
+        // ab9714be pine_fills.cpp:7449-7459: a deferred strategy.close belongs
+        // to the position cycle it was issued in.  When the live position
+        // opened on a bar later than the close's creation bar — the next open's
+        // opposite entry applied first and flipped the book — the legacy book
+        // Removes the stale close instead of flattening the freshly opened lot
+        // at its own entry price.  The two legacy exclusions are the short-seed
+        // MATERIALIZE_LONG close and the same-bar market transaction's targeted
+        // close artifact.
+        const bool stale_close_for_new_position =
+            (source.family == PineOrderFamily::Close
+             || source.family == PineOrderFamily::CloseAll)
+            && static_cast<PositionSide>(source.projection_position_side)
+                   != PositionSide::FLAT
+            && physical.signed_units != 0.0
+            && position_open_bar_index_ > source.projection_created_bar
+            && !source.frozen_market_targeted_close
+            && !(short_seed_.active && view.target == short_seed_.materialize_long);
+        if (stale_close_for_new_position) return NativePrecommitVerdict::Refuse;
         // ab9714be pine_fills.cpp:7483-7537: priced (stop/limit) entries are
         // throttled to one opening from flat per bar after an earlier entry
         // fill. A same-direction pyramid while still in position is the
