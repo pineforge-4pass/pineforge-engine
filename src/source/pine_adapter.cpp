@@ -2066,6 +2066,10 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
                             retained_source_sequence = predecessor_snapshot->source_sequence;
                         }
                     }
+                    if ((family == PineOrderFamily::Entry && snapshot.family == PineOrderFamily::Entry)
+                        || (family == PineOrderFamily::Order && snapshot.family == PineOrderFamily::Order)) {
+                        retained_source_sequence = predecessor_snapshot->source_sequence;
+                    }
                 }
                 snapshot.projection_predecessor_exit = predecessor_exit;
                 snapshot.projection_predecessor_market = predecessor_market;
@@ -9058,7 +9062,7 @@ NativePrecommitVerdict PineExecutionAdapter::validate_precommit(const NativePrec
                     || prior.is_long != source.is_long
                     || !finite_positive(prior.exit_levels.stop)
                     || finite_positive(prior.exit_levels.limit)
-                    || prior.command_sequence >= source.command_sequence) {
+                    || prior.source_sequence >= source.source_sequence) {
                     continue;
                 }
                 const auto created = static_cast<PositionSide>(
@@ -11785,7 +11789,10 @@ void PineExecutionAdapter::rearm_throttled_reopens() {
         // The kernel already walked past the nearer stop. Keep the owner's
         // fill price (the stop level) instead of the current path quote.
         snapshot.forced_execution_price = (same_dir && already_touched)
-            ? snapshot.exit_levels.stop : kNaN;
+            ? (finite_positive(staged_.syminfo.mintick)
+                ? directional_tick(snapshot.exit_levels.stop, staged_.syminfo.mintick, snapshot.is_long)
+                : snapshot.exit_levels.stop)
+            : kNaN;
         snapshot.projection_after_close = false;
         snapshot.cancellation = {};
         snapshot.market_admission = {};
