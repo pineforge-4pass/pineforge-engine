@@ -3644,8 +3644,16 @@ void PineExecutionAdapter::entry(const SourceId& id, bool is_long, double limit_
                 ? require_host().native_marked_equity(source_point->price) : kNaN;
             const double required = std::abs(normalized_qty) * mark
                 * staged_.syminfo.pointvalue * fx * margin / 100.0;
-            if (margin <= 100.0 && (!std::isfinite(required) || !std::isfinite(equity)
-                                    || required > equity)) {
+            // R4-D L10ad: ab9714be pine_strategy_commands.cpp:344-346 gates the
+            // whole placement affordability half on margin_pct > 0.0 ("margin_pct
+            // == 0 disables the check, as it does in TradingView").  A strategy
+            // declared with margin_long=0 / margin_short=0 therefore keeps taking
+            // explicit-qty entries after its equity has gone negative; without the
+            // gate required == 0 > equity rejected every later entry once the
+            // account traded below zero (NQ1 ORB probe: flat after trade #73).
+            if (finite_positive(margin) && margin <= 100.0
+                && (!std::isfinite(required) || !std::isfinite(equity)
+                    || required > equity)) {
                 if (pure_stop_entry) {
                     std::optional<native_order::RequestHandle> prior_handle;
                     if (const auto prior = live_by_source_key_.find(key_for(id));
