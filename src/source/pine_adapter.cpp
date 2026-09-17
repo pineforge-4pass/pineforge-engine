@@ -1099,9 +1099,28 @@ void PineExecutionAdapter::revive_brackets_after_margin(
             || candidate.family == PineOrderFamily::ExitTrail;
         if (!exit || !candidate.legs.dormant() || candidate.from_entry.empty()
             || !(cohort_exposure_for(candidate.from_entry) > 0.0)
-            || !candidate.legs.target().incarnation) {
+            || !candidate.legs.target().incarnation
+            // ab9714be pine_orders.cpp:597-608: leg ownership is position-cycle
+            // scoped, so only a bracket bound to the cycle this margin call is
+            // settling may be revived; one parked by an earlier cycle stays
+            // dormant until that cycle re-arms it.
+            || candidate.placement_cycle != current_position_cycle_) {
             continue;
         }
+        // A same-id exit re-issued after the slice REPLACED this bracket: the
+        // successor carries the cycle's legs, and reviving the superseded parent
+        // here would fire the finished cycle's already-touched level against the
+        // new lot (ab9714be pine_fills.cpp:7669-7673).
+        const auto inc = row.first;
+        const auto target_inc = candidate.legs.target().incarnation;
+        const bool superseded = std::any_of(
+            placement_.begin(), placement_.end(),
+            [&](const auto& pair) {
+                return pair.second.projection_predecessor != 0
+                    && (pair.second.projection_predecessor == inc
+                        || pair.second.projection_predecessor == target_inc);
+            });
+        if (superseded) continue;
         const double revive_stop = compat::pine::select_margin_revival_stop(candidate.legs);
         const exit_legs::Action restore{candidate.legs.target(), candidate.legs.revision(),
             cause, exit_legs::Restore{{exit_legs::Leg::Stop, exit_legs::Leg::Limit,
@@ -1113,9 +1132,13 @@ void PineExecutionAdapter::revive_brackets_after_margin(
         }
         candidate.restored_after_margin = true;
         const double held = std::abs(physical.signed_units);
+        // Full coverage is compared with a tolerance: the slice has already been
+        // split off the physical lot, so the surviving quantity sits below the
+        // pre-slice request (ab9714be spells full-position coverage as
+        // `qty - kQtyEpsilon`, pine_fills.cpp:1618).
         const bool full = !std::isfinite(candidate.requested_qty)
-            ? (!std::isfinite(candidate.qty_percent) || candidate.qty_percent >= 100.0)
-            : candidate.requested_qty >= held;
+            ? (!std::isfinite(candidate.qty_percent) || candidate.qty_percent >= 100.0 - 1e-5)
+            : candidate.requested_qty >= held - 1e-9;
         const bool ready = !candidate.leg_activation.bounds()
             || candidate.leg_activation.stop_ready(
                 current_position_cycle_, context.coordinate.interval_index);
@@ -2108,6 +2131,16 @@ std::optional<native_order::RequestHandle> PineExecutionAdapter::submit_or_repla
             }
             const auto result = host.replace(*existing_handle, request);
             if (result.status == native_order::ReplaceStatus::Replaced && result.successor) {
+                // ab9714be pine_strategy_host.cpp:239-241 + 270-275: the flatten
+                // unbinds every exit's leg activation and the fresh open rebinds
+                // only RETAINED activations, so a same-id exit that replaces a
+                // bracket across a stop-out starts its successor with clean legs
+                // instead of inheriting the finished cycle's touched stop / trail
+                // state and firing it against the new lot.
+                if (const auto found_p = placement_.find(existing_handle->incarnation);
+                    found_p != placement_.end()) {
+                    found_p->second.legs = {};
+                }
                 snapshot.projection_predecessor = existing_handle->incarnation;
                 if (predecessor_snapshot) {
                     const auto family = predecessor_snapshot->family;
@@ -5994,6 +6027,16 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || parent.source_id != from_entry) {
             return;
         }
+        // A pending same-bar parent is the level basis only while its cohort
+        // has no live exposure.  With a lot of that id still open the exit
+        // resolves against the LIVE position: ab9714be
+        // materialize_relative_exit_prices_for_live_position (pine_fills.cpp:
+        // 7208-7230) binds relative operands to position_entry_price_ of the
+        // current cycle, never to a not-yet-filled re-entry's resting price.
+        if (cohort_exposure_for(from_entry) > 0.0
+            && ((physical.signed_units > 0.0) == parent.is_long)) {
+            return;
+        }
         parent_long = parent.is_long;
         known_parent_level = finite_positive(parent.exit_levels.limit);
         if (known_parent_level) entry_price = parent.exit_levels.limit;
@@ -6027,6 +6070,15 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             // not the opposite physical position still held at placement.
             // ab9714be pine_fills.cpp:7788-7800 then evaluates the child with
             // the parent's eventual close side and exact-touch direction.
+            // The prearm serves the FLAT-to-position transition only: while a
+            // lot of that id is live and the physical side already matches it,
+            // the bracket resolves against the live position
+            // (pine_fills.cpp:7208-7230), not against the same-id re-entry that
+            // is still pending on this bar.
+            const bool same_side_live = physical.signed_units != 0.0
+                && (physical.signed_units > 0.0) == parent->second.is_long
+                && cohort_exposure_for(from_entry) > 0.0;
+            if (same_side_live) continue;
             parent_long = parent->second.is_long;
             // Relative profit/loss/trail operands bind to the parent's actual
             // fill, not its resting limit.  An opening gap may improve that
@@ -6938,7 +6990,24 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
                     + (exit_is_buy ? 1.0 : -1.0) * config_.slippage * tick;
                 one_shot_level = directional_tick(slipped, tick, exit_is_buy);
             }
-            one_shot_level = source_level_on_price_grid(one_shot_level, tick);
+            // A sell one-shot keeps the k / (1 / mintick) grid spelling so a
+            // chart print sitting exactly on the activation satisfies the
+            // generic `print >= level` bit-for-bit.  A buy one-shot keeps the
+            // directional k * mintick spelling instead: ab9714be books the
+            // crossed activation as a TRAIL event (engine_path_resolve.cpp:
+            // 984-987, fill.is_limit = false), so apply_slippage snaps it
+            // with round_to_mintick_directional, which materializes that same
+            // product, and the immutable generic buy limit accepts it because
+            // fill <= level holds by construction.  Re-spelling the buy level
+            // onto the division grid handed back a value one binary64 ULP
+            // away from the owner's fill and that ULP rode the equity path
+            // into printed PnL
+            // (zz-pop-stevenygabbyperez-fast-scalper-with-stops short exit
+            // 2025-04-02 22:00Z, activation 1870.0 - 3741 * 0.01: owner
+            // 1832.5900000000001, re-spelled 1832.59).
+            if (!exit_is_buy) {
+                one_shot_level = source_level_on_price_grid(one_shot_level, tick);
+            }
             submit_leg(PineOrderFamily::ExitTrail,
                        native_order::Limit{one_shot_level});
         } else if (native_trail_offset) {
@@ -7368,6 +7437,19 @@ void PineExecutionAdapter::release_delayed_orders(
                 || family == PineOrderFamily::ExitLimit);
         if (order.release_open_epoch <= broker_open_epoch_
             && (!explicit_brackets_only || explicit_bracket || coof_delayed_price)) {
+            // A newer same-(id, from_entry) placement already superseded this
+            // delayed leg: the owner drops same-id pending orders at replacement
+            // time (ab9714be pine_strategy_commands.cpp:446), so the stale
+            // command never reaches the book and must not resurrect a finished
+            // cycle's levels against the new lot.
+            const auto live_existing = live_by_source_key_.find(key_for(order.replacement_key));
+            if (live_existing != live_by_source_key_.end()) {
+                const auto found_p = placement_.find(live_existing->second.incarnation);
+                if (found_p != placement_.end()
+                    && found_p->second.command_sequence > order.snapshot.command_sequence) {
+                    continue;
+                }
+            }
             const bool execute_coof_open = order.execute_at_open
                 && finite_positive(current_open);
             if (execute_coof_open) {
@@ -13300,7 +13382,13 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
                 || family == PineOrderFamily::ExitStop
                 || family == PineOrderFamily::ExitTrail
                 || family == PineOrderFamily::Close
-                || family == PineOrderFamily::CloseAll) {
+                || family == PineOrderFamily::CloseAll
+                // The slice is a full close of its from_entry's cycle: the owner
+                // clears cycle_filled_entry_ids_ when the book goes flat
+                // (ab9714be pine_strategy_host.cpp:245-251), so the bracket
+                // retires with the rest instead of surviving into the next lot
+                // that reuses the id.
+                || family == PineOrderFamily::Margin) {
                 if (!found->second.from_entry.empty()
                     && std::find(ended_sources.begin(), ended_sources.end(),
                                  found->second.from_entry) == ended_sources.end()) {
