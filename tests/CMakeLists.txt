@@ -18,6 +18,7 @@ set(TEST_SOURCES
     test_l10j_corpus_parity
     test_l10m_corpus_parity
     test_l10k_corpus_parity
+    test_l10n_exit_reissue_after_close_all
     test_engine_risk_l4a
     test_entry_bar_margin_path_l4a
     test_high_value_fractional_money_margin_l4a

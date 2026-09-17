@@ -6618,7 +6618,21 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
         const auto cohort = cohort_for(from_entry);
         const auto found = cohorts_by_id_.find(from_entry);
         std::vector<native_order::RequestHandle> origins;
-        if (found != cohorts_by_id_.end()) origins = found->second.origins;
+        if (found != cohorts_by_id_.end()) {
+            // ab9714be keys (exit id, from_entry) per position cycle
+            // (cycle_filled_entry_ids_ is cleared on flat). Stale origins
+            // from a prior cycle are neither pending nor opened; keeping
+            // them prevents the empty-origins origin-zero fallback a first
+            // cycle uses while the new parent is still in
+            // pending_same_bar_commands_ (probe9 A v0 / bprakaash).
+            for (const auto& origin : found->second.origins) {
+                const bool origin_opened =
+                    std::find(found->second.opened.begin(), found->second.opened.end(),
+                              origin) != found->second.opened.end();
+                if (origin.incarnation == 0 || origin_is_pending(origin) || origin_opened)
+                    origins.push_back(origin);
+            }
+        }
         if (origins.empty()) origins.push_back({});
         for (const auto& origin : origins) {
             const std::string origin_key = std::to_string(origin.incarnation);
