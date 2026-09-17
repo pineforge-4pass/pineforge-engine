@@ -925,7 +925,17 @@ void source::PineStrategyHost::adapter_label_bracket_trades(
                 ? trade.entry_price - trade.exit_price
                 : trade.exit_price - trade.entry_price)
                 * trade.qty * syminfo_.pointvalue * active_account_currency_fx();
-            trade.max_drawdown = std::max(0.0, adverse);
+            // The legacy POOC pass settles an old bracket before the full-bar
+            // excursion update. Native confirms the complete waypoint first,
+            // so cap (rather than replace) the drawdown at the stop fill plus
+            // the already-paid entry commission; an earlier, larger adverse
+            // excursion remains authoritative.
+            const double exit_commission = calc_commission(
+                trade.exit_price, trade.qty);
+            const double entry_commission = trade.commission - exit_commission;
+            const double adverse_at_stop = std::max(
+                0.0, adverse + std::max(0.0, entry_commission));
+            trade.max_drawdown = std::min(trade.max_drawdown, adverse_at_stop);
         }
     }
 }

@@ -6014,6 +6014,18 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
     // live cohort only when it fills, so reissuing unchanged levels cannot
     // alter its executable terms. Avoid rebuilding two requests, snapshots,
     // and replacement events on the common every-bar bracket pattern.
+    // A normalized full-percent reservation is `units / basis * 100`, which
+    // can land a few binary64 ULPs below the literal 100% request. The owner
+    // still treats the re-issued default bracket as the same full-position
+    // reservation, so those representations are equivalent here.
+    const auto same_dynamic_percent = [](double prior_percent, double request_percent) {
+        if (std::isfinite(prior_percent) && std::isfinite(request_percent)
+            && prior_percent >= 100.0 - 1e-12
+            && request_percent >= 100.0 - 1e-12) {
+            return true;
+        }
+        return same_double_bits(prior_percent, request_percent);
+    };
     const auto unchanged_dynamic_leg = [&](PineOrderFamily family, double level) {
         const SourceId replacement_key = exit_id + "\x1f" + from_entry
             + std::to_string(static_cast<int>(family));
@@ -6026,7 +6038,7 @@ void PineExecutionAdapter::exit(const SourceId& exit_id, const SourceId& from_en
             || prior.source_id != exit_id || prior.from_entry != from_entry
             || prior.comment != comment || prior.oca_name != oca_name
             || prior.oca_type != 0
-            || !same_double_bits(prior.qty_percent, qty_percent)
+            || !same_dynamic_percent(prior.qty_percent, qty_percent)
             || prior.bracket_origin.incarnation != 0
             || !same_double_bits(prior.exit_levels.limit, limit_price)
             || !same_double_bits(prior.exit_levels.stop, stop_price)
@@ -8302,7 +8314,24 @@ native_order::ExecutionTerms PineExecutionAdapter::resolve_terms(
         const double level = finite_positive(source.exit_levels.limit)
             ? source.exit_levels.limit
             : (facts.trigger_level ? *facts.trigger_level : facts.raw_price);
-        return directional_tick(level, staged_.syminfo.mintick, !facts.is_buy);
+        // Preserve a source level that is on the chart grid (including a
+        // computed level only ULPs away from it).  `directional_tick` can
+        // return a value one binary64 ULP on the wrong side of that level
+        // (2409.49 -> 2409.4900000000002 for a buy limit), which the generic
+        // kernel then correctly rejects against its immutable limit.
+        const double projected = directional_tick(
+            level, staged_.syminfo.mintick, !facts.is_buy);
+        const double level_on_grid = source_level_on_price_grid(
+            level, staged_.syminfo.mintick);
+        const bool grid_level = source_bar_fill_tick(
+            level_on_grid, staged_.syminfo.mintick) == level_on_grid;
+        const bool wrong_side = facts.is_buy
+            ? projected > level
+            : projected < level;
+        if (grid_level && wrong_side) {
+            return level_on_grid;
+        }
+        return projected;
     };
     const auto source_trail_one_shot_fill = [&]() {
         // ab9714be pine_fills.cpp:7936-7958: an omitted-offset trail is a
@@ -11881,18 +11910,28 @@ void PineExecutionAdapter::on_applied(const native_order::ExecutionAppliedEvent&
             || placement_snapshot->family == PineOrderFamily::ExitStop
             || placement_snapshot->family == PineOrderFamily::ExitTrail;
         const auto native = require_host().native_state();
+        const bool explicit_resting_stop =
+            std::isfinite(placement_snapshot->requested_qty)
+            && placement_snapshot->requested_qty > 0.0;
+        const bool dynamic_full_position_stop =
+            std::isnan(placement_snapshot->requested_qty)
+            && std::isfinite(placement_snapshot->qty_percent)
+            && placement_snapshot->qty_percent >= 100.0 - 1e-12;
+        const bool legacy_fill_boundary =
+            (config_.calc_on_order_fills && !config_.process_orders_on_close
+             && config_.commission_value == 0.0)
+            || (config_.process_orders_on_close && !config_.calc_on_order_fills);
         const bool normalize_resting_stop_drawdown =
             placement_snapshot->family == PineOrderFamily::ExitStop
-            && std::isfinite(placement_snapshot->requested_qty)
-            && placement_snapshot->requested_qty > 0.0
+            && (explicit_resting_stop || dynamic_full_position_stop)
             && placement_snapshot->projection_created_bar
                 < context.coordinate.interval_index
             && placement_snapshot->oca_name.empty()
             && std::isnan(placement_snapshot->exit_levels.trail_points)
             && std::isnan(placement_snapshot->exit_levels.trail_price)
-            && config_.calc_on_order_fills && !config_.process_orders_on_close
+            && legacy_fill_boundary
             && config_.pyramiding == 0 && !config_.close_entries_rule_any
-            && config_.slippage == 0 && config_.commission_value == 0.0
+            && config_.slippage == 0
             && !stream_mode_ && (!native.spec || native.spec->intrabar.is_none());
         if (auto* pine_host = dynamic_cast<PineStrategyHost*>(&require_host())) {
             pine_host->adapter_label_bracket_trades(
